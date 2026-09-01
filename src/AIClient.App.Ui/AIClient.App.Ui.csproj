@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <RootNamespace>AIClient.App.Ui</RootNamespace>
+    <AssemblyName>aiclient-ui</AssemblyName>
+    <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- All three MUST be the same version, or you get a TypeLoadException at startup.
+         Pinned to match the Avalonia.Base that resolved on this machine. -->
+    <PackageReference Include="Avalonia" Version="12.1.1" />
+    <PackageReference Include="Avalonia.Desktop" Version="12.1.1" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\AIClient.Core\AIClient.Core.csproj" />
+    <ProjectReference Include="..\AIClient.Providers\AIClient.Providers.csproj" />
+    <ProjectReference Include="..\AIClient.Tools\AIClient.Tools.csproj" />
+    <ProjectReference Include="..\AIClient.Workspace\AIClient.Workspace.csproj" />
+    <ProjectReference Include="..\AIClient.Agents\AIClient.Agents.csproj" />
+  </ItemGroup>
+</Project>

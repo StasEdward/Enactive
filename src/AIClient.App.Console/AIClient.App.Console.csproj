@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>AIClient.App.Console</RootNamespace>
+    <AssemblyName>aiclient</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\AIClient.Core\AIClient.Core.csproj" />
+    <ProjectReference Include="..\AIClient.Providers\AIClient.Providers.csproj" />
+    <ProjectReference Include="..\AIClient.Tools\AIClient.Tools.csproj" />
+    <ProjectReference Include="..\AIClient.Workspace\AIClient.Workspace.csproj" />
+    <ProjectReference Include="..\AIClient.Agents\AIClient.Agents.csproj" />
+  </ItemGroup>
+</Project>

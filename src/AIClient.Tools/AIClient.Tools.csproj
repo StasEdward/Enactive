@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\AIClient.Core\AIClient.Core.csproj" />
+  </ItemGroup>
+</Project>

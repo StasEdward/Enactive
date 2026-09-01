@@ -1,0 +1,3 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Pure domain layer: models + abstractions only. No external packages, no transport/SDK types. -->
+</Project>
