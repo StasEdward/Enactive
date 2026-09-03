@@ -12,7 +12,8 @@ public sealed record DecisionRequest(
     string Topic,
     string Detail,
     IReadOnlyList<DecisionOption> Options,
-    string? RecommendedOptionId);
+    string? RecommendedOptionId,
+    string? Subject = null);   // the tool name, so a UI can remember approvals per tool
 
 /// <summary>The user's choice at a fork.</summary>
 public sealed record DecisionOutcome(string OptionId);

@@ -47,3 +47,39 @@ public static class LinearPlan
         return new Plan(Guid.NewGuid(), steps);
     }
 }
+
+/// <summary>A planner-emitted step: a title plus the 0-based indices of prerequisite steps.</summary>
+public sealed record PlanStepSpec(string Title, IReadOnlyList<int> DependsOn);
+
+/// <summary>
+/// Builds a real dependency graph from planner specs (index deps → step ids). If no spec declares any
+/// dependency, it falls back to a linear chain so a plain list of steps behaves exactly as before.
+/// Invalid, self- and duplicate indices are dropped defensively.
+/// </summary>
+public static class DagPlan
+{
+    public static Plan FromSpecs(IReadOnlyList<PlanStepSpec> specs)
+    {
+        var ids = new Guid[specs.Count];
+        for (var i = 0; i < specs.Count; i++)
+            ids[i] = Guid.NewGuid();
+
+        var anyDeps = specs.Any(s => s.DependsOn.Count > 0);
+        var steps = new List<PlanStep>(specs.Count);
+        for (var i = 0; i < specs.Count; i++)
+        {
+            IReadOnlyList<Guid> deps;
+            if (anyDeps)
+                deps = specs[i].DependsOn
+                    .Where(d => d >= 0 && d < specs.Count && d != i)
+                    .Distinct()
+                    .Select(d => ids[d])
+                    .ToArray();
+            else
+                deps = i > 0 ? new[] { ids[i - 1] } : Array.Empty<Guid>();
+
+            steps.Add(new PlanStep(ids[i], specs[i].Title, StepStatus.Pending, deps));
+        }
+        return new Plan(Guid.NewGuid(), steps);
+    }
+}

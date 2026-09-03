@@ -17,7 +17,8 @@ public sealed record WorkContext(
     string? Selection,
     string? GitBranch,
     IReadOnlyList<string> RelatedFiles,
-    IReadOnlyList<string> RecentChanges);
+    IReadOnlyList<string> RecentChanges,
+    EnvironmentInfo? Environment = null);
 
 /// <summary>Builds <see cref="WorkContext"/> from the current focus.</summary>
 public interface IContextProvider

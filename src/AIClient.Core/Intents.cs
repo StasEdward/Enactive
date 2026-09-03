@@ -14,4 +14,5 @@ public sealed record Intent(
     string RawText,
     IntentSource Source,
     WorkContext Context,
-    DateTimeOffset At);
+    DateTimeOffset At,
+    string? WorkerId = null);   // which role should handle this (null = provider's default)

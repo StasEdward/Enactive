@@ -25,8 +25,12 @@ public interface IModelResolver
     ModelRef? NextOnFailure(ModelPolicy policy, ModelRef failed);
 }
 
-/// <summary>Supplies workers. The first slice exposes a single default worker.</summary>
+/// <summary>Supplies the available worker roles and resolves one by id.</summary>
 public interface IWorkerProvider
 {
     Worker Default { get; }
+    IReadOnlyList<Worker> All { get; }
+
+    /// <summary>Returns the worker with this id, or <see cref="Default"/> when id is null/unknown.</summary>
+    Worker Get(string? id);
 }

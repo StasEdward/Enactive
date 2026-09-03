@@ -27,7 +27,11 @@ public sealed record ChatRequest(
     IReadOnlyList<ChatMessage> Messages,
     IReadOnlyList<ToolDefinition>? Tools = null,
     double? Temperature = null,
-    int? MaxTokens = null);
+    int? MaxTokens = null,
+    // Ollama context window override (options.num_ctx on the wire). Only honored by
+    // OllamaNativeProvider - the OpenAI-compatible /v1 endpoint has no such field and
+    // silently ignores it (confirmed against Ollama's own openai/openai.go).
+    int? NumCtx = null);
 
 /// <summary>A completed assistant turn (content and/or tool calls).</summary>
 public sealed record ChatCompletion(
