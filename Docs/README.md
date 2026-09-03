@@ -1,7 +1,7 @@
 # AIClient
 
 A desktop environment for AI agents (a "GUI for AI agents"), built on **.NET 10**.
-See `PLAN.md` (vision) and `PLAN_v2.md` (development spec). `LOGGING.md` documents the global log.
+See `PLAN.md` (vision) and `PLAN_v2.md` (development spec). `LOGGING.md` documents the global log; `MODELS.md` the multi-provider team-of-models design (in progress).
 
 The engine turns one intent into real, reviewable, recorded action:
 
@@ -30,7 +30,7 @@ Command -> Intent -> Context(+Environment) -> Planner -> Orchestrator -> Worker(
 
 - **Tasks with a real DAG plan** — the planner emits step dependencies; `DagScheduler` runs steps by readiness (not a fixed line), cascade-skips dependents on failure, detects cycles.
 - **Permissions + decisions** — autonomy slider (Observe/Suggest/Execute/Autonomous); run_command/run_powershell ask before running. The approval card can **remember** an allow for the session or the workspace (`.aiclient/permissions.json`).
-- **Multi-agent** (optional) — a reasoner (Anthropic) plans and reviews each step against the **real tool transcript** while the local Ollama model executes; on FAIL the step is retried with feedback.
+- **Multi-agent** (optional) — a reasoner plans and reviews each step against the **real tool transcript** while a coder model executes; on FAIL the step is retried with feedback. Evolving into a configurable **team**: any number of providers, a per-role model, and a chosen model per phase (Plan/Review/Execute) — see `MODELS.md`.
 - **Workers as roles** — Developer / Reviewer (read-only) / Ops / Writer, each with its own tool allowlist and permission level; pick one per run.
 - **Environment awareness** — read-only discovery of host/OS, git (branch/remote/dirty), Docker, WSL, services, and a live snapshot; fed into the prompt and shown in the UI.
 - **Timeline as project memory** — decisions and artifacts across all runs, decisions folded into a persistent memory store.
