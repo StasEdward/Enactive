@@ -1,8 +1,10 @@
 namespace AIClient.Providers;
 
+using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using AIClient.Core.Chat;
 using AIClient.Core.Diagnostics;
 using AIClient.Core.Providers;
@@ -15,7 +17,12 @@ using AIClient.Core.Tools;
 public sealed class AnthropicProvider : IChatProvider
 {
     private const string AnthropicVersion = "2023-06-01";
+    private const int DefaultMaxTokens = 32000;
     private static readonly JsonSerializerOptions JsonOpts = new();
+
+    // Discovered per-model output caps: on a 400 saying our max_tokens exceeds the model's limit, we parse
+    // the real maximum from the error and remember it, so later calls to that model request the right size.
+    private static readonly ConcurrentDictionary<string, int> ModelCaps = new();
 
     private readonly HttpClient _http;
     private readonly ProviderDescriptor _descriptor;
@@ -87,12 +94,12 @@ public sealed class AnthropicProvider : IChatProvider
         // Build + send in a local function so we can retry once without `temperature`: newer Anthropic models
         // (e.g. Opus 5.x) reject it with 400 "temperature is deprecated for this model", while older ones still
         // accept it — so we keep it by default and only drop it when the API tells us this model refuses it.
-        async Task<(bool Ok, int Status, string Body)> SendAsync(bool includeTemperature)
+        async Task<(bool Ok, int Status, string Body)> SendAsync(bool includeTemperature, int maxTokens)
         {
             var payload = new Dictionary<string, object?>
             {
                 ["model"] = request.Model,
-                ["max_tokens"] = _descriptor.MaxTokens ?? request.MaxTokens ?? 8192,
+                ["max_tokens"] = maxTokens,
                 ["messages"] = wire.ToArray()
             };
             if (systemParts.Count > 0)
@@ -125,9 +132,35 @@ public sealed class AnthropicProvider : IChatProvider
             return (response.IsSuccessStatusCode, (int)response.StatusCode, responseBody);
         }
 
-        var (ok, status, body) = await SendAsync(includeTemperature: true);
-        if (!ok && status == 400 && request.Temperature is not null && IsTemperatureDeprecated(body))
-            (ok, status, body) = await SendAsync(includeTemperature: false);
+        // Output budget: an explicit per-provider override wins; else a cap already discovered for this
+        // model; else a generous default big enough for large documents (self-corrects downward below).
+        var includeTemperature = true;
+        var maxTokens = _descriptor.MaxTokens
+            ?? request.MaxTokens
+            ?? (ModelCaps.TryGetValue(request.Model, out var known) ? known : DefaultMaxTokens);
+
+        var (ok, status, body) = await SendAsync(includeTemperature, maxTokens);
+
+        // Recover from the two 400s Anthropic returns for otherwise-valid requests: `temperature` is
+        // deprecated on newer models, and max_tokens above the model's cap (the error names the cap, which
+        // we parse and remember). Bounded to two retries so we can fix at most both.
+        for (var attempt = 0; attempt < 2 && !ok && status == 400; attempt++)
+        {
+            if (includeTemperature && request.Temperature is not null && IsTemperatureDeprecated(body))
+            {
+                includeTemperature = false;
+            }
+            else if (TryParseMaxTokensCap(body, maxTokens, out var cap))
+            {
+                ModelCaps[request.Model] = cap;
+                maxTokens = cap;
+            }
+            else
+            {
+                break;
+            }
+            (ok, status, body) = await SendAsync(includeTemperature, maxTokens);
+        }
 
         if (!ok)
         {
@@ -142,6 +175,21 @@ public sealed class AnthropicProvider : IChatProvider
     private static bool IsTemperatureDeprecated(string body)
         => body.Contains("temperature", StringComparison.OrdinalIgnoreCase)
            && body.Contains("deprecated", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Detects the "max_tokens above the model's cap" 400 and extracts the allowed maximum. The message
+    /// reads like "... 32000 &gt; 64000, which is the maximum ..." — the number after '&gt;' is the cap.
+    /// Falls back to a universally safe 8192 when the number can't be parsed.
+    /// </summary>
+    private static bool TryParseMaxTokensCap(string body, int requested, out int cap)
+    {
+        cap = 0;
+        if (!body.Contains("max_tokens", StringComparison.OrdinalIgnoreCase))
+            return false;
+        var m = Regex.Match(body, @">\s*(\d+)");
+        cap = m.Success && int.TryParse(m.Groups[1].Value, out var n) ? n : 8192;
+        return cap > 0 && cap < requested;
+    }
 
     private static ChatCompletion ParseCompletion(string body)
     {

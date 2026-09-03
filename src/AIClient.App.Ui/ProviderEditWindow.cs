@@ -31,7 +31,7 @@ internal sealed class ProviderEditWindow : Window
         var maxTokensBox = new TextBox
         {
             Text = config.MaxTokens?.ToString() ?? string.Empty,
-            Watermark = "max output tokens — blank uses the provider default (raise for big outputs)"
+            Watermark = "max output tokens — blank = auto (adjusts to the model's cap)"
         };
         var headersBox = new TextBox
         {
