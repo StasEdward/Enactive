@@ -285,6 +285,7 @@ public sealed class Orchestrator : IOrchestrator
 
             var contentBuilder = new StringBuilder();
             var toolBuilders = new Dictionary<int, ToolCallBuilder>();
+            string? finishReason = null;
 
             await foreach (var delta in provider.StreamChatAsync(request, ct))
             {
@@ -304,10 +305,28 @@ public sealed class Orchestrator : IOrchestrator
                         if (call.ArgumentsJson is not null) builder.Arguments.Append(call.ArgumentsJson);
                         break;
 
-                    case FinishDelta:
+                    case FinishDelta finish:
+                        finishReason = finish.Reason;
+                        break;
+
                     case UsageDelta:
                         break;
                 }
+            }
+
+            // The turn was cut off at the token limit. Record only the partial text (dropping any
+            // half-finished tool call, which would dangle without a tool_result and break the next
+            // provider call) and stop this step — otherwise the model re-issues the same truncated call
+            // every iteration until MaxIterations, burning the run (seen with a reasoning model whose
+            // thinking exhausted max_tokens before the tool arguments were emitted).
+            if (finishReason is "max_tokens" or "length")
+            {
+                if (contentBuilder.Length > 0)
+                    messages.Add(new ChatMessage(ChatRole.Assistant, contentBuilder.ToString(), null));
+                yield return Ev(EventKind.ErrorObserved,
+                    $"Model output was cut off at the token limit (finish={finishReason}); stopping this step. "
+                    + "Raise max_tokens, or use a model that doesn't spend the whole budget on reasoning.");
+                yield break;
             }
 
             var toolCalls = BuildToolCalls(toolBuilders);

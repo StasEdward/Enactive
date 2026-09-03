@@ -92,7 +92,7 @@ public sealed class AnthropicProvider : IChatProvider
             var payload = new Dictionary<string, object?>
             {
                 ["model"] = request.Model,
-                ["max_tokens"] = request.MaxTokens ?? 4096,
+                ["max_tokens"] = request.MaxTokens ?? 8192,
                 ["messages"] = wire.ToArray()
             };
             if (systemParts.Count > 0)
