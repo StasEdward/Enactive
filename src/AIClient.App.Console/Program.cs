@@ -1,5 +1,6 @@
 using AIClient.Agents;
 using AIClient.Core.Context;
+using AIClient.Core.Diagnostics;
 using AIClient.Core.Events;
 using AIClient.Core.History;
 using AIClient.Core.Intents;
@@ -43,36 +44,31 @@ if (string.IsNullOrEmpty(workspaceName))
 
 var workspace = new WorkspaceInfo(Guid.NewGuid(), workspaceName, workspaceRoot);
 var runStore = RunStoreFactory.Create(workspace);
+var memoryStore = new JsonMemoryStore(workspace);
 
 // ── Timeline view: print the project's run history and exit ───────────────────
 if (isTimeline)
 {
     var runs = await runStore.LoadAllAsync(CancellationToken.None);
-    Console.WriteLine($"PROJECT TIMELINE — {workspace.RootPath}");
-    Console.WriteLine();
-    if (runs.Count == 0)
-    {
-        Console.WriteLine("(no runs yet)");
-        return 0;
-    }
+    var entries = await memoryStore.LoadAllAsync(CancellationToken.None);
+    Console.WriteLine(ProjectMemory.Render(runs, entries, workspace.RootPath));
+    return 0;
+}
 
-    string? currentDay = null;
-    foreach (var run in runs)
-    {
-        var day = run.StartedAt.ToLocalTime().ToString("yyyy-MM-dd");
-        if (day != currentDay)
+// "inbox" as the first argument prints the AI Inbox (background-task outcomes) and exits.
+if (args.Length > 0 && string.Equals(args[0], "inbox", StringComparison.OrdinalIgnoreCase))
+{
+    var items = await new JsonInboxStore(workspace).LoadAllAsync(CancellationToken.None);
+    Console.WriteLine($"INBOX — {workspace.RootPath}");
+    Console.WriteLine();
+    if (items.Count == 0)
+        Console.WriteLine("(empty)");
+    else
+        foreach (var item in items.OrderByDescending(x => x.At))
         {
-            Console.WriteLine(day);
-            currentDay = day;
+            Console.WriteLine($"  {item.At.ToLocalTime():yyyy-MM-dd HH:mm}  [{item.Kind}] {item.Title}");
+            Console.WriteLine($"        {item.Summary}");
         }
-        Console.WriteLine($"  {run.StartedAt.ToLocalTime():HH:mm}  {run.Status,-10} {run.Title}");
-        if (run.Model is not null)
-            Console.WriteLine($"           model: {run.Model}");
-        if (run.Artifacts.Count > 0)
-            Console.WriteLine($"           artifacts: {string.Join(", ", run.Artifacts)}");
-        if (run.Decisions.Count > 0)
-            Console.WriteLine($"           decisions: {string.Join("; ", run.Decisions)}");
-    }
     return 0;
 }
 
@@ -86,31 +82,32 @@ var descriptor = new ProviderDescriptor(
     ApiKey: null,
     Models: new[] { model });
 
-var providerFactory = new ChatProviderFactory(new[] { descriptor }, http);
+// ── Global log ────────────────────────────────────────────────────────────────
+// Readable summaries + raw wire, mirrored to a daily file under %APPDATA%/AIClient/logs.
+// AICLIENT_LOG_LEVEL (Trace|Debug|Info|Warn|Error, default Debug) controls verbosity;
+// set it to Trace to capture the raw HTTP request/response bodies.
+var logLevel = Enum.TryParse<LogLevel>(Environment.GetEnvironmentVariable("AICLIENT_LOG_LEVEL"), ignoreCase: true, out var lv)
+    ? lv : LogLevel.Debug;
+var logFile = new FileLogSink();
+using var logHub = new LogHub(minLevel: logLevel, downstream: new ILogSink[] { logFile });
+logHub.Info(LogSource.System, $"AIClient console starting — provider={descriptor.DisplayName}, model={model}, log dir={FileLogSink.DefaultDirectory()}");
+
+var providerFactory = new ChatProviderFactory(new[] { descriptor }, http, logHub);
 var artifactStore = new DiskArtifactStore(workspace);
-var toolRegistry = new ToolRegistry(new ITool[]
+IToolRegistry toolRegistry = new LoggingToolRegistry(new ToolRegistry(new ITool[]
 {
     new WriteFileTool(),
     new ReadFileTool(),
     new ListDirectoryTool(),
-    new RunCommandTool()
-});
-var contextProvider = new ContextProvider(workspace);
+    new RunCommandTool(),
+    new RunPowerShellTool()
+}), logHub);
+var contextProvider = new ContextProvider(workspace, new EnvironmentProbe());
 var modelResolver = new ModelResolver();
 
-var developer = new Worker(
-    Id: "developer",
-    Role: "Developer",
-    Instructions:
-        "You are a developer agent working inside the user's workspace. You have these tools: "
-        + "write_file (create/overwrite a file), read_file (read a file), list_dir (list a directory), "
-        + "run_command (run a shell command in the workspace). All paths are relative to the workspace root. "
-        + "Use the tools to accomplish the request, then reply with a short confirmation of what you did.",
-    ToolAllowlist: new[] { "write_file", "read_file", "list_dir", "run_command" },
-    DefaultLevel: PermissionLevel.Execute,
-    ModelPolicy: new ModelPolicy(new ModelRef("ollama", model)));
-
-var workerProvider = new StaticWorkerProvider(developer);
+var workerProvider = new StaticWorkerProvider(
+    DefaultWorkers.Build(new ModelRef("ollama", model)),
+    DefaultWorkers.DefaultId);
 var planner = new Planner();
 var permissionEngine = new PermissionEngine();
 var decisionHandler = new ConsoleDecisionHandler();
@@ -119,13 +116,13 @@ var decisionHandler = new ConsoleDecisionHandler();
 var permissionPolicy = new PermissionPolicy(
     PermissionLevel.Execute,
     Allow: new[] { "*" },
-    AskBefore: new[] { "run_command" });
+    AskBefore: new[] { "run_command", "run_powershell" });
 
 var orchestrator = new Orchestrator(
     providerFactory, modelResolver, workerProvider, toolRegistry,
     artifactStore, workspace, planner, permissionEngine, decisionHandler,
     permissionPolicy, new EmptyServiceProvider());
-var runRecorder = new RunRecorder(runStore);
+var runRecorder = new RunRecorder(runStore, memoryStore, workspace.Id);
 
 // ── Run ──────────────────────────────────────────────────────────────────────
 using var cts = new CancellationTokenSource();
@@ -145,7 +142,7 @@ var intent = new Intent(Guid.NewGuid(), command, IntentSource.CommandBar, workCo
 var streaming = false;
 try
 {
-    await foreach (var ev in runRecorder.RecordAsync(orchestrator.SubmitIntentAsync(intent, cts.Token), cts.Token))
+    await foreach (var ev in runRecorder.RecordAsync(orchestrator.SubmitIntentAsync(intent, cts.Token).TeeToLog(logHub, cts.Token), cts.Token))
     {
         // Assistant text arrives token by token — print it inline as a live stream.
         if (ev.Kind == EventKind.AssistantDelta)

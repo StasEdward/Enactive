@@ -20,6 +20,11 @@ internal sealed class SettingsWindow : Window
 
         var baseUrlBox = new TextBox { Text = settings.BaseUrl, Watermark = "http://localhost:11434/v1" };
         var modelBox = new TextBox { Text = settings.Model, Watermark = "model name" };
+        var numCtxBox = new TextBox
+        {
+            Text = settings.NumCtx?.ToString() ?? string.Empty,
+            Watermark = "e.g. 8192 - blank uses whatever the model already has loaded"
+        };
 
         var modelsCombo = new ComboBox { PlaceholderText = "installed models…", HorizontalAlignment = HorizontalAlignment.Stretch };
         modelsCombo.SelectionChanged += (_, _) =>
@@ -92,6 +97,9 @@ internal sealed class SettingsWindow : Window
         {
             settings.BaseUrl = (baseUrlBox.Text ?? string.Empty).Trim();
             settings.Model = (modelBox.Text ?? string.Empty).Trim();
+            settings.NumCtx = int.TryParse((numCtxBox.Text ?? string.Empty).Trim(), out var parsedNumCtx)
+                ? parsedNumCtx
+                : null;
             settings.GlobalInstructions = globalBox.Text ?? string.Empty;
             settings.MultiAgent = multiAgentBox.IsChecked == true;
             settings.AnthropicApiKey = (apiKeyBox.Text ?? string.Empty).Trim();
@@ -114,6 +122,15 @@ internal sealed class SettingsWindow : Window
                     baseUrlBox,
                     Label("Model"),
                     modelBox,
+                    Label("Context length (num_ctx)"),
+                    new TextBlock
+                    {
+                        Text = "How much context to load the model with. Bigger costs VRAM and, if it "
+                             + "no longer fits, pushes part of the model onto the CPU - check `ollama ps` "
+                             + "after changing this. Leave blank to not override it.",
+                        Foreground = Brushes.Gray, FontSize = 11, TextWrapping = TextWrapping.Wrap
+                    },
+                    numCtxBox,
                     new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { modelsCombo, refreshButton } },
                     status,
                     Label("Global instructions"),

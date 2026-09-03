@@ -5,6 +5,9 @@
     <AssemblyName>aiclient</AssemblyName>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="3.53.3" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\AIClient.Core\AIClient.Core.csproj" />
     <ProjectReference Include="..\AIClient.Providers\AIClient.Providers.csproj" />
     <ProjectReference Include="..\AIClient.Tools\AIClient.Tools.csproj" />
