@@ -26,7 +26,6 @@ public sealed class Orchestrator : IOrchestrator
     private const int MaxIterations = 12;
 
     private readonly IChatProviderFactory _providers;
-    private readonly IModelResolver _modelResolver;
     private readonly IWorkerProvider _workers;
     private readonly IToolRegistry _tools;
     private readonly IArtifactStore _artifacts;
@@ -36,8 +35,7 @@ public sealed class Orchestrator : IOrchestrator
     private readonly IDecisionHandler _decisions;
     private readonly PermissionPolicy _policy;
     private readonly IServiceProvider _services;
-    private readonly IChatProvider? _reasoner;
-    private readonly string? _reasonerModel;
+    private readonly IModelRouter _router;
     private readonly int _reviewAttempts;
     private readonly int? _numCtx;
     private readonly Reviewer _reviewer = new();
@@ -54,13 +52,11 @@ public sealed class Orchestrator : IOrchestrator
         IDecisionHandler decisions,
         PermissionPolicy policy,
         IServiceProvider services,
-        IChatProvider? reasoner = null,
-        string? reasonerModel = null,
+        IModelRouter? router = null,
         int reviewAttempts = 1,
         int? numCtx = null)
     {
         _providers = providers;
-        _modelResolver = modelResolver;
         _workers = workers;
         _tools = tools;
         _artifacts = artifacts;
@@ -70,8 +66,7 @@ public sealed class Orchestrator : IOrchestrator
         _decisions = decisions;
         _policy = policy;
         _services = services;
-        _reasoner = reasoner;
-        _reasonerModel = reasonerModel;
+        _router = router ?? new ModelRouter(modelResolver);
         _reviewAttempts = reviewAttempts;
         _numCtx = numCtx;
     }
@@ -96,14 +91,25 @@ public sealed class Orchestrator : IOrchestrator
             + (intent.Context.Environment is { } envInfo ? $" · {envInfo.OneLine()}" : ""));
 
         var worker = _workers.Get(intent.WorkerId);
-        var model = _modelResolver.Resolve(worker.ModelPolicy);
+        var model = _router.Resolve(ModelPurpose.Execute, worker) ?? worker.ModelPolicy.Preferred;
         yield return Ev(EventKind.Routed, $"Worker '{worker.Role}' -> model {model.ProviderId}/{model.Model}");
-        if (_reasoner is not null)
-            yield return Ev(EventKind.Routed, $"Reasoner (planning + review): {_reasonerModel}");
 
         var provider = _providers.Create(model.ProviderId);
-        var planProvider = _reasoner ?? provider;
-        var planModel = _reasoner is not null ? (_reasonerModel ?? model.Model) : model.Model;
+
+        // Plan phase: the bound Plan model, else the executing model.
+        var planRef = _router.Resolve(ModelPurpose.Plan, worker) ?? model;
+        var planProvider = _providers.Create(planRef.ProviderId);
+        var planModel = planRef.Model;
+        if (planRef.ProviderId != model.ProviderId || planRef.Model != model.Model)
+            yield return Ev(EventKind.Routed, $"Planner -> {planRef.ProviderId}/{planRef.Model}");
+
+        // Review phase: on iff a Review model is bound.
+        var reviewRef = _router.Resolve(ModelPurpose.Review, worker);
+        var reviewOn = reviewRef is not null;
+        var reviewProvider = reviewOn ? _providers.Create(reviewRef!.ProviderId) : null;
+        var reviewModel = reviewRef?.Model ?? "";
+        if (reviewOn)
+            yield return Ev(EventKind.Routed, $"Reviewer -> {reviewRef!.ProviderId}/{reviewRef.Model}");
 
         // ── Understand / Plan (reasoner when multi-agent) ─────────────────────
         var plan = await _planner.PlanAsync(intent.RawText, intent.Context, planProvider, planModel, ct);
@@ -147,7 +153,7 @@ public sealed class Orchestrator : IOrchestrator
                 $"Proceed with this step of the plan: {step.Title}\n"
                 + "Do only this step. Use tools as needed. When finished, briefly confirm what you did."));
 
-            var maxAttempts = _reasoner is not null ? _reviewAttempts + 1 : 1;
+            var maxAttempts = reviewOn ? _reviewAttempts + 1 : 1;
             var passed = true;
             var failedHard = false;
             string? failError = null;
@@ -192,7 +198,7 @@ public sealed class Orchestrator : IOrchestrator
                 if (failedHard)
                     break;
 
-                if (_reasoner is null)
+                if (!reviewOn)
                     break;
 
                 yield return Ev(EventKind.ReviewRequested, $"[{stepNumber}] reviewing with reasoner…");
@@ -202,7 +208,7 @@ public sealed class Orchestrator : IOrchestrator
                 {
                     var changed = artifacts.Select(a => a.RelativePath).ToArray();
                     var evidence = BuildEvidence(messages, evidenceStart);
-                    review = await _reviewer.ReviewAsync(step.Title, LastAssistant(messages), evidence, changed, _reasoner, _reasonerModel ?? "", ct);
+                    review = await _reviewer.ReviewAsync(step.Title, LastAssistant(messages), evidence, changed, reviewProvider!, reviewModel, ct);
                 }
                 catch (Exception ex)
                 {

@@ -427,18 +427,10 @@ public sealed class MainWindow : Window, IDecisionHandler
         {
             var runStore = RunStoreFactory.Create(workspace);
             var contextProvider = new ContextProvider(workspace, new EnvironmentProbe());
-            IChatProvider? reasoner = null;
-            string? reasonerModel = null;
-            if (_settings.MultiAgent && !string.IsNullOrWhiteSpace(_settings.AnthropicApiKey))
-            {
-                reasoner = _providerFactory.Create("anthropic");
-                reasonerModel = _settings.ReasonerModel;
-            }
-
             var orchestrator = new Orchestrator(
                 _providerFactory, _modelResolver, _workerProvider, _toolRegistry, artifactStore,
                 workspace, _planner, _permissionEngine, this, policy, new EmptyProvider(),
-                reasoner, reasonerModel, 1, _settings.NumCtx);
+                BuildRouter(), 1, _settings.NumCtx);
             var recorder = new RunRecorder(runStore, new JsonMemoryStore(workspace), workspace.Id);
 
             var context = await contextProvider.BuildAsync(new IntentFocus(workspace.Id), _cts.Token);
@@ -993,6 +985,20 @@ public sealed class MainWindow : Window, IDecisionHandler
         }
     }
 
+    // Builds the phase->model router. Today it mirrors the MultiAgent setting (Plan+Review -> Anthropic);
+    // the team/provider editors will populate richer bindings later (Docs/MODELS.md).
+    private IModelRouter BuildRouter()
+    {
+        var bindings = new Dictionary<ModelPurpose, ModelRef>();
+        if (_settings.MultiAgent && !string.IsNullOrWhiteSpace(_settings.AnthropicApiKey))
+        {
+            var reasoner = new ModelRef("anthropic", _settings.ReasonerModel);
+            bindings[ModelPurpose.Plan] = reasoner;
+            bindings[ModelPurpose.Review] = reasoner;
+        }
+        return new ModelRouter(_modelResolver, bindings);
+    }
+
     private static WorkspaceInfo WorkspaceFrom(string path)
     {
         var full = Path.GetFullPath(path);
@@ -1020,18 +1026,11 @@ public sealed class MainWindow : Window, IDecisionHandler
             {
                 var runStore = RunStoreFactory.Create(workspace);
                 var contextProvider = new ContextProvider(workspace, new EnvironmentProbe());
-                IChatProvider? reasoner = null;
-                string? reasonerModel = null;
-                if (_settings.MultiAgent && !string.IsNullOrWhiteSpace(_settings.AnthropicApiKey))
-                {
-                    reasoner = _providerFactory.Create("anthropic");
-                    reasonerModel = _settings.ReasonerModel;
-                }
                 var decisions = new BackgroundDecisionHandler(inbox, workspace);
                 var orchestrator = new Orchestrator(
                     _providerFactory, _modelResolver, _workerProvider, _toolRegistry, new DiskArtifactStore(workspace),
                     workspace, _planner, _permissionEngine, decisions, policy, new EmptyProvider(),
-                    reasoner, reasonerModel, 1, _settings.NumCtx);
+                    BuildRouter(), 1, _settings.NumCtx);
                 var recorder = new RunRecorder(runStore, new JsonMemoryStore(workspace), workspace.Id);
                 var context = await contextProvider.BuildAsync(new IntentFocus(workspace.Id), CancellationToken.None);
                 var intent = new Intent(Guid.NewGuid(), text, IntentSource.Inbox, context, DateTimeOffset.UtcNow, workerId);

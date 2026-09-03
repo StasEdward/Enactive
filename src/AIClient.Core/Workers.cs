@@ -34,3 +34,16 @@ public interface IWorkerProvider
     /// <summary>Returns the worker with this id, or <see cref="Default"/> when id is null/unknown.</summary>
     Worker Get(string? id);
 }
+
+/// <summary>A phase of a run that a model is chosen for (PLAN_v2 team-of-models, Docs/MODELS.md).</summary>
+public enum ModelPurpose { Plan, Review, Execute }
+
+/// <summary>
+/// Resolves which model runs a given phase for a given worker. Execute uses the worker's own model;
+/// Plan/Review use configured bindings (null = the phase is off / falls back to the executing model).
+/// This replaces the old fixed "reasoner" so any number of providers/models can be assigned per phase.
+/// </summary>
+public interface IModelRouter
+{
+    ModelRef? Resolve(ModelPurpose purpose, Worker worker);
+}
