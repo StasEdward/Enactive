@@ -30,8 +30,13 @@ public static class DefaultWorkers
         + "- If a command fails (non-zero exit code, or an error in its output), report the real error and fix the "
         + "cause. Never substitute a plausible-looking placeholder value.\n"
         + "- When asked to put a command's result/report into a file, the file must contain the command's OUTPUT "
-        + "(the exact text the tool returned under 'command output'), NEVER the command line itself.\n"
-        + "- After writing a file that should hold real data, read it back to confirm it contains the real output.";
+        + "(the exact text the tool returned under 'command output'), NEVER the command line itself.";
+
+    // Verifying a write by reading it back catches a weak local model's fabrication, but it costs an extra
+    // round-trip that's wasteful on a strong model — so it's toggled via settings (VerifyWrites) rather than
+    // baked into the always-on rules above.
+    private const string ReadBackRule =
+        "\n- After writing a file that should hold real data, read it back to confirm it contains the real output.";
 
     // The role table, defined once. Instructions here are the BASE (pre-augmentation) text.
     private static readonly (string Id, string Role, string Instructions, string[] Tools, PermissionLevel Level)[] Roles =
@@ -68,9 +73,9 @@ public static class DefaultWorkers
     };
 
     /// <summary>Appends the shared honesty rules and (optionally) global instructions to a role's base text.</summary>
-    public static string Augment(string baseInstructions, string? globalInstructions = null)
+    public static string Augment(string baseInstructions, string? globalInstructions = null, bool verifyWrites = true)
     {
-        var full = baseInstructions + HonestyRules;
+        var full = baseInstructions + HonestyRules + (verifyWrites ? ReadBackRule : string.Empty);
         return string.IsNullOrWhiteSpace(globalInstructions)
             ? full
             : full + "\n\n## Global instructions (apply to every run)\n" + globalInstructions;
@@ -86,11 +91,11 @@ public static class DefaultWorkers
     }
 
     /// <summary>The roles with honesty + global instructions applied and the given model on every role.</summary>
-    public static IReadOnlyList<Worker> Build(ModelRef coder, string? globalInstructions = null)
+    public static IReadOnlyList<Worker> Build(ModelRef coder, string? globalInstructions = null, bool verifyWrites = true)
     {
         var policy = new ModelPolicy(coder);
         return Roles
-            .Select(r => new Worker(r.Id, r.Role, Augment(r.Instructions, globalInstructions), r.Tools, r.Level, policy))
+            .Select(r => new Worker(r.Id, r.Role, Augment(r.Instructions, globalInstructions, verifyWrites), r.Tools, r.Level, policy))
             .ToArray();
     }
 }

@@ -1254,12 +1254,12 @@ public sealed class MainWindow : Window, IDecisionHandler
         var workers = _settings.Workers.Select(w => new Worker(
             w.Id,
             w.Role,
-            DefaultWorkers.Augment(w.Instructions, _globalInstructions),
+            DefaultWorkers.Augment(w.Instructions, _globalInstructions, _settings.VerifyWrites),
             w.Tools,
             w.Level,
             new ModelPolicy(AppSettings.ParseRef(w.Model) ?? fallbackModel, AppSettings.ParseRef(w.Fallback)))).ToList();
         if (workers.Count == 0)
-            workers = DefaultWorkers.Build(fallbackModel, _globalInstructions).ToList();
+            workers = DefaultWorkers.Build(fallbackModel, _globalInstructions, _settings.VerifyWrites).ToList();
         var defaultId = workers.Any(w => w.Id == DefaultWorkers.DefaultId) ? DefaultWorkers.DefaultId : workers[0].Id;
         _workerProvider = new StaticWorkerProvider(workers, defaultId);
 

@@ -72,6 +72,7 @@ internal sealed class SettingsWindow : Window
     private TextBox _numCtxBox = null!;
     private TextBox _globalBox = null!;
     private CheckBox _thinkBox = null!;
+    private CheckBox _verifyBox = null!;
 
     private Control BuildGeneralTab()
     {
@@ -93,6 +94,11 @@ internal sealed class SettingsWindow : Window
             Content = "Disable local model reasoning (<think>) — recommended for qwen3",
             IsChecked = _working.DisableThinking
         };
+        _verifyBox = new CheckBox
+        {
+            Content = "Verify writes by reading files back — helps weak local models, adds a round-trip",
+            IsChecked = _working.VerifyWrites
+        };
 
         return new ScrollViewer
         {
@@ -112,7 +118,10 @@ internal sealed class SettingsWindow : Window
                     Header("Local model behaviour"),
                     Hint("Reasoning models like qwen3 can spend a whole turn in <think> and return nothing. "
                         + "Disabling it makes them answer (and call tools) directly. Only affects Ollama."),
-                    _thinkBox
+                    _thinkBox,
+                    _verifyBox,
+                    Hint("Reading a file back after writing catches a weak model inventing content. It's an extra "
+                        + "call per write, so turn it off when you mostly run strong models.")
                 }
             }
         };
@@ -123,6 +132,7 @@ internal sealed class SettingsWindow : Window
         _working.NumCtx = int.TryParse((_numCtxBox.Text ?? string.Empty).Trim(), out var n) ? n : null;
         _working.GlobalInstructions = _globalBox.Text ?? string.Empty;
         _working.DisableThinking = _thinkBox.IsChecked == true;
+        _working.VerifyWrites = _verifyBox.IsChecked == true;
     }
 
     // ── Providers ──────────────────────────────────────────────────────────────

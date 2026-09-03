@@ -108,6 +108,10 @@ internal sealed class AppSettings
     // burning a whole turn in <think> with empty content. On by default; only OllamaNative honors it.
     public bool DisableThinking { get; set; } = true;
 
+    // Ask workers to read a file back after writing it, to catch a weak local model fabricating content.
+    // Costs an extra LLM round-trip per write — worth turning off when running strong models. On by default.
+    public bool VerifyWrites { get; set; } = true;
+
     // ── Legacy fields (migration source only; superseded by the schema above) ──
     public string BaseUrl { get; set; } = "http://localhost:11434/v1";
     public string Model { get; set; } = "qwen2.5-coder";
@@ -254,6 +258,7 @@ internal sealed class AppSettings
         GlobalInstructions = GlobalInstructions,
         NumCtx = NumCtx,
         DisableThinking = DisableThinking,
+        VerifyWrites = VerifyWrites,
         BaseUrl = BaseUrl,
         Model = Model,
         MultiAgent = MultiAgent,
