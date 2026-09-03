@@ -34,8 +34,12 @@ internal sealed class SettingsWindow : Window
         tabs.Items.Add(phasesTab);
         // The model catalog changes when providers/models are edited on other tabs — refresh the Phases
         // pickers (preserving each selection) whenever the Phases tab is shown.
-        tabs.SelectionChanged += (_, _) =>
+        tabs.SelectionChanged += (_, e) =>
         {
+            // SelectionChanged is a bubbling routed event, so a ComboBox/ListBox inside a tab raises it here
+            // too — act ONLY on the TabControl's own tab change, or picking a model would re-enter and loop.
+            if (e.Source is not TabControl)
+                return;
             // Defer: mutating the pickers' ItemsSource inside the tab's own selection update throws
             // "Cannot change source while update is in progress"; run it once that update has finished.
             if (ReferenceEquals(tabs.SelectedItem, phasesTab))
