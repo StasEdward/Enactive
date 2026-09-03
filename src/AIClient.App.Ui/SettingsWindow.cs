@@ -63,6 +63,7 @@ internal sealed class SettingsWindow : Window
     // ── General ───────────────────────────────────────────────────────────────
     private TextBox _numCtxBox = null!;
     private TextBox _globalBox = null!;
+    private CheckBox _thinkBox = null!;
 
     private Control BuildGeneralTab()
     {
@@ -79,6 +80,11 @@ internal sealed class SettingsWindow : Window
             MinHeight = 220,
             Watermark = "Global instructions — applied to every run"
         };
+        _thinkBox = new CheckBox
+        {
+            Content = "Disable local model reasoning (<think>) — recommended for qwen3",
+            IsChecked = _working.DisableThinking
+        };
 
         return new ScrollViewer
         {
@@ -94,7 +100,11 @@ internal sealed class SettingsWindow : Window
                     _numCtxBox,
                     Header("Global instructions"),
                     Hint("Applied to every run and appended to every worker's instructions."),
-                    _globalBox
+                    _globalBox,
+                    Header("Local model behaviour"),
+                    Hint("Reasoning models like qwen3 can spend a whole turn in <think> and return nothing. "
+                        + "Disabling it makes them answer (and call tools) directly. Only affects Ollama."),
+                    _thinkBox
                 }
             }
         };
@@ -104,6 +114,7 @@ internal sealed class SettingsWindow : Window
     {
         _working.NumCtx = int.TryParse((_numCtxBox.Text ?? string.Empty).Trim(), out var n) ? n : null;
         _working.GlobalInstructions = _globalBox.Text ?? string.Empty;
+        _working.DisableThinking = _thinkBox.IsChecked == true;
     }
 
     // ── Providers ──────────────────────────────────────────────────────────────
@@ -235,6 +246,8 @@ internal sealed class SettingsWindow : Window
     // ── Phases ──────────────────────────────────────────────────────────────────
     private TextBox _planBox = null!;
     private TextBox _reviewBox = null!;
+    private TextBox _lightBox = null!;
+    private TextBox _heavyBox = null!;
 
     private Control BuildPhasesTab()
     {
@@ -257,6 +270,22 @@ internal sealed class SettingsWindow : Window
                 _reviewBox.Text = m == "(none)" ? string.Empty : m;
         };
 
+        _lightBox = new TextBox { Text = _working.Bindings.ExecuteLight, Watermark = "providerId/model — blank = the worker's own model" };
+        var lightCombo = new ComboBox { ItemsSource = catalog, PlaceholderText = "pick…", HorizontalAlignment = HorizontalAlignment.Stretch };
+        lightCombo.SelectionChanged += (_, _) =>
+        {
+            if (lightCombo.SelectedItem is string m)
+                _lightBox.Text = m == "(none)" ? string.Empty : m;
+        };
+
+        _heavyBox = new TextBox { Text = _working.Bindings.ExecuteHeavy, Watermark = "providerId/model — blank = the worker's own model" };
+        var heavyCombo = new ComboBox { ItemsSource = catalog, PlaceholderText = "pick…", HorizontalAlignment = HorizontalAlignment.Stretch };
+        heavyCombo.SelectionChanged += (_, _) =>
+        {
+            if (heavyCombo.SelectedItem is string m)
+                _heavyBox.Text = m == "(none)" ? string.Empty : m;
+        };
+
         return new ScrollViewer
         {
             Content = new StackPanel
@@ -273,7 +302,16 @@ internal sealed class SettingsWindow : Window
                     planCombo,
                     Header("Review model"),
                     _reviewBox,
-                    reviewCombo
+                    reviewCombo,
+                    Hint("Per-step auto-routing (optional): the planner rates each step trivial / normal / complex. "
+                        + "Trivial steps run on the light model, complex steps on the heavy model; normal steps stay on "
+                        + "the worker's own model. Leave both blank to disable auto-routing."),
+                    Header("Execute · light (trivial steps)"),
+                    _lightBox,
+                    lightCombo,
+                    Header("Execute · heavy (complex steps)"),
+                    _heavyBox,
+                    heavyCombo
                 }
             }
         };
@@ -283,6 +321,8 @@ internal sealed class SettingsWindow : Window
     {
         _working.Bindings.Plan = (_planBox.Text ?? string.Empty).Trim();
         _working.Bindings.Review = (_reviewBox.Text ?? string.Empty).Trim();
+        _working.Bindings.ExecuteLight = (_lightBox.Text ?? string.Empty).Trim();
+        _working.Bindings.ExecuteHeavy = (_heavyBox.Text ?? string.Empty).Trim();
     }
 
     private static TextBlock Header(string text) => new()

@@ -73,7 +73,7 @@ public sealed class Planner
                                     if (di.ValueKind == JsonValueKind.Number && di.TryGetInt32(out var idx))
                                         deps.Add(idx);
 
-                            specs.Add(new PlanStepSpec(stepTitle!, deps));
+                            specs.Add(new PlanStepSpec(stepTitle!, deps, ParseComplexity(el)));
                         }
                     }
                 }
@@ -103,6 +103,18 @@ public sealed class Planner
         return start >= 0 && end > start ? text.Remove(start, end + close.Length - start) : text;
     }
 
+    private static StepComplexity ParseComplexity(JsonElement el)
+    {
+        if (el.TryGetProperty("complexity", out var c) && c.ValueKind == JsonValueKind.String)
+            return c.GetString()?.Trim().ToLowerInvariant() switch
+            {
+                "trivial" => StepComplexity.Trivial,
+                "complex" => StepComplexity.Complex,
+                _ => StepComplexity.Normal
+            };
+        return StepComplexity.Normal;
+    }
+
     private static string? ExtractJson(string text)
     {
         var start = text.IndexOf('{');
@@ -116,11 +128,14 @@ public sealed class Planner
     private const string SystemPrompt =
         "You are a planning assistant for a developer agent. Decide whether the request is a single action or "
         + "genuinely needs several distinct stages. Respond with ONLY a JSON object, no prose and no code fences: "
-        + "{\"disposition\":\"quick_action\" or \"task\",\"title\":\"short title\",\"steps\":[{\"title\":\"...\",\"dependsOn\":[]}]}. "
+        + "{\"disposition\":\"quick_action\" or \"task\",\"title\":\"short title\",\"steps\":[{\"title\":\"...\",\"dependsOn\":[],\"complexity\":\"normal\"}]}. "
         + "STRONGLY prefer \"quick_action\" with empty steps: one action is a quick_action even when it has parts done "
         + "together - e.g. 'run script X and save its output to file Y' is ONE quick_action, not multiple steps. "
         + "For a \"task\", each step is an object with a \"title\" and \"dependsOn\": the 0-based indices of earlier "
         + "steps that must finish first ([] = can start immediately). Model the REAL dependencies as a graph — steps "
         + "that do not depend on each other must have independent dependsOn so they are not forced into a chain. Use "
-        + "2-4 steps max. NEVER split one command into 'do it' / 'capture it' / 'save it'. Keep the title under 8 words.";
+        + "2-4 steps max. NEVER split one command into 'do it' / 'capture it' / 'save it'. Keep the title under 8 words. "
+        + "For each step also set \"complexity\": \"trivial\" (a rename, one obvious edit, a one-line command), "
+        + "\"normal\" (the default), or \"complex\" (multi-file logic, a tricky algorithm, careful reasoning) — this lets "
+        + "the app run trivial steps on a smaller/faster model and complex steps on a stronger one.";
 }

@@ -31,7 +31,11 @@ public sealed record ChatRequest(
     // Ollama context window override (options.num_ctx on the wire). Only honored by
     // OllamaNativeProvider - the OpenAI-compatible /v1 endpoint has no such field and
     // silently ignores it (confirmed against Ollama's own openai/openai.go).
-    int? NumCtx = null);
+    int? NumCtx = null,
+    // Ollama "think" toggle (top-level on /api/chat). Set false to stop a reasoning model (qwen3, ...)
+    // from spending a whole turn in <think> and returning empty content. Null = leave it to the model.
+    // Only OllamaNativeProvider honors it; other providers ignore it.
+    bool? Think = null);
 
 /// <summary>A completed assistant turn (content and/or tool calls).</summary>
 public sealed record ChatCompletion(

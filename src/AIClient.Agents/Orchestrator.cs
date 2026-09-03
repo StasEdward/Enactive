@@ -38,6 +38,7 @@ public sealed class Orchestrator : IOrchestrator
     private readonly IModelRouter _router;
     private readonly int _reviewAttempts;
     private readonly int? _numCtx;
+    private readonly bool? _think;
     private readonly Reviewer _reviewer = new();
 
     public Orchestrator(
@@ -54,7 +55,8 @@ public sealed class Orchestrator : IOrchestrator
         IServiceProvider services,
         IModelRouter? router = null,
         int reviewAttempts = 1,
-        int? numCtx = null)
+        int? numCtx = null,
+        bool disableThinking = false)
     {
         _providers = providers;
         _workers = workers;
@@ -69,6 +71,8 @@ public sealed class Orchestrator : IOrchestrator
         _router = router ?? new ModelRouter(modelResolver);
         _reviewAttempts = reviewAttempts;
         _numCtx = numCtx;
+        // Disable the local model's <think> phase by sending think:false; null leaves it to the model.
+        _think = disableThinking ? false : null;
     }
 
     public async IAsyncEnumerable<WorkEvent> SubmitIntentAsync(
@@ -153,6 +157,14 @@ public sealed class Orchestrator : IOrchestrator
                 $"Proceed with this step of the plan: {step.Title}\n"
                 + "Do only this step. Use tools as needed. When finished, briefly confirm what you did."));
 
+            // Per-step model auto-routing: pick the Execute model for this step's complexity (light for
+            // trivial, heavy for complex, the worker's own for normal). Falls back to the base model.
+            var stepRef = _router.ResolveExecute(worker, step.Complexity) ?? model;
+            var stepProvider = _providers.Create(stepRef.ProviderId);
+            var stepModel = stepRef.Model;
+            if (stepRef.ProviderId != model.ProviderId || stepRef.Model != model.Model)
+                yield return Ev(EventKind.Routed, $"[{stepNumber}] {step.Complexity} step -> {stepRef.ProviderId}/{stepRef.Model}");
+
             var maxAttempts = reviewOn ? _reviewAttempts + 1 : 1;
             var passed = true;
             var failedHard = false;
@@ -164,7 +176,7 @@ public sealed class Orchestrator : IOrchestrator
 
                 // Drain the tool loop manually so a thrown exception fails only THIS step (and its
                 // dependents) instead of the whole run — the yield stays outside the try/catch.
-                var stepEnum = RunToolLoopAsync(taskId, runId, provider, model.Model, worker, messages, artifacts, intent.Context, ct)
+                var stepEnum = RunToolLoopAsync(taskId, runId, stepProvider, stepModel, worker, messages, artifacts, intent.Context, ct)
                     .GetAsyncEnumerator(ct);
                 try
                 {
@@ -269,7 +281,7 @@ public sealed class Orchestrator : IOrchestrator
         for (var iteration = 1; iteration <= MaxIterations; iteration++)
         {
             var toolDefs = _tools.Definitions.Where(d => Allows(worker, d.Name)).ToArray();
-            var request = new ChatRequest(model, messages, toolDefs, Temperature: 0.2, NumCtx: _numCtx);
+            var request = new ChatRequest(model, messages, toolDefs, Temperature: 0.2, NumCtx: _numCtx, Think: _think);
 
             var contentBuilder = new StringBuilder();
             var toolBuilders = new Dictionary<int, ToolCallBuilder>();

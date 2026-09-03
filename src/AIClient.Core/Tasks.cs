@@ -12,10 +12,18 @@ public enum WorkStatus { New, Understanding, Planning, Executing, WaitingForUser
 public enum StepStatus { Pending, Ready, Running, Done, Skipped, Failed }
 
 /// <summary>
+/// How hard a step is, as judged by the planner. Drives per-step model auto-routing: Trivial steps can run
+/// on a smaller/faster model, Complex steps on a stronger one, Normal on the worker's own model.
+/// </summary>
+public enum StepComplexity { Trivial, Normal, Complex }
+
+/// <summary>
 /// One step of a plan. Carries <see cref="DependsOn"/> so a linear chain (v1) and a future DAG share
 /// the same type (PLAN_v2 §2.4).
 /// </summary>
-public sealed record PlanStep(Guid Id, string Title, StepStatus Status, IReadOnlyList<Guid> DependsOn);
+public sealed record PlanStep(
+    Guid Id, string Title, StepStatus Status, IReadOnlyList<Guid> DependsOn,
+    StepComplexity Complexity = StepComplexity.Normal);
 
 /// <summary>A plan is a graph of steps. v1 builds a linear chain via <see cref="LinearPlan"/>.</summary>
 public sealed record Plan(Guid Id, IReadOnlyList<PlanStep> Steps);
@@ -49,7 +57,8 @@ public static class LinearPlan
 }
 
 /// <summary>A planner-emitted step: a title plus the 0-based indices of prerequisite steps.</summary>
-public sealed record PlanStepSpec(string Title, IReadOnlyList<int> DependsOn);
+public sealed record PlanStepSpec(
+    string Title, IReadOnlyList<int> DependsOn, StepComplexity Complexity = StepComplexity.Normal);
 
 /// <summary>
 /// Builds a real dependency graph from planner specs (index deps → step ids). If no spec declares any
@@ -78,7 +87,7 @@ public static class DagPlan
             else
                 deps = i > 0 ? new[] { ids[i - 1] } : Array.Empty<Guid>();
 
-            steps.Add(new PlanStep(ids[i], specs[i].Title, StepStatus.Pending, deps));
+            steps.Add(new PlanStep(ids[i], specs[i].Title, StepStatus.Pending, deps, specs[i].Complexity));
         }
         return new Plan(Guid.NewGuid(), steps);
     }

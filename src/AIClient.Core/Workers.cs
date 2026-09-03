@@ -2,6 +2,7 @@ namespace AIClient.Core.Workers;
 
 using AIClient.Core.Permissions;
 using AIClient.Core.Providers;
+using AIClient.Core.Tasks;
 
 /// <summary>Model selection policy for a worker (PLAN_v2 §2.5): preferred / fallback / user override.</summary>
 public sealed record ModelPolicy(
@@ -46,4 +47,10 @@ public enum ModelPurpose { Plan, Review, Execute }
 public interface IModelRouter
 {
     ModelRef? Resolve(ModelPurpose purpose, Worker worker);
+
+    /// <summary>
+    /// The Execute model for a step of the given complexity: Trivial/Complex map to the configured light/heavy
+    /// models when set, otherwise (and always for Normal) the worker's own model.
+    /// </summary>
+    ModelRef? ResolveExecute(Worker worker, StepComplexity complexity);
 }
