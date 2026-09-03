@@ -15,7 +15,7 @@ public sealed record ReviewResult(bool Pass, string Notes);
 public sealed class Reviewer
 {
     public async Task<ReviewResult> ReviewAsync(
-        string stepTitle, string coderOutput, IReadOnlyList<string> artifacts,
+        string stepTitle, string coderOutput, string executionEvidence, IReadOnlyList<string> artifacts,
         IChatProvider provider, string model, CancellationToken ct)
     {
         var files = artifacts.Count == 0 ? "(none)" : string.Join(", ", artifacts);
@@ -25,8 +25,12 @@ public sealed class Reviewer
             ChatMessage.User(
                 $"Step: {stepTitle}\n\n"
                 + $"What the coding agent reported:\n{coderOutput}\n\n"
+                + $"Tool execution evidence — the ACTUAL commands run and their real stdout/stderr/exit codes "
+                + $"(this is the ground truth; the agent's own words above may be wrong or invented):\n{executionEvidence}\n\n"
                 + $"Files changed: {files}\n\n"
-                + "Did the coder correctly and completely accomplish this step?")
+                + "Judge ONLY from the evidence. FAIL if: the step required running a command but none was actually "
+                + "run; a required command failed (non-zero exit or an error in its output); or the reported/saved "
+                + "result is fabricated or a placeholder value not present in the real tool output. Otherwise PASS.")
         };
 
         var completion = await provider.CompleteAsync(new ChatRequest(model, messages, Temperature: 0.0), ct);
@@ -71,7 +75,10 @@ public sealed class Reviewer
     }
 
     private const string SystemPrompt =
-        "You are a senior code reviewer. Judge whether the coding agent correctly and completely accomplished "
-        + "the given step. Respond with ONLY a JSON object, no prose and no code fences: "
-        + "{\"verdict\":\"pass\" or \"fail\",\"notes\":\"short, specific feedback\"}. Pass unless there is a real problem.";
+        "You are a senior code reviewer verifying a coding agent's step against real tool-execution evidence. "
+        + "Trust the execution evidence (actual commands + their real output/exit codes) over the agent's own summary, "
+        + "which may be mistaken or fabricated. Respond with ONLY a JSON object, no prose and no code fences: "
+        + "{\"verdict\":\"pass\" or \"fail\",\"notes\":\"short, specific feedback\"}. "
+        + "Fail if the required command was never actually run, a required command failed, or a reported/saved value "
+        + "is fabricated or a placeholder not present in the real output. Otherwise pass.";
 }

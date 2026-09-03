@@ -2,9 +2,12 @@ namespace AIClient.Agents;
 
 using System.Runtime.CompilerServices;
 using System.Text;
+using System.Text.Json;
+using System.Text.RegularExpressions;
 using AIClient.Core.Artifacts;
 using AIClient.Core.Chat;
 using AIClient.Core.Context;
+using AIClient.Core.Diagnostics;
 using AIClient.Core.Events;
 using AIClient.Core.Intents;
 using AIClient.Core.Orchestration;
@@ -20,7 +23,7 @@ using AIClient.Core.Workers;
 /// </summary>
 public sealed class Orchestrator : IOrchestrator
 {
-    private const int MaxIterations = 6;
+    private const int MaxIterations = 12;
 
     private readonly IChatProviderFactory _providers;
     private readonly IModelResolver _modelResolver;
@@ -36,6 +39,7 @@ public sealed class Orchestrator : IOrchestrator
     private readonly IChatProvider? _reasoner;
     private readonly string? _reasonerModel;
     private readonly int _reviewAttempts;
+    private readonly int? _numCtx;
     private readonly Reviewer _reviewer = new();
 
     public Orchestrator(
@@ -52,7 +56,8 @@ public sealed class Orchestrator : IOrchestrator
         IServiceProvider services,
         IChatProvider? reasoner = null,
         string? reasonerModel = null,
-        int reviewAttempts = 1)
+        int reviewAttempts = 1,
+        int? numCtx = null)
     {
         _providers = providers;
         _modelResolver = modelResolver;
@@ -68,6 +73,7 @@ public sealed class Orchestrator : IOrchestrator
         _reasoner = reasoner;
         _reasonerModel = reasonerModel;
         _reviewAttempts = reviewAttempts;
+        _numCtx = numCtx;
     }
 
     public async IAsyncEnumerable<WorkEvent> SubmitIntentAsync(
@@ -76,15 +82,20 @@ public sealed class Orchestrator : IOrchestrator
         var runId = Guid.NewGuid();
         var taskId = intent.Id;
 
+        // Open the ambient correlation scope for the whole run: every nested provider/tool/planner
+        // call is then tagged with this run in the global log, without threading ids through them.
+        using var _logScope = LogScope.Begin(runId, taskId);
+
         WorkEvent Ev(EventKind kind, string summary)
             => new(Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow, kind, summary, null);
 
         yield return Ev(EventKind.IntentReceived, $"Intent: {intent.RawText}");
         yield return Ev(EventKind.ContextAssembled,
             $"Workspace '{_workspace.Name}' at {_workspace.RootPath}"
-            + (intent.Context.GitBranch is { } branch ? $" (git: {branch})" : ""));
+            + (intent.Context.GitBranch is { } branch ? $" (git: {branch})" : "")
+            + (intent.Context.Environment is { } envInfo ? $" · {envInfo.OneLine()}" : ""));
 
-        var worker = _workers.Default;
+        var worker = _workers.Get(intent.WorkerId);
         var model = _modelResolver.Resolve(worker.ModelPolicy);
         yield return Ev(EventKind.Routed, $"Worker '{worker.Role}' -> model {model.ProviderId}/{model.Model}");
         if (_reasoner is not null)
@@ -108,35 +119,78 @@ public sealed class Orchestrator : IOrchestrator
         {
             yield return Ev(EventKind.Routed, $"Quick action: {plan.Title}");
 
-            await foreach (var ev in RunToolLoopAsync(taskId, runId, provider, model.Model, messages, artifacts, intent.Context, ct))
+            await foreach (var ev in RunToolLoopAsync(taskId, runId, provider, model.Model, worker, messages, artifacts, intent.Context, ct))
                 yield return ev;
 
             yield return Ev(EventKind.TaskCompleted, SummarizeArtifacts(artifacts));
             yield break;
         }
 
-        // ── Task with a linear plan ──────────────────────────────────────────
-        var builtPlan = LinearPlan.FromTitles(plan.Steps);
+        // ── Task with a DAG plan ──────────────────────────────────────────
+        var builtPlan = plan.Plan ?? LinearPlan.FromTitles(new[] { plan.Title });
+        var total = builtPlan.Steps.Count;
         yield return Ev(EventKind.PlanCreated,
-            $"{plan.Title} — {builtPlan.Steps.Count} steps: {string.Join(" | ", plan.Steps)}");
+            $"{plan.Title} — {total} steps: {string.Join(" | ", builtPlan.Steps.Select(x => x.Title))}");
 
+        var scheduler = new DagScheduler(builtPlan);
         var stepNumber = 0;
-        foreach (var step in builtPlan.Steps)
+
+        // Execute by readiness: a step runs only once all its dependencies are Done (a real DAG),
+        // not in a fixed linear order.
+        while (scheduler.NextReady() is { } step)
         {
             stepNumber++;
-            yield return Ev(EventKind.StepStarted, $"[{stepNumber}/{builtPlan.Steps.Count}] {step.Title}");
+            var depNote = step.DependsOn.Count > 0 ? $" (after {step.DependsOn.Count} dep)" : "";
+            yield return Ev(EventKind.StepStarted, $"[{stepNumber}/{total}] {step.Title}{depNote}");
 
             messages.Add(ChatMessage.User(
-                $"Proceed with step {stepNumber} of the plan: {step.Title}\n"
+                $"Proceed with this step of the plan: {step.Title}\n"
                 + "Do only this step. Use tools as needed. When finished, briefly confirm what you did."));
 
             var maxAttempts = _reasoner is not null ? _reviewAttempts + 1 : 1;
             var passed = true;
+            var failedHard = false;
+            string? failError = null;
 
             for (var attempt = 1; attempt <= maxAttempts; attempt++)
             {
-                await foreach (var ev in RunToolLoopAsync(taskId, runId, provider, model.Model, messages, artifacts, intent.Context, ct))
-                    yield return ev;
+                var evidenceStart = messages.Count;
+
+                // Drain the tool loop manually so a thrown exception fails only THIS step (and its
+                // dependents) instead of the whole run — the yield stays outside the try/catch.
+                var stepEnum = RunToolLoopAsync(taskId, runId, provider, model.Model, worker, messages, artifacts, intent.Context, ct)
+                    .GetAsyncEnumerator(ct);
+                try
+                {
+                    while (true)
+                    {
+                        WorkEvent current = null!;
+                        try
+                        {
+                            if (!await stepEnum.MoveNextAsync())
+                                break;
+                            current = stepEnum.Current;
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            throw;
+                        }
+                        catch (Exception ex)
+                        {
+                            failedHard = true;
+                            failError = ex.Message;
+                            break;
+                        }
+                        yield return current;
+                    }
+                }
+                finally
+                {
+                    await stepEnum.DisposeAsync();
+                }
+
+                if (failedHard)
+                    break;
 
                 if (_reasoner is null)
                     break;
@@ -147,7 +201,8 @@ public sealed class Orchestrator : IOrchestrator
                 try
                 {
                     var changed = artifacts.Select(a => a.RelativePath).ToArray();
-                    review = await _reviewer.ReviewAsync(step.Title, LastAssistant(messages), changed, _reasoner, _reasonerModel ?? "", ct);
+                    var evidence = BuildEvidence(messages, evidenceStart);
+                    review = await _reviewer.ReviewAsync(step.Title, LastAssistant(messages), evidence, changed, _reasoner, _reasonerModel ?? "", ct);
                 }
                 catch (Exception ex)
                 {
@@ -171,9 +226,24 @@ public sealed class Orchestrator : IOrchestrator
                         + "Please fix the issues and redo this step."));
             }
 
-            yield return Ev(EventKind.StepCompleted,
-                $"[{stepNumber}/{builtPlan.Steps.Count}] {step.Title} — {(passed ? "done" : "done (review not passed)")}");
+            if (failedHard)
+            {
+                var skippedSteps = scheduler.MarkFailed(step.Id);
+                yield return Ev(EventKind.StepCompleted, $"[{stepNumber}/{total}] {step.Title} — FAILED: {failError}");
+                foreach (var sk in skippedSteps)
+                    yield return Ev(EventKind.StepCompleted, $"[-/{total}] {sk.Title} — skipped (dependency failed)");
+            }
+            else
+            {
+                scheduler.MarkDone(step.Id);
+                yield return Ev(EventKind.StepCompleted,
+                    $"[{stepNumber}/{total}] {step.Title} — {(passed ? "done" : "done (review not passed)")}");
+            }
         }
+
+        if (scheduler.HasPending)
+            yield return Ev(EventKind.ErrorObserved,
+                "Plan has unresolvable dependencies (a cycle) — remaining steps could not run.");
 
         yield return Ev(EventKind.TaskCompleted, SummarizeArtifacts(artifacts));
     }
@@ -183,7 +253,7 @@ public sealed class Orchestrator : IOrchestrator
     /// answer (no tool calls). Emits token + tool + artifact events and appends produced artifacts.
     /// </summary>
     private async IAsyncEnumerable<WorkEvent> RunToolLoopAsync(
-        Guid taskId, Guid runId, IChatProvider provider, string model,
+        Guid taskId, Guid runId, IChatProvider provider, string model, Worker worker,
         List<ChatMessage> messages, List<ArtifactRef> artifacts, WorkContext context,
         [EnumeratorCancellation] CancellationToken ct)
     {
@@ -192,7 +262,8 @@ public sealed class Orchestrator : IOrchestrator
 
         for (var iteration = 1; iteration <= MaxIterations; iteration++)
         {
-            var request = new ChatRequest(model, messages, _tools.Definitions, Temperature: 0.2);
+            var toolDefs = _tools.Definitions.Where(d => Allows(worker, d.Name)).ToArray();
+            var request = new ChatRequest(model, messages, toolDefs, Temperature: 0.2, NumCtx: _numCtx);
 
             var contentBuilder = new StringBuilder();
             var toolBuilders = new Dictionary<int, ToolCallBuilder>();
@@ -222,16 +293,40 @@ public sealed class Orchestrator : IOrchestrator
             }
 
             var toolCalls = BuildToolCalls(toolBuilders);
+            var recovered = false;
+            if (toolCalls is null && contentBuilder.Length > 0)
+            {
+                var implicitCall = TryRecoverImplicitToolCall(contentBuilder.ToString());
+                if (implicitCall is not null)
+                {
+                    toolCalls = new List<ToolCall> { implicitCall };
+                    recovered = true;
+                }
+            }
+
             messages.Add(new ChatMessage(
                 ChatRole.Assistant,
                 contentBuilder.Length > 0 ? contentBuilder.ToString() : null,
                 toolCalls));
 
             if (toolCalls is null)
-                yield break; // final answer for this segment
+                yield break; // genuine final answer - no tool calls, nothing recoverable either
+
+            if (recovered)
+                yield return Ev(EventKind.ErrorObserved,
+                    $"The model described a '{toolCalls[0].Name}' call in plain text instead of "
+                    + "actually invoking it - recovered automatically. Verify the result below.");
 
             foreach (var call in toolCalls)
             {
+                // ── Role gate: is this tool available to the worker's role? ──
+                if (!Allows(worker, call.Name))
+                {
+                    yield return Ev(EventKind.DecisionResolved, $"{call.Name}: not available to role '{worker.Role}'");
+                    messages.Add(ChatMessage.Tool(call.Id, $"ERROR: tool '{call.Name}' is not available to the {worker.Role} role."));
+                    continue;
+                }
+
                 // ── Permission gate: allow / ask / deny ──────────────────────
                 var gate = _permissions.Evaluate(_policy, call.Name, _tools.RequiredLevelOf(call.Name));
                 if (gate != PermissionDecision.Allow)
@@ -247,7 +342,8 @@ public sealed class Orchestrator : IOrchestrator
                             $"Run tool '{call.Name}'?",
                             $"Arguments: {Compact(call.ArgumentsJson)}",
                             new[] { new DecisionOption("allow", "Allow"), new DecisionOption("deny", "Deny") },
-                            RecommendedOptionId: "allow");
+                            RecommendedOptionId: "allow",
+                            Subject: call.Name);
 
                         var outcome = await _decisions.RequestAsync(decisionRequest, ct);
                         approved = string.Equals(outcome.OptionId, "allow", StringComparison.OrdinalIgnoreCase);
@@ -306,6 +402,87 @@ public sealed class Orchestrator : IOrchestrator
         yield return Ev(EventKind.ErrorObserved, $"Segment did not converge after {MaxIterations} iterations.");
     }
 
+    /// <summary>
+    /// Best-effort recovery for the "narrated instead of called" failure mode: some local
+    /// models, especially quantized ones, sometimes print what a tool call WOULD look like
+    /// (a fenced ```json block, or a bare {...} block) instead of emitting a real structured
+    /// tool call. If that JSON's keys satisfy exactly one registered tool's required
+    /// parameters, treat it as if that tool had actually been called. Deliberately
+    /// conservative: any ambiguity (no tool matches, or more than one matches equally well)
+    /// returns null rather than guessing.
+    /// </summary>
+    private ToolCall? TryRecoverImplicitToolCall(string text)
+    {
+        var candidates = new List<string>();
+        foreach (Match m in JsonFenceRegex.Matches(text))
+            candidates.Add(m.Groups[1].Value);
+
+        // Fallback: the model may not have fenced it at all - try the outermost {...} span too.
+        var braceStart = text.IndexOf('{');
+        var braceEnd = text.LastIndexOf('}');
+        if (braceStart >= 0 && braceEnd > braceStart)
+            candidates.Add(text[braceStart..(braceEnd + 1)]);
+
+        foreach (var candidate in candidates)
+        {
+            JsonDocument doc;
+            try { doc = JsonDocument.Parse(candidate); }
+            catch { continue; }
+
+            using (doc)
+            {
+                if (doc.RootElement.ValueKind != JsonValueKind.Object)
+                    continue;
+
+                var docKeys = doc.RootElement.EnumerateObject()
+                    .Select(p => p.Name).ToHashSet(StringComparer.Ordinal);
+
+                ToolDefinition? best = null;
+                var bestScore = 0;
+                var ambiguous = false;
+
+                foreach (var tool in _tools.Definitions)
+                {
+                    if (!TryReadSchemaKeys(tool.JsonSchema, out var required, out var properties))
+                        continue;
+                    if (required.Count == 0 || !required.All(docKeys.Contains))
+                        continue; // must at least cover everything this tool requires
+
+                    var score = docKeys.Count(properties.Contains);
+                    if (score > bestScore) { best = tool; bestScore = score; ambiguous = false; }
+                    else if (score == bestScore && best is not null) { ambiguous = true; }
+                }
+
+                if (best is not null && !ambiguous)
+                    return new ToolCall(Guid.NewGuid().ToString("N"), best.Name, doc.RootElement.GetRawText());
+            }
+        }
+
+        return null;
+    }
+
+    private static readonly Regex JsonFenceRegex =
+        new("```(?:json)?\\s*(\\{[\\s\\S]*?\\})\\s*```", RegexOptions.Compiled);
+
+    private static bool TryReadSchemaKeys(string jsonSchema, out HashSet<string> required, out HashSet<string> properties)
+    {
+        required = new HashSet<string>(StringComparer.Ordinal);
+        properties = new HashSet<string>(StringComparer.Ordinal);
+        try
+        {
+            using var doc = JsonDocument.Parse(jsonSchema);
+            var root = doc.RootElement;
+            if (root.TryGetProperty("properties", out var props) && props.ValueKind == JsonValueKind.Object)
+                foreach (var p in props.EnumerateObject())
+                    properties.Add(p.Name);
+            if (root.TryGetProperty("required", out var req) && req.ValueKind == JsonValueKind.Array)
+                foreach (var r in req.EnumerateArray())
+                    if (r.ValueKind == JsonValueKind.String) required.Add(r.GetString()!);
+            return true;
+        }
+        catch { return false; }
+    }
+
     private static List<ToolCall>? BuildToolCalls(Dictionary<int, ToolCallBuilder> builders)
     {
         if (builders.Count == 0)
@@ -344,6 +521,12 @@ public sealed class Orchestrator : IOrchestrator
         sb.AppendLine($"Workspace name: {_workspace.Name}");
         if (context.GitBranch is { } branch)
             sb.AppendLine($"Git branch: {branch}");
+        if (context.Environment is { } env)
+        {
+            sb.AppendLine("Environment:");
+            foreach (var line in env.Summary().Split('\n'))
+                sb.AppendLine("  " + line);
+        }
         sb.AppendLine("File paths you pass to tools are RELATIVE to the workspace root.");
         sb.AppendLine();
         sb.AppendLine("## Request (the user's intent)");
@@ -355,6 +538,30 @@ public sealed class Orchestrator : IOrchestrator
     {
         var flattened = json.Replace('\n', ' ').Replace('\r', ' ');
         return flattened.Length <= 120 ? flattened : flattened[..120] + "…";
+    }
+
+    /// <summary>Whether a worker's role is allowed to call the given tool (empty or "*" = all).</summary>
+    private static bool Allows(Worker worker, string tool)
+        => worker.ToolAllowlist.Count == 0
+        || worker.ToolAllowlist.Contains("*")
+        || worker.ToolAllowlist.Contains(tool, StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The real commands and tool outputs added during a step — the reviewer's ground truth.</summary>
+    private static string BuildEvidence(List<ChatMessage> messages, int start)
+    {
+        var sb = new StringBuilder();
+        for (var i = Math.Max(0, start); i < messages.Count; i++)
+        {
+            var m = messages[i];
+            if (m.Role == ChatRole.Assistant && m.ToolCalls is { Count: > 0 } calls)
+                foreach (var call in calls)
+                    sb.Append("-> ").Append(call.Name).Append(' ').AppendLine(Compact(call.ArgumentsJson));
+            else if (m.Role == ChatRole.Tool && !string.IsNullOrEmpty(m.Content))
+                sb.Append("<- ").AppendLine(m.Content);
+        }
+        var text = sb.ToString().Trim();
+        if (text.Length == 0) return "(no tools were run in this step)";
+        return text.Length > 3000 ? text[..3000] + "\n… (truncated)" : text;
     }
 
     /// <summary>Accumulates a streamed tool call across deltas.</summary>

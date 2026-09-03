@@ -3,6 +3,7 @@ namespace AIClient.Agents;
 using System.Runtime.CompilerServices;
 using AIClient.Core.Events;
 using AIClient.Core.History;
+using AIClient.Core.Memory;
 
 /// <summary>
 /// Wraps an orchestrator event stream, re-yielding every event unchanged while accumulating a
@@ -12,8 +13,15 @@ using AIClient.Core.History;
 public sealed class RunRecorder
 {
     private readonly IRunStore _store;
+    private readonly IMemoryStore? _memory;
+    private readonly Guid _workspaceId;
 
-    public RunRecorder(IRunStore store) => _store = store;
+    public RunRecorder(IRunStore store, IMemoryStore? memory = null, Guid workspaceId = default)
+    {
+        _store = store;
+        _memory = memory;
+        _workspaceId = workspaceId;
+    }
 
     public async IAsyncEnumerable<WorkEvent> RecordAsync(
         IAsyncEnumerable<WorkEvent> stream, [EnumeratorCancellation] CancellationToken ct)
@@ -30,7 +38,17 @@ public sealed class RunRecorder
         finally
         {
             if (events.Count > 0)
-                await _store.SaveAsync(Build(events), CancellationToken.None);
+            {
+                var record = Build(events);
+                await _store.SaveAsync(record, CancellationToken.None);
+
+                // Fold each resolved decision into the project's durable memory (PLAN_v2 §2.6).
+                if (_memory is not null)
+                    foreach (var decision in record.Decisions)
+                        await _memory.AppendAsync(
+                            new MemoryEntry(Guid.NewGuid(), _workspaceId, "decision", decision, null, record.FinishedAt),
+                            CancellationToken.None);
+            }
         }
     }
 

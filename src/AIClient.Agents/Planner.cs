@@ -6,12 +6,13 @@ using AIClient.Core.Context;
 using AIClient.Core.Providers;
 using AIClient.Core.Tasks;
 
-/// <summary>The result of the understand/plan phase.</summary>
-public sealed record PlanResult(IntentDisposition Disposition, string Title, IReadOnlyList<string> Steps);
+/// <summary>The result of the understand/plan phase. For a Task, Plan is a real dependency graph.</summary>
+public sealed record PlanResult(IntentDisposition Disposition, string Title, Plan? Plan);
 
 /// <summary>
-/// Turns an intent into a routing decision + optional plan with one LLM call (PLAN_v2 §3, "Understand").
-/// Falls back to a QuickAction if the model's answer can't be parsed.
+/// Turns an intent into a routing decision + optional DAG plan with one LLM call (PLAN_v2 §3). Steps may
+/// declare dependencies (dependsOn indices); the plan is built as a graph. Falls back to a QuickAction if
+/// the model's answer can't be parsed.
 /// </summary>
 public sealed class Planner
 {
@@ -47,21 +48,42 @@ public sealed class Planner
                     ? (t.GetString() ?? fallbackTitle)
                     : fallbackTitle;
 
-                var steps = new List<string>();
+                var specs = new List<PlanStepSpec>();
                 if (root.TryGetProperty("steps", out var s) && s.ValueKind == JsonValueKind.Array)
                 {
-                    foreach (var element in s.EnumerateArray())
+                    foreach (var el in s.EnumerateArray())
                     {
-                        if (element.ValueKind == JsonValueKind.String && element.GetString() is { Length: > 0 } step)
-                            steps.Add(step);
+                        // A step is either a bare string (no deps) or an object {title, dependsOn:[int,...]}.
+                        if (el.ValueKind == JsonValueKind.String)
+                        {
+                            if (el.GetString() is { Length: > 0 } str)
+                                specs.Add(new PlanStepSpec(str, Array.Empty<int>()));
+                        }
+                        else if (el.ValueKind == JsonValueKind.Object)
+                        {
+                            var stepTitle = el.TryGetProperty("title", out var st) && st.ValueKind == JsonValueKind.String
+                                ? st.GetString()
+                                : null;
+                            if (string.IsNullOrWhiteSpace(stepTitle))
+                                continue;
+
+                            var deps = new List<int>();
+                            if (el.TryGetProperty("dependsOn", out var dep) && dep.ValueKind == JsonValueKind.Array)
+                                foreach (var di in dep.EnumerateArray())
+                                    if (di.ValueKind == JsonValueKind.Number && di.TryGetInt32(out var idx))
+                                        deps.Add(idx);
+
+                            specs.Add(new PlanStepSpec(stepTitle!, deps));
+                        }
                     }
                 }
 
                 // A "task" with no steps is really a quick action.
-                if (disposition == IntentDisposition.Task && steps.Count == 0)
+                if (disposition == IntentDisposition.Task && specs.Count == 0)
                     disposition = IntentDisposition.QuickAction;
 
-                return new PlanResult(disposition, Truncate(title, 80), steps);
+                var plan = disposition == IntentDisposition.Task ? DagPlan.FromSpecs(specs) : null;
+                return new PlanResult(disposition, Truncate(title, 80), plan);
             }
             catch (JsonException)
             {
@@ -69,7 +91,7 @@ public sealed class Planner
             }
         }
 
-        return new PlanResult(IntentDisposition.QuickAction, Truncate(fallbackTitle, 80), Array.Empty<string>());
+        return new PlanResult(IntentDisposition.QuickAction, Truncate(fallbackTitle, 80), null);
     }
 
     private static string StripThink(string text)
@@ -92,9 +114,13 @@ public sealed class Planner
         => value.Length <= max ? value : value[..max];
 
     private const string SystemPrompt =
-        "You are a planning assistant for a developer agent. Decide whether the user's request is a simple "
-        + "one-shot action or needs a short multi-step plan. Respond with ONLY a JSON object, no prose and no "
-        + "code fences: {\"disposition\":\"quick_action\" or \"task\",\"title\":\"short title\",\"steps\":[\"step\",...]}. "
-        + "Use \"quick_action\" for a single obvious action (steps empty). Use \"task\" for multi-step work with 2-5 "
-        + "concrete steps. Keep the title under 8 words.";
+        "You are a planning assistant for a developer agent. Decide whether the request is a single action or "
+        + "genuinely needs several distinct stages. Respond with ONLY a JSON object, no prose and no code fences: "
+        + "{\"disposition\":\"quick_action\" or \"task\",\"title\":\"short title\",\"steps\":[{\"title\":\"...\",\"dependsOn\":[]}]}. "
+        + "STRONGLY prefer \"quick_action\" with empty steps: one action is a quick_action even when it has parts done "
+        + "together - e.g. 'run script X and save its output to file Y' is ONE quick_action, not multiple steps. "
+        + "For a \"task\", each step is an object with a \"title\" and \"dependsOn\": the 0-based indices of earlier "
+        + "steps that must finish first ([] = can start immediately). Model the REAL dependencies as a graph — steps "
+        + "that do not depend on each other must have independent dependsOn so they are not forced into a chain. Use "
+        + "2-4 steps max. NEVER split one command into 'do it' / 'capture it' / 'save it'. Keep the title under 8 words.";
 }
