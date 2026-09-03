@@ -100,7 +100,9 @@ IToolRegistry toolRegistry = new LoggingToolRegistry(new ToolRegistry(new ITool[
     new ReadFileTool(),
     new ListDirectoryTool(),
     new RunCommandTool(),
-    new RunPowerShellTool()
+    new RunPowerShellTool(),
+    new GitTool(),
+    new DockerTool()
 }), logHub);
 var contextProvider = new ContextProvider(workspace, new EnvironmentProbe());
 var modelResolver = new ModelResolver();
@@ -116,7 +118,7 @@ var decisionHandler = new ConsoleDecisionHandler();
 var permissionPolicy = new PermissionPolicy(
     PermissionLevel.Execute,
     Allow: new[] { "*" },
-    AskBefore: new[] { "run_command", "run_powershell" });
+    AskBefore: new[] { "run_command", "run_powershell", "git", "docker" });
 
 var orchestrator = new Orchestrator(
     providerFactory, modelResolver, workerProvider, toolRegistry,

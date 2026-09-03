@@ -114,7 +114,7 @@ public sealed class MainWindow : Window, IDecisionHandler
 
         _toolRegistry = new LoggingToolRegistry(new ToolRegistry(new ITool[]
         {
-            new WriteFileTool(), new ReadFileTool(), new ListDirectoryTool(), new RunCommandTool(), new RunPowerShellTool()
+            new WriteFileTool(), new ReadFileTool(), new ListDirectoryTool(), new RunCommandTool(), new RunPowerShellTool(), new GitTool(), new DockerTool()
         }), _log);
         ApplySettings();
         _log.Info(LogSource.System, $"AIClient UI started — logs at {FileLogSink.DefaultDirectory()}");
@@ -1287,7 +1287,7 @@ public sealed class MainWindow : Window, IDecisionHandler
     {
         0 => new PermissionPolicy(PermissionLevel.Observe, new[] { "*" }, Array.Empty<string>()),
         1 => new PermissionPolicy(PermissionLevel.Suggest, new[] { "*" }, Array.Empty<string>()),
-        2 => new PermissionPolicy(PermissionLevel.Execute, new[] { "*" }, new[] { "run_command", "run_powershell" }),
+        2 => new PermissionPolicy(PermissionLevel.Execute, new[] { "*" }, new[] { "run_command", "run_powershell", "git", "docker" }),
         _ => new PermissionPolicy(PermissionLevel.Autonomous, new[] { "*" }, Array.Empty<string>())
     };
 
