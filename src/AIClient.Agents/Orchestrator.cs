@@ -493,10 +493,35 @@ public sealed class Orchestrator : IOrchestrator
             .Select(kv =>
             {
                 var b = kv.Value;
-                var arguments = b.Arguments.Length > 0 ? b.Arguments.ToString() : "{}";
+                var arguments = NormalizeToolArgs(b.Arguments.Length > 0 ? b.Arguments.ToString() : "{}");
                 return new ToolCall(b.Id ?? Guid.NewGuid().ToString("N"), b.Name ?? "", arguments);
             })
             .ToList();
+    }
+
+    /// <summary>
+    /// Small models sometimes concatenate two JSON objects into one tool call's arguments
+    /// (e.g. {"a":1}{"b":2}), which is not valid JSON. Keep only the FIRST value so the call still
+    /// runs instead of failing the whole step; trailing junk is dropped.
+    /// </summary>
+    private static string NormalizeToolArgs(string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            return "{}";
+        try
+        {
+            var reader = new Utf8JsonReader(Encoding.UTF8.GetBytes(raw));
+            if (JsonDocument.TryParseValue(ref reader, out var doc))
+            {
+                using (doc)
+                    return doc.RootElement.GetRawText();
+            }
+        }
+        catch
+        {
+            // fall through — let the tool report the parse error itself
+        }
+        return raw;
     }
 
     private static string SummarizeArtifacts(List<ArtifactRef> artifacts)
