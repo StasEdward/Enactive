@@ -235,6 +235,8 @@ internal sealed class SettingsWindow : Window
     // ── Phases ──────────────────────────────────────────────────────────────────
     private TextBox _planBox = null!;
     private TextBox _reviewBox = null!;
+    private TextBox _lightBox = null!;
+    private TextBox _heavyBox = null!;
 
     private Control BuildPhasesTab()
     {
@@ -257,6 +259,22 @@ internal sealed class SettingsWindow : Window
                 _reviewBox.Text = m == "(none)" ? string.Empty : m;
         };
 
+        _lightBox = new TextBox { Text = _working.Bindings.ExecuteLight, Watermark = "providerId/model — blank = the worker's own model" };
+        var lightCombo = new ComboBox { ItemsSource = catalog, PlaceholderText = "pick…", HorizontalAlignment = HorizontalAlignment.Stretch };
+        lightCombo.SelectionChanged += (_, _) =>
+        {
+            if (lightCombo.SelectedItem is string m)
+                _lightBox.Text = m == "(none)" ? string.Empty : m;
+        };
+
+        _heavyBox = new TextBox { Text = _working.Bindings.ExecuteHeavy, Watermark = "providerId/model — blank = the worker's own model" };
+        var heavyCombo = new ComboBox { ItemsSource = catalog, PlaceholderText = "pick…", HorizontalAlignment = HorizontalAlignment.Stretch };
+        heavyCombo.SelectionChanged += (_, _) =>
+        {
+            if (heavyCombo.SelectedItem is string m)
+                _heavyBox.Text = m == "(none)" ? string.Empty : m;
+        };
+
         return new ScrollViewer
         {
             Content = new StackPanel
@@ -273,7 +291,16 @@ internal sealed class SettingsWindow : Window
                     planCombo,
                     Header("Review model"),
                     _reviewBox,
-                    reviewCombo
+                    reviewCombo,
+                    Hint("Per-step auto-routing (optional): the planner rates each step trivial / normal / complex. "
+                        + "Trivial steps run on the light model, complex steps on the heavy model; normal steps stay on "
+                        + "the worker's own model. Leave both blank to disable auto-routing."),
+                    Header("Execute · light (trivial steps)"),
+                    _lightBox,
+                    lightCombo,
+                    Header("Execute · heavy (complex steps)"),
+                    _heavyBox,
+                    heavyCombo
                 }
             }
         };
@@ -283,6 +310,8 @@ internal sealed class SettingsWindow : Window
     {
         _working.Bindings.Plan = (_planBox.Text ?? string.Empty).Trim();
         _working.Bindings.Review = (_reviewBox.Text ?? string.Empty).Trim();
+        _working.Bindings.ExecuteLight = (_lightBox.Text ?? string.Empty).Trim();
+        _working.Bindings.ExecuteHeavy = (_heavyBox.Text ?? string.Empty).Trim();
     }
 
     private static TextBlock Header(string text) => new()

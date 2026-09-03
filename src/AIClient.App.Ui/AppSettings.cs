@@ -69,7 +69,19 @@ internal sealed class PhaseBindings
     public string Plan { get; set; } = string.Empty;
     public string Review { get; set; } = string.Empty;
 
-    public PhaseBindings Clone() => new() { Plan = Plan, Review = Review };
+    /// <summary>Execute model for Trivial steps (per-step auto-routing); blank = the worker's own model.</summary>
+    public string ExecuteLight { get; set; } = string.Empty;
+
+    /// <summary>Execute model for Complex steps (per-step auto-routing); blank = the worker's own model.</summary>
+    public string ExecuteHeavy { get; set; } = string.Empty;
+
+    public PhaseBindings Clone() => new()
+    {
+        Plan = Plan,
+        Review = Review,
+        ExecuteLight = ExecuteLight,
+        ExecuteHeavy = ExecuteHeavy
+    };
 }
 
 /// <summary>

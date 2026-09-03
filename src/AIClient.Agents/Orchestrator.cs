@@ -153,6 +153,14 @@ public sealed class Orchestrator : IOrchestrator
                 $"Proceed with this step of the plan: {step.Title}\n"
                 + "Do only this step. Use tools as needed. When finished, briefly confirm what you did."));
 
+            // Per-step model auto-routing: pick the Execute model for this step's complexity (light for
+            // trivial, heavy for complex, the worker's own for normal). Falls back to the base model.
+            var stepRef = _router.ResolveExecute(worker, step.Complexity) ?? model;
+            var stepProvider = _providers.Create(stepRef.ProviderId);
+            var stepModel = stepRef.Model;
+            if (stepRef.ProviderId != model.ProviderId || stepRef.Model != model.Model)
+                yield return Ev(EventKind.Routed, $"[{stepNumber}] {step.Complexity} step -> {stepRef.ProviderId}/{stepRef.Model}");
+
             var maxAttempts = reviewOn ? _reviewAttempts + 1 : 1;
             var passed = true;
             var failedHard = false;
@@ -164,7 +172,7 @@ public sealed class Orchestrator : IOrchestrator
 
                 // Drain the tool loop manually so a thrown exception fails only THIS step (and its
                 // dependents) instead of the whole run — the yield stays outside the try/catch.
-                var stepEnum = RunToolLoopAsync(taskId, runId, provider, model.Model, worker, messages, artifacts, intent.Context, ct)
+                var stepEnum = RunToolLoopAsync(taskId, runId, stepProvider, stepModel, worker, messages, artifacts, intent.Context, ct)
                     .GetAsyncEnumerator(ct);
                 try
                 {

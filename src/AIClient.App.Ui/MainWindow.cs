@@ -981,7 +981,11 @@ public sealed class MainWindow : Window, IDecisionHandler
             bindings[ModelPurpose.Plan] = plan;
         if (AppSettings.ParseRef(_settings.Bindings.Review) is { } review)
             bindings[ModelPurpose.Review] = review;
-        return new ModelRouter(_modelResolver, bindings);
+        return new ModelRouter(
+            _modelResolver,
+            bindings,
+            AppSettings.ParseRef(_settings.Bindings.ExecuteLight),
+            AppSettings.ParseRef(_settings.Bindings.ExecuteHeavy));
     }
 
     private static WorkspaceInfo WorkspaceFrom(string path)
