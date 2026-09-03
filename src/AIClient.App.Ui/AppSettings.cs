@@ -22,6 +22,18 @@ internal sealed class ProviderConfig
 
     public Dictionary<string, string> Headers { get; set; } = new();
     public List<string> Models { get; set; } = new();
+
+    public ProviderConfig Clone() => new()
+    {
+        Id = Id,
+        DisplayName = DisplayName,
+        Kind = Kind,
+        BaseUrl = BaseUrl,
+        ApiKeyProtected = ApiKeyProtected,
+        ApiKey = ApiKey,
+        Headers = new Dictionary<string, string>(Headers),
+        Models = new List<string>(Models)
+    };
 }
 
 /// <summary>One team member (role + its own model) as persisted in settings.json.</summary>
@@ -38,6 +50,17 @@ internal sealed class WorkerConfig
 
     /// <summary>Optional fallback model as "providerId/model", or null.</summary>
     public string? Fallback { get; set; }
+
+    public WorkerConfig Clone() => new()
+    {
+        Id = Id,
+        Role = Role,
+        Instructions = Instructions,
+        Tools = new List<string>(Tools),
+        Level = Level,
+        Model = Model,
+        Fallback = Fallback
+    };
 }
 
 /// <summary>Which model runs each orchestration phase. Empty Plan = plan on the executing model; empty Review = no review.</summary>
@@ -45,6 +68,8 @@ internal sealed class PhaseBindings
 {
     public string Plan { get; set; } = string.Empty;
     public string Review { get; set; } = string.Empty;
+
+    public PhaseBindings Clone() => new() { Plan = Plan, Review = Review };
 }
 
 /// <summary>
@@ -201,6 +226,38 @@ internal sealed class AppSettings
             Bindings.Plan = $"anthropic/{ReasonerModel}";
             Bindings.Review = $"anthropic/{ReasonerModel}";
         }
+    }
+
+    /// <summary>Deep copy — so an editor can work on a throwaway copy and discard it on Cancel.</summary>
+    public AppSettings Clone() => new()
+    {
+        GlobalInstructions = GlobalInstructions,
+        NumCtx = NumCtx,
+        BaseUrl = BaseUrl,
+        Model = Model,
+        MultiAgent = MultiAgent,
+        AnthropicApiKey = AnthropicApiKey,
+        AnthropicApiKeyProtected = AnthropicApiKeyProtected,
+        ReasonerModel = ReasonerModel,
+        AnthropicWorkspaceId = AnthropicWorkspaceId,
+        WindowX = WindowX,
+        WindowY = WindowY,
+        WindowWidth = WindowWidth,
+        WindowHeight = WindowHeight,
+        Bindings = Bindings.Clone(),
+        Providers = Providers.Select(x => x.Clone()).ToList(),
+        Workers = Workers.Select(x => x.Clone()).ToList()
+    };
+
+    /// <summary>All configured models as "providerId/model" strings, for model pickers.</summary>
+    public IReadOnlyList<string> ModelCatalog()
+    {
+        var list = new List<string>();
+        foreach (var p in Providers)
+            foreach (var m in p.Models)
+                if (!string.IsNullOrWhiteSpace(m))
+                    list.Add($"{p.Id}/{m}");
+        return list;
     }
 
     /// <summary>Finds a provider by id (case-insensitive), creating and appending it when absent.</summary>

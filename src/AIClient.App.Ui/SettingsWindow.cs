@@ -1,287 +1,298 @@
-using System.Text.Json;
 using AIClient.Core.Providers;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Templates;
 using Avalonia.Layout;
 using Avalonia.Media;
 
 namespace AIClient.App.Ui;
 
 /// <summary>
-/// Simple settings: the local coder endpoint/model, context length, global instructions, and an optional
-/// Anthropic reasoner (plan + review). It edits the universal team schema (Docs/MODELS.md) through a
-/// single-coder + single-reasoner view: the coder maps to the "ollama" provider and every worker that runs
-/// on it; the reasoner maps to the "anthropic" provider and the Plan/Review bindings. The full Providers /
-/// Team / Bindings editors are separate.
+/// Settings as tabs over the universal team schema (Docs/MODELS.md): General, Providers (any number of
+/// endpoints), Team (editable workers, each with its own model), and Phases (which model runs Plan / Review).
+/// Edits a throwaway clone; only Save (which calls <c>onSaved</c>) commits them.
 /// </summary>
 internal sealed class SettingsWindow : Window
 {
-    private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(10) };
+    private readonly AppSettings _working;
 
     public SettingsWindow(AppSettings settings, Action<AppSettings> onSaved)
     {
+        _working = settings.Clone();
+
         Title = "Settings";
-        Width = 660;
-        Height = 780;
+        Width = 720;
+        Height = 820;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
 
-        // ── Read the simple view out of the universal schema ──────────────────
-        var ollama = settings.Providers.FirstOrDefault(p => p.Kind == ProviderKind.OllamaNative)
-                     ?? settings.Providers.FirstOrDefault();
-        var initialBaseUrl = ollama?.BaseUrl ?? "http://localhost:11434/v1";
-        var initialModel = ollama?.Models.FirstOrDefault() ?? "qwen2.5-coder";
-
-        var anthropic = settings.Providers.FirstOrDefault(p => p.Kind == ProviderKind.Anthropic);
-        var planRef = AppSettings.ParseRef(settings.Bindings.Plan);
-        var reviewRef = AppSettings.ParseRef(settings.Bindings.Review);
-        var initialMultiAgent = planRef is not null || reviewRef is not null;
-        var initialApiKey = anthropic?.ApiKey ?? string.Empty;
-        var initialReasonerModel = planRef?.Model ?? anthropic?.Models.FirstOrDefault() ?? "claude-3-5-sonnet-latest";
-        var initialWorkspaceId = anthropic is not null && anthropic.Headers.TryGetValue("anthropic-workspace-id", out var wid)
-            ? wid : string.Empty;
-
-        var baseUrlBox = new TextBox { Text = initialBaseUrl, Watermark = "http://localhost:11434/v1" };
-        var modelBox = new TextBox { Text = initialModel, Watermark = "model name" };
-        var numCtxBox = new TextBox
-        {
-            Text = settings.NumCtx?.ToString() ?? string.Empty,
-            Watermark = "e.g. 8192 - blank uses whatever the model already has loaded"
-        };
-
-        var modelsCombo = new ComboBox { PlaceholderText = "installed models…", HorizontalAlignment = HorizontalAlignment.Stretch };
-        modelsCombo.SelectionChanged += (_, _) =>
-        {
-            if (modelsCombo.SelectedItem is string chosen && !string.IsNullOrEmpty(chosen))
-                modelBox.Text = chosen;
-        };
-
-        var refreshButton = new Button { Content = "Refresh" };
-        var status = new TextBlock { Foreground = Brushes.Gray, FontSize = 11, Margin = new Thickness(0, 2, 0, 0) };
-        refreshButton.Click += async (_, _) =>
-        {
-            status.Text = "loading…";
-            try
-            {
-                var models = await FetchModelsAsync(baseUrlBox.Text ?? string.Empty);
-                modelsCombo.ItemsSource = models;
-                status.Text = models.Count == 0 ? "no models found" : $"{models.Count} model(s)";
-            }
-            catch (Exception ex)
-            {
-                status.Text = "error: " + ex.Message;
-            }
-        };
-
-        var globalBox = new TextBox
-        {
-            Text = settings.GlobalInstructions,
-            AcceptsReturn = true,
-            TextWrapping = TextWrapping.Wrap,
-            MinHeight = 160,
-            Watermark = "Global instructions — applied to every run"
-        };
-
-        var multiAgentBox = new CheckBox
-        {
-            Content = "Multi-agent: Anthropic reasoner plans + reviews, local model codes",
-            IsChecked = initialMultiAgent
-        };
-        var apiKeyBox = new TextBox { Text = initialApiKey, Watermark = "Anthropic API key (sk-ant-…)", PasswordChar = '•' };
-        var reasonerModelBox = new TextBox { Text = initialReasonerModel, Watermark = "reasoner model, e.g. claude-3-5-sonnet-latest" };
-        var workspaceIdBox = new TextBox { Text = initialWorkspaceId, Watermark = "Anthropic workspace id — only for identity-linked keys" };
-
-        var reasonerModelsCombo = new ComboBox { PlaceholderText = "Anthropic models…", HorizontalAlignment = HorizontalAlignment.Stretch };
-        reasonerModelsCombo.SelectionChanged += (_, _) =>
-        {
-            if (reasonerModelsCombo.SelectedItem is string id && !string.IsNullOrEmpty(id))
-                reasonerModelBox.Text = id;
-        };
-        var reasonerRefresh = new Button { Content = "Refresh" };
-        var reasonerStatus = new TextBlock { Foreground = Brushes.Gray, FontSize = 11, Margin = new Thickness(0, 2, 0, 0) };
-        reasonerRefresh.Click += async (_, _) =>
-        {
-            reasonerStatus.Text = "loading…";
-            try
-            {
-                var models = await FetchAnthropicModelsAsync(apiKeyBox.Text ?? string.Empty, workspaceIdBox.Text ?? string.Empty);
-                reasonerModelsCombo.ItemsSource = models;
-                reasonerStatus.Text = models.Count == 0 ? "no models" : $"{models.Count} model(s)";
-            }
-            catch (Exception ex)
-            {
-                reasonerStatus.Text = "error: " + ex.Message;
-            }
-        };
+        var tabs = new TabControl();
+        tabs.Items.Add(new TabItem { Header = "General", Content = BuildGeneralTab() });
+        tabs.Items.Add(new TabItem { Header = "Providers", Content = BuildProvidersTab() });
+        tabs.Items.Add(new TabItem { Header = "Team", Content = BuildTeamTab() });
+        tabs.Items.Add(new TabItem { Header = "Phases", Content = BuildPhasesTab() });
 
         var saveButton = new Button { Content = "Save" };
         var cancelButton = new Button { Content = "Cancel" };
         saveButton.Click += (_, _) =>
         {
-            var baseUrl = (baseUrlBox.Text ?? string.Empty).Trim();
-            var model = (modelBox.Text ?? string.Empty).Trim();
-            settings.NumCtx = int.TryParse((numCtxBox.Text ?? string.Empty).Trim(), out var parsedNumCtx) ? parsedNumCtx : null;
-            settings.GlobalInstructions = globalBox.Text ?? string.Empty;
-
-            // Coder → the ollama provider, and every worker that runs on it (simple view = one shared coder model).
-            var ol = settings.EnsureProvider("ollama", "Ollama (local)", ProviderKind.OllamaNative);
-            ol.BaseUrl = baseUrl;
-            if (!string.IsNullOrWhiteSpace(model))
-                ol.Models = new List<string> { model };
-            foreach (var w in settings.Workers)
-            {
-                var r = AppSettings.ParseRef(w.Model);
-                if (r is null || string.Equals(r.ProviderId, ol.Id, StringComparison.OrdinalIgnoreCase))
-                    w.Model = $"{ol.Id}/{model}";
-            }
-
-            // Reasoner → the anthropic provider + Plan/Review bindings.
-            var multiAgent = multiAgentBox.IsChecked == true;
-            var apiKey = (apiKeyBox.Text ?? string.Empty).Trim();
-            var reasonerModel = (reasonerModelBox.Text ?? string.Empty).Trim();
-            var workspaceId = (workspaceIdBox.Text ?? string.Empty).Trim();
-            if (multiAgent && string.IsNullOrWhiteSpace(reasonerModel))
-                reasonerModel = "claude-3-5-sonnet-latest";
-
-            if (multiAgent && !string.IsNullOrWhiteSpace(apiKey))
-            {
-                var an = settings.EnsureProvider("anthropic", "Anthropic", ProviderKind.Anthropic);
-                if (string.IsNullOrWhiteSpace(an.BaseUrl))
-                    an.BaseUrl = "https://api.anthropic.com";
-                an.ApiKey = apiKey;
-                an.Models = new List<string> { reasonerModel };
-                an.Headers = new Dictionary<string, string>();
-                if (!string.IsNullOrWhiteSpace(workspaceId))
-                    an.Headers["anthropic-workspace-id"] = workspaceId;
-                settings.Bindings.Plan = $"anthropic/{reasonerModel}";
-                settings.Bindings.Review = $"anthropic/{reasonerModel}";
-            }
-            else
-            {
-                // Multi-agent off = single agent: plan on the coder, no review. Keep the key so it survives a toggle.
-                settings.Bindings.Plan = string.Empty;
-                settings.Bindings.Review = string.Empty;
-                var an = settings.Providers.FirstOrDefault(p => p.Kind == ProviderKind.Anthropic);
-                if (an is not null && !string.IsNullOrWhiteSpace(apiKey))
-                {
-                    an.ApiKey = apiKey;
-                    if (!string.IsNullOrWhiteSpace(reasonerModel))
-                        an.Models = new List<string> { reasonerModel };
-                }
-            }
-
-            onSaved(settings);
+            CommitGeneral();
+            CommitPhases();
+            onSaved(_working);
             Close();
         };
         cancelButton.Click += (_, _) => Close();
 
-        Content = new ScrollViewer
+        var buttonBar = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Margin = new Thickness(0, 12, 0, 0),
+            Children = { saveButton, cancelButton }
+        };
+        DockPanel.SetDock(buttonBar, Dock.Bottom);
+
+        Content = new DockPanel
+        {
+            LastChildFill = true,
+            Margin = new Thickness(12),
+            Children = { buttonBar, tabs }
+        };
+    }
+
+    // ── General ───────────────────────────────────────────────────────────────
+    private TextBox _numCtxBox = null!;
+    private TextBox _globalBox = null!;
+
+    private Control BuildGeneralTab()
+    {
+        _numCtxBox = new TextBox
+        {
+            Text = _working.NumCtx?.ToString() ?? string.Empty,
+            Watermark = "e.g. 8192 — blank uses whatever the model already has loaded"
+        };
+        _globalBox = new TextBox
+        {
+            Text = _working.GlobalInstructions,
+            AcceptsReturn = true,
+            TextWrapping = TextWrapping.Wrap,
+            MinHeight = 220,
+            Watermark = "Global instructions — applied to every run"
+        };
+
+        return new ScrollViewer
         {
             Content = new StackPanel
             {
-                Margin = new Thickness(16),
-                Spacing = 8,
+                Margin = new Thickness(12),
+                Spacing = 6,
                 Children =
                 {
-                    Label("Endpoint (OpenAI-compatible base URL)"),
-                    baseUrlBox,
-                    Label("Model"),
-                    modelBox,
-                    Label("Context length (num_ctx)"),
-                    new TextBlock
-                    {
-                        Text = "How much context to load the model with. Bigger costs VRAM and, if it "
-                             + "no longer fits, pushes part of the model onto the CPU - check `ollama ps` "
-                             + "after changing this. Leave blank to not override it.",
-                        Foreground = Brushes.Gray, FontSize = 11, TextWrapping = TextWrapping.Wrap
-                    },
-                    numCtxBox,
-                    new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { modelsCombo, refreshButton } },
-                    status,
-                    Label("Global instructions"),
-                    new TextBlock
-                    {
-                        Text = "Applied to all runs — preferences, conventions, or context the agent should always know.",
-                        Foreground = Brushes.Gray, FontSize = 11, TextWrapping = TextWrapping.Wrap
-                    },
-                    globalBox,
-                    Label("Multi-agent (reasoner + coder)"),
-                    new TextBlock
-                    {
-                        Text = "The Anthropic model plans and reviews each step (PASS/FAIL); the local model above writes the code.",
-                        Foreground = Brushes.Gray, FontSize = 11, TextWrapping = TextWrapping.Wrap
-                    },
-                    multiAgentBox,
-                    apiKeyBox,
-                    reasonerModelBox,
-                    new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { reasonerModelsCombo, reasonerRefresh } },
-                    reasonerStatus,
-                    workspaceIdBox,
-                    new StackPanel
-                    {
-                        Orientation = Orientation.Horizontal,
-                        Spacing = 8,
-                        Margin = new Thickness(0, 12, 0, 0),
-                        Children = { saveButton, cancelButton }
-                    }
+                    Header("Context length (num_ctx)"),
+                    Hint("How much context to load Ollama models with. Bigger costs VRAM and can spill onto the "
+                        + "CPU (check `ollama ps`). Leave blank to not override it."),
+                    _numCtxBox,
+                    Header("Global instructions"),
+                    Hint("Applied to every run and appended to every worker's instructions."),
+                    _globalBox
                 }
             }
         };
     }
 
-    private static TextBlock Label(string text) => new()
+    private void CommitGeneral()
     {
-        Text = text,
-        FontWeight = FontWeight.Bold,
-        FontSize = 12,
-        Margin = new Thickness(0, 10, 0, 2)
+        _working.NumCtx = int.TryParse((_numCtxBox.Text ?? string.Empty).Trim(), out var n) ? n : null;
+        _working.GlobalInstructions = _globalBox.Text ?? string.Empty;
+    }
+
+    // ── Providers ──────────────────────────────────────────────────────────────
+    private ListBox _providersList = null!;
+
+    private Control BuildProvidersTab()
+    {
+        _providersList = new ListBox
+        {
+            ItemTemplate = new FuncDataTemplate<ProviderConfig>((p, _) => new TextBlock
+            {
+                Text = p is null ? string.Empty : $"{p.Id}   ·   {p.Kind}   ·   {p.BaseUrl}",
+                Margin = new Thickness(2)
+            })
+        };
+        RefreshProviders();
+
+        var addButton = new Button { Content = "Add" };
+        var editButton = new Button { Content = "Edit" };
+        var removeButton = new Button { Content = "Remove" };
+        addButton.Click += (_, _) =>
+        {
+            var cfg = new ProviderConfig { Kind = ProviderKind.OpenAiCompatible };
+            new ProviderEditWindow(cfg, () => { _working.Providers.Add(cfg); RefreshProviders(); }).Show(this);
+        };
+        editButton.Click += (_, _) =>
+        {
+            var idx = _providersList.SelectedIndex;
+            if (idx >= 0 && idx < _working.Providers.Count)
+                new ProviderEditWindow(_working.Providers[idx], RefreshProviders).Show(this);
+        };
+        removeButton.Click += (_, _) =>
+        {
+            var idx = _providersList.SelectedIndex;
+            if (idx >= 0 && idx < _working.Providers.Count)
+            {
+                _working.Providers.RemoveAt(idx);
+                RefreshProviders();
+            }
+        };
+
+        var buttons = new StackPanel
+        {
+            Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 8, 0, 0),
+            Children = { addButton, editButton, removeButton }
+        };
+        DockPanel.SetDock(buttons, Dock.Bottom);
+
+        return new DockPanel
+        {
+            LastChildFill = true,
+            Margin = new Thickness(12),
+            Children = { buttons, _providersList }
+        };
+    }
+
+    private void RefreshProviders()
+    {
+        var keep = _providersList.SelectedIndex;
+        _providersList.ItemsSource = _working.Providers.ToList();
+        _providersList.SelectedIndex = keep >= 0 && keep < _working.Providers.Count ? keep : -1;
+    }
+
+    // ── Team ────────────────────────────────────────────────────────────────────
+    private ListBox _workersList = null!;
+
+    private Control BuildTeamTab()
+    {
+        _workersList = new ListBox
+        {
+            ItemTemplate = new FuncDataTemplate<WorkerConfig>((w, _) => new TextBlock
+            {
+                Text = w is null ? string.Empty : $"{w.Role}   ·   {w.Model}   ·   {w.Level}",
+                Margin = new Thickness(2)
+            })
+        };
+        RefreshWorkers();
+
+        var addButton = new Button { Content = "Add" };
+        var editButton = new Button { Content = "Edit" };
+        var removeButton = new Button { Content = "Remove" };
+        addButton.Click += (_, _) =>
+        {
+            var cfg = new WorkerConfig();
+            new WorkerEditWindow(cfg, _working.ModelCatalog(), () => { _working.Workers.Add(cfg); RefreshWorkers(); }).Show(this);
+        };
+        editButton.Click += (_, _) =>
+        {
+            var idx = _workersList.SelectedIndex;
+            if (idx >= 0 && idx < _working.Workers.Count)
+                new WorkerEditWindow(_working.Workers[idx], _working.ModelCatalog(), RefreshWorkers).Show(this);
+        };
+        removeButton.Click += (_, _) =>
+        {
+            var idx = _workersList.SelectedIndex;
+            if (idx >= 0 && idx < _working.Workers.Count)
+            {
+                _working.Workers.RemoveAt(idx);
+                RefreshWorkers();
+            }
+        };
+
+        var hint = Hint("The main window's role picker chooses which worker handles a run. Honesty rules and "
+                      + "global instructions are added to every worker automatically.");
+        DockPanel.SetDock(hint, Dock.Top);
+
+        var buttons = new StackPanel
+        {
+            Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 8, 0, 0),
+            Children = { addButton, editButton, removeButton }
+        };
+        DockPanel.SetDock(buttons, Dock.Bottom);
+
+        return new DockPanel
+        {
+            LastChildFill = true,
+            Margin = new Thickness(12),
+            Children = { hint, buttons, _workersList }
+        };
+    }
+
+    private void RefreshWorkers()
+    {
+        var keep = _workersList.SelectedIndex;
+        _workersList.ItemsSource = _working.Workers.ToList();
+        _workersList.SelectedIndex = keep >= 0 && keep < _working.Workers.Count ? keep : -1;
+    }
+
+    // ── Phases ──────────────────────────────────────────────────────────────────
+    private TextBox _planBox = null!;
+    private TextBox _reviewBox = null!;
+
+    private Control BuildPhasesTab()
+    {
+        var catalog = new List<string> { "(none)" };
+        catalog.AddRange(_working.ModelCatalog());
+
+        _planBox = new TextBox { Text = _working.Bindings.Plan, Watermark = "providerId/model — blank = plan on the executing model" };
+        var planCombo = new ComboBox { ItemsSource = catalog, PlaceholderText = "pick…", HorizontalAlignment = HorizontalAlignment.Stretch };
+        planCombo.SelectionChanged += (_, _) =>
+        {
+            if (planCombo.SelectedItem is string m)
+                _planBox.Text = m == "(none)" ? string.Empty : m;
+        };
+
+        _reviewBox = new TextBox { Text = _working.Bindings.Review, Watermark = "providerId/model — blank = no review (single-agent)" };
+        var reviewCombo = new ComboBox { ItemsSource = catalog, PlaceholderText = "pick…", HorizontalAlignment = HorizontalAlignment.Stretch };
+        reviewCombo.SelectionChanged += (_, _) =>
+        {
+            if (reviewCombo.SelectedItem is string m)
+                _reviewBox.Text = m == "(none)" ? string.Empty : m;
+        };
+
+        return new ScrollViewer
+        {
+            Content = new StackPanel
+            {
+                Margin = new Thickness(12),
+                Spacing = 6,
+                Children =
+                {
+                    Hint("Execute always runs on the selected worker's own model. Plan and Review use the models "
+                        + "bound here. Leave Plan blank to plan on the executing model; leave Review blank to skip "
+                        + "review entirely (single-agent)."),
+                    Header("Plan model"),
+                    _planBox,
+                    planCombo,
+                    Header("Review model"),
+                    _reviewBox,
+                    reviewCombo
+                }
+            }
+        };
+    }
+
+    private void CommitPhases()
+    {
+        _working.Bindings.Plan = (_planBox.Text ?? string.Empty).Trim();
+        _working.Bindings.Review = (_reviewBox.Text ?? string.Empty).Trim();
+    }
+
+    private static TextBlock Header(string text) => new()
+    {
+        Text = text, FontWeight = FontWeight.Bold, FontSize = 12, Margin = new Thickness(0, 10, 0, 2)
     };
 
-    private async Task<List<string>> FetchModelsAsync(string baseUrl)
+    private static TextBlock Hint(string text) => new()
     {
-        var root = baseUrl.Trim().TrimEnd('/');
-        if (root.EndsWith("/v1", StringComparison.OrdinalIgnoreCase))
-            root = root[..^3].TrimEnd('/');
-        var url = root + "/api/tags";
-
-        using var response = await _http.GetAsync(url);
-        response.EnsureSuccessStatusCode();
-        var json = await response.Content.ReadAsStringAsync();
-
-        var list = new List<string>();
-        using var doc = JsonDocument.Parse(json);
-        if (doc.RootElement.TryGetProperty("models", out var models) && models.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var model in models.EnumerateArray())
-            {
-                if (model.TryGetProperty("name", out var name) && name.ValueKind == JsonValueKind.String)
-                    list.Add(name.GetString()!);
-            }
-        }
-        return list;
-    }
-
-    private async Task<List<string>> FetchAnthropicModelsAsync(string apiKey, string workspaceId)
-    {
-        using var request = new HttpRequestMessage(HttpMethod.Get, "https://api.anthropic.com/v1/models?limit=1000");
-        request.Headers.TryAddWithoutValidation("x-api-key", apiKey);
-        request.Headers.TryAddWithoutValidation("anthropic-version", "2023-06-01");
-        if (!string.IsNullOrWhiteSpace(workspaceId))
-            request.Headers.TryAddWithoutValidation("anthropic-workspace-id", workspaceId);
-
-        using var response = await _http.SendAsync(request);
-        response.EnsureSuccessStatusCode();
-        var json = await response.Content.ReadAsStringAsync();
-
-        var list = new List<string>();
-        using var doc = JsonDocument.Parse(json);
-        if (doc.RootElement.TryGetProperty("data", out var data) && data.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var model in data.EnumerateArray())
-            {
-                if (model.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.String)
-                    list.Add(id.GetString()!);
-            }
-        }
-        return list;
-    }
+        Text = text, Foreground = Brushes.Gray, FontSize = 11, TextWrapping = TextWrapping.Wrap,
+        Margin = new Thickness(0, 0, 0, 4)
+    };
 }
