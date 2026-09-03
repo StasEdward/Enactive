@@ -1,4 +1,5 @@
 using System.Text.Json;
+using AIClient.Core.Providers;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
@@ -6,7 +7,13 @@ using Avalonia.Media;
 
 namespace AIClient.App.Ui;
 
-/// <summary>Settings: endpoint, model (with a live list from Ollama), and global instructions.</summary>
+/// <summary>
+/// Simple settings: the local coder endpoint/model, context length, global instructions, and an optional
+/// Anthropic reasoner (plan + review). It edits the universal team schema (Docs/MODELS.md) through a
+/// single-coder + single-reasoner view: the coder maps to the "ollama" provider and every worker that runs
+/// on it; the reasoner maps to the "anthropic" provider and the Plan/Review bindings. The full Providers /
+/// Team / Bindings editors are separate.
+/// </summary>
 internal sealed class SettingsWindow : Window
 {
     private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(10) };
@@ -18,8 +25,23 @@ internal sealed class SettingsWindow : Window
         Height = 780;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
 
-        var baseUrlBox = new TextBox { Text = settings.BaseUrl, Watermark = "http://localhost:11434/v1" };
-        var modelBox = new TextBox { Text = settings.Model, Watermark = "model name" };
+        // ── Read the simple view out of the universal schema ──────────────────
+        var ollama = settings.Providers.FirstOrDefault(p => p.Kind == ProviderKind.OllamaNative)
+                     ?? settings.Providers.FirstOrDefault();
+        var initialBaseUrl = ollama?.BaseUrl ?? "http://localhost:11434/v1";
+        var initialModel = ollama?.Models.FirstOrDefault() ?? "qwen2.5-coder";
+
+        var anthropic = settings.Providers.FirstOrDefault(p => p.Kind == ProviderKind.Anthropic);
+        var planRef = AppSettings.ParseRef(settings.Bindings.Plan);
+        var reviewRef = AppSettings.ParseRef(settings.Bindings.Review);
+        var initialMultiAgent = planRef is not null || reviewRef is not null;
+        var initialApiKey = anthropic?.ApiKey ?? string.Empty;
+        var initialReasonerModel = planRef?.Model ?? anthropic?.Models.FirstOrDefault() ?? "claude-3-5-sonnet-latest";
+        var initialWorkspaceId = anthropic is not null && anthropic.Headers.TryGetValue("anthropic-workspace-id", out var wid)
+            ? wid : string.Empty;
+
+        var baseUrlBox = new TextBox { Text = initialBaseUrl, Watermark = "http://localhost:11434/v1" };
+        var modelBox = new TextBox { Text = initialModel, Watermark = "model name" };
         var numCtxBox = new TextBox
         {
             Text = settings.NumCtx?.ToString() ?? string.Empty,
@@ -62,11 +84,11 @@ internal sealed class SettingsWindow : Window
         var multiAgentBox = new CheckBox
         {
             Content = "Multi-agent: Anthropic reasoner plans + reviews, local model codes",
-            IsChecked = settings.MultiAgent
+            IsChecked = initialMultiAgent
         };
-        var apiKeyBox = new TextBox { Text = settings.AnthropicApiKey, Watermark = "Anthropic API key (sk-ant-…)", PasswordChar = '•' };
-        var reasonerModelBox = new TextBox { Text = settings.ReasonerModel, Watermark = "reasoner model, e.g. claude-3-5-sonnet-latest" };
-        var workspaceIdBox = new TextBox { Text = settings.AnthropicWorkspaceId, Watermark = "Anthropic workspace id — only for identity-linked keys" };
+        var apiKeyBox = new TextBox { Text = initialApiKey, Watermark = "Anthropic API key (sk-ant-…)", PasswordChar = '•' };
+        var reasonerModelBox = new TextBox { Text = initialReasonerModel, Watermark = "reasoner model, e.g. claude-3-5-sonnet-latest" };
+        var workspaceIdBox = new TextBox { Text = initialWorkspaceId, Watermark = "Anthropic workspace id — only for identity-linked keys" };
 
         var reasonerModelsCombo = new ComboBox { PlaceholderText = "Anthropic models…", HorizontalAlignment = HorizontalAlignment.Stretch };
         reasonerModelsCombo.SelectionChanged += (_, _) =>
@@ -95,16 +117,58 @@ internal sealed class SettingsWindow : Window
         var cancelButton = new Button { Content = "Cancel" };
         saveButton.Click += (_, _) =>
         {
-            settings.BaseUrl = (baseUrlBox.Text ?? string.Empty).Trim();
-            settings.Model = (modelBox.Text ?? string.Empty).Trim();
-            settings.NumCtx = int.TryParse((numCtxBox.Text ?? string.Empty).Trim(), out var parsedNumCtx)
-                ? parsedNumCtx
-                : null;
+            var baseUrl = (baseUrlBox.Text ?? string.Empty).Trim();
+            var model = (modelBox.Text ?? string.Empty).Trim();
+            settings.NumCtx = int.TryParse((numCtxBox.Text ?? string.Empty).Trim(), out var parsedNumCtx) ? parsedNumCtx : null;
             settings.GlobalInstructions = globalBox.Text ?? string.Empty;
-            settings.MultiAgent = multiAgentBox.IsChecked == true;
-            settings.AnthropicApiKey = (apiKeyBox.Text ?? string.Empty).Trim();
-            settings.ReasonerModel = (reasonerModelBox.Text ?? string.Empty).Trim();
-            settings.AnthropicWorkspaceId = (workspaceIdBox.Text ?? string.Empty).Trim();
+
+            // Coder → the ollama provider, and every worker that runs on it (simple view = one shared coder model).
+            var ol = settings.EnsureProvider("ollama", "Ollama (local)", ProviderKind.OllamaNative);
+            ol.BaseUrl = baseUrl;
+            if (!string.IsNullOrWhiteSpace(model))
+                ol.Models = new List<string> { model };
+            foreach (var w in settings.Workers)
+            {
+                var r = AppSettings.ParseRef(w.Model);
+                if (r is null || string.Equals(r.ProviderId, ol.Id, StringComparison.OrdinalIgnoreCase))
+                    w.Model = $"{ol.Id}/{model}";
+            }
+
+            // Reasoner → the anthropic provider + Plan/Review bindings.
+            var multiAgent = multiAgentBox.IsChecked == true;
+            var apiKey = (apiKeyBox.Text ?? string.Empty).Trim();
+            var reasonerModel = (reasonerModelBox.Text ?? string.Empty).Trim();
+            var workspaceId = (workspaceIdBox.Text ?? string.Empty).Trim();
+            if (multiAgent && string.IsNullOrWhiteSpace(reasonerModel))
+                reasonerModel = "claude-3-5-sonnet-latest";
+
+            if (multiAgent && !string.IsNullOrWhiteSpace(apiKey))
+            {
+                var an = settings.EnsureProvider("anthropic", "Anthropic", ProviderKind.Anthropic);
+                if (string.IsNullOrWhiteSpace(an.BaseUrl))
+                    an.BaseUrl = "https://api.anthropic.com";
+                an.ApiKey = apiKey;
+                an.Models = new List<string> { reasonerModel };
+                an.Headers = new Dictionary<string, string>();
+                if (!string.IsNullOrWhiteSpace(workspaceId))
+                    an.Headers["anthropic-workspace-id"] = workspaceId;
+                settings.Bindings.Plan = $"anthropic/{reasonerModel}";
+                settings.Bindings.Review = $"anthropic/{reasonerModel}";
+            }
+            else
+            {
+                // Multi-agent off = single agent: plan on the coder, no review. Keep the key so it survives a toggle.
+                settings.Bindings.Plan = string.Empty;
+                settings.Bindings.Review = string.Empty;
+                var an = settings.Providers.FirstOrDefault(p => p.Kind == ProviderKind.Anthropic);
+                if (an is not null && !string.IsNullOrWhiteSpace(apiKey))
+                {
+                    an.ApiKey = apiKey;
+                    if (!string.IsNullOrWhiteSpace(reasonerModel))
+                        an.Models = new List<string> { reasonerModel };
+                }
+            }
+
             onSaved(settings);
             Close();
         };

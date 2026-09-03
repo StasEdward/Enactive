@@ -38,7 +38,6 @@ public sealed class MainWindow : Window, IDecisionHandler
     // ── Reusable singletons ──────────────────────────────────────────────────
     private readonly HttpClient _http = new() { Timeout = TimeSpan.FromMinutes(5) };
     private string _model = "qwen2.5-coder";
-    private string _baseUrl = "http://localhost:11434/v1";
     private string _globalInstructions = string.Empty;
     private ChatProviderFactory _providerFactory = null!;
     private readonly IToolRegistry _toolRegistry;
@@ -210,21 +209,9 @@ public sealed class MainWindow : Window, IDecisionHandler
         var settingsButton = new Button { Content = "Settings", HorizontalAlignment = HorizontalAlignment.Stretch };
         settingsButton.Click += (_, _) =>
         {
-            var copy = new AppSettings
-            {
-                BaseUrl = _settings.BaseUrl,
-                Model = _settings.Model,
-                GlobalInstructions = _settings.GlobalInstructions,
-                MultiAgent = _settings.MultiAgent,
-                AnthropicApiKey = _settings.AnthropicApiKey,
-                ReasonerModel = _settings.ReasonerModel,
-                AnthropicWorkspaceId = _settings.AnthropicWorkspaceId,
-                WindowX = _settings.WindowX,
-                WindowY = _settings.WindowY,
-                WindowWidth = _settings.WindowWidth,
-                WindowHeight = _settings.WindowHeight
-            };
-            new SettingsWindow(copy, saved => { _settings = saved; saved.Save(); ApplySettings(); }).Show(this);
+            // SettingsWindow reads the live settings and mutates them only when Save is clicked (Cancel/close
+            // leave them untouched), so we can hand it _settings directly instead of a partial copy.
+            new SettingsWindow(_settings, saved => { _settings = saved; saved.Save(); ApplySettings(); }).Show(this);
         };
 
         LoadRecents();
@@ -990,12 +977,10 @@ public sealed class MainWindow : Window, IDecisionHandler
     private IModelRouter BuildRouter()
     {
         var bindings = new Dictionary<ModelPurpose, ModelRef>();
-        if (_settings.MultiAgent && !string.IsNullOrWhiteSpace(_settings.AnthropicApiKey))
-        {
-            var reasoner = new ModelRef("anthropic", _settings.ReasonerModel);
-            bindings[ModelPurpose.Plan] = reasoner;
-            bindings[ModelPurpose.Review] = reasoner;
-        }
+        if (AppSettings.ParseRef(_settings.Bindings.Plan) is { } plan)
+            bindings[ModelPurpose.Plan] = plan;
+        if (AppSettings.ParseRef(_settings.Bindings.Review) is { } review)
+            bindings[ModelPurpose.Review] = review;
         return new ModelRouter(_modelResolver, bindings);
     }
 
@@ -1244,29 +1229,44 @@ public sealed class MainWindow : Window, IDecisionHandler
 
     private void ApplySettings()
     {
-        _baseUrl = _settings.BaseUrl;
-        _model = _settings.Model;
         _globalInstructions = _settings.GlobalInstructions;
 
-        var descriptors = new List<ProviderDescriptor>
-        {
-            new("ollama", "Ollama (local)", ProviderKind.OllamaNative, _baseUrl, null, new[] { _model })
-        };
-        if (_settings.MultiAgent && !string.IsNullOrWhiteSpace(_settings.AnthropicApiKey))
-        {
-            IReadOnlyDictionary<string, string>? headers = string.IsNullOrWhiteSpace(_settings.AnthropicWorkspaceId)
-                ? null
-                : new Dictionary<string, string> { ["anthropic-workspace-id"] = _settings.AnthropicWorkspaceId };
-            descriptors.Add(new ProviderDescriptor(
-                "anthropic", "Anthropic", ProviderKind.Anthropic, "https://api.anthropic.com",
-                _settings.AnthropicApiKey, new[] { _settings.ReasonerModel }, headers));
-        }
+        // Providers: build the factory from the whole universal list.
+        var descriptors = _settings.Providers.Select(p => new ProviderDescriptor(
+            p.Id,
+            string.IsNullOrWhiteSpace(p.DisplayName) ? p.Id : p.DisplayName,
+            p.Kind,
+            p.BaseUrl,
+            string.IsNullOrEmpty(p.ApiKey) ? null : p.ApiKey,
+            p.Models,
+            p.Headers.Count > 0 ? p.Headers : null)).ToList();
         _providerFactory = new ChatProviderFactory(descriptors, _http, _log);
 
-        _workerProvider = new StaticWorkerProvider(
-            DefaultWorkers.Build(new ModelRef("ollama", _model), _globalInstructions),
-            DefaultWorkers.DefaultId);
+        // Workers: the editable team, each with its own model; honesty + global instructions applied at build.
+        var fallbackModel = _settings.Providers.Count > 0 && _settings.Providers[0].Models.Count > 0
+            ? new ModelRef(_settings.Providers[0].Id, _settings.Providers[0].Models[0])
+            : new ModelRef("ollama", "qwen2.5-coder");
+        var workers = _settings.Workers.Select(w => new Worker(
+            w.Id,
+            w.Role,
+            DefaultWorkers.Augment(w.Instructions, _globalInstructions),
+            w.Tools,
+            w.Level,
+            new ModelPolicy(AppSettings.ParseRef(w.Model) ?? fallbackModel, AppSettings.ParseRef(w.Fallback)))).ToList();
+        if (workers.Count == 0)
+            workers = DefaultWorkers.Build(fallbackModel, _globalInstructions).ToList();
+        var defaultId = workers.Any(w => w.Id == DefaultWorkers.DefaultId) ? DefaultWorkers.DefaultId : workers[0].Id;
+        _workerProvider = new StaticWorkerProvider(workers, defaultId);
 
+        // Refresh the role picker if the UI is already built (settings can be re-applied after Save).
+        if (_workerBox is not null)
+        {
+            var keep = _workerBox.SelectedIndex;
+            _workerBox.ItemsSource = _workerProvider.All.Select(w => w.Role).ToArray();
+            _workerBox.SelectedIndex = keep >= 0 && keep < _workerProvider.All.Count ? keep : 0;
+        }
+
+        _model = _workerProvider.Default.ModelPolicy.Preferred.Model;
         if (_modelLabel is not null)
             _modelLabel.Text = $"model: {_model}";
     }
