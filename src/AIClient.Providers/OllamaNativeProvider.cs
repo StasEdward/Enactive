@@ -95,6 +95,8 @@ public sealed class OllamaNativeProvider : IChatProvider
             if (request.NumCtx is { } nc) options["num_ctx"] = nc;
             payload["options"] = options;
         }
+        if (request.Think is { } think)
+            payload["think"] = think;
         if (request.Tools is { Count: > 0 } tools)
             payload["tools"] = tools.Select(ToWireTool).ToArray();
 

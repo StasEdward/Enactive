@@ -63,6 +63,7 @@ internal sealed class SettingsWindow : Window
     // ── General ───────────────────────────────────────────────────────────────
     private TextBox _numCtxBox = null!;
     private TextBox _globalBox = null!;
+    private CheckBox _thinkBox = null!;
 
     private Control BuildGeneralTab()
     {
@@ -79,6 +80,11 @@ internal sealed class SettingsWindow : Window
             MinHeight = 220,
             Watermark = "Global instructions — applied to every run"
         };
+        _thinkBox = new CheckBox
+        {
+            Content = "Disable local model reasoning (<think>) — recommended for qwen3",
+            IsChecked = _working.DisableThinking
+        };
 
         return new ScrollViewer
         {
@@ -94,7 +100,11 @@ internal sealed class SettingsWindow : Window
                     _numCtxBox,
                     Header("Global instructions"),
                     Hint("Applied to every run and appended to every worker's instructions."),
-                    _globalBox
+                    _globalBox,
+                    Header("Local model behaviour"),
+                    Hint("Reasoning models like qwen3 can spend a whole turn in <think> and return nothing. "
+                        + "Disabling it makes them answer (and call tools) directly. Only affects Ollama."),
+                    _thinkBox
                 }
             }
         };
@@ -104,6 +114,7 @@ internal sealed class SettingsWindow : Window
     {
         _working.NumCtx = int.TryParse((_numCtxBox.Text ?? string.Empty).Trim(), out var n) ? n : null;
         _working.GlobalInstructions = _globalBox.Text ?? string.Empty;
+        _working.DisableThinking = _thinkBox.IsChecked == true;
     }
 
     // ── Providers ──────────────────────────────────────────────────────────────

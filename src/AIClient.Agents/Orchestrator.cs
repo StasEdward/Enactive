@@ -38,6 +38,7 @@ public sealed class Orchestrator : IOrchestrator
     private readonly IModelRouter _router;
     private readonly int _reviewAttempts;
     private readonly int? _numCtx;
+    private readonly bool? _think;
     private readonly Reviewer _reviewer = new();
 
     public Orchestrator(
@@ -54,7 +55,8 @@ public sealed class Orchestrator : IOrchestrator
         IServiceProvider services,
         IModelRouter? router = null,
         int reviewAttempts = 1,
-        int? numCtx = null)
+        int? numCtx = null,
+        bool disableThinking = false)
     {
         _providers = providers;
         _workers = workers;
@@ -69,6 +71,8 @@ public sealed class Orchestrator : IOrchestrator
         _router = router ?? new ModelRouter(modelResolver);
         _reviewAttempts = reviewAttempts;
         _numCtx = numCtx;
+        // Disable the local model's <think> phase by sending think:false; null leaves it to the model.
+        _think = disableThinking ? false : null;
     }
 
     public async IAsyncEnumerable<WorkEvent> SubmitIntentAsync(
@@ -277,7 +281,7 @@ public sealed class Orchestrator : IOrchestrator
         for (var iteration = 1; iteration <= MaxIterations; iteration++)
         {
             var toolDefs = _tools.Definitions.Where(d => Allows(worker, d.Name)).ToArray();
-            var request = new ChatRequest(model, messages, toolDefs, Temperature: 0.2, NumCtx: _numCtx);
+            var request = new ChatRequest(model, messages, toolDefs, Temperature: 0.2, NumCtx: _numCtx, Think: _think);
 
             var contentBuilder = new StringBuilder();
             var toolBuilders = new Dictionary<int, ToolCallBuilder>();

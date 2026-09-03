@@ -417,7 +417,7 @@ public sealed class MainWindow : Window, IDecisionHandler
             var orchestrator = new Orchestrator(
                 _providerFactory, _modelResolver, _workerProvider, _toolRegistry, artifactStore,
                 workspace, _planner, _permissionEngine, this, policy, new EmptyProvider(),
-                BuildRouter(), 1, _settings.NumCtx);
+                BuildRouter(), 1, _settings.NumCtx, _settings.DisableThinking);
             var recorder = new RunRecorder(runStore, new JsonMemoryStore(workspace), workspace.Id);
 
             var context = await contextProvider.BuildAsync(new IntentFocus(workspace.Id), _cts.Token);
@@ -1019,7 +1019,7 @@ public sealed class MainWindow : Window, IDecisionHandler
                 var orchestrator = new Orchestrator(
                     _providerFactory, _modelResolver, _workerProvider, _toolRegistry, new DiskArtifactStore(workspace),
                     workspace, _planner, _permissionEngine, decisions, policy, new EmptyProvider(),
-                    BuildRouter(), 1, _settings.NumCtx);
+                    BuildRouter(), 1, _settings.NumCtx, _settings.DisableThinking);
                 var recorder = new RunRecorder(runStore, new JsonMemoryStore(workspace), workspace.Id);
                 var context = await contextProvider.BuildAsync(new IntentFocus(workspace.Id), CancellationToken.None);
                 var intent = new Intent(Guid.NewGuid(), text, IntentSource.Inbox, context, DateTimeOffset.UtcNow, workerId);
