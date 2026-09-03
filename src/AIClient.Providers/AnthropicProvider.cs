@@ -4,6 +4,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using AIClient.Core.Chat;
+using AIClient.Core.Diagnostics;
 using AIClient.Core.Providers;
 using AIClient.Core.Tools;
 
@@ -18,11 +19,13 @@ public sealed class AnthropicProvider : IChatProvider
 
     private readonly HttpClient _http;
     private readonly ProviderDescriptor _descriptor;
+    private readonly ILogSink? _log;
 
-    public AnthropicProvider(HttpClient http, ProviderDescriptor descriptor)
+    public AnthropicProvider(HttpClient http, ProviderDescriptor descriptor, ILogSink? log = null)
     {
         _http = http;
         _descriptor = descriptor;
+        _log = log;
     }
 
     public async IAsyncEnumerable<ChatStreamEvent> StreamChatAsync(
@@ -100,9 +103,11 @@ public sealed class AnthropicProvider : IChatProvider
             }).ToArray();
 
         var url = _descriptor.BaseUrl.TrimEnd('/') + "/v1/messages";
+        var json = JsonSerializer.Serialize(payload, JsonOpts);
+        WireTap.Request(_log, _descriptor.Id, request.Model, json);
         using var httpRequest = new HttpRequestMessage(HttpMethod.Post, url)
         {
-            Content = new StringContent(JsonSerializer.Serialize(payload, JsonOpts), Encoding.UTF8, "application/json")
+            Content = new StringContent(json, Encoding.UTF8, "application/json")
         };
         httpRequest.Headers.TryAddWithoutValidation("x-api-key", _descriptor.ApiKey ?? "");
         httpRequest.Headers.TryAddWithoutValidation("anthropic-version", AnthropicVersion);
@@ -113,8 +118,12 @@ public sealed class AnthropicProvider : IChatProvider
         using var response = await _http.SendAsync(httpRequest, HttpCompletionOption.ResponseContentRead, ct);
         var body = await response.Content.ReadAsStringAsync(ct);
         if (!response.IsSuccessStatusCode)
+        {
+            WireTap.Error(_log, _descriptor.Id, (int)response.StatusCode, body);
             throw new HttpRequestException($"Anthropic returned {(int)response.StatusCode} {response.StatusCode}: {Truncate(body, 500)}");
+        }
 
+        WireTap.Response(_log, _descriptor.Id, (int)response.StatusCode, body);
         return ParseCompletion(body);
     }
 

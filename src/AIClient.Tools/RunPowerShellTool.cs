@@ -7,29 +7,34 @@ using AIClient.Core.Permissions;
 using AIClient.Core.Tools;
 
 /// <summary>
-/// Runs a shell command in the workspace directory (Execute level — and policy keeps it behind an
-/// approval by default). Captures stdout/stderr and the exit code.
+/// Runs a PowerShell script in the workspace and returns stdout/stderr + exit code. Unlike
+/// <see cref="RunCommandTool"/> (which goes through cmd.exe and makes PowerShell one-liners a
+/// quote-escaping nightmare), this passes the script via <c>-EncodedCommand</c> (base64 of the UTF-16
+/// script), so NO shell quoting is involved at all — the model just writes the script. Windows uses
+/// powershell.exe; elsewhere it tries pwsh.
 /// </summary>
-public sealed class RunCommandTool : ITool
+public sealed class RunPowerShellTool : ITool
 {
-    private const int TimeoutSeconds = 60;
-    private const int MaxOutputChars = 4000;
+    private const int TimeoutSeconds = 90;
+    private const int MaxOutputChars = 6000;
 
     public ToolDefinition Definition { get; } = new(
-        Name: "run_command",
-        Description: "Run a shell command in the workspace directory and return its stdout/stderr and exit code. "
-                   + "Use for builds, tests, git, etc.",
+        Name: "run_powershell",
+        Description: "Run a PowerShell script on Windows and return its stdout/stderr and exit code. "
+                   + "PREFER this over run_command for anything using PowerShell (Get-WmiObject/Get-CimInstance, "
+                   + "Get-PSDrive, pipes, quotes): write the script plainly — NO shell quote-escaping is needed. "
+                   + "To save results, take the returned output and write it with write_file; do not redirect to a file here.",
         JsonSchema: Schema);
 
     public PermissionLevel RequiredLevel => PermissionLevel.Execute;
 
     public async Task<ToolResult> InvokeAsync(string argumentsJson, ToolContext ctx, CancellationToken ct)
     {
-        string? command;
+        string? script;
         try
         {
             using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(argumentsJson) ? "{}" : argumentsJson);
-            command = doc.RootElement.TryGetProperty("command", out var c) && c.ValueKind == JsonValueKind.String
+            script = doc.RootElement.TryGetProperty("script", out var c) && c.ValueKind == JsonValueKind.String
                 ? c.GetString() : null;
         }
         catch (JsonException ex)
@@ -37,29 +42,25 @@ public sealed class RunCommandTool : ITool
             return ToolResults.Fail($"Invalid arguments JSON: {ex.Message}");
         }
 
-        if (string.IsNullOrWhiteSpace(command))
-            return ToolResults.Fail("'command' is required.");
+        if (string.IsNullOrWhiteSpace(script))
+            return ToolResults.Fail("'script' is required.");
+
+        // -EncodedCommand takes base64 of the UTF-16LE script text — bypasses ALL cmd/shell quoting.
+        var encoded = Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
 
         var startInfo = new ProcessStartInfo
         {
+            FileName = OperatingSystem.IsWindows() ? "powershell.exe" : "pwsh",
             WorkingDirectory = ctx.WorkspaceRoot,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true
         };
-        if (OperatingSystem.IsWindows())
-        {
-            startInfo.FileName = "cmd.exe";
-            startInfo.ArgumentList.Add("/c");
-            startInfo.ArgumentList.Add(command);
-        }
-        else
-        {
-            startInfo.FileName = "/bin/sh";
-            startInfo.ArgumentList.Add("-c");
-            startInfo.ArgumentList.Add(command);
-        }
+        startInfo.ArgumentList.Add("-NoProfile");
+        startInfo.ArgumentList.Add("-NonInteractive");
+        startInfo.ArgumentList.Add("-EncodedCommand");
+        startInfo.ArgumentList.Add(encoded);
 
         using var process = new Process { StartInfo = startInfo };
         var stdout = new StringBuilder();
@@ -80,11 +81,11 @@ public sealed class RunCommandTool : ITool
         catch (OperationCanceledException)
         {
             try { if (!process.HasExited) process.Kill(entireProcessTree: true); } catch { /* ignore */ }
-            return ToolResults.Fail($"Command timed out after {TimeoutSeconds}s or was cancelled.");
+            return ToolResults.Fail($"PowerShell timed out after {TimeoutSeconds}s or was cancelled.");
         }
         catch (Exception ex)
         {
-            return ToolResults.Fail($"Could not run command: {ex.Message}");
+            return ToolResults.Fail($"Could not run PowerShell: {ex.Message}");
         }
 
         var combined = stdout.ToString();
@@ -94,7 +95,6 @@ public sealed class RunCommandTool : ITool
         if (combined.Length > MaxOutputChars)
             combined = combined[..MaxOutputChars] + "\n… (truncated)";
 
-        // Label the result clearly so the model uses the OUTPUT (not the command text) when asked to save it.
         var output = $"exit code {process.ExitCode}\n----- command output (this is the result) -----\n{combined}";
         return ToolResults.Ok(
             output: output,
@@ -105,9 +105,9 @@ public sealed class RunCommandTool : ITool
     {
       "type": "object",
       "properties": {
-        "command": { "type": "string", "description": "The shell command to run in the workspace directory." }
+        "script": { "type": "string", "description": "The PowerShell script to run. Write it plainly; no shell quote-escaping is needed." }
       },
-      "required": ["command"]
+      "required": ["script"]
     }
     """;
 }

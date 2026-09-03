@@ -9,20 +9,21 @@ using AIClient.Core.Providers;
 using AIClient.Core.Tools;
 
 /// <summary>
-/// One adapter for every OpenAI-compatible endpoint: OpenAI, Ollama (/v1), OpenRouter, Groq,
-/// LM Studio, vLLM, ... Only the base URL / key / model change. Streaming uses a small hand-rolled
-/// SSE reader (no external packages).
+/// Talks to Ollama's own /api/chat (not the OpenAI-compatible /v1 shim). The only reason this
+/// exists alongside <see cref="OpenAiCompatibleProvider"/>: the /v1 endpoint silently ignores any
+/// context-window override (confirmed against Ollama's openai/openai.go - ChatCompletionRequest has
+/// no "options"/"num_ctx" field at all), so a per-run num_ctx only takes effect through this native
+/// wire format. Streaming here is newline-delimited JSON objects, not SSE.
 /// </summary>
-public sealed class OpenAiCompatibleProvider : IChatProvider
+public sealed class OllamaNativeProvider : IChatProvider
 {
-    // Default (no naming policy) keeps wire field names like "tool_calls" verbatim.
     private static readonly JsonSerializerOptions JsonOpts = new();
 
     private readonly HttpClient _http;
     private readonly ProviderDescriptor _descriptor;
     private readonly ILogSink? _log;
 
-    public OpenAiCompatibleProvider(HttpClient http, ProviderDescriptor descriptor, ILogSink? log = null)
+    public OllamaNativeProvider(HttpClient http, ProviderDescriptor descriptor, ILogSink? log = null)
     {
         _http = http;
         _descriptor = descriptor;
@@ -50,16 +51,10 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
             while (await reader.ReadLineAsync(ct) is { } line)
             {
                 raw.AppendLine(line);
-                if (line.Length == 0 || !line.StartsWith("data:", StringComparison.Ordinal))
+                if (line.Length == 0)
                     continue;
 
-                var data = line["data:".Length..].Trim();
-                if (data.Length == 0)
-                    continue;
-                if (data == "[DONE]")
-                    yield break;
-
-                foreach (var evt in ParseStreamChunk(data))
+                foreach (var evt in ParseStreamLine(line))
                     yield return evt;
             }
         }
@@ -93,12 +88,17 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
             ["stream"] = stream,
             ["messages"] = request.Messages.Select(ToWire).ToArray()
         };
-        if (request.Temperature is { } temperature)
-            payload["temperature"] = temperature;
+        if (request.Temperature is { } temperature || request.NumCtx is { } numCtx0)
+        {
+            var options = new Dictionary<string, object?>();
+            if (request.Temperature is { } t) options["temperature"] = t;
+            if (request.NumCtx is { } nc) options["num_ctx"] = nc;
+            payload["options"] = options;
+        }
         if (request.Tools is { Count: > 0 } tools)
             payload["tools"] = tools.Select(ToWireTool).ToArray();
 
-        var url = _descriptor.BaseUrl.TrimEnd('/') + "/chat/completions";
+        var url = RootUrl(_descriptor.BaseUrl) + "/api/chat";
         var json = JsonSerializer.Serialize(payload, JsonOpts);
         WireTap.Request(_log, _descriptor.Id, request.Model, json);
         var httpRequest = new HttpRequestMessage(HttpMethod.Post, url)
@@ -110,61 +110,78 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
         return httpRequest;
     }
 
-    private static IEnumerable<ChatStreamEvent> ParseStreamChunk(string data)
+    /// <summary>Ollama's native API lives at the server root, not under "/v1" - strip it if present
+    /// so the same "http://localhost:11434/v1" endpoint string works for both providers.</summary>
+    private static string RootUrl(string baseUrl)
+    {
+        var root = baseUrl.TrimEnd('/');
+        if (root.EndsWith("/v1", StringComparison.OrdinalIgnoreCase))
+            root = root[..^3].TrimEnd('/');
+        return root;
+    }
+
+    private static IEnumerable<ChatStreamEvent> ParseStreamLine(string line)
     {
         var events = new List<ChatStreamEvent>();
-        using var doc = JsonDocument.Parse(data);
+        using var doc = JsonDocument.Parse(line);
         var root = doc.RootElement;
 
-        if (root.TryGetProperty("choices", out var choices) && choices.GetArrayLength() > 0)
+        if (root.TryGetProperty("message", out var message))
         {
-            var choice = choices[0];
-
-            if (choice.TryGetProperty("delta", out var delta))
+            if (message.TryGetProperty("content", out var content)
+                && content.ValueKind == JsonValueKind.String
+                && content.GetString() is { Length: > 0 } text)
             {
-                if (delta.TryGetProperty("content", out var content)
-                    && content.ValueKind == JsonValueKind.String
-                    && content.GetString() is { Length: > 0 } text)
-                {
-                    events.Add(new TextDelta(text));
-                }
-
-                if (delta.TryGetProperty("tool_calls", out var toolCalls) && toolCalls.ValueKind == JsonValueKind.Array)
-                {
-                    foreach (var tc in toolCalls.EnumerateArray())
-                    {
-                        var index = tc.TryGetProperty("index", out var idx) && idx.TryGetInt32(out var i) ? i : 0;
-                        var id = tc.TryGetProperty("id", out var idEl) && idEl.ValueKind == JsonValueKind.String
-                            ? idEl.GetString() : null;
-
-                        string? name = null;
-                        string? argumentsPart = null;
-                        if (tc.TryGetProperty("function", out var fn))
-                        {
-                            if (fn.TryGetProperty("name", out var nameEl) && nameEl.ValueKind == JsonValueKind.String)
-                                name = nameEl.GetString();
-                            if (fn.TryGetProperty("arguments", out var argsEl) && argsEl.ValueKind == JsonValueKind.String)
-                                argumentsPart = argsEl.GetString();
-                        }
-
-                        events.Add(new ToolCallDelta(index, id, name, argumentsPart));
-                    }
-                }
+                events.Add(new TextDelta(text));
             }
 
-            if (choice.TryGetProperty("finish_reason", out var fr) && fr.ValueKind == JsonValueKind.String)
-                events.Add(new FinishDelta(fr.GetString()));
+            if (message.TryGetProperty("tool_calls", out var toolCalls) && toolCalls.ValueKind == JsonValueKind.Array)
+            {
+                // Ollama emits each tool call fully formed in one chunk (no incremental argument
+                // streaming like OpenAI's format), so this fires once per call with the complete
+                // arguments already - ToolCallDelta just happens to also support partial chunks.
+                var index = 0;
+                foreach (var tc in toolCalls.EnumerateArray())
+                {
+                    var (name, argsJson) = ReadFunction(tc);
+                    events.Add(new ToolCallDelta(index, Guid.NewGuid().ToString("N"), name, argsJson));
+                    index++;
+                }
+            }
         }
 
-        if (root.TryGetProperty("usage", out var usage) && usage.ValueKind == JsonValueKind.Object)
+        if (root.TryGetProperty("done", out var done) && done.ValueKind == JsonValueKind.True)
         {
-            int? prompt = usage.TryGetProperty("prompt_tokens", out var pt) && pt.TryGetInt32(out var ptv) ? ptv : null;
-            int? completion = usage.TryGetProperty("completion_tokens", out var cpt) && cpt.TryGetInt32(out var cptv) ? cptv : null;
+            int? prompt = root.TryGetProperty("prompt_eval_count", out var pt) && pt.TryGetInt32(out var ptv) ? ptv : null;
+            int? completion = root.TryGetProperty("eval_count", out var ec) && ec.TryGetInt32(out var ecv) ? ecv : null;
             if (prompt is not null || completion is not null)
                 events.Add(new UsageDelta(prompt, completion));
+
+            var reason = root.TryGetProperty("done_reason", out var dr) && dr.ValueKind == JsonValueKind.String
+                ? dr.GetString()
+                : "stop";
+            events.Add(new FinishDelta(reason));
         }
 
         return events;
+    }
+
+    private static (string? Name, string ArgsJson) ReadFunction(JsonElement toolCall)
+    {
+        if (!toolCall.TryGetProperty("function", out var fn))
+            return (null, "{}");
+
+        string? name = fn.TryGetProperty("name", out var nameEl) && nameEl.ValueKind == JsonValueKind.String
+            ? nameEl.GetString()
+            : null;
+
+        // Ollama's native wire sends arguments as a JSON *object*, unlike OpenAI's stringified form -
+        // re-serialize it to the string shape the rest of AIClient (ToolCall.ArgumentsJson) expects.
+        var argsJson = fn.TryGetProperty("arguments", out var argsEl)
+            ? argsEl.GetRawText()
+            : "{}";
+
+        return (name, argsJson);
     }
 
     private static object ToWireTool(ToolDefinition t) => new
@@ -181,7 +198,7 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
     private static object ToWire(ChatMessage m)
     {
         if (m.Role == ChatRole.Tool)
-            return new { role = "tool", tool_call_id = m.ToolCallId ?? "", content = m.Content ?? "" };
+            return new { role = "tool", content = m.Content ?? "" };
 
         if (m.ToolCalls is { Count: > 0 } calls)
         {
@@ -191,9 +208,13 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
                 content = m.Content ?? "",
                 tool_calls = calls.Select(tc => new
                 {
-                    id = tc.Id,
-                    type = "function",
-                    function = new { name = tc.Name, arguments = tc.ArgumentsJson }
+                    function = new
+                    {
+                        name = tc.Name,
+                        // Native Ollama wants the arguments as an object, not a JSON string.
+                        arguments = JsonDocument.Parse(
+                            string.IsNullOrWhiteSpace(tc.ArgumentsJson) ? "{}" : tc.ArgumentsJson).RootElement.Clone()
+                    }
                 }).ToArray()
             };
         }
@@ -215,10 +236,8 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
         using var doc = JsonDocument.Parse(body);
         var root = doc.RootElement;
 
-        if (!root.TryGetProperty("choices", out var choices) || choices.GetArrayLength() == 0)
-            throw new InvalidOperationException("Provider response contained no choices.");
-
-        var message = choices[0].GetProperty("message");
+        if (!root.TryGetProperty("message", out var message))
+            throw new InvalidOperationException("Provider response contained no message.");
 
         string? content = null;
         if (message.TryGetProperty("content", out var contentEl) && contentEl.ValueKind == JsonValueKind.String)
@@ -231,34 +250,17 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
             toolCalls = new List<ToolCall>();
             foreach (var tc in toolCallsEl.EnumerateArray())
             {
-                var function = tc.GetProperty("function");
-                var id = tc.TryGetProperty("id", out var idEl) && idEl.ValueKind == JsonValueKind.String
-                    ? idEl.GetString()!
-                    : Guid.NewGuid().ToString("N");
-                var name = function.TryGetProperty("name", out var nameEl) ? nameEl.GetString() ?? "" : "";
-
-                var arguments = "{}";
-                if (function.TryGetProperty("arguments", out var argsEl))
-                {
-                    arguments = argsEl.ValueKind == JsonValueKind.String
-                        ? (argsEl.GetString() ?? "{}")
-                        : argsEl.GetRawText();
-                }
-
-                toolCalls.Add(new ToolCall(id, name, arguments));
+                var (name, argsJson) = ReadFunction(tc);
+                toolCalls.Add(new ToolCall(Guid.NewGuid().ToString("N"), name ?? "", argsJson));
             }
         }
 
-        string? finishReason = null;
-        if (choices[0].TryGetProperty("finish_reason", out var frEl) && frEl.ValueKind == JsonValueKind.String)
-            finishReason = frEl.GetString();
+        var finishReason = root.TryGetProperty("done_reason", out var dr) && dr.ValueKind == JsonValueKind.String
+            ? dr.GetString()
+            : "stop";
 
-        int? promptTokens = null, completionTokens = null;
-        if (root.TryGetProperty("usage", out var usage))
-        {
-            if (usage.TryGetProperty("prompt_tokens", out var pt) && pt.TryGetInt32(out var ptv)) promptTokens = ptv;
-            if (usage.TryGetProperty("completion_tokens", out var cpt) && cpt.TryGetInt32(out var cptv)) completionTokens = cptv;
-        }
+        int? promptTokens = root.TryGetProperty("prompt_eval_count", out var pt) && pt.TryGetInt32(out var ptv) ? ptv : null;
+        int? completionTokens = root.TryGetProperty("eval_count", out var ec) && ec.TryGetInt32(out var ecv) ? ecv : null;
 
         var assistant = new ChatMessage(ChatRole.Assistant, content, toolCalls);
         return new ChatCompletion(assistant, finishReason, promptTokens, completionTokens);
