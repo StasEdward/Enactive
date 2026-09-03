@@ -9,5 +9,6 @@
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.11" />
     <!-- Modern async MySQL driver. Only used when AICLIENT_STORE=mysql. -->
     <PackageReference Include="MySqlConnector" Version="2.3.7" />
+    <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="3.53.3" />
   </ItemGroup>
 </Project>
