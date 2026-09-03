@@ -16,7 +16,9 @@ public sealed record ProviderDescriptor(
     string BaseUrl,
     string? ApiKey,
     IReadOnlyList<string> Models,
-    IReadOnlyDictionary<string, string>? Headers = null);
+    IReadOnlyDictionary<string, string>? Headers = null,
+    // Max output tokens for this provider (Anthropic max_tokens). Null = the provider's built-in default.
+    int? MaxTokens = null);
 
 /// <summary>Talks to an LLM. Implementations live in AIClient.Providers (transport stays out of Core).</summary>
 public interface IChatProvider

@@ -1243,7 +1243,8 @@ public sealed class MainWindow : Window, IDecisionHandler
             p.BaseUrl,
             string.IsNullOrEmpty(p.ApiKey) ? null : p.ApiKey,
             p.Models,
-            p.Headers.Count > 0 ? p.Headers : null)).ToList();
+            p.Headers.Count > 0 ? p.Headers : null,
+            p.MaxTokens)).ToList();
         _providerFactory = new ChatProviderFactory(descriptors, _http, _log);
 
         // Workers: the editable team, each with its own model; honesty + global instructions applied at build.

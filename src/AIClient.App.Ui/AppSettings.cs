@@ -23,6 +23,9 @@ internal sealed class ProviderConfig
     public Dictionary<string, string> Headers { get; set; } = new();
     public List<string> Models { get; set; } = new();
 
+    /// <summary>Max output tokens for this provider (blank = the provider's built-in default). Anthropic max_tokens.</summary>
+    public int? MaxTokens { get; set; }
+
     public ProviderConfig Clone() => new()
     {
         Id = Id,
@@ -32,7 +35,8 @@ internal sealed class ProviderConfig
         ApiKeyProtected = ApiKeyProtected,
         ApiKey = ApiKey,
         Headers = new Dictionary<string, string>(Headers),
-        Models = new List<string>(Models)
+        Models = new List<string>(Models),
+        MaxTokens = MaxTokens
     };
 }
 

@@ -28,6 +28,11 @@ internal sealed class ProviderEditWindow : Window
         };
         var baseUrlBox = new TextBox { Text = config.BaseUrl, Watermark = "base URL — e.g. http://localhost:11434/v1" };
         var apiKeyBox = new TextBox { Text = config.ApiKey, Watermark = "API key (blank for local providers)", PasswordChar = '•' };
+        var maxTokensBox = new TextBox
+        {
+            Text = config.MaxTokens?.ToString() ?? string.Empty,
+            Watermark = "max output tokens — blank uses the provider default (raise for big outputs)"
+        };
         var headersBox = new TextBox
         {
             Text = ModelFetch.FormatHeaders(config.Headers),
@@ -86,6 +91,7 @@ internal sealed class ProviderEditWindow : Window
             config.Kind = kindBox.SelectedItem is ProviderKind k ? k : ProviderKind.OpenAiCompatible;
             config.BaseUrl = (baseUrlBox.Text ?? string.Empty).Trim();
             config.ApiKey = (apiKeyBox.Text ?? string.Empty).Trim();
+            config.MaxTokens = int.TryParse((maxTokensBox.Text ?? string.Empty).Trim(), out var mt) && mt > 0 ? mt : null;
             config.Headers = ModelFetch.ParseHeaders(headersBox.Text);
             config.Models = (modelsBox.Text ?? string.Empty).Replace("\r\n", "\n").Split('\n')
                 .Select(l => l.Trim()).Where(l => l.Length > 0).ToList();
@@ -107,6 +113,7 @@ internal sealed class ProviderEditWindow : Window
                     Label("Kind"), kindBox,
                     Label("Base URL"), baseUrlBox,
                     Label("API key"), apiKeyBox,
+                    Label("Max output tokens"), maxTokensBox,
                     Label("Headers"), headersBox,
                     Label("Models"), modelsBox,
                     new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { fetchedCombo, refreshButton } },
