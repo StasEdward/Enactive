@@ -3,6 +3,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Templates;
 using Avalonia.Layout;
+using Avalonia.Threading;
 using Avalonia.Media;
 
 namespace AIClient.App.Ui;
@@ -35,8 +36,10 @@ internal sealed class SettingsWindow : Window
         // pickers (preserving each selection) whenever the Phases tab is shown.
         tabs.SelectionChanged += (_, _) =>
         {
+            // Defer: mutating the pickers' ItemsSource inside the tab's own selection update throws
+            // "Cannot change source while update is in progress"; run it once that update has finished.
             if (ReferenceEquals(tabs.SelectedItem, phasesTab))
-                RefreshPhasePickers();
+                Dispatcher.UIThread.Post(RefreshPhasePickers);
         };
 
         var saveButton = new Button { Content = "Save" };
@@ -192,6 +195,7 @@ internal sealed class SettingsWindow : Window
     private void RefreshProviders()
     {
         var keep = _providersList.SelectedIndex;
+        _providersList.SelectedIndex = -1;
         _providersList.ItemsSource = _working.Providers.ToList();
         _providersList.SelectedIndex = keep >= 0 && keep < _working.Providers.Count ? keep : -1;
     }
@@ -257,6 +261,7 @@ internal sealed class SettingsWindow : Window
     private void RefreshWorkers()
     {
         var keep = _workersList.SelectedIndex;
+        _workersList.SelectedIndex = -1;
         _workersList.ItemsSource = _working.Workers.ToList();
         _workersList.SelectedIndex = keep >= 0 && keep < _working.Workers.Count ? keep : -1;
     }
@@ -320,6 +325,9 @@ internal sealed class SettingsWindow : Window
         // Keep a saved value that's no longer in the catalog so the selection isn't silently dropped.
         if (!string.IsNullOrWhiteSpace(current) && !items.Contains(current))
             items.Add(current);
+        // Clear the selection before swapping the source, otherwise Avalonia tries to reconcile the old
+        // selection against the new list mid-change and throws "Cannot change source while update is in progress".
+        combo.SelectedItem = null;
         combo.ItemsSource = items;
         combo.SelectedItem = string.IsNullOrWhiteSpace(current) ? NoneLabel : current;
     }
