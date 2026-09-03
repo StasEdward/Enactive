@@ -84,48 +84,64 @@ public sealed class AnthropicProvider : IChatProvider
             }
         }
 
-        var payload = new Dictionary<string, object?>
+        // Build + send in a local function so we can retry once without `temperature`: newer Anthropic models
+        // (e.g. Opus 5.x) reject it with 400 "temperature is deprecated for this model", while older ones still
+        // accept it — so we keep it by default and only drop it when the API tells us this model refuses it.
+        async Task<(bool Ok, int Status, string Body)> SendAsync(bool includeTemperature)
         {
-            ["model"] = request.Model,
-            ["max_tokens"] = request.MaxTokens ?? 4096,
-            ["messages"] = wire.ToArray()
-        };
-        if (systemParts.Count > 0)
-            payload["system"] = string.Join("\n", systemParts);
-        if (request.Temperature is { } temperature)
-            payload["temperature"] = temperature;
-        if (request.Tools is { Count: > 0 } tools)
-            payload["tools"] = tools.Select(t => new
+            var payload = new Dictionary<string, object?>
             {
-                name = t.Name,
-                description = t.Description,
-                input_schema = ToElement(t.JsonSchema)
-            }).ToArray();
+                ["model"] = request.Model,
+                ["max_tokens"] = request.MaxTokens ?? 4096,
+                ["messages"] = wire.ToArray()
+            };
+            if (systemParts.Count > 0)
+                payload["system"] = string.Join("\n", systemParts);
+            if (includeTemperature && request.Temperature is { } temperature)
+                payload["temperature"] = temperature;
+            if (request.Tools is { Count: > 0 } tools)
+                payload["tools"] = tools.Select(t => new
+                {
+                    name = t.Name,
+                    description = t.Description,
+                    input_schema = ToElement(t.JsonSchema)
+                }).ToArray();
 
-        var url = _descriptor.BaseUrl.TrimEnd('/') + "/v1/messages";
-        var json = JsonSerializer.Serialize(payload, JsonOpts);
-        WireTap.Request(_log, _descriptor.Id, request.Model, json);
-        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, url)
-        {
-            Content = new StringContent(json, Encoding.UTF8, "application/json")
-        };
-        httpRequest.Headers.TryAddWithoutValidation("x-api-key", _descriptor.ApiKey ?? "");
-        httpRequest.Headers.TryAddWithoutValidation("anthropic-version", AnthropicVersion);
-        if (_descriptor.Headers is { } extraHeaders)
-            foreach (var header in extraHeaders)
-                httpRequest.Headers.TryAddWithoutValidation(header.Key, header.Value);
+            var url = _descriptor.BaseUrl.TrimEnd('/') + "/v1/messages";
+            var json = JsonSerializer.Serialize(payload, JsonOpts);
+            WireTap.Request(_log, _descriptor.Id, request.Model, json);
+            using var httpRequest = new HttpRequestMessage(HttpMethod.Post, url)
+            {
+                Content = new StringContent(json, Encoding.UTF8, "application/json")
+            };
+            httpRequest.Headers.TryAddWithoutValidation("x-api-key", _descriptor.ApiKey ?? "");
+            httpRequest.Headers.TryAddWithoutValidation("anthropic-version", AnthropicVersion);
+            if (_descriptor.Headers is { } extraHeaders)
+                foreach (var header in extraHeaders)
+                    httpRequest.Headers.TryAddWithoutValidation(header.Key, header.Value);
 
-        using var response = await _http.SendAsync(httpRequest, HttpCompletionOption.ResponseContentRead, ct);
-        var body = await response.Content.ReadAsStringAsync(ct);
-        if (!response.IsSuccessStatusCode)
-        {
-            WireTap.Error(_log, _descriptor.Id, (int)response.StatusCode, body);
-            throw new HttpRequestException($"Anthropic returned {(int)response.StatusCode} {response.StatusCode}: {Truncate(body, 500)}");
+            using var response = await _http.SendAsync(httpRequest, HttpCompletionOption.ResponseContentRead, ct);
+            var responseBody = await response.Content.ReadAsStringAsync(ct);
+            return (response.IsSuccessStatusCode, (int)response.StatusCode, responseBody);
         }
 
-        WireTap.Response(_log, _descriptor.Id, (int)response.StatusCode, body);
+        var (ok, status, body) = await SendAsync(includeTemperature: true);
+        if (!ok && status == 400 && request.Temperature is not null && IsTemperatureDeprecated(body))
+            (ok, status, body) = await SendAsync(includeTemperature: false);
+
+        if (!ok)
+        {
+            WireTap.Error(_log, _descriptor.Id, status, body);
+            throw new HttpRequestException($"Anthropic returned {status}: {Truncate(body, 500)}");
+        }
+
+        WireTap.Response(_log, _descriptor.Id, status, body);
         return ParseCompletion(body);
     }
+
+    private static bool IsTemperatureDeprecated(string body)
+        => body.Contains("temperature", StringComparison.OrdinalIgnoreCase)
+           && body.Contains("deprecated", StringComparison.OrdinalIgnoreCase);
 
     private static ChatCompletion ParseCompletion(string body)
     {
