@@ -29,7 +29,15 @@ internal sealed class SettingsWindow : Window
         tabs.Items.Add(new TabItem { Header = "General", Content = BuildGeneralTab() });
         tabs.Items.Add(new TabItem { Header = "Providers", Content = BuildProvidersTab() });
         tabs.Items.Add(new TabItem { Header = "Team", Content = BuildTeamTab() });
-        tabs.Items.Add(new TabItem { Header = "Phases", Content = BuildPhasesTab() });
+        var phasesTab = new TabItem { Header = "Phases", Content = BuildPhasesTab() };
+        tabs.Items.Add(phasesTab);
+        // The model catalog changes when providers/models are edited on other tabs — refresh the Phases
+        // pickers (preserving each selection) whenever the Phases tab is shown.
+        tabs.SelectionChanged += (_, _) =>
+        {
+            if (ReferenceEquals(tabs.SelectedItem, phasesTab))
+                RefreshPhasePickers();
+        };
 
         var saveButton = new Button { Content = "Save" };
         var cancelButton = new Button { Content = "Cancel" };
@@ -244,47 +252,22 @@ internal sealed class SettingsWindow : Window
     }
 
     // ── Phases ──────────────────────────────────────────────────────────────────
-    private TextBox _planBox = null!;
-    private TextBox _reviewBox = null!;
-    private TextBox _lightBox = null!;
-    private TextBox _heavyBox = null!;
+    private const string NoneLabel = "(none)";
+    private ComboBox _planCombo = null!;
+    private ComboBox _reviewCombo = null!;
+    private ComboBox _lightCombo = null!;
+    private ComboBox _heavyCombo = null!;
 
     private Control BuildPhasesTab()
     {
-        var catalog = new List<string> { "(none)" };
-        catalog.AddRange(_working.ModelCatalog());
-
-        _planBox = new TextBox { Text = _working.Bindings.Plan, Watermark = "providerId/model — blank = plan on the executing model" };
-        var planCombo = new ComboBox { ItemsSource = catalog, PlaceholderText = "pick…", HorizontalAlignment = HorizontalAlignment.Stretch };
-        planCombo.SelectionChanged += (_, _) =>
-        {
-            if (planCombo.SelectedItem is string m)
-                _planBox.Text = m == "(none)" ? string.Empty : m;
-        };
-
-        _reviewBox = new TextBox { Text = _working.Bindings.Review, Watermark = "providerId/model — blank = no review (single-agent)" };
-        var reviewCombo = new ComboBox { ItemsSource = catalog, PlaceholderText = "pick…", HorizontalAlignment = HorizontalAlignment.Stretch };
-        reviewCombo.SelectionChanged += (_, _) =>
-        {
-            if (reviewCombo.SelectedItem is string m)
-                _reviewBox.Text = m == "(none)" ? string.Empty : m;
-        };
-
-        _lightBox = new TextBox { Text = _working.Bindings.ExecuteLight, Watermark = "providerId/model — blank = the worker's own model" };
-        var lightCombo = new ComboBox { ItemsSource = catalog, PlaceholderText = "pick…", HorizontalAlignment = HorizontalAlignment.Stretch };
-        lightCombo.SelectionChanged += (_, _) =>
-        {
-            if (lightCombo.SelectedItem is string m)
-                _lightBox.Text = m == "(none)" ? string.Empty : m;
-        };
-
-        _heavyBox = new TextBox { Text = _working.Bindings.ExecuteHeavy, Watermark = "providerId/model — blank = the worker's own model" };
-        var heavyCombo = new ComboBox { ItemsSource = catalog, PlaceholderText = "pick…", HorizontalAlignment = HorizontalAlignment.Stretch };
-        heavyCombo.SelectionChanged += (_, _) =>
-        {
-            if (heavyCombo.SelectedItem is string m)
-                _heavyBox.Text = m == "(none)" ? string.Empty : m;
-        };
+        _planCombo = NewPicker();
+        _reviewCombo = NewPicker();
+        _lightCombo = NewPicker();
+        _heavyCombo = NewPicker();
+        PopulatePicker(_planCombo, _working.Bindings.Plan);
+        PopulatePicker(_reviewCombo, _working.Bindings.Review);
+        PopulatePicker(_lightCombo, _working.Bindings.ExecuteLight);
+        PopulatePicker(_heavyCombo, _working.Bindings.ExecuteHeavy);
 
         return new ScrollViewer
         {
@@ -295,34 +278,59 @@ internal sealed class SettingsWindow : Window
                 Children =
                 {
                     Hint("Execute always runs on the selected worker's own model. Plan and Review use the models "
-                        + "bound here. Leave Plan blank to plan on the executing model; leave Review blank to skip "
+                        + "bound here. Choose (none) for Plan to plan on the executing model, or for Review to skip "
                         + "review entirely (single-agent)."),
                     Header("Plan model"),
-                    _planBox,
-                    planCombo,
+                    _planCombo,
                     Header("Review model"),
-                    _reviewBox,
-                    reviewCombo,
+                    _reviewCombo,
                     Hint("Per-step auto-routing (optional): the planner rates each step trivial / normal / complex. "
                         + "Trivial steps run on the light model, complex steps on the heavy model; normal steps stay on "
-                        + "the worker's own model. Leave both blank to disable auto-routing."),
+                        + "the worker's own model. Choose (none) for both to disable auto-routing."),
                     Header("Execute · light (trivial steps)"),
-                    _lightBox,
-                    lightCombo,
+                    _lightCombo,
                     Header("Execute · heavy (complex steps)"),
-                    _heavyBox,
-                    heavyCombo
+                    _heavyCombo
                 }
             }
         };
     }
 
+    // A model picker over the whole provider catalog plus "(none)"; selection is remembered.
+    private static ComboBox NewPicker() => new()
+    {
+        HorizontalAlignment = HorizontalAlignment.Stretch,
+        PlaceholderText = NoneLabel
+    };
+
+    private void PopulatePicker(ComboBox combo, string current)
+    {
+        var items = new List<string> { NoneLabel };
+        items.AddRange(_working.ModelCatalog());
+        // Keep a saved value that's no longer in the catalog so the selection isn't silently dropped.
+        if (!string.IsNullOrWhiteSpace(current) && !items.Contains(current))
+            items.Add(current);
+        combo.ItemsSource = items;
+        combo.SelectedItem = string.IsNullOrWhiteSpace(current) ? NoneLabel : current;
+    }
+
+    private void RefreshPhasePickers()
+    {
+        PopulatePicker(_planCombo, ReadPicker(_planCombo));
+        PopulatePicker(_reviewCombo, ReadPicker(_reviewCombo));
+        PopulatePicker(_lightCombo, ReadPicker(_lightCombo));
+        PopulatePicker(_heavyCombo, ReadPicker(_heavyCombo));
+    }
+
+    private static string ReadPicker(ComboBox combo)
+        => combo.SelectedItem is string s && s != NoneLabel ? s : string.Empty;
+
     private void CommitPhases()
     {
-        _working.Bindings.Plan = (_planBox.Text ?? string.Empty).Trim();
-        _working.Bindings.Review = (_reviewBox.Text ?? string.Empty).Trim();
-        _working.Bindings.ExecuteLight = (_lightBox.Text ?? string.Empty).Trim();
-        _working.Bindings.ExecuteHeavy = (_heavyBox.Text ?? string.Empty).Trim();
+        _working.Bindings.Plan = ReadPicker(_planCombo);
+        _working.Bindings.Review = ReadPicker(_reviewCombo);
+        _working.Bindings.ExecuteLight = ReadPicker(_lightCombo);
+        _working.Bindings.ExecuteHeavy = ReadPicker(_heavyCombo);
     }
 
     private static TextBlock Header(string text) => new()

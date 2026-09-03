@@ -48,20 +48,33 @@ internal sealed class WorkerEditWindow : Window
             HorizontalAlignment = HorizontalAlignment.Stretch
         };
 
-        var modelBox = new TextBox { Text = config.Model, Watermark = "providerId/model" };
-        var modelCombo = new ComboBox { ItemsSource = modelCatalog, PlaceholderText = "pick a model…", HorizontalAlignment = HorizontalAlignment.Stretch };
-        modelCombo.SelectionChanged += (_, _) =>
+        const string none = "(none)";
+
+        // Model: a single picker over the catalog; a saved value not in the catalog is kept so it isn't lost.
+        var modelItems = new List<string>(modelCatalog);
+        if (!string.IsNullOrWhiteSpace(config.Model) && !modelItems.Contains(config.Model))
+            modelItems.Add(config.Model);
+        var modelCombo = new ComboBox
         {
-            if (modelCombo.SelectedItem is string m && !string.IsNullOrEmpty(m))
-                modelBox.Text = m;
+            ItemsSource = modelItems,
+            PlaceholderText = "pick a model…",
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            SelectedItem = !string.IsNullOrWhiteSpace(config.Model) && modelItems.Contains(config.Model)
+                ? config.Model
+                : (modelItems.Count > 0 ? modelItems[0] : null)
         };
 
-        var fallbackBox = new TextBox { Text = config.Fallback ?? string.Empty, Watermark = "fallback providerId/model (optional)" };
-        var fallbackCombo = new ComboBox { ItemsSource = modelCatalog, PlaceholderText = "pick a fallback…", HorizontalAlignment = HorizontalAlignment.Stretch };
-        fallbackCombo.SelectionChanged += (_, _) =>
+        // Fallback: optional, so it also offers "(none)".
+        var fallbackItems = new List<string> { none };
+        fallbackItems.AddRange(modelCatalog);
+        if (!string.IsNullOrWhiteSpace(config.Fallback) && !fallbackItems.Contains(config.Fallback))
+            fallbackItems.Add(config.Fallback);
+        var fallbackCombo = new ComboBox
         {
-            if (fallbackCombo.SelectedItem is string m && !string.IsNullOrEmpty(m))
-                fallbackBox.Text = m;
+            ItemsSource = fallbackItems,
+            PlaceholderText = none,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            SelectedItem = string.IsNullOrWhiteSpace(config.Fallback) ? none : config.Fallback
         };
 
         var saveButton = new Button { Content = "Save" };
@@ -73,9 +86,9 @@ internal sealed class WorkerEditWindow : Window
             config.Instructions = instructionsBox.Text ?? string.Empty;
             config.Tools = toolChecks.Where(c => c.IsChecked == true).Select(c => (string)c.Content!).ToList();
             config.Level = levelBox.SelectedItem is PermissionLevel lvl ? lvl : PermissionLevel.Execute;
-            config.Model = (modelBox.Text ?? string.Empty).Trim();
-            var fb = (fallbackBox.Text ?? string.Empty).Trim();
-            config.Fallback = fb.Length == 0 ? null : fb;
+            config.Model = modelCombo.SelectedItem as string ?? string.Empty;
+            var fb = fallbackCombo.SelectedItem as string;
+            config.Fallback = string.IsNullOrEmpty(fb) || fb == none ? null : fb;
             onSaved();
             Close();
         };
@@ -94,10 +107,8 @@ internal sealed class WorkerEditWindow : Window
                     Label("Instructions"), instructionsBox,
                     Label("Tools"), toolsPanel,
                     Label("Permission level"), levelBox,
-                    Label("Model"), modelBox,
-                    modelCombo,
-                    Label("Fallback model"), fallbackBox,
-                    fallbackCombo,
+                    Label("Model"), modelCombo,
+                    Label("Fallback model"), fallbackCombo,
                     new StackPanel
                     {
                         Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 12, 0, 0),
