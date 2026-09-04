@@ -14,20 +14,22 @@ namespace Enactive.App.Ui;
 /// prose is never shown verbatim; short remarks are logged as one-line notes instead.</summary>
 public sealed class StepCard
 {
-    private static readonly IBrush Pending = new SolidColorBrush(Color.Parse("#7d7d7d"));
-    private static readonly IBrush Running = new SolidColorBrush(Color.Parse("#4a9eff"));
-    private static readonly IBrush Done = new SolidColorBrush(Color.Parse("#4caf50"));
-    private static readonly IBrush Failed = new SolidColorBrush(Color.Parse("#e05555"));
-    private static readonly IBrush Warning = new SolidColorBrush(Color.Parse("#e0a83f"));
-    private static readonly IBrush MutedText = new SolidColorBrush(Color.Parse("#8a8a8a"));
-    private static readonly IBrush MutedTextHover = new SolidColorBrush(Color.Parse("#c0c0c0"));
-    private static readonly IBrush CommandIconBrush = new SolidColorBrush(Color.Parse("#4a9eff"));
-    private static readonly IBrush FileIconBrush = new SolidColorBrush(Color.Parse("#6fae6f"));
-    private static readonly IBrush ToolIconBrush = new SolidColorBrush(Color.Parse("#9a9a9a"));
-    private static readonly IBrush NoteDotBrush = new SolidColorBrush(Color.Parse("#8a8a8a"));
-    private static readonly IBrush EntryText = new SolidColorBrush(Color.Parse("#c8c8c8"));
-    private static readonly IBrush NoteText = new SolidColorBrush(Color.Parse("#dcdcdc"));
-    private static readonly IBrush DetailText = new SolidColorBrush(Color.Parse("#7f7f7f"));
+    // Step status comes straight from the brand's step tokens: a running step is the one
+    // place in the plan feed that earns ember.
+    private static readonly IBrush Pending = Brand.StepPending;
+    private static readonly IBrush Running = Brand.StepRunning;
+    private static readonly IBrush Done = Brand.StepDone;
+    private static readonly IBrush Failed = Brand.StepFailed;
+    private static readonly IBrush Warning = Brand.Warning;
+    private static readonly IBrush MutedText = Brand.TextMuted;
+    private static readonly IBrush MutedTextHover = Brand.TextBody;
+    private static readonly IBrush CommandIconBrush = Brand.Info;
+    private static readonly IBrush FileIconBrush = Brand.Success;
+    private static readonly IBrush ToolIconBrush = Brand.TextMuted;
+    private static readonly IBrush NoteDotBrush = Brand.TextMuted;
+    private static readonly IBrush EntryText = Brand.TextBody;
+    private static readonly IBrush NoteText = Brand.Text;
+    private static readonly IBrush DetailText = Brand.TextMuted;
 
     private const string CommandIcon = "$";
     private const string FileIcon = "▤";
@@ -62,7 +64,7 @@ public sealed class StepCard
         {
             Text = "Waiting…",
             FontSize = 12,
-            Foreground = new SolidColorBrush(Color.Parse("#9a9a9a")),
+            Foreground = Brand.TextMuted,
             TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(0, 3, 0, 0)
         };
@@ -114,7 +116,7 @@ public sealed class StepCard
         {
             Margin = new Thickness(0, 4, 0, 0),
             Padding = new Thickness(10, 4, 0, 0),
-            BorderBrush = new SolidColorBrush(Color.Parse("#2f2f2f")),
+            BorderBrush = Brand.Line,
             BorderThickness = new Thickness(2, 0, 0, 0),
             IsVisible = false,
             Child = _entriesPanel
@@ -122,7 +124,7 @@ public sealed class StepCard
 
         _root = new Border
         {
-            Background = new SolidColorBrush(Color.Parse("#1affffff")),
+            Background = Brand.CardFill,
             BorderBrush = Pending,
             BorderThickness = new Thickness(4, 0, 0, 0),
             CornerRadius = new CornerRadius(4),

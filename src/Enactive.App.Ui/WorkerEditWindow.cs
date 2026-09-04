@@ -15,6 +15,7 @@ internal sealed class WorkerEditWindow : Window
     public WorkerEditWindow(WorkerConfig config, IReadOnlyList<string> modelCatalog, Action onSaved)
     {
         Title = "Team member";
+        Background = Brand.Bg;
         Width = 640;
         Height = 720;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;

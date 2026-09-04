@@ -14,6 +14,7 @@ internal sealed class ProviderEditWindow : Window
     public ProviderEditWindow(ProviderConfig config, Action onSaved)
     {
         Title = "Provider";
+        Background = Brand.Bg;
         Width = 620;
         Height = 640;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
@@ -62,7 +63,7 @@ internal sealed class ProviderEditWindow : Window
             modelsBox.Text = string.Join("\n", lines);
         };
         var refreshButton = new Button { Content = "Fetch" };
-        var status = new TextBlock { Foreground = Brushes.Gray, FontSize = 11 };
+        var status = new TextBlock { Foreground = Brand.TextMuted, FontSize = 11 };
         refreshButton.Click += async (_, _) =>
         {
             status.Text = "loading…";

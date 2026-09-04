@@ -44,6 +44,7 @@ public sealed class LogWindow : Window
     {
         _hub = hub;
         Title = "Enactive — Global Log";
+        Background = Brand.Bg;
         Width = 1040;
         Height = 680;
 
@@ -110,7 +111,7 @@ public sealed class LogWindow : Window
         var template = new FuncDataTemplate<Row>((row, _) => new TextBlock
         {
             Text = row?.Line ?? string.Empty,
-            Foreground = row?.Brush ?? Brushes.Gray,
+            Foreground = row?.Brush ?? Brand.TextMuted,
             FontFamily = new FontFamily("Consolas, Menlo, monospace"),
             FontSize = 12,
             TextWrapping = TextWrapping.NoWrap
@@ -132,13 +133,13 @@ public sealed class LogWindow : Window
             Watermark = "Select a row to see its full payload (prompt / response / arguments)…"
         };
 
-        _status = new TextBlock { Margin = new Avalonia.Thickness(8, 2, 8, 4), FontSize = 11, Foreground = new SolidColorBrush(Color.Parse("#9a9a9a")) };
+        _status = new TextBlock { Margin = new Avalonia.Thickness(8, 2, 8, 4), FontSize = 11, Foreground = Brand.TextMuted };
 
         var grid = new Grid { RowDefinitions = new RowDefinitions("Auto,Auto,*,190,Auto") };
         Grid.SetRow(toolbar, 0);
         Grid.SetRow(chips, 1);
         Grid.SetRow(_list, 2);
-        var detailBorder = new Border { BorderBrush = new SolidColorBrush(Color.Parse("#333333")), BorderThickness = new Avalonia.Thickness(0, 1, 0, 0), Child = _detail };
+        var detailBorder = new Border { BorderBrush = Brand.Line, BorderThickness = new Avalonia.Thickness(0, 1, 0, 0), Child = _detail };
         Grid.SetRow(detailBorder, 3);
         Grid.SetRow(_status, 4);
         grid.Children.Add(toolbar);
@@ -281,12 +282,12 @@ public sealed class LogWindow : Window
 
         private static Color ColorFor(LogLevel l) => l switch
         {
-            LogLevel.Trace => Color.Parse("#6f6f6f"),
-            LogLevel.Debug => Color.Parse("#9a9a9a"),
-            LogLevel.Info => Color.Parse("#d3d3d3"),
-            LogLevel.Warn => Color.Parse("#e0b400"),
-            LogLevel.Error => Color.Parse("#e86f6f"),
-            _ => Color.Parse("#d3d3d3")
+            LogLevel.Trace => Brand.Ink400,
+            LogLevel.Debug => Brand.Ink300,
+            LogLevel.Info => Brand.Ink100,
+            LogLevel.Warn => Brand.WarningColor,
+            LogLevel.Error => Brand.DangerColor,
+            _ => Brand.Ink100
         };
     }
 }

@@ -7,6 +7,7 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Platform;
 using Avalonia.Threading;
 using Enactive.Agents;
 using Enactive.Core.Artifacts;
@@ -45,7 +46,7 @@ public sealed class MainWindow : Window, IDecisionHandler
     private readonly LogHub _log = new(minLevel: LogLevel.Debug, downstream: new ILogSink[] { new FileLogSink() });
     private LogWindow? _logWindow;
     private readonly EnvironmentProbe _envProbe = new();
-    private readonly TextBlock _envSummary = new() { Text = "", TextWrapping = TextWrapping.Wrap, FontSize = 11, Foreground = new SolidColorBrush(Color.Parse("#9a9a9a")) };
+    private readonly TextBlock _envSummary = new() { Text = "", TextWrapping = TextWrapping.Wrap, FontSize = 11, Foreground = Brand.TextMuted };
     private ComboBox _workerBox = null!;
     private readonly Planner _planner = new();
     private readonly ModelResolver _modelResolver = new();
@@ -98,6 +99,8 @@ public sealed class MainWindow : Window, IDecisionHandler
     public MainWindow()
     {
         Title = "Enactive";
+        Background = Brand.Bg;
+        TrySetIcon();
         Width = 1080;
         Height = 720;
 
@@ -147,7 +150,7 @@ public sealed class MainWindow : Window, IDecisionHandler
         chips.Children.Add(new TextBlock
         {
             Text = "Ctrl+K to focus · Enter to run · Ctrl+Enter = newline",
-            Foreground = Brushes.Gray,
+            Foreground = Brand.TextMuted,
             FontSize = 11,
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(8, 0, 0, 0)
@@ -181,7 +184,7 @@ public sealed class MainWindow : Window, IDecisionHandler
             if (e.Property == RangeBase.ValueProperty)
                 UpdateAutonomyLabel();
         };
-        _autonomyLabel = new TextBlock { Foreground = Brushes.Gray, FontSize = 12 };
+        _autonomyLabel = new TextBlock { Foreground = Brand.TextMuted, FontSize = 12 };
         UpdateAutonomyLabel();
 
         _stageBox = new CheckBox { Content = "Stage changes (review before apply)", IsChecked = false };
@@ -230,7 +233,7 @@ public sealed class MainWindow : Window, IDecisionHandler
             {
                 Header("WORKSPACE"),
                 _workspaceBox,
-                (_modelLabel = new TextBlock { Text = $"model: {_model}", Foreground = Brushes.Gray, FontSize = 11 }),
+                (_modelLabel = new TextBlock { Text = $"model: {_model}", Foreground = Brand.TextMuted, FontSize = 11 }),
                 Header("RECENT"),
                 _workspacesList,
                 Header("AUTONOMY"),
@@ -239,7 +242,7 @@ public sealed class MainWindow : Window, IDecisionHandler
                 _stageBox,
                 _backgroundBox,
                 new Border { Height = 8 },
-                new TextBlock { Text = "Role", FontSize = 11, Foreground = new SolidColorBrush(Color.Parse("#808080")) },
+                new TextBlock { Text = "Role", FontSize = 11, Foreground = Brand.TextMuted },
                 _workerBox,
                 new Border { Height = 6 },
                 timelineButton,
@@ -248,7 +251,7 @@ public sealed class MainWindow : Window, IDecisionHandler
                 _inboxButton,
                 settingsButton,
                 new Border { Height = 10 },
-                new TextBlock { Text = "Environment", FontSize = 11, Foreground = new SolidColorBrush(Color.Parse("#808080")) },
+                new TextBlock { Text = "Environment", FontSize = 11, Foreground = Brand.TextMuted },
                 _envSummary
             }
         };
@@ -266,14 +269,14 @@ public sealed class MainWindow : Window, IDecisionHandler
 
         // ── Right panel: AI status + decision + artifacts ────────────────────
         _statusPhase = new TextBlock { Text = "Idle", FontSize = 18, FontWeight = FontWeight.SemiBold };
-        _statusProgress = new TextBlock { Text = "—", Foreground = Brushes.Gray, FontSize = 12 };
-        _statusElapsed = new TextBlock { Text = string.Empty, Foreground = Brushes.Gray, FontSize = 12 };
-        _currentAction = new TextBlock { Text = "", TextWrapping = TextWrapping.Wrap, FontSize = 12, Foreground = new SolidColorBrush(Color.Parse("#b0b0b0")) };
+        _statusProgress = new TextBlock { Text = "—", Foreground = Brand.TextMuted, FontSize = 12 };
+        _statusElapsed = new TextBlock { Text = string.Empty, Foreground = Brand.TextMuted, FontSize = 12 };
+        _currentAction = new TextBlock { Text = "", TextWrapping = TextWrapping.Wrap, FontSize = 12, Foreground = Brand.TextBody };
 
-        _agentBadge = new TextBlock { Text = string.Empty, FontSize = 11, Foreground = Brushes.White };
+        _agentBadge = new TextBlock { Text = string.Empty, FontSize = 11, Foreground = Brand.Text };
         _agentPill = new Border
         {
-            Background = new SolidColorBrush(Color.Parse("#333333")),
+            Background = Brand.Line,
             CornerRadius = new CornerRadius(10),
             Padding = new Thickness(10, 2, 10, 2),
             HorizontalAlignment = HorizontalAlignment.Left,
@@ -284,10 +287,12 @@ public sealed class MainWindow : Window, IDecisionHandler
 
         _decisionText = new TextBlock { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 0), FontSize = 12 };
         _decisionButtons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 8, 0, 0) };
+        // A decision card means the run is BLOCKED waiting on the user - caution, not action -
+        // so it is amber, not ember. Ember belongs to the Allow button inside it.
         _decisionPanel = new Border
         {
-            Background = new SolidColorBrush(Color.Parse("#3a2f00")),
-            BorderBrush = new SolidColorBrush(Color.Parse("#c9a227")),
+            Background = Brand.DecisionFill,
+            BorderBrush = Brand.DecisionBorder,
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(6),
             Padding = new Thickness(12),
@@ -318,7 +323,7 @@ public sealed class MainWindow : Window, IDecisionHandler
                 _statusProgress,
                 _statusElapsed,
                 _agentPill,
-                new TextBlock { Text = "Current action", Foreground = Brushes.Gray, FontSize = 11, Margin = new Thickness(0, 8, 0, 0) },
+                new TextBlock { Text = "Current action", Foreground = Brand.TextMuted, FontSize = 11, Margin = new Thickness(0, 8, 0, 0) },
                 _currentAction,
                 _decisionPanel,
                 Header("ARTIFACTS")
@@ -468,14 +473,14 @@ public sealed class MainWindow : Window, IDecisionHandler
                     if (ev.Summary.Contains("-> model"))
                         _statusPhase.Text = "Planning";
                     if (ev.Summary.StartsWith("Reasoner", StringComparison.Ordinal))
-                        SetAgent("Reasoner · planning", "#3a6ea5");
+                        SetAgent("Reasoner · planning", Brand.PillReasoner);
                     break;
                 case EventKind.PlanCreated:
                     _statusPhase.Text = "Executing";
                     CreateStepCards(ev.Summary);
                     break;
                 case EventKind.StepStarted:
-                    SetAgent("Coder", "#3a7d44");
+                    SetAgent("Coder", Brand.PillCoder);
                     BeginStep(ev.Summary);
                     EnsureCurrentCard().SetActivity("Thinking…");
                     break;
@@ -486,7 +491,7 @@ public sealed class MainWindow : Window, IDecisionHandler
                     UpdateProgress();
                     break;
                 case EventKind.AssistantDelta:
-                    SetAgent("Coder", "#3a7d44");
+                    SetAgent("Coder", Brand.PillCoder);
                     var streamCard = EnsureCurrentCard();
                     // Buffered, not shown live - the raw streamed reply isn't interesting on its own;
                     // it gets folded into one short note the next time a tool runs or the step ends.
@@ -494,7 +499,7 @@ public sealed class MainWindow : Window, IDecisionHandler
                     streamCard.SetActivity("Thinking…");
                     break;
                 case EventKind.ToolInvoked:
-                    SetAgent("Coder", "#3a7d44");
+                    SetAgent("Coder", Brand.PillCoder);
                     _currentAction.Text = ev.Summary;
                     var toolCard = EnsureCurrentCard();
                     LogToolInvocation(toolCard, ev.Summary);
@@ -514,7 +519,7 @@ public sealed class MainWindow : Window, IDecisionHandler
                 case EventKind.ReviewRequested:
                 case EventKind.ReviewPassed:
                 case EventKind.ReviewFailed:
-                    SetAgent("Reasoner · review", "#3a6ea5");
+                    SetAgent("Reasoner · review", Brand.PillReasoner);
                     _currentAction.Text = ev.Summary;
                     var reviewCard = EnsureCurrentCard();
                     reviewCard.AddNote(ev.Summary);
@@ -711,7 +716,7 @@ public sealed class MainWindow : Window, IDecisionHandler
             FontFamily = new FontFamily("Consolas, Menlo, monospace"),
             FontSize = 12
         };
-        var status = new TextBlock { Text = string.Empty, Foreground = Brushes.Gray, FontSize = 11, Margin = new Thickness(6, 0, 0, 0) };
+        var status = new TextBlock { Text = string.Empty, Foreground = Brand.TextMuted, FontSize = 11, Margin = new Thickness(6, 0, 0, 0) };
         var review = new Button { Content = "Review", FontSize = 11, Padding = new Thickness(8, 2, 8, 2) };
         var undo = new Button { Content = "Undo", FontSize = 11, Padding = new Thickness(8, 2, 8, 2) };
 
@@ -747,7 +752,7 @@ public sealed class MainWindow : Window, IDecisionHandler
         };
         _artifactsPanel.Children.Add(new Border
         {
-            Background = new SolidColorBrush(Color.Parse("#1affffff")),
+            Background = Brand.CardFill,
             CornerRadius = new CornerRadius(4),
             Padding = new Thickness(8),
             Margin = new Thickness(0, 0, 0, 6),
@@ -770,11 +775,11 @@ public sealed class MainWindow : Window, IDecisionHandler
             FontFamily = new FontFamily("Consolas, Menlo, monospace"),
             FontSize = 12
         };
-        var tag = new TextBlock { Text = change.IsNew ? "new file" : "modified", Foreground = Brushes.Gray, FontSize = 11 };
+        var tag = new TextBlock { Text = change.IsNew ? "new file" : "modified", Foreground = Brand.TextMuted, FontSize = 11 };
         var status = new TextBlock
         {
             Text = "staged",
-            Foreground = new SolidColorBrush(Color.Parse("#c9a227")),
+            Foreground = Brand.Amber,
             FontSize = 11,
             Margin = new Thickness(6, 0, 0, 0)
         };
@@ -788,7 +793,7 @@ public sealed class MainWindow : Window, IDecisionHandler
         {
             staging.Apply(change.Id);
             status.Text = "applied";
-            status.Foreground = new SolidColorBrush(Color.Parse("#4caf50"));
+            status.Foreground = Brand.Success;
             applyButton.IsEnabled = false;
             rejectButton.IsEnabled = false;
         };
@@ -796,7 +801,7 @@ public sealed class MainWindow : Window, IDecisionHandler
         {
             staging.Reject(change.Id);
             status.Text = "rejected";
-            status.Foreground = new SolidColorBrush(Color.Parse("#e05555"));
+            status.Foreground = Brand.Danger;
             applyButton.IsEnabled = false;
             rejectButton.IsEnabled = false;
         };
@@ -811,8 +816,8 @@ public sealed class MainWindow : Window, IDecisionHandler
         };
         _artifactsPanel.Children.Add(new Border
         {
-            Background = new SolidColorBrush(Color.Parse("#1affffff")),
-            BorderBrush = new SolidColorBrush(Color.Parse("#c9a227")),
+            Background = Brand.CardFill,
+            BorderBrush = Brand.Amber,
             BorderThickness = new Thickness(2, 0, 0, 0),
             CornerRadius = new CornerRadius(4),
             Padding = new Thickness(8),
@@ -828,10 +833,10 @@ public sealed class MainWindow : Window, IDecisionHandler
         foreach (var line in unified)
         {
             IBrush brush =
-                line.StartsWith('+') ? new SolidColorBrush(Color.Parse("#5fd35f")) :
-                line.StartsWith('-') ? new SolidColorBrush(Color.Parse("#e86f6f")) :
-                line.StartsWith('#') ? Brushes.Gray :
-                new SolidColorBrush(Color.Parse("#9a9a9a"));
+                line.StartsWith('+') ? Brand.Success :
+                line.StartsWith('-') ? Brand.Danger :
+                line.StartsWith('#') ? Brand.TextMuted :
+                Brand.TextMuted;
             lines.Children.Add(new TextBlock
             {
                 Text = line,
@@ -843,7 +848,7 @@ public sealed class MainWindow : Window, IDecisionHandler
 
         return new Border
         {
-            Background = new SolidColorBrush(Color.Parse("#22000000")),
+            Background = Brand.Scrim,
             CornerRadius = new CornerRadius(3),
             Padding = new Thickness(6),
             Margin = new Thickness(0, 6, 0, 0),
@@ -1211,12 +1216,27 @@ public sealed class MainWindow : Window, IDecisionHandler
         _stageBox.IsEnabled = !busy;
     }
 
-    private void SetAgent(string label, string colorHex)
+    /// <summary>Window / taskbar icon (the Loop mark on an ember tile). Best-effort: a missing or
+    /// unreadable asset must never stop the app from starting.</summary>
+    private void TrySetIcon()
+    {
+        try
+        {
+            using var stream = AssetLoader.Open(new Uri("avares://enactive-ui/Assets/icon.png"));
+            Icon = new WindowIcon(stream);
+        }
+        catch
+        {
+            // no icon; not worth a crash
+        }
+    }
+
+    private void SetAgent(string label, IBrush fill)
     {
         if (_agentBadge.Text == label && _agentPill.IsVisible)
             return;
         _agentBadge.Text = label;
-        _agentPill.Background = new SolidColorBrush(Color.Parse(colorHex));
+        _agentPill.Background = fill;
         _agentPill.IsVisible = true;
     }
 
@@ -1277,7 +1297,12 @@ public sealed class MainWindow : Window, IDecisionHandler
     }
 
     private void UpdateAutonomyLabel()
-        => _autonomyLabel.Text = LevelName((int)Math.Round(_autonomySlider.Value));
+    {
+        var level = (int)Math.Round(_autonomySlider.Value);
+        _autonomyLabel.Text = LevelName(level);
+        // Warmth escalates with autonomy, so the colour itself says how much rope the agent has.
+        _autonomyLabel.Foreground = Brand.Autonomy(level);
+    }
 
     private static string LevelName(int level) => level switch
     {
@@ -1300,7 +1325,7 @@ public sealed class MainWindow : Window, IDecisionHandler
         Text = text,
         FontWeight = FontWeight.Bold,
         FontSize = 11,
-        Foreground = Brushes.Gray,
+        Foreground = Brand.TextMuted,
         Margin = new Thickness(0, 8, 0, 2)
     };
 

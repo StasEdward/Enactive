@@ -22,6 +22,7 @@ internal sealed class SettingsWindow : Window
         _working = settings.Clone();
 
         Title = "Settings";
+        Background = Brand.Bg;
         Width = 720;
         Height = 820;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
@@ -362,7 +363,7 @@ internal sealed class SettingsWindow : Window
 
     private static TextBlock Hint(string text) => new()
     {
-        Text = text, Foreground = Brushes.Gray, FontSize = 11, TextWrapping = TextWrapping.Wrap,
+        Text = text, Foreground = Brand.TextMuted, FontSize = 11, TextWrapping = TextWrapping.Wrap,
         Margin = new Thickness(0, 0, 0, 4)
     };
 }

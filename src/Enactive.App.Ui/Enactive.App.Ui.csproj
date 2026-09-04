@@ -5,7 +5,13 @@
     <AssemblyName>enactive-ui</AssemblyName>
     <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\app.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Brand assets: the app icon is loaded at runtime via avares://enactive-ui/Assets/icon.png -->
+    <AvaloniaResource Include="Assets\**" />
+  </ItemGroup>
 
   <ItemGroup>
     <!-- All three MUST be the same version, or you get a TypeLoadException at startup.
