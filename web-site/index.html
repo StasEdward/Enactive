@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Enactive — A desktop environment for AI agents</title>
+  <meta name="description" content="Enactive is a GUI for AI agents: you assign a task, the agent plans, uses tools, produces artifacts and asks for a decision only when it must. Model-agnostic, local-first, built on .NET 10." />
+  <meta property="og:title" content="Enactive — The operating system for AI work" />
+  <meta property="og:description" content="You don't talk to the AI. You give it a task. Tasks, plans, workers, artifacts, timeline — not chat bubbles." />
+  <meta property="og:url" content="https://enactive.dev" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+  <!-- ====== NAV ====== -->
+  <header class="nav">
+    <div class="container nav__inner">
+      <a href="#" class="logo"><span class="logo__mark">◆</span> enactive<span class="logo__tld">.dev</span></a>
+      <nav class="nav__links">
+        <a href="#how">How it works</a>
+        <a href="#features">Features</a>
+        <a href="#team">Team of models</a>
+        <a href="#architecture">Architecture</a>
+        <a href="#start">Get started</a>
+      </nav>
+      <a href="#start" class="btn btn--sm">Download</a>
+    </div>
+  </header>
+
+  <!-- ====== HERO ====== -->
+  <section class="hero">
+    <div class="container hero__grid">
+      <div class="hero__copy">
+        <p class="eyebrow">A desktop environment for AI agents · .NET 10 · Avalonia · open architecture</p>
+        <h1>You don't talk to the AI.<br /><span class="accent">You give it a task.</span></h1>
+        <p class="lead">
+          Chat was right when an LLM was a clever conversationalist. Modern models plan, use tools,
+          read files, run code and chain actions. Enactive is the environment they work in —
+          <strong>the operating system for AI work</strong>. The model is the engine; Enactive is the workspace.
+        </p>
+        <div class="hero__cta">
+          <a href="#start" class="btn">Get started</a>
+          <a href="#how" class="btn btn--ghost">See how it works</a>
+        </div>
+        <ul class="hero__facts">
+          <li>Works with local models via Ollama</li>
+          <li>Anthropic &amp; OpenAI-compatible providers</li>
+          <li>Every action recorded &amp; reviewable</li>
+        </ul>
+      </div>
+
+      <div class="hero__demo" aria-label="Task view illustration">
+        <div class="window">
+          <div class="window__bar">
+            <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+            <span class="window__title">ENACTIVE WORKSPACE</span>
+            <span class="status status--run">● Running</span>
+          </div>
+          <div class="window__body">
+            <div class="task__label">TASK</div>
+            <div class="task__title">Export all Home Assistant entities</div>
+            <ul class="plan">
+              <li class="done">Connected to Home Assistant</li>
+              <li class="done">Retrieved 1,842 entities</li>
+              <li class="done">Analyzed entity structure</li>
+              <li class="run">Generating exporter</li>
+              <li>Testing</li>
+              <li>Export CSV</li>
+            </ul>
+            <div class="task__label">CURRENT ACTION</div>
+            <div class="task__action">Creating <code>devices.py</code></div>
+            <div class="window__actions">
+              <span class="chip">View changes</span>
+              <span class="chip chip--muted">Stop</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ====== PRINCIPLES ====== -->
+  <section class="principles" id="how">
+    <div class="container">
+      <h2>From “Chat” to “Workspace”</h2>
+      <p class="section-lead">Four entities replace the message thread: <strong>Workspace → Tasks → Agents → Artifacts</strong>. Chat stays — as a side console, not the center.</p>
+
+      <div class="cards cards--4">
+        <article class="card">
+          <div class="card__icon">▣</div>
+          <h3>Task, not message</h3>
+          <p>The primary unit of interaction is a Task with a real lifecycle: <em>New → Planning → Executing → Waiting for user → Completed</em>.</p>
+        </article>
+        <article class="card">
+          <div class="card__icon">≡</div>
+          <h3>Work state, not chain-of-thought</h3>
+          <p>Structured progress — “Found 14 files → Identified bottleneck → 3 tests passed → Changes ready” — never raw reasoning.</p>
+        </article>
+        <article class="card">
+          <div class="card__icon">◧</div>
+          <h3>The result is the center</h3>
+          <p>The agent produces an Artifact — diff, file set, dashboard, report — with <code>[Apply] [Review] [Ask AI to improve]</code>. Not 50 bubbles.</p>
+        </article>
+        <article class="card">
+          <div class="card__icon">⚑</div>
+          <h3>Decisions only at real forks</h3>
+          <p>The agent runs the plan end-to-end and raises a <strong>USER DECISION REQUIRED</strong> card only when it must — with a recommended option.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ====== PIPELINE ====== -->
+  <section class="pipeline">
+    <div class="container">
+      <h2>One intent → real, reviewable, recorded action</h2>
+      <div class="flow" aria-label="Execution pipeline">
+        <span>Command</span><i>→</i>
+        <span>Intent</span><i>→</i>
+        <span>Context + Environment</span><i>→</i>
+        <span>Planner</span><i>→</i>
+        <span>Orchestrator</span><i>→</i>
+        <span>Worker (role)</span><i>→</i>
+        <span>Provider</span><i>→</i>
+        <span>Tool</span><i>→</i>
+        <span>Artifact</span><i>→</i>
+        <span>Event</span><i>→</i>
+        <span>RunRecorder</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ====== FEATURES ====== -->
+  <section class="features" id="features">
+    <div class="container">
+      <h2>Built for agents that actually do the work</h2>
+      <div class="cards cards--3">
+        <article class="card">
+          <h3>Real DAG plans</h3>
+          <p>The planner emits step dependencies. The scheduler runs steps by readiness, cascade-skips dependents on failure and detects cycles.</p>
+        </article>
+        <article class="card">
+          <h3>Permissions &amp; autonomy slider</h3>
+          <p><strong>Observe → Suggest → Execute → Autonomous.</strong> Shell and PowerShell ask before running; approvals can be remembered per session or per workspace.</p>
+        </article>
+        <article class="card">
+          <h3>Workers as roles</h3>
+          <p>Developer, Reviewer (read-only), Ops, Writer — each with its own tool allowlist, permission level and model. You pick a role, not a model.</p>
+        </article>
+        <article class="card">
+          <h3>Environment awareness</h3>
+          <p>Read-only discovery of host/OS, Git (branch, remote, dirty), Docker, WSL and services — fed into the prompt and shown in the UI. The agent sees “the world”.</p>
+        </article>
+        <article class="card">
+          <h3>Timeline as project memory</h3>
+          <p>Not a chat history — a project timeline. Decisions and artifacts across all runs are folded into a persistent memory store.</p>
+        </article>
+        <article class="card">
+          <h3>AI Inbox &amp; background tasks</h3>
+          <p>Drop ten tasks in the evening. The agent runs headless; results and decisions land in your Inbox.</p>
+        </article>
+        <article class="card">
+          <h3>Change staging</h3>
+          <p>Optional stage → diff → Apply / Reject before anything is written to disk.</p>
+        </article>
+        <article class="card">
+          <h3>Global log</h3>
+          <p>Every prompt, response, tool call and event — with a raw-wire option. Live window plus a daily file.</p>
+        </article>
+        <article class="card">
+          <h3>Secrets stay local</h3>
+          <p>API keys are DPAPI-encrypted in <code>settings.json</code>. Per-run data lives inside your workspace in <code>.aiclient/</code>.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ====== DECISION CARD ====== -->
+  <section class="decision">
+    <div class="container decision__grid">
+      <div>
+        <h2>Autonomous by default.<br />Human at the fork.</h2>
+        <p class="section-lead">
+          The agent scans, plans, builds and tests on its own. When it hits a genuine ambiguity, it stops and asks —
+          with options and a recommendation — instead of guessing.
+        </p>
+      </div>
+      <div class="window window--warn">
+        <div class="window__bar">
+          <span class="window__title">⚠ USER DECISION REQUIRED</span>
+        </div>
+        <div class="window__body">
+          <p class="decision__text">Package X has two incompatible versions.</p>
+          <div class="options">
+            <div class="option option--rec">
+              <div class="option__name">Option A</div>
+              <div>Upgrade dependent library</div>
+              <div class="option__tag">Recommended</div>
+            </div>
+            <div class="option">
+              <div class="option__name">Option B</div>
+              <div>Keep current version</div>
+            </div>
+          </div>
+          <div class="window__actions">
+            <span class="chip">Choose A</span>
+            <span class="chip chip--muted">Choose B</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ====== TEAM OF MODELS ====== -->
+  <section class="team" id="team">
+    <div class="container">
+      <h2>A team of models, not a model picker</h2>
+      <p class="section-lead">Configure any number of providers and bind a model to each phase of a run. Simple setups are just the degenerate case.</p>
+
+      <div class="team__grid">
+        <div class="phase">
+          <div class="phase__name">Plan</div>
+          <p>A reasoner turns the intent into a dependency graph and rates each step <em>trivial / normal / complex</em>.</p>
+        </div>
+        <div class="phase">
+          <div class="phase__name">Execute</div>
+          <p>Per-step auto-routing: trivial → light model, normal → the worker's own model, complex → heavy model.</p>
+        </div>
+        <div class="phase">
+          <div class="phase__name">Review</div>
+          <p>Each step is reviewed against the <strong>real tool transcript</strong>. On FAIL the step is retried with feedback.</p>
+        </div>
+      </div>
+
+      <div class="providers">
+        <span class="tag">Ollama (native, per-run <code>num_ctx</code>)</span>
+        <span class="tag">Anthropic</span>
+        <span class="tag">OpenAI-compatible</span>
+        <span class="tag">OpenRouter · Groq · a second Ollama…</span>
+      </div>
+      <p class="fineprint">
+        Robustness built in: local <code>&lt;think&gt;</code> off by default, Anthropic <code>temperature</code> auto-dropped and
+        <code>max_tokens</code> auto-sized, a token-limit truncation guard, optional read-back verification of writes.
+      </p>
+    </div>
+  </section>
+
+  <!-- ====== ARCHITECTURE ====== -->
+  <section class="arch" id="architecture">
+    <div class="container arch__grid">
+      <div>
+        <h2>Dependency-light, open architecture</h2>
+        <p class="section-lead">
+          Seven projects on <strong>.NET 10</strong>. The engine — Core, Providers, Tools, Agents, Console — uses
+          <strong>zero external NuGet packages</strong>. Only storage (SQLite / MySQL) and the Avalonia UI pull anything in.
+        </p>
+        <ul class="arch__list">
+          <li><strong>Core</strong> — domain model &amp; abstractions only: Intent, Plan/PlanStep (DAG), Worker, Decision, Permissions, Memory, Inbox.</li>
+          <li><strong>Providers</strong> — OpenAI-compatible, Ollama native, Anthropic behind one factory; logging &amp; wire tap.</li>
+          <li><strong>Tools</strong> — <code>write_file</code>, <code>read_file</code>, <code>list_dir</code>, <code>run_command</code>, <code>run_powershell</code>.</li>
+          <li><strong>Workspace</strong> — run stores (SQLite / MySQL / JSON), artifact staging, memory, inbox, environment probe.</li>
+          <li><strong>Agents</strong> — Orchestrator, Planner, DagScheduler, evidence-aware Reviewer, BackgroundRunner.</li>
+          <li><strong>App.Console</strong> &amp; <strong>App.Ui</strong> — headless host and Avalonia desktop UI.</li>
+        </ul>
+      </div>
+      <pre class="diagram" aria-label="Architecture diagram">        USER
+          │  intent / task
+          ▼
+   AI ORCHESTRATOR ──────────────┐
+     │        │        │         │ selects Worker, drives Plan,
+   Planner  Workers  Memory      │ enforces Permission, records Events
+     └────────┼────────┘
+              ▼
+            TOOLS  (Files · Terminal · Git · Docker · SQL · APIs)
+              │
+              ▼
+          ARTIFACTS</pre>
+    </div>
+  </section>
+
+  <!-- ====== GET STARTED ====== -->
+  <section class="start" id="start">
+    <div class="container">
+      <h2>Get started in three commands</h2>
+      <p class="section-lead">Prerequisites: .NET 10 SDK, Ollama with a tool-capable model, and optionally an Anthropic API key for multi-agent mode.</p>
+      <pre class="code"><span class="c"># pull a tool-capable local model</span>
+ollama pull qwen2.5-coder
+
+<span class="c"># build</span>
+dotnet build
+
+<span class="c"># desktop UI</span>
+dotnet run --project src/AIClient.App.Ui
+
+<span class="c"># or headless: run one task, then browse the timeline / inbox</span>
+dotnet run --project src/AIClient.App.Console -- "Create a Python script that lists files" "C:\path\to\ws"
+dotnet run --project src/AIClient.App.Console -- timeline "C:\path\to\ws"</pre>
+      <div class="hero__cta">
+        <a href="#" class="btn">Download for Windows</a>
+        <a href="#" class="btn btn--ghost">View source</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ====== FOOTER ====== -->
+  <footer class="footer">
+    <div class="container footer__inner">
+      <div class="logo"><span class="logo__mark">◆</span> enactive<span class="logo__tld">.dev</span></div>
+      <p>The interface becomes the agent's tool — rather than the agent being squeezed into a chat box.</p>
+      <p class="fineprint">© 2025 Enactive. Built on .NET 10 and Avalonia.</p>
+    </div>
+  </footer>
+
+</body>
+</html>
