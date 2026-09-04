@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Enactive.App.Console</RootNamespace>
+    <AssemblyName>enactive</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="3.53.3" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Enactive.Core\Enactive.Core.csproj" />
+    <ProjectReference Include="..\Enactive.Providers\Enactive.Providers.csproj" />
+    <ProjectReference Include="..\Enactive.Tools\Enactive.Tools.csproj" />
+    <ProjectReference Include="..\Enactive.Workspace\Enactive.Workspace.csproj" />
+    <ProjectReference Include="..\Enactive.Agents\Enactive.Agents.csproj" />
+  </ItemGroup>
+</Project>

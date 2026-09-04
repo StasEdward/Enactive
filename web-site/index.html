@@ -169,7 +169,7 @@
         </article>
         <article class="card">
           <h3>Secrets stay local</h3>
-          <p>API keys are DPAPI-encrypted in <code>settings.json</code>. Per-run data lives inside your workspace in <code>.aiclient/</code>.</p>
+          <p>API keys are DPAPI-encrypted in <code>settings.json</code>. Per-run data lives inside your workspace in <code>.enactive/</code>.</p>
         </article>
       </div>
     </div>
@@ -290,11 +290,11 @@ ollama pull qwen2.5-coder
 dotnet build
 
 <span class="c"># desktop UI</span>
-dotnet run --project src/AIClient.App.Ui
+dotnet run --project src/Enactive.App.Ui
 
 <span class="c"># or headless: run one task, then browse the timeline / inbox</span>
-dotnet run --project src/AIClient.App.Console -- "Create a Python script that lists files" "C:\path\to\ws"
-dotnet run --project src/AIClient.App.Console -- timeline "C:\path\to\ws"</pre>
+dotnet run --project src/Enactive.App.Console -- "Create a Python script that lists files" "C:\path\to\ws"
+dotnet run --project src/Enactive.App.Console -- timeline "C:\path\to\ws"</pre>
       <div class="hero__cta">
         <a href="#" class="btn">Download for Windows</a>
         <a href="#" class="btn btn--ghost">View source</a>

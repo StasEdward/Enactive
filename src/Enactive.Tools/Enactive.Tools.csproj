@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\Enactive.Core\Enactive.Core.csproj" />
+  </ItemGroup>
+</Project>

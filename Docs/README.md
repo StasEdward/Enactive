@@ -1,6 +1,8 @@
-# AIClient
+# Enactive
 
 A desktop environment for AI agents (a "GUI for AI agents"), built on **.NET 10**.
+Site: [enactive.dev](https://enactive.dev). Formerly named *AIClient* — renamed to **Enactive** in 2026-09;
+namespaces, assemblies, env vars and on-disk data folders all use the new name (see *Naming / migration* below).
 See `PLAN.md` (vision) and `PLAN_v2.md` (development spec). `LOGGING.md` documents the global log; `MODELS.md` the multi-provider team-of-models design (implemented).
 
 The engine turns one intent into real, reviewable, recorded action:
@@ -12,24 +14,24 @@ Command -> Intent -> Context(+Environment) -> Planner -> Orchestrator -> Worker(
 
 ## Solution
 
-`AIClient.sln`, **7 projects** (`net10.0`, pinned via `global.json`). The engine is dependency-light:
+`Enactive.sln`, **7 projects** (`net10.0`, pinned via `global.json`). The engine is dependency-light:
 `Core`/`Providers`/`Tools`/`Agents`/`App.Console` use **zero external NuGet packages**; only `Workspace`
 (Microsoft.Data.Sqlite, SQLitePCLRaw, MySqlConnector) and `App.Ui` (Avalonia ×3, ProtectedData) pull anything in.
 
 | Project | Responsibility |
 |---|---|
-| `AIClient.Core` | Domain model + abstractions only (Intent, WorkContext, Environment, Plan/PlanStep (DAG), Worker/ModelPolicy, Decision, Permissions, Memory, Inbox, events, diagnostics). No transport/SDK types. |
-| `AIClient.Providers` | `OpenAiCompatibleProvider`, `OllamaNativeProvider` (native `/api/chat` so per-run `num_ctx` works), `AnthropicProvider` (reasoner) behind `ChatProviderFactory`; `LoggingChatProvider` + `WireTap`. |
-| `AIClient.Tools` | `write_file`, `read_file`, `list_dir`, `run_command` (cmd.exe/sh), `run_powershell` (`-EncodedCommand`, no quoting); `LoggingToolRegistry`. |
-| `AIClient.Workspace` | Run stores (SQLite/MySQL/JSON via `RunStoreFactory`), artifact stores (disk + staging), `JsonMemoryStore`, `JsonInboxStore`, `EnvironmentProbe`, `ProjectMemory`, `LogHub`/`FileLogSink`. |
-| `AIClient.Agents` | `Orchestrator` (DAG execution, role tool-filtering, permission gating, optional reasoner plan+review), `Planner` (dependency graphs), `DagScheduler`, `Reviewer` (evidence-aware), `DefaultWorkers`, `BackgroundRunner`. |
-| `AIClient.App.Console` | Console host; sub-commands `timeline`, `inbox`. |
-| `AIClient.App.Ui` | Avalonia desktop UI (code-only). |
+| `Enactive.Core` | Domain model + abstractions only (Intent, WorkContext, Environment, Plan/PlanStep (DAG), Worker/ModelPolicy, Decision, Permissions, Memory, Inbox, events, diagnostics). No transport/SDK types. |
+| `Enactive.Providers` | `OpenAiCompatibleProvider`, `OllamaNativeProvider` (native `/api/chat` so per-run `num_ctx` works), `AnthropicProvider` (reasoner) behind `ChatProviderFactory`; `LoggingChatProvider` + `WireTap`. |
+| `Enactive.Tools` | `write_file`, `read_file`, `list_dir`, `run_command` (cmd.exe/sh), `run_powershell` (`-EncodedCommand`, no quoting); `LoggingToolRegistry`. |
+| `Enactive.Workspace` | Run stores (SQLite/MySQL/JSON via `RunStoreFactory`), artifact stores (disk + staging), `JsonMemoryStore`, `JsonInboxStore`, `EnvironmentProbe`, `ProjectMemory`, `LogHub`/`FileLogSink`. |
+| `Enactive.Agents` | `Orchestrator` (DAG execution, role tool-filtering, permission gating, optional reasoner plan+review), `Planner` (dependency graphs), `DagScheduler`, `Reviewer` (evidence-aware), `DefaultWorkers`, `BackgroundRunner`. |
+| `Enactive.App.Console` | Console host; sub-commands `timeline`, `inbox`. |
+| `Enactive.App.Ui` | Avalonia desktop UI (code-only). |
 
 ## Features
 
 - **Tasks with a real DAG plan** — the planner emits step dependencies; `DagScheduler` runs steps by readiness (not a fixed line), cascade-skips dependents on failure, detects cycles.
-- **Permissions + decisions** — autonomy slider (Observe/Suggest/Execute/Autonomous); run_command/run_powershell ask before running. The approval card can **remember** an allow for the session or the workspace (`.aiclient/permissions.json`).
+- **Permissions + decisions** — autonomy slider (Observe/Suggest/Execute/Autonomous); run_command/run_powershell ask before running. The approval card can **remember** an allow for the session or the workspace (`.enactive/permissions.json`).
 - **Team of models** — configure any number of providers (Ollama, Anthropic, OpenAI-compatible) and an editable team of workers, each with its own model, and bind a model per phase: **Plan**, **Review**, and per-step **Execute** auto-routing (the planner rates each step trivial/normal/complex → light/worker/heavy model). A reasoner plans and reviews each step against the **real tool transcript**; on FAIL the step is retried with feedback. Robustness: local reasoning (`<think>`) off by default, Anthropic `temperature` auto-dropped and `max_tokens` auto-sized to the model's cap, a token-limit truncation guard, and optional read-back verification of writes. See `MODELS.md`.
 - **Workers as roles** — Developer / Reviewer (read-only) / Ops / Writer, each with its own tool allowlist and permission level; pick one per run.
 - **Environment awareness** — read-only discovery of host/OS, git (branch/remote/dirty), Docker, WSL, services, and a live snapshot; fed into the prompt and shown in the UI.
@@ -45,12 +47,12 @@ Command -> Intent -> Context(+Environment) -> Planner -> Orchestrator -> Worker(
 dotnet build
 
 # console: run one command, or view history
-dotnet run --project src/AIClient.App.Console -- "Create a Python script that lists files" "C:\path\to\ws"
-dotnet run --project src/AIClient.App.Console -- timeline "C:\path\to\ws"
-dotnet run --project src/AIClient.App.Console -- inbox "C:\path\to\ws"
+dotnet run --project src/Enactive.App.Console -- "Create a Python script that lists files" "C:\path\to\ws"
+dotnet run --project src/Enactive.App.Console -- timeline "C:\path\to\ws"
+dotnet run --project src/Enactive.App.Console -- inbox "C:\path\to\ws"
 
 # desktop UI
-dotnet run --project src/AIClient.App.Ui
+dotnet run --project src/Enactive.App.Ui
 ```
 
 Prerequisites: **.NET 10 SDK**, **Ollama** with a tool-capable model (`ollama pull qwen2.5-coder`), and
@@ -59,7 +61,33 @@ WMI/CIM/Get-PSDrive/pipes.
 
 ### Configuration
 
-Env: `AICLIENT_MODEL`, `AICLIENT_OLLAMA_URL`, `AICLIENT_STORE` (sqlite|mysql|json), `AICLIENT_MYSQL`,
-`AICLIENT_LOG_LEVEL`, `AICLIENT_WORKSPACE` (UI). The UI persists endpoint/model/num_ctx/global-instructions/
-the provider list / worker team / phase bindings / toggles to `%APPDATA%/AIClient/settings.json` (API keys encrypted). Per-run data lives in
-`<workspace>/.aiclient/` (aiclient.db, memory.json, inbox.json, permissions.json).
+Env: `ENACTIVE_MODEL`, `ENACTIVE_OLLAMA_URL`, `ENACTIVE_STORE` (sqlite|mysql|json), `ENACTIVE_MYSQL`,
+`ENACTIVE_LOG_LEVEL`, `ENACTIVE_WORKSPACE` (UI). The UI persists endpoint/model/num_ctx/global-instructions/
+the provider list / worker team / phase bindings / toggles to `%APPDATA%/Enactive/settings.json` (API keys encrypted). Per-run data lives in
+`<workspace>/.enactive/` (enactive.db, memory.json, inbox.json, permissions.json).
+
+### Naming / migration (AIClient -> Enactive)
+
+The project was renamed from **AIClient** to **Enactive** (domain `enactive.dev`). The rename is total —
+it covers namespaces, assemblies **and every on-disk name**, so a build of the new code does not see the
+old installation's data:
+
+| Was | Is now |
+|---|---|
+| `AIClient.sln`, `src/AIClient.*` | `Enactive.sln`, `src/Enactive.*` |
+| namespaces `AIClient.*` | namespaces `Enactive.*` |
+| assemblies `aiclient`, `aiclient-ui` | `enactive`, `enactive-ui` |
+| `AICLIENT_MODEL`, `AICLIENT_OLLAMA_URL`, `AICLIENT_STORE`, `AICLIENT_MYSQL`, `AICLIENT_LOG_LEVEL`, `AICLIENT_WORKSPACE` | the same names with the `ENACTIVE_` prefix |
+| `%APPDATA%/AIClient/settings.json`, `workspaces.txt`, `logs/aiclient-*.log` | `%APPDATA%/Enactive/...`, `logs/enactive-*.log` |
+| `<workspace>/.aiclient/` (`aiclient.db`, memory.json, inbox.json, permissions.json) | `<workspace>/.enactive/` (`enactive.db`, ...) |
+| DPAPI entropy `AIClient.settings.v1` | `Enactive.settings.v1` |
+
+There is **no automatic migration**. After the rename:
+
+1. Settings start from defaults — copy `%APPDATA%/AIClient/settings.json` to `%APPDATA%/Enactive/settings.json`
+   to keep providers, the worker team and phase bindings.
+2. **API keys must be re-entered.** They are DPAPI-encrypted with the entropy above; the new entropy cannot
+   decrypt the old blobs, so a copied `settings.json` will fail to unprotect them. Clear the key fields and
+   paste the keys again in Settings -> Providers.
+3. Per-workspace history (runs, project memory, inbox, remembered approvals) lives in the old `.aiclient`
+   folder; rename it to `.enactive` inside each workspace to keep it, or leave it and start clean.

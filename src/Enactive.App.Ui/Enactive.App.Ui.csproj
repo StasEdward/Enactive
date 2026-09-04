@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <RootNamespace>Enactive.App.Ui</RootNamespace>
+    <AssemblyName>enactive-ui</AssemblyName>
+    <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- All three MUST be the same version, or you get a TypeLoadException at startup.
+         Pinned to match the Avalonia.Base that resolved on this machine. -->
+    <PackageReference Include="Avalonia" Version="12.1.1" />
+    <PackageReference Include="Avalonia.Desktop" Version="12.1.1" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.1" />
+    <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="3.53.3" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="9.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Enactive.Core\Enactive.Core.csproj" />
+    <ProjectReference Include="..\Enactive.Providers\Enactive.Providers.csproj" />
+    <ProjectReference Include="..\Enactive.Tools\Enactive.Tools.csproj" />
+    <ProjectReference Include="..\Enactive.Workspace\Enactive.Workspace.csproj" />
+    <ProjectReference Include="..\Enactive.Agents\Enactive.Agents.csproj" />
+  </ItemGroup>
+</Project>

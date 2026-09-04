@@ -15,3 +15,6 @@ workspace/
 # OS
 .DS_Store
 Thumbs.db
+
+# App runtime data
+.enactive/
