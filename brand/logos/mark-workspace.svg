@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Enactive workspace mark">
+  <!-- The three-panel environment: rail, artifact, console -->
+  <rect x="6.5" y="12.5" width="51" height="39" rx="9" fill="none" stroke="#F2F4F7" stroke-width="4"/>
+  <path d="M 23 14 L 23 50" stroke="#F2F4F7" stroke-width="4" stroke-linecap="round"/>
+  <circle cx="14.5" cy="23" r="2.4" fill="#8A93A3"/>
+  <circle cx="14.5" cy="32" r="2.4" fill="#8A93A3"/>
+  <circle cx="14.5" cy="41" r="2.4" fill="#8A93A3"/>
+  <rect x="30" y="20" width="21" height="12" rx="3.5" fill="#FF5F26"/>
+  <path d="M 30 39 L 51 39" stroke="#8A93A3" stroke-width="3.4" stroke-linecap="round"/>
+  <path d="M 30 45 L 43 45" stroke="#8A93A3" stroke-width="3.4" stroke-linecap="round"/>
+</svg>

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Enactive enso mark">
+  <!-- The environment holds the work: two arcs, one result -->
+  <path d="M 28.35 11.32 A 21 21 0 0 0 28.35 52.68" fill="none" stroke="#FF5F26" stroke-width="7.5" stroke-linecap="round"/>
+  <path d="M 35.65 52.68 A 21 21 0 0 0 35.65 11.32" fill="none" stroke="#5C6575" stroke-width="7.5" stroke-linecap="round"/>
+  <circle cx="32" cy="32" r="6" fill="#FFB020"/>
+</svg>

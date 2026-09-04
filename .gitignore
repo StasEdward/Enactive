@@ -18,3 +18,6 @@ Thumbs.db
 
 # App runtime data
 .enactive/
+
+# Files delivered into the chat by the Claude desktop app
+Claude outputs/

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Enactive E monogram with execution arrow">
+  <!-- E built on a spine; the middle arm executes -->
+  <rect x="13" y="12" width="9" height="40" rx="4.5" fill="#F2F4F7"/>
+  <rect x="22" y="12" width="26" height="9" rx="4.5" fill="#F2F4F7"/>
+  <rect x="22" y="43" width="26" height="9" rx="4.5" fill="#F2F4F7"/>
+  <path d="M 24 32 L 41 32" stroke="#FF5F26" stroke-width="9" stroke-linecap="round"/>
+  <path d="M 41 25 L 51 32 L 41 39 Z" fill="#FF5F26" stroke="#FF5F26" stroke-width="2" stroke-linejoin="round"/>
+</svg>

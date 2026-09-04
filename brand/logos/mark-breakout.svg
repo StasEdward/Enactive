@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Enactive breakout mark">
+  <!-- The workspace is a frame; the agent reaches outside it -->
+  <path d="M 42 14 L 12 14 A 8 8 0 0 0 4 22 L 4 46 A 8 8 0 0 0 12 54 L 42 54 A 8 8 0 0 0 50 46 L 50 36"
+        fill="none" stroke="#F2F4F7" stroke-width="4.5" stroke-linecap="round"/>
+  <circle cx="18" cy="42" r="4.5" fill="#FF5F26"/>
+  <path d="M 22.5 38 L 54 12" stroke="#FF5F26" stroke-width="5" stroke-linecap="round"/>
+  <path d="M 43 10 L 57 10 L 57 24" fill="none" stroke="#FF5F26" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

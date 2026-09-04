@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Enactive plan graph mark">
+  <!-- The plan is a DAG: fork, run in parallel, join on the artifact -->
+  <g stroke="#8A93A3" stroke-width="3.4" stroke-linecap="round">
+    <path d="M 12 32 L 32 14"/>
+    <path d="M 12 32 L 32 50"/>
+    <path d="M 32 14 L 52 32"/>
+    <path d="M 32 50 L 52 32"/>
+  </g>
+  <circle cx="12" cy="32" r="6" fill="#F2F4F7"/>
+  <circle cx="32" cy="14" r="6" fill="#F2F4F7"/>
+  <circle cx="32" cy="50" r="6" fill="#F2F4F7"/>
+  <circle cx="52" cy="32" r="7.5" fill="#FF5F26"/>
+</svg>

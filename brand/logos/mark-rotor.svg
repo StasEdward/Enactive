@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Enactive rotor mark">
+  <!-- Three arcs in motion: plan / execute / review, running continuously -->
+  <path d="M 47.60 17.95 A 21 21 0 0 0 16.40 17.95" fill="none" stroke="#FF5F26" stroke-width="7" stroke-linecap="round"/>
+  <path d="M 12.03 25.51 A 21 21 0 0 0 27.63 52.54" fill="none" stroke="#FF8A45" stroke-width="7" stroke-linecap="round"/>
+  <path d="M 36.37 52.54 A 21 21 0 0 0 51.97 25.51" fill="none" stroke="#FFB020" stroke-width="7" stroke-linecap="round"/>
+  <circle cx="32" cy="32" r="4.5" fill="#FF5F26"/>
+</svg>
