@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64.00 64.00" width="64" height="64" role="img" aria-label="Enactive">
+  <defs><linearGradient id="enactiveFav" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FF5F26"/><stop offset="1" stop-color="#E84A14"/></linearGradient></defs>
+  <rect width="64" height="64" rx="14" fill="url(#enactiveFav)"/>
+  <g transform="translate(32,32) scale(0.72) translate(-32,-32)">
+    <path d="M 36.37 11.46 A 21 21 0 1 0 52.19 26.21" fill="none" stroke="#FFFFFF" stroke-width="8.0" stroke-linecap="round"/>
+    <path d="M 49.02 15.16 L 59.27 26.26 L 46.20 30.01 Z" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="2" stroke-linejoin="round"/>
+    <circle cx="32" cy="32" r="6.5" fill="#FFFFFF"/>
+  </g>
+</svg>
