@@ -30,7 +30,17 @@ Command -> Intent -> Context(+Environment) -> Planner -> Orchestrator -> Worker(
 
 ## Features
 
-- **Tasks with a real DAG plan** — the planner emits step dependencies; `DagScheduler` runs steps by readiness (not a fixed line), cascade-skips dependents on failure, detects cycles.
+- **Tasks with a real DAG plan** — the planner emits step dependencies; `DagScheduler` runs steps by
+  readiness (not a fixed line), cascade-skips dependents on failure, detects cycles.
+- **Parallel branches** — `MaxParallelSteps` (Settings → General, default **1**) is how many independent
+  steps may run at once. At 1 nothing changes: one step at a time on one shared conversation. Above 1,
+  each concurrent step gets its **own forked conversation** — two steps cannot append to one message
+  list — seeded with the base prompt plus a one-line digest of what earlier steps concluded, so a branch
+  knows its siblings' conclusions without replaying their tool transcripts. Approval prompts are
+  serialised (one card at a time) and the shared artifact list is locked. Every event carries its step
+  number in `PayloadJson` (`{"step":3}`), which is how the UI keeps concurrent steps on their own cards.
+  Worth raising mainly when steps route to different providers — two steps on one Ollama still queue on
+  the GPU.
 - **Permissions + decisions** — autonomy slider (Observe/Suggest/Execute/Autonomous); run_command/run_powershell ask before running. The approval card can **remember** an allow for the session or the workspace (`.enactive/permissions.json`).
 - **Team of models** — configure any number of providers (Ollama, Anthropic, OpenAI-compatible) and an editable team of workers, each with its own model, and bind a model per phase: **Plan**, **Review**, and per-step **Execute** auto-routing (the planner rates each step trivial/normal/complex → light/worker/heavy model). A reasoner plans and reviews each step against the **real tool transcript**; on FAIL the step is retried with feedback. Robustness: local reasoning (`<think>`) off by default, Anthropic `temperature` auto-dropped and `max_tokens` auto-sized to the model's cap, a token-limit truncation guard, and optional read-back verification of writes. See `MODELS.md`.
 - **Workers as roles** — Developer / Reviewer (read-only) / Ops / Writer, each with its own tool allowlist and permission level; pick one per run.

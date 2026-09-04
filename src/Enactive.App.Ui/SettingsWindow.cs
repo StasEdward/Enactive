@@ -78,6 +78,7 @@ internal sealed class SettingsWindow : Window
 
     // ── General ───────────────────────────────────────────────────────────────
     private TextBox _numCtxBox = null!;
+    private TextBox _parallelBox = null!;
     private TextBox _globalBox = null!;
     private CheckBox _thinkBox = null!;
     private CheckBox _verifyBox = null!;
@@ -107,6 +108,11 @@ internal sealed class SettingsWindow : Window
             Content = "Verify writes by reading files back — helps weak local models, adds a round-trip",
             IsChecked = _working.VerifyWrites
         };
+        _parallelBox = new TextBox
+        {
+            Text = _working.MaxParallelSteps.ToString(),
+            Watermark = "1 = one step at a time"
+        };
 
         return new ScrollViewer
         {
@@ -129,7 +135,13 @@ internal sealed class SettingsWindow : Window
                     _thinkBox,
                     _verifyBox,
                     Hint("Reading a file back after writing catches a weak model inventing content. It's an extra "
-                        + "call per write, so turn it off when you mostly run strong models.")
+                        + "call per write, so turn it off when you mostly run strong models."),
+                    Header("Parallel steps"),
+                    Hint("How many independent steps of a plan may run at once. 1 keeps one step at a time on a "
+                        + "single conversation. Above 1 each concurrent step gets its own forked conversation and "
+                        + "sees only what its siblings concluded — faster on wide plans, and worth it mainly when "
+                        + "steps route to different providers, since two steps on one Ollama queue on the GPU."),
+                    _parallelBox
                 }
             }
         };
@@ -141,6 +153,7 @@ internal sealed class SettingsWindow : Window
         _working.GlobalInstructions = _globalBox.Text ?? string.Empty;
         _working.DisableThinking = _thinkBox.IsChecked == true;
         _working.VerifyWrites = _verifyBox.IsChecked == true;
+        _working.MaxParallelSteps = int.TryParse((_parallelBox.Text ?? string.Empty).Trim(), out var p) && p > 0 ? p : 1;
     }
 
     // ── Providers ──────────────────────────────────────────────────────────────

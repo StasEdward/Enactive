@@ -112,6 +112,12 @@ internal sealed class AppSettings
     // Costs an extra LLM round-trip per write — worth turning off when running strong models. On by default.
     public bool VerifyWrites { get; set; } = true;
 
+    // How many independent plan steps may run at once. 1 = the original behaviour: one step at a time on
+    // one shared conversation. Above 1 each concurrent step gets its own forked conversation, seeded with
+    // a digest of what earlier steps concluded. Only pays off when steps route to different providers —
+    // two steps on one Ollama still queue on the GPU.
+    public int MaxParallelSteps { get; set; } = 1;
+
     // ── Legacy fields (migration source only; superseded by the schema above) ──
     public string BaseUrl { get; set; } = "http://localhost:11434/v1";
     public string Model { get; set; } = "qwen2.5-coder";
@@ -259,6 +265,7 @@ internal sealed class AppSettings
         NumCtx = NumCtx,
         DisableThinking = DisableThinking,
         VerifyWrites = VerifyWrites,
+        MaxParallelSteps = MaxParallelSteps,
         BaseUrl = BaseUrl,
         Model = Model,
         MultiAgent = MultiAgent,

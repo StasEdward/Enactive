@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
+using System.Text.RegularExpressions;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
@@ -86,6 +87,7 @@ public sealed class MainWindow : Window, IDecisionHandler
     private TaskCompletionSource<DecisionOutcome>? _pendingDecision;
     private readonly HashSet<string> _sessionApprovals = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<StepCard> _cards = new();
+    private readonly List<StepCard> _running = new();
     private StepCard? _currentCard;
     private int _stepIndex;
     private int _doneSteps;
@@ -373,6 +375,7 @@ public sealed class MainWindow : Window, IDecisionHandler
         _shownArtifacts.Clear();
         _cards.Clear();
         _currentCard = null;
+        _running.Clear();
         _stepIndex = 0;
         _doneSteps = 0;
         _totalSteps = 0;
@@ -422,7 +425,7 @@ public sealed class MainWindow : Window, IDecisionHandler
             var orchestrator = new Orchestrator(
                 _providerFactory, _modelResolver, _workerProvider, _toolRegistry, artifactStore,
                 workspace, _planner, _permissionEngine, this, policy, new EmptyProvider(),
-                BuildRouter(), 1, _settings.NumCtx, _settings.DisableThinking);
+                BuildRouter(), 1, _settings.NumCtx, _settings.DisableThinking, _settings.MaxParallelSteps);
             var recorder = new RunRecorder(runStore, new JsonMemoryStore(workspace), workspace.Id);
 
             var context = await contextProvider.BuildAsync(new IntentFocus(workspace.Id), _cts.Token);
@@ -481,18 +484,20 @@ public sealed class MainWindow : Window, IDecisionHandler
                     break;
                 case EventKind.StepStarted:
                     SetAgent("Coder", Brand.PillCoder);
-                    BeginStep(ev.Summary);
-                    EnsureCurrentCard().SetActivity("Thinking…");
+                    BeginStep(ev);
+                    (CardFor(ev) ?? EnsureCurrentCard()).SetActivity("Thinking…");
                     break;
                 case EventKind.StepCompleted:
-                    _currentCard?.SetDone();
-                    _currentCard?.SetActivity("Done");
+                    var doneCard = CardFor(ev) ?? _currentCard;
+                    doneCard?.SetDone();
+                    doneCard?.SetActivity("Done");
+                    EndStep(doneCard);
                     _doneSteps++;
                     UpdateProgress();
                     break;
                 case EventKind.AssistantDelta:
                     SetAgent("Coder", Brand.PillCoder);
-                    var streamCard = EnsureCurrentCard();
+                    var streamCard = CardFor(ev) ?? EnsureCurrentCard();
                     // Buffered, not shown live - the raw streamed reply isn't interesting on its own;
                     // it gets folded into one short note the next time a tool runs or the step ends.
                     streamCard.AppendAssistantText(ev.Summary);
@@ -501,17 +506,17 @@ public sealed class MainWindow : Window, IDecisionHandler
                 case EventKind.ToolInvoked:
                     SetAgent("Coder", Brand.PillCoder);
                     _currentAction.Text = ev.Summary;
-                    var toolCard = EnsureCurrentCard();
+                    var toolCard = CardFor(ev) ?? EnsureCurrentCard();
                     LogToolInvocation(toolCard, ev.Summary);
                     toolCard.SetActivity(DescribeToolActivity(ev.Summary));
                     break;
                 case EventKind.ToolResult:
-                    EnsureCurrentCard().AppendEntryDetail(ev.Summary);
+                    (CardFor(ev) ?? EnsureCurrentCard()).AppendEntryDetail(ev.Summary);
                     break;
                 case EventKind.ErrorObserved:
                     // Something needs the user's eyes - a recovered implicit tool call, a stalled
                     // segment, ... - so this card does not stay collapsed like routine progress does.
-                    var warnCard = EnsureCurrentCard();
+                    var warnCard = CardFor(ev) ?? EnsureCurrentCard();
                     warnCard.AddNote("⚠ " + ev.Summary);
                     warnCard.SetActivity("⚠ " + ev.Summary);
                     warnCard.ExpandForAttention();
@@ -521,7 +526,7 @@ public sealed class MainWindow : Window, IDecisionHandler
                 case EventKind.ReviewFailed:
                     SetAgent("Reasoner · review", Brand.PillReasoner);
                     _currentAction.Text = ev.Summary;
-                    var reviewCard = EnsureCurrentCard();
+                    var reviewCard = CardFor(ev) ?? EnsureCurrentCard();
                     reviewCard.AddNote(ev.Summary);
                     reviewCard.SetActivity(
                         ev.Kind == EventKind.ReviewRequested ? "Reviewing…" :
@@ -530,7 +535,7 @@ public sealed class MainWindow : Window, IDecisionHandler
                 case EventKind.DecisionRequested:
                 case EventKind.DecisionResolved:
                     _currentAction.Text = ev.Summary;
-                    var decisionCard = EnsureCurrentCard();
+                    var decisionCard = CardFor(ev) ?? EnsureCurrentCard();
                     decisionCard.AddNote(ev.Summary);
                     if (ev.Kind == EventKind.DecisionRequested)
                     {
@@ -539,7 +544,7 @@ public sealed class MainWindow : Window, IDecisionHandler
                     }
                     break;
                 case EventKind.ArtifactProduced:
-                    EnsureCurrentCard().AddNote("Artifact: " + ev.Summary);
+                    (CardFor(ev) ?? EnsureCurrentCard()).AddNote("Artifact: " + ev.Summary);
                     if (_staging is not null)
                         AddStagedArtifact();
                     else
@@ -650,24 +655,57 @@ public sealed class MainWindow : Window, IDecisionHandler
         UpdateProgress();
     }
 
-    private void BeginStep(string summary)
+    private void BeginStep(WorkEvent ev)
     {
-        _stepIndex++;
+        // Prefer the step number the orchestrator stamped on the event; steps can start out of order
+        // (and several at once) once MaxParallelSteps > 1, so a running counter is not enough.
+        var index = StepNoOf(ev) ?? ++_stepIndex;
+        _stepIndex = Math.Max(_stepIndex, index);
+
         StepCard card;
-        if (_stepIndex - 1 < _cards.Count)
+        if (index - 1 < _cards.Count)
         {
-            card = _cards[_stepIndex - 1];
+            card = _cards[index - 1];
         }
         else
         {
-            card = new StepCard(summary);
+            card = new StepCard(ev.Summary);
             _cards.Add(card);
             _stepsPanel.Children.Add(card.Root);
             _totalSteps = _cards.Count;
         }
         card.SetRunning();
-        _currentCard = card;
-        _currentAction.Text = summary;
+        _running.Add(card);
+        // With one step in flight this is that step; with several, events without a step number have
+        // no single owner, so nothing claims to be "current".
+        _currentCard = _running.Count == 1 ? card : null;
+        _currentAction.Text = ev.Summary;
+    }
+
+    private void EndStep(StepCard? card)
+    {
+        if (card is not null)
+            _running.Remove(card);
+        _currentCard = _running.Count == 1 ? _running[0] : null;
+    }
+
+    /// <summary>The step number the orchestrator put in PayloadJson, e.g. {"step":3}.</summary>
+    private static int? StepNoOf(WorkEvent ev)
+    {
+        var payload = ev.PayloadJson;
+        if (string.IsNullOrEmpty(payload))
+            return null;
+        var m = StepNoRegex.Match(payload);
+        return m.Success && int.TryParse(m.Groups[1].Value, out var n) ? n : null;
+    }
+
+    private static readonly Regex StepNoRegex = new("\"step\"\\s*:\\s*(\\d+)", RegexOptions.Compiled);
+
+    /// <summary>The card this event belongs to, or null when it carries no step number.</summary>
+    private StepCard? CardFor(WorkEvent ev)
+    {
+        var n = StepNoOf(ev);
+        return n is { } i && i - 1 >= 0 && i - 1 < _cards.Count ? _cards[i - 1] : null;
     }
 
     private StepCard EnsureCurrentCard()
@@ -1024,7 +1062,7 @@ public sealed class MainWindow : Window, IDecisionHandler
                 var orchestrator = new Orchestrator(
                     _providerFactory, _modelResolver, _workerProvider, _toolRegistry, new DiskArtifactStore(workspace),
                     workspace, _planner, _permissionEngine, decisions, policy, new EmptyProvider(),
-                    BuildRouter(), 1, _settings.NumCtx, _settings.DisableThinking);
+                    BuildRouter(), 1, _settings.NumCtx, _settings.DisableThinking, _settings.MaxParallelSteps);
                 var recorder = new RunRecorder(runStore, new JsonMemoryStore(workspace), workspace.Id);
                 var context = await contextProvider.BuildAsync(new IntentFocus(workspace.Id), CancellationToken.None);
                 var intent = new Intent(Guid.NewGuid(), text, IntentSource.Inbox, context, DateTimeOffset.UtcNow, workerId);

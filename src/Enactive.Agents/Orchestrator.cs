@@ -4,6 +4,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Threading.Channels;
 using Enactive.Core.Artifacts;
 using Enactive.Core.Chat;
 using Enactive.Core.Context;
@@ -37,6 +38,9 @@ public sealed class Orchestrator : IOrchestrator
     private readonly IServiceProvider _services;
     private readonly IModelRouter _router;
     private readonly int _reviewAttempts;
+    private readonly int _maxParallelSteps;
+    /// <summary>One approval card at a time, however many steps are running.</summary>
+    private readonly SemaphoreSlim _decisionGate = new(1, 1);
     private readonly int? _numCtx;
     private readonly bool? _think;
     private readonly Reviewer _reviewer = new();
@@ -56,7 +60,8 @@ public sealed class Orchestrator : IOrchestrator
         IModelRouter? router = null,
         int reviewAttempts = 1,
         int? numCtx = null,
-        bool disableThinking = false)
+        bool disableThinking = false,
+        int maxParallelSteps = 1)
     {
         _providers = providers;
         _workers = workers;
@@ -70,6 +75,8 @@ public sealed class Orchestrator : IOrchestrator
         _services = services;
         _router = router ?? new ModelRouter(modelResolver);
         _reviewAttempts = reviewAttempts;
+        // 1 = the original behaviour: one step at a time on one shared conversation.
+        _maxParallelSteps = Math.Max(1, maxParallelSteps);
         _numCtx = numCtx;
         // Disable the local model's <think> phase by sending think:false; null leaves it to the model.
         _think = disableThinking ? false : null;
@@ -85,8 +92,11 @@ public sealed class Orchestrator : IOrchestrator
         // call is then tagged with this run in the global log, without threading ids through them.
         using var _logScope = LogScope.Begin(runId, taskId);
 
-        WorkEvent Ev(EventKind kind, string summary)
-            => new(Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow, kind, summary, null);
+        // The step number rides along in PayloadJson so a UI can attribute an event to the right
+        // step card even when several steps are running at once. No schema change needed.
+        WorkEvent Ev(EventKind kind, string summary, int? stepNo = null)
+            => new(Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow, kind, summary,
+                   stepNo is { } n ? $"{{\"step\":{n}}}" : null);
 
         yield return Ev(EventKind.IntentReceived, $"Intent: {intent.RawText}");
         yield return Ev(EventKind.ContextAssembled,
@@ -129,7 +139,7 @@ public sealed class Orchestrator : IOrchestrator
         {
             yield return Ev(EventKind.Routed, $"Quick action: {plan.Title}");
 
-            await foreach (var ev in RunToolLoopAsync(taskId, runId, provider, model.Model, worker, messages, artifacts, intent.Context, ct))
+            await foreach (var ev in RunToolLoopAsync(taskId, runId, provider, model.Model, worker, messages, artifacts, intent.Context, null, ct))
                 yield return ev;
 
             yield return Ev(EventKind.TaskCompleted, SummarizeArtifacts(artifacts));
@@ -143,17 +153,53 @@ public sealed class Orchestrator : IOrchestrator
             $"{plan.Title} — {total} steps: {string.Join(" | ", builtPlan.Steps.Select(x => x.Title))}");
 
         var scheduler = new DagScheduler(builtPlan);
-        var stepNumber = 0;
+        var stepCounter = new StrongBox<int>(0);
+        var maxParallel = _maxParallelSteps;
 
         // Execute by readiness: a step runs only once all its dependencies are Done (a real DAG),
-        // not in a fixed linear order.
-        while (scheduler.NextReady() is { } step)
-        {
-            stepNumber++;
-            var depNote = step.DependsOn.Count > 0 ? $" (after {step.DependsOn.Count} dep)" : "";
-            yield return Ev(EventKind.StepStarted, $"[{stepNumber}/{total}] {step.Title}{depNote}");
+        // not in a fixed linear order. With MaxParallelSteps > 1 the independent branches of the graph
+        // run at the same time; every step task writes into one channel so this method stays a single
+        // ordered event stream for the caller.
+        var events = Channel.CreateUnbounded<WorkEvent>(
+            new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
 
-            messages.Add(ChatMessage.User(
+        // One line per finished step, so a parallel branch knows what its siblings concluded.
+        var digest = new List<string>();
+
+        async Task RunStepAsync(PlanStep step)
+        {
+            var stepNumber = Interlocked.Increment(ref stepCounter.Value);
+            void Emit(EventKind kind, string summary) => events.Writer.TryWrite(Ev(kind, summary, stepNumber));
+
+            var depNote = step.DependsOn.Count > 0 ? $" (after {step.DependsOn.Count} dep)" : "";
+            Emit(EventKind.StepStarted, $"[{stepNumber}/{total}] {step.Title}{depNote}");
+
+            // Degree 1 keeps the one shared conversation, exactly as before - no behaviour change.
+            // Above that a step gets its own fork, because two steps cannot append to one message list;
+            // it is seeded with the base prompt plus a digest of what earlier steps concluded, rather
+            // than replaying their whole tool transcript.
+            List<ChatMessage> convo;
+            if (maxParallel == 1)
+            {
+                convo = messages;
+            }
+            else
+            {
+                convo = new List<ChatMessage>
+                {
+                    ChatMessage.System(worker.Instructions),
+                    ChatMessage.User(BuildUserPrompt(intent))
+                };
+                string[] doneSoFar;
+                lock (digest)
+                    doneSoFar = digest.ToArray();
+                if (doneSoFar.Length > 0)
+                    convo.Add(ChatMessage.User(
+                        "Earlier steps of this plan are already finished and their results are on disk:\n"
+                        + string.Join("\n", doneSoFar.Select(d => "- " + d))));
+            }
+
+            convo.Add(ChatMessage.User(
                 $"Proceed with this step of the plan: {step.Title}\n"
                 + "Do only this step. Use tools as needed. When finished, briefly confirm what you did."));
 
@@ -163,7 +209,7 @@ public sealed class Orchestrator : IOrchestrator
             var stepProvider = _providers.Create(stepRef.ProviderId);
             var stepModel = stepRef.Model;
             if (stepRef.ProviderId != model.ProviderId || stepRef.Model != model.Model)
-                yield return Ev(EventKind.Routed, $"[{stepNumber}] {step.Complexity} step -> {stepRef.ProviderId}/{stepRef.Model}");
+                Emit(EventKind.Routed, $"[{stepNumber}] {step.Complexity} step -> {stepRef.ProviderId}/{stepRef.Model}");
 
             var maxAttempts = reviewOn ? _reviewAttempts + 1 : 1;
             var passed = true;
@@ -172,55 +218,40 @@ public sealed class Orchestrator : IOrchestrator
 
             for (var attempt = 1; attempt <= maxAttempts; attempt++)
             {
-                var evidenceStart = messages.Count;
+                var evidenceStart = convo.Count;
 
-                // Drain the tool loop manually so a thrown exception fails only THIS step (and its
-                // dependents) instead of the whole run — the yield stays outside the try/catch.
-                var stepEnum = RunToolLoopAsync(taskId, runId, stepProvider, stepModel, worker, messages, artifacts, intent.Context, ct)
-                    .GetAsyncEnumerator(ct);
                 try
                 {
-                    while (true)
-                    {
-                        WorkEvent current = null!;
-                        try
-                        {
-                            if (!await stepEnum.MoveNextAsync())
-                                break;
-                            current = stepEnum.Current;
-                        }
-                        catch (OperationCanceledException)
-                        {
-                            throw;
-                        }
-                        catch (Exception ex)
-                        {
-                            failedHard = true;
-                            failError = ex.Message;
-                            break;
-                        }
-                        yield return current;
-                    }
+                    await foreach (var ev in RunToolLoopAsync(
+                        taskId, runId, stepProvider, stepModel, worker, convo, artifacts,
+                        intent.Context, stepNumber, ct))
+                        events.Writer.TryWrite(ev);
                 }
-                finally
+                catch (OperationCanceledException)
                 {
-                    await stepEnum.DisposeAsync();
+                    throw;
                 }
-
-                if (failedHard)
+                catch (Exception ex)
+                {
+                    // A throw fails only THIS step (and its dependents), never the whole run.
+                    failedHard = true;
+                    failError = ex.Message;
                     break;
+                }
 
                 if (!reviewOn)
                     break;
 
-                yield return Ev(EventKind.ReviewRequested, $"[{stepNumber}] reviewing with reasoner…");
+                Emit(EventKind.ReviewRequested, $"[{stepNumber}] reviewing with reasoner…");
 
                 ReviewResult review;
                 try
                 {
-                    var changed = artifacts.Select(a => a.RelativePath).ToArray();
-                    var evidence = BuildEvidence(messages, evidenceStart);
-                    review = await _reviewer.ReviewAsync(step.Title, LastAssistant(messages), evidence, changed, reviewProvider!, reviewModel, ct);
+                    string[] changed;
+                    lock (artifacts)
+                        changed = artifacts.Select(a => a.RelativePath).ToArray();
+                    var evidence = BuildEvidence(convo, evidenceStart);
+                    review = await _reviewer.ReviewAsync(step.Title, LastAssistant(convo), evidence, changed, reviewProvider!, reviewModel, ct);
                 }
                 catch (Exception ex)
                 {
@@ -229,17 +260,17 @@ public sealed class Orchestrator : IOrchestrator
 
                 if (review.Pass)
                 {
-                    yield return Ev(EventKind.ReviewPassed,
+                    Emit(EventKind.ReviewPassed,
                         $"[{stepNumber}] PASS{(string.IsNullOrEmpty(review.Notes) ? "" : ": " + review.Notes)}");
                     passed = true;
                     break;
                 }
 
                 passed = false;
-                yield return Ev(EventKind.ReviewFailed, $"[{stepNumber}] FAIL: {review.Notes}");
+                Emit(EventKind.ReviewFailed, $"[{stepNumber}] FAIL: {review.Notes}");
 
                 if (attempt < maxAttempts)
-                    messages.Add(ChatMessage.User(
+                    convo.Add(ChatMessage.User(
                         $"A reviewer rejected the previous attempt with this feedback: {review.Notes}\n"
                         + "Please fix the issues and redo this step."));
             }
@@ -247,17 +278,50 @@ public sealed class Orchestrator : IOrchestrator
             if (failedHard)
             {
                 var skippedSteps = scheduler.MarkFailed(step.Id);
-                yield return Ev(EventKind.StepCompleted, $"[{stepNumber}/{total}] {step.Title} — FAILED: {failError}");
+                Emit(EventKind.StepCompleted, $"[{stepNumber}/{total}] {step.Title} — FAILED: {failError}");
                 foreach (var sk in skippedSteps)
-                    yield return Ev(EventKind.StepCompleted, $"[-/{total}] {sk.Title} — skipped (dependency failed)");
+                    events.Writer.TryWrite(Ev(EventKind.StepCompleted, $"[-/{total}] {sk.Title} — skipped (dependency failed)"));
             }
             else
             {
                 scheduler.MarkDone(step.Id);
-                yield return Ev(EventKind.StepCompleted,
+                lock (digest)
+                    digest.Add($"{step.Title}: {Gist(LastAssistant(convo))}");
+                Emit(EventKind.StepCompleted,
                     $"[{stepNumber}/{total}] {step.Title} — {(passed ? "done" : "done (review not passed)")}");
             }
         }
+
+        // Dispatcher: keep up to maxParallel steps in flight, topping up as each one finishes.
+        var pump = Task.Run(async () =>
+        {
+            var inFlight = new List<Task>();
+            try
+            {
+                while (true)
+                {
+                    foreach (var ready in scheduler.NextReadyBatch(maxParallel - inFlight.Count))
+                        inFlight.Add(RunStepAsync(ready));
+
+                    if (inFlight.Count == 0)
+                        break;
+
+                    var finished = await Task.WhenAny(inFlight);
+                    inFlight.Remove(finished);
+                    await finished;   // surfaces cancellation; step failures are handled inside
+                }
+            }
+            finally
+            {
+                events.Writer.TryComplete();
+            }
+        }, ct);
+
+        await foreach (var ev in events.Reader.ReadAllAsync(ct))
+            yield return ev;
+
+        await pump;
+
 
         if (scheduler.HasPending)
             yield return Ev(EventKind.ErrorObserved,
@@ -273,10 +337,12 @@ public sealed class Orchestrator : IOrchestrator
     private async IAsyncEnumerable<WorkEvent> RunToolLoopAsync(
         Guid taskId, Guid runId, IChatProvider provider, string model, Worker worker,
         List<ChatMessage> messages, List<ArtifactRef> artifacts, WorkContext context,
+        int? stepNo,
         [EnumeratorCancellation] CancellationToken ct)
     {
         WorkEvent Ev(EventKind kind, string summary)
-            => new(Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow, kind, summary, null);
+            => new(Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow, kind, summary,
+                   stepNo is { } n ? $"{{\"step\":{n}}}" : null);
 
         for (var iteration = 1; iteration <= MaxIterations; iteration++)
         {
@@ -382,7 +448,11 @@ public sealed class Orchestrator : IOrchestrator
                             RecommendedOptionId: "allow",
                             Subject: call.Name);
 
-                        var outcome = await _decisions.RequestAsync(decisionRequest, ct);
+                        // Parallel steps must not race to put two cards on screen at once.
+                        DecisionOutcome outcome;
+                        await _decisionGate.WaitAsync(ct);
+                        try { outcome = await _decisions.RequestAsync(decisionRequest, ct); }
+                        finally { _decisionGate.Release(); }
                         approved = string.Equals(outcome.OptionId, "allow", StringComparison.OrdinalIgnoreCase);
                         yield return Ev(EventKind.DecisionResolved, $"{call.Name}: {(approved ? "allowed" : "denied")}");
                     }
@@ -426,7 +496,8 @@ public sealed class Orchestrator : IOrchestrator
 
                 foreach (var reference in result.Artifacts)
                 {
-                    artifacts.Add(reference);
+                    lock (artifacts)
+                        artifacts.Add(reference);
                     yield return Ev(EventKind.ArtifactProduced, $"{reference.Kind}: {reference.RelativePath}");
                 }
 
@@ -572,6 +643,16 @@ public sealed class Orchestrator : IOrchestrator
             if (messages[i].Role == ChatRole.Assistant && !string.IsNullOrEmpty(messages[i].Content))
                 return messages[i].Content!;
         return "(no output)";
+    }
+
+    /// <summary>One flat line out of a step's closing message - what a sibling branch needs to know
+    /// about it, without dragging the whole transcript along.</summary>
+    private static string Gist(string? text, int max = 220)
+    {
+        var flat = Regex.Replace(text ?? "", @"\s+", " ").Trim();
+        if (flat.Length == 0)
+            return "(no output)";
+        return flat.Length <= max ? flat : flat[..max] + "…";
     }
 
     private string BuildUserPrompt(Intent intent)

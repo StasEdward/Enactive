@@ -4,15 +4,19 @@ using Enactive.Core.Tasks;
 
 /// <summary>
 /// Executes a <see cref="Plan"/> as a real dependency graph, not a fixed sequence: a step becomes
-/// runnable only once all of its dependencies are Done. Sequential (one ready step at a time) to keep
-/// the shared conversation coherent, but driven by readiness — so diamonds, multiple roots and
-/// branches all run in a valid order. On a failure it cascade-skips every dependent; a plan whose
-/// remaining steps can never become ready (a cycle) is detected via <see cref="HasPending"/>.
+/// runnable only once all of its dependencies are Done. <see cref="NextReadyBatch"/> can hand out
+/// several ready steps at once, so independent branches of a diamond run concurrently; the caller
+/// decides how many it is willing to run at a time. On a failure it cascade-skips every dependent;
+/// a plan whose remaining steps can never become ready (a cycle) is detected via <see cref="HasPending"/>.
+///
+/// Thread-safe: with parallel execution, MarkDone/MarkFailed arrive from several step tasks at once.
+/// A step handed out by NextReadyBatch is immediately marked Running, so it is never dispatched twice.
 /// </summary>
 public sealed class DagScheduler
 {
     private readonly IReadOnlyList<PlanStep> _steps;
     private readonly Dictionary<Guid, StepStatus> _status = new();
+    private readonly object _gate = new();
 
     public DagScheduler(Plan plan)
     {
@@ -22,60 +26,96 @@ public sealed class DagScheduler
     }
 
     public int Total => _steps.Count;
-    public int DoneCount => _steps.Count(s => _status[s.Id] == StepStatus.Done);
-    public bool HasPending => _steps.Any(s => _status[s.Id] == StepStatus.Pending);
 
-    /// <summary>The next Pending step whose dependencies are all Done, or null if none is ready now.</summary>
-    public PlanStep? NextReady()
+    public int DoneCount
     {
-        foreach (var s in _steps)
+        get { lock (_gate) return _steps.Count(s => _status[s.Id] == StepStatus.Done); }
+    }
+
+    /// <summary>True while at least one step is still waiting for its dependencies.</summary>
+    public bool HasPending
+    {
+        get { lock (_gate) return _steps.Any(s => _status[s.Id] == StepStatus.Pending); }
+    }
+
+    /// <summary>The next ready step, marked Running, or null if none is ready now.</summary>
+    public PlanStep? NextReady() => NextReadyBatch(1).FirstOrDefault();
+
+    /// <summary>
+    /// Up to <paramref name="max"/> Pending steps whose dependencies are all Done. Every returned step
+    /// is marked Running before it is returned, so concurrent callers never receive the same step.
+    /// </summary>
+    public IReadOnlyList<PlanStep> NextReadyBatch(int max)
+    {
+        if (max <= 0)
+            return Array.Empty<PlanStep>();
+
+        var ready = new List<PlanStep>();
+        lock (_gate)
         {
-            if (_status[s.Id] != StepStatus.Pending)
-                continue;
-            var ready = true;
-            foreach (var dep in s.DependsOn)
-                if (_status.TryGetValue(dep, out var st) && st != StepStatus.Done)
-                {
-                    ready = false;
+            foreach (var s in _steps)
+            {
+                if (ready.Count >= max)
                     break;
-                }
-            if (ready)
-                return s;
+                if (_status[s.Id] != StepStatus.Pending)
+                    continue;
+                if (!DependenciesSatisfied(s))
+                    continue;
+                _status[s.Id] = StepStatus.Running;
+                ready.Add(s);
+            }
         }
-        return null;
+        return ready;
     }
 
     public void MarkDone(Guid id)
     {
-        if (_status.ContainsKey(id))
-            _status[id] = StepStatus.Done;
+        lock (_gate)
+        {
+            if (_status.ContainsKey(id))
+                _status[id] = StepStatus.Done;
+        }
     }
 
     /// <summary>Marks the step failed and cascade-skips every step that (transitively) depends on it.</summary>
     public IReadOnlyList<PlanStep> MarkFailed(Guid id)
     {
-        if (_status.ContainsKey(id))
-            _status[id] = StepStatus.Failed;
-
         var skipped = new List<PlanStep>();
-        var changed = true;
-        while (changed)
+        lock (_gate)
         {
-            changed = false;
-            foreach (var s in _steps)
+            if (_status.ContainsKey(id))
+                _status[id] = StepStatus.Failed;
+
+            // Only Pending steps are skipped. A dependent that is already Running cannot be recalled;
+            // it finishes on its own and is recorded normally.
+            var changed = true;
+            while (changed)
             {
-                if (_status[s.Id] != StepStatus.Pending)
-                    continue;
-                foreach (var dep in s.DependsOn)
-                    if (_status.TryGetValue(dep, out var st) && (st == StepStatus.Failed || st == StepStatus.Skipped))
-                    {
-                        _status[s.Id] = StepStatus.Skipped;
-                        skipped.Add(s);
-                        changed = true;
-                        break;
-                    }
+                changed = false;
+                foreach (var s in _steps)
+                {
+                    if (_status[s.Id] != StepStatus.Pending)
+                        continue;
+                    foreach (var dep in s.DependsOn)
+                        if (_status.TryGetValue(dep, out var st) && (st == StepStatus.Failed || st == StepStatus.Skipped))
+                        {
+                            _status[s.Id] = StepStatus.Skipped;
+                            skipped.Add(s);
+                            changed = true;
+                            break;
+                        }
+                }
             }
         }
         return skipped;
+    }
+
+    /// <summary>Caller must hold the gate.</summary>
+    private bool DependenciesSatisfied(PlanStep step)
+    {
+        foreach (var dep in step.DependsOn)
+            if (_status.TryGetValue(dep, out var st) && st != StepStatus.Done)
+                return false;
+        return true;
     }
 }
