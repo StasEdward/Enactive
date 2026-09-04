@@ -11,6 +11,7 @@
   <meta property="og:image" content="https://enactive.dev/assets/og.png" />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="theme-color" content="#0A0B0D" />
+  <link rel="canonical" href="https://enactive.dev/" />
   <link rel="icon" href="assets/favicon.svg" type="image/svg+xml" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -269,7 +270,7 @@
         <span class="tag">OpenAI-compatible</span>
         <span class="tag">OpenRouter · Groq · a second Ollama…</span>
       </div>
-      <p class="fineprint" style="margin-top:18px;max-width:70ch">
+      <p class="fineprint fineprint--note">
         The awkward parts are handled for you: local <code>&lt;think&gt;</code> is off by default, Anthropic's
         <code>temperature</code> is dropped for models that reject it, <code>max_tokens</code> is auto-sized to each
         model's real cap, a truncation guard stops a half-written tool call from looping, and writes can be
@@ -406,50 +407,7 @@ dotnet run <span class="p">--project</span> src/Enactive.App.Console -- timeline
     </div>
   </footer>
 
-  <script>
-    // The hero window runs the plan it shows: steps go pending -> running -> done, then reset.
-    // It is the one animation on the page, and it says the thing the product is about.
-    (function () {
-      "use strict";
-      var plan = document.getElementById("demoPlan");
-      if (!plan) return;
-
-      var steps = Array.prototype.slice.call(plan.children);
-      var action = document.getElementById("demoAction");
-      var status = document.getElementById("demoStatus");
-      var still = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-
-      function paint(activeIndex) {
-        steps.forEach(function (li, i) {
-          var st = li.querySelector(".st");
-          li.classList.toggle("done", i < activeIndex);
-          li.classList.toggle("run", i === activeIndex);
-          if (st) st.textContent = i < activeIndex ? "done" : i === activeIndex ? "running" : "";
-        });
-        if (activeIndex < steps.length) {
-          action.textContent = steps[activeIndex].getAttribute("data-action");
-          status.textContent = "● Running";
-          status.className = "status status--run";
-        } else {
-          action.textContent = "Artifact ready — 1 file changed, +84 −0";
-          status.textContent = "● Waiting for you";
-          status.className = "status status--wait";
-        }
-      }
-
-      // At rest — and for anyone who asked for less motion — the mock still shows a real
-      // mid-run state rather than an empty shell.
-      paint(2);
-      if (still) return;
-
-      // index === steps.length is the "all done, artifact ready" beat, then it loops.
-      var i = 2;
-      setInterval(function () {
-        i = i >= steps.length ? 0 : i + 1;
-        paint(i);
-      }, 2000);
-    })();
-  </script>
+  <script src="assets/hero.js" defer></script>
 
 </body>
 </html>

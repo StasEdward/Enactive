@@ -273,6 +273,7 @@ section { padding: 84px 0; border-top: 1px solid var(--ink-800); }
 .providers { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 26px; }
 .tag { font-family: var(--mono); font-size: 0.78rem; color: var(--ink-300); border: 1px solid var(--ink-700); border-radius: 999px; padding: 5px 13px; }
 .tag code { background: none; border: 0; padding: 0; color: var(--ink-200); }
+.fineprint--note { margin-top: 18px; max-width: 70ch; }
 
 /* ---------- architecture -------------------------------------------------- */
 .arch__grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 520px); gap: 56px; align-items: center; }
