@@ -16,8 +16,9 @@ workspace/
 .DS_Store
 Thumbs.db
 
-# App runtime data
+# App runtime data (per-workspace run history, memory, inbox, approvals)
 .enactive/
+.aiclient/
 
 # Files delivered into the chat by the Claude desktop app
 Claude outputs/
