@@ -26,7 +26,33 @@ Command -> Intent -> Context(+Environment) -> Planner -> Orchestrator -> Worker(
 | `Enactive.Workspace` | Run stores (SQLite/MySQL/JSON via `RunStoreFactory`), artifact stores (disk + staging), `JsonMemoryStore`, `JsonInboxStore`, `EnvironmentProbe`, `ProjectMemory`, `LogHub`/`FileLogSink`. |
 | `Enactive.Agents` | `Orchestrator` (DAG execution, role tool-filtering, permission gating, optional reasoner plan+review), `Planner` (dependency graphs), `DagScheduler`, `Reviewer` (evidence-aware), `DefaultWorkers`, `BackgroundRunner`. |
 | `Enactive.App.Console` | Console host; sub-commands `timeline`, `inbox`. |
-| `Enactive.App.Ui` | Avalonia desktop UI (code-only). |
+| `Enactive.App.Ui` | Avalonia desktop UI: `.axaml` views over view models (`ViewModels/`), with a small hand-written MVVM base in `Mvvm/`, app-wide styling in `Styles/Controls.axaml` and the palette in `Brand.cs`. |
+
+## UI
+
+The desktop UI is XAML over view models, so layout and styling are edited in `.axaml` without
+touching C#.
+
+| Piece | Where |
+|---|---|
+| Views | `App.axaml`, `MainWindow.axaml`, `SettingsWindow.axaml`, `LogWindow.axaml`, `ProviderEditWindow.axaml`, `WorkerEditWindow.axaml`, `StepCardView.axaml` |
+| View models | `ViewModels/` — one per view, plus the small item models the lists are built from (step entries, artifacts, staged changes, diff lines, decision options) |
+| MVVM base | `Mvvm/` — `ObservableObject` and `RelayCommand`/`AsyncRelayCommand`. No toolkit dependency |
+| Styling | `Styles/Controls.axaml` — the shared classes (`.label`, `.hint`, `.form`, `.actions`, `.primary`, `.multiline`, `.panelHeader`, `.disclosure`) |
+| Colour | `Brand.cs` is the single definition, mirroring `brand/brand.css`. `Brand.PublishTo` puts every token into the application's resources, so XAML uses `{DynamicResource Brand.Accent}` and **no `.axaml` file contains a hex value** |
+
+Two build settings matter:
+
+- `AvaloniaUseCompiledBindingsByDefault` is on, so every view declares `x:DataType` and a mistyped
+  binding path is a **build error**, not an empty control at runtime.
+- `AvaloniaNameGeneratorAttachDevTools` is off: the generator would otherwise emit
+  `this.AttachDevTools()` into `InitializeComponent`, which needs the `Avalonia.Diagnostics`
+  package this project does not reference.
+
+What stays in code-behind is only what needs the control or the window itself: focus and the caret
+in the command bar, the key tunnel for `Ctrl+K` / `Enter` / `Ctrl+Enter`, the window icon and saved
+bounds, following the tail of the log list, and opening child windows. Saved window bounds are
+applied **after** `InitializeComponent`, or the XAML's own `Width`/`Height` overwrite them.
 
 ## Features
 
