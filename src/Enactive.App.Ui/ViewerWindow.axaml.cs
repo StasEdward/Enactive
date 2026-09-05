@@ -1,4 +1,6 @@
 using Avalonia.Controls;
+// SetTextAsync is an extension in Avalonia 12, not a member of IClipboard.
+using Avalonia.Input.Platform;
 
 namespace Enactive.App.Ui;
 
