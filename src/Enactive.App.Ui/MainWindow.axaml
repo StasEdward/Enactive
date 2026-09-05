@@ -441,7 +441,7 @@
                                    ToolTip.Tip="{Binding TaskIntent}" />
                     </StackPanel>
                     <Border Grid.Column="1" Classes="pill" Background="{Binding StatusPillBrush}">
-                        <TextBlock Text="{Binding StatusPhase}" FontSize="11" FontWeight="SemiBold"
+                        <TextBlock Text="{Binding StatusPhase}"
                                    Foreground="{Binding StatusPillTextBrush}" />
                     </Border>
                 </Grid>
@@ -622,7 +622,7 @@
 
                         <Border Background="{Binding AgentBrush}" IsVisible="{Binding IsAgentVisible}"
                                 Classes="pill" HorizontalAlignment="Left">
-                            <TextBlock Text="{Binding AgentBadge}" FontSize="11"
+                            <TextBlock Text="{Binding AgentBadge}"
                                        Foreground="{DynamicResource Brand.Text}" />
                         </Border>
 
@@ -688,7 +688,7 @@
                                        ToolTip.Tip="{Binding PastRun.Meta}" />
                         </StackPanel>
                         <Border Grid.Column="2" Classes="pill" Background="{Binding PastRun.StatusBrush}">
-                            <TextBlock Text="{Binding PastRun.Status}" FontSize="11" FontWeight="SemiBold"
+                            <TextBlock Text="{Binding PastRun.Status}"
                                        Foreground="{Binding PastRun.StatusTextBrush}" />
                         </Border>
                     </Grid>
