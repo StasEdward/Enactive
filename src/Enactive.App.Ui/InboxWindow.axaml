@@ -43,17 +43,22 @@
                 </ListBox.ItemTemplate>
             </ListBox>
 
-            <!-- The item, and the run that produced it. -->
-            <ScrollViewer Grid.Column="1" Margin="5,0,10,0" IsVisible="{Binding HasSelection}">
-                <StackPanel Spacing="4">
+            <!-- The item, and the run that produced it. The item's own header is pinned: scrolling a
+                 long timeline should never cost you the answer to "which item am I looking at". -->
+            <DockPanel Grid.Column="1" Margin="5,0,10,0" IsVisible="{Binding HasSelection}">
 
+                <StackPanel DockPanel.Dock="Top" Spacing="4" Margin="0,0,0,8">
                     <TextBlock Text="{Binding DetailTitle}" FontSize="16" FontWeight="SemiBold"
                                TextWrapping="Wrap" />
                     <TextBlock Classes="hint" Text="{Binding DetailMeta}" />
                     <TextBlock Text="{Binding DetailSummary}" TextWrapping="Wrap"
                                Foreground="{DynamicResource Brand.TextBody}" Margin="0,6,0,0" />
+                </StackPanel>
 
-                    <TextBlock Classes="panelHeader" Text="RUN" Margin="0,12,0,0" />
+                <ScrollViewer>
+                  <StackPanel Spacing="4">
+
+                    <TextBlock Classes="panelHeader" Text="RUN" />
                     <TextBlock Classes="hint" Text="{Binding RunHeader}" />
 
                     <ItemsControl ItemsSource="{Binding RunEvents}" Margin="0,6,0,0"
@@ -94,8 +99,10 @@
                     </ItemsControl>
 
                     <Border Height="12" />
-                </StackPanel>
-            </ScrollViewer>
+
+                  </StackPanel>
+                </ScrollViewer>
+            </DockPanel>
         </Grid>
     </DockPanel>
 </Window>

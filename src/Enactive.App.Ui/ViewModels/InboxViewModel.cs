@@ -1,8 +1,10 @@
 namespace Enactive.App.Ui.ViewModels;
 
 using System.Collections.ObjectModel;
+using System.Text;
 using Avalonia.Media;
 using Enactive.App.Ui.Mvvm;
+using Enactive.Core.Events;
 using Enactive.Core.History;
 using Enactive.Core.Inbox;
 
@@ -47,20 +49,21 @@ internal sealed class InboxItemViewModel : ObservableObject
     public FontWeight TitleWeight => IsUnread ? FontWeight.SemiBold : FontWeight.Normal;
 }
 
-/// <summary>One event of the run behind the selected item.</summary>
+/// <summary>One line of the run's timeline.</summary>
 internal sealed class RunEventViewModel
 {
-    public RunEventViewModel(RunEventRecord record)
+    public RunEventViewModel(DateTimeOffset at, string kind, string summary)
     {
-        When = record.At.ToLocalTime().ToString("HH:mm:ss");
-        Kind = record.Kind;
-        Summary = record.Summary;
-        Brush = record.Kind switch
+        When = at.ToLocalTime().ToString("HH:mm:ss");
+        Kind = kind;
+        Summary = summary;
+        Brush = kind switch
         {
             "ErrorObserved" or "TaskFailed" => Brand.Danger,
             "ReviewFailed" => Brand.Warning,
             "ReviewPassed" or "TaskCompleted" => Brand.Success,
             "ToolInvoked" or "ToolResult" => Brand.TextMuted,
+            "assistant" => Brand.TextMuted,
             _ => Brand.TextBody
         };
     }
@@ -237,11 +240,51 @@ internal sealed class InboxViewModel : ObservableObject
 
         var elapsed = run.FinishedAt - run.StartedAt;
         RunHeader = $"{run.Title} — {run.Status} · {run.Model} · {elapsed.TotalSeconds:0}s";
-        foreach (var e in run.Events)
-            RunEvents.Add(new RunEventViewModel(e));
+        AddTimeline(run);
         foreach (var a in run.Artifacts)
             RunArtifacts.Add(a);
         foreach (var d in run.Decisions)
             RunDecisions.Add(d);
+    }
+
+    /// <summary>
+    /// Renders the run's events, FOLDING the assistant's streamed reply back together. It is recorded
+    /// one event per token, so replaying it verbatim buries the timeline under a column of single
+    /// words - the same reason the step cards never show streamed prose either: a run of deltas
+    /// becomes one short note, and everything that actually happened stays readable between them.
+    /// </summary>
+    private void AddTimeline(RunRecord run)
+    {
+        var buffer = new StringBuilder();
+        var bufferAt = default(DateTimeOffset);
+
+        void FlushAssistant()
+        {
+            if (buffer.Length == 0)
+                return;
+            var text = buffer.ToString().Replace('\n', ' ').Replace('\r', ' ').Trim();
+            buffer.Clear();
+            if (text.Length == 0)
+                return;
+            if (text.Length > 300)
+                text = text[..300] + "…";
+            RunEvents.Add(new RunEventViewModel(bufferAt, "assistant", text));
+        }
+
+        foreach (var e in run.Events)
+        {
+            if (e.Kind == nameof(EventKind.AssistantDelta))
+            {
+                if (buffer.Length == 0)
+                    bufferAt = e.At;
+                buffer.Append(e.Summary);
+                continue;
+            }
+
+            FlushAssistant();
+            RunEvents.Add(new RunEventViewModel(e.At, e.Kind, e.Summary));
+        }
+
+        FlushAssistant();
     }
 }
