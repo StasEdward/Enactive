@@ -71,12 +71,11 @@ internal sealed class SettingsViewModel : ObservableObject
     private const int SectionAiTeam = 5;
     private const int SectionAiPhases = 6;
 
-    private int _section = SectionAiGeneral;
+    private int _section = SectionGeneral;
 
     /// <summary>
-    /// Opens on the AI section, because that is where everything currently is. The three sections
-    /// above it are placeholders - they are listed so the shape of the window is honest about where
-    /// the rest is going, not to pretend they already do something.
+    /// Opens at the top of the list. A window that lands somewhere other than its first item makes
+    /// you check where you are before you can read anything.
     /// </summary>
     public int Section
     {
