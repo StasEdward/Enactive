@@ -80,18 +80,18 @@
         <Setter Property="Padding" Value="8,6" />
     </Style>
     <Style Selector="TextBox /template/ Border#PART_BorderElement">
-        <Setter Property="Background" Value="{DynamicResource Brand.CardFill}" />
+        <Setter Property="Background" Value="{DynamicResource Brand.InputFill}" />
         <Setter Property="BorderBrush" Value="{DynamicResource Brand.Line}" />
         <Setter Property="BorderThickness" Value="1" />
         <Setter Property="CornerRadius" Value="4" />
     </Style>
     <Style Selector="TextBox:pointerover /template/ Border#PART_BorderElement">
-        <Setter Property="Background" Value="{DynamicResource Brand.CardFillHover}" />
+        <Setter Property="Background" Value="{DynamicResource Brand.InputFillHover}" />
         <Setter Property="BorderBrush" Value="{DynamicResource Brand.LineStrong}" />
     </Style>
     <!-- Focus is the one place ember belongs on an input: it marks where typing goes. -->
     <Style Selector="TextBox:focus /template/ Border#PART_BorderElement">
-        <Setter Property="Background" Value="{DynamicResource Brand.CardFillHover}" />
+        <Setter Property="Background" Value="{DynamicResource Brand.InputFillHover}" />
         <Setter Property="BorderBrush" Value="{DynamicResource Brand.Accent}" />
     </Style>
     <Style Selector="TextBox:disabled /template/ Border#PART_BorderElement">
@@ -105,13 +105,13 @@
         <Setter Property="Padding" Value="8,5" />
     </Style>
     <Style Selector="ComboBox /template/ Border#PART_BorderElement">
-        <Setter Property="Background" Value="{DynamicResource Brand.CardFill}" />
+        <Setter Property="Background" Value="{DynamicResource Brand.InputFill}" />
         <Setter Property="BorderBrush" Value="{DynamicResource Brand.Line}" />
         <Setter Property="BorderThickness" Value="1" />
         <Setter Property="CornerRadius" Value="4" />
     </Style>
     <Style Selector="ComboBox:pointerover /template/ Border#PART_BorderElement">
-        <Setter Property="Background" Value="{DynamicResource Brand.CardFillHover}" />
+        <Setter Property="Background" Value="{DynamicResource Brand.InputFillHover}" />
         <Setter Property="BorderBrush" Value="{DynamicResource Brand.LineStrong}" />
     </Style>
     <Style Selector="ComboBox:focus /template/ Border#PART_BorderElement">
@@ -184,6 +184,24 @@
         <Setter Property="Foreground" Value="{DynamicResource Brand.Text}" />
     </Style>
     <Style Selector="ToggleButton:checked:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource Brand.AccentFill}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Brand.Accent}" />
+    </Style>
+
+    <Style Selector="ComboBoxItem /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="2,0,0,0" />
+        <Setter Property="CornerRadius" Value="0" />
+    </Style>
+    <Style Selector="ComboBoxItem:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource Brand.CardFill}" />
+    </Style>
+    <Style Selector="ComboBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource Brand.AccentFill}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Brand.Accent}" />
+    </Style>
+    <Style Selector="ComboBoxItem:selected:pointerover /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="{DynamicResource Brand.AccentFill}" />
         <Setter Property="BorderBrush" Value="{DynamicResource Brand.Accent}" />
     </Style>

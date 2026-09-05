@@ -70,6 +70,14 @@ internal static class Brand
     /// <summary>Translucent shade for an inset well (diff bodies, code blocks).</summary>
     public static readonly IBrush Scrim = new ImmutableSolidColorBrush(Colors.Black, 0.13);
 
+    // A box you type into is a WELL, not a card: the same ink as whatever it sits on, a shade
+    // deeper. CardFill is the opposite move - white over the ground - and using it on an input
+    // made every field a pale grey block that belonged to no palette here. Hover comes up a
+    // little; focus keeps the fill and takes ember on the border, because ember on an input
+    // means "typing goes here" and nothing else.
+    public static readonly IBrush InputFill = new ImmutableSolidColorBrush(Colors.Black, 0.22);
+    public static readonly IBrush InputFillHover = new ImmutableSolidColorBrush(Colors.Black, 0.14);
+
     // ── Text ────────────────────────────────────────────────────────────────
     public static readonly IBrush Text = Of(Ink50);          // primary
     public static readonly IBrush TextBody = Of(Ink200);     // long form
@@ -202,6 +210,8 @@ internal static class Brand
         r["Brand.CardFillHover"] = CardFillHover;
         r["Brand.CardFillActive"] = CardFillActive;
         r["Brand.Scrim"] = Scrim;
+        r["Brand.InputFill"] = InputFill;
+        r["Brand.InputFillHover"] = InputFillHover;
         r["Brand.Line"] = Line;
         r["Brand.LineStrong"] = LineStrong;
 
