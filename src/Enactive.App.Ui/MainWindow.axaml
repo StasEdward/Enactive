@@ -568,12 +568,19 @@
                         <StackPanel Spacing="2" IsVisible="{Binding Routing.HasAny}"
                                     Margin="0,6,0,0">
                             <TextBlock Classes="panelHeader" Text="ROUTING" Margin="0" />
-                            <TextBlock Classes="routing" Text="{Binding Routing.Worker}"
-                                       IsVisible="{Binding Routing.HasWorker}" />
-                            <TextBlock Classes="routing" Text="{Binding Routing.Plan}"
-                                       IsVisible="{Binding Routing.HasPlan}" />
-                            <TextBlock Classes="routing" Text="{Binding Routing.Review}"
-                                       IsVisible="{Binding Routing.HasReview}" />
+                            <ItemsControl ItemsSource="{Binding Routing.Rows}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:RoutingRow">
+                                        <Grid ColumnDefinitions="52,*" Margin="0,1">
+                                            <TextBlock Grid.Column="0" Classes="routingPhase"
+                                                       Text="{Binding Phase}" />
+                                            <TextBlock Grid.Column="1" Classes="routing"
+                                                       Text="{Binding Model}"
+                                                       ToolTip.Tip="{Binding Model}" />
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
                         </StackPanel>
 
                         <TextBlock Classes="hint" Text="{Binding StatusProgress}" FontSize="12" />
@@ -827,12 +834,19 @@
                             <StackPanel Spacing="2" IsVisible="{Binding PastRun.Routing.HasAny}"
                                         Margin="0,6,0,0">
                                 <TextBlock Classes="panelHeader" Text="ROUTING" Margin="0" />
-                                <TextBlock Classes="routing" Text="{Binding PastRun.Routing.Worker}"
-                                           IsVisible="{Binding PastRun.Routing.HasWorker}" />
-                                <TextBlock Classes="routing" Text="{Binding PastRun.Routing.Plan}"
-                                           IsVisible="{Binding PastRun.Routing.HasPlan}" />
-                                <TextBlock Classes="routing" Text="{Binding PastRun.Routing.Review}"
-                                           IsVisible="{Binding PastRun.Routing.HasReview}" />
+                                <ItemsControl ItemsSource="{Binding PastRun.Routing.Rows}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:RoutingRow">
+                                            <Grid ColumnDefinitions="52,*" Margin="0,1">
+                                                <TextBlock Grid.Column="0" Classes="routingPhase"
+                                                           Text="{Binding Phase}" />
+                                                <TextBlock Grid.Column="1" Classes="routing"
+                                                           Text="{Binding Model}"
+                                                           ToolTip.Tip="{Binding Model}" />
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
                             </StackPanel>
 
                             <!-- What it was allowed to do. Half of "why did it do that" is

@@ -1,8 +1,12 @@
 namespace Enactive.App.Ui.ViewModels;
 
+using System.Collections.ObjectModel;
 using Enactive.App.Ui.Mvvm;
 using Enactive.Core.Events;
 using Enactive.Core.History;
+
+/// <summary>One phase of a run and the model that served it.</summary>
+internal sealed record RoutingRow(string Phase, string Model);
 
 /// <summary>
 /// Which model actually served each phase of a run - the worker's, the planner's, the reviewer's.
@@ -24,15 +28,19 @@ internal sealed class RunRouting : ObservableObject
     public string Plan { get => _plan; private set => Set(ref _plan, value); }
     public string Review { get => _review; private set => Set(ref _review, value); }
 
-    public bool HasWorker => _worker.Length > 0;
-    public bool HasPlan => _plan.Length > 0;
-    public bool HasReview => _review.Length > 0;
-    public bool HasAny => HasWorker || HasPlan || HasReview;
+    public bool HasAny => Rows.Count > 0;
+
+    /// <summary>
+    /// The phases that actually ran, each with the model that served it. A list rather than three
+    /// properties in the view, so the phase and its model are written together in one place and a
+    /// phase that never happened - no reviewer, no separate planner - simply is not a row.
+    /// </summary>
+    public ObservableCollection<RoutingRow> Rows { get; } = new();
 
     public void Clear()
     {
         Worker = Plan = Review = string.Empty;
-        Raise();
+        Rebuild();
     }
 
     /// <summary>
@@ -51,7 +59,7 @@ internal sealed class RunRouting : ObservableObject
         else
             return;
 
-        Raise();
+        Rebuild();
     }
 
     public static RunRouting From(RunRecord record)
@@ -63,12 +71,19 @@ internal sealed class RunRouting : ObservableObject
         return routing;
     }
 
-    private void Raise()
+    private void Rebuild()
     {
-        OnPropertyChanged(nameof(HasWorker));
-        OnPropertyChanged(nameof(HasPlan));
-        OnPropertyChanged(nameof(HasReview));
+        Rows.Clear();
+        Add("worker", _worker);
+        Add("plan", _plan);
+        Add("review", _review);
         OnPropertyChanged(nameof(HasAny));
+
+        void Add(string phase, string model)
+        {
+            if (model.Length > 0)
+                Rows.Add(new RoutingRow(phase, model));
+        }
     }
 
     private static string After(string summary, string marker)

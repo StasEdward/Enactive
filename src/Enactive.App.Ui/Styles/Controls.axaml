@@ -433,6 +433,13 @@
         <Setter Property="FontWeight" Value="SemiBold" />
         <Setter Property="Foreground" Value="{DynamicResource Brand.Text}" />
     </Style>
+    <!-- Which phase the model served. Quieter than the name, because the name is the answer
+         and the phase is only the question it answers. -->
+    <Style Selector="TextBlock.routingPhase">
+        <Setter Property="FontSize" Value="11" />
+        <Setter Property="Foreground" Value="{DynamicResource Brand.TextFaint}" />
+    </Style>
+
     <!-- A model name is an identifier, so it gets the mono face - the same reason paths do. -->
     <Style Selector="TextBlock.routing">
         <Setter Property="FontFamily" Value="Consolas, Menlo, monospace" />
