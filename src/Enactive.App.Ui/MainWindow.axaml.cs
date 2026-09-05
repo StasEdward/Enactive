@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.Diagnostics;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Interactivity;
@@ -135,13 +136,23 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         }
         Closing += (_, e) =>
         {
-            // Ask before the window goes, but only when there is something to lose. A confirmation
-            // on every close is a click you learn to dismiss without reading, which is worse than
-            // no confirmation at all.
-            if (!_forceClose && HasWorkInFlight())
+            // Closing the window is not quitting. It goes to the tray, and a run it started keeps
+            // going - which is the whole reason a background run exists. Quitting is Exit, on the
+            // tray menu, and that is where the question about unfinished work lives.
+            if (!_forceClose)
             {
                 e.Cancel = true;
-                _ = ConfirmAndCloseAsync();
+                if (HasTray)
+                {
+                    SaveWindowBounds();
+                    Hide();
+                }
+                else
+                {
+                    // Nowhere to hide, and shutdown is explicit now - so the X has to do the whole
+                    // job: ask about unfinished work, then actually end the process.
+                    _ = RequestExitAsync();
+                }
                 return;
             }
 
@@ -213,21 +224,51 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             : $"{background} background runs are still going. Closing now stops them where they are.";
     }
 
-    private async Task ConfirmAndCloseAsync()
-    {
-        var close = await ConfirmWindow.AskAsync(
-            this,
-            "Enactive is still working",
-            DescribeWorkInFlight(),
-            "Close anyway",
-            "Keep working");
+    /// <summary>
+    /// False when this desktop has no system tray. Then the window has nowhere to hide and closing
+    /// it means what it used to mean - so it asks, and quits.
+    /// </summary>
+    public bool HasTray { get; set; } = true;
 
-        if (!close)
-            return;
+    /// <summary>Brings the window back from the tray, wherever it was left.</summary>
+    public void ShowFromTray()
+    {
+        Show();
+        if (WindowState == WindowState.Minimized)
+            WindowState = WindowState.Normal;
+        Activate();
+    }
+
+    /// <summary>Exit, from the tray menu. The only thing in this app that ends the process.</summary>
+    public void RequestExit() => _ = RequestExitAsync();
+
+    private async Task RequestExitAsync()
+    {
+        if (HasWorkInFlight())
+        {
+            // The question needs a window to sit on, and the window is probably in the tray - which
+            // is also the honest thing to do: show what is running before asking about killing it.
+            ShowFromTray();
+
+            var quit = await ConfirmWindow.AskAsync(
+                this,
+                "Enactive is still working",
+                DescribeWorkInFlight(),
+                "Quit anyway",
+                "Keep working");
+
+            if (!quit)
+                return;
+
+            _cts?.Cancel();
+        }
 
         _forceClose = true;
-        _cts?.Cancel();
         Close();
+
+        // Shutdown is explicit now: the lifetime no longer ends with the main window, because the
+        // main window comes and goes from the tray.
+        (Application.Current?.ApplicationLifetime as IClassicDesktopStyleApplicationLifetime)?.Shutdown();
     }
 
     private void SyncMaximiseGlyph()
