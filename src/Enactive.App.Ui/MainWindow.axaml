@@ -790,15 +790,32 @@
                             <StackPanel Margin="16,12,10,12" Spacing="6">
                                 <TextBlock Classes="hint" IsVisible="{Binding PastRun.HasNoArtifacts}"
                                            Text="This run wrote nothing." />
+                                <!-- Open is safe at any age. The second button is Delete, not Undo:
+                                     it removes the file as it is on disk now, which for a run this
+                                     old is not the version the run wrote. -->
                                 <ItemsControl ItemsSource="{Binding PastRun.Artifacts}"
                                               IsVisible="{Binding PastRun.HasArtifacts}">
                                     <ItemsControl.ItemTemplate>
-                                        <DataTemplate x:DataType="sys:String">
+                                        <DataTemplate x:DataType="vm:ArtifactItemViewModel">
                                             <Border Background="{DynamicResource Brand.CardFill}"
                                                     CornerRadius="4" Padding="10" Margin="0,0,0,6">
-                                                <TextBlock Text="{Binding}" TextWrapping="Wrap"
-                                                           FontFamily="Consolas, Menlo, monospace"
-                                                           FontSize="12" />
+                                                <Grid ColumnDefinitions="*,Auto">
+                                                    <StackPanel Grid.Column="0" Spacing="2"
+                                                                Margin="0,0,10,0" VerticalAlignment="Center">
+                                                        <TextBlock Text="{Binding RelativePath}" TextWrapping="Wrap"
+                                                                   FontFamily="Consolas, Menlo, monospace"
+                                                                   FontSize="12" />
+                                                        <TextBlock Classes="hint" Text="{Binding Status}" FontSize="11" />
+                                                    </StackPanel>
+                                                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6"
+                                                                VerticalAlignment="Center">
+                                                        <Button Content="Review" Command="{Binding ReviewCommand}"
+                                                                FontSize="11" Padding="8,2" />
+                                                        <Button Content="Delete" Command="{Binding UndoCommand}"
+                                                                Foreground="{DynamicResource Brand.Danger}"
+                                                                FontSize="11" Padding="8,2" />
+                                                    </StackPanel>
+                                                </Grid>
                                             </Border>
                                         </DataTemplate>
                                     </ItemsControl.ItemTemplate>

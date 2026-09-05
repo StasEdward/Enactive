@@ -108,7 +108,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         _vm.EnvironmentRequested += () => _ = ShowEnvironmentAsync();
         _vm.InboxRequested += ShowInbox;
         _vm.Runs.RefreshRequested += () => _ = LoadRunsAsync();
-        _vm.Runs.OpenRequested += record => _vm.ShowPastRun(record);
+        _vm.Runs.OpenRequested += record => _vm.ShowPastRun(BuildPastRun(record));
         _vm.WorkspacePathChanged += RefreshWorkspaces;
         _vm.WorkspaceSwitchRequested += SwitchWorkspace;
         _vm.WorkspaceRenameRequested += path => _ = RenameWorkspaceAsync(path);
@@ -676,18 +676,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         var root = _currentWorkspaceRoot;
         _vm.Artifacts.Add(new ArtifactItemViewModel(
             relative,
-            item =>
-            {
-                try
-                {
-                    var full = Path.Combine(root, item.RelativePath);
-                    ShowViewer(item.RelativePath, File.Exists(full) ? File.ReadAllText(full) : "(file not found)");
-                }
-                catch (Exception ex)
-                {
-                    ShowViewer(item.RelativePath, "Error: " + ex.Message);
-                }
-            },
+            item => ShowFile(root, item),
             item =>
             {
                 try
@@ -1092,6 +1081,73 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         }
 
         _inboxWindow.Activate();
+    }
+
+    /// <summary>
+    /// Builds the read-only view of a stored run. Its artifacts get the same two actions the live
+    /// run's do, because they are the same files - what changes is what the second one MEANS. On a
+    /// run that just finished, deleting what it wrote is undoing it; on one from last Tuesday it is
+    /// deleting a file that has had a week to be edited since, so it is labelled Delete and it
+    /// asks.
+    /// </summary>
+    private PastRunViewModel BuildPastRun(RunRecord record)
+    {
+        var root = WorkspaceRegistry.Normalise(_vm.WorkspacePath);
+
+        return new PastRunViewModel(
+            record,
+            item => ShowFile(root, item),
+            item => _ = DeletePastArtifactAsync(root, item));
+    }
+
+    /// <summary>Opens an artifact in the viewer. Reading is safe at any age.</summary>
+    private void ShowFile(string root, ArtifactItemViewModel item)
+    {
+        try
+        {
+            var full = Path.Combine(root, item.RelativePath);
+            ShowViewer(item.RelativePath, File.Exists(full) ? File.ReadAllText(full) : "(file not found)");
+        }
+        catch (Exception ex)
+        {
+            ShowViewer(item.RelativePath, "Error: " + ex.Message);
+        }
+    }
+
+    private async Task DeletePastArtifactAsync(string root, ArtifactItemViewModel item)
+    {
+        var full = Path.Combine(root, item.RelativePath);
+        if (!File.Exists(full))
+        {
+            item.Status = "already gone";
+            item.CanAct = false;
+            return;
+        }
+
+        // The file's own date is the whole point of asking: a week of edits does not show up in a
+        // run record, and this deletes what is on disk NOW, not what the run wrote.
+        var changed = File.GetLastWriteTime(full).ToString("yyyy-MM-dd HH:mm");
+        var go = await ConfirmWindow.AskAsync(
+            this,
+            $"Delete \u201c{item.RelativePath}\u201d?",
+            $"This deletes the file as it is on disk now, last changed {changed} - not the version this run wrote. "
+            + "There is no undo.",
+            "Delete",
+            "Keep");
+
+        if (!go)
+            return;
+
+        try
+        {
+            File.Delete(full);
+            item.Status = "deleted";
+            item.CanAct = false;
+        }
+        catch (Exception ex)
+        {
+            item.Status = "error: " + ex.Message;
+        }
     }
 
     /// <summary>

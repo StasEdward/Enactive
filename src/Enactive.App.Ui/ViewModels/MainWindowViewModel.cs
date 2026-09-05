@@ -40,11 +40,17 @@ internal sealed class ArtifactItemViewModel : ObservableObject
     private string _status = string.Empty;
     private bool _canAct = true;
 
-    public ArtifactItemViewModel(string relativePath, Action<ArtifactItemViewModel> review, Action<ArtifactItemViewModel> undo)
+    /// <summary>
+    /// <paramref name="open"/> shows the file; <paramref name="remove"/> deletes it. Both are used
+    /// by the live run and by a run read out of the history - the OPERATION is the same, and only
+    /// what it honestly means changes: undoing what just happened, or deleting a file that has had
+    /// a week to be edited since. The label says which; the button is labelled by its caller.
+    /// </summary>
+    public ArtifactItemViewModel(string relativePath, Action<ArtifactItemViewModel> open, Action<ArtifactItemViewModel> remove)
     {
         RelativePath = relativePath;
-        ReviewCommand = new RelayCommand(() => review(this), () => CanAct);
-        UndoCommand = new RelayCommand(() => undo(this), () => CanAct);
+        ReviewCommand = new RelayCommand(() => open(this), () => CanAct);
+        UndoCommand = new RelayCommand(() => remove(this), () => CanAct);
     }
 
     public string RelativePath { get; }
@@ -522,9 +528,10 @@ internal sealed class MainWindowViewModel : ObservableObject
 
     public RelayCommand BackToLiveCommand { get; }
 
-    public void ShowPastRun(RunRecord record)
+    /// <summary>Built by the window, which is the only thing that can read a file or open a viewer.</summary>
+    public void ShowPastRun(PastRunViewModel run)
     {
-        PastRun = new PastRunViewModel(record);
+        PastRun = run;
         IsViewingPast = true;
     }
 

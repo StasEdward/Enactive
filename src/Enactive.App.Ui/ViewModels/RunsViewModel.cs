@@ -94,6 +94,13 @@ internal sealed class RunListItemViewModel
             seconds = 0;
         return seconds >= 60 ? $"{(int)(seconds / 60)}m {(int)(seconds % 60)}s" : $"{seconds:0}s";
     }
+
+    /// <summary>An artifact is recorded as "FileSet: path" - the path is the part you can open.</summary>
+    private static string PathOf(string artifact)
+    {
+        var colon = artifact.IndexOf(": ", StringComparison.Ordinal);
+        return colon >= 0 ? artifact[(colon + 2)..] : artifact;
+    }
 }
 
 /// <summary>
@@ -113,7 +120,10 @@ internal sealed class PastRunViewModel : ObservableObject
 {
     private int _selectedTab;
 
-    public PastRunViewModel(RunRecord record)
+    public PastRunViewModel(
+        RunRecord record,
+        Action<ArtifactItemViewModel> open,
+        Action<ArtifactItemViewModel> remove)
     {
         Record = record;
         Title = string.IsNullOrWhiteSpace(record.Title) ? "(untitled run)" : record.Title;
@@ -132,7 +142,7 @@ internal sealed class PastRunViewModel : ObservableObject
         foreach (var row in RunTimeline.Fold(record))
             Events.Add(row);
         foreach (var a in record.Artifacts)
-            Artifacts.Add(a);
+            Artifacts.Add(new ArtifactItemViewModel(PathOf(a), open, remove));
         foreach (var d in record.Decisions)
             Decisions.Add(d);
 
@@ -187,7 +197,7 @@ internal sealed class PastRunViewModel : ObservableObject
     public string StepsText { get; }
 
     public ObservableCollection<RunEventViewModel> Events { get; } = new();
-    public ObservableCollection<string> Artifacts { get; } = new();
+    public ObservableCollection<ArtifactItemViewModel> Artifacts { get; } = new();
     public ObservableCollection<string> Decisions { get; } = new();
 
     /// <summary>False for a run recorded before its setup was.</summary>
