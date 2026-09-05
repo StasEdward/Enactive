@@ -44,7 +44,7 @@ if (string.IsNullOrEmpty(workspaceName))
 
 var workspace = new WorkspaceInfo(Guid.NewGuid(), workspaceName, workspaceRoot);
 var runStore = RunStoreFactory.Create(workspace);
-var memoryStore = new JsonMemoryStore(workspace);
+var memoryStore = MemoryStoreFactory.Create(workspace);
 
 // ── Timeline view: print the project's run history and exit ───────────────────
 if (isTimeline)

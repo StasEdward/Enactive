@@ -204,7 +204,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                 _providerFactory, _modelResolver, _workerProvider, _toolRegistry, artifactStore,
                 workspace, _planner, _permissionEngine, this, policy, new EmptyProvider(),
                 BuildRouter(), 1, _settings.NumCtx, _settings.DisableThinking, _settings.MaxParallelSteps);
-            var recorder = new RunRecorder(runStore, new JsonMemoryStore(workspace), workspace.Id);
+            var recorder = new RunRecorder(runStore, MemoryStoreFactory.Create(workspace), workspace.Id);
 
             var context = await contextProvider.BuildAsync(new IntentFocus(workspace.Id), _cts.Token);
             var workerId = _workerProvider.All.Count > 0
@@ -741,7 +741,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                     _providerFactory, _modelResolver, _workerProvider, _toolRegistry, new DiskArtifactStore(workspace),
                     workspace, _planner, _permissionEngine, decisions, policy, new EmptyProvider(),
                     BuildRouter(), 1, _settings.NumCtx, _settings.DisableThinking, _settings.MaxParallelSteps);
-                var recorder = new RunRecorder(runStore, new JsonMemoryStore(workspace), workspace.Id);
+                var recorder = new RunRecorder(runStore, MemoryStoreFactory.Create(workspace), workspace.Id);
                 var context = await contextProvider.BuildAsync(new IntentFocus(workspace.Id), CancellationToken.None);
                 var intent = new Intent(Guid.NewGuid(), text, IntentSource.Inbox, context, DateTimeOffset.UtcNow, workerId);
                 var recorded = recorder.RecordAsync(
@@ -802,7 +802,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
 
         var workspace = new WorkspaceInfo(Guid.NewGuid(), "workspace", Path.GetFullPath(workspacePath));
         var runStore = RunStoreFactory.Create(workspace);
-        var memory = new JsonMemoryStore(workspace);
+        var memory = MemoryStoreFactory.Create(workspace);
         var runs = await runStore.LoadAllAsync(CancellationToken.None);
         var entries = await memory.LoadAllAsync(CancellationToken.None);
         ShowViewer("Project Memory", ProjectMemory.Render(runs, entries, workspace.RootPath));

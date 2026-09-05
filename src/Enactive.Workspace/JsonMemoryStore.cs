@@ -7,8 +7,11 @@ using Enactive.Core.Memory;
 /// <summary>
 /// File-based project-memory store: a JSON array at <c>&lt;workspace&gt;/.enactive/memory.json</c>.
 /// Zero external dependencies, append-friendly, guarded by a semaphore for the single-user desktop
-/// case. Every operation is best-effort — a memory failure must never break a run. A SQLite/MySQL
-/// store behind the same interface is the later upgrade (mirroring the run store).
+/// case. Every operation is best-effort — a memory failure must never break a run.
+///
+/// No longer the default: <see cref="MemoryStoreFactory"/> picks SQLite unless ENACTIVE_STORE says
+/// otherwise. This store stays as the zero-dependency option, and as what the SQLite store imports
+/// from the first time it opens a workspace that predates it.
 /// </summary>
 public sealed class JsonMemoryStore : IMemoryStore
 {
