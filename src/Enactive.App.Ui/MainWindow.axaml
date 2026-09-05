@@ -658,14 +658,13 @@
                 <Border DockPanel.Dock="Top" Padding="16,0"
                         BorderBrush="{DynamicResource Brand.Line}" BorderThickness="0,0,0,1">
                     <StackPanel Orientation="Horizontal">
-                        <Button Classes="tab" Classes.on="{Binding PastRun.IsTimelineTab}"
-                                Content="Timeline" Command="{Binding PastRun.ShowTimelineCommand}" />
+                        <Button Classes="tab" Classes.on="{Binding PastRun.IsExecutionTab}"
+                                Content="Execution" Command="{Binding PastRun.ShowExecutionCommand}" />
                         <Button Classes="tab" Classes.on="{Binding PastRun.IsArtifactsTab}"
                                 Content="{Binding PastRun.ArtifactsTabLabel}"
                                 Command="{Binding PastRun.ShowArtifactsCommand}" />
-                        <Button Classes="tab" Classes.on="{Binding PastRun.IsDecisionsTab}"
-                                Content="{Binding PastRun.DecisionsTabLabel}"
-                                Command="{Binding PastRun.ShowDecisionsCommand}" />
+                        <Button Classes="tab" Classes.on="{Binding PastRun.IsTimelineTab}"
+                                Content="Timeline" Command="{Binding PastRun.ShowTimelineCommand}" />
                     </StackPanel>
                 </Border>
 
@@ -673,12 +672,56 @@
 
                     <Panel Grid.Column="0">
 
-                        <!-- Timeline: what the run actually did, with the assistant's streamed
-                             reply folded back into one note per burst. -->
+                        <!-- Execution: the plan's steps, rebuilt from the record and read the
+                             way they read while the run was happening. -->
+                        <ScrollViewer IsVisible="{Binding PastRun.IsExecutionTab}"
+                                      HorizontalScrollBarVisibility="Disabled"
+                                      VerticalScrollBarVisibility="Auto">
+                            <StackPanel Margin="16,12,10,12">
+                                <TextBlock Classes="hint" TextWrapping="Wrap"
+                                           IsVisible="{Binding PastRun.HasNoSteps}"
+                                           Text="This run was recorded before step numbers were, so its steps cannot be rebuilt without guessing which one each tool call came from. The timeline has everything it does hold." />
+                                <ItemsControl ItemsSource="{Binding PastRun.Steps}"
+                                              IsVisible="{Binding PastRun.HasSteps}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:StepCardViewModel">
+                                            <local:StepCardView />
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                        </ScrollViewer>
+
+                        <!-- Timeline: everything that was recorded, in order, with the assistant's
+                             streamed reply folded back into one note per burst - including the
+                             events that belong to the run rather than to any step. -->
                         <ScrollViewer IsVisible="{Binding PastRun.IsTimelineTab}"
                                       HorizontalScrollBarVisibility="Disabled"
                                       VerticalScrollBarVisibility="Auto">
-                            <ItemsControl ItemsSource="{Binding PastRun.Events}" Margin="16,12,10,12">
+                            <StackPanel Margin="16,12,10,12" Spacing="6">
+                                <!-- What was put to a person, above the run that put it there:
+                                     "what did it ask me" is why an old run gets opened. -->
+                                <StackPanel Spacing="6" IsVisible="{Binding PastRun.HasDecisions}"
+                                            Margin="0,0,0,6">
+                                    <TextBlock Classes="panelHeader" Text="DECISIONS" Margin="0" />
+                                    <ItemsControl ItemsSource="{Binding PastRun.Decisions}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate x:DataType="sys:String">
+                                                <Border Background="{DynamicResource Brand.CardFill}"
+                                                        BorderBrush="{DynamicResource Brand.Amber}"
+                                                        BorderThickness="2,0,0,0" CornerRadius="4"
+                                                        Padding="10" Margin="0,0,0,6">
+                                                    <TextBlock Text="{Binding}" TextWrapping="Wrap"
+                                                               FontSize="12"
+                                                               Foreground="{DynamicResource Brand.TextBody}" />
+                                                </Border>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                    <TextBlock Classes="panelHeader" Text="TIMELINE" Margin="0" />
+                                </StackPanel>
+
+                            <ItemsControl ItemsSource="{Binding PastRun.Events}">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate x:DataType="vm:RunEventViewModel">
                                         <Grid ColumnDefinitions="Auto,Auto,*" Margin="0,1">
@@ -697,6 +740,7 @@
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
+                            </StackPanel>
                         </ScrollViewer>
 
                         <!-- Artifacts: what it left behind. Named, not offered - Review and Undo
@@ -723,31 +767,6 @@
                             </StackPanel>
                         </ScrollViewer>
 
-                        <!-- Decisions: what it put to a person, and what they said. -->
-                        <ScrollViewer IsVisible="{Binding PastRun.IsDecisionsTab}"
-                                      HorizontalScrollBarVisibility="Disabled"
-                                      VerticalScrollBarVisibility="Auto">
-                            <StackPanel Margin="16,12,10,12" Spacing="6">
-                                <TextBlock Classes="hint" IsVisible="{Binding PastRun.HasNoDecisions}"
-                                           Text="Nothing was put to a person in this run." />
-                                <ItemsControl ItemsSource="{Binding PastRun.Decisions}"
-                                              IsVisible="{Binding PastRun.HasDecisions}">
-                                    <ItemsControl.ItemTemplate>
-                                        <DataTemplate x:DataType="sys:String">
-                                            <Border Background="{DynamicResource Brand.CardFill}"
-                                                    BorderBrush="{DynamicResource Brand.Amber}"
-                                                    BorderThickness="2,0,0,0" CornerRadius="4"
-                                                    Padding="10" Margin="0,0,0,6">
-                                                <TextBlock Text="{Binding}" TextWrapping="Wrap"
-                                                           FontSize="12"
-                                                           Foreground="{DynamicResource Brand.TextBody}" />
-                                            </Border>
-                                        </DataTemplate>
-                                    </ItemsControl.ItemTemplate>
-                                </ItemsControl>
-                            </StackPanel>
-                        </ScrollViewer>
-
                     </Panel>
 
                     <!-- The same column the live run has, off what was recorded. -->
@@ -756,6 +775,7 @@
                                   VerticalScrollBarVisibility="Auto">
                         <StackPanel Spacing="8">
                             <TextBlock Classes="panelHeader" Text="THIS RUN" Margin="0" />
+                            <TextBlock Classes="hint" Text="{Binding PastRun.StepsText}" FontSize="12" />
 
                             <Grid ColumnDefinitions="*,6,*,6,*">
                                 <Border Grid.Column="0" Classes="tile">

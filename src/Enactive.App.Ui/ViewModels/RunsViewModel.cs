@@ -124,6 +124,8 @@ internal sealed class PastRunViewModel : ObservableObject
         var model = string.IsNullOrWhiteSpace(record.Model) ? "unknown model" : record.Model;
         Meta = $"{record.StartedAt.ToLocalTime():yyyy-MM-dd HH:mm} · {model} · run {record.RunId:N}";
 
+        foreach (var card in RunReplay.Steps(record))
+            Steps.Add(card);
         foreach (var row in RunTimeline.Fold(record))
             Events.Add(row);
         foreach (var a in record.Artifacts)
@@ -136,9 +138,18 @@ internal sealed class PastRunViewModel : ObservableObject
         ToolCallsText = record.Events.Count(e => e.Kind == nameof(EventKind.ToolInvoked)).ToString();
         ElapsedText = Duration(elapsed);
 
-        ShowTimelineCommand = new RelayCommand(() => SelectedTab = 0);
+        var done = Steps.Count(c => c.StatusWord is "done" or "skipped");
+        StepsText = Steps.Count == 0 ? "—" : $"{done} / {Steps.Count} steps";
+
+        ShowExecutionCommand = new RelayCommand(() => SelectedTab = 0);
         ShowArtifactsCommand = new RelayCommand(() => SelectedTab = 1);
-        ShowDecisionsCommand = new RelayCommand(() => SelectedTab = 2);
+        ShowTimelineCommand = new RelayCommand(() => SelectedTab = 2);
+
+        // A run recorded before step numbers existed rebuilds no cards, so Execution would be an
+        // empty tab claiming the run did nothing. It opens on the timeline instead, which is what
+        // that record actually holds.
+        if (Steps.Count == 0)
+            SelectedTab = 2;
     }
 
     public RunRecord Record { get; }
@@ -146,6 +157,14 @@ internal sealed class PastRunViewModel : ObservableObject
     public string Meta { get; }
     public string Status { get; }
     public IBrush StatusBrush { get; }
+
+    /// <summary>The plan's steps, rebuilt from the record. Empty for a run stored before the step
+    /// number was, in which case the timeline is the whole story.</summary>
+    public ObservableCollection<StepCardViewModel> Steps { get; } = new();
+
+    public bool HasSteps => Steps.Count > 0;
+    public bool HasNoSteps => Steps.Count == 0;
+    public string StepsText { get; }
 
     public ObservableCollection<RunEventViewModel> Events { get; } = new();
     public ObservableCollection<string> Artifacts { get; } = new();
@@ -157,7 +176,6 @@ internal sealed class PastRunViewModel : ObservableObject
 
     /// <summary>A tab carries its own count, so a run that produced nothing does not advertise "(0)".</summary>
     public string ArtifactsTabLabel => Artifacts.Count == 0 ? "Artifacts" : $"Artifacts ({Artifacts.Count})";
-    public string DecisionsTabLabel => Decisions.Count == 0 ? "Decisions" : $"Decisions ({Decisions.Count})";
 
     public int SelectedTab
     {
@@ -166,19 +184,19 @@ internal sealed class PastRunViewModel : ObservableObject
         {
             if (!Set(ref _selectedTab, value))
                 return;
-            OnPropertyChanged(nameof(IsTimelineTab));
+            OnPropertyChanged(nameof(IsExecutionTab));
             OnPropertyChanged(nameof(IsArtifactsTab));
-            OnPropertyChanged(nameof(IsDecisionsTab));
+            OnPropertyChanged(nameof(IsTimelineTab));
         }
     }
 
-    public bool IsTimelineTab => _selectedTab == 0;
+    public bool IsExecutionTab => _selectedTab == 0;
     public bool IsArtifactsTab => _selectedTab == 1;
-    public bool IsDecisionsTab => _selectedTab == 2;
+    public bool IsTimelineTab => _selectedTab == 2;
 
-    public RelayCommand ShowTimelineCommand { get; }
+    public RelayCommand ShowExecutionCommand { get; }
     public RelayCommand ShowArtifactsCommand { get; }
-    public RelayCommand ShowDecisionsCommand { get; }
+    public RelayCommand ShowTimelineCommand { get; }
 
     /// <summary>Empty is a fact worth stating, not a blank panel.</summary>
     public bool HasArtifacts => Artifacts.Count > 0;

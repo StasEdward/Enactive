@@ -462,10 +462,17 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                     // card must not go green for either of them.
                     var wasSkipped = ev.Summary.Contains("skipped (dependency failed)", StringComparison.Ordinal);
                     var wasFailed = wasSkipped || ev.Summary.Contains("FAILED:", StringComparison.Ordinal);
-                    if (wasFailed)
+                    if (wasSkipped)
+                    {
+                        // Skipped is not failed: nothing went wrong in THIS step, and painting it red
+                        // sends you looking for a fault that is in another card.
+                        doneCard?.SetSkipped();
+                        doneCard?.SetActivity("Skipped — a dependency failed");
+                    }
+                    else if (wasFailed)
                     {
                         doneCard?.SetFailed();
-                        doneCard?.SetActivity(wasSkipped ? "Skipped — a dependency failed" : "Failed");
+                        doneCard?.SetActivity("Failed");
                         doneCard?.ExpandForAttention();
                     }
                     else
@@ -490,8 +497,8 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                     _vm.ToolCalls++;
                     _vm.CurrentAction = ev.Summary;
                     var toolCard = CardFor(ev) ?? EnsureCurrentCard();
-                    LogToolInvocation(toolCard, ev.Summary);
-                    toolCard.SetActivity(DescribeToolActivity(ev.Summary));
+                    StepCardWriter.LogInvocation(toolCard, ev.Summary);
+                    toolCard.SetActivity(StepCardWriter.DescribeActivity(ev.Summary));
                     break;
                 case EventKind.ToolResult:
                     (CardFor(ev) ?? EnsureCurrentCard()).AppendEntryDetail(ev.Summary);
@@ -547,122 +554,6 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                     break;
             }
         });
-    }
-
-    private static string DescribeToolActivity(string toolInvokedSummary)
-    {
-        var spaceIndex = toolInvokedSummary.IndexOf(' ');
-        var name = spaceIndex > 0 ? toolInvokedSummary[..spaceIndex] : toolInvokedSummary;
-        var argsJson = spaceIndex > 0 ? toolInvokedSummary[(spaceIndex + 1)..] : string.Empty;
-
-        string? Hint(string key)
-        {
-            try
-            {
-                using var doc = System.Text.Json.JsonDocument.Parse(argsJson);
-                if (doc.RootElement.TryGetProperty(key, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.String)
-                    return v.GetString();
-            }
-            catch { /* best-effort only - a truncated/compacted arg preview may not parse */ }
-            return null;
-        }
-
-        return name switch
-        {
-            "write_file" => Hint("path") is { } p ? $"Writing {p}…" : "Writing a file…",
-            "read_file" => Hint("path") is { } p ? $"Reading {p}…" : "Reading a file…",
-            "list_dir" => Hint("path") is { } p ? $"Listing {p}…" : "Listing files…",
-            "run_command" => Hint("command") is { } c
-                ? $"Running: {(c.Length <= 60 ? c : c[..60] + "…")}"
-                : "Running a command…",
-            _ => $"Running {name}…"
-        };
-    }
-
-    /// <summary>Routes a "{tool_name} {argsJson}" ToolInvoked summary into the card's structured
-    /// action log (a command line, a file operation, or a generic tool entry) instead of a raw
-    /// transcript dump - this is what the collapsed "Used N tools..." summary counts.</summary>
-    private static void LogToolInvocation(StepCardViewModel card, string toolInvokedSummary)
-    {
-        var spaceIndex = toolInvokedSummary.IndexOf(' ');
-        var name = spaceIndex > 0 ? toolInvokedSummary[..spaceIndex] : toolInvokedSummary;
-        var argsJson = spaceIndex > 0 ? toolInvokedSummary[(spaceIndex + 1)..] : string.Empty;
-
-        string? Hint(string key)
-        {
-            try
-            {
-                using var doc = System.Text.Json.JsonDocument.Parse(argsJson);
-                if (doc.RootElement.TryGetProperty(key, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.String)
-                    return v.GetString();
-            }
-            catch { /* best-effort only - a truncated/compacted arg preview may not parse */ }
-            return null;
-        }
-
-        switch (name)
-        {
-            case "write_file":
-                card.AddFileOp("Wrote", Hint("path") ?? "a file");
-                break;
-            case "read_file":
-                card.AddFileOp("Read", Hint("path") ?? "a file");
-                break;
-            case "list_dir":
-                card.AddFileOp("Listed", Hint("path") ?? "a directory");
-                break;
-            case "run_command":
-                card.AddCommand(Hint("command") ?? argsJson);
-                break;
-            default:
-                card.AddGenericTool($"Ran {name}");
-                break;
-        }
-    }
-
-    private void CreateStepCards(string planSummary)
-    {
-        var marker = " steps: ";
-        var index = planSummary.IndexOf(marker, StringComparison.Ordinal);
-        if (index < 0)
-            return;
-
-        var titles = planSummary[(index + marker.Length)..].Split(" | ", StringSplitOptions.RemoveEmptyEntries);
-        _totalSteps = titles.Length;
-        foreach (var title in titles)
-        {
-            var card = new StepCardViewModel(title.Trim());
-            _cards.Add(card);
-            _vm.Steps.Add(card);
-        }
-        UpdateProgress();
-    }
-
-    private void BeginStep(WorkEvent ev)
-    {
-        // Prefer the step number the orchestrator stamped on the event; steps can start out of order
-        // (and several at once) once MaxParallelSteps > 1, so a running counter is not enough.
-        var index = ev.StepNo() ?? ++_stepIndex;
-        _stepIndex = Math.Max(_stepIndex, index);
-
-        StepCardViewModel card;
-        if (index - 1 < _cards.Count)
-        {
-            card = _cards[index - 1];
-        }
-        else
-        {
-            card = new StepCardViewModel(ev.Summary);
-            _cards.Add(card);
-            _vm.Steps.Add(card);
-            _totalSteps = _cards.Count;
-        }
-        card.SetRunning();
-        _running.Add(card);
-        // With one step in flight this is that step; with several, events without a step number have
-        // no single owner, so nothing claims to be "current".
-        _currentCard = _running.Count == 1 ? card : null;
-        _vm.CurrentAction = ev.Summary;
     }
 
     private void EndStep(StepCardViewModel? card)

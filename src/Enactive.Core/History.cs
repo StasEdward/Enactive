@@ -1,7 +1,16 @@
 namespace Enactive.Core.History;
 
-/// <summary>A persisted event within a run (Timeline is a projection over these).</summary>
-public sealed record RunEventRecord(DateTimeOffset At, string Kind, string Summary);
+/// <summary>
+/// A persisted event within a run (Timeline is a projection over these).
+///
+/// <para><c>Step</c> is the PLAN POSITION the event belongs to, or null for events that belong to
+/// the run rather than to a step. It is recorded because a replay cannot recover it: with more than
+/// one step in flight, "the step that started most recently" is not the step a tool call came from,
+/// and attributing it by order puts the call under the wrong card. Defaulted, so records written
+/// before this existed still load - they simply have no step, and replay shows them as a timeline
+/// rather than as cards.</para>
+/// </summary>
+public sealed record RunEventRecord(DateTimeOffset At, string Kind, string Summary, int? Step = null);
 
 /// <summary>
 /// A persisted agent run (PLAN_v2 §2A.6) plus its events, artifacts and decisions. The Timeline —

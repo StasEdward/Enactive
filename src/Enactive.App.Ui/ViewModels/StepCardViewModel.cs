@@ -127,6 +127,16 @@ internal sealed class StepCardViewModel : ObservableObject
         SetStatus("failed", Brand.StepFailed);
     }
 
+    /// <summary>
+    /// A step that never ran because something it depended on failed. Not red: nothing went wrong
+    /// HERE, and painting it like a failure sends you looking for a fault in the wrong step.
+    /// </summary>
+    public void SetSkipped()
+    {
+        FlushPendingNote();
+        SetStatus("skipped", Brand.StepSkipped);
+    }
+
     public void SetActivity(string text) => Activity = text;
 
     /// <summary>
