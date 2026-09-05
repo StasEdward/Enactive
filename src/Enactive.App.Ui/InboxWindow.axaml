@@ -22,23 +22,30 @@
         <Grid ColumnDefinitions="360,*">
 
             <!-- What came in, newest first. -->
-            <ListBox Grid.Column="0" Margin="10,0,5,0"
+            <ListBox Grid.Column="0" Classes="cards" Margin="10,0,5,0"
                      ItemsSource="{Binding Items}"
                      SelectedItem="{Binding Selected}">
                 <ListBox.ItemTemplate>
                     <DataTemplate x:DataType="vm:InboxItemViewModel">
-                        <StackPanel Margin="0,3">
-                            <StackPanel Orientation="Horizontal" Spacing="6">
-                                <TextBlock Text="●" Foreground="{DynamicResource Brand.Accent}"
-                                           FontSize="11" VerticalAlignment="Center"
-                                           IsVisible="{Binding IsUnread}" />
-                                <TextBlock Text="{Binding Kind}" Foreground="{Binding KindBrush}"
-                                           FontSize="11" VerticalAlignment="Center" />
-                                <TextBlock Classes="hint" Text="{Binding When}" VerticalAlignment="Center" />
+                        <!-- The edge is what the item IS - a result, a decision nobody was there
+                             to answer, an error. The ember dot is the one thing that changes when
+                             you read it. -->
+                        <Border Classes="card" BorderBrush="{Binding KindBrush}">
+                            <StackPanel>
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <Ellipse Width="6" Height="6" VerticalAlignment="Center"
+                                             Fill="{DynamicResource Brand.Accent}"
+                                             IsVisible="{Binding IsUnread}" />
+                                    <TextBlock Text="{Binding Kind}" Foreground="{Binding KindBrush}"
+                                               FontSize="11" VerticalAlignment="Center" />
+                                    <TextBlock Classes="cardMeta" Text="{Binding When}"
+                                               Margin="0" VerticalAlignment="Center" />
+                                </StackPanel>
+                                <TextBlock Text="{Binding Title}" FontWeight="{Binding TitleWeight}"
+                                           Foreground="{DynamicResource Brand.Text}"
+                                           FontSize="12.5" TextWrapping="Wrap" Margin="0,3,0,0" />
                             </StackPanel>
-                            <TextBlock Text="{Binding Title}" FontWeight="{Binding TitleWeight}"
-                                       TextWrapping="Wrap" Margin="0,2,0,0" />
-                        </StackPanel>
+                        </Border>
                     </DataTemplate>
                 </ListBox.ItemTemplate>
             </ListBox>

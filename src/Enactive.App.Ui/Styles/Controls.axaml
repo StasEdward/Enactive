@@ -50,13 +50,6 @@
         <Setter Property="VerticalContentAlignment" Value="Center" />
     </Style>
 
-    <Style Selector="Button.primary">
-        <Setter Property="Background" Value="{DynamicResource Brand.Accent}" />
-        <Setter Property="Foreground" Value="White" />
-        <Setter Property="FontWeight" Value="SemiBold" />
-    </Style>
-
-    <!-- A vertical form: a column of label/input pairs with room to breathe. -->
     <Style Selector="StackPanel.form">
         <Setter Property="Margin" Value="16" />
         <Setter Property="Spacing" Value="6" />
@@ -69,8 +62,136 @@
         <Setter Property="Margin" Value="0,12,0,0" />
     </Style>
 
+    <!-- ── Inputs ──────────────────────────────────────────────────────────
+         Fluent's own fills are a grey that belongs to no palette here, and they
+         are where every "this looks like another program" started: a window can
+         be laid out perfectly and still read as someone else's if the boxes you
+         type into came with the theme. Dressed once, at the control, so every
+         window gets it - including the ones nobody has touched.
+
+         PART_BorderElement is the name Fluent gives the box around a TextBox and
+         a ComboBox; it is what carries the fill, so it is what has to be told.
+    -->
+    <Style Selector="TextBox">
+        <Setter Property="Foreground" Value="{DynamicResource Brand.Text}" />
+        <Setter Property="CaretBrush" Value="{DynamicResource Brand.Accent}" />
+        <Setter Property="SelectionBrush" Value="{DynamicResource Brand.AccentFill}" />
+        <Setter Property="SelectionForegroundBrush" Value="{DynamicResource Brand.Text}" />
+        <Setter Property="Padding" Value="8,6" />
+    </Style>
+    <Style Selector="TextBox /template/ Border#PART_BorderElement">
+        <Setter Property="Background" Value="{DynamicResource Brand.CardFill}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Brand.Line}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="4" />
+    </Style>
+    <Style Selector="TextBox:pointerover /template/ Border#PART_BorderElement">
+        <Setter Property="Background" Value="{DynamicResource Brand.CardFillHover}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Brand.LineStrong}" />
+    </Style>
+    <!-- Focus is the one place ember belongs on an input: it marks where typing goes. -->
+    <Style Selector="TextBox:focus /template/ Border#PART_BorderElement">
+        <Setter Property="Background" Value="{DynamicResource Brand.CardFillHover}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Brand.Accent}" />
+    </Style>
+    <Style Selector="TextBox:disabled /template/ Border#PART_BorderElement">
+        <Setter Property="Background" Value="{DynamicResource Brand.Scrim}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Brand.Line}" />
+    </Style>
+
     <Style Selector="ComboBox">
         <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="Foreground" Value="{DynamicResource Brand.Text}" />
+        <Setter Property="Padding" Value="8,5" />
+    </Style>
+    <Style Selector="ComboBox /template/ Border#PART_BorderElement">
+        <Setter Property="Background" Value="{DynamicResource Brand.CardFill}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Brand.Line}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="4" />
+    </Style>
+    <Style Selector="ComboBox:pointerover /template/ Border#PART_BorderElement">
+        <Setter Property="Background" Value="{DynamicResource Brand.CardFillHover}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Brand.LineStrong}" />
+    </Style>
+    <Style Selector="ComboBox:focus /template/ Border#PART_BorderElement">
+        <Setter Property="BorderBrush" Value="{DynamicResource Brand.Accent}" />
+    </Style>
+
+    <!-- ── Buttons ─────────────────────────────────────────────────────────
+         The plain button is the one that appears in every window, so it is the
+         one that decides whether the app looks like itself.
+    -->
+    <Style Selector="Button /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource Brand.CardFill}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Brand.Line}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="4" />
+    </Style>
+    <Style Selector="Button:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource Brand.CardFillHover}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Brand.LineStrong}" />
+    </Style>
+    <Style Selector="Button:pressed /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource Brand.CardFillActive}" />
+    </Style>
+    <Style Selector="Button:disabled /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource Brand.Scrim}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Brand.Line}" />
+    </Style>
+
+    <!-- Declared after the plain button, and in every state, because Fluent repaints a
+         button's background on hover and pressed - which would take the ember off the
+         one button on the screen that is meant to have it. -->
+    <Style Selector="Button.primary">
+        <Setter Property="Foreground" Value="White" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style Selector="Button.primary /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource Brand.Accent}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Brand.Accent}" />
+        <Setter Property="Foreground" Value="White" />
+    </Style>
+    <Style Selector="Button.primary:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource Brand.AccentHover}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Brand.AccentHover}" />
+        <Setter Property="Foreground" Value="White" />
+    </Style>
+    <Style Selector="Button.primary:pressed /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource Brand.AccentPressed}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Brand.AccentPressed}" />
+        <Setter Property="Foreground" Value="White" />
+    </Style>
+
+    <!-- A vertical form: a column of label/input pairs with room to breathe. -->
+
+    <!-- A source filter in the log, and anything else that is on or off. Fluent
+         paints a checked toggle in solid accent, which here is solid Ember - the
+         same false alarm the status pill had. A tint and an ember edge instead. -->
+    <Style Selector="ToggleButton /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource Brand.CardFill}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Brand.Line}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="4" />
+    </Style>
+    <Style Selector="ToggleButton:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource Brand.CardFillHover}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Brand.LineStrong}" />
+    </Style>
+    <Style Selector="ToggleButton:checked /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource Brand.AccentFill}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Brand.Accent}" />
+        <Setter Property="Foreground" Value="{DynamicResource Brand.Text}" />
+    </Style>
+    <Style Selector="ToggleButton:checked:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource Brand.AccentFill}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Brand.Accent}" />
+    </Style>
+
+    <!-- A list sits on whatever it is in, rather than bringing its own grey panel. -->
+    <Style Selector="ListBox">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
     </Style>
 
     <!-- A disclosure line: clickable text, no button chrome, brightening under the pointer. This is

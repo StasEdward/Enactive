@@ -44,7 +44,7 @@
             </ItemsControl>
         </WrapPanel>
 
-        <ListBox Grid.Row="2"
+        <ListBox Grid.Row="2" Margin="8,0"
                  x:Name="RowList"
                  ItemsSource="{Binding Rows}"
                  SelectedItem="{Binding SelectedRow}">
@@ -59,7 +59,8 @@
             </ListBox.ItemTemplate>
         </ListBox>
 
-        <Border Grid.Row="3" BorderBrush="{DynamicResource Brand.Line}" BorderThickness="0,1,0,0">
+        <Border Grid.Row="3" Margin="0,6,0,0"
+                BorderBrush="{DynamicResource Brand.Line}" BorderThickness="0,1,0,0" Padding="8,6,8,0">
             <TextBox IsReadOnly="True"
                      AcceptsReturn="True"
                      TextWrapping="NoWrap"
