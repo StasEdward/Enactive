@@ -3,6 +3,7 @@ namespace Enactive.App.Ui.ViewModels;
 using System.Collections.ObjectModel;
 using Avalonia.Media;
 using Enactive.App.Ui.Mvvm;
+using Enactive.Core.Events;
 using Enactive.Core.History;
 
 /// <summary>
@@ -96,23 +97,32 @@ internal sealed class RunListItemViewModel
 }
 
 /// <summary>
-/// A finished run, opened read-only: its timeline, what it wrote, and what it asked a person. There
-/// is nothing to click here on purpose - a past run is history, and history is not re-run by
-/// clicking Apply on a diff that was applied last Tuesday.
+/// A finished run, opened read-only - in the SAME frame as a live one: a header with what it was
+/// called and how it ended, tabs over the run, and the status column beside them. What changes is
+/// the content, not the shape, because it is the same thing at a different time.
+///
+/// The first tab is the timeline rather than step cards. A stored event is (when, kind, summary):
+/// the step number the live view sorts cards by is not recorded, and guessing it from the order
+/// would put a tool call under the wrong step the moment two steps ran at once - which is a bug
+/// this app has already had once.
+///
+/// There is nothing to click on purpose. This run finished, and history is not re-run by pressing
+/// Apply on a diff from last Tuesday.
 /// </summary>
-internal sealed class PastRunViewModel
+internal sealed class PastRunViewModel : ObservableObject
 {
+    private int _selectedTab;
+
     public PastRunViewModel(RunRecord record)
     {
         Record = record;
         Title = string.IsNullOrWhiteSpace(record.Title) ? "(untitled run)" : record.Title;
         Status = record.Status;
+        StatusBrush = RunListItemViewModel.BrushFor(record.Status);
 
         var elapsed = record.FinishedAt - record.StartedAt;
         var model = string.IsNullOrWhiteSpace(record.Model) ? "unknown model" : record.Model;
-        Meta = $"{record.StartedAt.ToLocalTime():yyyy-MM-dd HH:mm} · {model} · {elapsed.TotalSeconds:0}s · run {record.RunId:N}";
-
-        StatusBrush = RunListItemViewModel.BrushFor(record.Status);
+        Meta = $"{record.StartedAt.ToLocalTime():yyyy-MM-dd HH:mm} · {model} · run {record.RunId:N}";
 
         foreach (var row in RunTimeline.Fold(record))
             Events.Add(row);
@@ -120,6 +130,15 @@ internal sealed class PastRunViewModel
             Artifacts.Add(a);
         foreach (var d in record.Decisions)
             Decisions.Add(d);
+
+        // The same three tiles the live run shows, off what was actually recorded.
+        ArtifactCountText = Artifacts.Count.ToString();
+        ToolCallsText = record.Events.Count(e => e.Kind == nameof(EventKind.ToolInvoked)).ToString();
+        ElapsedText = Duration(elapsed);
+
+        ShowTimelineCommand = new RelayCommand(() => SelectedTab = 0);
+        ShowArtifactsCommand = new RelayCommand(() => SelectedTab = 1);
+        ShowDecisionsCommand = new RelayCommand(() => SelectedTab = 2);
     }
 
     public RunRecord Record { get; }
@@ -132,8 +151,48 @@ internal sealed class PastRunViewModel
     public ObservableCollection<string> Artifacts { get; } = new();
     public ObservableCollection<string> Decisions { get; } = new();
 
+    public string ArtifactCountText { get; }
+    public string ToolCallsText { get; }
+    public string ElapsedText { get; }
+
+    /// <summary>A tab carries its own count, so a run that produced nothing does not advertise "(0)".</summary>
+    public string ArtifactsTabLabel => Artifacts.Count == 0 ? "Artifacts" : $"Artifacts ({Artifacts.Count})";
+    public string DecisionsTabLabel => Decisions.Count == 0 ? "Decisions" : $"Decisions ({Decisions.Count})";
+
+    public int SelectedTab
+    {
+        get => _selectedTab;
+        set
+        {
+            if (!Set(ref _selectedTab, value))
+                return;
+            OnPropertyChanged(nameof(IsTimelineTab));
+            OnPropertyChanged(nameof(IsArtifactsTab));
+            OnPropertyChanged(nameof(IsDecisionsTab));
+        }
+    }
+
+    public bool IsTimelineTab => _selectedTab == 0;
+    public bool IsArtifactsTab => _selectedTab == 1;
+    public bool IsDecisionsTab => _selectedTab == 2;
+
+    public RelayCommand ShowTimelineCommand { get; }
+    public RelayCommand ShowArtifactsCommand { get; }
+    public RelayCommand ShowDecisionsCommand { get; }
+
+    /// <summary>Empty is a fact worth stating, not a blank panel.</summary>
     public bool HasArtifacts => Artifacts.Count > 0;
+    public bool HasNoArtifacts => Artifacts.Count == 0;
     public bool HasDecisions => Decisions.Count > 0;
+    public bool HasNoDecisions => Decisions.Count == 0;
+
+    private static string Duration(TimeSpan span)
+    {
+        var seconds = span.TotalSeconds;
+        if (seconds < 0)
+            seconds = 0;
+        return seconds >= 60 ? $"{(int)(seconds / 60)}m {(int)(seconds % 60)}s" : $"{seconds:0}s";
+    }
 }
 
 /// <summary>

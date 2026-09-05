@@ -627,8 +627,11 @@
             </DockPanel>
 
             <!-- ── A past run, read-only ───────────────────────────────────────
-                 There is nothing to click here on purpose: this run finished, and
-                 history is not re-run by pressing Apply on a diff from last Tuesday.
+                 Same frame as the live one - header, tabs, status column - because
+                 it is the same thing at a different time. The tabs differ because
+                 the content does: no Execution, because a stored event is (when,
+                 kind, summary) and the step number the cards sort by is not
+                 recorded; no Log, because the hub only holds this session.
             -->
             <DockPanel IsVisible="{Binding IsViewingPast}" LastChildFill="True">
 
@@ -652,65 +655,136 @@
                     </Grid>
                 </Border>
 
-                <ScrollViewer HorizontalScrollBarVisibility="Disabled"
-                              VerticalScrollBarVisibility="Auto">
-                    <StackPanel Margin="16,12,16,16" Spacing="6">
-
-                        <TextBlock Classes="panelHeader" Text="TIMELINE" Margin="0" />
-                        <ItemsControl ItemsSource="{Binding PastRun.Events}">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate x:DataType="vm:RunEventViewModel">
-                                    <Grid ColumnDefinitions="Auto,Auto,*" Margin="0,1">
-                                        <TextBlock Grid.Column="0" Text="{Binding When}"
-                                                   FontFamily="Consolas, Menlo, monospace" FontSize="11"
-                                                   Foreground="{DynamicResource Brand.TextFaint}"
-                                                   Margin="0,0,10,0" />
-                                        <TextBlock Grid.Column="1" Text="{Binding Kind}"
-                                                   FontSize="11" Width="130"
-                                                   Foreground="{DynamicResource Brand.TextMuted}"
-                                                   TextTrimming="CharacterEllipsis" Margin="0,0,10,0" />
-                                        <TextBlock Grid.Column="2" Text="{Binding Summary}"
-                                                   Foreground="{Binding Brush}"
-                                                   FontSize="12" TextWrapping="Wrap" />
-                                    </Grid>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-
-                        <TextBlock Classes="panelHeader" Text="ARTIFACTS"
-                                   IsVisible="{Binding PastRun.HasArtifacts}" />
-                        <ItemsControl ItemsSource="{Binding PastRun.Artifacts}"
-                                      IsVisible="{Binding PastRun.HasArtifacts}">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate x:DataType="sys:String">
-                                    <TextBlock Text="{Binding}" TextWrapping="Wrap"
-                                               FontFamily="Consolas, Menlo, monospace" FontSize="12"
-                                               Margin="0,1" />
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-
-                        <TextBlock Classes="panelHeader" Text="DECISIONS"
-                                   IsVisible="{Binding PastRun.HasDecisions}" />
-                        <ItemsControl ItemsSource="{Binding PastRun.Decisions}"
-                                      IsVisible="{Binding PastRun.HasDecisions}">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate x:DataType="sys:String">
-                                    <TextBlock Text="{Binding}" TextWrapping="Wrap" FontSize="12"
-                                               Foreground="{DynamicResource Brand.TextBody}"
-                                               Margin="0,1" />
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-
-                        <TextBlock Classes="hint" Margin="0,10,0,0"
-                                   Text="Read-only. The log tab only holds this session, so a past run shows what was recorded, not what was said to the model." />
-
+                <Border DockPanel.Dock="Top" Padding="16,0"
+                        BorderBrush="{DynamicResource Brand.Line}" BorderThickness="0,0,0,1">
+                    <StackPanel Orientation="Horizontal">
+                        <Button Classes="tab" Classes.on="{Binding PastRun.IsTimelineTab}"
+                                Content="Timeline" Command="{Binding PastRun.ShowTimelineCommand}" />
+                        <Button Classes="tab" Classes.on="{Binding PastRun.IsArtifactsTab}"
+                                Content="{Binding PastRun.ArtifactsTabLabel}"
+                                Command="{Binding PastRun.ShowArtifactsCommand}" />
+                        <Button Classes="tab" Classes.on="{Binding PastRun.IsDecisionsTab}"
+                                Content="{Binding PastRun.DecisionsTabLabel}"
+                                Command="{Binding PastRun.ShowDecisionsCommand}" />
                     </StackPanel>
-                </ScrollViewer>
+                </Border>
+
+                <Grid ColumnDefinitions="*,300">
+
+                    <Panel Grid.Column="0">
+
+                        <!-- Timeline: what the run actually did, with the assistant's streamed
+                             reply folded back into one note per burst. -->
+                        <ScrollViewer IsVisible="{Binding PastRun.IsTimelineTab}"
+                                      HorizontalScrollBarVisibility="Disabled"
+                                      VerticalScrollBarVisibility="Auto">
+                            <ItemsControl ItemsSource="{Binding PastRun.Events}" Margin="16,12,10,12">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:RunEventViewModel">
+                                        <Grid ColumnDefinitions="Auto,Auto,*" Margin="0,1">
+                                            <TextBlock Grid.Column="0" Text="{Binding When}"
+                                                       FontFamily="Consolas, Menlo, monospace" FontSize="11"
+                                                       Foreground="{DynamicResource Brand.TextFaint}"
+                                                       Margin="0,0,10,0" />
+                                            <TextBlock Grid.Column="1" Text="{Binding Kind}"
+                                                       FontSize="11" Width="130"
+                                                       Foreground="{DynamicResource Brand.TextMuted}"
+                                                       TextTrimming="CharacterEllipsis" Margin="0,0,10,0" />
+                                            <TextBlock Grid.Column="2" Text="{Binding Summary}"
+                                                       Foreground="{Binding Brush}"
+                                                       FontSize="12" TextWrapping="Wrap" />
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+
+                        <!-- Artifacts: what it left behind. Named, not offered - Review and Undo
+                             belong to the run that is happening, not to one from last Tuesday. -->
+                        <ScrollViewer IsVisible="{Binding PastRun.IsArtifactsTab}"
+                                      HorizontalScrollBarVisibility="Disabled"
+                                      VerticalScrollBarVisibility="Auto">
+                            <StackPanel Margin="16,12,10,12" Spacing="6">
+                                <TextBlock Classes="hint" IsVisible="{Binding PastRun.HasNoArtifacts}"
+                                           Text="This run wrote nothing." />
+                                <ItemsControl ItemsSource="{Binding PastRun.Artifacts}"
+                                              IsVisible="{Binding PastRun.HasArtifacts}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="sys:String">
+                                            <Border Background="{DynamicResource Brand.CardFill}"
+                                                    CornerRadius="4" Padding="10" Margin="0,0,0,6">
+                                                <TextBlock Text="{Binding}" TextWrapping="Wrap"
+                                                           FontFamily="Consolas, Menlo, monospace"
+                                                           FontSize="12" />
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                        </ScrollViewer>
+
+                        <!-- Decisions: what it put to a person, and what they said. -->
+                        <ScrollViewer IsVisible="{Binding PastRun.IsDecisionsTab}"
+                                      HorizontalScrollBarVisibility="Disabled"
+                                      VerticalScrollBarVisibility="Auto">
+                            <StackPanel Margin="16,12,10,12" Spacing="6">
+                                <TextBlock Classes="hint" IsVisible="{Binding PastRun.HasNoDecisions}"
+                                           Text="Nothing was put to a person in this run." />
+                                <ItemsControl ItemsSource="{Binding PastRun.Decisions}"
+                                              IsVisible="{Binding PastRun.HasDecisions}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="sys:String">
+                                            <Border Background="{DynamicResource Brand.CardFill}"
+                                                    BorderBrush="{DynamicResource Brand.Amber}"
+                                                    BorderThickness="2,0,0,0" CornerRadius="4"
+                                                    Padding="10" Margin="0,0,0,6">
+                                                <TextBlock Text="{Binding}" TextWrapping="Wrap"
+                                                           FontSize="12"
+                                                           Foreground="{DynamicResource Brand.TextBody}" />
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                        </ScrollViewer>
+
+                    </Panel>
+
+                    <!-- The same column the live run has, off what was recorded. -->
+                    <ScrollViewer Grid.Column="1" Margin="6,12,16,12"
+                                  HorizontalScrollBarVisibility="Disabled"
+                                  VerticalScrollBarVisibility="Auto">
+                        <StackPanel Spacing="8">
+                            <TextBlock Classes="panelHeader" Text="THIS RUN" Margin="0" />
+
+                            <Grid ColumnDefinitions="*,6,*,6,*">
+                                <Border Grid.Column="0" Classes="tile">
+                                    <StackPanel>
+                                        <TextBlock Classes="tileValue" Text="{Binding PastRun.ArtifactCountText}" />
+                                        <TextBlock Classes="tileLabel" Text="ARTIFACTS" />
+                                    </StackPanel>
+                                </Border>
+                                <Border Grid.Column="2" Classes="tile">
+                                    <StackPanel>
+                                        <TextBlock Classes="tileValue" Text="{Binding PastRun.ToolCallsText}" />
+                                        <TextBlock Classes="tileLabel" Text="TOOL CALLS" />
+                                    </StackPanel>
+                                </Border>
+                                <Border Grid.Column="4" Classes="tile">
+                                    <StackPanel>
+                                        <TextBlock Classes="tileValue" Text="{Binding PastRun.ElapsedText}" />
+                                        <TextBlock Classes="tileLabel" Text="ELAPSED" />
+                                    </StackPanel>
+                                </Border>
+                            </Grid>
+
+                            <TextBlock Classes="hint" TextWrapping="Wrap"
+                                       Text="Read-only. This run has finished — nothing here re-runs it, and the log tab only holds the current session." />
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
 
             </DockPanel>
-
             </Panel>
 
         </DockPanel>
