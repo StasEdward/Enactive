@@ -179,6 +179,7 @@ public sealed class FileLogSink : ILogSink, IDisposable
                 var run = entry.RunId is { } r ? r.ToString("N")[..8] : "--------";
                 if (entry.Step is { } stepNo)
                     run += "#" + stepNo;
+                run = run.PadRight(11);   // keep the columns aligned whether or not a line has a step
                 var cat = string.IsNullOrEmpty(entry.Category) ? "" : $" [{entry.Category}]";
                 _writer.WriteLine(
                     $"{entry.At.ToLocalTime():HH:mm:ss.fff} {entry.Level,-5} {entry.Source,-12} run={run}{cat} {entry.Message}");

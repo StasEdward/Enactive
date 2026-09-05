@@ -64,7 +64,7 @@ public sealed class LogWindow : Window
             if (on) { _levelBox.SelectedIndex = 0; _displayMin = LogLevel.Trace; Rebuild(); }
         };
 
-        _search = new TextBox { Watermark = "search…", Width = 200 };
+        _search = new TextBox { Watermark = "search… (#2 = one step)", Width = 200 };
         _search.TextChanged += (_, _) => Rebuild();
 
         _autoScroll = new CheckBox { Content = "Auto-scroll", IsChecked = true };
@@ -195,7 +195,7 @@ public sealed class LogWindow : Window
         var q = _search.Text;
         if (!string.IsNullOrWhiteSpace(q))
         {
-            var hay = $"{e.Message} {e.Category} {e.Detail}";
+            var hay = $"{e.Message} {e.Category} {e.Detail} {RunToken(e)}";
             if (hay.IndexOf(q, StringComparison.OrdinalIgnoreCase) < 0) return false;
         }
         return true;
@@ -215,8 +215,7 @@ public sealed class LogWindow : Window
     private void ShowDetail(LogEntry e)
     {
         var sb = new StringBuilder();
-        var run = (e.RunId is { } r ? r.ToString("N")[..8] : "(none)")
-                  + (e.Step is { } s8 ? "#" + s8 : "");
+        var run = e.RunId is null ? "(none)" : RunToken(e, 8);
         sb.Append(e.At.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss.fff"))
           .Append("  ").Append(e.Level)
           .Append("  ").Append(e.Source)
@@ -236,7 +235,11 @@ public sealed class LogWindow : Window
             Directory.CreateDirectory(dir);
             var path = Path.Combine(dir, $"export-{DateTime.Now:yyyyMMdd-HHmmss}.log");
             using var w = new StreamWriter(path);
-            foreach (var r in _visible)
+            // The live list is in ARRIVAL order: domain events reach the log through the run's event
+            // channel and the UI, so they land after wire lines they actually preceded. That is fine
+            // while tailing, but an exported file is read later as a timeline - so sort it by time
+            // (Seq breaks ties, being monotonic in the hub).
+            foreach (var r in _visible.OrderBy(x => x.Entry.At).ThenBy(x => x.Entry.Seq))
             {
                 w.WriteLine(r.Line);
                 if (!string.IsNullOrEmpty(r.Entry.Detail))
@@ -253,6 +256,15 @@ public sealed class LogWindow : Window
 
     private static Control Spacer() => new Border { Width = 14 };
 
+    /// <summary>
+    /// The correlation token shown in the run column: the short run id plus the plan step that
+    /// produced the line, e.g. "101e6d#2". Typing that token into the search box is how you isolate
+    /// one branch of a parallel run, so the filter matches against this same string.
+    /// </summary>
+    private static string RunToken(LogEntry e, int idChars = 6)
+        => (e.RunId is { } r ? r.ToString("N")[..idChars] : new string('-', idChars))
+           + (e.Step is { } step ? "#" + step : "");
+
     /// <summary>A view-model row: the one-line rendering plus its level colour.</summary>
     private sealed class Row
     {
@@ -263,8 +275,8 @@ public sealed class LogWindow : Window
         public Row(LogEntry e)
         {
             Entry = e;
-            var run = (e.RunId is { } r ? r.ToString("N")[..6] : "------")
-                      + (e.Step is { } s6 ? "#" + s6 : "");
+            // Padded so the category and message columns stay aligned whether or not a line has a step.
+            var run = RunToken(e).PadRight(9);
             var cat = string.IsNullOrEmpty(e.Category) ? "" : $" [{e.Category}]";
             var msg = e.Message.Replace("\r", " ").Replace("\n", " ");
             if (msg.Length > 200) msg = msg[..200] + "…";
