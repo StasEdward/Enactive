@@ -35,7 +35,7 @@ touching C#.
 
 | Piece | Where |
 |---|---|
-| Views | `App.axaml`, `MainWindow.axaml`, `SettingsWindow.axaml`, `LogWindow.axaml`, `ProviderEditWindow.axaml`, `WorkerEditWindow.axaml`, `StepCardView.axaml` |
+| Views | `App.axaml`, `MainWindow.axaml`, `SettingsWindow.axaml`, `LogWindow.axaml`, `InboxWindow.axaml`, `ProviderEditWindow.axaml`, `WorkerEditWindow.axaml`, `StepCardView.axaml` |
 | View models | `ViewModels/` — one per view, plus the small item models the lists are built from (step entries, artifacts, staged changes, diff lines, decision options) |
 | MVVM base | `Mvvm/` — `ObservableObject` and `RelayCommand`/`AsyncRelayCommand`. No toolkit dependency |
 | Styling | `Styles/Controls.axaml` — the shared classes (`.label`, `.hint`, `.form`, `.actions`, `.primary`, `.multiline`, `.panelHeader`, `.disclosure`) |

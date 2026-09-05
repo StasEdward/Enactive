@@ -19,5 +19,9 @@ public interface IInboxStore
 {
     Task AppendAsync(InboxItem item, CancellationToken ct);
     Task<IReadOnlyList<InboxItem>> LoadAllAsync(CancellationToken ct);
+
+    /// <summary>Marks one item read. Unknown ids are ignored - the inbox is never load-bearing.</summary>
+    Task MarkReadAsync(Guid id, CancellationToken ct);
+
     Task MarkAllReadAsync(CancellationToken ct);
 }

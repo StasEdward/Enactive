@@ -42,6 +42,22 @@ public sealed class JsonInboxStore : IInboxStore
         finally { _gate.Release(); }
     }
 
+    public async Task MarkReadAsync(Guid id, CancellationToken ct)
+    {
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            var list = await LoadInternalAsync(ct).ConfigureAwait(false);
+            var changed = list.Select(i =>
+                i.Id == id && !string.Equals(i.Status, "read", StringComparison.OrdinalIgnoreCase)
+                    ? i with { Status = "read" }
+                    : i).ToList();
+            await SaveInternalAsync(changed, ct).ConfigureAwait(false);
+        }
+        catch { /* best-effort */ }
+        finally { _gate.Release(); }
+    }
+
     public async Task MarkAllReadAsync(CancellationToken ct)
     {
         await _gate.WaitAsync(ct).ConfigureAwait(false);

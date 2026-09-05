@@ -46,6 +46,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     // Global, app-wide log hub. Default Debug (readable); the log window can drop it to Trace for raw wire.
     private readonly LogHub _log = new(minLevel: LogLevel.Debug, downstream: new ILogSink[] { new FileLogSink() });
     private LogWindow? _logWindow;
+    private InboxWindow? _inboxWindow;
     private readonly EnvironmentProbe _envProbe = new();
     private readonly Planner _planner = new();
     private readonly ModelResolver _modelResolver = new();
@@ -92,7 +93,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         _vm.TimelineRequested += () => _ = ShowTimelineAsync();
         _vm.LogRequested += ShowLogWindow;
         _vm.EnvironmentRequested += () => _ = ShowEnvironmentAsync();
-        _vm.InboxRequested += () => _ = ShowInboxAsync();
+        _vm.InboxRequested += ShowInbox;
         _vm.SettingsRequested += () =>
             // SettingsWindow reads the live settings and mutates them only when Save is clicked
             // (Cancel/close leave them untouched), so it gets _settings directly, not a partial copy.
@@ -770,28 +771,27 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         catch { /* ignore */ }
     }
 
-    private async Task ShowInboxAsync()
+    private void ShowInbox()
     {
         var path = _vm.WorkspacePath.Trim();
-        if (string.IsNullOrEmpty(path)) { ShowViewer("Inbox", "Set a workspace first."); return; }
-        var store = new JsonInboxStore(WorkspaceFrom(path));
-        var items = await store.LoadAllAsync(CancellationToken.None);
-        var sb = new System.Text.StringBuilder();
-        sb.AppendLine($"INBOX — {Path.GetFullPath(path)}");
-        sb.AppendLine();
-        if (items.Count == 0)
-            sb.AppendLine("(empty)");
-        else
-            foreach (var i in items.OrderByDescending(x => x.At))
-            {
-                var dot = string.Equals(i.Status, "unread", StringComparison.OrdinalIgnoreCase) ? " •" : "";
-                sb.AppendLine($"{i.At.ToLocalTime():yyyy-MM-dd HH:mm}  [{i.Kind}]{dot}  {i.Title}");
-                sb.AppendLine("    " + i.Summary);
-                sb.AppendLine();
-            }
-        ShowViewer("Inbox", sb.ToString());
-        await store.MarkAllReadAsync(CancellationToken.None);
-        RefreshInboxButton();
+        if (string.IsNullOrEmpty(path))
+        {
+            ShowViewer("Inbox", "Set a workspace first.");
+            return;
+        }
+
+        if (_inboxWindow is null)
+        {
+            var workspace = WorkspaceFrom(path);
+            _inboxWindow = new InboxWindow(
+                new JsonInboxStore(workspace), RunStoreFactory.Create(workspace), workspace.RootPath);
+            // The badge follows the window: reading an item there updates the button here.
+            _inboxWindow.UnreadChanged += unread => _vm.InboxLabel = unread > 0 ? $"Inbox ({unread})" : "Inbox";
+            _inboxWindow.Closed += (_, _) => { _inboxWindow = null; RefreshInboxButton(); };
+            _inboxWindow.Show(this);
+        }
+
+        _inboxWindow.Activate();
     }
 
     private async Task ShowTimelineAsync()
