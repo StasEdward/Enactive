@@ -3,7 +3,9 @@
 A desktop environment for AI agents (a "GUI for AI agents"), built on **.NET 10**.
 Site: [enactive.dev](https://enactive.dev). Formerly named *AIClient* — renamed to **Enactive** in 2026-09;
 namespaces, assemblies, env vars and on-disk data folders all use the new name (see *Naming / migration* below).
-See `PLAN.md` (vision) and `PLAN_v2.md` (development spec). `LOGGING.md` documents the global log; `MODELS.md` the multi-provider team-of-models design (implemented).
+See `PLAN.md` (vision) and `PLAN_v2.md` (development spec — its §11 is the honest status: what is built and what is not).
+`LOGGING.md` documents the global log; `MODELS.md` the multi-provider team-of-models design (implemented);
+`STYLING.md` how the Avalonia/Fluent UI is themed — read it before changing anything visual.
 
 The engine turns one intent into real, reviewable, recorded action:
 
