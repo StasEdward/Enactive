@@ -42,7 +42,7 @@ var workspaceName = Path.GetFileName(workspaceRoot.TrimEnd(Path.DirectorySeparat
 if (string.IsNullOrEmpty(workspaceName))
     workspaceName = "workspace";
 
-var workspace = new WorkspaceInfo(Guid.NewGuid(), workspaceName, workspaceRoot);
+var workspace = new WorkspaceInfo(WorkspaceInfo.IdFor(workspaceRoot), workspaceName, workspaceRoot);
 var runStore = RunStoreFactory.Create(workspace);
 var memoryStore = MemoryStoreFactory.Create(workspace);
 
@@ -58,7 +58,7 @@ if (isTimeline)
 // "inbox" as the first argument prints the AI Inbox (background-task outcomes) and exits.
 if (args.Length > 0 && string.Equals(args[0], "inbox", StringComparison.OrdinalIgnoreCase))
 {
-    var items = await new JsonInboxStore(workspace).LoadAllAsync(CancellationToken.None);
+    var items = await InboxStoreFactory.Create(workspace).LoadAllAsync(CancellationToken.None);
     Console.WriteLine($"INBOX — {workspace.RootPath}");
     Console.WriteLine();
     if (items.Count == 0)

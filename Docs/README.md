@@ -23,7 +23,7 @@ Command -> Intent -> Context(+Environment) -> Planner -> Orchestrator -> Worker(
 | `Enactive.Core` | Domain model + abstractions only (Intent, WorkContext, Environment, Plan/PlanStep (DAG), Worker/ModelPolicy, Decision, Permissions, Memory, Inbox, events, diagnostics). No transport/SDK types. |
 | `Enactive.Providers` | `OpenAiCompatibleProvider`, `OllamaNativeProvider` (native `/api/chat` so per-run `num_ctx` works), `AnthropicProvider` (reasoner) behind `ChatProviderFactory`; `LoggingChatProvider` + `WireTap`. |
 | `Enactive.Tools` | `write_file`, `read_file`, `list_dir`, `run_command` (cmd.exe/sh), `run_powershell` (`-EncodedCommand`, no quoting); `LoggingToolRegistry`. |
-| `Enactive.Workspace` | Run stores (SQLite/MySQL/JSON via `RunStoreFactory`) and project-memory stores (the same three via `MemoryStoreFactory`), artifact stores (disk + staging), `JsonInboxStore`, `EnvironmentProbe`, `ProjectMemory`, `LogHub`/`FileLogSink`. |
+| `Enactive.Workspace` | Run, project-memory and inbox stores, each SQLite/MySQL/JSON behind `RunStoreFactory` / `MemoryStoreFactory` / `InboxStoreFactory`; artifact stores (disk + staging), `EnvironmentProbe`, `ProjectMemory`, `LogHub`/`FileLogSink`. |
 | `Enactive.Agents` | `Orchestrator` (DAG execution, role tool-filtering, permission gating, optional reasoner plan+review), `Planner` (dependency graphs), `DagScheduler`, `Reviewer` (evidence-aware), `DefaultWorkers`, `BackgroundRunner`. |
 | `Enactive.App.Console` | Console host; sub-commands `timeline`, `inbox`. |
 | `Enactive.App.Ui` | Avalonia desktop UI: `.axaml` views over view models (`ViewModels/`), with a small hand-written MVVM base in `Mvvm/`, app-wide styling in `Styles/Controls.axaml` and the palette in `Brand.cs`. |
@@ -102,13 +102,21 @@ Env: `ENACTIVE_MODEL`, `ENACTIVE_OLLAMA_URL`, `ENACTIVE_STORE` (sqlite|mysql|jso
 the provider list / worker team / phase bindings / toggles to `%APPDATA%/Enactive/settings.json` (API keys encrypted). Per-run data lives in
 `<workspace>/.enactive/` (enactive.db, memory.json, inbox.json, permissions.json).
 
-`ENACTIVE_STORE` picks the run store **and** the project-memory store together, so a workspace's
-history and its memory always land in the same place. At the default (`sqlite`) both are tables in
-`enactive.db`; the first time a workspace opens on SQLite its existing `memory.json` is imported
-once, so switching stores does not empty its timeline. The JSON file is left where it is, and
-`ENACTIVE_STORE=json` still reads it. On MySQL the memory table is scoped by workspace id - one
-database serves many workspaces, and a memory entry carries the workspace it belongs to - and moving
-existing memory into a server database is a migration you do yourself.
+`ENACTIVE_STORE` picks the run store, the project-memory store **and** the inbox together, so
+everything a workspace persists lands in the same place. At the default (`sqlite`) all three are
+tables in `enactive.db`; the first time a workspace opens on SQLite its existing `memory.json` and
+`inbox.json` are imported once, so switching stores does not empty its timeline or its inbox. The
+JSON files are left where they are, and `ENACTIVE_STORE=json` still reads them. Moving existing data
+into a server database is a migration you do yourself - MySQL does not import.
+
+On MySQL the memory and inbox tables are scoped by workspace id, because one database serves every
+workspace pointed at it. For the inbox that is not only about reading: an unscoped "mark all read"
+would clear other projects' inboxes as a side effect of opening this one.
+
+That scoping is why a workspace's id is **derived from its folder path** (`WorkspaceInfo.IdFor`,
+SHA-256 over the normalised path, case folded where the filesystem folds it) rather than generated
+per session. A random id is written into every row just the same, and then matches nothing the next
+time the folder is opened.
 
 ### Naming / migration (AIClient -> Enactive)
 

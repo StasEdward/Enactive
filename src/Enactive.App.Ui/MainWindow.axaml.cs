@@ -179,7 +179,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         if (string.IsNullOrEmpty(name))
             name = "workspace";
 
-        var workspace = new WorkspaceInfo(Guid.NewGuid(), name, fullPath);
+        var workspace = new WorkspaceInfo(WorkspaceInfo.IdFor(fullPath), name, fullPath);
         var policy = PolicyFor(_vm.AutonomyTier);
 
         IArtifactStore artifactStore;
@@ -682,7 +682,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             var full = Path.GetFullPath(root);
             var name = Path.GetFileName(Path.TrimEndingDirectorySeparator(full));
             if (string.IsNullOrEmpty(name)) name = "workspace";
-            var ws = new WorkspaceInfo(Guid.NewGuid(), name, full);
+            var ws = new WorkspaceInfo(WorkspaceInfo.IdFor(full), name, full);
             var (info, snapshot) = await _envProbe.ProbeFullAsync(ws, CancellationToken.None);
             _vm.EnvironmentSummary = info.OneLine();
             ShowViewer("Environment", info.Summary() + "\n\n" + snapshot.Describe());
@@ -713,7 +713,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     {
         var full = Path.GetFullPath(path);
         var name = Path.GetFileName(Path.TrimEndingDirectorySeparator(full));
-        return new WorkspaceInfo(Guid.NewGuid(), string.IsNullOrEmpty(name) ? "workspace" : name, full);
+        return new WorkspaceInfo(WorkspaceInfo.IdFor(full), string.IsNullOrEmpty(name) ? "workspace" : name, full);
     }
 
     private void StartBackground(string text, string fullPath)
@@ -723,7 +723,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         var workerId = _workerProvider.All.Count > 0
             && _vm.SelectedWorkerIndex >= 0 && _vm.SelectedWorkerIndex < _workerProvider.All.Count
             ? _workerProvider.All[_vm.SelectedWorkerIndex].Id : null;
-        var inbox = new JsonInboxStore(workspace);
+        var inbox = InboxStoreFactory.Create(workspace);
         AddRecent(fullPath);
 
         _vm.StatusPhase = "Background task started";
@@ -764,7 +764,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         {
             var path = _vm.WorkspacePath.Trim();
             if (string.IsNullOrEmpty(path)) { _vm.InboxLabel = "Inbox"; return; }
-            var items = await new JsonInboxStore(WorkspaceFrom(path)).LoadAllAsync(CancellationToken.None);
+            var items = await InboxStoreFactory.Create(WorkspaceFrom(path)).LoadAllAsync(CancellationToken.None);
             var unread = items.Count(i => string.Equals(i.Status, "unread", StringComparison.OrdinalIgnoreCase));
             _vm.InboxLabel = unread > 0 ? $"Inbox ({unread})" : "Inbox";
         }
@@ -784,7 +784,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         {
             var workspace = WorkspaceFrom(path);
             _inboxWindow = new InboxWindow(
-                new JsonInboxStore(workspace), RunStoreFactory.Create(workspace), workspace.RootPath);
+                InboxStoreFactory.Create(workspace), RunStoreFactory.Create(workspace), workspace.RootPath);
             // The badge follows the window: reading an item there updates the button here.
             _inboxWindow.UnreadChanged += unread => _vm.InboxLabel = unread > 0 ? $"Inbox ({unread})" : "Inbox";
             _inboxWindow.Closed += (_, _) => { _inboxWindow = null; RefreshInboxButton(); };
@@ -800,7 +800,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         if (string.IsNullOrEmpty(workspacePath))
             return;
 
-        var workspace = new WorkspaceInfo(Guid.NewGuid(), "workspace", Path.GetFullPath(workspacePath));
+        var workspace = WorkspaceInfo.For(workspacePath);
         var runStore = RunStoreFactory.Create(workspace);
         var memory = MemoryStoreFactory.Create(workspace);
         var runs = await runStore.LoadAllAsync(CancellationToken.None);
