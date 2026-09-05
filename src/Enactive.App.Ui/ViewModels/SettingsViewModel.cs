@@ -9,7 +9,17 @@ using Enactive.Core.Providers;
 /// after the edit dialog writes back, instead of rebuilding the whole list.</summary>
 internal sealed class ProviderRow : ObservableObject
 {
-    public ProviderRow(ProviderConfig config) => Config = config;
+    public ProviderRow(ProviderConfig config, Action<ProviderRow> edit, Action<ProviderRow> remove)
+    {
+        Config = config;
+        // The buttons are ON the card, so the commands are the card's. Nothing has to be selected
+        // first to act on the thing you are already pointing at.
+        EditCommand = new RelayCommand(() => edit(this));
+        RemoveCommand = new RelayCommand(() => remove(this));
+    }
+
+    public RelayCommand EditCommand { get; }
+    public RelayCommand RemoveCommand { get; }
 
     public ProviderConfig Config { get; }
 
@@ -41,7 +51,15 @@ internal sealed class ProviderRow : ObservableObject
 /// <summary>One row of the Team list, on the same terms as <see cref="ProviderRow"/>.</summary>
 internal sealed class WorkerRow : ObservableObject
 {
-    public WorkerRow(WorkerConfig config) => Config = config;
+    public WorkerRow(WorkerConfig config, Action<WorkerRow> edit, Action<WorkerRow> remove)
+    {
+        Config = config;
+        EditCommand = new RelayCommand(() => edit(this));
+        RemoveCommand = new RelayCommand(() => remove(this));
+    }
+
+    public RelayCommand EditCommand { get; }
+    public RelayCommand RemoveCommand { get; }
 
     public WorkerConfig Config { get; }
 
@@ -165,9 +183,9 @@ internal sealed class SettingsViewModel : ObservableObject
             : "Only Windows starts programs this way; this desktop does not.";
 
         foreach (var p in _working.Providers)
-            Providers.Add(new ProviderRow(p));
+            Providers.Add(NewProviderRow(p));
         foreach (var w in _working.Workers)
-            Workers.Add(new WorkerRow(w));
+            Workers.Add(NewWorkerRow(w));
 
         ShowGeneralCommand = new RelayCommand(() => Section = SectionGeneral);
         ShowAccountCommand = new RelayCommand(() => Section = SectionAccount);
@@ -187,12 +205,8 @@ internal sealed class SettingsViewModel : ObservableObject
         SyncCatalog();
 
         AddProviderCommand = new RelayCommand(AddProvider);
-        EditProviderCommand = new RelayCommand(EditProvider, () => SelectedProvider is not null);
-        RemoveProviderCommand = new RelayCommand(RemoveProvider, () => SelectedProvider is not null);
 
         AddWorkerCommand = new RelayCommand(AddWorker);
-        EditWorkerCommand = new RelayCommand(EditWorker, () => SelectedWorker is not null);
-        RemoveWorkerCommand = new RelayCommand(RemoveWorker, () => SelectedWorker is not null);
 
         SaveCommand = new RelayCommand(Save);
         CancelCommand = new RelayCommand(() => CloseRequested?.Invoke());
@@ -276,29 +290,10 @@ internal sealed class SettingsViewModel : ObservableObject
     public ObservableCollection<ProviderRow> Providers { get; } = new();
     public ObservableCollection<WorkerRow> Workers { get; } = new();
 
-    public ProviderRow? SelectedProvider
-    {
-        get => _selectedProvider;
-        set
-        {
-            if (!Set(ref _selectedProvider, value))
-                return;
-            EditProviderCommand.RaiseCanExecuteChanged();
-            RemoveProviderCommand.RaiseCanExecuteChanged();
-        }
-    }
+    /// <summary>Only the highlight now - the buttons that act on a row are on the row.</summary>
+    public ProviderRow? SelectedProvider { get => _selectedProvider; set => Set(ref _selectedProvider, value); }
 
-    public WorkerRow? SelectedWorker
-    {
-        get => _selectedWorker;
-        set
-        {
-            if (!Set(ref _selectedWorker, value))
-                return;
-            EditWorkerCommand.RaiseCanExecuteChanged();
-            RemoveWorkerCommand.RaiseCanExecuteChanged();
-        }
-    }
+    public WorkerRow? SelectedWorker { get => _selectedWorker; set => Set(ref _selectedWorker, value); }
 
     // ── Phases ────────────────────────────────────────────────────────────────
     /// <summary>Every model of every provider, plus "(none)". Live: edits on other tabs land here.</summary>
@@ -310,11 +305,7 @@ internal sealed class SettingsViewModel : ObservableObject
     public string ExecuteHeavy { get => _executeHeavy; set => Set(ref _executeHeavy, value); }
 
     public RelayCommand AddProviderCommand { get; }
-    public RelayCommand EditProviderCommand { get; }
-    public RelayCommand RemoveProviderCommand { get; }
     public RelayCommand AddWorkerCommand { get; }
-    public RelayCommand EditWorkerCommand { get; }
-    public RelayCommand RemoveWorkerCommand { get; }
     public RelayCommand SaveCommand { get; }
     public RelayCommand CancelCommand { get; }
 
@@ -324,15 +315,20 @@ internal sealed class SettingsViewModel : ObservableObject
         ProviderEditRequested?.Invoke(config, () =>
         {
             _working.Providers.Add(config);
-            Providers.Add(new ProviderRow(config));
+            Providers.Add(NewProviderRow(config));
             SyncCatalog();
         });
     }
 
-    private void EditProvider()
+    /// <summary>Rows are built here so each one is handed the two things it can do to itself.</summary>
+    private ProviderRow NewProviderRow(ProviderConfig config)
+        => new(config, EditProvider, RemoveProvider);
+
+    private WorkerRow NewWorkerRow(WorkerConfig config)
+        => new(config, EditWorker, RemoveWorker);
+
+    private void EditProvider(ProviderRow row)
     {
-        if (SelectedProvider is not { } row)
-            return;
         ProviderEditRequested?.Invoke(row.Config, () =>
         {
             row.Refresh();
@@ -340,10 +336,8 @@ internal sealed class SettingsViewModel : ObservableObject
         });
     }
 
-    private void RemoveProvider()
+    private void RemoveProvider(ProviderRow row)
     {
-        if (SelectedProvider is not { } row)
-            return;
         _working.Providers.Remove(row.Config);
         Providers.Remove(row);
         SelectedProvider = null;
@@ -356,21 +350,15 @@ internal sealed class SettingsViewModel : ObservableObject
         WorkerEditRequested?.Invoke(config, _working.ModelCatalog(), () =>
         {
             _working.Workers.Add(config);
-            Workers.Add(new WorkerRow(config));
+            Workers.Add(NewWorkerRow(config));
         });
     }
 
-    private void EditWorker()
-    {
-        if (SelectedWorker is not { } row)
-            return;
-        WorkerEditRequested?.Invoke(row.Config, _working.ModelCatalog(), row.Refresh);
-    }
+    private void EditWorker(WorkerRow row)
+        => WorkerEditRequested?.Invoke(row.Config, _working.ModelCatalog(), row.Refresh);
 
-    private void RemoveWorker()
+    private void RemoveWorker(WorkerRow row)
     {
-        if (SelectedWorker is not { } row)
-            return;
         _working.Workers.Remove(row.Config);
         Workers.Remove(row);
         SelectedWorker = null;

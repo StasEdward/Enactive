@@ -260,7 +260,7 @@
                                                             </StackPanel>
                                                         </Button>
                                                         </Border>
-                                                        <Button Grid.Column="1" Classes="wsForget"
+                                                        <Button Grid.Column="1" Classes="rowIcon"
                                                                 Command="{Binding RenameCommand}"
                                                                 ToolTip.Tip="Rename. What Enactive calls it — the folder is not touched.">
                                                             <Viewbox Width="12" Height="12">
@@ -270,7 +270,7 @@
                                                                 </Canvas>
                                                             </Viewbox>
                                                         </Button>
-                                                        <Button Grid.Column="2" Classes="wsForget destructive"
+                                                        <Button Grid.Column="2" Classes="rowIcon destructive"
                                                                 Command="{Binding ForgetCommand}"
                                                                 ToolTip.Tip="Forget this workspace. The folder and its history are left where they are.">
                                                             <Viewbox Width="11" Height="11">

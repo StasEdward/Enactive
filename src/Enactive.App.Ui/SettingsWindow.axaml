@@ -162,22 +162,40 @@
                                Text="Green runs on this machine; blue is reached over the network — the one thing about a provider worth seeing without reading it." />
                     <StackPanel DockPanel.Dock="Bottom" Classes="actions">
                         <Button Content="Add" Command="{Binding AddProviderCommand}" />
-                        <Button Content="Edit" Command="{Binding EditProviderCommand}" />
-                        <Button Content="Remove" Command="{Binding RemoveProviderCommand}" />
                     </StackPanel>
                     <ListBox Classes="cards" ItemsSource="{Binding Providers}"
                              SelectedItem="{Binding SelectedProvider}">
                         <ListBox.ItemTemplate>
                             <DataTemplate x:DataType="vm:ProviderRow">
                                 <Border Classes="card" BorderBrush="{Binding EdgeBrush}">
-                                    <Grid ColumnDefinitions="*,Auto">
+                                    <Grid ColumnDefinitions="*,Auto,Auto">
                                         <StackPanel Grid.Column="0" Margin="0,0,10,0">
                                             <TextBlock Classes="cardTitle" Text="{Binding Name}" />
                                             <TextBlock Classes="cardMeta" Text="{Binding Meta}" />
                                         </StackPanel>
                                         <TextBlock Grid.Column="1" Text="{Binding Reach}"
                                                    Classes="cardMeta" VerticalAlignment="Center"
-                                                   Margin="0" />
+                                                   Margin="0,0,10,0" />
+                                        <StackPanel Grid.Column="2" Orientation="Horizontal"
+                                                    VerticalAlignment="Center" Spacing="2">
+                                            <Button Classes="rowIcon" Command="{Binding EditCommand}"
+                                                    ToolTip.Tip="Edit">
+                                                <Viewbox Width="12" Height="12">
+                                                    <Canvas Width="24" Height="24">
+                                                        <Path Data="M 4,20 L 4,16 L 15.5,4.5 L 19.5,8.5 L 8,20 Z" />
+                                                        <Path Data="M 13.5,6.5 L 17.5,10.5" />
+                                                    </Canvas>
+                                                </Viewbox>
+                                            </Button>
+                                            <Button Classes="rowIcon destructive" Command="{Binding RemoveCommand}"
+                                                    ToolTip.Tip="Remove">
+                                                <Viewbox Width="11" Height="11">
+                                                    <Canvas Width="24" Height="24">
+                                                        <Path Data="M 6,6 L 18,18 M 18,6 L 6,18" />
+                                                    </Canvas>
+                                                </Viewbox>
+                                            </Button>
+                                        </StackPanel>
                                     </Grid>
                                 </Border>
                             </DataTemplate>
@@ -192,18 +210,38 @@
                                Text="The main window's role picker chooses which worker handles a run. Honesty rules and global instructions are added to every worker automatically. The edge is the worker's permission level, on the same green-to-red scale as the autonomy slider." />
                     <StackPanel DockPanel.Dock="Bottom" Classes="actions">
                         <Button Content="Add" Command="{Binding AddWorkerCommand}" />
-                        <Button Content="Edit" Command="{Binding EditWorkerCommand}" />
-                        <Button Content="Remove" Command="{Binding RemoveWorkerCommand}" />
                     </StackPanel>
                     <ListBox Classes="cards" ItemsSource="{Binding Workers}"
                              SelectedItem="{Binding SelectedWorker}">
                         <ListBox.ItemTemplate>
                             <DataTemplate x:DataType="vm:WorkerRow">
                                 <Border Classes="card" BorderBrush="{Binding EdgeBrush}">
-                                    <StackPanel>
-                                        <TextBlock Classes="cardTitle" Text="{Binding Name}" />
-                                        <TextBlock Classes="cardMeta" Text="{Binding Meta}" />
-                                    </StackPanel>
+                                    <Grid ColumnDefinitions="*,Auto">
+                                        <StackPanel Grid.Column="0" Margin="0,0,10,0">
+                                            <TextBlock Classes="cardTitle" Text="{Binding Name}" />
+                                            <TextBlock Classes="cardMeta" Text="{Binding Meta}" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1" Orientation="Horizontal"
+                                                    VerticalAlignment="Center" Spacing="2">
+                                            <Button Classes="rowIcon" Command="{Binding EditCommand}"
+                                                    ToolTip.Tip="Edit">
+                                                <Viewbox Width="12" Height="12">
+                                                    <Canvas Width="24" Height="24">
+                                                        <Path Data="M 4,20 L 4,16 L 15.5,4.5 L 19.5,8.5 L 8,20 Z" />
+                                                        <Path Data="M 13.5,6.5 L 17.5,10.5" />
+                                                    </Canvas>
+                                                </Viewbox>
+                                            </Button>
+                                            <Button Classes="rowIcon destructive" Command="{Binding RemoveCommand}"
+                                                    ToolTip.Tip="Remove">
+                                                <Viewbox Width="11" Height="11">
+                                                    <Canvas Width="24" Height="24">
+                                                        <Path Data="M 6,6 L 18,18 M 18,6 L 6,18" />
+                                                    </Canvas>
+                                                </Viewbox>
+                                            </Button>
+                                        </StackPanel>
+                                    </Grid>
                                 </Border>
                             </DataTemplate>
                         </ListBox.ItemTemplate>

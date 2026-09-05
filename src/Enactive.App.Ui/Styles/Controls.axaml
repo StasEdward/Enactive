@@ -423,9 +423,10 @@
         <Setter Property="Background" Value="{DynamicResource Brand.CardFillActive}" />
     </Style>
 
-    <!-- Forgetting a workspace is destructive-shaped, so it is Danger on hover and
-         never Ember. Ember is the action you are meant to take. -->
-    <Style Selector="Button.wsForget">
+    <!-- A small icon button living on a row: edit it, or remove it. Anything destructive
+         adds .destructive and goes Danger on hover, never Ember - Ember is the action you
+         are meant to take, and deleting something is not it. -->
+    <Style Selector="Button.rowIcon">
         <Setter Property="Width" Value="26" />
         <Setter Property="Height" Value="26" />
         <Setter Property="Padding" Value="0" />
@@ -433,26 +434,26 @@
         <Setter Property="HorizontalContentAlignment" Value="Center" />
         <Setter Property="VerticalContentAlignment" Value="Center" />
     </Style>
-    <Style Selector="Button.wsForget /template/ ContentPresenter#PART_ContentPresenter">
+    <Style Selector="Button.rowIcon /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="BorderThickness" Value="0" />
         <Setter Property="CornerRadius" Value="4" />
     </Style>
-    <Style Selector="Button.wsForget:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Style Selector="Button.rowIcon:pointerover /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="{DynamicResource Brand.CardFill}" />
     </Style>
-    <Style Selector="Button.wsForget Path">
+    <Style Selector="Button.rowIcon Path">
         <Setter Property="Stroke" Value="{DynamicResource Brand.TextFaint}" />
         <Setter Property="StrokeThickness" Value="1.8" />
         <Setter Property="StrokeLineCap" Value="Round" />
     </Style>
-    <Style Selector="Button.wsForget:pointerover Path">
+    <Style Selector="Button.rowIcon:pointerover Path">
         <Setter Property="Stroke" Value="{DynamicResource Brand.Text}" />
     </Style>
     <!-- Danger belongs to the one that destroys something; rename lights up like any other
          control. Declared LAST because Avalonia has no specificity - the last matching
          setter wins, so a more general rule after this one would undo it. -->
-    <Style Selector="Button.wsForget.destructive:pointerover Path">
+    <Style Selector="Button.rowIcon.destructive:pointerover Path">
         <Setter Property="Stroke" Value="{DynamicResource Brand.Danger}" />
     </Style>
 
