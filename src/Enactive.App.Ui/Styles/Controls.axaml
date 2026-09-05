@@ -369,11 +369,13 @@
         <Setter Property="HorizontalAlignment" Value="Stretch" />
         <Setter Property="HorizontalContentAlignment" Value="Stretch" />
     </Style>
+    <!-- The left edge is on a Border around the button, so it keeps the workspace's colour
+         while Fluent repaints the button's own border on hover. -->
     <Style Selector="Button.wsCard /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="{DynamicResource Brand.CardFill}" />
         <Setter Property="BorderBrush" Value="{DynamicResource Brand.Line}" />
-        <Setter Property="BorderThickness" Value="1" />
-        <Setter Property="CornerRadius" Value="5" />
+        <Setter Property="BorderThickness" Value="0,1,1,1" />
+        <Setter Property="CornerRadius" Value="0,5,5,0" />
     </Style>
     <Style Selector="Button.wsCard:pointerover /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="{DynamicResource Brand.CardFillHover}" />
@@ -387,7 +389,9 @@
     </Style>
 
     <Style Selector="Border.popup">
-        <Setter Property="Background" Value="{DynamicResource Brand.Card}" />
+        <!-- The darkest surface in the app, on purpose: the rows inside are cards made of white at
+             10-19%, and over a light panel that is a difference you cannot see. -->
+        <Setter Property="Background" Value="{DynamicResource Brand.Bg}" />
         <Setter Property="BorderBrush" Value="{DynamicResource Brand.LineStrong}" />
         <Setter Property="BorderThickness" Value="1" />
         <Setter Property="CornerRadius" Value="6" />
@@ -403,10 +407,14 @@
     <Style Selector="Button.wsRow /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="BorderThickness" Value="0" />
-        <Setter Property="CornerRadius" Value="4" />
+        <Setter Property="CornerRadius" Value="0,4,4,0" />
     </Style>
+    <!-- Over the row's own fill, so it has to be the next step up and not the same value. -->
     <Style Selector="Button.wsRow:pointerover /template/ ContentPresenter#PART_ContentPresenter">
-        <Setter Property="Background" Value="{DynamicResource Brand.CardFill}" />
+        <Setter Property="Background" Value="{DynamicResource Brand.CardFillHover}" />
+    </Style>
+    <Style Selector="Button.wsRow:pressed /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource Brand.CardFillActive}" />
     </Style>
 
     <!-- Forgetting a workspace is destructive-shaped, so it is Danger on hover and

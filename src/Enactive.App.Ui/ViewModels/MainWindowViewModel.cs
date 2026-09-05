@@ -307,11 +307,18 @@ internal sealed class MainWindowViewModel : ObservableObject
         set
         {
             if (Set(ref _workspaceMissing, value))
+            {
                 OnPropertyChanged(nameof(WorkspaceNameBrush));
+                OnPropertyChanged(nameof(WorkspaceEdgeBrush));
+            }
         }
     }
 
     public IBrush WorkspaceNameBrush => _workspaceMissing ? Brand.Danger : Brand.Text;
+
+    /// <summary>The card wears the same edge as its row in the switcher, so the two read as one
+    /// object seen closed and open.</summary>
+    public IBrush WorkspaceEdgeBrush => _workspaceMissing ? Brand.Danger : Brand.Accent;
 
     /// <summary>Every workspace the app knows about. Rebuilt by the window from the registry.</summary>
     public ObservableCollection<WorkspaceItemViewModel> Workspaces { get; } = new();

@@ -231,6 +231,8 @@
                             <TextBlock Classes="panelHeader" Text="WORKSPACE" Margin="0" />
 
                             <Panel>
+                                <Border BorderBrush="{Binding WorkspaceEdgeBrush}"
+                                        BorderThickness="2,0,0,0" CornerRadius="0,5,5,0">
                                 <Button Classes="wsCard" Command="{Binding ToggleSwitcherCommand}"
                                         ToolTip.Tip="{Binding WorkspacePath}">
                                     <Grid ColumnDefinitions="*,Auto">
@@ -250,6 +252,7 @@
                                         </Viewbox>
                                     </Grid>
                                 </Button>
+                                </Border>
 
                                 <!-- The switcher. Light dismiss writes IsOpen back, so clicking
                                      away closes it without the view model being told twice. -->
@@ -266,13 +269,18 @@
                                                     <ItemsControl.ItemTemplate>
                                                         <DataTemplate x:DataType="vm:WorkspaceItemViewModel">
                                                             <Grid ColumnDefinitions="*,Auto">
-                                                                <!-- The edge lives on a Border, not
-                                                                     on the Button: Fluent repaints a
-                                                                     button's own border on hover, and
-                                                                     "you are here" must not blink. -->
+                                                                <!-- The edge and the fill live on a
+                                                                     Border, not on the Button: Fluent
+                                                                     repaints a button's own border and
+                                                                     background on hover, and neither
+                                                                     the marker nor "you are here" may
+                                                                     blink when the pointer crosses. -->
                                                                 <Border Grid.Column="0"
-                                                                        BorderBrush="{Binding CurrentBrush}"
-                                                                        BorderThickness="2,0,0,0">
+                                                                        Background="{Binding FillBrush}"
+                                                                        BorderBrush="{Binding EdgeBrush}"
+                                                                        BorderThickness="2,0,0,0"
+                                                                        CornerRadius="0,4,4,0"
+                                                                        Margin="0,0,0,4">
                                                                 <Button Classes="wsRow"
                                                                         Command="{Binding SwitchCommand}">
                                                                     <StackPanel Spacing="1">

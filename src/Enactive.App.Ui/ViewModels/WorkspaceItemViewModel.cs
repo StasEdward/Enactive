@@ -24,8 +24,18 @@ internal sealed class WorkspaceItemViewModel
         Detail = exists ? entry.RootPath : "Folder not found · " + entry.RootPath;
         DetailBrush = exists ? Brand.TextMuted : Brand.Danger;
         NameBrush = exists ? Brand.Text : Brand.TextMuted;
-        // The one you are in is marked, not repainted - the same quiet edge a selected row gets.
-        CurrentBrush = isCurrent ? Brand.Accent : Brushes.Transparent;
+
+        // EVERY row gets an edge, not just the current one. An edge that appears on one row only
+        // reads as decoration on that row; an edge on all of them is a column you can scan - which
+        // is the whole point, because "which of these is gone" is what you came here to see.
+        // A missing folder outranks being current: the name is already red, and the edge agrees.
+        EdgeBrush = !exists ? Brand.Danger
+            : isCurrent ? Brand.Accent
+            : Brand.LineStrong;
+
+        // The row you are in sits a little brighter. Same light, more of it - the edge carries the
+        // meaning, the fill only says where you are.
+        FillBrush = isCurrent ? Brand.CardFillActive : Brand.CardFill;
 
         SwitchCommand = new RelayCommand(() => switchTo(entry.RootPath));
         ForgetCommand = new RelayCommand(() => forget(entry.RootPath));
@@ -40,7 +50,8 @@ internal sealed class WorkspaceItemViewModel
     public string Detail { get; }
     public IBrush DetailBrush { get; }
     public IBrush NameBrush { get; }
-    public IBrush CurrentBrush { get; }
+    public IBrush EdgeBrush { get; }
+    public IBrush FillBrush { get; }
 
     public RelayCommand SwitchCommand { get; }
     public RelayCommand ForgetCommand { get; }
