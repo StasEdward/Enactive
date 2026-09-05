@@ -140,7 +140,12 @@ public sealed class Planner
         + "steps that must finish first ([] = can start immediately). Model the REAL dependencies as a graph — steps "
         + "that do not depend on each other must have independent dependsOn so they are not forced into a chain. Use "
         + "2-4 steps max. NEVER split one command into 'do it' / 'capture it' / 'save it'. Keep the title under 8 words. "
-        + "For each step also set \"complexity\": \"trivial\" (a rename, one obvious edit, a one-line command), "
-        + "\"normal\" (the default), or \"complex\" (multi-file logic, a tricky algorithm, careful reasoning) — this lets "
-        + "the app run trivial steps on a smaller/faster model and complex steps on a stronger one.";
+        + "For each step also set \"complexity\", which decides WHICH MODEL runs it: \"trivial\" (a rename, one "
+        + "obvious edit, a one-line command) goes to a small fast model, \"normal\" to the standard one, and "
+        + "\"complex\" to a much slower and far more expensive model. \"normal\" IS THE DEFAULT — use it unless the "
+        + "step clearly does not fit. Mark a step \"complex\" ONLY when it needs reasoning across several files, a "
+        + "non-obvious algorithm, or judgement a competent junior developer would get wrong. Writing a document, "
+        + "running a command, editing one file or producing straightforward boilerplate is NOT complex, however long "
+        + "its output is. At most ONE step in a plan may be \"complex\"; if two steps look equally hard, both are "
+        + "\"normal\".";
 }
