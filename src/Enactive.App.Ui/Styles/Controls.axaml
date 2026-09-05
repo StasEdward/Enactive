@@ -455,5 +455,44 @@
         <Setter Property="Stroke" Value="{DynamicResource Brand.Danger}" />
     </Style>
 
+    <!-- ── A settings section list ─────────────────────────────────────────
+         Sections rather than tabs: a tab strip stops being readable somewhere
+         around six, and a list has room for a group heading. Selection is marked
+         the way it is everywhere else here - a tint and an ember edge, never a
+         solid block.
+    -->
+    <Style Selector="Button.nav">
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="HorizontalContentAlignment" Value="Left" />
+        <Setter Property="Padding" Value="10,6" />
+        <Setter Property="Margin" Value="0,0,0,2" />
+        <Setter Property="FontSize" Value="12.5" />
+    </Style>
+    <Style Selector="Button.nav /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="2,0,0,0" />
+        <Setter Property="CornerRadius" Value="0,4,4,0" />
+        <Setter Property="Foreground" Value="{DynamicResource Brand.TextMuted}" />
+    </Style>
+    <Style Selector="Button.nav:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource Brand.CardFill}" />
+        <Setter Property="Foreground" Value="{DynamicResource Brand.Text}" />
+    </Style>
+    <Style Selector="Button.nav:pressed /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource Brand.CardFillHover}" />
+    </Style>
+    <!-- Last, so the section you are in keeps its edge while the pointer is over it. -->
+    <Style Selector="Button.nav.on /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource Brand.CardFillActive}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Brand.Accent}" />
+        <Setter Property="Foreground" Value="{DynamicResource Brand.Text}" />
+    </Style>
+    <Style Selector="Button.nav.on:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource Brand.CardFillActive}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Brand.Accent}" />
+        <Setter Property="Foreground" Value="{DynamicResource Brand.Text}" />
+    </Style>
+
 </Styles>
 

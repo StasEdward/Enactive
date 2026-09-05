@@ -4,19 +4,65 @@
         x:Class="Enactive.App.Ui.SettingsWindow"
         x:DataType="vm:SettingsViewModel"
         Title="Settings"
-        Width="720" Height="830"
+        Width="900" Height="700"
         WindowStartupLocation="CenterOwner">
 
-    <DockPanel LastChildFill="True" Margin="12">
+    <DockPanel LastChildFill="True">
 
-        <StackPanel DockPanel.Dock="Bottom" Classes="actions" HorizontalAlignment="Right">
+        <StackPanel DockPanel.Dock="Bottom" Classes="actions" HorizontalAlignment="Right"
+                    Margin="12">
             <Button Classes="primary" Content="Save" Command="{Binding SaveCommand}" />
             <Button Content="Cancel" Command="{Binding CancelCommand}" />
         </StackPanel>
 
-        <TabControl>
+        <Grid ColumnDefinitions="188,*">
 
-            <TabItem Header="General">
+            <!-- The sections. Placeholders are listed rather than hidden: the shape of the
+                 window should say where the rest is going. -->
+            <Border Grid.Column="0" Classes="context" Padding="8,12,8,12">
+                <StackPanel Spacing="0">
+                    <Button Classes="nav" Classes.on="{Binding IsGeneral}"
+                            Content="General" Command="{Binding ShowGeneralCommand}" />
+                    <Button Classes="nav" Classes.on="{Binding IsAccount}"
+                            Content="Account" Command="{Binding ShowAccountCommand}" />
+                    <Button Classes="nav" Classes.on="{Binding IsAbout}"
+                            Content="About" Command="{Binding ShowAboutCommand}" />
+
+                    <Border Height="1" Margin="10,10,0,8"
+                            Background="{DynamicResource Brand.Line}" />
+                    <TextBlock Classes="panelHeader" Text="AI" Margin="10,0,0,4" />
+
+                    <Button Classes="nav" Classes.on="{Binding IsAiGeneral}"
+                            Content="General" Command="{Binding ShowAiGeneralCommand}" />
+                    <Button Classes="nav" Classes.on="{Binding IsAiProviders}"
+                            Content="Providers" Command="{Binding ShowAiProvidersCommand}" />
+                    <Button Classes="nav" Classes.on="{Binding IsAiTeam}"
+                            Content="Team" Command="{Binding ShowAiTeamCommand}" />
+                    <Button Classes="nav" Classes.on="{Binding IsAiPhases}"
+                            Content="Phases" Command="{Binding ShowAiPhasesCommand}" />
+                </StackPanel>
+            </Border>
+
+            <Panel Grid.Column="1" Margin="4,0,0,0">
+
+            <StackPanel IsVisible="{Binding IsGeneral}" Margin="12" Spacing="6">
+                <TextBlock Classes="label" Text="General" />
+                <TextBlock Classes="hint"
+                           Text="Nothing here yet. Application-wide settings that are not about the AI will land here." />
+            </StackPanel>
+
+            <StackPanel IsVisible="{Binding IsAccount}" Margin="12" Spacing="6">
+                <TextBlock Classes="label" Text="Account" />
+                <TextBlock Classes="hint"
+                           Text="Nothing here yet. Enactive has no account of its own; provider credentials live under AI · Providers." />
+            </StackPanel>
+
+            <StackPanel IsVisible="{Binding IsAbout}" Margin="12" Spacing="6">
+                <TextBlock Classes="label" Text="About" />
+                <TextBlock Classes="hint" Text="Enactive — an AI workspace. Nothing here yet." />
+            </StackPanel>
+
+            <Panel IsVisible="{Binding IsAiGeneral}">
                 <ScrollViewer>
                     <StackPanel Margin="12" Spacing="6">
 
@@ -48,9 +94,9 @@
 
                     </StackPanel>
                 </ScrollViewer>
-            </TabItem>
+            </Panel>
 
-            <TabItem Header="Providers">
+            <Panel IsVisible="{Binding IsAiProviders}">
                 <DockPanel LastChildFill="True" Margin="12">
                     <StackPanel DockPanel.Dock="Bottom" Classes="actions">
                         <Button Content="Add" Command="{Binding AddProviderCommand}" />
@@ -65,9 +111,9 @@
                         </ListBox.ItemTemplate>
                     </ListBox>
                 </DockPanel>
-            </TabItem>
+            </Panel>
 
-            <TabItem Header="Team">
+            <Panel IsVisible="{Binding IsAiTeam}">
                 <DockPanel LastChildFill="True" Margin="12">
                     <TextBlock DockPanel.Dock="Top" Classes="hint"
                                Text="The main window's role picker chooses which worker handles a run. Honesty rules and global instructions are added to every worker automatically." />
@@ -84,9 +130,9 @@
                         </ListBox.ItemTemplate>
                     </ListBox>
                 </DockPanel>
-            </TabItem>
+            </Panel>
 
-            <TabItem Header="Phases">
+            <Panel IsVisible="{Binding IsAiPhases}">
                 <ScrollViewer>
                     <StackPanel Margin="12" Spacing="6">
 
@@ -110,8 +156,9 @@
 
                     </StackPanel>
                 </ScrollViewer>
-            </TabItem>
+            </Panel>
 
-        </TabControl>
+            </Panel>
+        </Grid>
     </DockPanel>
 </Window>

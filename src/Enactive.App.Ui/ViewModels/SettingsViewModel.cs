@@ -58,6 +58,58 @@ internal sealed class SettingsViewModel : ObservableObject
     private string _executeLight;
     private string _executeHeavy;
 
+    // ── Which section is showing ──────────────────────────────────────────────
+    // Sections, not tabs: a tab strip stops being readable somewhere around six, and this
+    // window is going to keep growing. The list on the left has room for a group heading,
+    // which is what lets everything about the AI sit together under one word.
+    private const int SectionGeneral = 0;
+    private const int SectionAccount = 1;
+    private const int SectionAbout = 2;
+    private const int SectionAiGeneral = 3;
+    private const int SectionAiProviders = 4;
+    private const int SectionAiTeam = 5;
+    private const int SectionAiPhases = 6;
+
+    private int _section = SectionAiGeneral;
+
+    /// <summary>
+    /// Opens on the AI section, because that is where everything currently is. The three sections
+    /// above it are placeholders - they are listed so the shape of the window is honest about where
+    /// the rest is going, not to pretend they already do something.
+    /// </summary>
+    public int Section
+    {
+        get => _section;
+        set
+        {
+            if (!Set(ref _section, value))
+                return;
+            OnPropertyChanged(nameof(IsGeneral));
+            OnPropertyChanged(nameof(IsAccount));
+            OnPropertyChanged(nameof(IsAbout));
+            OnPropertyChanged(nameof(IsAiGeneral));
+            OnPropertyChanged(nameof(IsAiProviders));
+            OnPropertyChanged(nameof(IsAiTeam));
+            OnPropertyChanged(nameof(IsAiPhases));
+        }
+    }
+
+    public bool IsGeneral => _section == SectionGeneral;
+    public bool IsAccount => _section == SectionAccount;
+    public bool IsAbout => _section == SectionAbout;
+    public bool IsAiGeneral => _section == SectionAiGeneral;
+    public bool IsAiProviders => _section == SectionAiProviders;
+    public bool IsAiTeam => _section == SectionAiTeam;
+    public bool IsAiPhases => _section == SectionAiPhases;
+
+    public RelayCommand ShowGeneralCommand { get; }
+    public RelayCommand ShowAccountCommand { get; }
+    public RelayCommand ShowAboutCommand { get; }
+    public RelayCommand ShowAiGeneralCommand { get; }
+    public RelayCommand ShowAiProvidersCommand { get; }
+    public RelayCommand ShowAiTeamCommand { get; }
+    public RelayCommand ShowAiPhasesCommand { get; }
+
     public SettingsViewModel(AppSettings settings, Action<AppSettings> onSaved)
     {
         _working = settings.Clone();
@@ -73,6 +125,14 @@ internal sealed class SettingsViewModel : ObservableObject
             Providers.Add(new ProviderRow(p));
         foreach (var w in _working.Workers)
             Workers.Add(new WorkerRow(w));
+
+        ShowGeneralCommand = new RelayCommand(() => Section = SectionGeneral);
+        ShowAccountCommand = new RelayCommand(() => Section = SectionAccount);
+        ShowAboutCommand = new RelayCommand(() => Section = SectionAbout);
+        ShowAiGeneralCommand = new RelayCommand(() => Section = SectionAiGeneral);
+        ShowAiProvidersCommand = new RelayCommand(() => Section = SectionAiProviders);
+        ShowAiTeamCommand = new RelayCommand(() => Section = SectionAiTeam);
+        ShowAiPhasesCommand = new RelayCommand(() => Section = SectionAiPhases);
 
         _plan = ToSelection(_working.Bindings.Plan);
         _review = ToSelection(_working.Bindings.Review);

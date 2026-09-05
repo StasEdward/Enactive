@@ -4,9 +4,10 @@ using Enactive.App.Ui.ViewModels;
 namespace Enactive.App.Ui;
 
 /// <summary>
-/// Settings as tabs over the universal team schema (Docs/MODELS.md). Layout is in the .axaml and the
-/// state in SettingsViewModel; the only thing left here is opening the two child editors, which is a
-/// view's job because it owns the window they parent to.
+/// Settings as sections over the universal team schema (Docs/MODELS.md) - a list on the left, one
+/// pane on the right. Layout is in the .axaml and the state in SettingsViewModel; the only thing
+/// left here is opening the two child editors, which is a view's job because it owns the window
+/// they parent to.
 /// </summary>
 internal sealed partial class SettingsWindow : Window
 {
