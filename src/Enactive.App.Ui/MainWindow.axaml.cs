@@ -1248,18 +1248,9 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
-    private void ShowViewer(string title, string content)
-    {
-        var box = new TextBox
-        {
-            Text = content,
-            IsReadOnly = true,
-            AcceptsReturn = true,
-            TextWrapping = TextWrapping.NoWrap,
-            FontFamily = new FontFamily("Consolas, Menlo, monospace")
-        };
-        new Window { Title = title, Width = 780, Height = 540, Content = box }.Show();
-    }
+    /// <summary>Shows a report, a file or a diff. Owned by this window, so it does not outlive it
+    /// or get lost behind it.</summary>
+    private void ShowViewer(string title, string content) => ViewerWindow.Show(this, title, content);
 
     /// <summary>Window / taskbar icon (the Loop mark on an ember tile). Best-effort: a missing or
     /// unreadable asset must never stop the app from starting.</summary>

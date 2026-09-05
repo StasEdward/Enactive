@@ -1,0 +1,31 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="using:Enactive.App.Ui"
+        x:Class="Enactive.App.Ui.ViewerWindow"
+        Title="Enactive"
+        Width="820" Height="580"
+        Background="{DynamicResource Brand.Bg}"
+        WindowDecorations="BorderOnly"
+        ExtendClientAreaToDecorationsHint="True">
+
+    <Grid RowDefinitions="Auto,*" Margin="{Binding $parent[Window].OffScreenMargin}">
+
+        <local:TitleBarView Grid.Row="0" />
+
+        <!-- Everything the app shows as plain text lands here: the environment probe, the
+             project memory digest, a file an artifact wrote, a diff. Read-only, monospaced
+             and never wrapped - these are reports whose columns mean something. -->
+        <DockPanel Grid.Row="1" LastChildFill="True" Margin="12,10,12,12">
+
+            <Grid DockPanel.Dock="Bottom" ColumnDefinitions="*,Auto" Margin="0,10,0,0">
+                <TextBlock Grid.Column="0" x:Name="StatusText" Classes="hint"
+                           VerticalAlignment="Center" />
+                <Button Grid.Column="1" x:Name="CopyButton" Content="Copy all" Padding="12,4" />
+            </Grid>
+
+            <TextBox x:Name="ContentBox" IsReadOnly="True" AcceptsReturn="True"
+                     TextWrapping="NoWrap"
+                     FontFamily="Consolas, Menlo, monospace" FontSize="12" />
+        </DockPanel>
+    </Grid>
+</Window>
