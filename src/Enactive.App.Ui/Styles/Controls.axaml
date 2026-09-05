@@ -427,8 +427,8 @@
          adds .destructive and goes Danger on hover, never Ember - Ember is the action you
          are meant to take, and deleting something is not it. -->
     <Style Selector="Button.rowIcon">
-        <Setter Property="Width" Value="26" />
-        <Setter Property="Height" Value="26" />
+        <Setter Property="Width" Value="32" />
+        <Setter Property="Height" Value="32" />
         <Setter Property="Padding" Value="0" />
         <Setter Property="VerticalAlignment" Value="Center" />
         <Setter Property="HorizontalContentAlignment" Value="Center" />
@@ -444,7 +444,7 @@
     </Style>
     <Style Selector="Button.rowIcon Path">
         <Setter Property="Stroke" Value="{DynamicResource Brand.TextFaint}" />
-        <Setter Property="StrokeThickness" Value="1.8" />
+        <Setter Property="StrokeThickness" Value="1.7" />
         <Setter Property="StrokeLineCap" Value="Round" />
     </Style>
     <Style Selector="Button.rowIcon:pointerover Path">
