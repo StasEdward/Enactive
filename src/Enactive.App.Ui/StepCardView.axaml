@@ -1,0 +1,68 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Enactive.App.Ui.ViewModels"
+             x:Class="Enactive.App.Ui.StepCardView"
+             x:DataType="vm:StepCardViewModel">
+
+    <!-- The left edge carries the step's status colour: a running step is the one place in the plan
+         feed that earns ember. -->
+    <Border Background="{DynamicResource Brand.CardFill}"
+            BorderBrush="{Binding StatusBrush}"
+            BorderThickness="4,0,0,0"
+            CornerRadius="4"
+            Padding="12,8,10,10"
+            Margin="0,0,0,8">
+        <StackPanel>
+
+            <TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextWrapping="Wrap" />
+            <TextBlock Text="{Binding StatusWord}" Foreground="{Binding StatusBrush}"
+                       FontSize="11" Margin="0,2,0,0" />
+            <TextBlock Text="{Binding Activity}" FontSize="12"
+                       Foreground="{DynamicResource Brand.TextMuted}"
+                       TextWrapping="Wrap" Margin="0,3,0,0" />
+
+            <!-- Disclosure: hidden until the step has logged something, and the summary is computed
+                 from what it logged rather than written by the caller. -->
+            <Button Classes="disclosure"
+                    Command="{Binding ToggleCommand}"
+                    IsVisible="{Binding HasEntries}"
+                    Margin="0,6,0,0">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="{Binding Chevron}" FontSize="12" FontWeight="SemiBold"
+                               VerticalAlignment="Center" Margin="0,0,4,0" />
+                    <TextBlock Text="{Binding ToggleLabel}" FontSize="11" VerticalAlignment="Center" />
+                </StackPanel>
+            </Button>
+
+            <!-- The flat action log: one row per tool call or note, in the order they happened. -->
+            <Border Margin="0,4,0,0" Padding="10,4,0,0"
+                    BorderBrush="{DynamicResource Brand.Line}" BorderThickness="2,0,0,0"
+                    IsVisible="{Binding IsExpanded}">
+                <ItemsControl ItemsSource="{Binding Entries}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:StepEntry">
+                            <StackPanel>
+                                <StackPanel Orientation="Horizontal" Margin="0,3,0,0">
+                                    <TextBlock Text="{Binding Icon}"
+                                               Foreground="{Binding IconBrush}"
+                                               FontFamily="Consolas, Menlo, monospace"
+                                               FontSize="12" Width="16" TextAlignment="Center" />
+                                    <TextBlock Text="{Binding Label}"
+                                               Foreground="{Binding LabelBrush}"
+                                               FontWeight="{Binding LabelWeight}"
+                                               FontSize="12" TextWrapping="Wrap" />
+                                </StackPanel>
+                                <TextBlock Text="{Binding Detail}"
+                                           IsVisible="{Binding HasDetail}"
+                                           FontSize="11"
+                                           Foreground="{DynamicResource Brand.TextMuted}"
+                                           TextWrapping="Wrap" Margin="20,0,0,0" />
+                            </StackPanel>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </Border>
+
+        </StackPanel>
+    </Border>
+</UserControl>

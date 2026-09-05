@@ -55,6 +55,32 @@
         <Setter Property="HorizontalAlignment" Value="Stretch" />
     </Style>
 
+    <!-- A disclosure line: clickable text, no button chrome, brightening under the pointer. This is
+         what a step card's "Used 3 tools, ran 1 command" toggle is. -->
+    <Style Selector="Button.disclosure">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Padding" Value="0,2" />
+        <Setter Property="HorizontalAlignment" Value="Left" />
+        <Setter Property="Cursor" Value="Hand" />
+    </Style>
+    <Style Selector="Button.disclosure /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+    </Style>
+    <Style Selector="Button.disclosure:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="Button.disclosure:pressed /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="Button.disclosure TextBlock">
+        <Setter Property="Foreground" Value="{DynamicResource Brand.TextMuted}" />
+    </Style>
+    <Style Selector="Button.disclosure:pointerover TextBlock">
+        <Setter Property="Foreground" Value="{DynamicResource Brand.TextBody}" />
+    </Style>
+
     <!-- A multi-line input (instructions, headers, model lists). -->
     <Style Selector="TextBox.multiline">
         <Setter Property="AcceptsReturn" Value="True" />

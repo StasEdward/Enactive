@@ -13,6 +13,7 @@ using Enactive.Agents;
 using Enactive.Core.Artifacts;
 using Enactive.Core.Context;
 using Enactive.Core.Diagnostics;
+using Enactive.App.Ui.ViewModels;
 using Enactive.Core.Events;
 using Enactive.Core.Inbox;
 using Enactive.Core.Intents;
@@ -85,9 +86,9 @@ public sealed class MainWindow : Window, IDecisionHandler
     private CancellationTokenSource? _cts;
     private TaskCompletionSource<DecisionOutcome>? _pendingDecision;
     private readonly HashSet<string> _sessionApprovals = new(StringComparer.OrdinalIgnoreCase);
-    private readonly List<StepCard> _cards = new();
-    private readonly List<StepCard> _running = new();
-    private StepCard? _currentCard;
+    private readonly List<StepCardViewModel> _cards = new();
+    private readonly List<StepCardViewModel> _running = new();
+    private StepCardViewModel? _currentCard;
     private int _stepIndex;
     private int _doneSteps;
     private int _totalSteps;
@@ -611,7 +612,7 @@ public sealed class MainWindow : Window, IDecisionHandler
     /// <summary>Routes a "{tool_name} {argsJson}" ToolInvoked summary into the card's structured
     /// action log (a command line, a file operation, or a generic tool entry) instead of a raw
     /// transcript dump - this is what the collapsed "Used N tools..." summary counts.</summary>
-    private static void LogToolInvocation(StepCard card, string toolInvokedSummary)
+    private static void LogToolInvocation(StepCardViewModel card, string toolInvokedSummary)
     {
         var spaceIndex = toolInvokedSummary.IndexOf(' ');
         var name = spaceIndex > 0 ? toolInvokedSummary[..spaceIndex] : toolInvokedSummary;
@@ -660,9 +661,9 @@ public sealed class MainWindow : Window, IDecisionHandler
         _totalSteps = titles.Length;
         foreach (var title in titles)
         {
-            var card = new StepCard(title.Trim());
+            var card = new StepCardViewModel(title.Trim());
             _cards.Add(card);
-            _stepsPanel.Children.Add(card.Root);
+            _stepsPanel.Children.Add(new StepCardView { DataContext = card });
         }
         UpdateProgress();
     }
@@ -674,16 +675,16 @@ public sealed class MainWindow : Window, IDecisionHandler
         var index = ev.StepNo() ?? ++_stepIndex;
         _stepIndex = Math.Max(_stepIndex, index);
 
-        StepCard card;
+        StepCardViewModel card;
         if (index - 1 < _cards.Count)
         {
             card = _cards[index - 1];
         }
         else
         {
-            card = new StepCard(ev.Summary);
+            card = new StepCardViewModel(ev.Summary);
             _cards.Add(card);
-            _stepsPanel.Children.Add(card.Root);
+            _stepsPanel.Children.Add(new StepCardView { DataContext = card });
             _totalSteps = _cards.Count;
         }
         card.SetRunning();
@@ -694,7 +695,7 @@ public sealed class MainWindow : Window, IDecisionHandler
         _currentAction.Text = ev.Summary;
     }
 
-    private void EndStep(StepCard? card)
+    private void EndStep(StepCardViewModel? card)
     {
         if (card is not null)
             _running.Remove(card);
@@ -702,20 +703,20 @@ public sealed class MainWindow : Window, IDecisionHandler
     }
 
     /// <summary>The card this event belongs to, or null when it carries no step number.</summary>
-    private StepCard? CardFor(WorkEvent ev)
+    private StepCardViewModel? CardFor(WorkEvent ev)
     {
         var n = ev.StepNo();
         return n is { } i && i - 1 >= 0 && i - 1 < _cards.Count ? _cards[i - 1] : null;
     }
 
-    private StepCard EnsureCurrentCard()
+    private StepCardViewModel EnsureCurrentCard()
     {
         if (_currentCard is null)
         {
-            var card = new StepCard("Working");
+            var card = new StepCardViewModel("Working");
             card.SetRunning();
             _cards.Add(card);
-            _stepsPanel.Children.Add(card.Root);
+            _stepsPanel.Children.Add(new StepCardView { DataContext = card });
             _currentCard = card;
             if (_totalSteps == 0)
                 _totalSteps = 1;
