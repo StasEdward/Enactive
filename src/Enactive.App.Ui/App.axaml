@@ -1,0 +1,13 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="Enactive.App.Ui.App"
+             RequestedThemeVariant="Dark">
+
+    <!-- Fluent supplies the control templates; Styles/Controls.axaml re-dresses them in Enactive's
+         own language. The palette itself is NOT here - Brand.cs publishes it into these resources at
+         startup, so there is one definition of every colour and no hex literal in any .axaml. -->
+    <Application.Styles>
+        <FluentTheme />
+        <StyleInclude Source="avares://enactive-ui/Styles/Controls.axaml" />
+    </Application.Styles>
+</Application>

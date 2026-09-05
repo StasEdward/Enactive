@@ -1,3 +1,4 @@
+using Avalonia;
 using Avalonia.Media;
 using Avalonia.Media.Immutable;
 
@@ -105,6 +106,62 @@ internal static class Brand
     // ── Agent pills (white text on a filled pill) ───────────────────────────
     public static readonly IBrush PillCoder = Of(SuccessDeep);
     public static readonly IBrush PillReasoner = Of(InfoDeep);
+
+    /// <summary>
+    /// Publishes the palette into the application's resources, so a XAML style can reach exactly the
+    /// tokens the C# side uses: <c>{DynamicResource Brand.Accent}</c> and friends. This is what keeps
+    /// ONE definition of every colour - this file - with no hex literal in any .axaml.
+    ///
+    /// It also overrides Fluent's seven accent keys, out of which the theme builds every accented
+    /// control: slider thumb, checkbox tick, focus ring, selection. Without them the stock theme
+    /// speaks Windows blue in the middle of an Ember UI.
+    /// </summary>
+    public static void PublishTo(Application app)
+    {
+        var r = app.Resources;
+
+        r["SystemAccentColor"] = Ember500;
+        r["SystemAccentColorLight1"] = Ember400;
+        r["SystemAccentColorLight2"] = Ember300;
+        r["SystemAccentColorLight3"] = Ember200;
+        r["SystemAccentColorDark1"] = Ember600;
+        r["SystemAccentColorDark2"] = Ember700;
+        r["SystemAccentColorDark3"] = Ember800;
+
+        // Keys mirror the member names above, so a token is looked up in XAML by the same name it
+        // has in code. Add a token here whenever you add one to the palette.
+        r["Brand.Bg"] = Bg;
+        r["Brand.Surface"] = Surface;
+        r["Brand.Card"] = Card;
+        r["Brand.CardFill"] = CardFill;
+        r["Brand.Scrim"] = Scrim;
+        r["Brand.Line"] = Line;
+        r["Brand.LineStrong"] = LineStrong;
+
+        r["Brand.Text"] = Text;
+        r["Brand.TextBody"] = TextBody;
+        r["Brand.TextMuted"] = TextMuted;
+        r["Brand.TextFaint"] = TextFaint;
+
+        r["Brand.Accent"] = Accent;
+        r["Brand.AccentSoft"] = AccentSoft;
+        r["Brand.Amber"] = Amber;
+        r["Brand.Success"] = Success;
+        r["Brand.Warning"] = Warning;
+        r["Brand.Danger"] = Danger;
+        r["Brand.Info"] = Info;
+
+        r["Brand.StepPending"] = StepPending;
+        r["Brand.StepRunning"] = StepRunning;
+        r["Brand.StepDone"] = StepDone;
+        r["Brand.StepSkipped"] = StepSkipped;
+        r["Brand.StepFailed"] = StepFailed;
+
+        r["Brand.DecisionFill"] = DecisionFill;
+        r["Brand.DecisionBorder"] = DecisionBorder;
+        r["Brand.PillCoder"] = PillCoder;
+        r["Brand.PillReasoner"] = PillReasoner;
+    }
 
     private static IBrush Of(Color c) => new ImmutableSolidColorBrush(c);
 }
