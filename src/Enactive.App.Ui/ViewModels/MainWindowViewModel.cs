@@ -341,7 +341,13 @@ internal sealed class MainWindowViewModel : ObservableObject
 
     /// <summary>Forgetting a workspace removes it from THIS list only - the folder and its
     /// .enactive history are the user's, and are left exactly where they are.</summary>
-    public void RequestForget(string path) => WorkspaceForgetRequested?.Invoke(path);
+    public void RequestForget(string path)
+    {
+        // Closes first: the question is a modal window, and asking it through a light-dismiss popup
+        // means the popup vanishes underneath the answer.
+        IsSwitcherOpen = false;
+        WorkspaceForgetRequested?.Invoke(path);
+    }
 
     /// <summary>Renaming closes the switcher: the dialog needs the window, not a popup over it.</summary>
     public void RequestRename(string path)

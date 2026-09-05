@@ -217,6 +217,9 @@ internal sealed class SettingsViewModel : ObservableObject
     /// <summary>Asks the view to open the provider editor: (config, what to do once it saved).</summary>
     public event Action<ProviderConfig, Action>? ProviderEditRequested;
 
+    /// <summary>Asks a yes/no question. The window answers it, because the dialog needs a parent.</summary>
+    public event Func<string, string, Task<bool>>? ConfirmRequested;
+
     /// <summary>Asks the view to open the worker editor: (config, model catalog, what to do once it saved).</summary>
     public event Action<WorkerConfig, IReadOnlyList<string>, Action>? WorkerEditRequested;
 
@@ -322,10 +325,10 @@ internal sealed class SettingsViewModel : ObservableObject
 
     /// <summary>Rows are built here so each one is handed the two things it can do to itself.</summary>
     private ProviderRow NewProviderRow(ProviderConfig config)
-        => new(config, EditProvider, RemoveProvider);
+        => new(config, EditProvider, row => _ = RemoveProviderAsync(row));
 
     private WorkerRow NewWorkerRow(WorkerConfig config)
-        => new(config, EditWorker, RemoveWorker);
+        => new(config, EditWorker, row => _ = RemoveWorkerAsync(row));
 
     private void EditProvider(ProviderRow row)
     {
@@ -336,8 +339,18 @@ internal sealed class SettingsViewModel : ObservableObject
         });
     }
 
-    private void RemoveProvider(ProviderRow row)
+    /// <summary>
+    /// Removing a provider takes its API key with it, and a key cannot be read back out of the app
+    /// to retype. So it asks - and says the one thing that makes the answer easy: nothing is
+    /// written anywhere until Save.
+    /// </summary>
+    private async Task RemoveProviderAsync(ProviderRow row)
     {
+        if (!await ConfirmAsync(
+                $"Remove provider \u201c{row.Name}\u201d?",
+                "Its settings and API key are removed from Enactive. Nothing changes at the provider itself, and closing Settings with Cancel puts it back."))
+            return;
+
         _working.Providers.Remove(row.Config);
         Providers.Remove(row);
         SelectedProvider = null;
@@ -357,12 +370,23 @@ internal sealed class SettingsViewModel : ObservableObject
     private void EditWorker(WorkerRow row)
         => WorkerEditRequested?.Invoke(row.Config, _working.ModelCatalog(), row.Refresh);
 
-    private void RemoveWorker(WorkerRow row)
+    /// <summary>A worker is mostly its instructions, which are typed by hand and nowhere else.</summary>
+    private async Task RemoveWorkerAsync(WorkerRow row)
     {
+        if (!await ConfirmAsync(
+                $"Remove worker \u201c{row.Name}\u201d?",
+                "Its instructions go with it. Closing Settings with Cancel puts it back."))
+            return;
+
         _working.Workers.Remove(row.Config);
         Workers.Remove(row);
         SelectedWorker = null;
     }
+
+    /// <summary>Asks the window, which owns the dialog. No handler attached means yes - a view model
+    /// under test should not be blocked by a question nobody is there to answer.</summary>
+    private async Task<bool> ConfirmAsync(string headline, string detail)
+        => ConfirmRequested is null || await ConfirmRequested(headline, detail);
 
     private void Save()
     {

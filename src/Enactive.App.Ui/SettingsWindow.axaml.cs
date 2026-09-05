@@ -22,6 +22,8 @@ internal sealed partial class SettingsWindow : Window
             new ProviderEditWindow(config, saved).Show(this);
         viewModel.WorkerEditRequested += (config, catalog, saved) =>
             new WorkerEditWindow(config, catalog, saved).Show(this);
+        viewModel.ConfirmRequested += (headline, detail) =>
+            ConfirmWindow.AskAsync(this, headline, detail, "Remove", "Keep");
 
         DataContext = viewModel;
         InitializeComponent();

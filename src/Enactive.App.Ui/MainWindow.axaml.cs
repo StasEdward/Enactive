@@ -112,7 +112,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         _vm.WorkspacePathChanged += RefreshWorkspaces;
         _vm.WorkspaceSwitchRequested += SwitchWorkspace;
         _vm.WorkspaceRenameRequested += path => _ = RenameWorkspaceAsync(path);
-        _vm.WorkspaceForgetRequested += ForgetWorkspace;
+        _vm.WorkspaceForgetRequested += path => _ = ForgetWorkspaceAsync(path);
         _vm.RunSettingsChanged += SaveRunSettings;
         _vm.AddWorkspaceRequested += () => _ = AddWorkspaceAsync();
         _vm.SettingsRequested += () =>
@@ -899,8 +899,28 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         }
     }
 
-    private void ForgetWorkspace(string path)
+    /// <summary>
+    /// Forgetting a workspace used to be harmless - the entry was a path and nothing else. It now
+    /// holds the name you gave it and how a run behaves in it, and neither comes back with the
+    /// folder. So it asks, and says what is actually lost.
+    /// </summary>
+    private async Task ForgetWorkspaceAsync(string path)
     {
+        var entry = _registry.Find(path);
+        if (entry is null)
+            return;
+
+        var forget = await ConfirmWindow.AskAsync(
+            this,
+            $"Forget \u201c{entry.Name}\u201d?",
+            "The folder and everything in it, including its run history, are left exactly where they are. "
+            + "What goes is the name you gave it here and how runs are set up in it.",
+            "Forget",
+            "Keep");
+
+        if (!forget)
+            return;
+
         _registry.Remove(path);
         RefreshWorkspaces();
     }
