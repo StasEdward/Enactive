@@ -188,6 +188,19 @@
         <Setter Property="BorderBrush" Value="{DynamicResource Brand.Accent}" />
     </Style>
 
+    <!-- The panel the list drops onto. Avalonia 12 calls it PART_Border - the name is in the
+         theme's own part list, which is the only place worth reading it from: the 11.x recipes
+         call it PopupBorder and that name is simply not there any more. Same dark panel and
+         shadow the workspace switcher uses, so a dropdown looks like every other thing in this
+         app that floats over the window. -->
+    <Style Selector="ComboBox /template/ Border#PART_Border">
+        <Setter Property="Background" Value="{DynamicResource Brand.Surface}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Brand.LineStrong}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="6" />
+        <Setter Property="BoxShadow" Value="0 10 28 0 #70000000" />
+    </Style>
+
     <Style Selector="ComboBoxItem /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="BorderBrush" Value="Transparent" />
