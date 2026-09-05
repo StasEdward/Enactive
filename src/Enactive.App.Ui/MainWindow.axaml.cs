@@ -100,7 +100,8 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         _vm.AttachLog(_log);
 
         // The view model asks; the window is what can actually open a child window or move focus.
-        _vm.RunRequested += () => _ = RunAsync();
+        _vm.RunRequested += () => _ = RunAsync(background: false);
+        _vm.BackgroundRunRequested += () => _ = RunAsync(background: true);
         _vm.StopRequested += () => _cts?.Cancel();
         _vm.TimelineRequested += () => _ = ShowTimelineAsync();
         _vm.LogRequested += ShowLogWindow;
@@ -280,7 +281,12 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     }
 
     // ── Run an intent ────────────────────────────────────────────────────────
-    private async Task RunAsync()
+    /// <summary>
+    /// Starts the request in the box. <paramref name="background"/> comes from WHICH BUTTON was
+    /// pressed, not from a setting: the same words typed into the same box should not do two
+    /// different things depending on state the user cannot see from here.
+    /// </summary>
+    private async Task RunAsync(bool background)
     {
         if (_pendingDecision is not null)
             return;
@@ -304,7 +310,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         }
 
         // Background: fire the run headless (results land in the Inbox) and keep the UI free.
-        if (_vm.RunInBackground)
+        if (background)
         {
             StartBackground(text, Path.GetFullPath(workspacePath));
             return;
@@ -745,7 +751,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             {
                 // Enter → run
                 e.Handled = true;
-                _ = RunAsync();
+                _ = RunAsync(background: false);
             }
         }
     }

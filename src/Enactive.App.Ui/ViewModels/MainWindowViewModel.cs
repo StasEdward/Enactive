@@ -153,7 +153,6 @@ internal sealed class MainWindowViewModel : ObservableObject
     private string _autonomyLabel = string.Empty;
     private IBrush _autonomyBrush = Brand.AutonomyExecute;
     private bool _stageChanges;
-    private bool _runInBackground;
     private int _selectedWorkerIndex;
     private string _statusPhase = "Idle";
     private IBrush _statusPillBrush = Brand.TextMuted;
@@ -185,6 +184,7 @@ internal sealed class MainWindowViewModel : ObservableObject
             Verbs.Add(new VerbChipViewModel(verb, PrefixInput));
 
         RunCommand = new RelayCommand(() => RunRequested?.Invoke(), () => !IsBusy);
+        RunBackgroundCommand = new RelayCommand(() => BackgroundRunRequested?.Invoke(), () => !IsBusy);
         StopCommand = new RelayCommand(() => StopRequested?.Invoke(), () => IsBusy);
         TimelineCommand = new RelayCommand(() => TimelineRequested?.Invoke());
         LogCommand = new RelayCommand(() => LogRequested?.Invoke());
@@ -231,6 +231,7 @@ internal sealed class MainWindowViewModel : ObservableObject
     public RunLogViewModel? RunLog { get; private set; }
 
     public event Action? RunRequested;
+    public event Action? BackgroundRunRequested;
     public event Action? StopRequested;
     public event Action? TimelineRequested;
     public event Action? LogRequested;
@@ -247,6 +248,13 @@ internal sealed class MainWindowViewModel : ObservableObject
     public string InputText { get => _inputText; set => Set(ref _inputText, value); }
 
     public RelayCommand RunCommand { get; }
+    /// <summary>
+    /// Start the same request headless. It was a checkbox in the next-run panel, which meant the
+    /// Run button did two different things depending on a box ticked ten minutes ago and scrolled
+    /// out of sight. A button says what it does at the moment you press it.
+    /// </summary>
+    public RelayCommand RunBackgroundCommand { get; }
+
     public RelayCommand StopCommand { get; }
 
     // ── Left panel ────────────────────────────────────────────────────────────
@@ -346,7 +354,6 @@ internal sealed class MainWindowViewModel : ObservableObject
     public int AutonomyTier => (int)Math.Round(AutonomyLevel);
 
     public bool StageChanges { get => _stageChanges; set => Set(ref _stageChanges, value); }
-    public bool RunInBackground { get => _runInBackground; set => Set(ref _runInBackground, value); }
 
     public ObservableCollection<string> WorkerRoles { get; } = new();
     public int SelectedWorkerIndex { get => _selectedWorkerIndex; set => Set(ref _selectedWorkerIndex, value); }
@@ -532,6 +539,7 @@ internal sealed class MainWindowViewModel : ObservableObject
                 return;
             OnPropertyChanged(nameof(IsIdle));
             RunCommand.RaiseCanExecuteChanged();
+            RunBackgroundCommand.RaiseCanExecuteChanged();
             StopCommand.RaiseCanExecuteChanged();
         }
     }

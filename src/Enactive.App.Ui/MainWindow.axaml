@@ -198,7 +198,6 @@
                               SelectedIndex="{Binding SelectedWorkerIndex, Mode=TwoWay}" />
                     <CheckBox Content="Stage changes (review before apply)"
                               IsChecked="{Binding StageChanges}" IsEnabled="{Binding IsIdle}" />
-                    <CheckBox Content="Run in background (Inbox)" IsChecked="{Binding RunInBackground}" />
                     <TextBlock Classes="hint" Text="{Binding EnvironmentSummary}" />
                 </StackPanel>
 
@@ -365,11 +364,21 @@
                 </StackPanel>
 
                 <DockPanel LastChildFill="True">
+                    <!-- Both ways of starting are here, beside the box you typed into. Which one
+                         you pressed is what decides where the run goes - it used to be a checkbox
+                         in the panel on the left, so Run did two different things depending on a
+                         box ticked ten minutes ago and scrolled out of sight. -->
                     <StackPanel DockPanel.Dock="Right" Spacing="6" VerticalAlignment="Center"
                                 Margin="8,0,0,0">
-                        <Button Classes="primary" Content="Run" Width="72"
-                                Command="{Binding RunCommand}" />
-                        <Button Content="Stop" Width="72" Command="{Binding StopCommand}" />
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <Button Classes="primary" Content="Run" Width="86"
+                                    Command="{Binding RunCommand}" />
+                            <Button Content="Stop" Width="64" Command="{Binding StopCommand}" />
+                        </StackPanel>
+                        <Button Content="Run in background" FontSize="11"
+                                HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                                Command="{Binding RunBackgroundCommand}"
+                                ToolTip.Tip="Runs it headless: the window stays free and it reports back to the Inbox when it is done." />
                     </StackPanel>
                     <TextBox x:Name="InputBox"
                              Text="{Binding InputText}"
