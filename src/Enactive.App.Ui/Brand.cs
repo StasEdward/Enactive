@@ -61,6 +61,12 @@ internal static class Brand
 
     /// <summary>Translucent lift for a card sitting on an unknown background.</summary>
     public static readonly IBrush CardFill = new ImmutableSolidColorBrush(Colors.White, 0.10);
+
+    // Hover and selection on a card: MORE OF THE SAME LIGHT, not a different colour. A list of
+    // cards that each carry a status edge cannot also change hue to say "you are here" - the two
+    // would argue, and the status would lose.
+    public static readonly IBrush CardFillHover = new ImmutableSolidColorBrush(Colors.White, 0.14);
+    public static readonly IBrush CardFillActive = new ImmutableSolidColorBrush(Colors.White, 0.19);
     /// <summary>Translucent shade for an inset well (diff bodies, code blocks).</summary>
     public static readonly IBrush Scrim = new ImmutableSolidColorBrush(Colors.Black, 0.13);
 
@@ -140,6 +146,8 @@ internal static class Brand
         r["Brand.Surface"] = Surface;
         r["Brand.Card"] = Card;
         r["Brand.CardFill"] = CardFill;
+        r["Brand.CardFillHover"] = CardFillHover;
+        r["Brand.CardFillActive"] = CardFillActive;
         r["Brand.Scrim"] = Scrim;
         r["Brand.Line"] = Line;
         r["Brand.LineStrong"] = LineStrong;

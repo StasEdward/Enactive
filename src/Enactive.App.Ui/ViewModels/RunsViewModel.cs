@@ -5,7 +5,11 @@ using Avalonia.Media;
 using Enactive.App.Ui.Mvvm;
 using Enactive.Core.History;
 
-/// <summary>One finished run, as a row in the context column.</summary>
+/// <summary>
+/// One finished run, as a CARD in the context column: a coloured edge for how it ended, the title
+/// the planner gave it, and one line saying when and what came of it. The edge is part of the card,
+/// not part of being selected - you have to be able to spot the failed run without clicking it.
+/// </summary>
 internal sealed class RunListItemViewModel
 {
     public RunListItemViewModel(RunRecord record)
@@ -13,29 +17,82 @@ internal sealed class RunListItemViewModel
         Record = record;
 
         Title = string.IsNullOrWhiteSpace(record.Title) ? "(untitled run)" : record.Title;
+        Meta = $"{Ago(record.StartedAt)} · {Outcome(record)}";
+        StatusBrush = BrushFor(record.Status);
 
         var elapsed = record.FinishedAt - record.StartedAt;
-        var seconds = elapsed.TotalSeconds;
-        var duration = seconds >= 60 ? $"{(int)(seconds / 60)}m {(int)(seconds % 60)}s" : $"{seconds:0}s";
-
-        // The date is only worth the width when it is not today's.
-        var started = record.StartedAt.ToLocalTime();
-        var when = started.Date == DateTime.Today ? started.ToString("HH:mm") : started.ToString("MMM d HH:mm");
-        Meta = $"{when} · {duration}";
-
-        StatusBrush = record.Status.ToLowerInvariant() switch
-        {
-            "completed" or "succeeded" or "ok" => Brand.Success,
-            "failed" or "error" => Brand.Danger,
-            "cancelled" or "canceled" => Brand.TextMuted,
-            _ => Brand.Amber
-        };
+        Tooltip = $"{Title}\n{record.StartedAt.ToLocalTime():yyyy-MM-dd HH:mm} · {record.Status} · {Duration(elapsed)}";
     }
 
     public RunRecord Record { get; }
     public string Title { get; }
     public string Meta { get; }
+    public string Tooltip { get; }
     public IBrush StatusBrush { get; }
+
+    internal static IBrush BrushFor(string status) => status.ToLowerInvariant() switch
+    {
+        "completed" or "succeeded" or "ok" => Brand.Success,
+        "failed" or "error" => Brand.Danger,
+        "cancelled" or "canceled" => Brand.TextMuted,
+        // Anything else never wrote a final status - blocked, or the app died mid-run. That is a
+        // person's problem to look at, which is what amber means everywhere else here.
+        _ => Brand.Amber
+    };
+
+    /// <summary>
+    /// How long ago, the way a person would say it. Days are counted on the CALENDAR, not in
+    /// 24-hour blocks: a run at 23:50 was "yesterday" by breakfast, not "9 h ago".
+    /// </summary>
+    private static string Ago(DateTimeOffset at)
+    {
+        var local = at.ToLocalTime();
+        var days = (DateTime.Today - local.Date).Days;
+
+        if (days == 1)
+            return "yesterday";
+        if (days > 1 && days < 7)
+            return $"{days} days ago";
+        if (days >= 7)
+            return local.ToString("MMM d");
+
+        var span = DateTimeOffset.Now - at;
+        if (span.TotalMinutes < 1)
+            return "just now";
+        if (span.TotalMinutes < 60)
+            return $"{(int)span.TotalMinutes} min ago";
+        return $"{(int)span.TotalHours} h ago";
+    }
+
+    /// <summary>
+    /// What came of it, in two or three words. A failure says so; otherwise what it produced is
+    /// more use than how long it took, and the duration is in the run's own header anyway.
+    /// </summary>
+    private static string Outcome(RunRecord record)
+    {
+        switch (record.Status.ToLowerInvariant())
+        {
+            case "failed":
+            case "error":
+                return "failed";
+            case "cancelled":
+            case "canceled":
+                return "cancelled";
+        }
+
+        if (record.Artifacts.Count > 0)
+            return $"{record.Artifacts.Count} artifact{(record.Artifacts.Count == 1 ? "" : "s")}";
+
+        return Duration(record.FinishedAt - record.StartedAt);
+    }
+
+    private static string Duration(TimeSpan span)
+    {
+        var seconds = span.TotalSeconds;
+        if (seconds < 0)
+            seconds = 0;
+        return seconds >= 60 ? $"{(int)(seconds / 60)}m {(int)(seconds % 60)}s" : $"{seconds:0}s";
+    }
 }
 
 /// <summary>
@@ -55,13 +112,7 @@ internal sealed class PastRunViewModel
         var model = string.IsNullOrWhiteSpace(record.Model) ? "unknown model" : record.Model;
         Meta = $"{record.StartedAt.ToLocalTime():yyyy-MM-dd HH:mm} · {model} · {elapsed.TotalSeconds:0}s · run {record.RunId:N}";
 
-        StatusBrush = record.Status.ToLowerInvariant() switch
-        {
-            "completed" or "succeeded" or "ok" => Brand.Success,
-            "failed" or "error" => Brand.Danger,
-            "cancelled" or "canceled" => Brand.TextMuted,
-            _ => Brand.Amber
-        };
+        StatusBrush = RunListItemViewModel.BrushFor(record.Status);
 
         foreach (var row in RunTimeline.Fold(record))
             Events.Add(row);
