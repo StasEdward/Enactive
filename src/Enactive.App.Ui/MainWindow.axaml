@@ -369,12 +369,15 @@
                                       IsChecked="{Binding StageChanges}" IsEnabled="{Binding IsIdle}"
                                       ToolTip.Tip="Write changes to a staging area and review the diff before applying." />
                         </Grid>
+                        <!-- The label names what the slider is set to, so it belongs ON the
+                             slider, not floating above it. A Slider carries its own vertical
+                             padding around the track; the negative margin takes it back. -->
                         <TextBlock Text="{Binding AutonomyLabel}" Foreground="{Binding AutonomyBrush}"
                                    FontSize="11" TextWrapping="NoWrap"
-                                   TextTrimming="CharacterEllipsis"
+                                   TextTrimming="CharacterEllipsis" Margin="0,2,0,0"
                                    ToolTip.Tip="{Binding AutonomyLabel}" />
                         <Slider Minimum="0" Maximum="3" TickFrequency="1" IsSnapToTickEnabled="True"
-                                Margin="0,-4,0,-6"
+                                Margin="0,-9,0,-9"
                                 Value="{Binding AutonomyLevel, Mode=TwoWay}" IsEnabled="{Binding IsIdle}" />
                     </StackPanel>
 
@@ -392,8 +395,8 @@
                                     Command="{Binding RunCommand}" />
                             <Button Content="Stop" Width="64" Command="{Binding StopCommand}" />
                         </StackPanel>
-                        <Button Content="Run in background" FontSize="11"
-                                HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                        <Button Content="Run in background"
+                                HorizontalAlignment="Stretch"
                                 Command="{Binding RunBackgroundCommand}"
                                 ToolTip.Tip="Runs it headless: the window stays free and it reports back to the Inbox when it is done." />
                     </StackPanel>

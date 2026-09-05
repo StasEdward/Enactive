@@ -40,6 +40,16 @@
 
     <!-- Ember means action. The one button that commits a dialog wears it; a destructive button
          never does - that is what Brand.Danger is for. -->
+    <!-- Fluent leaves a button's content aligned to its start, which only shows once a
+         button is wider than its label - as every fixed-width button here is. Centre is
+         what a button means. Classes that deliberately fill their content edge to edge
+         (the workspace card and its rows) set Stretch themselves and win, being more
+         specific than this. -->
+    <Style Selector="Button">
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+
     <Style Selector="Button.primary">
         <Setter Property="Background" Value="{DynamicResource Brand.Accent}" />
         <Setter Property="Foreground" Value="White" />
