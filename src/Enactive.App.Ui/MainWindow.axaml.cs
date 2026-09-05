@@ -556,6 +556,51 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         });
     }
 
+    private void CreateStepCards(string planSummary)
+    {
+        var marker = " steps: ";
+        var index = planSummary.IndexOf(marker, StringComparison.Ordinal);
+        if (index < 0)
+            return;
+
+        var titles = planSummary[(index + marker.Length)..].Split(" | ", StringSplitOptions.RemoveEmptyEntries);
+        _totalSteps = titles.Length;
+        foreach (var title in titles)
+        {
+            var card = new StepCardViewModel(title.Trim());
+            _cards.Add(card);
+            _vm.Steps.Add(card);
+        }
+        UpdateProgress();
+    }
+
+    private void BeginStep(WorkEvent ev)
+    {
+        // Prefer the step number the orchestrator stamped on the event; steps can start out of order
+        // (and several at once) once MaxParallelSteps > 1, so a running counter is not enough.
+        var index = ev.StepNo() ?? ++_stepIndex;
+        _stepIndex = Math.Max(_stepIndex, index);
+
+        StepCardViewModel card;
+        if (index - 1 < _cards.Count)
+        {
+            card = _cards[index - 1];
+        }
+        else
+        {
+            card = new StepCardViewModel(ev.Summary);
+            _cards.Add(card);
+            _vm.Steps.Add(card);
+            _totalSteps = _cards.Count;
+        }
+        card.SetRunning();
+        _running.Add(card);
+        // With one step in flight this is that step; with several, events without a step number have
+        // no single owner, so nothing claims to be "current".
+        _currentCard = _running.Count == 1 ? card : null;
+        _vm.CurrentAction = ev.Summary;
+    }
+
     private void EndStep(StepCardViewModel? card)
     {
         if (card is not null)
