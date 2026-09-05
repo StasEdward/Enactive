@@ -85,6 +85,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         _log.Info(LogSource.System, $"Enactive UI started — logs at {FileLogSink.DefaultDirectory()}");
 
         _vm.WorkspacePath = Environment.GetEnvironmentVariable("ENACTIVE_WORKSPACE") ?? Directory.GetCurrentDirectory();
+        _vm.AttachLog(_log);
         LoadRecents();
 
         // The view model asks; the window is what can actually open a child window or move focus.
@@ -116,7 +117,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             WindowStartupLocation = WindowStartupLocation.Manual;
             Position = new PixelPoint(_settings.WindowX, _settings.WindowY);
         }
-        Closing += (_, _) => { SaveWindowBounds(); _log.Dispose(); };
+        Closing += (_, _) => { SaveWindowBounds(); _vm.RunLog?.Detach(); _log.Dispose(); };
 
         // Tunnel so we see the keys before the TextBox consumes Enter.
         AddHandler(InputElement.KeyDownEvent, OnPreviewKeyDown, RoutingStrategies.Tunnel);
@@ -173,6 +174,14 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             return;
         }
 
+        // The command bar clears, so the request moves into the header - otherwise what you asked
+        // for survives only in the log.
+        _vm.TaskIntent = text;
+        _vm.TaskTitle = Summarise(text);
+        _vm.HasTask = true;
+        _vm.ToolCalls = 0;
+        _vm.SelectedTab = 0;
+
         // reset run state / panels
         _vm.InputText = string.Empty;
         _vm.Steps.Clear();
@@ -188,13 +197,13 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         _vm.IsAgentVisible = false;
         _vm.StatusPhase = "Running";
         _vm.StatusProgress = "—";
-        _vm.StatusElapsed = string.Empty;
+        _vm.StatusElapsed = "0s";
         _vm.CurrentAction = string.Empty;
         _vm.IsBusy = true;
         _elapsedTimer?.Stop();
         _runStopwatch.Restart();
         _elapsedTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
-        _elapsedTimer.Tick += (_, _) => _vm.StatusElapsed = $"Elapsed: {FormatElapsed(_runStopwatch.Elapsed)}";
+        _elapsedTimer.Tick += (_, _) => _vm.StatusElapsed = FormatElapsed(_runStopwatch.Elapsed);
         _elapsedTimer.Start();
 
         _cts = new CancellationTokenSource();
@@ -261,7 +270,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             _elapsedTimer = null;
             _runStopwatch.Stop();
             var finalElapsed = FormatElapsed(_runStopwatch.Elapsed);
-            Dispatcher.UIThread.Post(() => _vm.StatusElapsed = $"Elapsed: {finalElapsed}");
+            Dispatcher.UIThread.Post(() => _vm.StatusElapsed = finalElapsed);
             _vm.IsBusy = false;
             _cts = null;
         }
@@ -272,6 +281,10 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     {
         Dispatcher.UIThread.Post(() =>
         {
+            // The run id is the orchestrator's to mint, so the log tab learns it from the first
+            // event rather than being told in advance.
+            _vm.RunLog?.SetRun(ev.RunId);
+
             switch (ev.Kind)
             {
                 case EventKind.IntentReceived:
@@ -280,11 +293,18 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                 case EventKind.Routed:
                     if (ev.Summary.Contains("-> model"))
                         _vm.StatusPhase = "Planning";
+                    if (ev.Summary.StartsWith("Quick action: ", StringComparison.Ordinal))
+                        _vm.TaskTitle = ev.Summary["Quick action: ".Length..];
                     if (ev.Summary.StartsWith("Reasoner", StringComparison.Ordinal))
                         _vm.SetAgent("Reasoner · planning", Brand.PillReasoner);
                     break;
                 case EventKind.PlanCreated:
                     _vm.StatusPhase = "Executing";
+                    // "<title> — N steps: a | b" — the planner's title is a better header than the
+                    // raw request, which is often a paragraph.
+                    var dash = ev.Summary.IndexOf(" — ", StringComparison.Ordinal);
+                    if (dash > 0)
+                        _vm.TaskTitle = ev.Summary[..dash];
                     CreateStepCards(ev.Summary);
                     break;
                 case EventKind.StepStarted:
@@ -323,6 +343,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                     break;
                 case EventKind.ToolInvoked:
                     _vm.SetAgent("Coder", Brand.PillCoder);
+                    _vm.ToolCalls++;
                     _vm.CurrentAction = ev.Summary;
                     var toolCard = CardFor(ev) ?? EnsureCurrentCard();
                     LogToolInvocation(toolCard, ev.Summary);
@@ -531,6 +552,14 @@ public sealed partial class MainWindow : Window, IDecisionHandler
 
     private void UpdateProgress()
         => _vm.StatusProgress = _totalSteps > 0 ? $"{_doneSteps} / {_totalSteps} steps" : "—";
+
+    /// <summary>A one-line title from a request that may be a paragraph. Held until the planner
+    /// produces a real title, which it almost always does.</summary>
+    private static string Summarise(string text)
+    {
+        var line = text.Replace('\r', ' ').Replace('\n', ' ').Trim();
+        return line.Length <= 70 ? line : line[..70] + "…";
+    }
 
     private static string FormatElapsed(TimeSpan span)
     {
@@ -755,6 +784,9 @@ public sealed partial class MainWindow : Window, IDecisionHandler
 
         _vm.StatusPhase = "Background task started";
         _vm.CurrentAction = text;
+        _vm.TaskIntent = text;
+        _vm.TaskTitle = Summarise(text);
+        _vm.HasTask = true;
         _vm.InputText = string.Empty;
 
         _ = Task.Run(async () =>

@@ -1,7 +1,9 @@
 namespace Enactive.App.Ui.ViewModels;
 
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
 using Avalonia.Media;
+using Enactive.Workspace;
 using Enactive.App.Ui.Mvvm;
 
 /// <summary>A verb chip above the command bar. Clicking one prefixes the input.</summary>
@@ -154,8 +156,14 @@ internal sealed class MainWindowViewModel : ObservableObject
     private int _selectedWorkerIndex;
     private string? _selectedRecent;
     private string _statusPhase = "Idle";
+    private IBrush _statusPillBrush = Brand.TextMuted;
+    private string _taskTitle = string.Empty;
+    private string _taskIntent = string.Empty;
+    private bool _hasTask;
+    private int _toolCalls;
+    private int _selectedTab;
     private string _statusProgress = "—";
-    private string _statusElapsed = string.Empty;
+    private string _statusElapsed = "—";
     private string _currentAction = string.Empty;
     private string _agentBadge = string.Empty;
     private IBrush _agentBrush = Brand.Line;
@@ -180,7 +188,33 @@ internal sealed class MainWindowViewModel : ObservableObject
         SettingsCommand = new RelayCommand(() => SettingsRequested?.Invoke());
 
         UpdateAutonomyLabel();
+
+        // The tab badge counts what the run produced, so it follows the list rather than being
+        // maintained by whoever happens to add to it.
+        Artifacts.CollectionChanged += (_, _) =>
+        {
+            OnPropertyChanged(nameof(ArtifactCount));
+            OnPropertyChanged(nameof(ArtifactCountText));
+            OnPropertyChanged(nameof(ArtifactsTabLabel));
+        };
+
+        ShowExecutionCommand = new RelayCommand(() => SelectedTab = 0);
+        ShowArtifactsCommand = new RelayCommand(() => SelectedTab = 1);
+        ShowLogCommand = new RelayCommand(() => SelectedTab = 2);
     }
+
+    /// <summary>
+    /// Gives the run's log tab the hub to read. Done after construction because the hub belongs to
+    /// the window, which owns the engine; the view model only shows what it produces.
+    /// </summary>
+    public void AttachLog(LogHub hub)
+    {
+        RunLog = new RunLogViewModel(hub);
+        OnPropertyChanged(nameof(RunLog));
+    }
+
+    /// <summary>The current run's log, for the tab beside its steps. Null until AttachLog.</summary>
+    public RunLogViewModel? RunLog { get; private set; }
 
     public event Action? RunRequested;
     public event Action? StopRequested;
@@ -273,7 +307,86 @@ internal sealed class MainWindowViewModel : ObservableObject
     public ObservableCollection<StepCardViewModel> Steps { get; } = new();
 
     // ── Right: status, decision, artifacts ────────────────────────────────────
-    public string StatusPhase { get => _statusPhase; set => Set(ref _statusPhase, value); }
+    /// <summary>
+    /// The run's phase, and the colour of the pill that shows it. They move together: a phase set
+    /// anywhere in the engine wiring repaints the pill without that code knowing a pill exists.
+    /// </summary>
+    public string StatusPhase
+    {
+        get => _statusPhase;
+        set
+        {
+            if (!Set(ref _statusPhase, value))
+                return;
+            StatusPillBrush = value switch
+            {
+                "Completed" => Brand.Success,
+                "Failed" or "Error" => Brand.Danger,
+                "Cancelled" => Brand.TextMuted,
+                "Idle" => Brand.TextMuted,
+                _ => Brand.Accent
+            };
+        }
+    }
+
+    public IBrush StatusPillBrush { get => _statusPillBrush; set => Set(ref _statusPillBrush, value); }
+
+    /// <summary>What the run is called - the plan's title once there is one, the request until then.</summary>
+    public string TaskTitle { get => _taskTitle; set => Set(ref _taskTitle, value); }
+
+    /// <summary>
+    /// The request, kept verbatim. The command bar clears when a run starts, so without this the
+    /// only place to read what you actually asked for was the log.
+    /// </summary>
+    public string TaskIntent { get => _taskIntent; set => Set(ref _taskIntent, value); }
+
+    /// <summary>False before the first run of the session: an empty header is worse than none.</summary>
+    public bool HasTask { get => _hasTask; set => Set(ref _hasTask, value); }
+
+    /// <summary>
+    /// Which of the three views of the run is showing. Kept as an index rather than three booleans
+    /// because only one can be on, and the tab strip binds each button to its own flag off it.
+    /// </summary>
+    public int SelectedTab
+    {
+        get => _selectedTab;
+        set
+        {
+            if (!Set(ref _selectedTab, value))
+                return;
+            OnPropertyChanged(nameof(IsExecutionTab));
+            OnPropertyChanged(nameof(IsArtifactsTab));
+            OnPropertyChanged(nameof(IsLogTab));
+        }
+    }
+
+    public bool IsExecutionTab => _selectedTab == 0;
+    public bool IsArtifactsTab => _selectedTab == 1;
+    public bool IsLogTab => _selectedTab == 2;
+
+    public RelayCommand ShowExecutionCommand { get; }
+    public RelayCommand ShowArtifactsCommand { get; }
+    public RelayCommand ShowLogCommand { get; }
+
+    public int ArtifactCount => Artifacts.Count;
+
+    /// <summary>The tab carries its own count, so an empty run does not advertise "Artifacts (0)".</summary>
+    public string ArtifactsTabLabel => Artifacts.Count == 0 ? "Artifacts" : $"Artifacts ({Artifacts.Count})";
+
+    /// <summary>Tile text. A tile shows a value under a label, so the number arrives ready to draw.</summary>
+    public string ArtifactCountText => Artifacts.Count.ToString();
+
+    public int ToolCalls
+    {
+        get => _toolCalls;
+        set
+        {
+            if (Set(ref _toolCalls, value))
+                OnPropertyChanged(nameof(ToolCallsText));
+        }
+    }
+
+    public string ToolCallsText => _toolCalls.ToString();
     public string StatusProgress { get => _statusProgress; set => Set(ref _statusProgress, value); }
     public string StatusElapsed { get => _statusElapsed; set => Set(ref _statusElapsed, value); }
     public string CurrentAction { get => _currentAction; set => Set(ref _currentAction, value); }

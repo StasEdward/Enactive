@@ -4,7 +4,7 @@
         x:Class="Enactive.App.Ui.SettingsWindow"
         x:DataType="vm:SettingsViewModel"
         Title="Settings"
-        Width="720" Height="820"
+        Width="720" Height="830"
         WindowStartupLocation="CenterOwner">
 
     <DockPanel LastChildFill="True" Margin="12">
