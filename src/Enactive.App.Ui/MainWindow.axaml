@@ -187,20 +187,6 @@
         <Border Grid.Column="1" Classes="context">
             <DockPanel LastChildFill="True">
 
-                <!-- Pinned to the bottom: the setup for the NEXT run. -->
-                <StackPanel DockPanel.Dock="Bottom" Margin="12" Spacing="8">
-                    <TextBlock Classes="panelHeader" Text="NEXT RUN" Margin="0" />
-                    <TextBlock Text="{Binding AutonomyLabel}" Foreground="{Binding AutonomyBrush}"
-                               FontSize="12" TextWrapping="Wrap" />
-                    <Slider Minimum="0" Maximum="3" TickFrequency="1" IsSnapToTickEnabled="True"
-                            Value="{Binding AutonomyLevel, Mode=TwoWay}" IsEnabled="{Binding IsIdle}" />
-                    <ComboBox ItemsSource="{Binding WorkerRoles}"
-                              SelectedIndex="{Binding SelectedWorkerIndex, Mode=TwoWay}" />
-                    <CheckBox Content="Stage changes (review before apply)"
-                              IsChecked="{Binding StageChanges}" IsEnabled="{Binding IsIdle}" />
-                    <TextBlock Classes="hint" Text="{Binding EnvironmentSummary}" />
-                </StackPanel>
-
                 <!-- Where the work happens, and what has been done there - one column, no
                      switching. Change the workspace and watch the list under it change. -->
                 <StackPanel DockPanel.Dock="Top" Margin="12,12,12,0" Spacing="8">
@@ -303,7 +289,8 @@
                                Foreground="{DynamicResource Brand.Danger}"
                                Text="This folder is not on disk. Nothing will run here until you pick another one." />
 
-                        <TextBlock Classes="hint" Text="{Binding ModelLabel}" />
+                    <TextBlock Classes="hint" Text="{Binding ModelLabel}" />
+                    <TextBlock Classes="hint" Text="{Binding EnvironmentSummary}" />
                 </StackPanel>
 
                 <!-- The line between "where" and "what happened there". -->
@@ -364,6 +351,36 @@
                 </StackPanel>
 
                 <DockPanel LastChildFill="True">
+
+                    <!-- How the next run behaves, beside the box that starts it. It used to be a
+                         NEXT RUN panel on the far side of the window: three controls that decide
+                         what the Run button does, placed where you cannot see them while pressing
+                         it. Declared first because a DockPanel fills from the outside in - this
+                         block is the far right. -->
+                    <StackPanel DockPanel.Dock="Right" Width="252" Spacing="4"
+                                VerticalAlignment="Center">
+                        <Grid ColumnDefinitions="Auto,*">
+                            <ComboBox Grid.Column="0" Width="118" FontSize="11"
+                                      ItemsSource="{Binding WorkerRoles}"
+                                      SelectedIndex="{Binding SelectedWorkerIndex, Mode=TwoWay}"
+                                      ToolTip.Tip="Which role the worker takes" />
+                            <CheckBox Grid.Column="1" Content="Stage changes" FontSize="11"
+                                      Margin="10,0,0,0" VerticalAlignment="Center"
+                                      IsChecked="{Binding StageChanges}" IsEnabled="{Binding IsIdle}"
+                                      ToolTip.Tip="Write changes to a staging area and review the diff before applying." />
+                        </Grid>
+                        <TextBlock Text="{Binding AutonomyLabel}" Foreground="{Binding AutonomyBrush}"
+                                   FontSize="11" TextWrapping="NoWrap"
+                                   TextTrimming="CharacterEllipsis"
+                                   ToolTip.Tip="{Binding AutonomyLabel}" />
+                        <Slider Minimum="0" Maximum="3" TickFrequency="1" IsSnapToTickEnabled="True"
+                                Margin="0,-4,0,-6"
+                                Value="{Binding AutonomyLevel, Mode=TwoWay}" IsEnabled="{Binding IsIdle}" />
+                    </StackPanel>
+
+                    <Border DockPanel.Dock="Right" Width="1" Margin="12,2"
+                            Background="{DynamicResource Brand.Line}" />
+
                     <!-- Both ways of starting are here, beside the box you typed into. Which one
                          you pressed is what decides where the run goes - it used to be a checkbox
                          in the panel on the left, so Run did two different things depending on a
