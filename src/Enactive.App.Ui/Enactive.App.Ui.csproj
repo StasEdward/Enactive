@@ -6,6 +6,14 @@
     <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
+    <!-- Views are .axaml; Avalonia's build tasks pick up **\*.axaml on their own, so there is no
+         item group for them. Bindings are compiled with the XAML, which turns a typo in a binding
+         path into a build error instead of a silently empty control - the reason x:DataType is
+         mandatory on every view that binds. -->
+    <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+    <!-- The name generator otherwise emits this.AttachDevTools() into the generated
+         InitializeComponent, which needs the Avalonia.Diagnostics package. We do not ship it. -->
+    <AvaloniaNameGeneratorAttachDevTools>false</AvaloniaNameGeneratorAttachDevTools>
   </PropertyGroup>
 
   <ItemGroup>

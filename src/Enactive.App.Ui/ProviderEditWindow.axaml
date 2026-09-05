@@ -1,0 +1,60 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:Enactive.App.Ui.ViewModels"
+        x:Class="Enactive.App.Ui.ProviderEditWindow"
+        x:DataType="vm:ProviderEditViewModel"
+        Title="Provider"
+        Width="620" Height="640"
+        WindowStartupLocation="CenterOwner">
+
+    <ScrollViewer>
+        <StackPanel Classes="form">
+
+            <TextBlock Classes="label" Text="Id" />
+            <TextBox Text="{Binding Id}"
+                     Watermark="id — e.g. ollama, anthropic, openrouter (used in providerId/model)" />
+
+            <TextBlock Classes="label" Text="Display name" />
+            <TextBox Text="{Binding DisplayName}" Watermark="display name" />
+
+            <TextBlock Classes="label" Text="Kind" />
+            <ComboBox ItemsSource="{Binding Kinds}" SelectedItem="{Binding Kind}" />
+
+            <TextBlock Classes="label" Text="Base URL" />
+            <TextBox Text="{Binding BaseUrl}" Watermark="base URL — e.g. http://localhost:11434/v1" />
+
+            <TextBlock Classes="label" Text="API key" />
+            <TextBox Text="{Binding ApiKey}" PasswordChar="•"
+                     Watermark="API key (blank for local providers)" />
+
+            <TextBlock Classes="label" Text="Max output tokens" />
+            <TextBox Text="{Binding MaxTokensText}"
+                     Watermark="blank = auto (adjusts to the model's cap)" />
+
+            <TextBlock Classes="label" Text="Headers" />
+            <TextBox Classes="multiline" MinHeight="60" Text="{Binding HeadersText}"
+                     Watermark="extra headers — one Header-Name: value per line" />
+
+            <TextBlock Classes="label" Text="Models" />
+            <TextBox Classes="multiline" MinHeight="100" Text="{Binding ModelsText}"
+                     Watermark="models — one per line" />
+
+            <!-- Ask the provider what it actually serves, then pick one to add to the list above. -->
+            <Grid ColumnDefinitions="*,Auto" Margin="0,6,0,0">
+                <ComboBox Grid.Column="0"
+                          ItemsSource="{Binding FetchedModels}"
+                          SelectedItem="{Binding SelectedFetchedModel}"
+                          PlaceholderText="fetched models…" />
+                <Button Grid.Column="1" Margin="8,0,0,0"
+                        Content="Fetch" Command="{Binding FetchCommand}" />
+            </Grid>
+            <TextBlock Classes="hint" Text="{Binding Status}" />
+
+            <StackPanel Classes="actions">
+                <Button Classes="primary" Content="Save" Command="{Binding SaveCommand}" />
+                <Button Content="Cancel" Command="{Binding CancelCommand}" />
+            </StackPanel>
+
+        </StackPanel>
+    </ScrollViewer>
+</Window>
