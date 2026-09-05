@@ -87,8 +87,34 @@
         <Border Grid.Column="0" Classes="rail">
             <DockPanel LastChildFill="False">
 
+                <!-- These two choose what the column beside the rail shows. Everything
+                     below the line opens a window instead - hence the line. -->
+                <Button DockPanel.Dock="Top" Classes="rail" Classes.on="{Binding IsWorkspacePane}"
+                        Command="{Binding ShowWorkspacePaneCommand}"
+                        ToolTip.Tip="Workspace" Margin="0,10,0,0">
+                    <Viewbox Width="18" Height="18">
+                        <Canvas Width="24" Height="24">
+                            <Path Data="M 3,18.5 V 5.5 H 9.5 L 11.5,8.5 H 21 V 18.5 Z" />
+                        </Canvas>
+                    </Viewbox>
+                </Button>
+
+                <Button DockPanel.Dock="Top" Classes="rail" Classes.on="{Binding IsRunsPane}"
+                        Command="{Binding ShowRunsPaneCommand}"
+                        ToolTip.Tip="Runs · what this workspace has already done">
+                    <Viewbox Width="18" Height="18">
+                        <Canvas Width="24" Height="24">
+                            <Path Data="M 12,3.5 A 8.5,8.5 0 1 0 12.01,3.5 Z" />
+                            <Path Data="M 12,7.5 V 12.2 L 15.6,14.3" />
+                        </Canvas>
+                    </Viewbox>
+                </Button>
+
+                <Border DockPanel.Dock="Top" Height="1" Margin="9,9,9,7"
+                        Background="{DynamicResource Brand.Line}" />
+
                 <Button DockPanel.Dock="Top" Classes="rail" Command="{Binding TimelineCommand}"
-                        ToolTip.Tip="Timeline · project memory" Margin="0,10,0,0">
+                        ToolTip.Tip="Timeline · project memory">
                     <Viewbox Width="18" Height="18">
                         <Canvas Width="24" Height="24">
                             <Path Data="M 7,4 V 20" />
@@ -154,17 +180,8 @@
         <Border Grid.Column="1" Classes="context">
             <DockPanel LastChildFill="True">
 
-                <StackPanel DockPanel.Dock="Top" Margin="12,12,12,0" Spacing="6">
-                    <TextBlock Classes="panelHeader" Text="WORKSPACE" Margin="0" />
-                    <TextBox Text="{Binding WorkspacePath}" IsEnabled="{Binding IsIdle}"
-                             Watermark="Workspace folder"
-                             ToolTip.Tip="{Binding WorkspacePath}" />
-                    <TextBlock Classes="hint" Text="{Binding ModelLabel}" />
-                    <TextBlock Classes="panelHeader" Text="RECENT" />
-                </StackPanel>
-
-                <!-- Pinned to the bottom: this is the setup for the NEXT run, not
-                     part of the list above it. -->
+                <!-- Pinned to the bottom: this is the setup for the NEXT run, and it
+                     applies whichever pane is showing above it. -->
                 <StackPanel DockPanel.Dock="Bottom" Margin="12" Spacing="8">
                     <TextBlock Classes="panelHeader" Text="NEXT RUN" Margin="0" />
                     <TextBlock Text="{Binding AutonomyLabel}" Foreground="{Binding AutonomyBrush}"
@@ -179,15 +196,69 @@
                     <TextBlock Classes="hint" Text="{Binding EnvironmentSummary}" />
                 </StackPanel>
 
-                <ListBox Margin="12,0,12,0" Background="Transparent"
-                         ItemsSource="{Binding RecentWorkspaces}"
-                         SelectedItem="{Binding SelectedRecent}">
-                    <ListBox.ItemTemplate>
-                        <DataTemplate x:DataType="sys:String">
-                            <TextBlock Classes="path" Text="{Binding}" ToolTip.Tip="{Binding}" />
-                        </DataTemplate>
-                    </ListBox.ItemTemplate>
-                </ListBox>
+                <Panel>
+
+                    <!-- Workspace: where the work happens. -->
+                    <DockPanel IsVisible="{Binding IsWorkspacePane}" LastChildFill="True">
+                        <StackPanel DockPanel.Dock="Top" Margin="12,12,12,0" Spacing="6">
+                            <TextBlock Classes="panelHeader" Text="WORKSPACE" Margin="0" />
+                            <TextBox Text="{Binding WorkspacePath}" IsEnabled="{Binding IsIdle}"
+                                     Watermark="Workspace folder"
+                                     ToolTip.Tip="{Binding WorkspacePath}" />
+                            <TextBlock Classes="hint" Text="{Binding ModelLabel}" />
+                            <TextBlock Classes="panelHeader" Text="RECENT" />
+                        </StackPanel>
+
+                        <ListBox Margin="12,0,12,0" Background="Transparent"
+                                 ItemsSource="{Binding RecentWorkspaces}"
+                                 SelectedItem="{Binding SelectedRecent}">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate x:DataType="sys:String">
+                                    <TextBlock Classes="path" Text="{Binding}" ToolTip.Tip="{Binding}" />
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                    </DockPanel>
+
+                    <!-- Runs: what this workspace has already done. Picking one opens it
+                         read-only over the live run, which keeps running underneath. -->
+                    <DockPanel IsVisible="{Binding IsRunsPane}" LastChildFill="True">
+                        <Grid DockPanel.Dock="Top" Margin="12,12,12,6" ColumnDefinitions="*,Auto">
+                            <TextBlock Grid.Column="0" Classes="panelHeader" Text="RUNS" Margin="0"
+                                       VerticalAlignment="Center" />
+                            <Button Grid.Column="1" Content="Refresh" FontSize="11" Padding="8,1"
+                                    Command="{Binding Runs.RefreshCommand}" />
+                        </Grid>
+
+                        <TextBlock DockPanel.Dock="Bottom" Classes="hint" Margin="12,6,12,0"
+                                   Text="{Binding Runs.Status}" />
+
+                        <ListBox Margin="6,0,6,0" Background="Transparent" BorderThickness="0"
+                                 ItemsSource="{Binding Runs.Items}"
+                                 SelectedItem="{Binding Runs.Selected}">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate x:DataType="vm:RunListItemViewModel">
+                                    <Grid ColumnDefinitions="Auto,*" Margin="0,1">
+                                        <!-- How it ended, in one dot. Amber is "still open or
+                                             unknown", which for a stored run means it never
+                                             wrote a final status. -->
+                                        <Ellipse Grid.Column="0" Width="7" Height="7"
+                                                 Fill="{Binding StatusBrush}"
+                                                 VerticalAlignment="Top" Margin="0,5,8,0" />
+                                        <StackPanel Grid.Column="1" Spacing="1">
+                                            <TextBlock Text="{Binding Title}" FontSize="12"
+                                                       TextWrapping="NoWrap"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       ToolTip.Tip="{Binding Title}" />
+                                            <TextBlock Classes="hint" Text="{Binding Meta}" FontSize="11" />
+                                        </StackPanel>
+                                    </Grid>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                    </DockPanel>
+
+                </Panel>
 
             </DockPanel>
         </Border>
@@ -228,6 +299,12 @@
                              AcceptsReturn="True" MinHeight="56" TextWrapping="Wrap" />
                 </DockPanel>
             </StackPanel>
+
+            <!-- The live run and a past one occupy the same space: reading history does
+                 not shrink the run you are watching, and a new run brings you back. -->
+            <Panel>
+
+            <DockPanel IsVisible="{Binding IsViewingLive}" LastChildFill="True">
 
             <!-- ── The task ────────────────────────────────────────────────────
                  The command bar clears when a run starts, so without this the only
@@ -468,6 +545,94 @@
                     </StackPanel>
                 </ScrollViewer>
             </Grid>
+            </DockPanel>
+
+            <!-- ── A past run, read-only ───────────────────────────────────────
+                 There is nothing to click here on purpose: this run finished, and
+                 history is not re-run by pressing Apply on a diff from last Tuesday.
+            -->
+            <DockPanel IsVisible="{Binding IsViewingPast}" LastChildFill="True">
+
+                <Border DockPanel.Dock="Top" Classes="taskHeader">
+                    <Grid ColumnDefinitions="Auto,*,Auto">
+                        <Button Grid.Column="0" Content="← Back" FontSize="11" Padding="8,2"
+                                VerticalAlignment="Center"
+                                Command="{Binding BackToLiveCommand}"
+                                ToolTip.Tip="Back to the current run" />
+                        <StackPanel Grid.Column="1" Spacing="2" Margin="12,0">
+                            <TextBlock Text="{Binding PastRun.Title}" FontSize="15" FontWeight="SemiBold"
+                                       TextTrimming="CharacterEllipsis" />
+                            <TextBlock Classes="hint" Text="{Binding PastRun.Meta}" FontSize="11"
+                                       TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
+                                       ToolTip.Tip="{Binding PastRun.Meta}" />
+                        </StackPanel>
+                        <Border Grid.Column="2" Classes="pill" Background="{Binding PastRun.StatusBrush}">
+                            <TextBlock Text="{Binding PastRun.Status}" FontSize="11"
+                                       Foreground="{DynamicResource Brand.Bg}" />
+                        </Border>
+                    </Grid>
+                </Border>
+
+                <ScrollViewer HorizontalScrollBarVisibility="Disabled"
+                              VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="16,12,16,16" Spacing="6">
+
+                        <TextBlock Classes="panelHeader" Text="TIMELINE" Margin="0" />
+                        <ItemsControl ItemsSource="{Binding PastRun.Events}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:RunEventViewModel">
+                                    <Grid ColumnDefinitions="Auto,Auto,*" Margin="0,1">
+                                        <TextBlock Grid.Column="0" Text="{Binding When}"
+                                                   FontFamily="Consolas, Menlo, monospace" FontSize="11"
+                                                   Foreground="{DynamicResource Brand.TextFaint}"
+                                                   Margin="0,0,10,0" />
+                                        <TextBlock Grid.Column="1" Text="{Binding Kind}"
+                                                   FontSize="11" Width="130"
+                                                   Foreground="{DynamicResource Brand.TextMuted}"
+                                                   TextTrimming="CharacterEllipsis" Margin="0,0,10,0" />
+                                        <TextBlock Grid.Column="2" Text="{Binding Summary}"
+                                                   Foreground="{Binding Brush}"
+                                                   FontSize="12" TextWrapping="Wrap" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+
+                        <TextBlock Classes="panelHeader" Text="ARTIFACTS"
+                                   IsVisible="{Binding PastRun.HasArtifacts}" />
+                        <ItemsControl ItemsSource="{Binding PastRun.Artifacts}"
+                                      IsVisible="{Binding PastRun.HasArtifacts}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="sys:String">
+                                    <TextBlock Text="{Binding}" TextWrapping="Wrap"
+                                               FontFamily="Consolas, Menlo, monospace" FontSize="12"
+                                               Margin="0,1" />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+
+                        <TextBlock Classes="panelHeader" Text="DECISIONS"
+                                   IsVisible="{Binding PastRun.HasDecisions}" />
+                        <ItemsControl ItemsSource="{Binding PastRun.Decisions}"
+                                      IsVisible="{Binding PastRun.HasDecisions}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="sys:String">
+                                    <TextBlock Text="{Binding}" TextWrapping="Wrap" FontSize="12"
+                                               Foreground="{DynamicResource Brand.TextBody}"
+                                               Margin="0,1" />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+
+                        <TextBlock Classes="hint" Margin="0,10,0,0"
+                                   Text="Read-only. The log tab only holds this session, so a past run shows what was recorded, not what was said to the model." />
+
+                    </StackPanel>
+                </ScrollViewer>
+
+            </DockPanel>
+
+            </Panel>
 
         </DockPanel>
         </Grid>

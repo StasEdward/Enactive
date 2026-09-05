@@ -1,10 +1,8 @@
 namespace Enactive.App.Ui.ViewModels;
 
 using System.Collections.ObjectModel;
-using System.Text;
 using Avalonia.Media;
 using Enactive.App.Ui.Mvvm;
-using Enactive.Core.Events;
 using Enactive.Core.History;
 using Enactive.Core.Inbox;
 
@@ -247,44 +245,11 @@ internal sealed class InboxViewModel : ObservableObject
             RunDecisions.Add(d);
     }
 
-    /// <summary>
-    /// Renders the run's events, FOLDING the assistant's streamed reply back together. It is recorded
-    /// one event per token, so replaying it verbatim buries the timeline under a column of single
-    /// words - the same reason the step cards never show streamed prose either: a run of deltas
-    /// becomes one short note, and everything that actually happened stays readable between them.
-    /// </summary>
+    /// <summary>Renders the run's events. The folding of the streamed reply lives in
+    /// <see cref="RunTimeline"/>, because every view that replays a run needs it.</summary>
     private void AddTimeline(RunRecord run)
     {
-        var buffer = new StringBuilder();
-        var bufferAt = default(DateTimeOffset);
-
-        void FlushAssistant()
-        {
-            if (buffer.Length == 0)
-                return;
-            var text = buffer.ToString().Replace('\n', ' ').Replace('\r', ' ').Trim();
-            buffer.Clear();
-            if (text.Length == 0)
-                return;
-            if (text.Length > 300)
-                text = text[..300] + "…";
-            RunEvents.Add(new RunEventViewModel(bufferAt, "assistant", text));
-        }
-
-        foreach (var e in run.Events)
-        {
-            if (e.Kind == nameof(EventKind.AssistantDelta))
-            {
-                if (buffer.Length == 0)
-                    bufferAt = e.At;
-                buffer.Append(e.Summary);
-                continue;
-            }
-
-            FlushAssistant();
-            RunEvents.Add(new RunEventViewModel(e.At, e.Kind, e.Summary));
-        }
-
-        FlushAssistant();
+        foreach (var row in RunTimeline.Fold(run))
+            RunEvents.Add(row);
     }
 }

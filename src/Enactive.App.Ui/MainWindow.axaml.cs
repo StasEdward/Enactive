@@ -15,6 +15,7 @@ using Enactive.Core.Context;
 using Enactive.Core.Diagnostics;
 using Enactive.App.Ui.ViewModels;
 using Enactive.Core.Events;
+using Enactive.Core.History;
 using Enactive.Core.Inbox;
 using Enactive.Core.Intents;
 using Enactive.Core.Permissions;
@@ -95,6 +96,8 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         _vm.LogRequested += ShowLogWindow;
         _vm.EnvironmentRequested += () => _ = ShowEnvironmentAsync();
         _vm.InboxRequested += ShowInbox;
+        _vm.Runs.RefreshRequested += () => _ = LoadRunsAsync();
+        _vm.Runs.OpenRequested += record => _vm.ShowPastRun(record);
         _vm.SettingsRequested += () =>
             // SettingsWindow reads the live settings and mutates them only when Save is clicked
             // (Cancel/close leave them untouched), so it gets _settings directly, not a partial copy.
@@ -181,6 +184,8 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         _vm.HasTask = true;
         _vm.ToolCalls = 0;
         _vm.SelectedTab = 0;
+        // Reading history is fine; watching it while a new run of your own starts is not.
+        _vm.ShowLiveRun();
 
         // reset run state / panels
         _vm.InputText = string.Empty;
@@ -270,7 +275,13 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             _elapsedTimer = null;
             _runStopwatch.Stop();
             var finalElapsed = FormatElapsed(_runStopwatch.Elapsed);
-            Dispatcher.UIThread.Post(() => _vm.StatusElapsed = finalElapsed);
+            Dispatcher.UIThread.Post(() =>
+            {
+                _vm.StatusElapsed = finalElapsed;
+                // The run that just ended belongs in the history list, if that is what is open.
+                if (_vm.IsRunsPane)
+                    _ = LoadRunsAsync();
+            });
             _vm.IsBusy = false;
             _cts = null;
         }
@@ -788,6 +799,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         _vm.TaskTitle = Summarise(text);
         _vm.HasTask = true;
         _vm.InputText = string.Empty;
+        _vm.ShowLiveRun();
 
         _ = Task.Run(async () =>
         {
@@ -856,6 +868,33 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         }
 
         _inboxWindow.Activate();
+    }
+
+    /// <summary>
+    /// Loads the workspace's runs for the context column. The store type is the environment's
+    /// choice (SQLite, MySQL or files), which is why the list does not create one itself.
+    /// </summary>
+    private async Task LoadRunsAsync()
+    {
+        var path = _vm.WorkspacePath.Trim();
+        if (string.IsNullOrEmpty(path))
+        {
+            _vm.Runs.Show(Array.Empty<RunRecord>());
+            return;
+        }
+
+        try
+        {
+            var store = RunStoreFactory.Create(WorkspaceFrom(path));
+            var records = await store.LoadAllAsync(CancellationToken.None);
+            _vm.Runs.Show(records);
+        }
+        catch (Exception ex)
+        {
+            // A workspace whose store is unreachable is a fact to show, not a crash: the rest of
+            // the window is still perfectly usable.
+            _vm.Runs.Fail(ex.Message);
+        }
     }
 
     private async Task ShowTimelineAsync()

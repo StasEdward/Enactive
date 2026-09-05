@@ -3,6 +3,7 @@ namespace Enactive.App.Ui.ViewModels;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using Avalonia.Media;
+using Enactive.Core.History;
 using Enactive.Workspace;
 using Enactive.App.Ui.Mvvm;
 
@@ -162,6 +163,9 @@ internal sealed class MainWindowViewModel : ObservableObject
     private bool _hasTask;
     private int _toolCalls;
     private int _selectedTab;
+    private int _selectedPane;
+    private bool _isViewingPast;
+    private PastRunViewModel? _pastRun;
     private string _statusProgress = "—";
     private string _statusElapsed = "—";
     private string _currentAction = string.Empty;
@@ -201,6 +205,16 @@ internal sealed class MainWindowViewModel : ObservableObject
         ShowExecutionCommand = new RelayCommand(() => SelectedTab = 0);
         ShowArtifactsCommand = new RelayCommand(() => SelectedTab = 1);
         ShowLogCommand = new RelayCommand(() => SelectedTab = 2);
+
+        ShowWorkspacePaneCommand = new RelayCommand(() => SelectedPane = 0);
+        ShowRunsPaneCommand = new RelayCommand(() =>
+        {
+            SelectedPane = 1;
+            // Asking on the way in beats a Refresh button nobody presses: the list is only ever
+            // looked at when this pane is open.
+            Runs.RefreshCommand.Execute(null);
+        });
+        BackToLiveCommand = new RelayCommand(() => ShowLiveRun());
     }
 
     /// <summary>
@@ -236,7 +250,22 @@ internal sealed class MainWindowViewModel : ObservableObject
     public RelayCommand StopCommand { get; }
 
     // ── Left panel ────────────────────────────────────────────────────────────
-    public string WorkspacePath { get => _workspacePath; set => Set(ref _workspacePath, value); }
+    /// <summary>
+    /// The folder everything is scoped to. Changing it invalidates the run list, which belongs to
+    /// the workspace that was open when it was loaded.
+    /// </summary>
+    public string WorkspacePath
+    {
+        get => _workspacePath;
+        set
+        {
+            if (!Set(ref _workspacePath, value))
+                return;
+            Runs.Reset();
+            if (IsRunsPane)
+                Runs.RefreshCommand.Execute(null);
+        }
+    }
     public string ModelLabel { get => _modelLabel; set => Set(ref _modelLabel, value); }
     public string EnvironmentSummary { get => _environmentSummary; set => Set(ref _environmentSummary, value); }
 
@@ -363,6 +392,65 @@ internal sealed class MainWindowViewModel : ObservableObject
     public bool IsExecutionTab => _selectedTab == 0;
     public bool IsArtifactsTab => _selectedTab == 1;
     public bool IsLogTab => _selectedTab == 2;
+
+    // ── The context column's two panes ────────────────────────────────────────
+    /// <summary>The workspace's run history. Handed its records by whoever owns the stores.</summary>
+    public RunsViewModel Runs { get; } = new();
+
+    /// <summary>0 = workspace, 1 = runs. The rail switches it; the column shows one at a time
+    /// because 268px cannot hold both and still leave the run setup readable.</summary>
+    public int SelectedPane
+    {
+        get => _selectedPane;
+        set
+        {
+            if (!Set(ref _selectedPane, value))
+                return;
+            OnPropertyChanged(nameof(IsWorkspacePane));
+            OnPropertyChanged(nameof(IsRunsPane));
+        }
+    }
+
+    public bool IsWorkspacePane => _selectedPane == 0;
+    public bool IsRunsPane => _selectedPane == 1;
+
+    public RelayCommand ShowWorkspacePaneCommand { get; }
+    public RelayCommand ShowRunsPaneCommand { get; }
+
+    // ── Reading a past run ────────────────────────────────────────────────────
+    /// <summary>
+    /// A finished run, opened read-only over the live one. The live run keeps running underneath -
+    /// reading history never interrupts work - and Back returns to it.
+    /// </summary>
+    public PastRunViewModel? PastRun { get => _pastRun; private set => Set(ref _pastRun, value); }
+
+    public bool IsViewingPast
+    {
+        get => _isViewingPast;
+        private set
+        {
+            if (Set(ref _isViewingPast, value))
+                OnPropertyChanged(nameof(IsViewingLive));
+        }
+    }
+
+    public bool IsViewingLive => !_isViewingPast;
+
+    public RelayCommand BackToLiveCommand { get; }
+
+    public void ShowPastRun(RunRecord record)
+    {
+        PastRun = new PastRunViewModel(record);
+        IsViewingPast = true;
+    }
+
+    /// <summary>Back to the run in progress. Called by Back, and by a new run starting.</summary>
+    public void ShowLiveRun()
+    {
+        IsViewingPast = false;
+        PastRun = null;
+        Runs.Selected = null;
+    }
 
     public RelayCommand ShowExecutionCommand { get; }
     public RelayCommand ShowArtifactsCommand { get; }

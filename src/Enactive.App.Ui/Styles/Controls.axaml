@@ -126,6 +126,19 @@
         <Setter Property="Stroke" Value="{DynamicResource Brand.Text}" />
     </Style>
 
+    <!-- Two of the rail's buttons choose what the column beside it shows, so one of
+         them is always on. Ember marks the section you are IN - the same job it does
+         on a selected row - and the rest of the rail stays quiet. -->
+    <Style Selector="Button.rail.on /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource Brand.AccentFill}" />
+    </Style>
+    <Style Selector="Button.rail.on Path">
+        <Setter Property="Stroke" Value="{DynamicResource Brand.Accent}" />
+    </Style>
+    <Style Selector="Button.rail.on:pointerover Path">
+        <Setter Property="Stroke" Value="{DynamicResource Brand.Accent}" />
+    </Style>
+
     <!-- A selected row is marked, not repainted. Fluent builds selection out of the
          accent, and since the accent is Ember the stock result is a solid ember block -
          which claims to be the action on the screen. A tint and an edge say the same
