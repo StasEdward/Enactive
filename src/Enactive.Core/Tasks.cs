@@ -56,13 +56,21 @@ public static class LinearPlan
     }
 }
 
-/// <summary>A planner-emitted step: a title plus the 0-based indices of prerequisite steps.</summary>
+/// <summary>
+/// A planner-emitted step: a title plus the 0-based indices of prerequisite steps.
+/// <see cref="DependenciesDeclared"/> separates "the planner said this step depends on nothing" (an
+/// explicit empty dependsOn - a genuinely independent step) from "the planner never mentioned
+/// dependencies at all" (a bare title string). Without that distinction a fully independent plan -
+/// exactly the one worth running in parallel - is indistinguishable from a legacy list of titles.
+/// </summary>
 public sealed record PlanStepSpec(
-    string Title, IReadOnlyList<int> DependsOn, StepComplexity Complexity = StepComplexity.Normal);
+    string Title, IReadOnlyList<int> DependsOn, StepComplexity Complexity = StepComplexity.Normal,
+    bool DependenciesDeclared = false);
 
 /// <summary>
-/// Builds a real dependency graph from planner specs (index deps → step ids). If no spec declares any
-/// dependency, it falls back to a linear chain so a plain list of steps behaves exactly as before.
+/// Builds a real dependency graph from planner specs (index deps → step ids). Only when NO spec says
+/// anything about dependencies does it fall back to a linear chain, so a legacy plain list of titles
+/// behaves exactly as before while an explicit "dependsOn": [] stays independent.
 /// Invalid, self- and duplicate indices are dropped defensively.
 /// </summary>
 public static class DagPlan
@@ -73,12 +81,12 @@ public static class DagPlan
         for (var i = 0; i < specs.Count; i++)
             ids[i] = Guid.NewGuid();
 
-        var anyDeps = specs.Any(s => s.DependsOn.Count > 0);
+        var graph = specs.Any(s => s.DependenciesDeclared || s.DependsOn.Count > 0);
         var steps = new List<PlanStep>(specs.Count);
         for (var i = 0; i < specs.Count; i++)
         {
             IReadOnlyList<Guid> deps;
-            if (anyDeps)
+            if (graph)
                 deps = specs[i].DependsOn
                     .Where(d => d >= 0 && d < specs.Count && d != i)
                     .Distinct()

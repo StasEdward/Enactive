@@ -68,12 +68,17 @@ public sealed class Planner
                                 continue;
 
                             var deps = new List<int>();
-                            if (el.TryGetProperty("dependsOn", out var dep) && dep.ValueKind == JsonValueKind.Array)
+                            // An empty "dependsOn": [] is a statement, not a silence - the step is
+                            // independent and may run in parallel. Only a step object that omits the
+                            // property entirely leaves the dependency question unanswered.
+                            var declared = el.TryGetProperty("dependsOn", out var dep)
+                                           && dep.ValueKind == JsonValueKind.Array;
+                            if (declared)
                                 foreach (var di in dep.EnumerateArray())
                                     if (di.ValueKind == JsonValueKind.Number && di.TryGetInt32(out var idx))
                                         deps.Add(idx);
 
-                            specs.Add(new PlanStepSpec(stepTitle!, deps, ParseComplexity(el)));
+                            specs.Add(new PlanStepSpec(stepTitle!, deps, ParseComplexity(el), declared));
                         }
                     }
                 }
