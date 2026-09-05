@@ -155,7 +155,8 @@ internal sealed class MainWindowViewModel : ObservableObject
     private bool _stageChanges;
     private int _selectedWorkerIndex;
     private string _statusPhase = "Idle";
-    private IBrush _statusPillBrush = Brand.TextMuted;
+    private IBrush _statusPillBrush = Brand.PillIdleFill;
+    private IBrush _statusPillTextBrush = Brand.TextMuted;
     private string _taskTitle = string.Empty;
     private string _taskIntent = string.Empty;
     private bool _hasTask;
@@ -444,18 +445,15 @@ internal sealed class MainWindowViewModel : ObservableObject
         {
             if (!Set(ref _statusPhase, value))
                 return;
-            StatusPillBrush = value switch
-            {
-                "Completed" => Brand.Success,
-                "Failed" or "Error" => Brand.Danger,
-                "Cancelled" => Brand.TextMuted,
-                "Idle" => Brand.TextMuted,
-                _ => Brand.Accent
-            };
+            StatusPillBrush = Brand.PhaseFill(value);
+            StatusPillTextBrush = Brand.PhaseText(value);
         }
     }
 
     public IBrush StatusPillBrush { get => _statusPillBrush; set => Set(ref _statusPillBrush, value); }
+
+    /// <summary>The word carries the colour; the fill is only a tint behind it.</summary>
+    public IBrush StatusPillTextBrush { get => _statusPillTextBrush; set => Set(ref _statusPillTextBrush, value); }
 
     /// <summary>What the run is called - the plan's title once there is one, the request until then.</summary>
     public string TaskTitle { get => _taskTitle; set => Set(ref _taskTitle, value); }

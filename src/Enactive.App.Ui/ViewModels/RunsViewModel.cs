@@ -118,7 +118,10 @@ internal sealed class PastRunViewModel : ObservableObject
         Record = record;
         Title = string.IsNullOrWhiteSpace(record.Title) ? "(untitled run)" : record.Title;
         Status = record.Status;
-        StatusBrush = RunListItemViewModel.BrushFor(record.Status);
+        // The pill is a tint with the colour in the word - see Brand. The 3px edge on a run
+        // CARD stays saturated: an edge that thin has nowhere to put a tint.
+        StatusBrush = Brand.PhaseFill(record.Status);
+        StatusTextBrush = Brand.PhaseText(record.Status);
 
         var elapsed = record.FinishedAt - record.StartedAt;
         var model = string.IsNullOrWhiteSpace(record.Model) ? "unknown model" : record.Model;
@@ -173,6 +176,7 @@ internal sealed class PastRunViewModel : ObservableObject
     public string Meta { get; }
     public string Status { get; }
     public IBrush StatusBrush { get; }
+    public IBrush StatusTextBrush { get; }
 
     /// <summary>The plan's steps, rebuilt from the record. Empty for a run stored before the step
     /// number was, in which case the timeline is the whole story.</summary>

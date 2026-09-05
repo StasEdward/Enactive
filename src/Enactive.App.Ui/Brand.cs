@@ -122,6 +122,50 @@ internal static class Brand
     public static readonly IBrush DecisionBorder = Amber;
 
     // ── Agent pills (white text on a filled pill) ───────────────────────────
+    // ── Status pills ────────────────────────────────────────────────────────
+    // A pill states a fact; it is not an alarm. Solid saturated fills at this size read
+    // as one - a running task painted in full Ember looked like something had gone
+    // wrong. So a pill is a TINT with the colour carried by its text: enough to spot
+    // across the window, not enough to shout.
+    public static readonly IBrush PillRunningFill = new ImmutableSolidColorBrush(Ember500, 0.18);
+    public static readonly IBrush PillDoneFill = new ImmutableSolidColorBrush(SuccessColor, 0.18);
+    public static readonly IBrush PillFailedFill = new ImmutableSolidColorBrush(DangerColor, 0.18);
+    public static readonly IBrush PillOpenFill = new ImmutableSolidColorBrush(Amber400, 0.18);
+    public static readonly IBrush PillIdleFill = CardFill;
+
+    /// <summary>The tint behind a phase or a stored status.</summary>
+    public static IBrush PhaseFill(string phase) => Phase(phase) switch
+    {
+        PhaseKind.Done => PillDoneFill,
+        PhaseKind.Failed => PillFailedFill,
+        PhaseKind.Open => PillOpenFill,
+        PhaseKind.Idle => PillIdleFill,
+        _ => PillRunningFill
+    };
+
+    /// <summary>The word on the pill. Ember500 is too dark on its own tint, so running takes
+    /// Ember300 - the ember made for text on dark.</summary>
+    public static IBrush PhaseText(string phase) => Phase(phase) switch
+    {
+        PhaseKind.Done => Success,
+        PhaseKind.Failed => Danger,
+        PhaseKind.Open => Amber,
+        PhaseKind.Idle => TextMuted,
+        _ => AccentSoft
+    };
+
+    private enum PhaseKind { Running, Done, Failed, Open, Idle }
+
+    private static PhaseKind Phase(string phase) => phase.ToLowerInvariant() switch
+    {
+        "completed" or "succeeded" or "ok" => PhaseKind.Done,
+        "failed" or "error" => PhaseKind.Failed,
+        // Never wrote a final status: the run stopped somewhere nobody watched.
+        "incomplete" => PhaseKind.Open,
+        "cancelled" or "canceled" or "idle" or "" => PhaseKind.Idle,
+        _ => PhaseKind.Running
+    };
+
     public static readonly IBrush PillCoder = Of(SuccessDeep);
     public static readonly IBrush PillReasoner = Of(InfoDeep);
 
@@ -166,6 +210,10 @@ internal static class Brand
 
         r["Brand.Accent"] = Accent;
         r["Brand.AccentFill"] = AccentFill;
+        r["Brand.PillRunningFill"] = PillRunningFill;
+        r["Brand.PillDoneFill"] = PillDoneFill;
+        r["Brand.PillFailedFill"] = PillFailedFill;
+        r["Brand.PillOpenFill"] = PillOpenFill;
         r["Brand.AccentSoft"] = AccentSoft;
         r["Brand.Amber"] = Amber;
         r["Brand.Success"] = Success;

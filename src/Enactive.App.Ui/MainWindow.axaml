@@ -441,8 +441,8 @@
                                    ToolTip.Tip="{Binding TaskIntent}" />
                     </StackPanel>
                     <Border Grid.Column="1" Classes="pill" Background="{Binding StatusPillBrush}">
-                        <TextBlock Text="{Binding StatusPhase}" FontSize="11"
-                                   Foreground="{DynamicResource Brand.Bg}" />
+                        <TextBlock Text="{Binding StatusPhase}" FontSize="11" FontWeight="SemiBold"
+                                   Foreground="{Binding StatusPillTextBrush}" />
                     </Border>
                 </Grid>
             </Border>
@@ -688,8 +688,8 @@
                                        ToolTip.Tip="{Binding PastRun.Meta}" />
                         </StackPanel>
                         <Border Grid.Column="2" Classes="pill" Background="{Binding PastRun.StatusBrush}">
-                            <TextBlock Text="{Binding PastRun.Status}" FontSize="11"
-                                       Foreground="{DynamicResource Brand.Bg}" />
+                            <TextBlock Text="{Binding PastRun.Status}" FontSize="11" FontWeight="SemiBold"
+                                       Foreground="{Binding PastRun.StatusTextBrush}" />
                         </Border>
                     </Grid>
                 </Border>
