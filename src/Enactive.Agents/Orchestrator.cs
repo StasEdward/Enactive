@@ -153,7 +153,13 @@ public sealed class Orchestrator : IOrchestrator
             $"{plan.Title} — {total} steps: {string.Join(" | ", builtPlan.Steps.Select(x => x.Title))}");
 
         var scheduler = new DagScheduler(builtPlan);
-        var stepCounter = new StrongBox<int>(0);
+        // Step numbers are PLAN positions, not a dispatch counter. The UI resolves an event to its
+        // step card by this number, and its cards come from the plan in plan order; as soon as
+        // readiness order differs from plan order (any real DAG, and every parallel run) a dispatch
+        // counter would point at the wrong card. For a linear plan the two are identical, as before.
+        var stepNumbers = new Dictionary<Guid, int>();
+        for (var i = 0; i < builtPlan.Steps.Count; i++)
+            stepNumbers[builtPlan.Steps[i].Id] = i + 1;
         var maxParallel = _maxParallelSteps;
 
         // Execute by readiness: a step runs only once all its dependencies are Done (a real DAG),
@@ -168,7 +174,7 @@ public sealed class Orchestrator : IOrchestrator
 
         async Task RunStepAsync(PlanStep step)
         {
-            var stepNumber = Interlocked.Increment(ref stepCounter.Value);
+            var stepNumber = stepNumbers.TryGetValue(step.Id, out var planNo) ? planNo : 0;
             void Emit(EventKind kind, string summary) => events.Writer.TryWrite(Ev(kind, summary, stepNumber));
 
             var depNote = step.DependsOn.Count > 0 ? $" (after {step.DependsOn.Count} dep)" : "";
@@ -280,7 +286,14 @@ public sealed class Orchestrator : IOrchestrator
                 var skippedSteps = scheduler.MarkFailed(step.Id);
                 Emit(EventKind.StepCompleted, $"[{stepNumber}/{total}] {step.Title} — FAILED: {failError}");
                 foreach (var sk in skippedSteps)
-                    events.Writer.TryWrite(Ev(EventKind.StepCompleted, $"[-/{total}] {sk.Title} — skipped (dependency failed)"));
+                {
+                    // Stamp the skipped step's own number so the UI marks ITS card, not whichever
+                    // card happened to be current.
+                    var skNo = stepNumbers.TryGetValue(sk.Id, out var n) ? n : 0;
+                    events.Writer.TryWrite(Ev(EventKind.StepCompleted,
+                        $"[{skNo}/{total}] {sk.Title} — skipped (dependency failed)",
+                        skNo > 0 ? skNo : (int?)null));
+                }
             }
             else
             {

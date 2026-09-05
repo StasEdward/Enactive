@@ -489,8 +489,21 @@ public sealed class MainWindow : Window, IDecisionHandler
                     break;
                 case EventKind.StepCompleted:
                     var doneCard = CardFor(ev) ?? _currentCard;
-                    doneCard?.SetDone();
-                    doneCard?.SetActivity("Done");
+                    // A failed step and a dependency-skipped step arrive as StepCompleted too, so the
+                    // card must not go green for either of them.
+                    var wasSkipped = ev.Summary.Contains("skipped (dependency failed)", StringComparison.Ordinal);
+                    var wasFailed = wasSkipped || ev.Summary.Contains("FAILED:", StringComparison.Ordinal);
+                    if (wasFailed)
+                    {
+                        doneCard?.SetFailed();
+                        doneCard?.SetActivity(wasSkipped ? "Skipped — a dependency failed" : "Failed");
+                        doneCard?.ExpandForAttention();
+                    }
+                    else
+                    {
+                        doneCard?.SetDone();
+                        doneCard?.SetActivity("Done");
+                    }
                     EndStep(doneCard);
                     _doneSteps++;
                     UpdateProgress();
