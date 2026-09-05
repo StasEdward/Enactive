@@ -95,11 +95,18 @@ internal static class Brand
     public static readonly IBrush StepSkipped = LineStrong;
     public static readonly IBrush StepFailed = Danger;
 
-    // ── Autonomy tiers. Warmth escalates with how much rope the agent has. ──
-    public static readonly IBrush AutonomyObserve = TextMuted;
-    public static readonly IBrush AutonomySuggest = Info;
-    public static readonly IBrush AutonomyExecute = Accent;
-    public static readonly IBrush AutonomyAutonomous = Amber;
+    // ── Autonomy tiers ──────────────────────────────────────────────────────
+    // Read as a risk scale, because that is what it is: how much the agent may do
+    // to the workspace without asking. Green through blue and yellow to red - the
+    // reading every dashboard in the world has trained people on, so the colour
+    // says "how much rope" before the words are read.
+    //
+    // Ember is deliberately NOT on this scale. Ember is the action you are meant
+    // to take; a level of danger is not something to encourage.
+    public static readonly IBrush AutonomyObserve = Success;      // watches, changes nothing
+    public static readonly IBrush AutonomySuggest = Info;         // proposes, you apply
+    public static readonly IBrush AutonomyExecute = Warning;      // edits freely, asks before commands
+    public static readonly IBrush AutonomyAutonomous = Danger;    // runs commands unasked
 
     /// <summary>Colour for an autonomy slider position (0 = Observe … 3 = Autonomous).</summary>
     public static IBrush Autonomy(int level) => level switch
