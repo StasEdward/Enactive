@@ -120,6 +120,47 @@ public sealed partial class MainWindow : Window, IDecisionHandler
 
         // Tunnel so we see the keys before the TextBox consumes Enter.
         AddHandler(InputElement.KeyDownEvent, OnPreviewKeyDown, RoutingStrategies.Tunnel);
+
+        WireTitleBar();
+    }
+
+    /// <summary>
+    /// The window wears its own title bar (the client area is extended over the system
+    /// decorations), so dragging, maximising and closing are this window's job now. The caption
+    /// buttons mark their own PointerPressed handled, which is what keeps a click on one of them
+    /// from also starting a window drag.
+    /// </summary>
+    private void WireTitleBar()
+    {
+        TitleBar.PointerPressed += (_, e) =>
+        {
+            if (e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
+                BeginMoveDrag(e);
+        };
+        TitleBar.DoubleTapped += (_, _) => ToggleMaximised();
+
+        MinimiseButton.Click += (_, _) => WindowState = WindowState.Minimized;
+        MaximiseButton.Click += (_, _) => ToggleMaximised();
+        CloseButton.Click += (_, _) => Close();
+
+        // The button shows what it will DO next, so its glyph follows the window state.
+        SyncMaximiseGlyph();
+        PropertyChanged += (_, e) =>
+        {
+            if (e.Property == WindowStateProperty)
+                SyncMaximiseGlyph();
+        };
+    }
+
+    private void ToggleMaximised()
+        => WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
+
+    private void SyncMaximiseGlyph()
+    {
+        var maximised = WindowState == WindowState.Maximized;
+        MaximiseGlyph.IsVisible = !maximised;
+        RestoreGlyph.IsVisible = maximised;
+        MaximiseButton.SetValue(ToolTip.TipProperty, maximised ? "Restore" : "Maximise");
     }
 
     // ── Run an intent ────────────────────────────────────────────────────────

@@ -126,6 +126,50 @@
         <Setter Property="Stroke" Value="{DynamicResource Brand.Text}" />
     </Style>
 
+    <!-- ── The window's own title bar ───────────────────────────────────────
+         The client area is extended over the system decorations, so this strip
+         IS the title bar: it drags the window and carries the caption buttons.
+    -->
+    <Style Selector="Border.titlebar">
+        <Setter Property="Background" Value="{DynamicResource Brand.Rail}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Brand.Line}" />
+        <Setter Property="BorderThickness" Value="0,0,0,1" />
+    </Style>
+
+    <Style Selector="Button.caption">
+        <Setter Property="Width" Value="46" />
+        <Setter Property="Height" Value="34" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="CornerRadius" Value="0" />
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Button.caption /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+    </Style>
+    <Style Selector="Button.caption:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource Brand.CardFill}" />
+    </Style>
+    <Style Selector="Button.caption Path">
+        <Setter Property="Stroke" Value="{DynamicResource Brand.TextMuted}" />
+        <Setter Property="StrokeThickness" Value="1.2" />
+    </Style>
+    <Style Selector="Button.caption:pointerover Path">
+        <Setter Property="Stroke" Value="{DynamicResource Brand.Text}" />
+    </Style>
+
+    <!-- Close is the one destructive control in the chrome, so it takes danger.
+         Ember means action and is never spent on destruction. -->
+    <Style Selector="Button.caption.close:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource Brand.Danger}" />
+    </Style>
+    <Style Selector="Button.caption.close:pointerover Path">
+        <Setter Property="Stroke" Value="{DynamicResource Brand.Bg}" />
+    </Style>
+
     <!-- ── The context column ──────────────────────────────────────────────── -->
     <Style Selector="Border.context">
         <Setter Property="Background" Value="{DynamicResource Brand.Surface}" />
