@@ -23,6 +23,14 @@
         <Setter Property="Margin" Value="0,8,0,2" />
     </Style>
 
+    <!-- A small caps-ish section heading in a side panel. -->
+    <Style Selector="TextBlock.panelHeader">
+        <Setter Property="FontWeight" Value="Bold" />
+        <Setter Property="FontSize" Value="11" />
+        <Setter Property="Foreground" Value="{DynamicResource Brand.TextMuted}" />
+        <Setter Property="Margin" Value="0,6,0,0" />
+    </Style>
+
     <!-- Explanatory copy under a control: present, but never competing with the control itself. -->
     <Style Selector="TextBlock.hint">
         <Setter Property="Foreground" Value="{DynamicResource Brand.TextMuted}" />
