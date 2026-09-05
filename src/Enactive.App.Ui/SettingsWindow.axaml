@@ -1,6 +1,7 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:Enactive.App.Ui.ViewModels"
+        xmlns:local="using:Enactive.App.Ui"
         x:Class="Enactive.App.Ui.SettingsWindow"
         x:DataType="vm:SettingsViewModel"
         Title="Settings"
@@ -74,10 +75,52 @@
                            Text="Nothing here yet. Enactive has no account of its own; provider credentials live under AI · Providers." />
             </StackPanel>
 
-            <StackPanel IsVisible="{Binding IsAbout}" Margin="12" Spacing="6">
-                <TextBlock Classes="label" Text="About" />
-                <TextBlock Classes="hint" Text="Enactive — an AI workspace. Nothing here yet." />
-            </StackPanel>
+            <DockPanel IsVisible="{Binding IsAbout}" Margin="12" LastChildFill="True">
+
+                <StackPanel DockPanel.Dock="Top" Spacing="6">
+                    <TextBlock Text="Enactive" FontSize="20" FontWeight="SemiBold" />
+                    <TextBlock Classes="hint" Text="An AI workspace." />
+
+                    <Grid ColumnDefinitions="120,*" RowDefinitions="Auto,Auto,Auto" Margin="0,10,0,0">
+                        <TextBlock Grid.Row="0" Grid.Column="0" Classes="hint" Text="Version" />
+                        <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding AppVersion}"
+                                   FontFamily="Consolas, Menlo, monospace" FontSize="12"
+                                   TextWrapping="Wrap" />
+
+                        <TextBlock Grid.Row="1" Grid.Column="0" Classes="hint" Text="Built" />
+                        <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding BuiltAt}"
+                                   FontFamily="Consolas, Menlo, monospace" FontSize="12" />
+
+                        <TextBlock Grid.Row="2" Grid.Column="0" Classes="hint" Text="Runtime" />
+                        <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding RuntimeInfo}"
+                                   FontSize="12" TextWrapping="Wrap" />
+                    </Grid>
+
+                    <TextBlock Classes="panelHeader" Text="COMPONENTS" Margin="0,14,0,0" />
+                    <TextBlock Classes="hint"
+                               Text="All of these ship from one build, so they carry the same version. Two different numbers below mean a stale file is sitting in the program folder." />
+                </StackPanel>
+
+                <ScrollViewer Margin="0,6,0,0">
+                    <ItemsControl ItemsSource="{Binding Components}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="local:BuildComponent">
+                                <Grid ColumnDefinitions="*,140,120" Margin="0,0,0,3">
+                                    <TextBlock Grid.Column="0" Text="{Binding Name}" FontSize="12"
+                                               TextTrimming="CharacterEllipsis" />
+                                    <TextBlock Grid.Column="1" Text="{Binding Version}" FontSize="12"
+                                               FontFamily="Consolas, Menlo, monospace"
+                                               Foreground="{DynamicResource Brand.TextBody}"
+                                               TextTrimming="CharacterEllipsis" />
+                                    <TextBlock Grid.Column="2" Text="{Binding Detail}" FontSize="11"
+                                               Foreground="{DynamicResource Brand.TextFaint}" />
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+
+            </DockPanel>
 
             <Panel IsVisible="{Binding IsAiGeneral}">
                 <ScrollViewer>

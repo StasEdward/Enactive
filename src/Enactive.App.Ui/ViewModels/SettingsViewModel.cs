@@ -144,6 +144,9 @@ internal sealed class SettingsViewModel : ObservableObject
         ShowAiTeamCommand = new RelayCommand(() => Section = SectionAiTeam);
         ShowAiPhasesCommand = new RelayCommand(() => Section = SectionAiPhases);
 
+        foreach (var component in BuildInfo.Components())
+            Components.Add(component);
+
         _plan = ToSelection(_working.Bindings.Plan);
         _review = ToSelection(_working.Bindings.Review);
         _executeLight = ToSelection(_working.Bindings.ExecuteLight);
@@ -213,6 +216,18 @@ internal sealed class SettingsViewModel : ObservableObject
     }
 
     public bool HasStartupNote => _startupNote.Length > 0;
+
+    // ── About ─────────────────────────────────────────────────────────────────
+    public string AppVersion => BuildInfo.AppVersion;
+    public string BuiltAt => BuildInfo.BuiltAt;
+    public string RuntimeInfo => BuildInfo.Runtime;
+
+    /// <summary>
+    /// Every assembly this build ships. They come from one repo and one build, so they carry the
+    /// same version - and that is the point of listing them: two different numbers here mean a
+    /// stale DLL is in the output folder.
+    /// </summary>
+    public ObservableCollection<BuildComponent> Components { get; } = new();
 
     public bool ExitOnClose
     {

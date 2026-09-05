@@ -7,5 +7,26 @@
     <LangVersion>latest</LangVersion>
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
+
+    <!-- One repo, one build, one version. Every assembly here ships together, so they all carry
+         the same number - which is the point: About lists them, and two different numbers in that
+         list means a stale DLL is sitting in the output folder. -->
+    <Product>Enactive</Product>
+    <Version>0.1.0</Version>
   </PropertyGroup>
+
+  <!-- The commit is the only part of the version that actually moves between builds, so it goes
+       into InformationalVersion. ContinueOnError, because a copy of the source with no .git is
+       still a perfectly good thing to build. -->
+  <Target Name="StampCommit" BeforeTargets="GetAssemblyAttributes">
+    <Exec Command="git rev-parse --short HEAD"
+          ConsoleToMSBuild="true" StandardOutputImportance="low"
+          ContinueOnError="true" IgnoreExitCode="true">
+      <Output TaskParameter="ConsoleOutput" PropertyName="GitCommit" />
+    </Exec>
+    <PropertyGroup>
+      <InformationalVersion Condition="'$(GitCommit)' != ''">$(Version)+$(GitCommit.Trim())</InformationalVersion>
+      <InformationalVersion Condition="'$(GitCommit)' == ''">$(Version)</InformationalVersion>
+    </PropertyGroup>
+  </Target>
 </Project>
