@@ -263,8 +263,13 @@ internal static class Brand
         //
         // The names are Avalonia 12.1.1's own, read from the tagged source of
         // Themes.Fluent/Controls/ComboBox.xaml - not from an 11.x recipe.
-        Fluent(r, InputFill,
-            "ComboBoxBackground", "ComboBoxBackgroundUnfocused", "ComboBoxDropDownBackground");
+        Fluent(r, InputFill, "ComboBoxBackground", "ComboBoxBackgroundUnfocused");
+
+        // The dropdown is OPAQUE, and it is the one that has to be. InputFill is black at 22% -
+        // fine for a field sunk into a page, and see-through for a panel that floats over one:
+        // the text underneath read straight through it. Ink950 is the same colour that 22% lands
+        // on over the app's ground, with nothing behind it to show.
+        Fluent(r, Rail, "ComboBoxDropDownBackground");
         Fluent(r, InputFillHover,
             "ComboBoxBackgroundPointerOver", "ComboBoxBackgroundPressed");
         Fluent(r, Scrim, "ComboBoxBackgroundDisabled");
