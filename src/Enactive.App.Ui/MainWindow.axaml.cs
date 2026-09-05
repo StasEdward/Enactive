@@ -125,25 +125,14 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     }
 
     /// <summary>
-    /// The window wears its own title bar (the client area is extended over the system
-    /// decorations), so dragging, maximising and closing are this window's job now. The caption
-    /// buttons mark their own PointerPressed handled, which is what keeps a click on one of them
-    /// from also starting a window drag.
+    /// The window wears its own title bar. Nothing here moves or closes it: the bar and the three
+    /// caption buttons declare their WindowDecorationProperties.ElementRole in XAML, and the
+    /// platform does the rest - on Win32 those roles become HTCAPTION / HTMINBUTTON / HTMAXBUTTON /
+    /// HTCLOSE, which is what buys drag, double-click-to-maximise and the Windows snap layouts for
+    /// free rather than reimplementing them badly. The only thing left for us is the glyph.
     /// </summary>
     private void WireTitleBar()
     {
-        TitleBar.PointerPressed += (_, e) =>
-        {
-            if (e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
-                BeginMoveDrag(e);
-        };
-        TitleBar.DoubleTapped += (_, _) => ToggleMaximised();
-
-        MinimiseButton.Click += (_, _) => WindowState = WindowState.Minimized;
-        MaximiseButton.Click += (_, _) => ToggleMaximised();
-        CloseButton.Click += (_, _) => Close();
-
-        // The button shows what it will DO next, so its glyph follows the window state.
         SyncMaximiseGlyph();
         PropertyChanged += (_, e) =>
         {
@@ -151,9 +140,6 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                 SyncMaximiseGlyph();
         };
     }
-
-    private void ToggleMaximised()
-        => WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
 
     private void SyncMaximiseGlyph()
     {
