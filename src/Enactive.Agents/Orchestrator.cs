@@ -88,8 +88,9 @@ public sealed class Orchestrator : IOrchestrator
         var runId = Guid.NewGuid();
         var taskId = intent.Id;
 
-        // Open the ambient correlation scope for the whole run: every nested provider/tool/planner
-        // call is then tagged with this run in the global log, without threading ids through them.
+        // This scope covers only the code up to the first yield: an async iterator resumes on its
+        // CONSUMER's execution context, so an AsyncLocal set here is gone from the next segment on.
+        // The work itself is therefore scoped where it runs - see InScopeAsync and the two pumps.
         using var _logScope = LogScope.Begin(runId, taskId);
 
         // The step number rides along in PayloadJson so a UI can attribute an event to the right
@@ -126,7 +127,8 @@ public sealed class Orchestrator : IOrchestrator
             yield return Ev(EventKind.Routed, $"Reviewer -> {reviewRef!.ProviderId}/{reviewRef.Model}");
 
         // ── Understand / Plan (reasoner when multi-agent) ─────────────────────
-        var plan = await _planner.PlanAsync(intent.RawText, intent.Context, planProvider, planModel, ct);
+        var plan = await InScopeAsync(runId, taskId, null,
+            () => _planner.PlanAsync(intent.RawText, intent.Context, planProvider, planModel, ct));
 
         var messages = new List<ChatMessage>
         {
@@ -139,8 +141,29 @@ public sealed class Orchestrator : IOrchestrator
         {
             yield return Ev(EventKind.Routed, $"Quick action: {plan.Title}");
 
-            await foreach (var ev in RunToolLoopAsync(taskId, runId, provider, model.Model, worker, messages, artifacts, intent.Context, null, ct))
+            // Drained through a channel for the same reason as the DAG path below: the work runs in a
+            // task that owns the log scope, while this method only yields what the channel hands it.
+            var quick = Channel.CreateUnbounded<WorkEvent>(
+                new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
+            var quickPump = Task.Run(async () =>
+            {
+                using var _quickScope = LogScope.Begin(runId, taskId);
+                try
+                {
+                    await foreach (var ev in RunToolLoopAsync(
+                        taskId, runId, provider, model.Model, worker, messages, artifacts, intent.Context, null, ct))
+                        quick.Writer.TryWrite(ev);
+                }
+                finally
+                {
+                    quick.Writer.TryComplete();
+                }
+            }, ct);
+
+            await foreach (var ev in quick.Reader.ReadAllAsync(ct))
                 yield return ev;
+
+            await quickPump;
 
             yield return Ev(EventKind.TaskCompleted, SummarizeArtifacts(artifacts));
             yield break;
@@ -175,6 +198,9 @@ public sealed class Orchestrator : IOrchestrator
         async Task RunStepAsync(PlanStep step)
         {
             var stepNumber = stepNumbers.TryGetValue(step.Id, out var planNo) ? planNo : 0;
+            // Every prompt, response and tool call this step makes is stamped with its number, so a
+            // parallel run stays readable in one log file.
+            using var _stepScope = LogScope.Begin(runId, taskId, stepNumber);
             void Emit(EventKind kind, string summary) => events.Writer.TryWrite(Ev(kind, summary, stepNumber));
 
             var depNote = step.DependsOn.Count > 0 ? $" (after {step.DependsOn.Count} dep)" : "";
@@ -308,6 +334,7 @@ public sealed class Orchestrator : IOrchestrator
         // Dispatcher: keep up to maxParallel steps in flight, topping up as each one finishes.
         var pump = Task.Run(async () =>
         {
+            using var _pumpScope = LogScope.Begin(runId, taskId);
             var inFlight = new List<Task>();
             try
             {
@@ -341,6 +368,17 @@ public sealed class Orchestrator : IOrchestrator
                 "Plan has unresolvable dependencies (a cycle) — remaining steps could not run.");
 
         yield return Ev(EventKind.TaskCompleted, SummarizeArtifacts(artifacts));
+    }
+
+    /// <summary>
+    /// Runs one awaited operation under the ambient log scope, so what it logs carries the run (and,
+    /// where given, the step). Needed because <see cref="SubmitIntentAsync"/> is an async iterator and
+    /// a scope opened in it does not survive a yield - see <see cref="LogScope"/>.
+    /// </summary>
+    private static async Task<T> InScopeAsync<T>(Guid run, Guid task, int? step, Func<Task<T>> body)
+    {
+        using var _scope = LogScope.Begin(run, task, step);
+        return await body();
     }
 
     /// <summary>

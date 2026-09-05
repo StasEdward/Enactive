@@ -175,7 +175,10 @@ public sealed class FileLogSink : ILogSink, IDisposable
                 RollIfNeeded(entry.At);
                 if (_writer is null) return;
 
+                // "run=1a2b3c4d#2" - the step suffix is what makes parallel steps separable in one file.
                 var run = entry.RunId is { } r ? r.ToString("N")[..8] : "--------";
+                if (entry.Step is { } stepNo)
+                    run += "#" + stepNo;
                 var cat = string.IsNullOrEmpty(entry.Category) ? "" : $" [{entry.Category}]";
                 _writer.WriteLine(
                     $"{entry.At.ToLocalTime():HH:mm:ss.fff} {entry.Level,-5} {entry.Source,-12} run={run}{cat} {entry.Message}");

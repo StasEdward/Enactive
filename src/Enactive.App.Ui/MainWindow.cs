@@ -1,6 +1,5 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
-using System.Text.RegularExpressions;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
@@ -672,7 +671,7 @@ public sealed class MainWindow : Window, IDecisionHandler
     {
         // Prefer the step number the orchestrator stamped on the event; steps can start out of order
         // (and several at once) once MaxParallelSteps > 1, so a running counter is not enough.
-        var index = StepNoOf(ev) ?? ++_stepIndex;
+        var index = ev.StepNo() ?? ++_stepIndex;
         _stepIndex = Math.Max(_stepIndex, index);
 
         StepCard card;
@@ -702,22 +701,10 @@ public sealed class MainWindow : Window, IDecisionHandler
         _currentCard = _running.Count == 1 ? _running[0] : null;
     }
 
-    /// <summary>The step number the orchestrator put in PayloadJson, e.g. {"step":3}.</summary>
-    private static int? StepNoOf(WorkEvent ev)
-    {
-        var payload = ev.PayloadJson;
-        if (string.IsNullOrEmpty(payload))
-            return null;
-        var m = StepNoRegex.Match(payload);
-        return m.Success && int.TryParse(m.Groups[1].Value, out var n) ? n : null;
-    }
-
-    private static readonly Regex StepNoRegex = new("\"step\"\\s*:\\s*(\\d+)", RegexOptions.Compiled);
-
     /// <summary>The card this event belongs to, or null when it carries no step number.</summary>
     private StepCard? CardFor(WorkEvent ev)
     {
-        var n = StepNoOf(ev);
+        var n = ev.StepNo();
         return n is { } i && i - 1 >= 0 && i - 1 < _cards.Count ? _cards[i - 1] : null;
     }
 

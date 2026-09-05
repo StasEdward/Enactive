@@ -35,3 +35,23 @@ public sealed record WorkEvent(
     EventKind Kind,
     string Summary,
     string? PayloadJson);
+
+/// <summary>
+/// Reading the extras the orchestrator puts in <see cref="WorkEvent.PayloadJson"/>. The step number
+/// rides there as {"step":3} rather than in a typed field, so adding it needed no schema change; this
+/// is the single place that knows that, for every consumer (log tap, UI step cards).
+/// </summary>
+public static class WorkEventPayload
+{
+    private static readonly System.Text.RegularExpressions.Regex StepNoRegex =
+        new("\"step\"\\s*:\\s*(\\d+)", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>The plan step this event belongs to, or null when it carries no step number.</summary>
+    public static int? StepNo(this WorkEvent ev)
+    {
+        if (string.IsNullOrEmpty(ev.PayloadJson))
+            return null;
+        var m = StepNoRegex.Match(ev.PayloadJson);
+        return m.Success && int.TryParse(m.Groups[1].Value, out var n) ? n : null;
+    }
+}

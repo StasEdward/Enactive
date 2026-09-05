@@ -34,7 +34,8 @@ public static class EventLogTap
                         TaskId: ev.TaskId,
                         Message: $"{ev.Kind}: {ev.Summary}",
                         Detail: ev.PayloadJson,
-                        Category: ev.Kind.ToString()));
+                        Category: ev.Kind.ToString(),
+                        Step: ev.StepNo()));
                 }
                 catch { /* logging must never break the run */ }
             }

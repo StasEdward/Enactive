@@ -20,9 +20,11 @@ public enum LogSource
 
 /// <summary>
 /// One line in the global log. Immutable. Seq is a monotonic id assigned by the hub so the UI can
-/// order and de-duplicate regardless of thread timing. RunId/TaskId carry run correlation, filled
-/// from the ambient <see cref="LogScope"/> at write time. Detail holds the heavy payload (a full
-/// prompt, a raw response body, a tool's arguments) that the UI shows only when a row is expanded.
+/// order and de-duplicate regardless of thread timing. RunId/TaskId carry run correlation and Step
+/// the plan step that produced the line, all filled from the ambient <see cref="LogScope"/> at write
+/// time; Step is what makes a parallel run readable, since several steps interleave their prompts and
+/// responses in one file. Detail holds the heavy payload (a full prompt, a raw response body, a
+/// tool's arguments) that the UI shows only when a row is expanded.
 /// </summary>
 public sealed record LogEntry(
     long            Seq,
@@ -33,7 +35,8 @@ public sealed record LogEntry(
     Guid?           TaskId,
     string          Message,
     string?         Detail,
-    string?         Category);
+    string?         Category,
+    int?            Step = null);
 
 /// <summary>
 /// The write side of the log. Everything that wants to log holds one of these and nothing more —
@@ -54,26 +57,33 @@ public sealed class NullLogSink : ILogSink
 }
 
 /// <summary>
-/// Ambient run correlation. The orchestrator opens a scope for the duration of a run; every nested
-/// async call (provider, tool, planner, reviewer) then reads the current run id without it being
-/// threaded through method signatures. Uses <see cref="AsyncLocal{T}"/> so the value flows with the
-/// async call chain and is isolated per run even when runs overlap.
+/// Ambient run correlation. A scope is opened around the work of a run (and, inside it, of a single
+/// plan step); every nested async call — provider, tool, planner, reviewer — then reads the current
+/// ids without them being threaded through method signatures. Uses <see cref="AsyncLocal{T}"/> so the
+/// value flows with the async call chain and is isolated per run, and per step, even when several
+/// overlap.
+///
+/// IMPORTANT: an async ITERATOR resumes on its consumer's execution context after every
+/// <c>yield return</c>, so a scope opened once at the top of one is gone from the second segment
+/// onwards — that is why the orchestrator opens the scope around the work (the planner call, the step
+/// pump) rather than once around its event stream. Do not "simplify" it back.
 /// </summary>
 public static class LogScope
 {
     private static readonly AsyncLocal<Frame?> _current = new();
 
-    public static (Guid Run, Guid Task)? Current
-        => _current.Value is { } f ? (f.Run, f.Task) : null;
+    public static (Guid Run, Guid Task, int? Step)? Current
+        => _current.Value is { } f ? (f.Run, f.Task, f.Step) : null;
 
-    public static IDisposable Begin(Guid run, Guid task)
+    /// <summary>Opens a scope for a run, optionally narrowed to one plan step.</summary>
+    public static IDisposable Begin(Guid run, Guid task, int? step = null)
     {
         var previous = _current.Value;
-        _current.Value = new Frame(run, task);
+        _current.Value = new Frame(run, task, step);
         return new Pop(previous);
     }
 
-    private sealed record Frame(Guid Run, Guid Task);
+    private sealed record Frame(Guid Run, Guid Task, int? Step);
 
     private sealed class Pop : IDisposable
     {
@@ -117,7 +127,8 @@ public static class LogSinkExtensions
                 TaskId: run?.Task,
                 Message: message,
                 Detail: detail,
-                Category: category));
+                Category: category,
+                Step: run?.Step));
         }
         catch
         {

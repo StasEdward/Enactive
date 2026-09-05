@@ -215,7 +215,8 @@ public sealed class LogWindow : Window
     private void ShowDetail(LogEntry e)
     {
         var sb = new StringBuilder();
-        var run = e.RunId is { } r ? r.ToString("N")[..8] : "(none)";
+        var run = (e.RunId is { } r ? r.ToString("N")[..8] : "(none)")
+                  + (e.Step is { } s8 ? "#" + s8 : "");
         sb.Append(e.At.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss.fff"))
           .Append("  ").Append(e.Level)
           .Append("  ").Append(e.Source)
@@ -262,7 +263,8 @@ public sealed class LogWindow : Window
         public Row(LogEntry e)
         {
             Entry = e;
-            var run = e.RunId is { } r ? r.ToString("N")[..6] : "------";
+            var run = (e.RunId is { } r ? r.ToString("N")[..6] : "------")
+                      + (e.Step is { } s6 ? "#" + s6 : "");
             var cat = string.IsNullOrEmpty(e.Category) ? "" : $" [{e.Category}]";
             var msg = e.Message.Replace("\r", " ").Replace("\n", " ");
             if (msg.Length > 200) msg = msg[..200] + "…";
