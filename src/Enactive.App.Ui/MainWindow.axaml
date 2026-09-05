@@ -324,7 +324,7 @@
                          SelectedItem="{Binding Runs.Selected}">
                     <ListBox.ItemTemplate>
                         <DataTemplate x:DataType="vm:RunListItemViewModel">
-                            <Border Classes="runCard" BorderBrush="{Binding StatusBrush}"
+                            <Border Classes="card" BorderBrush="{Binding StatusBrush}"
                                     ToolTip.Tip="{Binding Tooltip}">
                                 <StackPanel>
                                     <TextBlock Classes="cardTitle" Text="{Binding Title}" />

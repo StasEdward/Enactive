@@ -158,15 +158,28 @@
 
             <Panel IsVisible="{Binding IsAiProviders}">
                 <DockPanel LastChildFill="True" Margin="12">
+                    <TextBlock DockPanel.Dock="Top" Classes="hint" Margin="0,0,0,6"
+                               Text="Green runs on this machine; blue is reached over the network — the one thing about a provider worth seeing without reading it." />
                     <StackPanel DockPanel.Dock="Bottom" Classes="actions">
                         <Button Content="Add" Command="{Binding AddProviderCommand}" />
                         <Button Content="Edit" Command="{Binding EditProviderCommand}" />
                         <Button Content="Remove" Command="{Binding RemoveProviderCommand}" />
                     </StackPanel>
-                    <ListBox ItemsSource="{Binding Providers}" SelectedItem="{Binding SelectedProvider}">
+                    <ListBox Classes="cards" ItemsSource="{Binding Providers}"
+                             SelectedItem="{Binding SelectedProvider}">
                         <ListBox.ItemTemplate>
                             <DataTemplate x:DataType="vm:ProviderRow">
-                                <TextBlock Text="{Binding Display}" Margin="2" />
+                                <Border Classes="card" BorderBrush="{Binding EdgeBrush}">
+                                    <Grid ColumnDefinitions="*,Auto">
+                                        <StackPanel Grid.Column="0" Margin="0,0,10,0">
+                                            <TextBlock Classes="cardTitle" Text="{Binding Name}" />
+                                            <TextBlock Classes="cardMeta" Text="{Binding Meta}" />
+                                        </StackPanel>
+                                        <TextBlock Grid.Column="1" Text="{Binding Reach}"
+                                                   Classes="cardMeta" VerticalAlignment="Center"
+                                                   Margin="0" />
+                                    </Grid>
+                                </Border>
                             </DataTemplate>
                         </ListBox.ItemTemplate>
                     </ListBox>
@@ -175,17 +188,23 @@
 
             <Panel IsVisible="{Binding IsAiTeam}">
                 <DockPanel LastChildFill="True" Margin="12">
-                    <TextBlock DockPanel.Dock="Top" Classes="hint"
-                               Text="The main window's role picker chooses which worker handles a run. Honesty rules and global instructions are added to every worker automatically." />
+                    <TextBlock DockPanel.Dock="Top" Classes="hint" Margin="0,0,0,6"
+                               Text="The main window's role picker chooses which worker handles a run. Honesty rules and global instructions are added to every worker automatically. The edge is the worker's permission level, on the same green-to-red scale as the autonomy slider." />
                     <StackPanel DockPanel.Dock="Bottom" Classes="actions">
                         <Button Content="Add" Command="{Binding AddWorkerCommand}" />
                         <Button Content="Edit" Command="{Binding EditWorkerCommand}" />
                         <Button Content="Remove" Command="{Binding RemoveWorkerCommand}" />
                     </StackPanel>
-                    <ListBox ItemsSource="{Binding Workers}" SelectedItem="{Binding SelectedWorker}">
+                    <ListBox Classes="cards" ItemsSource="{Binding Workers}"
+                             SelectedItem="{Binding SelectedWorker}">
                         <ListBox.ItemTemplate>
                             <DataTemplate x:DataType="vm:WorkerRow">
-                                <TextBlock Text="{Binding Display}" Margin="2" />
+                                <Border Classes="card" BorderBrush="{Binding EdgeBrush}">
+                                    <StackPanel>
+                                        <TextBlock Classes="cardTitle" Text="{Binding Name}" />
+                                        <TextBlock Classes="cardMeta" Text="{Binding Meta}" />
+                                    </StackPanel>
+                                </Border>
                             </DataTemplate>
                         </ListBox.ItemTemplate>
                     </ListBox>

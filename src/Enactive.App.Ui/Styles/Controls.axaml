@@ -299,10 +299,11 @@
     </Style>
 
     <!-- ── A list of cards ─────────────────────────────────────────────────
-         The run list is cards, not rows: each carries a coloured edge saying how
-         it ended, and that edge has to be there BEFORE you click it - which is
-         exactly what a selection-only marker cannot do. So the ListBoxItem gives
-         up all its own chrome and the card inside it carries every state.
+         Runs, providers, workers: each row carries a coloured edge saying something
+         true about it, and that edge has to be there BEFORE you click it - which is
+         exactly what a selection-only marker cannot do. So the ListBoxItem gives up
+         all its own chrome, including Fluent's flat grey ground, and the card inside
+         it carries every state.
     -->
     <Style Selector="ListBox.cards">
         <Setter Property="Background" Value="Transparent" />
@@ -333,7 +334,7 @@
         <Setter Property="BorderThickness" Value="0" />
     </Style>
 
-    <Style Selector="Border.runCard">
+    <Style Selector="Border.card">
         <Setter Property="Background" Value="{DynamicResource Brand.CardFill}" />
         <Setter Property="BorderBrush" Value="{DynamicResource Brand.LineStrong}" />
         <Setter Property="BorderThickness" Value="3,0,0,0" />
@@ -341,10 +342,10 @@
         <Setter Property="Padding" Value="10,8" />
         <Setter Property="Margin" Value="0,0,0,6" />
     </Style>
-    <Style Selector="ListBoxItem:pointerover Border.runCard">
+    <Style Selector="ListBoxItem:pointerover Border.card">
         <Setter Property="Background" Value="{DynamicResource Brand.CardFillHover}" />
     </Style>
-    <Style Selector="ListBoxItem:selected Border.runCard">
+    <Style Selector="ListBoxItem:selected Border.card">
         <Setter Property="Background" Value="{DynamicResource Brand.CardFillActive}" />
     </Style>
 

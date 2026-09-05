@@ -1,6 +1,7 @@
 namespace Enactive.App.Ui.ViewModels;
 
 using System.Collections.ObjectModel;
+using Avalonia.Media;
 using Enactive.App.Ui.Mvvm;
 using Enactive.Core.Providers;
 
@@ -12,9 +13,29 @@ internal sealed class ProviderRow : ObservableObject
 
     public ProviderConfig Config { get; }
 
-    public string Display => $"{Config.Id}   ·   {Config.Kind}   ·   {Config.BaseUrl}";
+    public string Name => Config.Id;
+    public string Meta => $"{Config.Kind}  ·  {Config.BaseUrl}";
 
-    public void Refresh() => OnPropertyChanged(nameof(Display));
+    /// <summary>
+    /// Green when the provider is on this machine, blue when it is not. That is the one thing about
+    /// a provider worth seeing without reading: whether your code leaves the box to reach it.
+    /// </summary>
+    public IBrush EdgeBrush => IsLocal ? Brand.Success : Brand.Info;
+
+    public string Reach => IsLocal ? "local" : "remote";
+
+    private bool IsLocal =>
+        Config.BaseUrl.Contains("localhost", StringComparison.OrdinalIgnoreCase)
+        || Config.BaseUrl.Contains("127.0.0.1", StringComparison.Ordinal)
+        || Config.BaseUrl.Contains("[::1]", StringComparison.Ordinal);
+
+    public void Refresh()
+    {
+        OnPropertyChanged(nameof(Name));
+        OnPropertyChanged(nameof(Meta));
+        OnPropertyChanged(nameof(EdgeBrush));
+        OnPropertyChanged(nameof(Reach));
+    }
 }
 
 /// <summary>One row of the Team list, on the same terms as <see cref="ProviderRow"/>.</summary>
@@ -24,9 +45,21 @@ internal sealed class WorkerRow : ObservableObject
 
     public WorkerConfig Config { get; }
 
-    public string Display => $"{Config.Role}   ·   {Config.Model}   ·   {Config.Level}";
+    public string Name => Config.Role;
+    public string Meta => $"{Config.Model}  ·  {Config.Level}";
 
-    public void Refresh() => OnPropertyChanged(nameof(Display));
+    /// <summary>
+    /// The worker's permission level on the same green-blue-yellow-red scale the autonomy slider
+    /// uses, because it is the same question: how much this one may do without asking.
+    /// </summary>
+    public IBrush EdgeBrush => Brand.Autonomy((int)Config.Level);
+
+    public void Refresh()
+    {
+        OnPropertyChanged(nameof(Name));
+        OnPropertyChanged(nameof(Meta));
+        OnPropertyChanged(nameof(EdgeBrush));
+    }
 }
 
 /// <summary>
