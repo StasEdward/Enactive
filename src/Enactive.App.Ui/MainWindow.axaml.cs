@@ -136,6 +136,8 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         // Tunnel so we see the keys before the TextBox consumes Enter.
         AddHandler(InputElement.KeyDownEvent, OnPreviewKeyDown, RoutingStrategies.Tunnel);
 
+        // Startup stays on the workspace pane: nobody CHOSE anything this session, and the card is
+        // where you check which folder you were left in.
         RefreshWorkspaces();
         WireTitleBar();
     }
@@ -748,6 +750,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         _registry.Touch(_vm.WorkspacePath);
         RefreshWorkspaces();
         RefreshInboxButton();
+        SettleOnAPane();
     }
 
     /// <summary>
@@ -768,6 +771,20 @@ public sealed partial class MainWindow : Window, IDecisionHandler
 
         _registry.Touch(picked);
         SwitchWorkspace(picked);
+    }
+
+    /// <summary>
+    /// Which pane to leave the user on. Having just CHOSEN a workspace, the card they chose it with
+    /// tells them nothing they do not know; what has already been done in it does. So: the run
+    /// history - unless the folder is not there, in which case the workspace pane, because that is
+    /// where the problem is stated and where the fix lives.
+    /// </summary>
+    private void SettleOnAPane()
+    {
+        if (_vm.WorkspaceMissing)
+            _vm.SelectedPane = 0;
+        else
+            _vm.ShowRunsPane();
     }
 
     private void ForgetWorkspace(string path)

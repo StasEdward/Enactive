@@ -209,13 +209,7 @@ internal sealed class MainWindowViewModel : ObservableObject
         ShowLogCommand = new RelayCommand(() => SelectedTab = 2);
 
         ShowWorkspacePaneCommand = new RelayCommand(() => SelectedPane = 0);
-        ShowRunsPaneCommand = new RelayCommand(() =>
-        {
-            SelectedPane = 1;
-            // Asking on the way in beats a Refresh button nobody presses: the list is only ever
-            // looked at when this pane is open.
-            Runs.RefreshCommand.Execute(null);
-        });
+        ShowRunsPaneCommand = new RelayCommand(ShowRunsPane);
         BackToLiveCommand = new RelayCommand(() => ShowLiveRun());
 
         ToggleSwitcherCommand = new RelayCommand(() => IsSwitcherOpen = !IsSwitcherOpen);
@@ -473,6 +467,16 @@ internal sealed class MainWindowViewModel : ObservableObject
 
     public RelayCommand ShowWorkspacePaneCommand { get; }
     public RelayCommand ShowRunsPaneCommand { get; }
+
+    /// <summary>
+    /// Opens the run history and loads it. Asking on the way in beats a Refresh button nobody
+    /// presses - the list is only ever looked at while this pane is open.
+    /// </summary>
+    public void ShowRunsPane()
+    {
+        SelectedPane = 1;
+        Runs.RefreshCommand.Execute(null);
+    }
 
     // ── Reading a past run ────────────────────────────────────────────────────
     /// <summary>
