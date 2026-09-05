@@ -433,6 +433,15 @@
         <Setter Property="FontWeight" Value="SemiBold" />
         <Setter Property="Foreground" Value="{DynamicResource Brand.Text}" />
     </Style>
+    <!-- A model name is an identifier, so it gets the mono face - the same reason paths do. -->
+    <Style Selector="TextBlock.routing">
+        <Setter Property="FontFamily" Value="Consolas, Menlo, monospace" />
+        <Setter Property="FontSize" Value="11" />
+        <Setter Property="Foreground" Value="{DynamicResource Brand.TextMuted}" />
+        <Setter Property="TextWrapping" Value="NoWrap" />
+        <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+    </Style>
+
     <Style Selector="TextBlock.tileLabel">
         <Setter Property="FontSize" Value="10" />
         <Setter Property="Foreground" Value="{DynamicResource Brand.TextFaint}" />

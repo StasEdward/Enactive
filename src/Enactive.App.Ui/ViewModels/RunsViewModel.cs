@@ -140,6 +140,15 @@ internal sealed class PastRunViewModel : ObservableObject
             Decisions.Add(d);
 
         // The same three tiles the live run shows, off what was actually recorded.
+        Routing = RunRouting.From(record);
+
+        // Null usage means the run predates the counting, or the provider never reported - which is
+        // not the same as zero and does not get to look like it.
+        TokensText = record.Usage is { } u ? MainWindowViewModel.Compact(u.Total) : "—";
+        TokensDetail = record.Usage is { } u2
+            ? $"{MainWindowViewModel.Compact(u2.PromptTokens)} in · {MainWindowViewModel.Compact(u2.CompletionTokens)} out"
+            : "nothing reported";
+
         ArtifactCountText = Artifacts.Count.ToString();
         ToolCallsText = record.Events.Count(e => e.Kind == nameof(EventKind.ToolInvoked)).ToString();
         ElapsedText = Duration(elapsed);
@@ -199,6 +208,10 @@ internal sealed class PastRunViewModel : ObservableObject
     public IBrush AutonomyBrush { get; } = Brand.TextMuted;
     public string WorkerText { get; } = string.Empty;
     public string StagingText { get; } = string.Empty;
+
+    public RunRouting Routing { get; }
+    public string TokensText { get; }
+    public string TokensDetail { get; }
 
     public string ArtifactCountText { get; }
     public string ToolCallsText { get; }

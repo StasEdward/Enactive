@@ -21,6 +21,15 @@ public sealed record RunEventRecord(DateTimeOffset At, string Kind, string Summa
 public sealed record RunSettings(int Autonomy, string AutonomyName, string? Worker, bool Staged);
 
 /// <summary>
+/// What the run cost, summed over every turn. Providers report a total per turn rather than an
+/// increment, so this is the sum of the turns, not of a running counter.
+/// </summary>
+public sealed record RunUsage(int PromptTokens, int CompletionTokens)
+{
+    public int Total => PromptTokens + CompletionTokens;
+}
+
+/// <summary>
 /// A persisted agent run (PLAN_v2 §2A.6) plus its events, artifacts and decisions. The Timeline —
 /// "the memory of the project" — is built from these records.
 /// </summary>
@@ -36,7 +45,10 @@ public sealed record RunRecord(
     IReadOnlyList<string> Artifacts,
     IReadOnlyList<string> Decisions,
     /// <summary>Null for runs recorded before the settings were kept.</summary>
-    RunSettings? Settings = null);
+    RunSettings? Settings = null,
+    /// <summary>Null for runs recorded before tokens were counted, and for a provider that does not
+    /// report them - which is a different thing from zero and is shown differently.</summary>
+    RunUsage? Usage = null);
 
 /// <summary>Persists and loads run records for a workspace.</summary>
 public interface IRunStore

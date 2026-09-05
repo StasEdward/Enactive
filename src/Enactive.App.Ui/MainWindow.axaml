@@ -532,27 +532,49 @@
                     <StackPanel Spacing="8">
                         <TextBlock Classes="panelHeader" Text="AI STATUS" Margin="0" />
 
-                        <!-- Only counts the app actually holds. -->
-                        <Grid ColumnDefinitions="*,6,*,6,*">
-                            <Border Grid.Column="0" Classes="tile">
+                        <!-- Four tiles, two by two: a 300px column cannot hold four across
+                             and still show a number. Only counts the app actually holds. -->
+                        <Grid ColumnDefinitions="*,6,*" RowDefinitions="Auto,6,Auto">
+                            <Border Grid.Row="0" Grid.Column="0" Classes="tile">
                                 <StackPanel>
                                     <TextBlock Classes="tileValue" Text="{Binding ArtifactCountText}" />
                                     <TextBlock Classes="tileLabel" Text="ARTIFACTS" />
                                 </StackPanel>
                             </Border>
-                            <Border Grid.Column="2" Classes="tile">
+                            <Border Grid.Row="0" Grid.Column="2" Classes="tile">
                                 <StackPanel>
                                     <TextBlock Classes="tileValue" Text="{Binding ToolCallsText}" />
                                     <TextBlock Classes="tileLabel" Text="TOOL CALLS" />
                                 </StackPanel>
                             </Border>
-                            <Border Grid.Column="4" Classes="tile">
+                            <Border Grid.Row="2" Grid.Column="0" Classes="tile"
+                                    ToolTip.Tip="{Binding TokensDetail}">
+                                <StackPanel>
+                                    <TextBlock Classes="tileValue" Text="{Binding TokensText}" />
+                                    <TextBlock Classes="tileLabel" Text="TOKENS" />
+                                </StackPanel>
+                            </Border>
+                            <Border Grid.Row="2" Grid.Column="2" Classes="tile">
                                 <StackPanel>
                                     <TextBlock Classes="tileValue" Text="{Binding StatusElapsed}" />
                                     <TextBlock Classes="tileLabel" Text="ELAPSED" />
                                 </StackPanel>
                             </Border>
                         </Grid>
+
+                        <!-- Which model actually served each phase. Read from the run's own Routed
+                             events, not from the bindings: the settings say what is bound, this
+                             says what was used. -->
+                        <StackPanel Spacing="2" IsVisible="{Binding Routing.HasAny}"
+                                    Margin="0,6,0,0">
+                            <TextBlock Classes="panelHeader" Text="ROUTING" Margin="0" />
+                            <TextBlock Classes="routing" Text="{Binding Routing.Worker}"
+                                       IsVisible="{Binding Routing.HasWorker}" />
+                            <TextBlock Classes="routing" Text="{Binding Routing.Plan}"
+                                       IsVisible="{Binding Routing.HasPlan}" />
+                            <TextBlock Classes="routing" Text="{Binding Routing.Review}"
+                                       IsVisible="{Binding Routing.HasReview}" />
+                        </StackPanel>
 
                         <TextBlock Classes="hint" Text="{Binding StatusProgress}" FontSize="12" />
 
@@ -769,26 +791,49 @@
                             <TextBlock Classes="panelHeader" Text="THIS RUN" Margin="0" />
                             <TextBlock Classes="hint" Text="{Binding PastRun.StepsText}" FontSize="12" />
 
-                            <Grid ColumnDefinitions="*,6,*,6,*">
-                                <Border Grid.Column="0" Classes="tile">
+                            <!-- Four tiles, two by two: a 300px column cannot hold four across
+                                 and still show a number. Only counts the app actually holds. -->
+                            <Grid ColumnDefinitions="*,6,*" RowDefinitions="Auto,6,Auto">
+                                <Border Grid.Row="0" Grid.Column="0" Classes="tile">
                                     <StackPanel>
                                         <TextBlock Classes="tileValue" Text="{Binding PastRun.ArtifactCountText}" />
                                         <TextBlock Classes="tileLabel" Text="ARTIFACTS" />
                                     </StackPanel>
                                 </Border>
-                                <Border Grid.Column="2" Classes="tile">
+                                <Border Grid.Row="0" Grid.Column="2" Classes="tile">
                                     <StackPanel>
                                         <TextBlock Classes="tileValue" Text="{Binding PastRun.ToolCallsText}" />
                                         <TextBlock Classes="tileLabel" Text="TOOL CALLS" />
                                     </StackPanel>
                                 </Border>
-                                <Border Grid.Column="4" Classes="tile">
+                                <Border Grid.Row="2" Grid.Column="0" Classes="tile"
+                                        ToolTip.Tip="{Binding PastRun.TokensDetail}">
+                                    <StackPanel>
+                                        <TextBlock Classes="tileValue" Text="{Binding PastRun.TokensText}" />
+                                        <TextBlock Classes="tileLabel" Text="TOKENS" />
+                                    </StackPanel>
+                                </Border>
+                                <Border Grid.Row="2" Grid.Column="2" Classes="tile">
                                     <StackPanel>
                                         <TextBlock Classes="tileValue" Text="{Binding PastRun.ElapsedText}" />
                                         <TextBlock Classes="tileLabel" Text="ELAPSED" />
                                     </StackPanel>
                                 </Border>
                             </Grid>
+
+                            <!-- Which model actually served each phase. Read from the run's own Routed
+                                 events, not from the bindings: the settings say what is bound, this
+                                 says what was used. -->
+                            <StackPanel Spacing="2" IsVisible="{Binding PastRun.Routing.HasAny}"
+                                        Margin="0,6,0,0">
+                                <TextBlock Classes="panelHeader" Text="ROUTING" Margin="0" />
+                                <TextBlock Classes="routing" Text="{Binding PastRun.Routing.Worker}"
+                                           IsVisible="{Binding PastRun.Routing.HasWorker}" />
+                                <TextBlock Classes="routing" Text="{Binding PastRun.Routing.Plan}"
+                                           IsVisible="{Binding PastRun.Routing.HasPlan}" />
+                                <TextBlock Classes="routing" Text="{Binding PastRun.Routing.Review}"
+                                           IsVisible="{Binding PastRun.Routing.HasReview}" />
+                            </StackPanel>
 
                             <!-- What it was allowed to do. Half of "why did it do that" is
                                  answered here, and the slider on screen today is not it. -->

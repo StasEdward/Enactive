@@ -44,6 +44,12 @@ public sealed class AnthropicProvider : IChatProvider
         if (completion.Message.ToolCalls is { Count: > 0 } calls)
             foreach (var call in calls)
                 yield return new ToolCallDelta(0, call.Id, call.Name, call.ArgumentsJson);
+
+        // The counts were already in the response and were being thrown away here, which is why a
+        // run on Claude reported no tokens at all while a local one did.
+        if (completion.PromptTokens is not null || completion.CompletionTokens is not null)
+            yield return new UsageDelta(completion.PromptTokens, completion.CompletionTokens);
+
         yield return new FinishDelta(completion.FinishReason);
     }
 

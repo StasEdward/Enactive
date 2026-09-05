@@ -289,6 +289,8 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         _vm.TaskTitle = Summarise(text);
         _vm.HasTask = true;
         _vm.ToolCalls = 0;
+        _vm.ResetUsage();
+        _vm.Routing.Clear();
         _vm.SelectedTab = 0;
         // Reading history is fine; watching it while a new run of your own starts is not.
         _vm.ShowLiveRun();
@@ -410,6 +412,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                     _vm.StatusPhase = "Understanding";
                     break;
                 case EventKind.Routed:
+                    _vm.Routing.Apply(ev.Summary);
                     if (ev.Summary.Contains("-> model"))
                         _vm.StatusPhase = "Planning";
                     if (ev.Summary.StartsWith("Quick action: ", StringComparison.Ordinal))
@@ -507,6 +510,10 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                         decisionCard.SetActivity("Waiting for your approval…");
                         decisionCard.ExpandForAttention();
                     }
+                    break;
+                case EventKind.UsageReported:
+                    if (ev.Usage() is { } used)
+                        _vm.AddUsage(used.In, used.Out);
                     break;
                 case EventKind.ArtifactProduced:
                     (CardFor(ev) ?? EnsureCurrentCard()).AddNote("Artifact: " + ev.Summary);

@@ -70,6 +70,9 @@ public sealed class RunRecorder
         var eventRecords = new List<RunEventRecord>();
         var failed = false;
         var completed = false;
+        var promptTokens = 0;
+        var completionTokens = 0;
+        var sawUsage = false;
 
         foreach (var ev in events)
         {
@@ -91,6 +94,11 @@ public sealed class RunRecorder
                 case EventKind.DecisionResolved:
                     decisions.Add(ev.Summary);
                     break;
+                case EventKind.UsageReported when ev.Usage() is { } used:
+                    promptTokens += used.In;
+                    completionTokens += used.Out;
+                    sawUsage = true;
+                    break;
                 case EventKind.TaskFailed:
                     failed = true;
                     break;
@@ -103,7 +111,10 @@ public sealed class RunRecorder
         var status = failed ? "Failed" : completed ? "Completed" : "Incomplete";
         return new RunRecord(
             first.RunId, first.TaskId, title, model,
-            first.At, last.At, status, eventRecords, artifacts, decisions, settings);
+            first.At, last.At, status, eventRecords, artifacts, decisions, settings,
+            // Null rather than zero when nothing reported: "this provider does not tell us" and
+            // "this run used no tokens" are different facts and are shown differently.
+            sawUsage ? new RunUsage(promptTokens, completionTokens) : null);
     }
 
     private static string StripPrefix(string value, string prefix)

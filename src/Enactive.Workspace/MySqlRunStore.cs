@@ -30,13 +30,13 @@ public sealed class MySqlRunStore : IRunStore
         command.CommandText =
             """
             INSERT INTO runs
-              (run_id, task_id, title, model, started_at, finished_at, status, events_json, artifacts_json, decisions_json, settings_json)
+              (run_id, task_id, title, model, started_at, finished_at, status, events_json, artifacts_json, decisions_json, settings_json, usage_json)
             VALUES
-              (@run_id, @task_id, @title, @model, @started_at, @finished_at, @status, @events, @artifacts, @decisions, @settings)
+              (@run_id, @task_id, @title, @model, @started_at, @finished_at, @status, @events, @artifacts, @decisions, @settings, @usage)
             ON DUPLICATE KEY UPDATE
               task_id=@task_id, title=@title, model=@model, started_at=@started_at, finished_at=@finished_at,
               status=@status, events_json=@events, artifacts_json=@artifacts, decisions_json=@decisions,
-              settings_json=@settings;
+              settings_json=@settings, usage_json=@usage;
             """;
         command.Parameters.AddWithValue("@run_id", record.RunId.ToString());
         command.Parameters.AddWithValue("@task_id", record.TaskId.ToString());
@@ -50,6 +50,8 @@ public sealed class MySqlRunStore : IRunStore
         command.Parameters.AddWithValue("@decisions", JsonSerializer.Serialize(record.Decisions, Json));
         command.Parameters.AddWithValue("@settings",
             record.Settings is null ? DBNull.Value : JsonSerializer.Serialize(record.Settings, Json));
+        command.Parameters.AddWithValue("@usage",
+            record.Usage is null ? DBNull.Value : JsonSerializer.Serialize(record.Usage, Json));
 
         await command.ExecuteNonQueryAsync(ct);
     }
@@ -67,7 +69,7 @@ public sealed class MySqlRunStore : IRunStore
         command.CommandText =
             """
             SELECT run_id, task_id, title, model, started_at, finished_at, status,
-                   events_json, artifacts_json, decisions_json, settings_json
+                   events_json, artifacts_json, decisions_json, settings_json, usage_json
             FROM runs
             ORDER BY started_at DESC;
             """;
@@ -81,6 +83,9 @@ public sealed class MySqlRunStore : IRunStore
             var settings = reader.IsDBNull(10)
                 ? null
                 : JsonSerializer.Deserialize<RunSettings>(reader.GetString(10), Json);
+            var usage = reader.IsDBNull(11)
+                ? null
+                : JsonSerializer.Deserialize<RunUsage>(reader.GetString(11), Json);
 
             results.Add(new RunRecord(
                 Guid.Parse(reader.GetString(0)),
@@ -90,7 +95,7 @@ public sealed class MySqlRunStore : IRunStore
                 DateTimeOffset.Parse(reader.GetString(4), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
                 DateTimeOffset.Parse(reader.GetString(5), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
                 reader.GetString(6),
-                events, artifacts, decisions, settings));
+                events, artifacts, decisions, settings, usage));
         }
 
         return results;
@@ -124,7 +129,8 @@ public sealed class MySqlRunStore : IRunStore
                   events_json    LONGTEXT,
                   artifacts_json LONGTEXT,
                   decisions_json LONGTEXT,
-                  settings_json  LONGTEXT
+                  settings_json  LONGTEXT,
+                  usage_json     LONGTEXT
                 );
                 """;
             await command.ExecuteNonQueryAsync(ct);
@@ -135,6 +141,11 @@ public sealed class MySqlRunStore : IRunStore
             using var upgrade = connection.CreateCommand();
             upgrade.CommandText = "ALTER TABLE runs ADD COLUMN settings_json LONGTEXT;";
             try { await upgrade.ExecuteNonQueryAsync(ct); }
+            catch (MySqlException) { /* already has it */ }
+
+            using var upgradeUsage = connection.CreateCommand();
+            upgradeUsage.CommandText = "ALTER TABLE runs ADD COLUMN usage_json LONGTEXT;";
+            try { await upgradeUsage.ExecuteNonQueryAsync(ct); }
             catch (MySqlException) { /* already has it */ }
 
             _initialized = true;

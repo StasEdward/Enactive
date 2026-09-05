@@ -566,6 +566,48 @@ internal sealed class MainWindowViewModel : ObservableObject
     }
 
     public string ToolCallsText => _toolCalls.ToString();
+
+    /// <summary>
+    /// Tokens in and out, summed over the run. Providers report a total per turn rather than an
+    /// increment, so this adds up turns. An em dash means nothing was reported - which is a
+    /// different fact from zero, and is what a provider that does not count looks like.
+    /// </summary>
+    public int PromptTokens { get; private set; }
+    public int CompletionTokens { get; private set; }
+
+    public string TokensText => PromptTokens + CompletionTokens == 0
+        ? "—"
+        : Compact(PromptTokens + CompletionTokens);
+
+    public string TokensDetail => PromptTokens + CompletionTokens == 0
+        ? "nothing reported"
+        : $"{Compact(PromptTokens)} in · {Compact(CompletionTokens)} out";
+
+    public void AddUsage(int promptTokens, int completionTokens)
+    {
+        PromptTokens += promptTokens;
+        CompletionTokens += completionTokens;
+        OnPropertyChanged(nameof(TokensText));
+        OnPropertyChanged(nameof(TokensDetail));
+    }
+
+    public void ResetUsage()
+    {
+        PromptTokens = CompletionTokens = 0;
+        OnPropertyChanged(nameof(TokensText));
+        OnPropertyChanged(nameof(TokensDetail));
+    }
+
+    /// <summary>A tile is about four characters wide, and 128000 does not fit in four.</summary>
+    internal static string Compact(int tokens) => tokens switch
+    {
+        >= 1_000_000 => $"{tokens / 1_000_000.0:0.#}M",
+        >= 1_000 => $"{tokens / 1_000.0:0.#}k",
+        _ => tokens.ToString()
+    };
+
+    /// <summary>Which model actually served each phase of this run.</summary>
+    public RunRouting Routing { get; } = new();
     public string StatusProgress { get => _statusProgress; set => Set(ref _statusProgress, value); }
     public string StatusElapsed { get => _statusElapsed; set => Set(ref _statusElapsed, value); }
     public string CurrentAction { get => _currentAction; set => Set(ref _currentAction, value); }

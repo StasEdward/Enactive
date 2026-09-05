@@ -395,6 +395,11 @@ public sealed class Orchestrator : IOrchestrator
             => new(Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow, kind, summary,
                    stepNo is { } n ? $"{{\"step\":{n}}}" : null);
 
+        WorkEvent Usage(int prompt, int completion)
+            => new(Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow, EventKind.UsageReported,
+                   $"tokens: {prompt} in, {completion} out",
+                   WorkEventPayload.UsagePayload(prompt, completion, stepNo));
+
         for (var iteration = 1; iteration <= MaxIterations; iteration++)
         {
             var toolDefs = _tools.Definitions.Where(d => Allows(worker, d.Name)).ToArray();
@@ -426,7 +431,11 @@ public sealed class Orchestrator : IOrchestrator
                         finishReason = finish.Reason;
                         break;
 
-                    case UsageDelta:
+                    // What the turn cost. It was dropped here, which is why nothing downstream -
+                    // the status tile, the run record - could ever say. Providers report totals per
+                    // turn, not increments, so each turn is one event and the run adds them up.
+                    case UsageDelta usage:
+                        yield return Usage(usage.PromptTokens ?? 0, usage.CompletionTokens ?? 0);
                         break;
                 }
             }
