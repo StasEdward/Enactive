@@ -162,7 +162,6 @@ internal sealed class MainWindowViewModel : ObservableObject
     private bool _hasTask;
     private int _toolCalls;
     private int _selectedTab;
-    private int _selectedPane;
     private string _workspaceName = string.Empty;
     private bool _workspaceMissing;
     private bool _isSwitcherOpen;
@@ -208,8 +207,6 @@ internal sealed class MainWindowViewModel : ObservableObject
         ShowArtifactsCommand = new RelayCommand(() => SelectedTab = 1);
         ShowLogCommand = new RelayCommand(() => SelectedTab = 2);
 
-        ShowWorkspacePaneCommand = new RelayCommand(() => SelectedPane = 0);
-        ShowRunsPaneCommand = new RelayCommand(ShowRunsPane);
         BackToLiveCommand = new RelayCommand(() => ShowLiveRun());
 
         ToggleSwitcherCommand = new RelayCommand(() => IsSwitcherOpen = !IsSwitcherOpen);
@@ -266,8 +263,7 @@ internal sealed class MainWindowViewModel : ObservableObject
             if (!Set(ref _workspacePath, value))
                 return;
             Runs.Reset();
-            if (IsRunsPane)
-                Runs.RefreshCommand.Execute(null);
+            Runs.RefreshCommand.Execute(null);
             WorkspacePathChanged?.Invoke();
         }
     }
@@ -444,39 +440,12 @@ internal sealed class MainWindowViewModel : ObservableObject
     public bool IsArtifactsTab => _selectedTab == 1;
     public bool IsLogTab => _selectedTab == 2;
 
-    // ── The context column's two panes ────────────────────────────────────────
-    /// <summary>The workspace's run history. Handed its records by whoever owns the stores.</summary>
-    public RunsViewModel Runs { get; } = new();
-
-    /// <summary>0 = workspace, 1 = runs. The rail switches it; the column shows one at a time
-    /// because 268px cannot hold both and still leave the run setup readable.</summary>
-    public int SelectedPane
-    {
-        get => _selectedPane;
-        set
-        {
-            if (!Set(ref _selectedPane, value))
-                return;
-            OnPropertyChanged(nameof(IsWorkspacePane));
-            OnPropertyChanged(nameof(IsRunsPane));
-        }
-    }
-
-    public bool IsWorkspacePane => _selectedPane == 0;
-    public bool IsRunsPane => _selectedPane == 1;
-
-    public RelayCommand ShowWorkspacePaneCommand { get; }
-    public RelayCommand ShowRunsPaneCommand { get; }
-
     /// <summary>
-    /// Opens the run history and loads it. Asking on the way in beats a Refresh button nobody
-    /// presses - the list is only ever looked at while this pane is open.
+    /// The workspace's run history, which lives under the workspace card in the same column: you
+    /// change where you are working and watch what has been done there change under it. Handed its
+    /// records by whoever owns the stores.
     /// </summary>
-    public void ShowRunsPane()
-    {
-        SelectedPane = 1;
-        Runs.RefreshCommand.Execute(null);
-    }
+    public RunsViewModel Runs { get; } = new();
 
     // ── Reading a past run ────────────────────────────────────────────────────
     /// <summary>
