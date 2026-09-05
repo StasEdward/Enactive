@@ -74,6 +74,8 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     private DispatcherTimer? _elapsedTimer;
     private string _currentWorkspaceRoot = string.Empty;
     private readonly WorkspaceRegistry _registry = WorkspaceRegistry.Load();
+    private int _backgroundRuns;
+    private bool _forceClose;
     private StagingArtifactStore? _staging;
     private int _stagedShown;
 
@@ -131,7 +133,22 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             WindowStartupLocation = WindowStartupLocation.Manual;
             Position = new PixelPoint(_settings.WindowX, _settings.WindowY);
         }
-        Closing += (_, _) => { SaveWindowBounds(); _vm.RunLog?.Detach(); _log.Dispose(); };
+        Closing += (_, e) =>
+        {
+            // Ask before the window goes, but only when there is something to lose. A confirmation
+            // on every close is a click you learn to dismiss without reading, which is worse than
+            // no confirmation at all.
+            if (!_forceClose && HasWorkInFlight())
+            {
+                e.Cancel = true;
+                _ = ConfirmAndCloseAsync();
+                return;
+            }
+
+            SaveWindowBounds();
+            _vm.RunLog?.Detach();
+            _log.Dispose();
+        };
 
         // Tunnel so we see the keys before the TextBox consumes Enter.
         AddHandler(InputElement.KeyDownEvent, OnPreviewKeyDown, RoutingStrategies.Tunnel);
@@ -144,20 +161,73 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     }
 
     /// <summary>
-    /// The window wears its own title bar. Nothing here moves or closes it: the bar and the three
-    /// caption buttons declare their WindowDecorationProperties.ElementRole in XAML, and the
-    /// platform does the rest - on Win32 those roles become HTCAPTION / HTMINBUTTON / HTMAXBUTTON /
-    /// HTCLOSE, which is what buys drag, double-click-to-maximise and the Windows snap layouts for
-    /// free rather than reimplementing them badly. The only thing left for us is the glyph.
+    /// The window wears its own title bar. MOVING it is still the platform's job: the strip declares
+    /// ElementRole="TitleBar", which becomes HTCAPTION on Win32 and buys drag and
+    /// double-click-to-maximise for free rather than reimplementing them badly.
+    ///
+    /// The three caption buttons do NOT delegate. They used to declare CloseButton / MinimizeButton
+    /// / MaximizeButton, which map to HTCLOSE / HTMINBUTTON / HTMAXBUTTON and hand the click to
+    /// Windows - and nothing came back, so the close button did not close. They now declare
+    /// DecorationsElement, documented to pass input through to the element, and are handled here.
+    /// The cost is the Win11 snap-layouts flyout on maximise; the gain is a close button that
+    /// closes, through Close(), which means the Closing handler gets to ask first.
     /// </summary>
     private void WireTitleBar()
     {
+        // The three caption buttons are ordinary buttons with ordinary handlers. They used to carry
+        // the Win32 roles (HTCLOSE and friends) and nothing else, which handed the click to Windows
+        // - and Windows did nothing with it, so the close button did not close.
+        MinimiseButton.Click += (_, _) => WindowState = WindowState.Minimized;
+        MaximiseButton.Click += (_, _) => WindowState =
+            WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
+        CloseButton.Click += (_, _) => Close();
+
         SyncMaximiseGlyph();
         PropertyChanged += (_, e) =>
         {
             if (e.Property == WindowStateProperty)
                 SyncMaximiseGlyph();
         };
+    }
+
+    // ── Closing ──────────────────────────────────────────────────────────────
+    /// <summary>
+    /// Work that dies with the window: the run in the foreground, a decision it is waiting on, and
+    /// any background run - those live in a Task owned by this process, so closing kills them
+    /// halfway through whatever they were writing.
+    /// </summary>
+    private bool HasWorkInFlight()
+        => _vm.IsBusy || _pendingDecision is not null || Volatile.Read(ref _backgroundRuns) > 0;
+
+    private string DescribeWorkInFlight()
+    {
+        var background = Volatile.Read(ref _backgroundRuns);
+        if (_pendingDecision is not null)
+            return "A run is waiting for your decision. Closing now cancels it.";
+        if (_vm.IsBusy && background > 0)
+            return $"A run is going, and {background} more in the background. Closing now stops all of them where they are.";
+        if (_vm.IsBusy)
+            return "A run is going. Closing now stops it where it is - a step that was half written stays half written.";
+        return background == 1
+            ? "A background run is still going. Closing now stops it where it is."
+            : $"{background} background runs are still going. Closing now stops them where they are.";
+    }
+
+    private async Task ConfirmAndCloseAsync()
+    {
+        var close = await ConfirmWindow.AskAsync(
+            this,
+            "Enactive is still working",
+            DescribeWorkInFlight(),
+            "Close anyway",
+            "Keep working");
+
+        if (!close)
+            return;
+
+        _forceClose = true;
+        _cts?.Cancel();
+        Close();
     }
 
     private void SyncMaximiseGlyph()
@@ -856,6 +926,10 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         _vm.InputText = string.Empty;
         _vm.ShowLiveRun();
 
+        // Counted so the window knows there is something to lose on close. A background run lives
+        // in a Task owned by this process - closing kills it wherever it happens to be.
+        Interlocked.Increment(ref _backgroundRuns);
+
         _ = Task.Run(async () =>
         {
             try
@@ -879,6 +953,10 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             {
                 await inbox.AppendAsync(new InboxItem(Guid.NewGuid(), workspace.Id, "error", text,
                     "Failed to start: " + ex.Message, Guid.Empty, "unread", DateTimeOffset.UtcNow), CancellationToken.None);
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _backgroundRuns);
             }
             Dispatcher.UIThread.Post(RefreshInboxButton);
         });

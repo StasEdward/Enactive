@@ -45,9 +45,15 @@
                                VerticalAlignment="Center" />
                 </StackPanel>
 
+                <!-- DecorationsElement, not CloseButton/MinimizeButton/MaximizeButton: those map
+                     to HTCLOSE/HTMINBUTTON/HTMAXBUTTON and hand the click to Windows, which never
+                     gave it back - the close button did nothing. DecorationsElement is documented
+                     to PASS INPUT THROUGH to the element, so these are ordinary buttons with
+                     ordinary handlers. It costs the Win11 snap-layouts flyout on maximise, and
+                     buys a close button that closes and a Closing event we can question. -->
                 <StackPanel Grid.Column="2" Orientation="Horizontal">
-                    <Button Classes="caption" ToolTip.Tip="Minimise"
-                            chrome:WindowDecorationProperties.ElementRole="MinimizeButton">
+                    <Button x:Name="MinimiseButton" Classes="caption" ToolTip.Tip="Minimise"
+                            chrome:WindowDecorationProperties.ElementRole="DecorationsElement">
                         <Viewbox Width="12" Height="12">
                             <Canvas Width="24" Height="24">
                                 <Path Data="M 5,12 H 19" />
@@ -55,7 +61,7 @@
                         </Viewbox>
                     </Button>
                     <Button Classes="caption" x:Name="MaximiseButton" ToolTip.Tip="Maximise"
-                            chrome:WindowDecorationProperties.ElementRole="MaximizeButton">
+                            chrome:WindowDecorationProperties.ElementRole="DecorationsElement">
                         <Viewbox Width="12" Height="12">
                             <Canvas Width="24" Height="24">
                                 <Path x:Name="MaximiseGlyph" Data="M 6,6 H 18 V 18 H 6 Z" />
@@ -64,8 +70,8 @@
                             </Canvas>
                         </Viewbox>
                     </Button>
-                    <Button Classes="caption close" ToolTip.Tip="Close"
-                            chrome:WindowDecorationProperties.ElementRole="CloseButton">
+                    <Button x:Name="CloseButton" Classes="caption close" ToolTip.Tip="Close"
+                            chrome:WindowDecorationProperties.ElementRole="DecorationsElement">
                         <Viewbox Width="12" Height="12">
                             <Canvas Width="24" Height="24">
                                 <Path Data="M 6,6 L 18,18 M 18,6 L 6,18" />
