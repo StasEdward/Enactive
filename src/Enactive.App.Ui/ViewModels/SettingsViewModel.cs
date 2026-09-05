@@ -51,6 +51,7 @@ internal sealed class SettingsViewModel : ObservableObject
     private bool _disableThinking;
     private bool _verifyWrites;
     private string _maxParallelStepsText;
+    private bool _closeToTray;
     private ProviderRow? _selectedProvider;
     private WorkerRow? _selectedWorker;
     private string _plan;
@@ -120,6 +121,7 @@ internal sealed class SettingsViewModel : ObservableObject
         _disableThinking = _working.DisableThinking;
         _verifyWrites = _working.VerifyWrites;
         _maxParallelStepsText = _working.MaxParallelSteps.ToString();
+        _closeToTray = _working.CloseToTray;
 
         foreach (var p in _working.Providers)
             Providers.Add(new ProviderRow(p));
@@ -166,6 +168,31 @@ internal sealed class SettingsViewModel : ObservableObject
     public bool DisableThinking { get => _disableThinking; set => Set(ref _disableThinking, value); }
     public bool VerifyWrites { get => _verifyWrites; set => Set(ref _verifyWrites, value); }
     public string MaxParallelStepsText { get => _maxParallelStepsText; set => Set(ref _maxParallelStepsText, value); }
+
+    /// <summary>
+    /// What the main window's close button does. Two mutually exclusive options, so the pair moves
+    /// together: setting one clears the other, and the view binds a radio to each rather than
+    /// asking the user to read a checkbox and work out what "unchecked" means.
+    /// </summary>
+    public bool CloseToTray
+    {
+        get => _closeToTray;
+        set
+        {
+            if (Set(ref _closeToTray, value))
+                OnPropertyChanged(nameof(ExitOnClose));
+        }
+    }
+
+    public bool ExitOnClose
+    {
+        get => !_closeToTray;
+        set
+        {
+            if (value)
+                CloseToTray = false;
+        }
+    }
 
     // ── Providers / Team ──────────────────────────────────────────────────────
     public ObservableCollection<ProviderRow> Providers { get; } = new();
@@ -278,6 +305,7 @@ internal sealed class SettingsViewModel : ObservableObject
         _working.DisableThinking = DisableThinking;
         _working.VerifyWrites = VerifyWrites;
         _working.MaxParallelSteps = int.TryParse(MaxParallelStepsText.Trim(), out var p) && p > 0 ? p : 1;
+        _working.CloseToTray = CloseToTray;
 
         _working.Bindings.Plan = FromSelection(Plan);
         _working.Bindings.Review = FromSelection(Review);

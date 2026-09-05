@@ -46,9 +46,17 @@
             <Panel Grid.Column="1" Margin="4,0,0,0">
 
             <StackPanel IsVisible="{Binding IsGeneral}" Margin="12" Spacing="6">
-                <TextBlock Classes="label" Text="General" />
+
+                <TextBlock Classes="label" Text="Close Main Panel Action" />
                 <TextBlock Classes="hint"
-                           Text="Nothing here yet. Application-wide settings that are not about the AI will land here." />
+                           Text="What the main window's close button does. Hiding it keeps a run going - including anything started in the background, which lives in this process and dies with it." />
+                <RadioButton GroupName="CloseAction" IsChecked="{Binding CloseToTray}"
+                             Content="Minimize to system tray without exiting" />
+                <RadioButton GroupName="CloseAction" IsChecked="{Binding ExitOnClose}"
+                             Content="Exit program" />
+                <TextBlock Classes="hint"
+                           Text="Either way, quitting asks first when a run is still going. With no system tray on this desktop the window has nowhere to hide, and closing it exits whatever is chosen here." />
+
             </StackPanel>
 
             <StackPanel IsVisible="{Binding IsAccount}" Margin="12" Spacing="6">

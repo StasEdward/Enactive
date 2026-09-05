@@ -118,6 +118,11 @@ internal sealed class AppSettings
     // two steps on one Ollama still queue on the GPU.
     public int MaxParallelSteps { get; set; } = 1;
 
+    // What the main window's close button does. True - the default - hides it to the tray, where a
+    // run it started keeps going; false makes closing the window quit the program, asking first if
+    // there is work in flight. Ignored when the desktop has no tray: there is nowhere to hide.
+    public bool CloseToTray { get; set; } = true;
+
     // ── Legacy fields (migration source only; superseded by the schema above) ──
     public string BaseUrl { get; set; } = "http://localhost:11434/v1";
     public string Model { get; set; } = "qwen2.5-coder";
@@ -266,6 +271,7 @@ internal sealed class AppSettings
         DisableThinking = DisableThinking,
         VerifyWrites = VerifyWrites,
         MaxParallelSteps = MaxParallelSteps,
+        CloseToTray = CloseToTray,
         BaseUrl = BaseUrl,
         Model = Model,
         MultiAgent = MultiAgent,

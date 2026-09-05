@@ -139,21 +139,23 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         }
         Closing += (_, e) =>
         {
-            // Closing the window is not quitting. It goes to the tray, and a run it started keeps
-            // going - which is the whole reason a background run exists. Quitting is Exit, on the
-            // tray menu, and that is where the question about unfinished work lives.
+            // By default closing the window is not quitting: it goes to the tray, and a run it
+            // started keeps going - which is the whole reason a background run exists. Quitting is
+            // then Exit, on the tray menu, and that is where the question about unfinished work
+            // lives. Settings · General can make the X quit instead, and with no tray on this
+            // desktop there is nowhere to hide, so it quits either way.
             if (!_forceClose)
             {
                 e.Cancel = true;
-                if (HasTray)
+                if (HasTray && _settings.CloseToTray)
                 {
                     SaveWindowBounds();
                     Hide();
                 }
                 else
                 {
-                    // Nowhere to hide, and shutdown is explicit now - so the X has to do the whole
-                    // job: ask about unfinished work, then actually end the process.
+                    // Shutdown is explicit now, so the X has to do the whole job: ask about
+                    // unfinished work, then actually end the process.
                     _ = RequestExitAsync();
                 }
                 return;
