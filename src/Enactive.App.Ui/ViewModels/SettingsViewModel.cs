@@ -52,6 +52,8 @@ internal sealed class SettingsViewModel : ObservableObject
     private bool _verifyWrites;
     private string _maxParallelStepsText;
     private bool _closeToTray;
+    private bool _runAtStartup;
+    private string _startupNote = string.Empty;
     private ProviderRow? _selectedProvider;
     private WorkerRow? _selectedWorker;
     private string _plan;
@@ -122,6 +124,13 @@ internal sealed class SettingsViewModel : ObservableObject
         _maxParallelStepsText = _working.MaxParallelSteps.ToString();
         _closeToTray = _working.CloseToTray;
 
+        // Read from the system, not from settings.json: the Run key is the truth, and a copy would
+        // drift the first time the user removed it in Task Manager.
+        _runAtStartup = StartupEntry.IsEnabled();
+        _startupNote = StartupEntry.Supported
+            ? string.Empty
+            : "Only Windows starts programs this way; this desktop does not.";
+
         foreach (var p in _working.Providers)
             Providers.Add(new ProviderRow(p));
         foreach (var w in _working.Workers)
@@ -182,6 +191,28 @@ internal sealed class SettingsViewModel : ObservableObject
                 OnPropertyChanged(nameof(ExitOnClose));
         }
     }
+
+    /// <summary>
+    /// Whether the computer starts Enactive at login. Applied on Save with the rest, and re-read
+    /// from the system afterwards - if the registry refused, the box goes back to the truth rather
+    /// than claiming something that did not happen.
+    /// </summary>
+    public bool RunAtStartup { get => _runAtStartup; set => Set(ref _runAtStartup, value); }
+
+    public bool StartupSupported => StartupEntry.Supported;
+
+    /// <summary>Empty when there is nothing to say - a note that is always there is not read.</summary>
+    public string StartupNote
+    {
+        get => _startupNote;
+        set
+        {
+            if (Set(ref _startupNote, value))
+                OnPropertyChanged(nameof(HasStartupNote));
+        }
+    }
+
+    public bool HasStartupNote => _startupNote.Length > 0;
 
     public bool ExitOnClose
     {
@@ -306,12 +337,31 @@ internal sealed class SettingsViewModel : ObservableObject
         _working.MaxParallelSteps = int.TryParse(MaxParallelStepsText.Trim(), out var p) && p > 0 ? p : 1;
         _working.CloseToTray = CloseToTray;
 
+        var startupRefused =
+            StartupEntry.Supported
+            && RunAtStartup != StartupEntry.IsEnabled()
+            && !StartupEntry.Set(RunAtStartup);
+
+        if (startupRefused)
+        {
+            // Show what actually happened rather than a tick that means nothing.
+            RunAtStartup = StartupEntry.IsEnabled();
+            StartupNote = "Windows would not let that be changed. Start-up is left as it was.";
+        }
+
         _working.Bindings.Plan = FromSelection(Plan);
         _working.Bindings.Review = FromSelection(Review);
         _working.Bindings.ExecuteLight = FromSelection(ExecuteLight);
         _working.Bindings.ExecuteHeavy = FromSelection(ExecuteHeavy);
 
         _onSaved(_working);
+
+        // Everything else is saved either way. The window stays open only when there is something
+        // the user has not seen yet - a note nobody reads because the window closed on top of it is
+        // the same as no note at all.
+        if (startupRefused)
+            return;
+
         CloseRequested?.Invoke();
     }
 

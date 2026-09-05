@@ -47,7 +47,16 @@
 
             <StackPanel IsVisible="{Binding IsGeneral}" Margin="12" Spacing="6">
 
-                <TextBlock Classes="label" Text="Close Main Panel Action" />
+                <TextBlock Classes="label" Text="Start-up" />
+                <CheckBox Content="Run with computer startup"
+                          IsChecked="{Binding RunAtStartup}"
+                          IsEnabled="{Binding StartupSupported}" />
+                <TextBlock Classes="hint" IsVisible="{Binding HasStartupNote}"
+                           Text="{Binding StartupNote}" />
+                <TextBlock Classes="hint"
+                           Text="Adds Enactive to your own login, under HKCU — no administrator rights, and nothing changed for other users of this computer. Applied when you press Save." />
+
+                <TextBlock Classes="label" Text="Close Main Panel Action" Margin="0,10,0,0" />
                 <TextBlock Classes="hint"
                            Text="What the main window's close button does. Hiding it keeps a run going - including anything started in the background, which lives in this process and dies with it." />
                 <RadioButton GroupName="CloseAction" IsChecked="{Binding CloseToTray}"
