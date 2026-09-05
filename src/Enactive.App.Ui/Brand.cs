@@ -1,4 +1,5 @@
 using Avalonia;
+using Avalonia.Controls;
 using Avalonia.Media;
 using Avalonia.Media.Immutable;
 
@@ -188,6 +189,13 @@ internal static class Brand
     /// control: slider thumb, checkbox tick, focus ring, selection. Without them the stock theme
     /// speaks Windows blue in the middle of an Ember UI.
     /// </summary>
+    /// <summary>Points a set of the theme's own resource keys at one of ours.</summary>
+    private static void Fluent(IResourceDictionary resources, IBrush brush, params string[] keys)
+    {
+        foreach (var key in keys)
+            resources[key] = brush;
+    }
+
     public static void PublishTo(Application app)
     {
         var r = app.Resources;
@@ -244,6 +252,36 @@ internal static class Brand
         r["Brand.DecisionFill"] = DecisionFill;
         r["Brand.DecisionBorder"] = DecisionBorder;
         r["Brand.PillCoder"] = PillCoder;
+
+        // ── Fluent's own keys ────────────────────────────────────────────────
+        // The theme sets some template values as LOCAL values through DynamicResource -
+        // "Background={DynamicResource ComboBoxDropDownBackground}" written on the element
+        // itself. A local value outranks any style setter, which is why four passes of
+        // "ComboBox /template/ ..." and "PopupRoot > Border" changed nothing: there was no
+        // selector that could win. The lookup is dynamic, though, so defining the key here
+        // is the one thing that does.
+        //
+        // The names are Avalonia 12.1.1's own, read from the tagged source of
+        // Themes.Fluent/Controls/ComboBox.xaml - not from an 11.x recipe.
+        Fluent(r, InputFill,
+            "ComboBoxBackground", "ComboBoxBackgroundUnfocused", "ComboBoxDropDownBackground");
+        Fluent(r, InputFillHover,
+            "ComboBoxBackgroundPointerOver", "ComboBoxBackgroundPressed");
+        Fluent(r, Scrim, "ComboBoxBackgroundDisabled");
+        Fluent(r, Line,
+            "ComboBoxBorderBrush", "ComboBoxBackgroundBorderBrushUnfocused",
+            "ComboBoxBorderBrushDisabled");
+        Fluent(r, LineStrong,
+            "ComboBoxBorderBrushPointerOver", "ComboBoxBorderBrushPressed",
+            "ComboBoxDropDownBorderBrush");
+        Fluent(r, Accent, "ComboBoxBackgroundBorderBrushFocused");
+        Fluent(r, Text,
+            "ComboBoxForeground", "ComboBoxForegroundFocused", "ComboBoxForegroundFocusedPressed");
+        Fluent(r, TextMuted,
+            "ComboBoxPlaceHolderForeground", "ComboBoxPlaceHolderForegroundFocusedPressed",
+            "ComboBoxDropDownGlyphForeground", "ComboBoxDropDownGlyphForegroundFocused",
+            "ComboBoxDropDownGlyphForegroundFocusedPressed");
+        Fluent(r, TextFaint, "ComboBoxForegroundDisabled", "ComboBoxDropDownGlyphForegroundDisabled");
         r["Brand.PillReasoner"] = PillReasoner;
     }
 
