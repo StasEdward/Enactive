@@ -72,6 +72,9 @@ internal static class Brand
 
     // ── Accent + semantic brushes ───────────────────────────────────────────
     public static readonly IBrush Accent = Of(Ember500);
+    /// <summary>Ember at low opacity: a selected row is MARKED, not repainted. A solid ember
+    /// block reads as "this is the action", which a list selection is not.</summary>
+    public static readonly IBrush AccentFill = new ImmutableSolidColorBrush(Ember500, 0.16);
     public static readonly IBrush AccentSoft = Of(Ember300);
     public static readonly IBrush Amber = Of(Amber400);
     public static readonly IBrush Success = Of(SuccessColor);
@@ -147,6 +150,7 @@ internal static class Brand
         r["Brand.TextFaint"] = TextFaint;
 
         r["Brand.Accent"] = Accent;
+        r["Brand.AccentFill"] = AccentFill;
         r["Brand.AccentSoft"] = AccentSoft;
         r["Brand.Amber"] = Amber;
         r["Brand.Success"] = Success;

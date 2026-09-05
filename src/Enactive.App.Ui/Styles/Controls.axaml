@@ -126,6 +126,32 @@
         <Setter Property="Stroke" Value="{DynamicResource Brand.Text}" />
     </Style>
 
+    <!-- A selected row is marked, not repainted. Fluent builds selection out of the
+         accent, and since the accent is Ember the stock result is a solid ember block -
+         which claims to be the action on the screen. A tint and an edge say the same
+         thing quietly. -->
+    <Style Selector="ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource Brand.AccentFill}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Brand.Accent}" />
+        <Setter Property="BorderThickness" Value="2,0,0,0" />
+    </Style>
+    <Style Selector="ListBoxItem:selected:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource Brand.AccentFill}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Brand.Accent}" />
+        <Setter Property="BorderThickness" Value="2,0,0,0" />
+    </Style>
+    <Style Selector="ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter > TextBlock">
+        <Setter Property="Foreground" Value="{DynamicResource Brand.Text}" />
+    </Style>
+
+    <!-- A filesystem path in a narrow column: trim the FRONT, because the part that
+         tells one project from another is at the end. -->
+    <Style Selector="TextBlock.path">
+        <Setter Property="FontFamily" Value="Consolas, Menlo, monospace" />
+        <Setter Property="FontSize" Value="11.5" />
+        <Setter Property="TextTrimming" Value="PrefixCharacterEllipsis" />
+    </Style>
+
     <!-- ── The window's own title bar ───────────────────────────────────────
          The client area is extended over the system decorations, so this strip
          IS the title bar: it drags the window and carries the caption buttons.

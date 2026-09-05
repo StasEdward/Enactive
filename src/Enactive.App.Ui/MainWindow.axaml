@@ -3,6 +3,7 @@
         xmlns:vm="using:Enactive.App.Ui.ViewModels"
         xmlns:local="using:Enactive.App.Ui"
         xmlns:chrome="using:Avalonia.Controls.Chrome"
+        xmlns:sys="using:System"
         x:Class="Enactive.App.Ui.MainWindow"
         x:DataType="vm:MainWindowViewModel"
         Title="Enactive"
@@ -42,9 +43,6 @@
                     </Viewbox>
                     <TextBlock Text="Enactive" FontSize="12" FontWeight="SemiBold"
                                VerticalAlignment="Center" />
-                    <TextBlock Classes="hint" Text="{Binding WorkspacePath}"
-                               VerticalAlignment="Center" Margin="6,0,0,0"
-                               TextTrimming="CharacterEllipsis" MaxWidth="420" />
                 </StackPanel>
 
                 <StackPanel Grid.Column="2" Orientation="Horizontal">
@@ -93,8 +91,10 @@
                         ToolTip.Tip="Timeline · project memory" Margin="0,10,0,0">
                     <Viewbox Width="18" Height="18">
                         <Canvas Width="24" Height="24">
-                            <Path Data="M 4,5 H 20 V 16 H 4 Z" />
-                            <Path Data="M 4,16 L 8,11 L 11,14 L 14,10 L 20,16" />
+                            <Path Data="M 7,4 V 20" />
+                            <Path Data="M 7,7 A 2,2 0 1 0 7.01,7 Z M 7,12 A 2,2 0 1 0 7.01,12 Z
+                                        M 7,17 A 2,2 0 1 0 7.01,17 Z" />
+                            <Path Data="M 12,7 H 19 M 12,12 H 17 M 12,17 H 20" />
                         </Canvas>
                     </Viewbox>
                 </Button>
@@ -157,7 +157,8 @@
                 <StackPanel DockPanel.Dock="Top" Margin="12,12,12,0" Spacing="6">
                     <TextBlock Classes="panelHeader" Text="WORKSPACE" Margin="0" />
                     <TextBox Text="{Binding WorkspacePath}" IsEnabled="{Binding IsIdle}"
-                             Watermark="Workspace folder" TextWrapping="Wrap" />
+                             Watermark="Workspace folder"
+                             ToolTip.Tip="{Binding WorkspacePath}" />
                     <TextBlock Classes="hint" Text="{Binding ModelLabel}" />
                     <TextBlock Classes="panelHeader" Text="RECENT" />
                 </StackPanel>
@@ -180,7 +181,13 @@
 
                 <ListBox Margin="12,0,12,0" Background="Transparent"
                          ItemsSource="{Binding RecentWorkspaces}"
-                         SelectedItem="{Binding SelectedRecent}" />
+                         SelectedItem="{Binding SelectedRecent}">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate x:DataType="sys:String">
+                            <TextBlock Classes="path" Text="{Binding}" ToolTip.Tip="{Binding}" />
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
 
             </DockPanel>
         </Border>
