@@ -1,58 +1,74 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="using:Enactive.App.Ui"
         xmlns:vm="using:Enactive.App.Ui.ViewModels"
         x:Class="Enactive.App.Ui.WorkerEditWindow"
         x:DataType="vm:WorkerEditViewModel"
         Title="Team member"
         Width="640" Height="720"
-        WindowStartupLocation="CenterOwner">
+        WindowStartupLocation="CenterOwner"
+        Background="{DynamicResource Brand.Bg}"
+        WindowDecorations="BorderOnly"
+        ExtendClientAreaToDecorationsHint="True">
 
-    <ScrollViewer>
-        <StackPanel Classes="form">
+    <!-- OffScreenMargin keeps a MAXIMISED window inside the screen: with the client
+         area extended over the decorations, the platform would otherwise push the edges
+         a few pixels past the work area. -->
+    <Grid RowDefinitions="Auto,*" Margin="{Binding $parent[Window].OffScreenMargin}">
 
-            <TextBlock Classes="label" Text="Id" />
-            <TextBox Text="{Binding Id}" Watermark="id — unique, e.g. developer, architect" />
+        <local:TitleBarView Grid.Row="0" />
 
-            <TextBlock Classes="label" Text="Role" />
-            <TextBox Text="{Binding Role}" Watermark="role name shown in the picker" />
+        <Panel Grid.Row="1">
 
-            <TextBlock Classes="label" Text="Instructions" />
-            <TextBox Classes="multiline" MinHeight="160" Text="{Binding Instructions}"
-                     Watermark="base instructions (honesty rules + global instructions are added automatically)" />
+        <ScrollViewer>
+            <StackPanel Classes="form">
 
-            <!-- The tools list is data now: one row per tool, not a loop building checkboxes. -->
-            <TextBlock Classes="label" Text="Tools" />
-            <ItemsControl ItemsSource="{Binding Tools}">
-                <ItemsControl.ItemsPanel>
-                    <ItemsPanelTemplate>
-                        <WrapPanel Orientation="Horizontal" />
-                    </ItemsPanelTemplate>
-                </ItemsControl.ItemsPanel>
-                <ItemsControl.ItemTemplate>
-                    <DataTemplate x:DataType="vm:ToolToggle">
-                        <CheckBox Content="{Binding Name}"
-                                  IsChecked="{Binding IsSelected}"
-                                  Margin="0,0,12,0" />
-                    </DataTemplate>
-                </ItemsControl.ItemTemplate>
-            </ItemsControl>
+                <TextBlock Classes="label" Text="Id" />
+                <TextBox Text="{Binding Id}" Watermark="id — unique, e.g. developer, architect" />
 
-            <TextBlock Classes="label" Text="Permission level" />
-            <ComboBox ItemsSource="{Binding Levels}" SelectedItem="{Binding Level}" />
+                <TextBlock Classes="label" Text="Role" />
+                <TextBox Text="{Binding Role}" Watermark="role name shown in the picker" />
 
-            <TextBlock Classes="label" Text="Model" />
-            <ComboBox ItemsSource="{Binding Models}" SelectedItem="{Binding Model}"
-                      PlaceholderText="pick a model…" />
+                <TextBlock Classes="label" Text="Instructions" />
+                <TextBox Classes="multiline" MinHeight="160" Text="{Binding Instructions}"
+                         Watermark="base instructions (honesty rules + global instructions are added automatically)" />
 
-            <TextBlock Classes="label" Text="Fallback model" />
-            <ComboBox ItemsSource="{Binding Fallbacks}" SelectedItem="{Binding Fallback}"
-                      PlaceholderText="(none)" />
+                <!-- The tools list is data now: one row per tool, not a loop building checkboxes. -->
+                <TextBlock Classes="label" Text="Tools" />
+                <ItemsControl ItemsSource="{Binding Tools}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <WrapPanel Orientation="Horizontal" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:ToolToggle">
+                            <CheckBox Content="{Binding Name}"
+                                      IsChecked="{Binding IsSelected}"
+                                      Margin="0,0,12,0" />
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
 
-            <StackPanel Classes="actions">
-                <Button Classes="primary" Content="Save" Command="{Binding SaveCommand}" />
-                <Button Content="Cancel" Command="{Binding CancelCommand}" />
+                <TextBlock Classes="label" Text="Permission level" />
+                <ComboBox ItemsSource="{Binding Levels}" SelectedItem="{Binding Level}" />
+
+                <TextBlock Classes="label" Text="Model" />
+                <ComboBox ItemsSource="{Binding Models}" SelectedItem="{Binding Model}"
+                          PlaceholderText="pick a model…" />
+
+                <TextBlock Classes="label" Text="Fallback model" />
+                <ComboBox ItemsSource="{Binding Fallbacks}" SelectedItem="{Binding Fallback}"
+                          PlaceholderText="(none)" />
+
+                <StackPanel Classes="actions">
+                    <Button Classes="primary" Content="Save" Command="{Binding SaveCommand}" />
+                    <Button Content="Cancel" Command="{Binding CancelCommand}" />
+                </StackPanel>
+
             </StackPanel>
+        </ScrollViewer>
+        </Panel>
+    </Grid>
 
-        </StackPanel>
-    </ScrollViewer>
 </Window>

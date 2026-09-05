@@ -174,37 +174,6 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         // The history is always on screen now, so it is always loaded - including for the workspace
         // restored at startup.
         _ = LoadRunsAsync();
-        WireTitleBar();
-    }
-
-    /// <summary>
-    /// The window wears its own title bar. MOVING it is still the platform's job: the strip declares
-    /// ElementRole="TitleBar", which becomes HTCAPTION on Win32 and buys drag and
-    /// double-click-to-maximise for free rather than reimplementing them badly.
-    ///
-    /// The three caption buttons do NOT delegate. They used to declare CloseButton / MinimizeButton
-    /// / MaximizeButton, which map to HTCLOSE / HTMINBUTTON / HTMAXBUTTON and hand the click to
-    /// Windows - and nothing came back, so the close button did not close. They now declare
-    /// DecorationsElement, documented to pass input through to the element, and are handled here.
-    /// The cost is the Win11 snap-layouts flyout on maximise; the gain is a close button that
-    /// closes, through Close(), which means the Closing handler gets to ask first.
-    /// </summary>
-    private void WireTitleBar()
-    {
-        // The three caption buttons are ordinary buttons with ordinary handlers. They used to carry
-        // the Win32 roles (HTCLOSE and friends) and nothing else, which handed the click to Windows
-        // - and Windows did nothing with it, so the close button did not close.
-        MinimiseButton.Click += (_, _) => WindowState = WindowState.Minimized;
-        MaximiseButton.Click += (_, _) => WindowState =
-            WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
-        CloseButton.Click += (_, _) => Close();
-
-        SyncMaximiseGlyph();
-        PropertyChanged += (_, e) =>
-        {
-            if (e.Property == WindowStateProperty)
-                SyncMaximiseGlyph();
-        };
     }
 
     // ── Closing ──────────────────────────────────────────────────────────────
@@ -277,13 +246,6 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         (Application.Current?.ApplicationLifetime as IClassicDesktopStyleApplicationLifetime)?.Shutdown();
     }
 
-    private void SyncMaximiseGlyph()
-    {
-        var maximised = WindowState == WindowState.Maximized;
-        MaximiseGlyph.IsVisible = !maximised;
-        RestoreGlyph.IsVisible = maximised;
-        MaximiseButton.SetValue(ToolTip.TipProperty, maximised ? "Restore" : "Maximise");
-    }
 
     // ── Run an intent ────────────────────────────────────────────────────────
     /// <summary>

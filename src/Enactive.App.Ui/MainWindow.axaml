@@ -2,7 +2,6 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:Enactive.App.Ui.ViewModels"
         xmlns:local="using:Enactive.App.Ui"
-        xmlns:chrome="using:Avalonia.Controls.Chrome"
         xmlns:sys="using:System"
         x:Class="Enactive.App.Ui.MainWindow"
         x:DataType="vm:MainWindowViewModel"
@@ -17,70 +16,7 @@
          a few pixels past the work area. -->
     <Grid RowDefinitions="Auto,*" Margin="{Binding $parent[Window].OffScreenMargin}">
 
-        <!-- ── Title bar ────────────────────────────────────────────────────
-             This strip replaces the system chrome: it drags the window, double
-             click maximises it, and it carries the mark, the name and the
-             caption buttons.
-        -->
-        <Border Grid.Row="0" Classes="titlebar" Height="34"
-                chrome:WindowDecorationProperties.ElementRole="TitleBar">
-            <Grid ColumnDefinitions="Auto,*,Auto">
-
-                <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8"
-                            Margin="12,0,0,0" VerticalAlignment="Center">
-                    <!-- The Loop: the run cycle, the gap where the human decision
-                         fits, and the artifact in the middle. -->
-                    <Viewbox Width="16" Height="16">
-                        <Canvas Width="64" Height="64">
-                            <Path Data="M 36.37,11.46 A 21,21 0 1 0 52.19,26.21"
-                                  Stroke="{DynamicResource Brand.Accent}" StrokeThickness="8"
-                                  StrokeLineCap="Round" />
-                            <Path Data="M 49.02,15.16 L 59.27,26.25 L 46.21,30.01 Z"
-                                  Fill="{DynamicResource Brand.Accent}" />
-                            <Ellipse Canvas.Left="25.5" Canvas.Top="25.5" Width="13" Height="13"
-                                     Fill="{DynamicResource Brand.Amber}" />
-                        </Canvas>
-                    </Viewbox>
-                    <TextBlock Text="Enactive" FontSize="12" FontWeight="SemiBold"
-                               VerticalAlignment="Center" />
-                </StackPanel>
-
-                <!-- DecorationsElement, not CloseButton/MinimizeButton/MaximizeButton: those map
-                     to HTCLOSE/HTMINBUTTON/HTMAXBUTTON and hand the click to Windows, which never
-                     gave it back - the close button did nothing. DecorationsElement is documented
-                     to PASS INPUT THROUGH to the element, so these are ordinary buttons with
-                     ordinary handlers. It costs the Win11 snap-layouts flyout on maximise, and
-                     buys a close button that closes and a Closing event we can question. -->
-                <StackPanel Grid.Column="2" Orientation="Horizontal">
-                    <Button x:Name="MinimiseButton" Classes="caption" ToolTip.Tip="Minimise"
-                            chrome:WindowDecorationProperties.ElementRole="DecorationsElement">
-                        <Viewbox Width="12" Height="12">
-                            <Canvas Width="24" Height="24">
-                                <Path Data="M 5,12 H 19" />
-                            </Canvas>
-                        </Viewbox>
-                    </Button>
-                    <Button Classes="caption" x:Name="MaximiseButton" ToolTip.Tip="Maximise"
-                            chrome:WindowDecorationProperties.ElementRole="DecorationsElement">
-                        <Viewbox Width="12" Height="12">
-                            <Canvas Width="24" Height="24">
-                                <Path x:Name="MaximiseGlyph" Data="M 6,6 H 18 V 18 H 6 Z" />
-                                <Path x:Name="RestoreGlyph" IsVisible="False"
-                                      Data="M 8,9 H 18 V 19 H 8 Z M 6,15 V 5 H 16" />
-                            </Canvas>
-                        </Viewbox>
-                    </Button>
-                    <Button x:Name="CloseButton" Classes="caption close" ToolTip.Tip="Close"
-                            chrome:WindowDecorationProperties.ElementRole="DecorationsElement">
-                        <Viewbox Width="12" Height="12">
-                            <Canvas Width="24" Height="24">
-                                <Path Data="M 6,6 L 18,18 M 18,6 L 6,18" />
-                            </Canvas>
-                        </Viewbox>
-                    </Button>
-                </StackPanel>
-            </Grid>
-        </Border>
+        <local:TitleBarView Grid.Row="0" />
 
         <!--
           Three columns, full height: the icon rail is chrome, the context column says

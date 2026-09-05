@@ -1,115 +1,131 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="using:Enactive.App.Ui"
         xmlns:vm="using:Enactive.App.Ui.ViewModels"
         xmlns:sys="using:System"
         x:Class="Enactive.App.Ui.InboxWindow"
         x:DataType="vm:InboxViewModel"
         Title="Enactive — Inbox"
-        Width="1000" Height="640">
+        Width="1000" Height="640"
+        Background="{DynamicResource Brand.Bg}"
+        WindowDecorations="BorderOnly"
+        ExtendClientAreaToDecorationsHint="True">
 
-    <DockPanel LastChildFill="True">
+    <!-- OffScreenMargin keeps a MAXIMISED window inside the screen: with the client
+         area extended over the decorations, the platform would otherwise push the edges
+         a few pixels past the work area. -->
+    <Grid RowDefinitions="Auto,*" Margin="{Binding $parent[Window].OffScreenMargin}">
 
-        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="8" Margin="10,8">
-            <Button Content="Refresh" Command="{Binding RefreshCommand}" />
-            <Button Content="Mark all read" Command="{Binding MarkAllReadCommand}" />
-            <CheckBox Content="Unread only" IsChecked="{Binding UnreadOnly}" VerticalAlignment="Center" />
-            <TextBlock Classes="hint" Text="{Binding Status}" VerticalAlignment="Center" Margin="8,0,0,0" />
-        </StackPanel>
+        <local:TitleBarView Grid.Row="0" />
 
-        <TextBlock DockPanel.Dock="Bottom" Classes="hint" Margin="10,4,10,8"
-                   Text="{Binding WorkspaceRoot}" />
+        <Panel Grid.Row="1">
 
-        <Grid ColumnDefinitions="360,*">
+        <DockPanel LastChildFill="True">
 
-            <!-- What came in, newest first. -->
-            <ListBox Grid.Column="0" Classes="cards" Margin="10,0,5,0"
-                     ItemsSource="{Binding Items}"
-                     SelectedItem="{Binding Selected}">
-                <ListBox.ItemTemplate>
-                    <DataTemplate x:DataType="vm:InboxItemViewModel">
-                        <!-- The edge is what the item IS - a result, a decision nobody was there
-                             to answer, an error. The ember dot is the one thing that changes when
-                             you read it. -->
-                        <Border Classes="card" BorderBrush="{Binding KindBrush}">
-                            <StackPanel>
-                                <StackPanel Orientation="Horizontal" Spacing="6">
-                                    <Ellipse Width="6" Height="6" VerticalAlignment="Center"
-                                             Fill="{DynamicResource Brand.Accent}"
-                                             IsVisible="{Binding IsUnread}" />
-                                    <TextBlock Text="{Binding Kind}" Foreground="{Binding KindBrush}"
-                                               FontSize="11" VerticalAlignment="Center" />
-                                    <TextBlock Classes="cardMeta" Text="{Binding When}"
-                                               Margin="0" VerticalAlignment="Center" />
+            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="8" Margin="10,8">
+                <Button Content="Refresh" Command="{Binding RefreshCommand}" />
+                <Button Content="Mark all read" Command="{Binding MarkAllReadCommand}" />
+                <CheckBox Content="Unread only" IsChecked="{Binding UnreadOnly}" VerticalAlignment="Center" />
+                <TextBlock Classes="hint" Text="{Binding Status}" VerticalAlignment="Center" Margin="8,0,0,0" />
+            </StackPanel>
+
+            <TextBlock DockPanel.Dock="Bottom" Classes="hint" Margin="10,4,10,8"
+                       Text="{Binding WorkspaceRoot}" />
+
+            <Grid ColumnDefinitions="360,*">
+
+                <!-- What came in, newest first. -->
+                <ListBox Grid.Column="0" Classes="cards" Margin="10,0,5,0"
+                         ItemsSource="{Binding Items}"
+                         SelectedItem="{Binding Selected}">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate x:DataType="vm:InboxItemViewModel">
+                            <!-- The edge is what the item IS - a result, a decision nobody was there
+                                 to answer, an error. The ember dot is the one thing that changes when
+                                 you read it. -->
+                            <Border Classes="card" BorderBrush="{Binding KindBrush}">
+                                <StackPanel>
+                                    <StackPanel Orientation="Horizontal" Spacing="6">
+                                        <Ellipse Width="6" Height="6" VerticalAlignment="Center"
+                                                 Fill="{DynamicResource Brand.Accent}"
+                                                 IsVisible="{Binding IsUnread}" />
+                                        <TextBlock Text="{Binding Kind}" Foreground="{Binding KindBrush}"
+                                                   FontSize="11" VerticalAlignment="Center" />
+                                        <TextBlock Classes="cardMeta" Text="{Binding When}"
+                                                   Margin="0" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                    <TextBlock Text="{Binding Title}" FontWeight="{Binding TitleWeight}"
+                                               Foreground="{DynamicResource Brand.Text}"
+                                               FontSize="12.5" TextWrapping="Wrap" Margin="0,3,0,0" />
                                 </StackPanel>
-                                <TextBlock Text="{Binding Title}" FontWeight="{Binding TitleWeight}"
-                                           Foreground="{DynamicResource Brand.Text}"
-                                           FontSize="12.5" TextWrapping="Wrap" Margin="0,3,0,0" />
-                            </StackPanel>
-                        </Border>
-                    </DataTemplate>
-                </ListBox.ItemTemplate>
-            </ListBox>
+                            </Border>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
 
-            <!-- The item, and the run that produced it. The item's own header is pinned: scrolling a
-                 long timeline should never cost you the answer to "which item am I looking at". -->
-            <DockPanel Grid.Column="1" Margin="5,0,10,0" IsVisible="{Binding HasSelection}">
+                <!-- The item, and the run that produced it. The item's own header is pinned: scrolling a
+                     long timeline should never cost you the answer to "which item am I looking at". -->
+                <DockPanel Grid.Column="1" Margin="5,0,10,0" IsVisible="{Binding HasSelection}">
 
-                <StackPanel DockPanel.Dock="Top" Spacing="4" Margin="0,0,0,8">
-                    <TextBlock Text="{Binding DetailTitle}" FontSize="16" FontWeight="SemiBold"
-                               TextWrapping="Wrap" />
-                    <TextBlock Classes="hint" Text="{Binding DetailMeta}" />
-                    <TextBlock Text="{Binding DetailSummary}" TextWrapping="Wrap"
-                               Foreground="{DynamicResource Brand.TextBody}" Margin="0,6,0,0" />
-                </StackPanel>
+                    <StackPanel DockPanel.Dock="Top" Spacing="4" Margin="0,0,0,8">
+                        <TextBlock Text="{Binding DetailTitle}" FontSize="16" FontWeight="SemiBold"
+                                   TextWrapping="Wrap" />
+                        <TextBlock Classes="hint" Text="{Binding DetailMeta}" />
+                        <TextBlock Text="{Binding DetailSummary}" TextWrapping="Wrap"
+                                   Foreground="{DynamicResource Brand.TextBody}" Margin="0,6,0,0" />
+                    </StackPanel>
 
-                <ScrollViewer>
-                  <StackPanel Spacing="4">
+                    <ScrollViewer>
+                      <StackPanel Spacing="4">
 
-                    <TextBlock Classes="panelHeader" Text="RUN" />
-                    <TextBlock Classes="hint" Text="{Binding RunHeader}" />
+                        <TextBlock Classes="panelHeader" Text="RUN" />
+                        <TextBlock Classes="hint" Text="{Binding RunHeader}" />
 
-                    <ItemsControl ItemsSource="{Binding RunEvents}" Margin="0,6,0,0"
-                                  IsVisible="{Binding HasRun}">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate x:DataType="vm:RunEventViewModel">
-                                <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,1">
-                                    <TextBlock Text="{Binding When}" Classes="hint"
-                                               FontFamily="Consolas, Menlo, monospace" />
-                                    <TextBlock Text="{Binding Kind}" Foreground="{Binding Brush}"
-                                               FontSize="11" Width="120" />
-                                    <TextBlock Text="{Binding Summary}" Foreground="{Binding Brush}"
-                                               FontSize="12" TextWrapping="Wrap" />
-                                </StackPanel>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
+                        <ItemsControl ItemsSource="{Binding RunEvents}" Margin="0,6,0,0"
+                                      IsVisible="{Binding HasRun}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:RunEventViewModel">
+                                    <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,1">
+                                        <TextBlock Text="{Binding When}" Classes="hint"
+                                                   FontFamily="Consolas, Menlo, monospace" />
+                                        <TextBlock Text="{Binding Kind}" Foreground="{Binding Brush}"
+                                                   FontSize="11" Width="120" />
+                                        <TextBlock Text="{Binding Summary}" Foreground="{Binding Brush}"
+                                                   FontSize="12" TextWrapping="Wrap" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
 
-                    <TextBlock Classes="panelHeader" Text="ARTIFACTS" Margin="0,12,0,0"
-                               IsVisible="{Binding HasRun}" />
-                    <ItemsControl ItemsSource="{Binding RunArtifacts}" IsVisible="{Binding HasRun}">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate x:DataType="sys:String">
-                                <TextBlock Text="{Binding}" FontFamily="Consolas, Menlo, monospace"
-                                           FontSize="12" TextWrapping="Wrap" Margin="0,1" />
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
+                        <TextBlock Classes="panelHeader" Text="ARTIFACTS" Margin="0,12,0,0"
+                                   IsVisible="{Binding HasRun}" />
+                        <ItemsControl ItemsSource="{Binding RunArtifacts}" IsVisible="{Binding HasRun}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="sys:String">
+                                    <TextBlock Text="{Binding}" FontFamily="Consolas, Menlo, monospace"
+                                               FontSize="12" TextWrapping="Wrap" Margin="0,1" />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
 
-                    <TextBlock Classes="panelHeader" Text="DECISIONS" Margin="0,12,0,0"
-                               IsVisible="{Binding HasRun}" />
-                    <ItemsControl ItemsSource="{Binding RunDecisions}" IsVisible="{Binding HasRun}">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate x:DataType="sys:String">
-                                <TextBlock Text="{Binding}" FontSize="12" TextWrapping="Wrap" Margin="0,1" />
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
+                        <TextBlock Classes="panelHeader" Text="DECISIONS" Margin="0,12,0,0"
+                                   IsVisible="{Binding HasRun}" />
+                        <ItemsControl ItemsSource="{Binding RunDecisions}" IsVisible="{Binding HasRun}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="sys:String">
+                                    <TextBlock Text="{Binding}" FontSize="12" TextWrapping="Wrap" Margin="0,1" />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
 
-                    <Border Height="12" />
+                        <Border Height="12" />
 
-                  </StackPanel>
-                </ScrollViewer>
-            </DockPanel>
-        </Grid>
-    </DockPanel>
+                      </StackPanel>
+                    </ScrollViewer>
+                </DockPanel>
+            </Grid>
+        </DockPanel>
+        </Panel>
+    </Grid>
+
 </Window>

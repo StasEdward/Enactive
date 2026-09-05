@@ -1,26 +1,42 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="using:Enactive.App.Ui"
         x:Class="Enactive.App.Ui.ConfirmWindow"
         Title="Enactive"
         SizeToContent="Height" Width="420"
         CanResize="False"
         WindowStartupLocation="CenterOwner"
-        ShowInTaskbar="False">
+        ShowInTaskbar="False"
+        Background="{DynamicResource Brand.Bg}"
+        WindowDecorations="BorderOnly"
+        ExtendClientAreaToDecorationsHint="True">
 
-    <StackPanel Margin="20" Spacing="12">
-        <TextBlock x:Name="HeadlineText" FontSize="15" FontWeight="SemiBold"
-                   TextWrapping="Wrap" />
-        <TextBlock x:Name="DetailText" FontSize="12" TextWrapping="Wrap"
-                   Foreground="{DynamicResource Brand.TextBody}" />
+    <!-- OffScreenMargin keeps a MAXIMISED window inside the screen: with the client
+         area extended over the decorations, the platform would otherwise push the edges
+         a few pixels past the work area. -->
+    <Grid RowDefinitions="Auto,Auto" Margin="{Binding $parent[Window].OffScreenMargin}">
 
-        <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right"
-                    Margin="0,4,0,0">
-            <!-- The confirm is the DESTRUCTIVE one here, so it is plain with danger text.
-                 Ember stays on the safe choice, which is also the default: a window closed
-                 by accident is exactly what this dialog exists to prevent. -->
-            <Button x:Name="ConfirmButton" Foreground="{DynamicResource Brand.Danger}"
-                    Padding="14,4" />
-            <Button x:Name="CancelButton" Classes="primary" Padding="14,4" IsDefault="True" />
+        <local:TitleBarView Grid.Row="0" />
+
+        <Panel Grid.Row="1">
+
+        <StackPanel Margin="20" Spacing="12">
+            <TextBlock x:Name="HeadlineText" FontSize="15" FontWeight="SemiBold"
+                       TextWrapping="Wrap" />
+            <TextBlock x:Name="DetailText" FontSize="12" TextWrapping="Wrap"
+                       Foreground="{DynamicResource Brand.TextBody}" />
+
+            <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right"
+                        Margin="0,4,0,0">
+                <!-- The confirm is the DESTRUCTIVE one here, so it is plain with danger text.
+                     Ember stays on the safe choice, which is also the default: a window closed
+                     by accident is exactly what this dialog exists to prevent. -->
+                <Button x:Name="ConfirmButton" Foreground="{DynamicResource Brand.Danger}"
+                        Padding="14,4" />
+                <Button x:Name="CancelButton" Classes="primary" Padding="14,4" IsDefault="True" />
+            </StackPanel>
         </StackPanel>
-    </StackPanel>
+        </Panel>
+    </Grid>
+
 </Window>
