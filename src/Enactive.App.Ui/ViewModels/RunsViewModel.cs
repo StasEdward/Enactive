@@ -94,13 +94,6 @@ internal sealed class RunListItemViewModel
             seconds = 0;
         return seconds >= 60 ? $"{(int)(seconds / 60)}m {(int)(seconds % 60)}s" : $"{seconds:0}s";
     }
-
-    /// <summary>An artifact is recorded as "FileSet: path" - the path is the part you can open.</summary>
-    private static string PathOf(string artifact)
-    {
-        var colon = artifact.IndexOf(": ", StringComparison.Ordinal);
-        return colon >= 0 ? artifact[(colon + 2)..] : artifact;
-    }
 }
 
 /// <summary>
@@ -247,6 +240,13 @@ internal sealed class PastRunViewModel : ObservableObject
         if (seconds < 0)
             seconds = 0;
         return seconds >= 60 ? $"{(int)(seconds / 60)}m {(int)(seconds % 60)}s" : $"{seconds:0}s";
+    }
+
+    /// <summary>An artifact is recorded as "FileSet: path" - the path is the part you can open.</summary>
+    private static string PathOf(string artifact)
+    {
+        var colon = artifact.IndexOf(": ", StringComparison.Ordinal);
+        return colon >= 0 ? artifact[(colon + 2)..] : artifact;
     }
 }
 
