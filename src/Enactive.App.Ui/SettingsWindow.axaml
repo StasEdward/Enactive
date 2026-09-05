@@ -1,0 +1,117 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:Enactive.App.Ui.ViewModels"
+        x:Class="Enactive.App.Ui.SettingsWindow"
+        x:DataType="vm:SettingsViewModel"
+        Title="Settings"
+        Width="720" Height="820"
+        WindowStartupLocation="CenterOwner">
+
+    <DockPanel LastChildFill="True" Margin="12">
+
+        <StackPanel DockPanel.Dock="Bottom" Classes="actions" HorizontalAlignment="Right">
+            <Button Classes="primary" Content="Save" Command="{Binding SaveCommand}" />
+            <Button Content="Cancel" Command="{Binding CancelCommand}" />
+        </StackPanel>
+
+        <TabControl>
+
+            <TabItem Header="General">
+                <ScrollViewer>
+                    <StackPanel Margin="12" Spacing="6">
+
+                        <TextBlock Classes="label" Text="Context length (num_ctx)" />
+                        <TextBlock Classes="hint"
+                                   Text="How much context to load Ollama models with. Bigger costs VRAM and can spill onto the CPU (check `ollama ps`). Leave blank to not override it." />
+                        <TextBox Text="{Binding NumCtxText}"
+                                 Watermark="e.g. 8192 — blank uses whatever the model already has loaded" />
+
+                        <TextBlock Classes="label" Text="Global instructions" />
+                        <TextBlock Classes="hint" Text="Applied to every run and appended to every worker's instructions." />
+                        <TextBox Classes="multiline" MinHeight="220" Text="{Binding GlobalInstructions}"
+                                 Watermark="Global instructions — applied to every run" />
+
+                        <TextBlock Classes="label" Text="Local model behaviour" />
+                        <TextBlock Classes="hint"
+                                   Text="Reasoning models like qwen3 can spend a whole turn in &lt;think&gt; and return nothing. Disabling it makes them answer (and call tools) directly. Only affects Ollama." />
+                        <CheckBox IsChecked="{Binding DisableThinking}"
+                                  Content="Disable local model reasoning (&lt;think&gt;) — recommended for qwen3" />
+                        <CheckBox IsChecked="{Binding VerifyWrites}"
+                                  Content="Verify writes by reading files back — helps weak local models, adds a round-trip" />
+                        <TextBlock Classes="hint"
+                                   Text="Reading a file back after writing catches a weak model inventing content. It's an extra call per write, so turn it off when you mostly run strong models." />
+
+                        <TextBlock Classes="label" Text="Parallel steps" />
+                        <TextBlock Classes="hint"
+                                   Text="How many independent steps of a plan may run at once. 1 keeps one step at a time on a single conversation. Above 1 each concurrent step gets its own forked conversation and sees only what its siblings concluded — faster on wide plans, and worth it mainly when steps route to different providers, since two steps on one Ollama queue on the GPU." />
+                        <TextBox Text="{Binding MaxParallelStepsText}" Watermark="1 = one step at a time" />
+
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <TabItem Header="Providers">
+                <DockPanel LastChildFill="True" Margin="12">
+                    <StackPanel DockPanel.Dock="Bottom" Classes="actions">
+                        <Button Content="Add" Command="{Binding AddProviderCommand}" />
+                        <Button Content="Edit" Command="{Binding EditProviderCommand}" />
+                        <Button Content="Remove" Command="{Binding RemoveProviderCommand}" />
+                    </StackPanel>
+                    <ListBox ItemsSource="{Binding Providers}" SelectedItem="{Binding SelectedProvider}">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate x:DataType="vm:ProviderRow">
+                                <TextBlock Text="{Binding Display}" Margin="2" />
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </DockPanel>
+            </TabItem>
+
+            <TabItem Header="Team">
+                <DockPanel LastChildFill="True" Margin="12">
+                    <TextBlock DockPanel.Dock="Top" Classes="hint"
+                               Text="The main window's role picker chooses which worker handles a run. Honesty rules and global instructions are added to every worker automatically." />
+                    <StackPanel DockPanel.Dock="Bottom" Classes="actions">
+                        <Button Content="Add" Command="{Binding AddWorkerCommand}" />
+                        <Button Content="Edit" Command="{Binding EditWorkerCommand}" />
+                        <Button Content="Remove" Command="{Binding RemoveWorkerCommand}" />
+                    </StackPanel>
+                    <ListBox ItemsSource="{Binding Workers}" SelectedItem="{Binding SelectedWorker}">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate x:DataType="vm:WorkerRow">
+                                <TextBlock Text="{Binding Display}" Margin="2" />
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </DockPanel>
+            </TabItem>
+
+            <TabItem Header="Phases">
+                <ScrollViewer>
+                    <StackPanel Margin="12" Spacing="6">
+
+                        <TextBlock Classes="hint"
+                                   Text="Execute always runs on the selected worker's own model. Plan and Review use the models bound here. Choose (none) for Plan to plan on the executing model, or for Review to skip review entirely (single-agent)." />
+
+                        <TextBlock Classes="label" Text="Plan model" />
+                        <ComboBox ItemsSource="{Binding ModelCatalog}" SelectedItem="{Binding Plan}" />
+
+                        <TextBlock Classes="label" Text="Review model" />
+                        <ComboBox ItemsSource="{Binding ModelCatalog}" SelectedItem="{Binding Review}" />
+
+                        <TextBlock Classes="hint"
+                                   Text="Per-step auto-routing (optional): the planner rates each step trivial / normal / complex. Trivial steps run on the light model, complex steps on the heavy model; normal steps stay on the worker's own model. Choose (none) for both to disable auto-routing." />
+
+                        <TextBlock Classes="label" Text="Execute · light (trivial steps)" />
+                        <ComboBox ItemsSource="{Binding ModelCatalog}" SelectedItem="{Binding ExecuteLight}" />
+
+                        <TextBlock Classes="label" Text="Execute · heavy (complex steps)" />
+                        <ComboBox ItemsSource="{Binding ModelCatalog}" SelectedItem="{Binding ExecuteHeavy}" />
+
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+        </TabControl>
+    </DockPanel>
+</Window>
