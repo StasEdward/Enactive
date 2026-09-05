@@ -763,10 +763,11 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         try
         {
             var path = _vm.WorkspacePath.Trim();
-            if (string.IsNullOrEmpty(path)) { _vm.InboxLabel = "Inbox"; return; }
+            if (string.IsNullOrEmpty(path)) { _vm.InboxLabel = "Inbox"; _vm.InboxUnread = 0; return; }
             var items = await InboxStoreFactory.Create(WorkspaceFrom(path)).LoadAllAsync(CancellationToken.None);
             var unread = items.Count(i => string.Equals(i.Status, "unread", StringComparison.OrdinalIgnoreCase));
             _vm.InboxLabel = unread > 0 ? $"Inbox ({unread})" : "Inbox";
+            _vm.InboxUnread = unread;
         }
         catch { /* ignore */ }
     }
@@ -786,7 +787,11 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             _inboxWindow = new InboxWindow(
                 InboxStoreFactory.Create(workspace), RunStoreFactory.Create(workspace), workspace.RootPath);
             // The badge follows the window: reading an item there updates the button here.
-            _inboxWindow.UnreadChanged += unread => _vm.InboxLabel = unread > 0 ? $"Inbox ({unread})" : "Inbox";
+            _inboxWindow.UnreadChanged += unread =>
+            {
+                _vm.InboxLabel = unread > 0 ? $"Inbox ({unread})" : "Inbox";
+                _vm.InboxUnread = unread;
+            };
             _inboxWindow.Closed += (_, _) => { _inboxWindow = null; RefreshInboxButton(); };
             _inboxWindow.Show(this);
         }

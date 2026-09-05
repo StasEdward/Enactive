@@ -52,6 +52,8 @@ internal static class Brand
 
     // ── Surfaces ────────────────────────────────────────────────────────────
     public static readonly IBrush Bg = Of(Ink900);
+    /// <summary>The icon rail: one step darker than the app, so it reads as chrome, not content.</summary>
+    public static readonly IBrush Rail = Of(Ink950);
     public static readonly IBrush Surface = Of(Ink800);
     public static readonly IBrush Card = Of(Ink700);
     public static readonly IBrush Line = Of(Ink600);
@@ -131,6 +133,7 @@ internal static class Brand
         // Keys mirror the member names above, so a token is looked up in XAML by the same name it
         // has in code. Add a token here whenever you add one to the palette.
         r["Brand.Bg"] = Bg;
+        r["Brand.Rail"] = Rail;
         r["Brand.Surface"] = Surface;
         r["Brand.Card"] = Card;
         r["Brand.CardFill"] = CardFill;

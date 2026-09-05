@@ -89,6 +89,50 @@
         <Setter Property="Foreground" Value="{DynamicResource Brand.TextBody}" />
     </Style>
 
+    <!-- ── The icon rail ────────────────────────────────────────────────────
+         Chrome, not content: it sits on the darkest ink, its icons are quiet
+         until you point at them, and only the section you are in takes ember.
+    -->
+    <Style Selector="Border.rail">
+        <Setter Property="Background" Value="{DynamicResource Brand.Rail}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Brand.Line}" />
+        <Setter Property="BorderThickness" Value="0,0,1,0" />
+    </Style>
+
+    <Style Selector="Button.rail">
+        <Setter Property="Width" Value="38" />
+        <Setter Property="Height" Value="38" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="CornerRadius" Value="6" />
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Button.rail /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+    </Style>
+    <Style Selector="Button.rail:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource Brand.CardFill}" />
+    </Style>
+    <Style Selector="Button.rail Path">
+        <Setter Property="Stroke" Value="{DynamicResource Brand.TextFaint}" />
+        <Setter Property="StrokeThickness" Value="1.6" />
+        <Setter Property="StrokeLineCap" Value="Round" />
+        <Setter Property="StrokeJoin" Value="Round" />
+    </Style>
+    <Style Selector="Button.rail:pointerover Path">
+        <Setter Property="Stroke" Value="{DynamicResource Brand.Text}" />
+    </Style>
+
+    <!-- ── The context column ──────────────────────────────────────────────── -->
+    <Style Selector="Border.context">
+        <Setter Property="Background" Value="{DynamicResource Brand.Surface}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Brand.Line}" />
+        <Setter Property="BorderThickness" Value="0,0,1,0" />
+    </Style>
+
     <!-- A multi-line input (instructions, headers, model lists). -->
     <Style Selector="TextBox.multiline">
         <Setter Property="AcceptsReturn" Value="True" />

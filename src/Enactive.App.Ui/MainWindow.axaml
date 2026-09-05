@@ -7,213 +7,300 @@
         Title="Enactive"
         Width="1080" Height="720">
 
-    <DockPanel LastChildFill="True">
+    <!--
+      Three columns, full height: the icon rail is chrome, the context column says
+      WHERE you are working and how the next run is configured, and everything about
+      the run itself lives in the third.
+    -->
+    <Grid ColumnDefinitions="52,268,*">
 
-        <!-- ── Command bar ──────────────────────────────────────────────────── -->
-        <StackPanel DockPanel.Dock="Top" Margin="12,12,12,6" Spacing="6">
+        <!-- ── Icon rail ────────────────────────────────────────────────────── -->
+        <Border Grid.Column="0" Classes="rail">
+            <DockPanel LastChildFill="False">
 
-            <StackPanel Orientation="Horizontal" Spacing="6">
-                <ItemsControl ItemsSource="{Binding Verbs}">
-                    <ItemsControl.ItemsPanel>
-                        <ItemsPanelTemplate>
-                            <StackPanel Orientation="Horizontal" Spacing="6" />
-                        </ItemsPanelTemplate>
-                    </ItemsControl.ItemsPanel>
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate x:DataType="vm:VerbChipViewModel">
-                            <Button Content="{Binding Verb}" Command="{Binding Command}"
-                                    FontSize="11" Padding="8,2" />
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
-                <TextBlock Text="Ctrl+K to focus · Enter to run · Ctrl+Enter = newline"
-                           Classes="hint" VerticalAlignment="Center" Margin="8,0,0,0" />
-            </StackPanel>
+                <!-- The Loop: the run cycle, the gap where the human decision fits,
+                     and the artifact in the middle. -->
+                <Viewbox DockPanel.Dock="Top" Width="24" Height="24" Margin="0,12,0,10">
+                    <Canvas Width="64" Height="64">
+                        <Path Data="M 36.37,11.46 A 21,21 0 1 0 52.19,26.21"
+                              Stroke="{DynamicResource Brand.Accent}" StrokeThickness="8"
+                              StrokeLineCap="Round" />
+                        <Path Data="M 49.02,15.16 L 59.27,26.25 L 46.21,30.01 Z"
+                              Fill="{DynamicResource Brand.Accent}" />
+                        <Ellipse Canvas.Left="25.5" Canvas.Top="25.5" Width="13" Height="13"
+                                 Fill="{DynamicResource Brand.Amber}" />
+                    </Canvas>
+                </Viewbox>
 
-            <DockPanel LastChildFill="True">
-                <StackPanel DockPanel.Dock="Right" Spacing="6" VerticalAlignment="Center">
-                    <Button Content="Run" Width="72" Command="{Binding RunCommand}" />
-                    <Button Content="Stop" Width="72" Command="{Binding StopCommand}" />
-                </StackPanel>
-                <TextBox x:Name="InputBox"
-                         Text="{Binding InputText}"
-                         IsEnabled="{Binding IsIdle}"
-                         Watermark="What do you want to accomplish?"
-                         AcceptsReturn="True" MinHeight="56" TextWrapping="Wrap" />
+                <Button DockPanel.Dock="Top" Classes="rail" Command="{Binding TimelineCommand}"
+                        ToolTip.Tip="Timeline · project memory">
+                    <Viewbox Width="18" Height="18">
+                        <Canvas Width="24" Height="24">
+                            <Path Data="M 4,5 H 20 V 16 H 4 Z" />
+                            <Path Data="M 4,16 L 8,11 L 11,14 L 14,10 L 20,16" />
+                        </Canvas>
+                    </Viewbox>
+                </Button>
+
+                <Button DockPanel.Dock="Top" Classes="rail" Command="{Binding InboxCommand}"
+                        ToolTip.Tip="{Binding InboxTooltip}">
+                    <Panel>
+                        <Viewbox Width="18" Height="18">
+                            <Canvas Width="24" Height="24">
+                                <Path Data="M 3,7 H 21 V 19 H 3 Z" />
+                                <Path Data="M 3,7 L 12,14 L 21,7" />
+                            </Canvas>
+                        </Viewbox>
+                        <Ellipse Width="7" Height="7" Margin="0,2,2,0"
+                                 HorizontalAlignment="Right" VerticalAlignment="Top"
+                                 Fill="{DynamicResource Brand.Accent}"
+                                 IsVisible="{Binding HasUnread}" />
+                    </Panel>
+                </Button>
+
+                <Button DockPanel.Dock="Top" Classes="rail" Command="{Binding LogCommand}"
+                        ToolTip.Tip="Global log">
+                    <Viewbox Width="18" Height="18">
+                        <Canvas Width="24" Height="24">
+                            <Path Data="M 5,5 H 19 V 19 H 5 Z" />
+                            <Path Data="M 8,9 H 16 M 8,13 H 16 M 8,17 H 13" />
+                        </Canvas>
+                    </Viewbox>
+                </Button>
+
+                <Button DockPanel.Dock="Bottom" Classes="rail" Command="{Binding SettingsCommand}"
+                        ToolTip.Tip="Settings" Margin="0,0,0,10">
+                    <Viewbox Width="18" Height="18">
+                        <Canvas Width="24" Height="24">
+                            <Path Data="M 12,8.8 A 3.2,3.2 0 1 0 12.01,8.8 Z" />
+                            <Path Data="M 12,3 V 5.4 M 12,18.6 V 21 M 3,12 H 5.4 M 18.6,12 H 21
+                                        M 5.64,5.64 L 7.34,7.34 M 16.66,16.66 L 18.36,18.36
+                                        M 18.36,5.64 L 16.66,7.34 M 7.34,16.66 L 5.64,18.36" />
+                        </Canvas>
+                    </Viewbox>
+                </Button>
+
+                <Button DockPanel.Dock="Bottom" Classes="rail" Command="{Binding EnvironmentCommand}"
+                        ToolTip.Tip="Environment">
+                    <Viewbox Width="18" Height="18">
+                        <Canvas Width="24" Height="24">
+                            <Path Data="M 4,5 H 20 V 15 H 4 Z" />
+                            <Path Data="M 9,19 H 15 M 12,15 V 19" />
+                        </Canvas>
+                    </Viewbox>
+                </Button>
+
             </DockPanel>
-        </StackPanel>
+        </Border>
 
-        <Grid ColumnDefinitions="240,*,320">
+        <!-- ── Context: where you are working, and how the next run is set up ── -->
+        <Border Grid.Column="1" Classes="context">
+            <DockPanel LastChildFill="True">
 
-            <!-- ── Left: workspace, autonomy, tools ─────────────────────────── -->
-            <ScrollViewer Grid.Column="0">
-                <StackPanel Margin="12,6,6,12" Spacing="8">
-                    <TextBlock Classes="panelHeader" Text="WORKSPACE" />
+                <StackPanel DockPanel.Dock="Top" Margin="12,12,12,0" Spacing="6">
+                    <TextBlock Classes="panelHeader" Text="WORKSPACE" Margin="0" />
                     <TextBox Text="{Binding WorkspacePath}" IsEnabled="{Binding IsIdle}"
                              Watermark="Workspace folder" TextWrapping="Wrap" />
                     <TextBlock Classes="hint" Text="{Binding ModelLabel}" />
-
                     <TextBlock Classes="panelHeader" Text="RECENT" />
-                    <ListBox MaxHeight="150"
-                             ItemsSource="{Binding RecentWorkspaces}"
-                             SelectedItem="{Binding SelectedRecent}" />
+                </StackPanel>
 
-                    <TextBlock Classes="panelHeader" Text="AUTONOMY" />
-                    <TextBlock Text="{Binding AutonomyLabel}" Foreground="{Binding AutonomyBrush}" FontSize="12" />
+                <!-- Pinned to the bottom: this is the setup for the NEXT run, not
+                     part of the list above it. -->
+                <StackPanel DockPanel.Dock="Bottom" Margin="12" Spacing="8">
+                    <TextBlock Classes="panelHeader" Text="NEXT RUN" Margin="0" />
+                    <TextBlock Text="{Binding AutonomyLabel}" Foreground="{Binding AutonomyBrush}"
+                               FontSize="12" TextWrapping="Wrap" />
                     <Slider Minimum="0" Maximum="3" TickFrequency="1" IsSnapToTickEnabled="True"
                             Value="{Binding AutonomyLevel, Mode=TwoWay}" IsEnabled="{Binding IsIdle}" />
+                    <ComboBox ItemsSource="{Binding WorkerRoles}"
+                              SelectedIndex="{Binding SelectedWorkerIndex, Mode=TwoWay}" />
                     <CheckBox Content="Stage changes (review before apply)"
                               IsChecked="{Binding StageChanges}" IsEnabled="{Binding IsIdle}" />
                     <CheckBox Content="Run in background (Inbox)" IsChecked="{Binding RunInBackground}" />
-
-                    <Border Height="8" />
-                    <TextBlock Classes="hint" Text="Role" />
-                    <ComboBox ItemsSource="{Binding WorkerRoles}" SelectedIndex="{Binding SelectedWorkerIndex, Mode=TwoWay}" />
-
-                    <Border Height="6" />
-                    <Button Content="Timeline" HorizontalAlignment="Stretch" Command="{Binding TimelineCommand}" />
-                    <Button Content="Log" HorizontalAlignment="Stretch" Command="{Binding LogCommand}" />
-                    <Button Content="Env" HorizontalAlignment="Stretch" Command="{Binding EnvironmentCommand}" />
-                    <Button Content="{Binding InboxLabel}" HorizontalAlignment="Stretch" Command="{Binding InboxCommand}" />
-                    <Button Content="Settings" HorizontalAlignment="Stretch" Command="{Binding SettingsCommand}" />
-
-                    <Border Height="10" />
-                    <TextBlock Classes="hint" Text="Environment" />
                     <TextBlock Classes="hint" Text="{Binding EnvironmentSummary}" />
                 </StackPanel>
-            </ScrollViewer>
 
-            <!-- ── Centre: the plan-step feed ───────────────────────────────── -->
-            <ScrollViewer Grid.Column="1"
-                          HorizontalScrollBarVisibility="Disabled"
-                          VerticalScrollBarVisibility="Auto">
-                <ItemsControl ItemsSource="{Binding Steps}" Margin="6,6,6,12">
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate x:DataType="vm:StepCardViewModel">
-                            <local:StepCardView />
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
-            </ScrollViewer>
+                <ListBox Margin="12,0,12,0" Background="Transparent"
+                         ItemsSource="{Binding RecentWorkspaces}"
+                         SelectedItem="{Binding SelectedRecent}" />
 
-            <!-- ── Right: AI status, decision, artifacts ────────────────────── -->
-            <DockPanel Grid.Column="2" Margin="6,6,12,12">
-                <StackPanel DockPanel.Dock="Top" Spacing="4">
-                    <TextBlock Classes="panelHeader" Text="AI STATUS" />
-                    <TextBlock Text="{Binding StatusPhase}" FontSize="18" FontWeight="SemiBold" />
-                    <TextBlock Classes="hint" Text="{Binding StatusProgress}" FontSize="12" />
-                    <TextBlock Classes="hint" Text="{Binding StatusElapsed}" FontSize="12" />
+            </DockPanel>
+        </Border>
 
-                    <Border Background="{Binding AgentBrush}" IsVisible="{Binding IsAgentVisible}"
-                            CornerRadius="10" Padding="10,2" HorizontalAlignment="Left" Margin="0,4,0,0">
-                        <TextBlock Text="{Binding AgentBadge}" FontSize="11"
-                                   Foreground="{DynamicResource Brand.Text}" />
-                    </Border>
+        <!-- ── Main: the command bar and the run ────────────────────────────── -->
+        <DockPanel Grid.Column="2" LastChildFill="True">
 
-                    <TextBlock Classes="hint" Text="Current action" Margin="0,8,0,0" />
-                    <TextBlock Text="{Binding CurrentAction}" TextWrapping="Wrap" FontSize="12"
-                               Foreground="{DynamicResource Brand.TextBody}" />
-
-                    <!-- A decision card means the run is BLOCKED waiting on the user - caution, not
-                         action - so it is amber, not ember. Ember belongs to the Allow button. -->
-                    <Border IsVisible="{Binding IsDecisionVisible}"
-                            Background="{DynamicResource Brand.DecisionFill}"
-                            BorderBrush="{DynamicResource Brand.DecisionBorder}"
-                            BorderThickness="1" CornerRadius="6"
-                            Padding="12" Margin="0,8,0,8">
-                        <StackPanel>
-                            <TextBlock Text="USER DECISION REQUIRED" FontWeight="Bold" />
-                            <TextBlock Text="{Binding DecisionText}" TextWrapping="Wrap"
-                                       Margin="0,4,0,0" FontSize="12" />
-                            <ItemsControl ItemsSource="{Binding DecisionOptions}" Margin="0,8,0,0">
-                                <ItemsControl.ItemsPanel>
-                                    <ItemsPanelTemplate>
-                                        <WrapPanel Orientation="Horizontal" />
-                                    </ItemsPanelTemplate>
-                                </ItemsControl.ItemsPanel>
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate x:DataType="vm:DecisionOptionViewModel">
-                                        <Button Content="{Binding Label}" Command="{Binding Command}"
-                                                Margin="0,0,8,4" />
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-                        </StackPanel>
-                    </Border>
-
-                    <TextBlock Classes="panelHeader" Text="ARTIFACTS" />
+            <StackPanel DockPanel.Dock="Top" Margin="16,12,16,10" Spacing="8">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <ItemsControl ItemsSource="{Binding Verbs}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <StackPanel Orientation="Horizontal" Spacing="6" />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:VerbChipViewModel">
+                                <Button Content="{Binding Verb}" Command="{Binding Command}"
+                                        FontSize="11" Padding="8,2" />
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <TextBlock Text="Ctrl+K to focus · Enter to run · Ctrl+Enter = newline"
+                               Classes="hint" VerticalAlignment="Center" Margin="8,0,0,0" />
                 </StackPanel>
 
-                <ScrollViewer>
-                    <ItemsControl ItemsSource="{Binding Artifacts}">
-                        <ItemsControl.DataTemplates>
+                <DockPanel LastChildFill="True">
+                    <StackPanel DockPanel.Dock="Right" Spacing="6" VerticalAlignment="Center"
+                                Margin="8,0,0,0">
+                        <Button Classes="primary" Content="Run" Width="72"
+                                Command="{Binding RunCommand}" />
+                        <Button Content="Stop" Width="72" Command="{Binding StopCommand}" />
+                    </StackPanel>
+                    <TextBox x:Name="InputBox"
+                             Text="{Binding InputText}"
+                             IsEnabled="{Binding IsIdle}"
+                             Watermark="What do you want to accomplish?"
+                             AcceptsReturn="True" MinHeight="56" TextWrapping="Wrap" />
+                </DockPanel>
+            </StackPanel>
 
-                            <!-- A file written straight to disk. -->
-                            <DataTemplate DataType="vm:ArtifactItemViewModel">
-                                <Border Background="{DynamicResource Brand.CardFill}" CornerRadius="4"
-                                        Padding="8" Margin="0,0,0,6">
-                                    <StackPanel>
-                                        <TextBlock Text="{Binding RelativePath}" TextWrapping="Wrap"
-                                                   FontFamily="Consolas, Menlo, monospace" FontSize="12" />
-                                        <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,4,0,0">
-                                            <Button Content="Review" Command="{Binding ReviewCommand}"
-                                                    FontSize="11" Padding="8,2" />
-                                            <Button Content="Undo" Command="{Binding UndoCommand}"
-                                                    FontSize="11" Padding="8,2" />
-                                            <TextBlock Classes="hint" Text="{Binding Status}"
-                                                       VerticalAlignment="Center" Margin="6,0,0,0" />
-                                        </StackPanel>
-                                    </StackPanel>
-                                </Border>
+            <Grid ColumnDefinitions="*,320">
+
+                <!-- The plan-step feed -->
+                <ScrollViewer Grid.Column="0"
+                              HorizontalScrollBarVisibility="Disabled"
+                              VerticalScrollBarVisibility="Auto">
+                    <ItemsControl ItemsSource="{Binding Steps}" Margin="16,0,10,12">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:StepCardViewModel">
+                                <local:StepCardView />
                             </DataTemplate>
-
-                            <!-- A change waiting for apply or reject, with its diff. -->
-                            <DataTemplate DataType="vm:StagedChangeViewModel">
-                                <Border Background="{DynamicResource Brand.CardFill}"
-                                        BorderBrush="{DynamicResource Brand.Amber}"
-                                        BorderThickness="2,0,0,0" CornerRadius="4"
-                                        Padding="8" Margin="0,0,0,6">
-                                    <StackPanel>
-                                        <TextBlock Text="{Binding RelativePath}" TextWrapping="Wrap"
-                                                   FontFamily="Consolas, Menlo, monospace" FontSize="12" />
-                                        <StackPanel Orientation="Horizontal" Spacing="6">
-                                            <TextBlock Classes="hint" Text="{Binding Tag}" />
-                                            <TextBlock Text="{Binding Status}" Foreground="{Binding StatusBrush}"
-                                                       FontSize="11" Margin="6,0,0,0" />
-                                        </StackPanel>
-                                        <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,4,0,0">
-                                            <Button Content="Diff" Command="{Binding DiffCommand}"
-                                                    FontSize="11" Padding="8,2" />
-                                            <Button Content="Apply" Command="{Binding ApplyCommand}"
-                                                    FontSize="11" Padding="8,2" />
-                                            <Button Content="Reject" Command="{Binding RejectCommand}"
-                                                    FontSize="11" Padding="8,2" />
-                                        </StackPanel>
-                                        <Border IsVisible="{Binding IsDiffVisible}"
-                                                Background="{DynamicResource Brand.Scrim}"
-                                                CornerRadius="3" Padding="6" Margin="0,6,0,0"
-                                                MaxHeight="220">
-                                            <ScrollViewer>
-                                                <ItemsControl ItemsSource="{Binding Diff}">
-                                                    <ItemsControl.ItemTemplate>
-                                                        <DataTemplate x:DataType="vm:DiffLineViewModel">
-                                                            <TextBlock Text="{Binding Text}"
-                                                                       Foreground="{Binding Brush}"
-                                                                       FontFamily="Consolas, Menlo, monospace"
-                                                                       FontSize="11" />
-                                                        </DataTemplate>
-                                                    </ItemsControl.ItemTemplate>
-                                                </ItemsControl>
-                                            </ScrollViewer>
-                                        </Border>
-                                    </StackPanel>
-                                </Border>
-                            </DataTemplate>
-
-                        </ItemsControl.DataTemplates>
+                        </ItemsControl.ItemTemplate>
                     </ItemsControl>
                 </ScrollViewer>
-            </DockPanel>
-        </Grid>
-    </DockPanel>
+
+                <!-- AI status, the decision card, and what the run produced -->
+                <DockPanel Grid.Column="1" Margin="6,0,16,12">
+                    <StackPanel DockPanel.Dock="Top" Spacing="4">
+                        <TextBlock Classes="panelHeader" Text="AI STATUS" Margin="0" />
+                        <TextBlock Text="{Binding StatusPhase}" FontSize="18" FontWeight="SemiBold" />
+                        <TextBlock Classes="hint" Text="{Binding StatusProgress}" FontSize="12" />
+                        <TextBlock Classes="hint" Text="{Binding StatusElapsed}" FontSize="12" />
+
+                        <Border Background="{Binding AgentBrush}" IsVisible="{Binding IsAgentVisible}"
+                                CornerRadius="10" Padding="10,2" HorizontalAlignment="Left"
+                                Margin="0,4,0,0">
+                            <TextBlock Text="{Binding AgentBadge}" FontSize="11"
+                                       Foreground="{DynamicResource Brand.Text}" />
+                        </Border>
+
+                        <TextBlock Classes="hint" Text="Current action" Margin="0,8,0,0" />
+                        <TextBlock Text="{Binding CurrentAction}" TextWrapping="Wrap" FontSize="12"
+                                   Foreground="{DynamicResource Brand.TextBody}" />
+
+                        <!-- A decision card means the run is BLOCKED waiting on the user -
+                             caution, not action - so it is amber, not ember. Ember belongs
+                             to the Allow button. -->
+                        <Border IsVisible="{Binding IsDecisionVisible}"
+                                Background="{DynamicResource Brand.DecisionFill}"
+                                BorderBrush="{DynamicResource Brand.DecisionBorder}"
+                                BorderThickness="1" CornerRadius="6"
+                                Padding="12" Margin="0,8,0,8">
+                            <StackPanel>
+                                <TextBlock Text="USER DECISION REQUIRED" FontWeight="Bold" />
+                                <TextBlock Text="{Binding DecisionText}" TextWrapping="Wrap"
+                                           Margin="0,4,0,0" FontSize="12" />
+                                <ItemsControl ItemsSource="{Binding DecisionOptions}" Margin="0,8,0,0">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <WrapPanel Orientation="Horizontal" />
+                                        </ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:DecisionOptionViewModel">
+                                            <Button Content="{Binding Label}" Command="{Binding Command}"
+                                                    Margin="0,0,8,4" />
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                        </Border>
+
+                        <TextBlock Classes="panelHeader" Text="ARTIFACTS" />
+                    </StackPanel>
+
+                    <ScrollViewer>
+                        <ItemsControl ItemsSource="{Binding Artifacts}">
+                            <ItemsControl.DataTemplates>
+
+                                <!-- A file written straight to disk. -->
+                                <DataTemplate DataType="vm:ArtifactItemViewModel">
+                                    <Border Background="{DynamicResource Brand.CardFill}" CornerRadius="4"
+                                            Padding="8" Margin="0,0,0,6">
+                                        <StackPanel>
+                                            <TextBlock Text="{Binding RelativePath}" TextWrapping="Wrap"
+                                                       FontFamily="Consolas, Menlo, monospace" FontSize="12" />
+                                            <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,4,0,0">
+                                                <Button Content="Review" Command="{Binding ReviewCommand}"
+                                                        FontSize="11" Padding="8,2" />
+                                                <Button Content="Undo" Command="{Binding UndoCommand}"
+                                                        FontSize="11" Padding="8,2" />
+                                                <TextBlock Classes="hint" Text="{Binding Status}"
+                                                           VerticalAlignment="Center" Margin="6,0,0,0" />
+                                            </StackPanel>
+                                        </StackPanel>
+                                    </Border>
+                                </DataTemplate>
+
+                                <!-- A change waiting for apply or reject, with its diff. -->
+                                <DataTemplate DataType="vm:StagedChangeViewModel">
+                                    <Border Background="{DynamicResource Brand.CardFill}"
+                                            BorderBrush="{DynamicResource Brand.Amber}"
+                                            BorderThickness="2,0,0,0" CornerRadius="4"
+                                            Padding="8" Margin="0,0,0,6">
+                                        <StackPanel>
+                                            <TextBlock Text="{Binding RelativePath}" TextWrapping="Wrap"
+                                                       FontFamily="Consolas, Menlo, monospace" FontSize="12" />
+                                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                                <TextBlock Classes="hint" Text="{Binding Tag}" />
+                                                <TextBlock Text="{Binding Status}" Foreground="{Binding StatusBrush}"
+                                                           FontSize="11" Margin="6,0,0,0" />
+                                            </StackPanel>
+                                            <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,4,0,0">
+                                                <Button Content="Diff" Command="{Binding DiffCommand}"
+                                                        FontSize="11" Padding="8,2" />
+                                                <Button Content="Apply" Command="{Binding ApplyCommand}"
+                                                        FontSize="11" Padding="8,2" />
+                                                <Button Content="Reject" Command="{Binding RejectCommand}"
+                                                        FontSize="11" Padding="8,2" />
+                                            </StackPanel>
+                                            <Border IsVisible="{Binding IsDiffVisible}"
+                                                    Background="{DynamicResource Brand.Scrim}"
+                                                    CornerRadius="3" Padding="6" Margin="0,6,0,0"
+                                                    MaxHeight="220">
+                                                <ScrollViewer>
+                                                    <ItemsControl ItemsSource="{Binding Diff}">
+                                                        <ItemsControl.ItemTemplate>
+                                                            <DataTemplate x:DataType="vm:DiffLineViewModel">
+                                                                <TextBlock Text="{Binding Text}"
+                                                                           Foreground="{Binding Brush}"
+                                                                           FontFamily="Consolas, Menlo, monospace"
+                                                                           FontSize="11" />
+                                                            </DataTemplate>
+                                                        </ItemsControl.ItemTemplate>
+                                                    </ItemsControl>
+                                                </ScrollViewer>
+                                            </Border>
+                                        </StackPanel>
+                                    </Border>
+                                </DataTemplate>
+
+                            </ItemsControl.DataTemplates>
+                        </ItemsControl>
+                    </ScrollViewer>
+                </DockPanel>
+            </Grid>
+        </DockPanel>
+    </Grid>
 </Window>

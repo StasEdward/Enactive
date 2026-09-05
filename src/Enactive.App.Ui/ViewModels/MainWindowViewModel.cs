@@ -163,6 +163,7 @@ internal sealed class MainWindowViewModel : ObservableObject
     private bool _isDecisionVisible;
     private string _decisionText = string.Empty;
     private string _inboxLabel = "Inbox";
+    private int _inboxUnread;
     private bool _isBusy;
 
     public MainWindowViewModel()
@@ -241,6 +242,26 @@ internal sealed class MainWindowViewModel : ObservableObject
     public int SelectedWorkerIndex { get => _selectedWorkerIndex; set => Set(ref _selectedWorkerIndex, value); }
 
     public string InboxLabel { get => _inboxLabel; set => Set(ref _inboxLabel, value); }
+
+    /// <summary>
+    /// How many inbox items are unread. The rail shows a dot rather than a number - at a glance you
+    /// need "something is waiting", and the count itself is one hover away in the tooltip.
+    /// </summary>
+    public int InboxUnread
+    {
+        get => _inboxUnread;
+        set
+        {
+            if (!Set(ref _inboxUnread, value))
+                return;
+            OnPropertyChanged(nameof(HasUnread));
+            OnPropertyChanged(nameof(InboxTooltip));
+        }
+    }
+
+    public bool HasUnread => InboxUnread > 0;
+
+    public string InboxTooltip => InboxUnread > 0 ? $"Inbox — {InboxUnread} unread" : "Inbox";
 
     public RelayCommand TimelineCommand { get; }
     public RelayCommand LogCommand { get; }
