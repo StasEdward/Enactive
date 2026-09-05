@@ -226,25 +226,105 @@
                 <Panel>
 
                     <!-- Workspace: where the work happens. -->
-                    <DockPanel IsVisible="{Binding IsWorkspacePane}" LastChildFill="True">
-                        <StackPanel DockPanel.Dock="Top" Margin="12,12,12,0" Spacing="6">
+                    <DockPanel IsVisible="{Binding IsWorkspacePane}" LastChildFill="False">
+                        <StackPanel DockPanel.Dock="Top" Margin="12,12,12,0" Spacing="8">
                             <TextBlock Classes="panelHeader" Text="WORKSPACE" Margin="0" />
-                            <TextBox Text="{Binding WorkspacePath}" IsEnabled="{Binding IsIdle}"
-                                     Watermark="Workspace folder"
-                                     ToolTip.Tip="{Binding WorkspacePath}" />
+
+                            <Panel>
+                                <Button Classes="wsCard" Command="{Binding ToggleSwitcherCommand}"
+                                        ToolTip.Tip="{Binding WorkspacePath}">
+                                    <Grid ColumnDefinitions="*,Auto">
+                                        <StackPanel Grid.Column="0" Spacing="1" Margin="0,0,8,0">
+                                            <TextBlock Text="{Binding WorkspaceName}"
+                                                       FontSize="13" FontWeight="SemiBold"
+                                                       Foreground="{Binding WorkspaceNameBrush}"
+                                                       TextWrapping="NoWrap"
+                                                       TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Classes="path" Text="{Binding WorkspacePath}" />
+                                        </StackPanel>
+                                        <Viewbox Grid.Column="1" Width="14" Height="14"
+                                                 VerticalAlignment="Center">
+                                            <Canvas Width="24" Height="24">
+                                                <Path Data="M 7,10 L 12,15 L 17,10" />
+                                            </Canvas>
+                                        </Viewbox>
+                                    </Grid>
+                                </Button>
+
+                                <!-- The switcher. Light dismiss writes IsOpen back, so clicking
+                                     away closes it without the view model being told twice. -->
+                                <Popup IsOpen="{Binding IsSwitcherOpen, Mode=TwoWay}"
+                                       Placement="BottomEdgeAlignedLeft" VerticalOffset="4"
+                                       IsLightDismissEnabled="True">
+                                    <Border Classes="popup" Width="300">
+                                        <StackPanel Spacing="6">
+                                            <TextBlock Classes="panelHeader" Text="WORKSPACES" Margin="0" />
+
+                                            <ScrollViewer MaxHeight="300"
+                                                          HorizontalScrollBarVisibility="Disabled">
+                                                <ItemsControl ItemsSource="{Binding Workspaces}">
+                                                    <ItemsControl.ItemTemplate>
+                                                        <DataTemplate x:DataType="vm:WorkspaceItemViewModel">
+                                                            <Grid ColumnDefinitions="*,Auto">
+                                                                <!-- The edge lives on a Border, not
+                                                                     on the Button: Fluent repaints a
+                                                                     button's own border on hover, and
+                                                                     "you are here" must not blink. -->
+                                                                <Border Grid.Column="0"
+                                                                        BorderBrush="{Binding CurrentBrush}"
+                                                                        BorderThickness="2,0,0,0">
+                                                                <Button Classes="wsRow"
+                                                                        Command="{Binding SwitchCommand}">
+                                                                    <StackPanel Spacing="1">
+                                                                        <TextBlock Text="{Binding Name}"
+                                                                                   FontSize="12.5" FontWeight="SemiBold"
+                                                                                   Foreground="{Binding NameBrush}"
+                                                                                   TextWrapping="NoWrap"
+                                                                                   TextTrimming="CharacterEllipsis" />
+                                                                        <TextBlock Text="{Binding Detail}"
+                                                                                   FontSize="11"
+                                                                                   Foreground="{Binding DetailBrush}"
+                                                                                   FontFamily="Consolas, Menlo, monospace"
+                                                                                   TextWrapping="NoWrap"
+                                                                                   TextTrimming="PrefixCharacterEllipsis" />
+                                                                    </StackPanel>
+                                                                </Button>
+                                                                </Border>
+                                                                <Button Grid.Column="1" Classes="wsForget"
+                                                                        Command="{Binding ForgetCommand}"
+                                                                        ToolTip.Tip="Forget this workspace. The folder and its history are left where they are.">
+                                                                    <Viewbox Width="11" Height="11">
+                                                                        <Canvas Width="24" Height="24">
+                                                                            <Path Data="M 6,6 L 18,18 M 18,6 L 6,18" />
+                                                                        </Canvas>
+                                                                    </Viewbox>
+                                                                </Button>
+                                                            </Grid>
+                                                        </DataTemplate>
+                                                    </ItemsControl.ItemTemplate>
+                                                </ItemsControl>
+                                            </ScrollViewer>
+
+                                            <Button Content="Add folder…" FontSize="12"
+                                                    HorizontalAlignment="Stretch"
+                                                    HorizontalContentAlignment="Center"
+                                                    Command="{Binding AddWorkspaceCommand}" />
+                                        </StackPanel>
+                                    </Border>
+                                </Popup>
+                            </Panel>
+
+                            <TextBlock IsVisible="{Binding WorkspaceMissing}" FontSize="11"
+                                       TextWrapping="Wrap"
+                                       Foreground="{DynamicResource Brand.Danger}"
+                                       Text="This folder is not on disk. Nothing will run here until you pick another one." />
+
                             <TextBlock Classes="hint" Text="{Binding ModelLabel}" />
-                            <TextBlock Classes="panelHeader" Text="RECENT" />
                         </StackPanel>
 
-                        <ListBox Margin="12,0,12,0" Background="Transparent"
-                                 ItemsSource="{Binding RecentWorkspaces}"
-                                 SelectedItem="{Binding SelectedRecent}">
-                            <ListBox.ItemTemplate>
-                                <DataTemplate x:DataType="sys:String">
-                                    <TextBlock Classes="path" Text="{Binding}" ToolTip.Tip="{Binding}" />
-                                </DataTemplate>
-                            </ListBox.ItemTemplate>
-                        </ListBox>
+                        <!-- The one thing the old panel never said: what switching actually does. -->
+                        <TextBlock DockPanel.Dock="Top" Classes="hint" Margin="12,14,12,0"
+                                   Text="Switching re-scopes the runs, the project memory, the inbox and where artifacts are written. It never touches the folder, and it never starts anything." />
                     </DockPanel>
 
                     <!-- Runs: what this workspace has already done. Picking one opens it

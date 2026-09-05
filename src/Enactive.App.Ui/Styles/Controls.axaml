@@ -358,5 +358,83 @@
         <Setter Property="TextTrimming" Value="CharacterEllipsis" />
     </Style>
 
+    <!-- ── The workspace card and its switcher ─────────────────────────────
+         A workspace is recognised by its NAME. The path underneath it is trimmed
+         from the FRONT, because the end is the part that tells one project from
+         another - which is exactly what the old row of truncated path buttons got
+         backwards.
+    -->
+    <Style Selector="Button.wsCard">
+        <Setter Property="Padding" Value="10,8" />
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+    </Style>
+    <Style Selector="Button.wsCard /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource Brand.CardFill}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Brand.Line}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="5" />
+    </Style>
+    <Style Selector="Button.wsCard:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource Brand.CardFillHover}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Brand.LineStrong}" />
+    </Style>
+    <Style Selector="Button.wsCard Path">
+        <Setter Property="Stroke" Value="{DynamicResource Brand.TextMuted}" />
+        <Setter Property="StrokeThickness" Value="1.8" />
+        <Setter Property="StrokeLineCap" Value="Round" />
+        <Setter Property="StrokeJoin" Value="Round" />
+    </Style>
+
+    <Style Selector="Border.popup">
+        <Setter Property="Background" Value="{DynamicResource Brand.Card}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Brand.LineStrong}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="6" />
+        <Setter Property="Padding" Value="8" />
+        <Setter Property="BoxShadow" Value="0 10 28 0 #70000000" />
+    </Style>
+
+    <Style Selector="Button.wsRow">
+        <Setter Property="Padding" Value="8,6" />
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+    </Style>
+    <Style Selector="Button.wsRow /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="CornerRadius" Value="4" />
+    </Style>
+    <Style Selector="Button.wsRow:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource Brand.CardFill}" />
+    </Style>
+
+    <!-- Forgetting a workspace is destructive-shaped, so it is Danger on hover and
+         never Ember. Ember is the action you are meant to take. -->
+    <Style Selector="Button.wsForget">
+        <Setter Property="Width" Value="26" />
+        <Setter Property="Height" Value="26" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Button.wsForget /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="CornerRadius" Value="4" />
+    </Style>
+    <Style Selector="Button.wsForget:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource Brand.CardFill}" />
+    </Style>
+    <Style Selector="Button.wsForget Path">
+        <Setter Property="Stroke" Value="{DynamicResource Brand.TextFaint}" />
+        <Setter Property="StrokeThickness" Value="1.8" />
+        <Setter Property="StrokeLineCap" Value="Round" />
+    </Style>
+    <Style Selector="Button.wsForget:pointerover Path">
+        <Setter Property="Stroke" Value="{DynamicResource Brand.Danger}" />
+    </Style>
+
 </Styles>
 

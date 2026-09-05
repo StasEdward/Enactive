@@ -8,6 +8,7 @@ using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Platform;
+using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using Enactive.Agents;
 using Enactive.Core.Artifacts;
@@ -72,6 +73,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     private readonly Stopwatch _runStopwatch = new();
     private DispatcherTimer? _elapsedTimer;
     private string _currentWorkspaceRoot = string.Empty;
+    private readonly WorkspaceRegistry _registry = WorkspaceRegistry.Load();
     private StagingArtifactStore? _staging;
     private int _stagedShown;
 
@@ -85,9 +87,14 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         ApplySettings();
         _log.Info(LogSource.System, $"Enactive UI started — logs at {FileLogSink.DefaultDirectory()}");
 
-        _vm.WorkspacePath = Environment.GetEnvironmentVariable("ENACTIVE_WORKSPACE") ?? Directory.GetCurrentDirectory();
+        // Where to start: the environment wins, then the workspace last opened. The old default -
+        // the current directory - made the folder the .exe happens to sit in a workspace, complete
+        // with a .enactive folder nobody asked for.
+        var env = Environment.GetEnvironmentVariable("ENACTIVE_WORKSPACE");
+        _vm.WorkspacePath = !string.IsNullOrWhiteSpace(env)
+            ? env
+            : _registry.LastOpened?.RootPath ?? Directory.GetCurrentDirectory();
         _vm.AttachLog(_log);
-        LoadRecents();
 
         // The view model asks; the window is what can actually open a child window or move focus.
         _vm.RunRequested += () => _ = RunAsync();
@@ -98,6 +105,10 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         _vm.InboxRequested += ShowInbox;
         _vm.Runs.RefreshRequested += () => _ = LoadRunsAsync();
         _vm.Runs.OpenRequested += record => _vm.ShowPastRun(record);
+        _vm.WorkspacePathChanged += RefreshWorkspaces;
+        _vm.WorkspaceSwitchRequested += SwitchWorkspace;
+        _vm.WorkspaceForgetRequested += ForgetWorkspace;
+        _vm.AddWorkspaceRequested += () => _ = AddWorkspaceAsync();
         _vm.SettingsRequested += () =>
             // SettingsWindow reads the live settings and mutates them only when Save is clicked
             // (Cancel/close leave them untouched), so it gets _settings directly, not a partial copy.
@@ -125,6 +136,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         // Tunnel so we see the keys before the TextBox consumes Enter.
         AddHandler(InputElement.KeyDownEvent, OnPreviewKeyDown, RoutingStrategies.Tunnel);
 
+        RefreshWorkspaces();
         WireTitleBar();
     }
 
@@ -167,8 +179,15 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         if (string.IsNullOrEmpty(workspacePath))
             return;
 
-        try { Directory.CreateDirectory(workspacePath); }
-        catch (Exception ex) { _vm.StatusPhase = "Error"; _vm.CurrentAction = ex.Message; return; }
+        // The app used to create whatever path was in the box. That is how an empty workspace
+        // appeared beside the .exe on first start: a typo, or a default nobody chose, became a
+        // folder. A run happens in a folder that already exists, or it does not happen.
+        if (!Directory.Exists(workspacePath))
+        {
+            _vm.StatusPhase = "Error";
+            _vm.CurrentAction = $"No such folder: {workspacePath}. Pick another workspace, or create the folder yourself first.";
+            return;
+        }
 
         // Background: fire the run headless (results land in the Inbox) and keep the UI free.
         if (_vm.RunInBackground)
@@ -215,7 +234,8 @@ public sealed partial class MainWindow : Window, IDecisionHandler
 
         var fullPath = Path.GetFullPath(workspacePath);
         _currentWorkspaceRoot = fullPath;
-        AddRecent(fullPath);
+        _registry.Touch(fullPath);
+        RefreshWorkspaces();
         var name = Path.GetFileName(Path.TrimEndingDirectorySeparator(fullPath));
         if (string.IsNullOrEmpty(name))
             name = "workspace";
@@ -689,41 +709,73 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         InputBox.CaretIndex = caret + 1;
     }
 
-    private static string RecentsPath()
-        => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Enactive", "workspaces.txt");
-
-    private void LoadRecents()
+    // ── The workspace registry ───────────────────────────────────────────────
+    /// <summary>
+    /// Rebuilds the switcher from the registry and re-reads the current folder. Called at startup
+    /// and whenever the workspace changes - which is the only moment the disk needs asking.
+    /// </summary>
+    private void RefreshWorkspaces()
     {
-        try
-        {
-            var file = RecentsPath();
-            if (!File.Exists(file))
-                return;
-            foreach (var line in File.ReadAllLines(file))
-                if (!string.IsNullOrWhiteSpace(line))
-                    _vm.RecentWorkspaces.Add(line.Trim());
-        }
-        catch { /* ignore */ }
+        var current = WorkspaceRegistry.Normalise(_vm.WorkspacePath);
+
+        _vm.WorkspaceName = WorkspaceRegistry.NameFor(current);
+        _vm.WorkspaceMissing = current.Length > 0 && !Directory.Exists(current);
+
+        _vm.Workspaces.Clear();
+        foreach (var entry in _registry.Entries)
+            _vm.Workspaces.Add(new WorkspaceItemViewModel(
+                entry,
+                Directory.Exists(entry.RootPath),
+                string.Equals(entry.RootPath, current, StringComparison.OrdinalIgnoreCase),
+                _vm.RequestSwitch,
+                _vm.RequestForget));
     }
 
-    private void AddRecent(string path)
+    /// <summary>
+    /// Switching a workspace re-scopes everything the window shows - runs, memory, the inbox badge,
+    /// artifacts - because every store is built from the workspace it is asked about. It does not
+    /// touch the folder, and it does not start anything.
+    /// </summary>
+    private void SwitchWorkspace(string path)
     {
-        for (var i = _vm.RecentWorkspaces.Count - 1; i >= 0; i--)
-            if (string.Equals(_vm.RecentWorkspaces[i], path, StringComparison.OrdinalIgnoreCase))
-                _vm.RecentWorkspaces.RemoveAt(i);
-
-        _vm.RecentWorkspaces.Insert(0, path);
-        while (_vm.RecentWorkspaces.Count > 12)
-            _vm.RecentWorkspaces.RemoveAt(_vm.RecentWorkspaces.Count - 1);
-
-        try
+        if (_vm.IsBusy)
         {
-            var file = RecentsPath();
-            Directory.CreateDirectory(Path.GetDirectoryName(file)!);
-            File.WriteAllLines(file, _vm.RecentWorkspaces);
+            _vm.CurrentAction = "Finish or stop the run before switching workspace.";
+            return;
         }
-        catch { /* ignore */ }
+
+        _vm.WorkspacePath = WorkspaceRegistry.Normalise(path);
+        _registry.Touch(_vm.WorkspacePath);
+        RefreshWorkspaces();
+        RefreshInboxButton();
     }
+
+    /// <summary>
+    /// Adds a folder to the list. Only a folder that EXISTS can be added - the app used to create
+    /// whatever path was in the box, which is how an empty workspace appeared beside the .exe.
+    /// </summary>
+    private async Task AddWorkspaceAsync()
+    {
+        var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
+        {
+            Title = "Choose a workspace folder",
+            AllowMultiple = false
+        });
+
+        var picked = folders.Count > 0 ? folders[0].TryGetLocalPath() : null;
+        if (string.IsNullOrWhiteSpace(picked))
+            return;
+
+        _registry.Touch(picked);
+        SwitchWorkspace(picked);
+    }
+
+    private void ForgetWorkspace(string path)
+    {
+        _registry.Remove(path);
+        RefreshWorkspaces();
+    }
+
 
     private void ShowLogWindow()
     {
@@ -791,7 +843,8 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             && _vm.SelectedWorkerIndex >= 0 && _vm.SelectedWorkerIndex < _workerProvider.All.Count
             ? _workerProvider.All[_vm.SelectedWorkerIndex].Id : null;
         var inbox = InboxStoreFactory.Create(workspace);
-        AddRecent(fullPath);
+        _registry.Touch(fullPath);
+        RefreshWorkspaces();
 
         _vm.StatusPhase = "Background task started";
         _vm.CurrentAction = text;

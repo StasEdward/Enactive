@@ -155,7 +155,6 @@ internal sealed class MainWindowViewModel : ObservableObject
     private bool _stageChanges;
     private bool _runInBackground;
     private int _selectedWorkerIndex;
-    private string? _selectedRecent;
     private string _statusPhase = "Idle";
     private IBrush _statusPillBrush = Brand.TextMuted;
     private string _taskTitle = string.Empty;
@@ -164,6 +163,9 @@ internal sealed class MainWindowViewModel : ObservableObject
     private int _toolCalls;
     private int _selectedTab;
     private int _selectedPane;
+    private string _workspaceName = string.Empty;
+    private bool _workspaceMissing;
+    private bool _isSwitcherOpen;
     private bool _isViewingPast;
     private PastRunViewModel? _pastRun;
     private string _statusProgress = "—";
@@ -215,6 +217,13 @@ internal sealed class MainWindowViewModel : ObservableObject
             Runs.RefreshCommand.Execute(null);
         });
         BackToLiveCommand = new RelayCommand(() => ShowLiveRun());
+
+        ToggleSwitcherCommand = new RelayCommand(() => IsSwitcherOpen = !IsSwitcherOpen);
+        AddWorkspaceCommand = new RelayCommand(() =>
+        {
+            IsSwitcherOpen = false;
+            AddWorkspaceRequested?.Invoke();
+        });
     }
 
     /// <summary>
@@ -252,7 +261,8 @@ internal sealed class MainWindowViewModel : ObservableObject
     // ── Left panel ────────────────────────────────────────────────────────────
     /// <summary>
     /// The folder everything is scoped to. Changing it invalidates the run list, which belongs to
-    /// the workspace that was open when it was loaded.
+    /// the workspace that was open when it was loaded, and the window re-reads the folder to see
+    /// whether it is still there.
     /// </summary>
     public string WorkspacePath
     {
@@ -264,23 +274,63 @@ internal sealed class MainWindowViewModel : ObservableObject
             Runs.Reset();
             if (IsRunsPane)
                 Runs.RefreshCommand.Execute(null);
+            WorkspacePathChanged?.Invoke();
         }
     }
+
+    /// <summary>Raised when the workspace changes. Touching the disk is the window's business.</summary>
+    public event Action? WorkspacePathChanged;
+
+    /// <summary>Which model answered, as one line under the workspace card.</summary>
     public string ModelLabel { get => _modelLabel; set => Set(ref _modelLabel, value); }
+
+    /// <summary>What the environment probe found - one line, under the next-run setup.</summary>
     public string EnvironmentSummary { get => _environmentSummary; set => Set(ref _environmentSummary, value); }
 
-    public ObservableCollection<string> RecentWorkspaces { get; } = new();
+    /// <summary>Asks the window to open a folder picker - only it has a StorageProvider.</summary>
+    public event Action? AddWorkspaceRequested;
 
-    /// <summary>Picking a recent workspace just fills the workspace box; it starts nothing.</summary>
-    public string? SelectedRecent
+    public event Action<string>? WorkspaceSwitchRequested;
+    public event Action<string>? WorkspaceForgetRequested;
+
+    /// <summary>
+    /// The workspace's own name, which is what makes it recognisable. The path is shown under it
+    /// and trimmed from the FRONT, because the end is the part that tells one project from another.
+    /// </summary>
+    public string WorkspaceName { get => _workspaceName; set => Set(ref _workspaceName, value); }
+
+    /// <summary>True when the current workspace folder is not on disk. The run refuses to start in
+    /// one, so saying so up here beats an error after the user has typed a request.</summary>
+    public bool WorkspaceMissing
     {
-        get => _selectedRecent;
+        get => _workspaceMissing;
         set
         {
-            if (Set(ref _selectedRecent, value) && !string.IsNullOrEmpty(value))
-                WorkspacePath = value;
+            if (Set(ref _workspaceMissing, value))
+                OnPropertyChanged(nameof(WorkspaceNameBrush));
         }
     }
+
+    public IBrush WorkspaceNameBrush => _workspaceMissing ? Brand.Danger : Brand.Text;
+
+    /// <summary>Every workspace the app knows about. Rebuilt by the window from the registry.</summary>
+    public ObservableCollection<WorkspaceItemViewModel> Workspaces { get; } = new();
+
+    public bool IsSwitcherOpen { get => _isSwitcherOpen; set => Set(ref _isSwitcherOpen, value); }
+
+    public RelayCommand ToggleSwitcherCommand { get; }
+    public RelayCommand AddWorkspaceCommand { get; }
+
+    /// <summary>Closes the switcher and asks for the switch. Called by a row in the list.</summary>
+    public void RequestSwitch(string path)
+    {
+        IsSwitcherOpen = false;
+        WorkspaceSwitchRequested?.Invoke(path);
+    }
+
+    /// <summary>Forgetting a workspace removes it from THIS list only - the folder and its
+    /// .enactive history are the user's, and are left exactly where they are.</summary>
+    public void RequestForget(string path) => WorkspaceForgetRequested?.Invoke(path);
 
     public double AutonomyLevel
     {
