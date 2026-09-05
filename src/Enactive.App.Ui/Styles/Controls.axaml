@@ -441,6 +441,12 @@
         <Setter Property="StrokeLineCap" Value="Round" />
     </Style>
     <Style Selector="Button.wsForget:pointerover Path">
+        <Setter Property="Stroke" Value="{DynamicResource Brand.Text}" />
+    </Style>
+    <!-- Danger belongs to the one that destroys something; rename lights up like any other
+         control. Declared LAST because Avalonia has no specificity - the last matching
+         setter wins, so a more general rule after this one would undo it. -->
+    <Style Selector="Button.wsForget.destructive:pointerover Path">
         <Setter Property="Stroke" Value="{DynamicResource Brand.Danger}" />
     </Style>
 

@@ -1,0 +1,21 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="Enactive.App.Ui.PromptWindow"
+        Title="Enactive"
+        SizeToContent="Height" Width="400"
+        CanResize="False"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False">
+
+    <StackPanel Margin="20" Spacing="12">
+        <TextBlock x:Name="HeadlineText" FontSize="15" FontWeight="SemiBold" TextWrapping="Wrap" />
+        <TextBlock x:Name="DetailText" FontSize="12" TextWrapping="Wrap"
+                   Foreground="{DynamicResource Brand.TextBody}" />
+        <TextBox x:Name="ValueBox" />
+
+        <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right" Margin="0,4,0,0">
+            <Button x:Name="CancelButton" Content="Cancel" Padding="14,4" />
+            <Button x:Name="OkButton" Classes="primary" Content="Save" Padding="14,4" IsDefault="True" />
+        </StackPanel>
+    </StackPanel>
+</Window>

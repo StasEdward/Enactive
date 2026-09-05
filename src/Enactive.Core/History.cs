@@ -13,6 +13,14 @@ namespace Enactive.Core.History;
 public sealed record RunEventRecord(DateTimeOffset At, string Kind, string Summary, int? Step = null);
 
 /// <summary>
+/// How the run was set up: the autonomy it was given, the worker role it took, and whether its
+/// changes were staged for review. Recorded because "why did it do that" is usually answered by
+/// what it was allowed to do, and a setting read off the window today is the setting as it is NOW,
+/// not as it was when the run happened.
+/// </summary>
+public sealed record RunSettings(int Autonomy, string AutonomyName, string? Worker, bool Staged);
+
+/// <summary>
 /// A persisted agent run (PLAN_v2 §2A.6) plus its events, artifacts and decisions. The Timeline —
 /// "the memory of the project" — is built from these records.
 /// </summary>
@@ -26,7 +34,9 @@ public sealed record RunRecord(
     string Status,
     IReadOnlyList<RunEventRecord> Events,
     IReadOnlyList<string> Artifacts,
-    IReadOnlyList<string> Decisions);
+    IReadOnlyList<string> Decisions,
+    /// <summary>Null for runs recorded before the settings were kept.</summary>
+    RunSettings? Settings = null);
 
 /// <summary>Persists and loads run records for a workspace.</summary>
 public interface IRunStore

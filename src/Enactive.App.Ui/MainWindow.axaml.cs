@@ -111,7 +111,9 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         _vm.Runs.OpenRequested += record => _vm.ShowPastRun(record);
         _vm.WorkspacePathChanged += RefreshWorkspaces;
         _vm.WorkspaceSwitchRequested += SwitchWorkspace;
+        _vm.WorkspaceRenameRequested += path => _ = RenameWorkspaceAsync(path);
         _vm.WorkspaceForgetRequested += ForgetWorkspace;
+        _vm.RunSettingsChanged += SaveRunSettings;
         _vm.AddWorkspaceRequested += () => _ = AddWorkspaceAsync();
         _vm.SettingsRequested += () =>
             // SettingsWindow reads the live settings and mutates them only when Save is clicked
@@ -166,6 +168,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         AddHandler(InputElement.KeyDownEvent, OnPreviewKeyDown, RoutingStrategies.Tunnel);
 
         RefreshWorkspaces();
+        ApplyWorkspaceDefaults();
         // The history is always on screen now, so it is always loaded - including for the workspace
         // restored at startup.
         _ = LoadRunsAsync();
@@ -352,6 +355,8 @@ public sealed partial class MainWindow : Window, IDecisionHandler
 
         _cts = new CancellationTokenSource();
 
+        var runSettings = CurrentRunSettings();
+
         var fullPath = Path.GetFullPath(workspacePath);
         _currentWorkspaceRoot = fullPath;
         _registry.Touch(fullPath);
@@ -385,7 +390,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                 _providerFactory, _modelResolver, _workerProvider, _toolRegistry, artifactStore,
                 workspace, _planner, _permissionEngine, this, policy, new EmptyProvider(),
                 BuildRouter(), 1, _settings.NumCtx, _settings.DisableThinking, _settings.MaxParallelSteps);
-            var recorder = new RunRecorder(runStore, MemoryStoreFactory.Create(workspace), workspace.Id);
+            var recorder = new RunRecorder(runStore, MemoryStoreFactory.Create(workspace), workspace.Id, runSettings);
 
             var context = await contextProvider.BuildAsync(new IntentFocus(workspace.Id), _cts.Token);
             var workerId = _workerProvider.All.Count > 0
@@ -783,6 +788,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                 Directory.Exists(entry.RootPath),
                 string.Equals(entry.RootPath, current, StringComparison.OrdinalIgnoreCase),
                 _vm.RequestSwitch,
+                _vm.RequestRename,
                 _vm.RequestForget));
     }
 
@@ -802,6 +808,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         _vm.WorkspacePath = WorkspaceRegistry.Normalise(path);
         _registry.Touch(_vm.WorkspacePath);
         RefreshWorkspaces();
+        ApplyWorkspaceDefaults();
         RefreshInboxButton();
     }
 
@@ -823,6 +830,71 @@ public sealed partial class MainWindow : Window, IDecisionHandler
 
         _registry.Touch(picked);
         SwitchWorkspace(picked);
+    }
+
+    /// <summary>
+    /// Gives a workspace a name of its own. Two checkouts both called "src" are told apart by their
+    /// paths today, which is exactly what the old panel got wrong.
+    /// </summary>
+    private async Task RenameWorkspaceAsync(string path)
+    {
+        var entry = _registry.Find(path);
+        if (entry is null)
+            return;
+
+        var name = await PromptWindow.AskAsync(
+            this,
+            "Name this workspace",
+            "What Enactive calls it. The folder is not touched.",
+            entry.Name);
+
+        if (name is null)
+            return;
+
+        _registry.Rename(path, name);
+        RefreshWorkspaces();
+    }
+
+    /// <summary>
+    /// Keeps autonomy, the worker role and staging on the workspace they were set for. They are
+    /// properties of the place, not of the person: a scratch folder wants Autonomous and the repo
+    /// you ship from does not, and nobody remembers to move the slider back.
+    /// </summary>
+    private void SaveRunSettings()
+    {
+        var path = _vm.WorkspacePath.Trim();
+        if (path.Length == 0)
+            return;
+
+        _registry.SaveSettings(path, _vm.AutonomyTier, CurrentWorkerRole(), _vm.StageChanges);
+    }
+
+    /// <summary>
+    /// Loads a workspace's saved setup into the window. Guarded, or every load would look like an
+    /// edit and write itself back onto whichever workspace was current a moment ago.
+    /// </summary>
+    private void ApplyWorkspaceDefaults()
+    {
+        var entry = _registry.Find(_vm.WorkspacePath.Trim());
+        if (entry is null)
+            return;
+
+        _vm.IsLoadingWorkspaceDefaults = true;
+        try
+        {
+            _vm.AutonomyLevel = Math.Clamp(entry.Autonomy, 0, 3);
+            _vm.StageChanges = entry.StageChanges;
+
+            // By role name, not by position: the list changes when the roles are edited, and an
+            // index would then quietly select a different worker.
+            var index = entry.WorkerId is null ? -1 : _vm.WorkerRoles.IndexOf(entry.WorkerId);
+            if (index >= 0)
+                _vm.SelectedWorkerIndex = index;
+        }
+        finally
+        {
+            _vm.IsLoadingWorkspaceDefaults = false;
+        }
     }
 
     private void ForgetWorkspace(string path)
@@ -883,6 +955,19 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             AppSettings.ParseRef(_settings.Bindings.ExecuteHeavy));
     }
 
+    /// <summary>
+    /// The run's setup as it is RIGHT NOW, for the record. Read once at the start, because by the
+    /// time anyone opens the run to ask what it was allowed to do, the slider will have moved.
+    /// </summary>
+    private RunSettings CurrentRunSettings()
+        => new(_vm.AutonomyTier, MainWindowViewModel.LevelName(_vm.AutonomyTier), CurrentWorkerRole(), _vm.StageChanges);
+
+    /// <summary>The role the worker box is on, by name - null when there are no roles to pick from.</summary>
+    private string? CurrentWorkerRole()
+        => _vm.SelectedWorkerIndex >= 0 && _vm.SelectedWorkerIndex < _vm.WorkerRoles.Count
+            ? _vm.WorkerRoles[_vm.SelectedWorkerIndex]
+            : null;
+
     private static WorkspaceInfo WorkspaceFrom(string path)
     {
         var full = Path.GetFullPath(path);
@@ -894,6 +979,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     {
         var workspace = WorkspaceFrom(fullPath);
         var policy = PolicyFor(_vm.AutonomyTier);
+        var runSettings = CurrentRunSettings();
         var workerId = _workerProvider.All.Count > 0
             && _vm.SelectedWorkerIndex >= 0 && _vm.SelectedWorkerIndex < _workerProvider.All.Count
             ? _workerProvider.All[_vm.SelectedWorkerIndex].Id : null;
@@ -924,7 +1010,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                     _providerFactory, _modelResolver, _workerProvider, _toolRegistry, new DiskArtifactStore(workspace),
                     workspace, _planner, _permissionEngine, decisions, policy, new EmptyProvider(),
                     BuildRouter(), 1, _settings.NumCtx, _settings.DisableThinking, _settings.MaxParallelSteps);
-                var recorder = new RunRecorder(runStore, MemoryStoreFactory.Create(workspace), workspace.Id);
+                var recorder = new RunRecorder(runStore, MemoryStoreFactory.Create(workspace), workspace.Id, runSettings);
                 var context = await contextProvider.BuildAsync(new IntentFocus(workspace.Id), CancellationToken.None);
                 var intent = new Intent(Guid.NewGuid(), text, IntentSource.Inbox, context, DateTimeOffset.UtcNow, workerId);
                 var recorded = recorder.RecordAsync(
@@ -1194,11 +1280,21 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         _workerProvider = new StaticWorkerProvider(workers, defaultId);
 
         // Refresh the role picker; settings can be re-applied after Save.
-        var keep = _vm.SelectedWorkerIndex;
-        _vm.WorkerRoles.Clear();
-        foreach (var worker in _workerProvider.All)
-            _vm.WorkerRoles.Add(worker.Role);
-        _vm.SelectedWorkerIndex = keep >= 0 && keep < _vm.WorkerRoles.Count ? keep : 0;
+        // Rebuilding the role list is not the user choosing a role, so it must not be written back
+        // to the workspace as if it were.
+        _vm.IsLoadingWorkspaceDefaults = true;
+        try
+        {
+            var keep = _vm.SelectedWorkerIndex;
+            _vm.WorkerRoles.Clear();
+            foreach (var worker in _workerProvider.All)
+                _vm.WorkerRoles.Add(worker.Role);
+            _vm.SelectedWorkerIndex = keep >= 0 && keep < _vm.WorkerRoles.Count ? keep : 0;
+        }
+        finally
+        {
+            _vm.IsLoadingWorkspaceDefaults = false;
+        }
 
         _model = _workerProvider.Default.ModelPolicy.Preferred.Model;
         _vm.ModelLabel = $"model: {_model}";

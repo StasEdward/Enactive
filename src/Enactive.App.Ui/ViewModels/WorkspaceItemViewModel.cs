@@ -13,7 +13,7 @@ using Enactive.Workspace;
 internal sealed class WorkspaceItemViewModel
 {
     public WorkspaceItemViewModel(WorkspaceEntry entry, bool exists, bool isCurrent,
-                                  Action<string> switchTo, Action<string> forget)
+                                  Action<string> switchTo, Action<string> rename, Action<string> forget)
     {
         Entry = entry;
         Exists = exists;
@@ -38,6 +38,7 @@ internal sealed class WorkspaceItemViewModel
         FillBrush = isCurrent ? Brand.CardFillActive : Brand.CardFill;
 
         SwitchCommand = new RelayCommand(() => switchTo(entry.RootPath));
+        RenameCommand = new RelayCommand(() => rename(entry.RootPath));
         ForgetCommand = new RelayCommand(() => forget(entry.RootPath));
     }
 
@@ -54,5 +55,6 @@ internal sealed class WorkspaceItemViewModel
     public IBrush FillBrush { get; }
 
     public RelayCommand SwitchCommand { get; }
+    public RelayCommand RenameCommand { get; }
     public RelayCommand ForgetCommand { get; }
 }

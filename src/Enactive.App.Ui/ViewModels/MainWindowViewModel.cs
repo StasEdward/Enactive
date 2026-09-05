@@ -289,7 +289,12 @@ internal sealed class MainWindowViewModel : ObservableObject
     public event Action? AddWorkspaceRequested;
 
     public event Action<string>? WorkspaceSwitchRequested;
+    public event Action<string>? WorkspaceRenameRequested;
     public event Action<string>? WorkspaceForgetRequested;
+
+    /// <summary>Raised when autonomy, the worker or staging changes, so the window can keep them on
+    /// the workspace they belong to.</summary>
+    public event Action? RunSettingsChanged;
 
     /// <summary>
     /// The workspace's own name, which is what makes it recognisable. The path is shown under it
@@ -337,13 +342,35 @@ internal sealed class MainWindowViewModel : ObservableObject
     /// .enactive history are the user's, and are left exactly where they are.</summary>
     public void RequestForget(string path) => WorkspaceForgetRequested?.Invoke(path);
 
+    /// <summary>Renaming closes the switcher: the dialog needs the window, not a popup over it.</summary>
+    public void RequestRename(string path)
+    {
+        IsSwitcherOpen = false;
+        WorkspaceRenameRequested?.Invoke(path);
+    }
+
+    /// <summary>
+    /// True while the window is loading a workspace's saved setup into these properties. Without it
+    /// every load would look like an edit and write itself straight back - onto whichever workspace
+    /// was current a moment ago.
+    /// </summary>
+    public bool IsLoadingWorkspaceDefaults { get; set; }
+
+    private void RunSettingChanged()
+    {
+        if (!IsLoadingWorkspaceDefaults)
+            RunSettingsChanged?.Invoke();
+    }
+
     public double AutonomyLevel
     {
         get => _autonomyLevel;
         set
         {
-            if (Set(ref _autonomyLevel, value))
-                UpdateAutonomyLabel();
+            if (!Set(ref _autonomyLevel, value))
+                return;
+            UpdateAutonomyLabel();
+            RunSettingChanged();
         }
     }
 
@@ -353,10 +380,26 @@ internal sealed class MainWindowViewModel : ObservableObject
     /// <summary>The autonomy slider as the engine wants it: 0 Observe … 3 Autonomous.</summary>
     public int AutonomyTier => (int)Math.Round(AutonomyLevel);
 
-    public bool StageChanges { get => _stageChanges; set => Set(ref _stageChanges, value); }
+    public bool StageChanges
+    {
+        get => _stageChanges;
+        set
+        {
+            if (Set(ref _stageChanges, value))
+                RunSettingChanged();
+        }
+    }
 
     public ObservableCollection<string> WorkerRoles { get; } = new();
-    public int SelectedWorkerIndex { get => _selectedWorkerIndex; set => Set(ref _selectedWorkerIndex, value); }
+    public int SelectedWorkerIndex
+    {
+        get => _selectedWorkerIndex;
+        set
+        {
+            if (Set(ref _selectedWorkerIndex, value))
+                RunSettingChanged();
+        }
+    }
 
     public string InboxLabel { get => _inboxLabel; set => Set(ref _inboxLabel, value); }
 
@@ -569,7 +612,9 @@ internal sealed class MainWindowViewModel : ObservableObject
         AutonomyBrush = Brand.Autonomy(level);
     }
 
-    private static string LevelName(int level) => level switch
+    /// <summary>The tier in words. Internal because the run record stores it too - a number alone
+    /// means nothing to whoever reads that run in six months.</summary>
+    internal static string LevelName(int level) => level switch
     {
         0 => "Observe — read only, asks before changes",
         1 => "Suggest — prepares changes, asks to apply",

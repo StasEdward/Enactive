@@ -141,6 +141,22 @@ internal sealed class PastRunViewModel : ObservableObject
         var done = Steps.Count(c => c.StatusWord is "done" or "skipped");
         StepsText = Steps.Count == 0 ? "—" : $"{done} / {Steps.Count} steps";
 
+        // What it was ALLOWED to do, as recorded. Runs from before this was kept say so rather
+        // than showing today's slider position and passing it off as history.
+        if (record.Settings is { } set)
+        {
+            HasSettings = true;
+            AutonomyText = set.AutonomyName;
+            AutonomyBrush = Brand.Autonomy(set.Autonomy);
+            WorkerText = string.IsNullOrWhiteSpace(set.Worker) ? "default worker" : set.Worker;
+            StagingText = set.Staged ? "changes were staged for review" : "changes were applied directly";
+        }
+        else
+        {
+            AutonomyText = WorkerText = StagingText = string.Empty;
+            AutonomyBrush = Brand.TextMuted;
+        }
+
         ShowExecutionCommand = new RelayCommand(() => SelectedTab = 0);
         ShowArtifactsCommand = new RelayCommand(() => SelectedTab = 1);
         ShowTimelineCommand = new RelayCommand(() => SelectedTab = 2);
@@ -169,6 +185,13 @@ internal sealed class PastRunViewModel : ObservableObject
     public ObservableCollection<RunEventViewModel> Events { get; } = new();
     public ObservableCollection<string> Artifacts { get; } = new();
     public ObservableCollection<string> Decisions { get; } = new();
+
+    /// <summary>False for a run recorded before its setup was.</summary>
+    public bool HasSettings { get; }
+    public string AutonomyText { get; } = string.Empty;
+    public IBrush AutonomyBrush { get; } = Brand.TextMuted;
+    public string WorkerText { get; } = string.Empty;
+    public string StagingText { get; } = string.Empty;
 
     public string ArtifactCountText { get; }
     public string ToolCallsText { get; }

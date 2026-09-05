@@ -230,7 +230,7 @@
                                         <ItemsControl ItemsSource="{Binding Workspaces}">
                                             <ItemsControl.ItemTemplate>
                                                 <DataTemplate x:DataType="vm:WorkspaceItemViewModel">
-                                                    <Grid ColumnDefinitions="*,Auto">
+                                                    <Grid ColumnDefinitions="*,Auto,Auto">
                                                         <!-- The edge and the fill live on a
                                                              Border, not on the Button: Fluent
                                                              repaints a button's own border and
@@ -261,6 +261,16 @@
                                                         </Button>
                                                         </Border>
                                                         <Button Grid.Column="1" Classes="wsForget"
+                                                                Command="{Binding RenameCommand}"
+                                                                ToolTip.Tip="Rename. What Enactive calls it — the folder is not touched.">
+                                                            <Viewbox Width="12" Height="12">
+                                                                <Canvas Width="24" Height="24">
+                                                                    <Path Data="M 4,20 L 4,16 L 15.5,4.5 L 19.5,8.5 L 8,20 Z" />
+                                                                    <Path Data="M 13.5,6.5 L 17.5,10.5" />
+                                                                </Canvas>
+                                                            </Viewbox>
+                                                        </Button>
+                                                        <Button Grid.Column="2" Classes="wsForget destructive"
                                                                 Command="{Binding ForgetCommand}"
                                                                 ToolTip.Tip="Forget this workspace. The folder and its history are left where they are.">
                                                             <Viewbox Width="11" Height="11">
@@ -826,6 +836,18 @@
                                     </StackPanel>
                                 </Border>
                             </Grid>
+
+                            <!-- What it was allowed to do. Half of "why did it do that" is
+                                 answered here, and the slider on screen today is not it. -->
+                            <StackPanel Spacing="3" IsVisible="{Binding PastRun.HasSettings}"
+                                        Margin="0,6,0,0">
+                                <TextBlock Classes="panelHeader" Text="RAN AS" Margin="0" />
+                                <TextBlock Text="{Binding PastRun.AutonomyText}"
+                                           Foreground="{Binding PastRun.AutonomyBrush}"
+                                           FontSize="11" TextWrapping="Wrap" />
+                                <TextBlock Classes="hint" Text="{Binding PastRun.WorkerText}" FontSize="11" />
+                                <TextBlock Classes="hint" Text="{Binding PastRun.StagingText}" FontSize="11" />
+                            </StackPanel>
 
                             <TextBlock Classes="hint" TextWrapping="Wrap"
                                        Text="Read-only. This run has finished — nothing here re-runs it, and the log tab only holds the current session." />

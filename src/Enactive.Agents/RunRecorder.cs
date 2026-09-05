@@ -15,12 +15,18 @@ public sealed class RunRecorder
     private readonly IRunStore _store;
     private readonly IMemoryStore? _memory;
     private readonly Guid _workspaceId;
+    private readonly RunSettings? _settings;
 
-    public RunRecorder(IRunStore store, IMemoryStore? memory = null, Guid workspaceId = default)
+    public RunRecorder(
+        IRunStore store, IMemoryStore? memory = null, Guid workspaceId = default,
+        RunSettings? settings = null)
     {
         _store = store;
         _memory = memory;
         _workspaceId = workspaceId;
+        // Handed in rather than read back later: what the run was allowed to do is a fact about the
+        // moment it started, and the slider will have moved by the time anyone asks.
+        _settings = settings;
     }
 
     public async IAsyncEnumerable<WorkEvent> RecordAsync(
@@ -39,7 +45,7 @@ public sealed class RunRecorder
         {
             if (events.Count > 0)
             {
-                var record = Build(events);
+                var record = Build(events, _settings);
                 await _store.SaveAsync(record, CancellationToken.None);
 
                 // Fold each resolved decision into the project's durable memory (PLAN_v2 §2.6).
@@ -52,7 +58,7 @@ public sealed class RunRecorder
         }
     }
 
-    private static RunRecord Build(List<WorkEvent> events)
+    private static RunRecord Build(List<WorkEvent> events, RunSettings? settings)
     {
         var first = events[0];
         var last = events[^1];
@@ -97,7 +103,7 @@ public sealed class RunRecorder
         var status = failed ? "Failed" : completed ? "Completed" : "Incomplete";
         return new RunRecord(
             first.RunId, first.TaskId, title, model,
-            first.At, last.At, status, eventRecords, artifacts, decisions);
+            first.At, last.At, status, eventRecords, artifacts, decisions, settings);
     }
 
     private static string StripPrefix(string value, string prefix)

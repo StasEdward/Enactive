@@ -2,9 +2,25 @@ namespace Enactive.Workspace;
 
 using System.Text.Json;
 
-/// <summary>One folder the user has worked in. Whether it still EXISTS is not stored: a drive that
-/// is not mounted this morning is not a workspace the user threw away.</summary>
-public sealed record WorkspaceEntry(string Name, string RootPath, DateTimeOffset LastOpenedAt);
+/// <summary>
+/// One folder the user has worked in, and how a run behaves in it. Whether it still EXISTS is not
+/// stored: a drive that is not mounted this morning is not a workspace the user threw away.
+///
+/// <para>Autonomy, worker and staging live HERE rather than in the app settings because they are
+/// properties of the place, not of the person: a scratch folder wants Autonomous, and the repo you
+/// ship from does not - and nobody remembers to move the slider back. The worker is stored by id,
+/// not by its position in a list that changes when the roles are edited.</para>
+///
+/// <para>Every field past the path is optional, so a registry written before it existed still
+/// loads. The defaults are the cautious ones.</para>
+/// </summary>
+public sealed record WorkspaceEntry(
+    string Name,
+    string RootPath,
+    DateTimeOffset LastOpenedAt,
+    int Autonomy = 2,
+    string? WorkerId = null,
+    bool StageChanges = false);
 
 /// <summary>
 /// The list of workspaces the app knows about, in %APPDATA%/Enactive/workspaces.json.
@@ -75,7 +91,12 @@ public sealed class WorkspaceRegistry
     {
         var full = Normalise(rootPath);
         var existing = Find(full);
-        var entry = new WorkspaceEntry(existing?.Name ?? NameFor(full), full, DateTimeOffset.Now);
+
+        // Everything the entry already knew survives being reopened - the name it was given and how
+        // a run behaves in it. Only the timestamp is news.
+        var entry = existing is null
+            ? new WorkspaceEntry(NameFor(full), full, DateTimeOffset.Now)
+            : existing with { LastOpenedAt = DateTimeOffset.Now };
 
         if (existing is not null)
             _entries.Remove(existing);
@@ -83,6 +104,38 @@ public sealed class WorkspaceRegistry
 
         Save();
         return entry;
+    }
+
+    /// <summary>
+    /// Gives a workspace a name of its own. The folder is not touched - this is what the app calls
+    /// it, so two folders both named "src" can be told apart without reading their paths.
+    /// </summary>
+    public void Rename(string rootPath, string name)
+    {
+        var existing = Find(rootPath);
+        if (existing is null)
+            return;
+
+        var trimmed = name.Trim();
+        if (trimmed.Length == 0)
+            trimmed = NameFor(existing.RootPath);
+
+        Replace(existing, existing with { Name = trimmed });
+    }
+
+    /// <summary>
+    /// Records how a run should behave in this workspace. Creates the entry if the workspace is not
+    /// listed yet: changing a setting for a folder is intent enough to remember the folder.
+    /// </summary>
+    public void SaveSettings(string rootPath, int autonomy, string? workerId, bool stageChanges)
+    {
+        var existing = Find(rootPath) ?? Touch(rootPath);
+        Replace(existing, existing with
+        {
+            Autonomy = autonomy,
+            WorkerId = workerId,
+            StageChanges = stageChanges
+        });
     }
 
     /// <summary>Forgets a workspace. The folder and everything in it - including its .enactive
@@ -115,6 +168,15 @@ public sealed class WorkspaceRegistry
     {
         try { return Path.GetFullPath(rootPath.Trim()); }
         catch { return rootPath.Trim(); }
+    }
+
+    private void Replace(WorkspaceEntry old, WorkspaceEntry updated)
+    {
+        var at = _entries.IndexOf(old);
+        if (at < 0)
+            return;
+        _entries[at] = updated;
+        Save();
     }
 
     private static bool PathsEqual(string a, string b)

@@ -37,9 +37,9 @@ public sealed class SqliteRunStore : IRunStore
         command.CommandText =
             """
             INSERT OR REPLACE INTO runs
-              (run_id, task_id, title, model, started_at, finished_at, status, events_json, artifacts_json, decisions_json)
+              (run_id, task_id, title, model, started_at, finished_at, status, events_json, artifacts_json, decisions_json, settings_json)
             VALUES
-              ($run_id, $task_id, $title, $model, $started_at, $finished_at, $status, $events, $artifacts, $decisions);
+              ($run_id, $task_id, $title, $model, $started_at, $finished_at, $status, $events, $artifacts, $decisions, $settings);
             """;
         command.Parameters.AddWithValue("$run_id", record.RunId.ToString());
         command.Parameters.AddWithValue("$task_id", record.TaskId.ToString());
@@ -51,6 +51,8 @@ public sealed class SqliteRunStore : IRunStore
         command.Parameters.AddWithValue("$events", JsonSerializer.Serialize(record.Events, Json));
         command.Parameters.AddWithValue("$artifacts", JsonSerializer.Serialize(record.Artifacts, Json));
         command.Parameters.AddWithValue("$decisions", JsonSerializer.Serialize(record.Decisions, Json));
+        command.Parameters.AddWithValue("$settings",
+            record.Settings is null ? DBNull.Value : JsonSerializer.Serialize(record.Settings, Json));
 
         await command.ExecuteNonQueryAsync(ct);
     }
@@ -68,7 +70,7 @@ public sealed class SqliteRunStore : IRunStore
         command.CommandText =
             """
             SELECT run_id, task_id, title, model, started_at, finished_at, status,
-                   events_json, artifacts_json, decisions_json
+                   events_json, artifacts_json, decisions_json, settings_json
             FROM runs
             ORDER BY started_at DESC;
             """;
@@ -79,6 +81,9 @@ public sealed class SqliteRunStore : IRunStore
             var events = JsonSerializer.Deserialize<List<RunEventRecord>>(reader.GetString(7), Json) ?? new();
             var artifacts = JsonSerializer.Deserialize<List<string>>(reader.GetString(8), Json) ?? new();
             var decisions = JsonSerializer.Deserialize<List<string>>(reader.GetString(9), Json) ?? new();
+            var settings = reader.IsDBNull(10)
+                ? null
+                : JsonSerializer.Deserialize<RunSettings>(reader.GetString(10), Json);
 
             results.Add(new RunRecord(
                 Guid.Parse(reader.GetString(0)),
@@ -88,7 +93,7 @@ public sealed class SqliteRunStore : IRunStore
                 DateTimeOffset.Parse(reader.GetString(4), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
                 DateTimeOffset.Parse(reader.GetString(5), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
                 reader.GetString(6),
-                events, artifacts, decisions));
+                events, artifacts, decisions, settings));
         }
 
         return results;
@@ -121,10 +126,19 @@ public sealed class SqliteRunStore : IRunStore
                   status         TEXT,
                   events_json    TEXT,
                   artifacts_json TEXT,
-                  decisions_json TEXT
+                  decisions_json TEXT,
+                  settings_json  TEXT
                 );
                 """;
             await command.ExecuteNonQueryAsync(ct);
+
+            // A database created before the column existed is upgraded in place; SQLite has no
+            // "ADD COLUMN IF NOT EXISTS", and a second run of this throws on a column that is
+            // already there - which is the success case, not a failure.
+            using var upgrade = connection.CreateCommand();
+            upgrade.CommandText = "ALTER TABLE runs ADD COLUMN settings_json TEXT;";
+            try { await upgrade.ExecuteNonQueryAsync(ct); }
+            catch (SqliteException) { /* already has it */ }
 
             _initialized = true;
         }
