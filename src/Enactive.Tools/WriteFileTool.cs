@@ -49,6 +49,22 @@ public sealed class WriteFileTool : ITool
 
         try
         {
+            // Whether this REPLACES something has to be settled before the write, and it belongs in
+            // the result: "Created X" for a file that already existed is a false statement, and it is
+            // the exact statement the reviewer is handed as ground truth. A staged proposal counts as
+            // existing content — that is what the next read would return.
+            bool replacing;
+            try
+            {
+                replacing = await ctx.Artifacts.TryReadPendingAsync(path, ct) is not null
+                            || File.Exists(WorkspacePaths.ResolveInside(ctx.WorkspaceRoot, path));
+            }
+            catch
+            {
+                // A path the guard refuses fails properly in CreateAsync below, with its own message.
+                replacing = false;
+            }
+
             var reference = await ctx.Artifacts.CreateAsync(
                 path, ArtifactKind.FileSet, path,
                 async stream =>
@@ -58,13 +74,20 @@ public sealed class WriteFileTool : ITool
                 },
                 ct);
 
+            // Bytes, not "chars": the two differ the moment the content is not ASCII, and the result
+            // line and the metadata disagreeing by four is a puzzle nobody should have to solve.
+            var bytes = Encoding.UTF8.GetByteCount(text);
+
             return ToolResults.Ok(
-                output: $"Created '{path}' ({text.Length} chars).",
+                output: replacing
+                    ? $"REPLACED the existing file '{path}' ({bytes} bytes). Its previous version was kept and can be restored."
+                    : $"Created new file '{path}' ({bytes} bytes).",
                 artifacts: new[] { reference },
                 metadata: new Dictionary<string, object?>
                 {
                     ["path"] = path,
-                    ["bytes"] = Encoding.UTF8.GetByteCount(text)
+                    ["bytes"] = bytes,
+                    ["replacedExistingFile"] = replacing
                 });
         }
         catch (Exception ex)
