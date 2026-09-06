@@ -27,9 +27,25 @@
     <ProjectReference Include="..\..\src\Enactive.Providers\Enactive.Providers.csproj" />
   </ItemGroup>
 
+  <!--
+    The MCP tests start the test server with `dotnet <dll>`, against the copy of it that the project
+    reference puts in THIS project's output. That launch needs the server's runtimeconfig.json beside
+    that copy, and a ProjectReference brings the assembly but not that file.
+
+    The path is taken from what the reference actually produced, never assembled by hand from
+    $(Configuration). Hand-assembling it was wrong in a way that only showed up on a clean machine:
+    the server was not in the solution, so a Release build of the solution
+    still built it into bin/Debug while this target looked in bin/Release, and the whole solution
+    failed with MSB3030 on every push, since build.yml builds the solution in Release. Old artifacts in a
+    working folder hid it. The server is in the solution now, and this no longer depends on that.
+  -->
   <Target Name="CopyMcpTestRuntime" AfterTargets="Build">
-    <Copy SourceFiles="../Enactive.Mcp.TestServer/bin/$(Configuration)/$(TargetFramework)/Enactive.Mcp.TestServer.runtimeconfig.json"
-          DestinationFolder="$(OutDir)" />
+    <ItemGroup>
+      <McpTestServerRuntimeConfig
+        Include="@(_ResolvedProjectReferencePaths->'%(RootDir)%(Directory)%(Filename).runtimeconfig.json')"
+        Condition="'%(Filename)' == 'Enactive.Mcp.TestServer'" />
+    </ItemGroup>
+    <Copy SourceFiles="@(McpTestServerRuntimeConfig)" DestinationFolder="$(OutDir)" />
   </Target>
 
 </Project>

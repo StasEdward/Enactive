@@ -1,0 +1,56 @@
+namespace Enactive.Engine.Tests;
+
+using Xunit;
+
+/// <summary>
+/// The solution has to list every project the build needs.
+///
+/// <para>A project reached only through a ProjectReference still builds — but a SOLUTION build does
+/// not map its configuration onto it, so it builds Debug while everything around it builds Release.
+/// `Enactive.Mcp.TestServer` was outside the solution for exactly that reason, and a clean
+/// `dotnet build Enactive.sln` in Release put it in bin/Debug while this project's copy step looked
+/// in bin/Release: MSB3030, on every push, since build.yml builds the solution in Release. Nobody
+/// saw it locally because a working folder already had the Release artefacts from an earlier
+/// build.</para>
+///
+/// <para>The copy step no longer assembles that path by hand, so the failure cannot come back in the
+/// same shape. This is the other half: a project that quietly leaves the solution is what made it
+/// possible at all, and the check costs nothing.</para>
+/// </summary>
+public sealed class SolutionLayoutTests
+{
+    [Fact]
+    public void Every_project_is_listed_in_the_solution()
+    {
+        var root = RepositoryRoot();
+        var solution = File.ReadAllText(Path.Combine(root, "Enactive.sln"));
+
+        var projects = Directory
+            .EnumerateFiles(root, "*.csproj", SearchOption.AllDirectories)
+            // work/ is scratch — probes and throwaway review harnesses, deliberately out of the tree.
+            .Where(p => !p.Contains($"{Path.DirectorySeparatorChar}work{Path.DirectorySeparatorChar}",
+                                    StringComparison.OrdinalIgnoreCase))
+            .Select(Path.GetFileName)
+            .ToArray();
+
+        Assert.NotEmpty(projects);
+
+        var missing = projects.Where(name => !solution.Contains(name!, StringComparison.OrdinalIgnoreCase)).ToArray();
+
+        Assert.True(missing.Length == 0,
+            "These projects are not in Enactive.sln, so a solution build will not apply its "
+            + "configuration to them: " + string.Join(", ", missing));
+    }
+
+    /// <summary>Walks up from the test binaries until the solution file turns up.</summary>
+    private static string RepositoryRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "Enactive.sln")))
+            directory = directory.Parent;
+
+        Assert.True(directory is not null, "Enactive.sln was not found above " + AppContext.BaseDirectory);
+        return directory!.FullName;
+    }
+}
