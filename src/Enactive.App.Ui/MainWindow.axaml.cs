@@ -679,7 +679,10 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     {
         if (_currentCard is null)
         {
-            var card = new StepCardViewModel("Working");
+            // The quick action's own title when the planner has given one - the same name replay
+            // puts on this card, so a run reads identically live and from the history.
+            var card = new StepCardViewModel(
+                string.IsNullOrWhiteSpace(_vm.TaskTitle) ? "Working" : _vm.TaskTitle);
             card.SetRunning();
             _cards.Add(card);
             _vm.Steps.Add(card);
