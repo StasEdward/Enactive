@@ -24,7 +24,26 @@ using Enactive.Core.Workers;
 /// </summary>
 public sealed class Orchestrator : IOrchestrator
 {
-    private const int MaxIterations = 12;
+    /// <summary>
+    /// How many turns in a row may go by without the step doing anything it has not already done,
+    /// before it is called stuck.
+    ///
+    /// <para>This replaced a flat cap of 12 turns, which was the wrong quantity to count. A step
+    /// that scaffolds an Avalonia project reads seven files and writes seven more, one per turn, and
+    /// was cut off on its twelfth having done nothing wrong — while a model rereading the same file
+    /// forever was equally welcome to twelve. Work is not the thing to limit; a project with a
+    /// hundred files needs a hundred turns and no setting should have to say so. REPETITION is the
+    /// thing to limit, and it does not grow with the project.</para>
+    /// </summary>
+    private const int StallLimit = 3;
+
+    /// <summary>
+    /// An absolute backstop, not a work limit: nothing legitimate reaches it, and a step that does
+    /// has gone wrong in a way <see cref="StallLimit"/> cannot see (an agent inventing new work
+    /// forever). Deliberately far above any real task, because the moment this number starts
+    /// deciding outcomes it is the flat cap again under a new name.
+    /// </summary>
+    private const int RunawayCeiling = 250;
 
     private readonly IChatProviderFactory _providers;
     private readonly IWorkerProvider _workers;
@@ -699,8 +718,63 @@ public sealed class Orchestrator : IOrchestrator
         public string Describe()
             => string.Join("; ", _byCall.Values);
 
-        private static string Key(ToolCall call)
+        private static string Key(ToolCall call) => KeyOf(call);
+
+        /// <summary>
+        /// A call's identity: what it is and what it was asked to do. Shared with
+        /// <see cref="StepProgress"/> so "the same call again" means one thing in this file.
+        /// </summary>
+        internal static string KeyOf(ToolCall call)
             => call.Name + "\0" + (call.ArgumentsJson ?? string.Empty).Trim();
+    }
+
+    /// <summary>
+    /// Whether a step is still getting somewhere.
+    ///
+    /// <para>"Somewhere" is deliberately cheap to define: a tool call, by name and arguments, that
+    /// this step has not made before. Success is not required — a command that fails teaches the
+    /// model something and an unresolved failure is already caught at the end of the loop — so what
+    /// is left is exactly repetition, which is what a stuck model actually does.</para>
+    /// </summary>
+    private sealed class StepProgress
+    {
+        private readonly HashSet<string> _seen = new(StringComparer.Ordinal);
+        private readonly List<string> _repeats = new();
+
+        /// <summary>Turns in a row that did nothing new.</summary>
+        public int Stalled { get; private set; }
+
+        /// <summary>Records one turn's calls and says whether any of them was new.</summary>
+        public bool Advanced(IReadOnlyList<ToolCall> calls)
+        {
+            var advanced = false;
+            var repeatedHere = new List<string>();
+
+            foreach (var call in calls)
+                if (_seen.Add(OpenFailures.KeyOf(call)))
+                    advanced = true;
+                else
+                    repeatedHere.Add($"{call.Name} {Compact(call.ArgumentsJson)}");
+
+            if (advanced)
+            {
+                Stalled = 0;
+                _repeats.Clear();
+            }
+            else
+            {
+                Stalled++;
+                foreach (var repeat in repeatedHere)
+                    if (!_repeats.Contains(repeat))
+                        _repeats.Add(repeat);
+            }
+
+            return advanced;
+        }
+
+        /// <summary>What it kept asking for, for the message that stops it.</summary>
+        public string Describe()
+            => _repeats.Count == 0 ? "no new tool calls" : string.Join("; ", _repeats);
     }
 
     /// <summary>
@@ -779,7 +853,7 @@ public sealed class Orchestrator : IOrchestrator
         // guessed. Pessimistic until proven otherwise: falling out of the loop means the iteration
         // cap was reached, which is not success.
         loopResult.Set(StepOutcomeKind.Incomplete,
-            $"reached the {MaxIterations}-iteration limit without a final answer");
+            $"ran for {RunawayCeiling} turns without a final answer");
 
         WorkEvent Ev(EventKind kind, string summary)
             => new(Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow, kind, summary,
@@ -811,7 +885,10 @@ public sealed class Orchestrator : IOrchestrator
         // characters - exactly the margin that decides whether the last turn fits.
         var toolsOverhead = toolDefs.Sum(d => d.Name.Length + d.Description.Length + d.JsonSchema.Length + 16);
 
-        for (var iteration = 1; iteration <= MaxIterations; iteration++)
+        // Repetition, counted. Not turns - see StallLimit.
+        var progress = new StepProgress();
+
+        for (var iteration = 1; iteration <= RunawayCeiling; iteration++)
         {
             var request = new ChatRequest(model, messages, toolDefs, Temperature: 0.2, NumCtx: _numCtx, Think: _think);
 
@@ -906,7 +983,7 @@ public sealed class Orchestrator : IOrchestrator
             // The turn was cut off at the token limit. Record only the partial text (dropping any
             // half-finished tool call, which would dangle without a tool_result and break the next
             // provider call) and stop this step — otherwise the model re-issues the same truncated call
-            // every iteration until MaxIterations, burning the run (seen with a reasoning model whose
+            // every iteration until the ceiling, burning the run (seen with a reasoning model whose
             // thinking exhausted max_tokens before the tool arguments were emitted).
             if (finishReason is "max_tokens" or "length")
             {
@@ -984,6 +1061,23 @@ public sealed class Orchestrator : IOrchestrator
 
                 loopResult.Set(StepOutcomeKind.Succeeded, null);
                 yield break; // genuine final answer - no tool calls
+            }
+
+            // Did this turn do anything the step had not already done? A stuck model does not stop
+            // calling tools - it calls the SAME one, with the same arguments, until something else
+            // stops it. That is the shape worth detecting, and unlike a turn count it does not grow
+            // with the size of the job: seven new files are seven turns of progress, while one file
+            // read three times is three turns of nothing however big the project is.
+            if (!progress.Advanced(toolCalls) && progress.Stalled >= StallLimit)
+            {
+                var repeated = progress.Describe();
+                loopResult.Set(StepOutcomeKind.Incomplete,
+                    $"stopped after {StallLimit} turns that only repeated earlier tool calls: {repeated}");
+                yield return Ev(EventKind.ErrorObserved,
+                    $"The model spent {StallLimit} turns repeating tool calls it had already made "
+                    + $"({repeated}) without doing anything new; stopping this step. It is stuck rather "
+                    + "than slow — the turn count is not the limit here.");
+                yield break;
             }
 
             if (recovered)
@@ -1091,7 +1185,12 @@ public sealed class Orchestrator : IOrchestrator
             }
         }
 
-        yield return Ev(EventKind.ErrorObserved, $"Segment did not converge after {MaxIterations} iterations.");
+        // The backstop, reached only by a step that kept finding genuinely new things to do for
+        // longer than any real task does. Worth saying plainly rather than as "did not converge".
+        yield return Ev(EventKind.ErrorObserved,
+            $"This step ran {RunawayCeiling} turns and never finished. It was still doing new things "
+            + "each turn, so it is not stuck in a loop — but nothing this long is going to plan. "
+            + "Stopping it.");
     }
 
     /// <summary>
