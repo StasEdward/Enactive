@@ -330,6 +330,76 @@ public sealed class FileToolsTests
         Assert.False(fx.Exists("new.md"));
     }
 
+    // A move must hand back the SAME file. This one read its input as text and wrote UTF-8 back, so a
+    // PNG or a zip came out with every byte that is not valid UTF-8 replaced by U+FFFD — and then the
+    // original was deleted and the result reported as success. Bytes [0,255,254,128,65,0] came back
+    // as [0,239,191,189,…]: silent corruption of an asset, announced as a rename.
+    [Fact]
+    public async Task A_move_preserves_bytes_that_are_not_text()
+    {
+        using var fx = new EngineFixture();
+
+        var original = new byte[] { 0x00, 0xFF, 0xFE, 0x80, 0x41, 0x00 };
+        File.WriteAllBytes(fx.PathOf("asset.bin"), original);
+
+        var result = await Call(new MoveFileTool(), fx, """{"from":"asset.bin","to":"moved.bin"}""");
+
+        Assert.True(result.Success, result.Error);
+        Assert.Equal(original, File.ReadAllBytes(fx.PathOf("moved.bin")));
+        Assert.False(fx.Exists("asset.bin"));
+    }
+
+    // The same failure in the shape it takes on a text file: a UTF-16 document is transcoded and its
+    // BOM is gone. The file still "reads", which is what makes it worse than the binary case.
+    [Fact]
+    public async Task A_move_preserves_a_utf16_file_and_its_bom()
+    {
+        using var fx = new EngineFixture();
+
+        var original = new System.Text.UnicodeEncoding(bigEndian: false, byteOrderMark: true)
+            .GetPreamble()
+            .Concat(System.Text.Encoding.Unicode.GetBytes("привет"))
+            .ToArray();
+        File.WriteAllBytes(fx.PathOf("doc.txt"), original);
+
+        Assert.True((await Call(new MoveFileTool(), fx, """{"from":"doc.txt","to":"moved.txt"}""")).Success);
+
+        Assert.Equal(original, File.ReadAllBytes(fx.PathOf("moved.txt")));
+    }
+
+    // And the byte count it reports is the file's, not the length of some re-encoding of it.
+    [Fact]
+    public async Task A_move_reports_the_real_size()
+    {
+        using var fx = new EngineFixture();
+
+        var original = new byte[] { 0x00, 0xFF, 0xFE, 0x80, 0x41, 0x00 };
+        File.WriteAllBytes(fx.PathOf("asset.bin"), original);
+
+        var result = await Call(new MoveFileTool(), fx, """{"from":"asset.bin","to":"moved.bin"}""");
+
+        Assert.Equal(6L, Assert.Contains("bytes", result.Metadata));
+    }
+
+    // Both sides are journalled for a binary too, so a rejected step gets the original bytes back
+    // rather than a rendering of them.
+    [Fact]
+    public async Task Reverting_a_move_restores_the_original_bytes()
+    {
+        using var fx = new EngineFixture();
+
+        var original = new byte[] { 0x00, 0xFF, 0xFE, 0x80, 0x41, 0x00 };
+        File.WriteAllBytes(fx.PathOf("asset.bin"), original);
+
+        var step = fx.Artifacts.Checkpoint();
+        Assert.True((await Call(new MoveFileTool(), fx, """{"from":"asset.bin","to":"moved.bin"}""")).Success);
+
+        await fx.Artifacts.RevertToAsync(step, new[] { "asset.bin", "moved.bin" }, default);
+
+        Assert.Equal(original, File.ReadAllBytes(fx.PathOf("asset.bin")));
+        Assert.False(fx.Exists("moved.bin"));
+    }
+
     [Fact]
     public async Task A_move_refuses_to_overwrite()
     {

@@ -25,11 +25,14 @@ public sealed class SolutionLayoutTests
         var root = RepositoryRoot();
         var solution = File.ReadAllText(Path.Combine(root, "Enactive.sln"));
 
-        var projects = Directory
-            .EnumerateFiles(root, "*.csproj", SearchOption.AllDirectories)
-            // work/ is scratch — probes and throwaway review harnesses, deliberately out of the tree.
-            .Where(p => !p.Contains($"{Path.DirectorySeparatorChar}work{Path.DirectorySeparatorChar}",
-                                    StringComparison.OrdinalIgnoreCase))
+        // Only src/ and tests/ — those are what the solution is for, and a project that lands there
+        // is meant to build with everything else. Anything else at the top level is work in progress
+        // or scratch (work/ holds probes and throwaway review harnesses) and joins the solution when
+        // its author says so, not because a test found a file.
+        var projects = new[] { "src", "tests" }
+            .Select(folder => Path.Combine(root, folder))
+            .Where(Directory.Exists)
+            .SelectMany(folder => Directory.EnumerateFiles(folder, "*.csproj", SearchOption.AllDirectories))
             .Select(Path.GetFileName)
             .ToArray();
 

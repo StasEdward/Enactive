@@ -1,6 +1,5 @@
 namespace Enactive.Tools;
 
-using System.Text;
 using System.Text.Json;
 using Enactive.Core.Artifacts;
 using Enactive.Core.Permissions;
@@ -18,6 +17,9 @@ using Enactive.Core.Tools;
 ///
 /// It refuses to overwrite. A rename that lands on an existing file is either a mistake or a
 /// deletion the model did not say it wanted, and neither should happen silently.
+///
+/// The bytes are copied, never decoded. A move that re-encodes its file is not a move: it returns
+/// something else under the old name and deletes the original to prove it.
 /// </summary>
 public sealed class MoveFileTool : ITool
 {
@@ -62,13 +64,24 @@ public sealed class MoveFileTool : ITool
                     $"'{to}' already exists. Moving onto it would destroy it — choose another name, "
                     + "or delete that file deliberately first.");
 
-            var content = await File.ReadAllTextAsync(source, ct);
+            // BYTES, not text. This read the file with ReadAllTextAsync and wrote UTF-8 back, which
+            // is not a move: a PNG or a zip came out with every invalid UTF-8 byte replaced by U+FFFD,
+            // a UTF-16 file was transcoded, a BOM could vanish — and then the original was deleted and
+            // the result reported as success. A move must hand back the same file it was given.
+            long moved = 0;
 
             // Destination first. If the removal then fails, the workspace holds both copies — which
             // is recoverable and visible. The other order risks losing the file entirely.
             var reference = await ctx.Artifacts.CreateAsync(
                 to, ArtifactKind.FileSet, to,
-                async stream => await stream.WriteAsync(Encoding.UTF8.GetBytes(content), ct),
+                async stream =>
+                {
+                    await using var input = new FileStream(
+                        source, FileMode.Open, FileAccess.Read, FileShare.Read,
+                        bufferSize: 81920, useAsync: true);
+                    await input.CopyToAsync(stream, ct);
+                    moved = input.Length;
+                },
                 ct);
 
             try
@@ -84,14 +97,14 @@ public sealed class MoveFileTool : ITool
             }
 
             return ToolResults.Ok(
-                output: $"Moved '{from}' to '{to}' ({Encoding.UTF8.GetByteCount(content)} bytes). "
+                output: $"Moved '{from}' to '{to}' ({moved} bytes). "
                       + "Both the new file and the removal can be undone.",
                 artifacts: new[] { reference },
                 metadata: new Dictionary<string, object?>
                 {
                     ["from"] = from,
                     ["to"] = to,
-                    ["bytes"] = Encoding.UTF8.GetByteCount(content)
+                    ["bytes"] = moved
                 });
         }
         catch (Exception ex)
