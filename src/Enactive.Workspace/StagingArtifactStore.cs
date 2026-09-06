@@ -8,18 +8,40 @@ using Enactive.Core.Context;
 /// <summary>A proposed file change held for review (not yet written to disk).</summary>
 public sealed class StagedChange
 {
-    public StagedChange(Guid id, string relativePath, string? oldContent, string newContent, int sequence)
+    public StagedChange(
+        Guid id, string relativePath, string key, string? oldContent, string newContent,
+        int sequence, int scope = -1)
     {
         Id = id;
         RelativePath = relativePath;
+        Key = key;
         OldContent = oldContent;
         NewContent = newContent;
         Sequence = sequence;
+        Scope = scope;
         BaseHash = FileHash.Of(oldContent);
     }
 
+    /// <summary>
+    /// Which revert scope proposed this. A rejected step drops the proposals it made and nobody
+    /// else's — with several steps sharing one store, an earlier checkpoint used to sweep away a
+    /// later step's still-pending work.
+    /// </summary>
+    public int Scope { get; }
+
     public Guid Id { get; }
+
+    /// <summary>The path as the caller spelled it. For display only — never for matching.</summary>
     public string RelativePath { get; }
+
+    /// <summary>
+    /// The one identity of the file this proposal is about: the path resolved against the workspace
+    /// root and expressed relative to it again, so <c>./doc.txt</c>, <c>doc.txt</c> and
+    /// <c>sub/../doc.txt</c> are one entry rather than three. Matching on the raw string meant a
+    /// worker could write <c>./doc.txt</c> and then read <c>doc.txt</c> back as "File not found",
+    /// and two proposals for one file were not ordered against each other.
+    /// </summary>
+    public string Key { get; }
     public string? OldContent { get; }
     public string NewContent { get; }
 
@@ -87,6 +109,9 @@ public sealed class StagingArtifactStore : IArtifactStore
     private readonly object _gate = new();
     private int _sequence;
 
+    /// <summary>The newest revert scope handed out by <see cref="Checkpoint"/>; -1 = none yet.</summary>
+    private int _scope = -1;
+
     public StagingArtifactStore(string workspaceRoot) => _root = Path.GetFullPath(workspaceRoot);
 
     public IReadOnlyList<StagedChange> Changes
@@ -100,7 +125,7 @@ public sealed class StagingArtifactStore : IArtifactStore
         {
             lock (_gate)
                 return _changes.Where(c => c.Pending)
-                               .Select(c => c.RelativePath)
+                               .Select(c => c.Key)
                                .Distinct(StringComparer.OrdinalIgnoreCase)
                                .ToArray();
         }
@@ -115,16 +140,18 @@ public sealed class StagingArtifactStore : IArtifactStore
         var newContent = Encoding.UTF8.GetString(buffer.ToArray());
 
         var full = ResolveInside(relativePath);
+        var key = KeyOf(full);
 
         // The base for the diff and for the conflict check is what a reader would see NOW: an earlier
         // pending proposal for the same path, else the file on disk. Diffing against the disk while a
         // proposal is already outstanding shows a change the user never made.
-        var pending = await TryReadPendingAsync(relativePath, ct);
+        var pending = NewestPending(key);
         var oldContent = pending ?? (File.Exists(full) ? await File.ReadAllTextAsync(full, ct) : null);
 
         var id = Guid.NewGuid();
         lock (_gate)
-            _changes.Add(new StagedChange(id, relativePath, oldContent, newContent, _sequence++));
+            _changes.Add(new StagedChange(
+                id, relativePath, key, oldContent, newContent, _sequence++, _scope));
 
         return new ArtifactRef(id, kind, title, relativePath);
     }
@@ -151,18 +178,26 @@ public sealed class StagingArtifactStore : IArtifactStore
     /// <summary>The newest pending proposal for a path, or null when there is none.</summary>
     public Task<string?> TryReadPendingAsync(string relativePath, CancellationToken ct)
     {
+        string key;
+        try { key = KeyOf(ResolveInside(relativePath)); }
+        catch (ArgumentException) { return Task.FromResult<string?>(null); }
+
+        return Task.FromResult(NewestPending(key));
+    }
+
+    private string? NewestPending(string key)
+    {
         lock (_gate)
         {
             for (var i = _changes.Count - 1; i >= 0; i--)
             {
                 var change = _changes[i];
-                if (change.Pending
-                    && string.Equals(change.RelativePath, relativePath, WorkspaceGuard.Comparison))
-                    return Task.FromResult<string?>(change.NewContent);
+                if (change.Pending && string.Equals(change.Key, key, WorkspaceGuard.Comparison))
+                    return change.NewContent;
             }
         }
 
-        return Task.FromResult<string?>(null);
+        return null;
     }
 
     /// <summary>
@@ -188,7 +223,7 @@ public sealed class StagingArtifactStore : IArtifactStore
             var earlier = _changes.FirstOrDefault(c =>
                 c.Pending
                 && c.Sequence < change.Sequence
-                && string.Equals(c.RelativePath, change.RelativePath, WorkspaceGuard.Comparison));
+                && string.Equals(c.Key, change.Key, WorkspaceGuard.Comparison));
 
             if (earlier is not null)
                 return ApplyResult.Blocked(
@@ -217,9 +252,7 @@ public sealed class StagingArtifactStore : IArtifactStore
 
             // Write beside the target and move into place: an interrupted apply must not leave the
             // user with half a file.
-            var temp = full + ".enactive-tmp";
-            File.WriteAllText(temp, change.NewContent);
-            File.Move(temp, full, overwrite: true);
+            AtomicWrite.Replace(full, change.NewContent);
         }
         catch (Exception ex)
         {
@@ -237,9 +270,14 @@ public sealed class StagingArtifactStore : IArtifactStore
             _changes.Find(c => c.Id == id)?.MarkRejected();
     }
 
+    /// <summary>
+    /// Opens a revert scope and returns its id — the same contract as the disk store's. Proposals
+    /// made from here on are stamped with it, so a rejected step drops ITS proposals and leaves a
+    /// concurrent step's alone.
+    /// </summary>
     public int Checkpoint()
     {
-        lock (_gate) return _sequence;
+        lock (_gate) return ++_scope;
     }
 
     /// <summary>
@@ -252,19 +290,29 @@ public sealed class StagingArtifactStore : IArtifactStore
     {
         var reverted = new List<string>();
 
+        // The caller's paths come out of a transcript, so they carry whatever spelling the model
+        // used. Canonicalise them the same way the proposals were, or "./doc.txt" and "doc.txt"
+        // describe the same file and match nothing.
+        var wanted = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var path in paths)
+        {
+            try { wanted.Add(KeyOf(ResolveInside(path))); }
+            catch (ArgumentException) { /* a path no proposal could have used */ }
+        }
+
         lock (_gate)
         {
             foreach (var change in _changes)
             {
-                if (change.Sequence < checkpoint || !change.Pending)
+                if (change.Scope != checkpoint || !change.Pending)
                     continue;
 
-                if (!paths.Contains(change.RelativePath, StringComparer.OrdinalIgnoreCase))
+                if (!wanted.Contains(change.Key))
                     continue;
 
                 change.MarkRejected();
-                if (!reverted.Contains(change.RelativePath, StringComparer.OrdinalIgnoreCase))
-                    reverted.Add(change.RelativePath);
+                if (!reverted.Contains(change.Key, StringComparer.OrdinalIgnoreCase))
+                    reverted.Add(change.Key);
             }
         }
 
@@ -279,4 +327,13 @@ public sealed class StagingArtifactStore : IArtifactStore
 
         return WorkspaceGuard.ResolveInside(_root, relativePath);
     }
+
+    /// <summary>
+    /// The identity of a file inside this workspace: its resolved location, said relative to the
+    /// root, with one separator. Everything that has to decide "is this the same file?" — pending
+    /// reads, apply ordering, revert — compares this and nothing else.
+    /// </summary>
+    private string KeyOf(string full)
+        => Path.GetRelativePath(_root, full)
+               .Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar);
 }

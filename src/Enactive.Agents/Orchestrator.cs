@@ -627,6 +627,38 @@ public sealed class Orchestrator : IOrchestrator
     }
 
     /// <summary>
+    /// The tool calls that failed and were never made to work.
+    ///
+    /// A failed <see cref="ToolResult"/> used to reach only the transcript: the model saw "ERROR:
+    /// file not found", replied "Done", and the step was recorded as Succeeded because a reply
+    /// without tool calls was taken as a finished job. A run that never read the file it was asked
+    /// to read reported green.
+    ///
+    /// An operation is considered recovered when the SAME call — same tool, same arguments — later
+    /// succeeds. That is the only recovery this can actually verify; a different call succeeding
+    /// says nothing about the one that failed. The cost is that an agent which reaches the goal by
+    /// another route still leaves the step Incomplete, which is the honest reading: what it was
+    /// asked to do did not happen, whatever else did.
+    /// </summary>
+    private sealed class OpenFailures
+    {
+        private readonly Dictionary<string, string> _byCall = new(StringComparer.Ordinal);
+
+        public int Count => _byCall.Count;
+
+        public void Failed(ToolCall call, string? error)
+            => _byCall[Key(call)] = $"{call.Name} {Compact(call.ArgumentsJson)} — {error ?? "failed"}";
+
+        public void Succeeded(ToolCall call) => _byCall.Remove(Key(call));
+
+        public string Describe()
+            => string.Join("; ", _byCall.Values);
+
+        private static string Key(ToolCall call)
+            => call.Name + " " + (call.ArgumentsJson ?? string.Empty).Trim();
+    }
+
+    /// <summary>
     /// Asks the reviewer about the work just done. Shared by the QuickAction path and by a DAG step,
     /// so a configured reviewer applies to both — it used to run for plan steps only, while the
     /// planner was told to prefer QuickAction, which left most ordinary requests unreviewed.
@@ -713,6 +745,7 @@ public sealed class Orchestrator : IOrchestrator
         // A reply that describes a call instead of making one earns exactly ONE re-ask per step; without
         // the cap a model that keeps explaining itself would burn every iteration on the same nudge.
         var repairRequested = false;
+        var openFailures = new OpenFailures();
 
         for (var iteration = 1; iteration <= MaxIterations; iteration++)
         {
@@ -804,6 +837,18 @@ public sealed class Orchestrator : IOrchestrator
                     continue;
                 }
 
+                // A final answer only settles the step if the actions behind it actually worked. The
+                // model saying "Done" over a failed read is the exact shape the follow-up review
+                // caught reporting green.
+                if (openFailures.Count > 0)
+                {
+                    var unresolved = openFailures.Describe();
+                    yield return Ev(EventKind.ErrorObserved,
+                        $"Finished without resolving {openFailures.Count} failed tool call(s): {unresolved}");
+                    loopResult.Set(StepOutcomeKind.Incomplete, "unresolved tool failure: " + unresolved);
+                    yield break;
+                }
+
                 loopResult.Set(StepOutcomeKind.Succeeded, null);
                 yield break; // genuine final answer - no tool calls
             }
@@ -888,6 +933,11 @@ public sealed class Orchestrator : IOrchestrator
                 {
                     result = ToolResults.Fail($"{call.Name} threw: {ex.Message}");
                 }
+
+                if (result.Success)
+                    openFailures.Succeeded(call);
+                else
+                    openFailures.Failed(call, result.Error);
 
                 yield return result.Success
                     ? Ev(EventKind.ToolResult, $"{call.Name} -> ok: {result.Output}")

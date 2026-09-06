@@ -45,6 +45,15 @@ public interface IArtifactStore
     IReadOnlyCollection<string> PendingPaths => Array.Empty<string>();
 
     /// <summary>
+    /// Whether the version this store displaced at <paramref name="relativePath"/> can actually be
+    /// put back. Asked so a tool can report what is true rather than what is usually true: taking a
+    /// backup is best-effort and can fail silently, while <c>write_file</c> told the model — and
+    /// therefore the reviewer, which treats that sentence as ground truth — that the previous
+    /// version "was kept and can be restored" every single time.
+    /// </summary>
+    bool CanRestore(string relativePath) => false;
+
+    /// <summary>
     /// A marker for "the state the workspace is in right now", to be handed back to
     /// <see cref="RevertToAsync"/>. Opaque on purpose: what it counts is the store's business.
     /// </summary>

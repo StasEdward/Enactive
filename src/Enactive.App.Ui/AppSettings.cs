@@ -206,6 +206,15 @@ internal sealed class AppSettings
                         loaded.AnthropicApiKey = Secret.Unprotect(loaded.AnthropicApiKeyProtected);
 
                     loaded.MigrateIfNeeded();
+
+                    // A file written by an older version can hold duplicate ids, which used to reach
+                    // ToDictionary and take the app down on startup — with no way in, and therefore
+                    // no way to fix the settings that were the problem. Repair in memory so the app
+                    // opens, keep a copy of the original so nothing is lost, and let the window say
+                    // what happened.
+                    if (loaded.RepairForStartup().Count > 0)
+                        KeepACopy(file);
+
                     return loaded;
                 }
             }
@@ -215,6 +224,25 @@ internal sealed class AppSettings
         var seeded = SeedFromEnvironment();
         seeded.MigrateIfNeeded();
         return seeded;
+    }
+
+    /// <summary>
+    /// Copies the settings file next to itself before the app runs on a repaired version of it, so
+    /// the user still has exactly what they had. Best-effort: failing to keep a copy must not stop
+    /// the app from starting, which is the whole point of the repair.
+    /// </summary>
+    private static void KeepACopy(string file)
+    {
+        try
+        {
+            var copy = Path.Combine(
+                Path.GetDirectoryName(file)!,
+                $"settings.before-repair-{DateTime.Now:yyyyMMdd-HHmmss}.json");
+
+            if (!File.Exists(copy))
+                File.Copy(file, copy);
+        }
+        catch { /* the repaired settings are in memory either way */ }
     }
 
     public void Save()
@@ -353,6 +381,65 @@ internal sealed class AppSettings
         Providers = Providers.Select(x => x.Clone()).ToList(),
         Workers = Workers.Select(x => x.Clone()).ToList()
     };
+
+    /// <summary>
+    /// What was wrong with the file this configuration was loaded from, and what was done about it.
+    /// Empty for a healthy file. Not serialized: it describes one load, not the settings.
+    /// </summary>
+    [JsonIgnore]
+    public IReadOnlyList<string> LoadProblems { get; private set; } = Array.Empty<string>();
+
+    /// <summary>
+    /// Makes a configuration runnable without throwing away what the user typed.
+    ///
+    /// Validation was added on the SAVE path, which stops the UI writing a broken file but does
+    /// nothing for the people whose settings.json was already broken by an older version: load did
+    /// not validate, and duplicate ids went straight into the <c>ToDictionary</c> that builds the
+    /// provider and worker registries, so the app threw on startup with nowhere to fix it from.
+    ///
+    /// Nothing is deleted for having a duplicate id — the later entry is renamed, so both remain
+    /// visible and editable in Settings. An entry with no id at all is the exception: it cannot be
+    /// referenced by anything and cannot be renamed into something meaningful.
+    /// </summary>
+    public IReadOnlyList<string> RepairForStartup()
+    {
+        var repairs = new List<string>();
+
+        repairs.AddRange(DropUnnamed(Providers, p => p.Id, "provider"));
+        repairs.AddRange(DropUnnamed(Workers, w => w.Id, "worker"));
+        repairs.AddRange(RenameDuplicates(Providers, p => p.Id, (p, id) => p.Id = id, "provider"));
+        repairs.AddRange(RenameDuplicates(Workers, w => w.Id, (w, id) => w.Id = id, "worker"));
+
+        LoadProblems = repairs;
+        return repairs;
+    }
+
+    private static IEnumerable<string> DropUnnamed<T>(List<T> items, Func<T, string> id, string what)
+    {
+        var removed = items.RemoveAll(item => string.IsNullOrWhiteSpace(id(item)));
+        if (removed > 0)
+            yield return $"Removed {removed} {what}(s) with no id — nothing could refer to them.";
+    }
+
+    private static IEnumerable<string> RenameDuplicates<T>(
+        List<T> items, Func<T, string> get, Action<T, string> set, string what)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var item in items)
+        {
+            var id = get(item).Trim();
+            if (seen.Add(id))
+                continue;
+
+            var renamed = id;
+            for (var n = 2; !seen.Add(renamed); n++)
+                renamed = $"{id}-{n}";
+
+            set(item, renamed);
+            yield return $"Two {what}s shared the id \"{id}\"; the second is now \"{renamed}\".";
+        }
+    }
 
     /// <summary>
     /// Everything wrong with this configuration, in plain language, or empty when it is sound.

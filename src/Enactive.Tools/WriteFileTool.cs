@@ -78,16 +78,24 @@ public sealed class WriteFileTool : ITool
             // line and the metadata disagreeing by four is a puzzle nobody should have to solve.
             var bytes = Encoding.UTF8.GetByteCount(text);
 
+            // Only claim the old version is recoverable when it actually is. Taking the backup is
+            // best-effort by design, and this sentence is what the reviewer is handed as ground
+            // truth — a promise made every time is a promise the reviewer cannot check.
+            var restorable = replacing && ctx.Artifacts.CanRestore(path);
+
             return ToolResults.Ok(
                 output: replacing
-                    ? $"REPLACED the existing file '{path}' ({bytes} bytes). Its previous version was kept and can be restored."
+                    ? restorable
+                        ? $"REPLACED the existing file '{path}' ({bytes} bytes). Its previous version was kept and can be restored."
+                        : $"REPLACED the existing file '{path}' ({bytes} bytes). Its previous version could NOT be backed up and is gone."
                     : $"Created new file '{path}' ({bytes} bytes).",
                 artifacts: new[] { reference },
                 metadata: new Dictionary<string, object?>
                 {
                     ["path"] = path,
                     ["bytes"] = bytes,
-                    ["replacedExistingFile"] = replacing
+                    ["replacedExistingFile"] = replacing,
+                    ["previousVersionRecoverable"] = restorable
                 });
         }
         catch (Exception ex)

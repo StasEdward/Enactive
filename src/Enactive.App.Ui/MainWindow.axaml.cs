@@ -105,6 +105,13 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                 $"settings.json could not be applied ({settingsProblem}). Running on defaults — your file "
                 + "has NOT been overwritten; fix it in Settings, or edit it and restart.");
 
+        // A file an older version left in a state the runtime cannot build was repaired in memory so
+        // the app could open at all. Say what changed, and where the untouched original went.
+        foreach (var repair in _settings.LoadProblems)
+            _log.Error(LogSource.System,
+                $"settings.json needed repair to start: {repair} A copy of the original is beside it "
+                + "as settings.before-repair-*.json. Review Settings and save to keep the repair.");
+
         // Where to start: the environment wins, then the workspace last opened. The old default -
         // the current directory - made the folder the .exe happens to sit in a workspace, complete
         // with a .enactive folder nobody asked for.

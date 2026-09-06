@@ -56,12 +56,25 @@ public static class WorkspaceGuard
         if (!IsInside(fullRoot, full))
             throw new ArgumentException("Path escapes the workspace root.", nameof(relativePath));
 
-        if (!allowReserved && TouchesReserved(fullRoot, full))
+        // Both remaining questions are asked of the EFFECTIVE path — where the write actually lands
+        // once every link on the way has been followed — not of the string the caller typed. Asking
+        // them of the string is how a junction named `alias` pointing at `.enactive` passed the
+        // reserved-folder check: `alias/state.txt` contains no reserved segment, and the write then
+        // landed in the workspace's own state, backups of the undo journal included.
+        var effective = FollowLinks(fullRoot, full, nameof(relativePath));
+
+        if (!IsInside(fullRoot, effective))
+            throw new ArgumentException("Path escapes the workspace root.", nameof(relativePath));
+
+        if (!allowReserved && TouchesReserved(fullRoot, effective))
             throw new ArgumentException(
                 $"'{ReservedFolder}' holds the workspace's own state and is not writable by tools.",
                 nameof(relativePath));
 
-        EnsureNoEscapingLink(fullRoot, full);
+        // The literal path is what the caller opens; the OS follows the same links we just did, so
+        // it reaches the destination we vetted. Returning it keeps recorded paths as the user wrote
+        // them. NOTE this is a check, not a lock: between here and the open, the path could change.
+        // Closing that window needs the open itself to be link-aware, which is a separate change.
         return full;
     }
 
@@ -93,46 +106,68 @@ public static class WorkspaceGuard
     }
 
     /// <summary>
-    /// Follows every existing component between the root and the target. A component that is a
-    /// reparse point (junction, symlink) is resolved to its final target, and that target has to be
-    /// inside the workspace too — otherwise the string check passes while the write lands elsewhere.
-    /// Components that do not exist yet are skipped: there is nothing to follow, and the write will
-    /// create a plain file or folder.
+    /// Walks the path from the root down, one segment at a time, and returns where it really ends
+    /// up. A segment that is a reparse point (junction, symlink) is replaced by its final target and
+    /// the rest of the path is appended to THAT, so the caller is left holding the location the file
+    /// system would actually reach rather than the spelling it was given.
+    ///
+    /// A link is refused the moment its target leaves the workspace, so the offending segment can be
+    /// named — reporting the whole resolved path would point at a folder the user never mentioned.
+    /// Segments that do not exist yet are passed through: there is nothing to follow, and the write
+    /// will create a plain file or folder.
     /// </summary>
-    private static void EnsureNoEscapingLink(string fullRoot, string full)
+    private static string FollowLinks(string fullRoot, string full, string parameterName)
     {
-        var components = new List<string>();
-        for (var current = full;
-             current is not null && !string.Equals(current, fullRoot, Comparison);
-             current = Path.GetDirectoryName(current))
-        {
-            components.Add(current);
-        }
+        if (string.Equals(full, fullRoot, Comparison))
+            return fullRoot;
 
-        // Deepest last: report the outermost offending link, which is the one the user can see.
-        for (var i = components.Count - 1; i >= 0; i--)
+        var segments = Path.GetRelativePath(fullRoot, full)
+            .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+        var effective = fullRoot;
+        foreach (var segment in segments)
         {
-            var path = components[i];
+            if (segment.Length == 0 || segment == ".")
+                continue;
+
+            effective = Path.GetFullPath(Path.Combine(effective, segment));
 
             FileSystemInfo info;
-            if (Directory.Exists(path)) info = new DirectoryInfo(path);
-            else if (File.Exists(path)) info = new FileInfo(path);
+            if (Directory.Exists(effective)) info = new DirectoryInfo(effective);
+            else if (File.Exists(effective)) info = new FileInfo(effective);
             else continue;
 
             if (!info.Attributes.HasFlag(FileAttributes.ReparsePoint))
                 continue;
 
             string? target;
-            try { target = info.ResolveLinkTarget(returnFinalTarget: true)?.FullName; }
-            catch { target = null; }   // a broken or unreadable link resolves to nothing to follow
+            try
+            {
+                target = info.ResolveLinkTarget(returnFinalTarget: true)?.FullName;
+            }
+            catch (Exception ex)
+            {
+                // We could not learn where this leads, so we cannot say it is safe. A failure here
+                // is a refusal, not a shrug: the old code caught this and carried on, which meant an
+                // unreadable link was treated exactly like an ordinary folder.
+                throw new ArgumentException(
+                    $"'{Path.GetRelativePath(fullRoot, effective)}' is a link that could not be "
+                    + $"resolved ({ex.Message}), so where it leads is unknown.", parameterName);
+            }
 
+            // Null is not a failure: a cloud-storage placeholder carries the reparse attribute
+            // without being a link to anywhere, and a link with no target reaches nothing to write.
             if (target is null)
                 continue;
 
-            if (!IsInside(fullRoot, Path.GetFullPath(target)))
+            effective = Path.GetFullPath(target);
+
+            if (!IsInside(fullRoot, effective))
                 throw new ArgumentException(
-                    $"'{Path.GetRelativePath(fullRoot, path)}' is a link that leads outside the workspace.",
-                    nameof(full));
+                    $"'{Path.GetRelativePath(fullRoot, full)}' passes through a link that leads "
+                    + "outside the workspace.", parameterName);
         }
+
+        return effective;
     }
 }

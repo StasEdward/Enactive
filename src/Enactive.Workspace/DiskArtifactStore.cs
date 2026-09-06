@@ -13,7 +13,11 @@ public sealed record FileWriteRecord(
     bool ExistedBefore,
     string? BeforeHash,
     string? BackupPath,
-    string AfterHash);
+    string AfterHash,
+    // Which revert scope was open when this write happened — see DiskArtifactStore.Checkpoint.
+    // A revert only undoes writes made in its OWN scope; one made under a later scope belongs to
+    // another step and is a conflict to report, never work to throw away.
+    int Scope = 0);
 
 /// <summary>Why an undo could not be performed, or that it was.</summary>
 public sealed record UndoResult(bool Undone, string? Conflict = null, bool Restored = false)
@@ -49,6 +53,12 @@ public sealed class DiskArtifactStore : IArtifactStore
     private readonly object _journalGate = new();
     private int _backupSequence;
 
+    /// <summary>
+    /// The newest revert scope handed out by <see cref="Checkpoint"/>. Every write is stamped with
+    /// it, which is how a revert tells its own work from a concurrent step's.
+    /// </summary>
+    private int _scope = -1;
+
     public DiskArtifactStore(WorkspaceInfo workspace, Guid runId = default)
     {
         _root = Path.GetFullPath(workspace.RootPath);
@@ -74,6 +84,15 @@ public sealed class DiskArtifactStore : IArtifactStore
     public bool CreatedHere(string relativePath)
         => FirstWrite(relativePath) is { ExistedBefore: false };
 
+    /// <summary>
+    /// True only when a backup of the displaced version is on disk right now. BackUp is deliberately
+    /// best-effort — a write must not fail because housekeeping did — so the answer has to come from
+    /// the file, not from the intention.
+    /// </summary>
+    public bool CanRestore(string relativePath)
+        => FirstWrite(relativePath) is { ExistedBefore: true, BackupPath: { } backup }
+           && File.Exists(backup);
+
     /// <summary>The state this path was in before the run first touched it.</summary>
     public FileWriteRecord? FirstWrite(string relativePath)
     {
@@ -90,10 +109,23 @@ public sealed class DiskArtifactStore : IArtifactStore
                 w => string.Equals(w.RelativePath, relativePath, WorkspaceGuard.Comparison));
     }
 
+    /// <summary>
+    /// Opens a revert scope and returns its id. The id is opaque to the caller: it identifies WHO is
+    /// about to write, not just WHEN, which is what lets <see cref="RevertToAsync"/> undo one step's
+    /// work without touching a concurrent step's.
+    /// </summary>
     public int Checkpoint()
     {
-        lock (_journalGate) return _journal.Count;
+        lock (_journalGate)
+        {
+            _scope = _scopePositions.Count;
+            _scopePositions.Add(_journal.Count);
+            return _scope;
+        }
     }
+
+    /// <summary>Journal position each scope was opened at, indexed by scope id.</summary>
+    private readonly List<int> _scopePositions = new();
 
     public async Task<ArtifactRef> CreateAsync(
         string relativePath, ArtifactKind kind, string title, Func<Stream, Task> write, CancellationToken ct)
@@ -108,12 +140,16 @@ public sealed class DiskArtifactStore : IArtifactStore
         if (!string.IsNullOrEmpty(directory))
             Directory.CreateDirectory(directory);
 
-        await using (var stream = new FileStream(fullPath, FileMode.Create, FileAccess.Write, FileShare.None))
-            await write(stream);
+        // Built somewhere else and moved into place. Opening the target itself with FileMode.Create
+        // emptied it before the first byte arrived, so a provider that threw halfway — or a
+        // cancellation, or a full disk — replaced the user's file with a fragment, and nothing was
+        // journalled because the entry was only added on success. An exception now propagates with
+        // the file exactly as it was.
+        await AtomicWrite.Replace(fullPath, write);
 
         lock (_journalGate)
             _journal.Add(new FileWriteRecord(
-                relativePath, existed, beforeHash, backupPath, FileHash.OfFile(fullPath)!));
+                relativePath, existed, beforeHash, backupPath, FileHash.OfFile(fullPath)!, _scope));
 
         var id = Guid.NewGuid();
         _paths[id] = fullPath;
@@ -152,6 +188,12 @@ public sealed class DiskArtifactStore : IArtifactStore
         var reverted = new List<string>();
         var kept = new List<string>();
 
+        int position;
+        lock (_journalGate)
+            position = checkpoint >= 0 && checkpoint < _scopePositions.Count
+                ? _scopePositions[checkpoint]
+                : 0;
+
         foreach (var path in paths.Distinct(StringComparer.OrdinalIgnoreCase))
         {
             // The state to go back to is the one the FIRST write after the checkpoint displaced; the
@@ -159,12 +201,22 @@ public sealed class DiskArtifactStore : IArtifactStore
             FileWriteRecord[] after;
             lock (_journalGate)
                 after = _journal
-                    .Skip(checkpoint)
+                    .Skip(position)
                     .Where(w => string.Equals(w.RelativePath, path, WorkspaceGuard.Comparison))
                     .ToArray();
 
             if (after.Length == 0)
                 continue;
+
+            // Somebody else wrote this file after we did. Their step may already have been accepted,
+            // so putting the file back to OUR "before" would destroy approved work — the file is no
+            // longer ours to speak for. The hash check below cannot catch this: what is on disk
+            // matches their write exactly, so it looks untouched. Report it instead.
+            if (after.Any(w => w.Scope != checkpoint))
+            {
+                kept.Add(path);
+                continue;
+            }
 
             var outcome = Restore(path, after[0], after[^1]);
             if (!outcome.Undone)
@@ -175,20 +227,12 @@ public sealed class DiskArtifactStore : IArtifactStore
 
             reverted.Add(path);
 
-            // Drop only THIS path's post-checkpoint entries; everything before the checkpoint, and
-            // every other path's writes, stay exactly where they were.
+            // Drop only the entries this scope made for this path; everything from before, and every
+            // other path's writes, stay exactly where they were.
             lock (_journalGate)
-            {
-                var head = _journal.Take(checkpoint).ToList();
-                var tail = _journal
-                    .Skip(checkpoint)
-                    .Where(w => !string.Equals(w.RelativePath, path, WorkspaceGuard.Comparison))
-                    .ToList();
-
-                _journal.Clear();
-                _journal.AddRange(head);
-                _journal.AddRange(tail);
-            }
+                _journal.RemoveAll(w =>
+                    w.Scope == checkpoint
+                    && string.Equals(w.RelativePath, path, WorkspaceGuard.Comparison));
         }
 
         return Task.FromResult(new RevertReport(reverted, kept));
