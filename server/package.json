@@ -1,0 +1,14 @@
+{
+  "name": "enactive-remote",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "assets": "node scripts/assets.mjs",
+    "test": "node --test tests/gateway.test.mjs"
+  },
+  "dependencies": {
+    "@fontsource/inter": "5.2.5",
+    "@fontsource/jetbrains-mono": "5.2.5",
+    "@fontsource/space-grotesk": "5.2.5"
+  }
+}

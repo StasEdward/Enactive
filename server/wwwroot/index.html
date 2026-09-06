@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Enactive · Remote</title><meta name="theme-color" content="#101216">
+  <link rel="icon" href="/brand/mark-loop.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/brand/brand.css"><link rel="stylesheet" href="/fonts.css"><link rel="stylesheet" href="/app.css">
+  <script src="/app.js" type="module"></script>
+</head>
+<body>
+  <section id="login" class="login-page" hidden>
+    <div class="login-card"><div class="brand"><img class="mark" src="/brand/mark-loop.svg" alt=""><img class="wordmark" src="/brand/wordmark.svg" alt="Enactive"></div>
+      <p class="eyebrow">Your workspace, within reach</p><h1>Pick up from<br>anywhere.</h1><p class="muted">Assign the task. Review the result.<br>Your computer does the work.</p>
+      <form id="login-form"><label for="owner-key">Owner access key</label><input id="owner-key" type="password" autocomplete="current-password" required placeholder="Enter your private access key"><button class="primary" type="submit">Connect to Enactive <span aria-hidden="true">↗</span></button><p id="login-error" class="error" role="alert"></p></form>
+      <p class="small muted">Use the access key configured on your server.</p>
+    </div>
+  </section>
+  <div id="shell" class="shell" hidden>
+    <aside class="sidebar">
+      <a href="#tasks" class="brand" aria-label="Enactive tasks"><img class="mark" src="/brand/mark-loop.svg" alt=""><img class="wordmark" src="/brand/wordmark.svg" alt="Enactive"></a>
+      <div class="product-label">REMOTE WORKSPACE <span>01</span></div>
+      <nav aria-label="Main navigation">
+        <button data-view="tasks" class="nav active"><span aria-hidden="true">▦</span> Tasks <span id="task-count" class="nav-count">0</span></button>
+        <button data-view="approvals" class="nav"><span aria-hidden="true">◇</span> Permissions <span id="approval-count" class="nav-count">0</span></button>
+        <button data-view="inbox" class="nav"><span aria-hidden="true">▤</span> Inbox <span id="inbox-count" class="nav-count">0</span></button>
+        <button data-view="hosts" class="nav"><span aria-hidden="true">▣</span> Computers</button>
+      </nav>
+      <div class="sidebar-bottom"><div class="connection"><span id="gateway-dot" class="dot"></span><div>Gateway connection<small id="connection-label">Connecting…</small></div></div>
+        <div class="sidebar-actions"><button id="theme" class="quiet">Light theme</button><button id="logout" class="quiet">Sign out</button></div>
+      </div>
+    </aside>
+    <div class="main-shell">
+      <header class="topbar"><div><span class="muted">Enactive</span><span class="slash">/</span><span id="breadcrumb">Tasks</span></div><span class="owner"><span class="avatar">O</span> Personal workspace</span></header>
+      <main>
+        <div id="connection-error" class="banner" role="status" hidden>Connection lost. Showing the last received state. Reconnecting…</div>
+        <div class="page-heading"><div><p class="eyebrow">Intent → action → result</p><h1 id="page-title">Your work, in motion.</h1><p id="page-description" class="muted">A clear view of what’s running, waiting, and ready for you.</p></div><button id="new-task" class="primary"><span aria-hidden="true">＋</span> New task</button></div>
+        <div id="stats" class="stats"></div>
+        <section id="tasks-view"><div class="section-bar"><div class="tabs" role="group" aria-label="Filter tasks"><button class="tab active" data-filter="all">All tasks</button><button class="tab" data-filter="active">Active</button><button class="tab" data-filter="waiting">Needs you</button><button class="tab" data-filter="done">Finished</button></div><input id="search" class="search" aria-label="Search tasks" placeholder="Search tasks…" type="search"></div><div id="task-list" class="task-list"></div></section>
+        <section id="approvals-view" hidden><div id="approval-list" class="approval-list"></div></section>
+        <section id="inbox-view" hidden><div class="section-bar"><h2>Activity inbox</h2><button id="mark-read" class="secondary">Mark all read</button></div><p class="muted small">Saved here on the server. External phone notifications are not connected yet.</p><div id="notice-list"></div></section>
+        <section id="hosts-view" hidden><div class="section-bar"><h2>Connected computers</h2><button id="add-host" class="secondary">＋ Register computer</button></div><p class="muted small">Computers publish their available workspaces when they connect.</p><div id="host-list" class="host-list"></div></section>
+        <footer><span>Real, reviewable, recorded action.</span><span>Enactive Remote · Preview</span></footer>
+      </main>
+    </div>
+  </div>
+  <dialog id="task-dialog"><form id="task-form"><div class="dialog-heading"><div><p class="eyebrow">One intent. A new task.</p><h2>What needs doing?</h2></div><button type="button" data-close="task-dialog" class="icon-button" aria-label="Close">×</button></div><label for="workspace">Workspace</label><select id="workspace" required></select><label for="task-title">Task title</label><input id="task-title" required maxlength="140" placeholder="A short, specific title"><label for="prompt">Instructions</label><textarea id="prompt" required maxlength="16000" rows="6" placeholder="Describe the outcome, context, and any constraints…"></textarea><p id="task-error" class="error" role="alert"></p><div class="dialog-actions"><button type="submit" name="mode" value="draft" class="secondary">Save draft</button><button type="submit" name="mode" value="run" class="primary">Create & queue ↗</button></div></form></dialog>
+  <dialog id="host-dialog"><form id="host-form"><div class="dialog-heading"><h2>Register a computer</h2><button type="button" data-close="host-dialog" class="icon-button" aria-label="Close">×</button></div><p class="muted">Create a device credential for your Enactive Host.</p><label for="host-name">Computer name</label><input id="host-name" required maxlength="80" placeholder="Studio PC"><div id="host-secret" hidden><p class="small">Save this credential in your Host configuration. It is shown only once.</p><label for="host-id">Host ID</label><input id="host-id" readonly><label for="host-token">Device token</label><textarea id="host-token" readonly rows="3" spellcheck="false"></textarea></div><p id="host-error" class="error" role="alert"></p><div class="dialog-actions"><button id="register" class="primary" type="submit">Create credential</button></div></form></dialog>
+  <dialog id="detail-dialog" class="detail-dialog"><div class="dialog-heading"><h2>Task details</h2><button data-close="detail-dialog" class="icon-button" aria-label="Close">×</button></div><div id="task-detail"></div></dialog>
+  <dialog id="confirm-dialog"><form id="confirm-form"><h2>Revoke this computer?</h2><p class="muted">Its remote connection will close and pending commands will be rejected. Local work may continue.</p><div class="dialog-actions"><button type="button" data-close="confirm-dialog" class="secondary">Keep connected</button><button type="submit" class="danger">Revoke access</button></div></form></dialog>
+  <div id="toast" class="toast" role="status" hidden></div>
+</body>
+</html>
