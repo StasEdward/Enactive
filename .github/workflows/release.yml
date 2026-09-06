@@ -1,0 +1,75 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (for example v0.1.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+
+    steps:
+      - name: Resolve release tag
+        id: release
+        shell: pwsh
+        run: |
+          $tag = "${{ github.event.release.tag_name }}"
+          if ([string]::IsNullOrWhiteSpace($tag)) { $tag = "${{ github.event.inputs.tag }}" }
+          if ([string]::IsNullOrWhiteSpace($tag)) { $tag = "${{ github.ref_name }}" }
+          if ($tag -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+([-.].*)?$') {
+            throw "Tag '$tag' must look like v1.2.3"
+          }
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "version=$($tag.Substring(1))" >> $env:GITHUB_OUTPUT
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.release.outputs.tag }}
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Restore
+        run: dotnet restore Enactive.sln --runtime win-x64
+
+      - name: Test
+        run: dotnet test tests/Enactive.Engine.Tests/Enactive.Engine.Tests.csproj --no-restore --configuration Release --verbosity normal
+
+      - name: Publish Windows package
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          dotnet publish src/Enactive.App.Ui/Enactive.App.Ui.csproj `
+            --configuration Release `
+            --runtime win-x64 `
+            --self-contained true `
+            --no-restore `
+            -p:Version=$env:VERSION `
+            -p:PublishSingleFile=true `
+            -p:IncludeNativeLibrariesForSelfExtract=true `
+            -p:DebugType=None `
+            --output artifacts/enactive-win-x64
+
+          Compress-Archive `
+            -Path artifacts/enactive-win-x64/* `
+            -DestinationPath "artifacts/Enactive-$env:VERSION-win-x64.zip"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release.outputs.tag }}
+          name: Enactive ${{ steps.release.outputs.tag }}
+          generate_release_notes: true
+          files: artifacts/Enactive-${{ steps.release.outputs.version }}-win-x64.zip

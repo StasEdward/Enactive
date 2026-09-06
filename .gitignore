@@ -22,3 +22,6 @@ Thumbs.db
 
 # Files delivered into the chat by the Claude desktop app
 Claude outputs/
+
+# Scratch: probes and throwaway projects, kept out of the tree on purpose
+work/
