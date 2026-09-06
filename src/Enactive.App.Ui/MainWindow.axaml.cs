@@ -677,18 +677,16 @@ public sealed partial class MainWindow : Window, IDecisionHandler
 
         var root = _currentWorkspaceRoot;
 
-        // "Undo" used to be an unconditional File.Delete: if the agent EDITED an existing source file,
-        // pressing it deleted the source outright and reported "undone". Nothing here can restore a
-        // previous version yet, so the button no longer claims to. A file this run created can be
-        // removed in one click; anything that was already on disk gets a plain delete confirmation
-        // that says the old content was not kept.
+        // "Undo" used to be an unconditional File.Delete: if the agent EDITED an existing source
+        // file, pressing it deleted the source outright and reported "undone". The store now keeps
+        // what it overwrote, so the button can say which of the two things it will actually do.
         var createdByThisRun = _disk?.CreatedHere(relative) == true;
 
         _vm.Artifacts.Add(new ArtifactItemViewModel(
             relative,
             item => ShowFile(root, item),
-            item => _ = RemoveLiveArtifactAsync(root, item, createdByThisRun),
-            createdByThisRun ? "Delete" : "Delete…"));
+            item => _ = UndoLiveArtifactAsync(root, item, createdByThisRun),
+            createdByThisRun ? "Delete" : "Undo"));
     }
 
     private void AddStagedArtifact()
@@ -708,7 +706,17 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             diff,
             item =>
             {
-                staging.Apply(change.Id);
+                // Apply can refuse now: if the file changed after the proposal was made, writing it
+                // would erase that edit. The card says so and stays actionable, so the user can look
+                // at the file and decide, instead of finding out afterwards.
+                var result = staging.Apply(change.Id);
+                if (!result.Applied)
+                {
+                    item.Status = result.Conflict ?? "could not apply";
+                    item.StatusBrush = Brand.Amber;
+                    return;
+                }
+
                 item.Status = "applied";
                 item.StatusBrush = Brand.Success;
                 item.CanAct = false;
@@ -1126,44 +1134,45 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     }
 
     /// <summary>
-    /// Removes a file the CURRENT run produced. A file the run created is deleted straight away —
-    /// that really does undo the write. A file that already existed is only overwritten, and the old
-    /// bytes are gone, so deleting it destroys the user's content: that path asks first and says so.
+    /// Undoes what the CURRENT run did to a file: a file it created is removed, a file it overwrote
+    /// is restored from the copy the store took first. Both refuse when the file has changed since,
+    /// because at that point undoing would throw away an edit the run did not make.
     /// </summary>
-    private async Task RemoveLiveArtifactAsync(string root, ArtifactItemViewModel item, bool createdByThisRun)
+    private async Task UndoLiveArtifactAsync(string root, ArtifactItemViewModel item, bool createdByThisRun)
     {
-        var full = Path.Combine(root, item.RelativePath);
-        if (!File.Exists(full))
+        if (_disk is null)
         {
-            item.Status = "already gone";
+            item.Status = "this run cannot be undone";
             item.CanAct = false;
             return;
         }
 
+        // Removing a generated file is cheap to redo; replacing the file the user has been looking
+        // at is not, so only that one asks.
         if (!createdByThisRun)
         {
             var go = await ConfirmWindow.AskAsync(
                 this,
-                $"Delete “{item.RelativePath}”?",
-                "This file existed before the run and was overwritten, so deleting it does NOT restore "
-                + "the previous version - that content was not kept. The file will simply be gone.",
-                "Delete",
+                $"Restore the previous version of “{item.RelativePath}”?",
+                "The file as this run left it will be replaced by the version that was there before "
+                + "the run started.",
+                "Restore",
                 "Keep");
 
             if (!go)
                 return;
         }
 
-        try
+        var result = _disk.Undo(item.RelativePath);
+        if (!result.Undone)
         {
-            File.Delete(full);
-            item.Status = createdByThisRun ? "deleted (was created by this run)" : "deleted";
-            item.CanAct = false;
+            // A conflict is not an error to swallow: the user needs to know the file moved on.
+            item.Status = result.Conflict ?? "could not undo";
+            return;
         }
-        catch (Exception ex)
-        {
-            item.Status = "error: " + ex.Message;
-        }
+
+        item.Status = result.Restored ? "previous version restored" : "deleted (created by this run)";
+        item.CanAct = false;
     }
 
     private async Task DeletePastArtifactAsync(string root, ArtifactItemViewModel item)
