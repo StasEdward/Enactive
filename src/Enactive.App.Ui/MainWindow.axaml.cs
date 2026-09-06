@@ -92,8 +92,18 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         {
             new WriteFileTool(), new ReadFileTool(), new ListDirectoryTool(), new RunCommandTool(), new RunPowerShellTool(), new GitTool(), new DockerTool()
         }), _log);
-        ApplySettings();
+
+        // A settings file the app cannot build from must not make the app unlaunchable. Saving is
+        // validated now, but a file edited by hand — or written by an older build — can still be
+        // impossible, and the constructor is the one place where throwing means the window never
+        // opens. Start on defaults instead, keep the file, and say so.
+        var settingsProblem = TryApplySettings();
+
         _log.Info(LogSource.System, $"Enactive UI started — logs at {FileLogSink.DefaultDirectory()}");
+        if (settingsProblem is not null)
+            _log.Error(LogSource.System,
+                $"settings.json could not be applied ({settingsProblem}). Running on defaults — your file "
+                + "has NOT been overwritten; fix it in Settings, or edit it and restart.");
 
         // Where to start: the environment wins, then the workspace last opened. The old default -
         // the current directory - made the folder the .exe happens to sit in a workspace, complete
@@ -1261,10 +1271,31 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             return Task.FromResult(new DecisionOutcome(AllowOptionId(request)));
 
         var tcs = new TaskCompletionSource<DecisionOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
-        ct.Register(() => tcs.TrySetCanceled());
+
+        // Cancelling used to complete the task and stop there: the card stayed on screen and
+        // _pendingDecision stayed set, so the NEXT run returned immediately from RunAsync because
+        // "a decision is pending" — a decision belonging to a task that had already been stopped.
+        // The lifetime of the card is now tied to the lifetime of the request, in one place.
+        var registration = ct.Register(() =>
+        {
+            tcs.TrySetCanceled();
+            Dispatcher.UIThread.Post(() => ClearDecision(tcs));
+        });
+
+        // The continuation runs whichever way the request ends — clicked, cancelled or faulted — so
+        // the cancellation registration is always released.
+        _ = tcs.Task.ContinueWith(
+            _ => registration.Dispose(),
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
 
         Dispatcher.UIThread.Post(() =>
         {
+            // Cancelled before the post ran: do not put a card on screen for a dead request.
+            if (tcs.Task.IsCompleted)
+                return;
+
             _pendingDecision = tcs;
             _vm.DecisionText = request.Topic;
             // The full action, not the summary: this is what the click authorises.
@@ -1296,10 +1327,26 @@ public sealed partial class MainWindow : Window, IDecisionHandler
 
     private void ResolveDecision(string optionId)
     {
-        _vm.IsDecisionVisible = false;
         var tcs = _pendingDecision;
-        _pendingDecision = null;
+        ClearDecision(tcs);
         tcs?.TrySetResult(new DecisionOutcome(optionId));
+    }
+
+    /// <summary>
+    /// Takes THIS request's card off screen. Checking which request it belongs to matters: by the
+    /// time a cancellation is dispatched, a later run may already have put its own card up, and
+    /// clearing that one would leave the new run waiting on something the user can no longer answer.
+    /// </summary>
+    private void ClearDecision(TaskCompletionSource<DecisionOutcome>? tcs)
+    {
+        if (tcs is not null && !ReferenceEquals(_pendingDecision, tcs))
+            return;
+
+        _pendingDecision = null;
+        _vm.IsDecisionVisible = false;
+        _vm.DecisionOptions.Clear();
+        _vm.DecisionText = string.Empty;
+        _vm.DecisionDetail = string.Empty;
     }
 
     private static string AllowOptionId(DecisionRequest request)
@@ -1369,6 +1416,35 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         _settings.WindowWidth = (int)Width;
         _settings.WindowHeight = (int)Height;
         _settings.Save();
+    }
+
+    /// <summary>
+    /// Applies the loaded settings, falling back to defaults if they cannot be built. Returns what
+    /// went wrong, or null. The saved file is left exactly as it is: overwriting it with defaults
+    /// would destroy the configuration the user is about to fix.
+    /// </summary>
+    private string? TryApplySettings()
+    {
+        try
+        {
+            ApplySettings();
+            return null;
+        }
+        catch (Exception ex)
+        {
+            try
+            {
+                _settings = new AppSettings();
+                ApplySettings();
+            }
+            catch
+            {
+                // Defaults themselves failing is not something to paper over.
+                throw;
+            }
+
+            return ex.Message;
+        }
     }
 
     private void ApplySettings()

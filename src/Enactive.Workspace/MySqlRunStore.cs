@@ -8,16 +8,26 @@ using Enactive.Core.History;
 /// <summary>
 /// MySQL-backed run store — same <see cref="IRunStore"/> contract as the SQLite and file stores, for a
 /// shared/server-backed deployment. Connection string comes from the host (env ENACTIVE_MYSQL).
+///
+/// Scoped by workspace, like the memory and inbox stores already were. Without it, every project
+/// sharing one connection string shared one history: opening a record then resolved its RELATIVE
+/// artifact paths against whatever workspace happened to be open, so a file could be viewed — or
+/// deleted — in the belief that it belonged to the run on screen.
 /// </summary>
 public sealed class MySqlRunStore : IRunStore
 {
     private static readonly JsonSerializerOptions Json = new() { PropertyNameCaseInsensitive = true };
 
     private readonly string _connectionString;
+    private readonly Guid _workspaceId;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private bool _initialized;
 
-    public MySqlRunStore(string connectionString) => _connectionString = connectionString;
+    public MySqlRunStore(string connectionString, Guid workspaceId)
+    {
+        _connectionString = connectionString;
+        _workspaceId = workspaceId;
+    }
 
     public async Task SaveAsync(RunRecord record, CancellationToken ct)
     {
@@ -30,15 +40,17 @@ public sealed class MySqlRunStore : IRunStore
         command.CommandText =
             """
             INSERT INTO runs
-              (run_id, task_id, title, model, started_at, finished_at, status, events_json, artifacts_json, decisions_json, settings_json, usage_json)
+              (run_id, workspace_id, task_id, title, model, started_at, finished_at, status, events_json, artifacts_json, decisions_json, settings_json, usage_json)
             VALUES
-              (@run_id, @task_id, @title, @model, @started_at, @finished_at, @status, @events, @artifacts, @decisions, @settings, @usage)
+              (@run_id, @workspace_id, @task_id, @title, @model, @started_at, @finished_at, @status, @events, @artifacts, @decisions, @settings, @usage)
             ON DUPLICATE KEY UPDATE
-              task_id=@task_id, title=@title, model=@model, started_at=@started_at, finished_at=@finished_at,
+              workspace_id=@workspace_id, task_id=@task_id, title=@title, model=@model,
+              started_at=@started_at, finished_at=@finished_at,
               status=@status, events_json=@events, artifacts_json=@artifacts, decisions_json=@decisions,
               settings_json=@settings, usage_json=@usage;
             """;
         command.Parameters.AddWithValue("@run_id", record.RunId.ToString());
+        command.Parameters.AddWithValue("@workspace_id", _workspaceId.ToString());
         command.Parameters.AddWithValue("@task_id", record.TaskId.ToString());
         command.Parameters.AddWithValue("@title", record.Title);
         command.Parameters.AddWithValue("@model", (object?)record.Model ?? DBNull.Value);
@@ -71,8 +83,10 @@ public sealed class MySqlRunStore : IRunStore
             SELECT run_id, task_id, title, model, started_at, finished_at, status,
                    events_json, artifacts_json, decisions_json, settings_json, usage_json
             FROM runs
+            WHERE workspace_id = @workspace_id
             ORDER BY started_at DESC;
             """;
+        command.Parameters.AddWithValue("@workspace_id", _workspaceId.ToString());
 
         await using var reader = await command.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
@@ -120,6 +134,7 @@ public sealed class MySqlRunStore : IRunStore
                 """
                 CREATE TABLE IF NOT EXISTS runs (
                   run_id         CHAR(36) PRIMARY KEY,
+                  workspace_id   CHAR(36),
                   task_id        CHAR(36),
                   title          TEXT,
                   model          VARCHAR(255),
@@ -146,6 +161,21 @@ public sealed class MySqlRunStore : IRunStore
             using var upgradeUsage = connection.CreateCommand();
             upgradeUsage.CommandText = "ALTER TABLE runs ADD COLUMN usage_json LONGTEXT;";
             try { await upgradeUsage.ExecuteNonQueryAsync(ct); }
+            catch (MySqlException) { /* already has it */ }
+
+            // Rows written before this column existed keep workspace_id NULL and are therefore not
+            // listed by any workspace. They are NOT backfilled to whichever folder happens to be open:
+            // their artifact paths are relative, so guessing wrong would show one project's files
+            // under another project's run. They are still in the table for anyone who wants to
+            // reassign them with a deliberate UPDATE.
+            using var upgradeWorkspace = connection.CreateCommand();
+            upgradeWorkspace.CommandText = "ALTER TABLE runs ADD COLUMN workspace_id CHAR(36);";
+            try { await upgradeWorkspace.ExecuteNonQueryAsync(ct); }
+            catch (MySqlException) { /* already has it */ }
+
+            using var index = connection.CreateCommand();
+            index.CommandText = "CREATE INDEX ix_runs_workspace ON runs (workspace_id, started_at);";
+            try { await index.ExecuteNonQueryAsync(ct); }
             catch (MySqlException) { /* already has it */ }
 
             _initialized = true;

@@ -6,91 +6,72 @@ using Enactive.Core.Inbox;
 
 /// <summary>
 /// File-based AI Inbox: a JSON array at <c>&lt;workspace&gt;/.enactive/inbox.json</c>. Same shape and
-/// guarantees as the memory store — semaphore-guarded, best-effort, zero external dependencies.
+/// guarantees as the memory store. Locking, atomic writes and the refusal to overwrite a file it
+/// could not read live in <see cref="JsonFileStore"/> — see the note there for what was wrong.
 /// </summary>
 public sealed class JsonInboxStore : IInboxStore
 {
     private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = true };
 
     private readonly string _path;
-    private readonly SemaphoreSlim _gate = new(1, 1);
 
     public JsonInboxStore(WorkspaceInfo workspace)
     {
-        var dir = Path.Combine(workspace.RootPath, ".enactive");
+        var dir = Path.Combine(workspace.RootPath, WorkspaceGuard.ReservedFolder);
         try { Directory.CreateDirectory(dir); } catch { /* best-effort */ }
         _path = Path.Combine(dir, "inbox.json");
     }
 
-    public async Task AppendAsync(InboxItem item, CancellationToken ct)
-    {
-        await _gate.WaitAsync(ct).ConfigureAwait(false);
-        try
-        {
-            var list = await LoadInternalAsync(ct).ConfigureAwait(false);
-            list.Add(item);
-            await SaveInternalAsync(list, ct).ConfigureAwait(false);
-        }
-        catch { /* best-effort: the inbox is never load-bearing */ }
-        finally { _gate.Release(); }
-    }
+    public Task AppendAsync(InboxItem item, CancellationToken ct)
+        => MutateAsync(list => { list.Add(item); return list; }, ct);
 
     public async Task<IReadOnlyList<InboxItem>> LoadAllAsync(CancellationToken ct)
     {
-        await _gate.WaitAsync(ct).ConfigureAwait(false);
-        try { return await LoadInternalAsync(ct).ConfigureAwait(false); }
-        finally { _gate.Release(); }
-    }
-
-    public async Task MarkReadAsync(Guid id, CancellationToken ct)
-    {
-        await _gate.WaitAsync(ct).ConfigureAwait(false);
+        var gate = JsonFileStore.GateFor(_path);
+        await gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            var list = await LoadInternalAsync(ct).ConfigureAwait(false);
-            var changed = list.Select(i =>
+            var (items, _) = await JsonFileStore.LoadAsync<InboxItem>(_path, JsonOpts, ct).ConfigureAwait(false);
+            return items;
+        }
+        finally { gate.Release(); }
+    }
+
+    public Task MarkReadAsync(Guid id, CancellationToken ct)
+        => MutateAsync(list => list.Select(i =>
                 i.Id == id && !string.Equals(i.Status, "read", StringComparison.OrdinalIgnoreCase)
                     ? i with { Status = "read" }
-                    : i).ToList();
-            await SaveInternalAsync(changed, ct).ConfigureAwait(false);
-        }
-        catch { /* best-effort */ }
-        finally { _gate.Release(); }
-    }
+                    : i).ToList(),
+            ct);
 
-    public async Task MarkAllReadAsync(CancellationToken ct)
+    public Task MarkAllReadAsync(CancellationToken ct)
+        => MutateAsync(list => list.Select(i =>
+                string.Equals(i.Status, "read", StringComparison.OrdinalIgnoreCase)
+                    ? i
+                    : i with { Status = "read" }).ToList(),
+            ct);
+
+    /// <summary>
+    /// Read-modify-write under the file's own lock. The read and the write are one critical section,
+    /// or two tasks each append to the list they read and the later write drops the earlier entry.
+    /// </summary>
+    private async Task MutateAsync(Func<List<InboxItem>, List<InboxItem>> change, CancellationToken ct)
     {
-        await _gate.WaitAsync(ct).ConfigureAwait(false);
+        var gate = JsonFileStore.GateFor(_path);
+        await gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            var list = await LoadInternalAsync(ct).ConfigureAwait(false);
-            var changed = list.Select(i =>
-                string.Equals(i.Status, "read", StringComparison.OrdinalIgnoreCase) ? i : i with { Status = "read" }).ToList();
-            await SaveInternalAsync(changed, ct).ConfigureAwait(false);
-        }
-        catch { /* best-effort */ }
-        finally { _gate.Release(); }
-    }
+            var (items, readable) = await JsonFileStore.LoadAsync<InboxItem>(_path, JsonOpts, ct).ConfigureAwait(false);
 
-    private async Task<List<InboxItem>> LoadInternalAsync(CancellationToken ct)
-    {
-        try
-        {
-            if (!File.Exists(_path))
-                return new List<InboxItem>();
-            await using var stream = File.OpenRead(_path);
-            var list = await JsonSerializer.DeserializeAsync<List<InboxItem>>(stream, JsonOpts, ct).ConfigureAwait(false);
-            return list ?? new List<InboxItem>();
-        }
-        catch
-        {
-            return new List<InboxItem>();
-        }
-    }
+            // The file exists but could not be parsed. Writing now would replace whatever is in there
+            // with a list built from nothing — so move it aside first and start a fresh one, keeping
+            // the damaged content for anyone who wants to look.
+            if (!readable)
+                JsonFileStore.QuarantineUnreadable(_path);
 
-    private async Task SaveInternalAsync(List<InboxItem> list, CancellationToken ct)
-    {
-        await using var stream = File.Create(_path);
-        await JsonSerializer.SerializeAsync(stream, list, JsonOpts, ct).ConfigureAwait(false);
+            await JsonFileStore.SaveAsync(_path, change(items), JsonOpts, ct).ConfigureAwait(false);
+        }
+        catch { /* best-effort: the inbox is never load-bearing */ }
+        finally { gate.Release(); }
     }
 }

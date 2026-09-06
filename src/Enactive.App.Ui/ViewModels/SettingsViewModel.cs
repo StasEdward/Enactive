@@ -418,6 +418,16 @@ internal sealed class SettingsViewModel : ObservableObject
         _working.Bindings.ExecuteLight = FromSelection(ExecuteLight);
         _working.Bindings.ExecuteHeavy = FromSelection(ExecuteHeavy);
 
+        // Validate BEFORE handing this over to be written. A configuration that cannot be built —
+        // two providers with the same id, say — used to be saved anyway, and then took the app down
+        // on every launch afterwards, because startup reads the same file and fails the same way.
+        var problems = _working.Validate();
+        if (problems.Count > 0)
+        {
+            StartupNote = "Not saved — " + string.Join(" ", problems);
+            return;
+        }
+
         _onSaved(_working);
 
         // Everything else is saved either way. The window stays open only when there is something

@@ -6,61 +6,57 @@ using Enactive.Core.Memory;
 
 /// <summary>
 /// File-based project-memory store: a JSON array at <c>&lt;workspace&gt;/.enactive/memory.json</c>.
-/// Zero external dependencies, append-friendly, guarded by a semaphore for the single-user desktop
-/// case. Every operation is best-effort — a memory failure must never break a run.
+/// Zero external dependencies and best-effort — a memory failure must never break a run.
 ///
 /// No longer the default: <see cref="MemoryStoreFactory"/> picks SQLite unless ENACTIVE_STORE says
 /// otherwise. This store stays as the zero-dependency option, and as what the SQLite store imports
 /// from the first time it opens a workspace that predates it.
+///
+/// Locking, atomic writes and the refusal to overwrite a file it could not read live in
+/// <see cref="JsonFileStore"/> — see the note there for what was wrong with doing it per instance.
 /// </summary>
 public sealed class JsonMemoryStore : IMemoryStore
 {
     private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = true };
 
     private readonly string _path;
-    private readonly SemaphoreSlim _gate = new(1, 1);
 
     public JsonMemoryStore(WorkspaceInfo workspace)
     {
-        var dir = Path.Combine(workspace.RootPath, ".enactive");
+        var dir = Path.Combine(workspace.RootPath, WorkspaceGuard.ReservedFolder);
         try { Directory.CreateDirectory(dir); } catch { /* best-effort */ }
         _path = Path.Combine(dir, "memory.json");
     }
 
     public async Task AppendAsync(MemoryEntry entry, CancellationToken ct)
     {
-        await _gate.WaitAsync(ct).ConfigureAwait(false);
+        var gate = JsonFileStore.GateFor(_path);
+        await gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            var list = await LoadInternalAsync(ct).ConfigureAwait(false);
-            list.Add(entry);
-            await using var stream = File.Create(_path);
-            await JsonSerializer.SerializeAsync(stream, list, JsonOpts, ct).ConfigureAwait(false);
+            var (items, readable) = await JsonFileStore.LoadAsync<MemoryEntry>(_path, JsonOpts, ct).ConfigureAwait(false);
+
+            // Unparseable is not empty. Overwriting here would replace the file's real contents with
+            // a list built from nothing, so the damaged file is moved aside first and kept.
+            if (!readable)
+                JsonFileStore.QuarantineUnreadable(_path);
+
+            items.Add(entry);
+            await JsonFileStore.SaveAsync(_path, items, JsonOpts, ct).ConfigureAwait(false);
         }
         catch { /* best-effort: memory is never load-bearing */ }
-        finally { _gate.Release(); }
+        finally { gate.Release(); }
     }
 
     public async Task<IReadOnlyList<MemoryEntry>> LoadAllAsync(CancellationToken ct)
     {
-        await _gate.WaitAsync(ct).ConfigureAwait(false);
-        try { return await LoadInternalAsync(ct).ConfigureAwait(false); }
-        finally { _gate.Release(); }
-    }
-
-    private async Task<List<MemoryEntry>> LoadInternalAsync(CancellationToken ct)
-    {
+        var gate = JsonFileStore.GateFor(_path);
+        await gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            if (!File.Exists(_path))
-                return new List<MemoryEntry>();
-            await using var stream = File.OpenRead(_path);
-            var list = await JsonSerializer.DeserializeAsync<List<MemoryEntry>>(stream, JsonOpts, ct).ConfigureAwait(false);
-            return list ?? new List<MemoryEntry>();
+            var (items, _) = await JsonFileStore.LoadAsync<MemoryEntry>(_path, JsonOpts, ct).ConfigureAwait(false);
+            return items;
         }
-        catch
-        {
-            return new List<MemoryEntry>();
-        }
+        finally { gate.Release(); }
     }
 }

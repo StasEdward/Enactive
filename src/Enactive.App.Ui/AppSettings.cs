@@ -330,6 +330,69 @@ internal sealed class AppSettings
         Workers = Workers.Select(x => x.Clone()).ToList()
     };
 
+    /// <summary>
+    /// Everything wrong with this configuration, in plain language, or empty when it is sound.
+    ///
+    /// Save used to write settings.json FIRST and build the runtime objects afterwards, where
+    /// <c>ToDictionary</c> rejects duplicate ids. The exception took down the settings window — and
+    /// then the next launch read the same file, hit the same exception in the MainWindow
+    /// constructor, and the app would not start at all. Validating before writing means a
+    /// configuration that cannot be built is never persisted. Ids are compared case-insensitively
+    /// because the dictionaries are: "foo" and "Foo" are one id here.
+    /// </summary>
+    public IReadOnlyList<string> Validate()
+    {
+        var problems = new List<string>();
+
+        foreach (var provider in Providers)
+            if (string.IsNullOrWhiteSpace(provider.Id))
+                problems.Add("A provider has no id.");
+
+        foreach (var duplicate in Providers
+                     .Where(p => !string.IsNullOrWhiteSpace(p.Id))
+                     .GroupBy(p => p.Id.Trim(), StringComparer.OrdinalIgnoreCase)
+                     .Where(g => g.Count() > 1))
+            problems.Add($"Two providers share the id \"{duplicate.Key}\" (ids ignore case).");
+
+        foreach (var worker in Workers)
+            if (string.IsNullOrWhiteSpace(worker.Id))
+                problems.Add("A worker has no id.");
+
+        foreach (var duplicate in Workers
+                     .Where(w => !string.IsNullOrWhiteSpace(w.Id))
+                     .GroupBy(w => w.Id.Trim(), StringComparer.OrdinalIgnoreCase)
+                     .Where(g => g.Count() > 1))
+            problems.Add($"Two workers share the id \"{duplicate.Key}\" (ids ignore case).");
+
+        // A model bound to a provider that is not configured cannot run; better to say so here than
+        // to fail on the first request.
+        foreach (var (label, reference) in new[]
+                 {
+                     ("Plan", Bindings.Plan),
+                     ("Review", Bindings.Review),
+                     ("Execute · light", Bindings.ExecuteLight),
+                     ("Execute · heavy", Bindings.ExecuteHeavy)
+                 })
+        {
+            if (ParseRef(reference) is { } model
+                && !Providers.Any(p => string.Equals(p.Id, model.ProviderId, StringComparison.OrdinalIgnoreCase)))
+            {
+                problems.Add($"The {label} model uses provider \"{model.ProviderId}\", which is not configured.");
+            }
+        }
+
+        foreach (var worker in Workers)
+        {
+            if (ParseRef(worker.Model) is { } model
+                && !Providers.Any(p => string.Equals(p.Id, model.ProviderId, StringComparison.OrdinalIgnoreCase)))
+            {
+                problems.Add($"Worker \"{worker.Id}\" uses provider \"{model.ProviderId}\", which is not configured.");
+            }
+        }
+
+        return problems;
+    }
+
     /// <summary>All configured models as "providerId/model" strings, for model pickers.</summary>
     public IReadOnlyList<string> ModelCatalog()
     {
