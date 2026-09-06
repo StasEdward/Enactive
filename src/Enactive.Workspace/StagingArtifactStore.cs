@@ -2,6 +2,7 @@ namespace Enactive.Workspace;
 
 using System.Text;
 using Enactive.Core.Artifacts;
+using Enactive.Core.Context;
 
 /// <summary>A proposed file change held for review (not yet written to disk).</summary>
 public sealed class StagedChange
@@ -89,18 +90,12 @@ public sealed class StagingArtifactStore : IArtifactStore
     /// <summary>Discard a staged change.</summary>
     public void Reject(Guid id) => _changes.Find(c => c.Id == id)?.MarkRejected();
 
+    /// <summary>The shared rule — see the same note on <see cref="DiskArtifactStore"/>.</summary>
     private string ResolveInside(string relativePath)
     {
         if (string.IsNullOrWhiteSpace(relativePath))
             throw new ArgumentException("Path is empty.", nameof(relativePath));
-        if (Path.IsPathRooted(relativePath))
-            throw new ArgumentException("Absolute paths are not allowed.", nameof(relativePath));
 
-        var full = Path.GetFullPath(Path.Combine(_root, relativePath));
-        var rootWithSeparator = _root.EndsWith(Path.DirectorySeparatorChar) ? _root : _root + Path.DirectorySeparatorChar;
-        if (!full.StartsWith(rootWithSeparator, StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException("Path escapes the workspace root.", nameof(relativePath));
-
-        return full;
+        return WorkspaceGuard.ResolveInside(_root, relativePath);
     }
 }

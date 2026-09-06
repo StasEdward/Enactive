@@ -71,21 +71,16 @@ public sealed class DiskArtifactStore : IArtifactStore
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// One shared rule (<see cref="WorkspaceGuard"/>) instead of this store's own copy of it. The
+    /// copy compared strings only, so a junction inside the workspace passed the check and the write
+    /// then landed wherever the junction pointed.
+    /// </summary>
     private string ResolveInsideRoot(string relativePath)
     {
         if (string.IsNullOrWhiteSpace(relativePath))
             throw new ArgumentException("Path is empty.", nameof(relativePath));
-        if (Path.IsPathRooted(relativePath))
-            throw new ArgumentException("Absolute paths are not allowed.", nameof(relativePath));
 
-        var fullPath = Path.GetFullPath(Path.Combine(_root, relativePath));
-        var rootWithSeparator = _root.EndsWith(Path.DirectorySeparatorChar)
-            ? _root
-            : _root + Path.DirectorySeparatorChar;
-
-        if (!fullPath.StartsWith(rootWithSeparator, StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException("Path escapes the workspace root.", nameof(relativePath));
-
-        return fullPath;
+        return WorkspaceGuard.ResolveInside(_root, relativePath);
     }
 }

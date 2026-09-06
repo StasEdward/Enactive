@@ -610,6 +610,22 @@
                                 <TextBlock Text="USER DECISION REQUIRED" FontWeight="Bold" />
                                 <TextBlock Text="{Binding DecisionText}" TextWrapping="Wrap"
                                            Margin="0,4,0,0" FontSize="12" />
+
+                                <!-- The COMPLETE action, never the shortened one. A command is
+                                     approved by reading it, so it is monospaced, keeps its line
+                                     breaks, and scrolls instead of being cut off. -->
+                                <Border IsVisible="{Binding HasDecisionDetail}"
+                                        Background="{DynamicResource Brand.InputFill}"
+                                        CornerRadius="4" Padding="8" Margin="0,8,0,0">
+                                    <ScrollViewer MaxHeight="220"
+                                                  HorizontalScrollBarVisibility="Auto"
+                                                  VerticalScrollBarVisibility="Auto">
+                                        <SelectableTextBlock Text="{Binding DecisionDetail}"
+                                                             FontFamily="Consolas, Menlo, monospace"
+                                                             FontSize="12" />
+                                    </ScrollViewer>
+                                </Border>
+
                                 <ItemsControl ItemsSource="{Binding DecisionOptions}" Margin="0,8,0,0">
                                     <ItemsControl.ItemsPanel>
                                         <ItemsPanelTemplate>

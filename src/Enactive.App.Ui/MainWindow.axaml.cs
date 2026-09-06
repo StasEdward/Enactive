@@ -60,6 +60,8 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     /// <summary>Everything the window shows. Nothing below touches a control - it sets a property here.</summary>
     private readonly MainWindowViewModel _vm = new();
     private readonly HashSet<string> _shownArtifacts = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>Workspaces already told about their ignored legacy approvals file — say it once.</summary>
+    private readonly HashSet<string> _legacyApprovalsNoted = new(StringComparer.OrdinalIgnoreCase);
 
     // ── Run state ────────────────────────────────────────────────────────────
     private CancellationTokenSource? _cts;
@@ -328,6 +330,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
 
         var fullPath = Path.GetFullPath(workspacePath);
         _currentWorkspaceRoot = fullPath;
+        NoteLegacyApprovalsIfAny(fullPath);
         _registry.Touch(fullPath);
         RefreshWorkspaces();
         var name = Path.GetFileName(Path.TrimEndingDirectorySeparator(fullPath));
@@ -1231,9 +1234,9 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         Dispatcher.UIThread.Post(() =>
         {
             _pendingDecision = tcs;
-            _vm.DecisionText = string.IsNullOrEmpty(request.Detail)
-                ? request.Topic
-                : request.Topic + "\n" + request.Detail;
+            _vm.DecisionText = request.Topic;
+            // The full action, not the summary: this is what the click authorises.
+            _vm.DecisionDetail = request.FullText;
 
             _vm.DecisionOptions.Clear();
             foreach (var option in request.Options)
@@ -1273,42 +1276,36 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         ?? request.Options.FirstOrDefault()?.Id
         ?? "allow";
 
-    // Workspace-scoped approvals persist in <workspace>/.enactive/permissions.json (a JSON array of tool names).
+    // Workspace-scoped approvals live OUTSIDE the workspace now — see ApprovalStore for why. The
+    // old <workspace>/.enactive/permissions.json is ignored, not imported.
     private bool WorkspaceApproves(string tool)
     {
-        try { return LoadWorkspaceApprovals(_currentWorkspaceRoot).Contains(tool, StringComparer.OrdinalIgnoreCase); }
-        catch { return false; }
-    }
+        if (string.IsNullOrEmpty(_currentWorkspaceRoot))
+            return false;
 
-    private static List<string> LoadWorkspaceApprovals(string root)
-    {
-        try
-        {
-            if (string.IsNullOrEmpty(root)) return new List<string>();
-            var path = Path.Combine(root, ".enactive", "permissions.json");
-            if (!File.Exists(path)) return new List<string>();
-            return System.Text.Json.JsonSerializer.Deserialize<List<string>>(File.ReadAllText(path)) ?? new List<string>();
-        }
-        catch { return new List<string>(); }
+        return ApprovalStore.Approves(WorkspaceInfo.IdFor(_currentWorkspaceRoot), tool);
     }
 
     private void SaveWorkspaceApproval(string tool)
     {
-        try
-        {
-            var root = _currentWorkspaceRoot;
-            if (string.IsNullOrEmpty(root)) return;
-            var dir = Path.Combine(root, ".enactive");
-            Directory.CreateDirectory(dir);
-            var list = LoadWorkspaceApprovals(root);
-            if (!list.Contains(tool, StringComparer.OrdinalIgnoreCase))
-            {
-                list.Add(tool);
-                File.WriteAllText(Path.Combine(dir, "permissions.json"),
-                    System.Text.Json.JsonSerializer.Serialize(list, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
-            }
-        }
-        catch { /* ignore */ }
+        if (string.IsNullOrEmpty(_currentWorkspaceRoot))
+            return;
+
+        ApprovalStore.Approve(WorkspaceInfo.IdFor(_currentWorkspaceRoot), tool);
+    }
+
+    /// <summary>
+    /// Says once per workspace that an old in-folder approvals file is being ignored, so being asked
+    /// again looks like the deliberate change it is rather than a bug.
+    /// </summary>
+    private void NoteLegacyApprovalsIfAny(string root)
+    {
+        if (!_legacyApprovalsNoted.Add(root) || !ApprovalStore.HasLegacyFile(root))
+            return;
+
+        _log.Info(LogSource.System,
+            $"Ignoring {WorkspaceGuard.ReservedFolder}/permissions.json in {root}: remembered approvals now "
+            + "live outside the workspace, where a tool cannot write them. Approve again to restore them.");
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────

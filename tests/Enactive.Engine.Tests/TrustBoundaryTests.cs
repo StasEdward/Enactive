@@ -137,9 +137,8 @@ public sealed class TrustBoundaryTests
 
     // Review finding #10 — the approval card showed arguments truncated at 120 characters while the
     // FULL arguments were executed, so a long shell script could hide its tail behind an ellipsis.
-    // Wave 1 replaces the truncated Detail; this test pins the current, known-bad behaviour so the
-    // fix has something to flip. It asserts what the USER SEES, not how it is produced.
-    [Fact(Skip = "Wave 1: the decision card must show the full command before it is approved.")]
+    // The assertion is on what the USER IS SHOWN, not on how it is produced.
+    [Fact]
     public async Task Approval_card_shows_the_whole_command()
     {
         using var fx = new EngineFixture();
@@ -155,7 +154,10 @@ public sealed class TrustBoundaryTests
         await fx.RunAsync(orchestrator, "run a long command");
 
         var card = Assert.Single(fx.Decisions.Requests);
-        Assert.Contains(script, card.Detail, StringComparison.Ordinal);
+
+        // Detail may still be the short summary — it is a log line. FullText is the contract.
+        Assert.Contains(script, card.FullText, StringComparison.Ordinal);
+        Assert.DoesNotContain("…", card.FullText, StringComparison.Ordinal);
     }
 }
 

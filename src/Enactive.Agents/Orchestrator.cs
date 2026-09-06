@@ -528,13 +528,17 @@ public sealed class Orchestrator : IOrchestrator
                         yield return Ev(EventKind.DecisionRequested,
                             $"Approve tool '{call.Name}'? {Compact(call.ArgumentsJson)}");
 
+                        // Detail is the one-line summary; FullDetail is what will actually run. The
+                        // card must show the second before it can be approved — a 400-character
+                        // PowerShell script used to be approved on its first 120 characters.
                         var decisionRequest = new DecisionRequest(
                             taskId,
                             $"Run tool '{call.Name}'?",
                             $"Arguments: {Compact(call.ArgumentsJson)}",
                             new[] { new DecisionOption("allow", "Allow"), new DecisionOption("deny", "Deny") },
                             RecommendedOptionId: "allow",
-                            Subject: call.Name);
+                            Subject: call.Name,
+                            FullDetail: DescribeCall(call));
 
                         // Parallel steps must not race to put two cards on screen at once.
                         DecisionOutcome outcome;
@@ -764,10 +768,48 @@ public sealed class Orchestrator : IOrchestrator
         return sb.ToString();
     }
 
+    /// <summary>
+    /// A one-line form for an EVENT LINE. Never for a decision card: shortening what a person is
+    /// asked to approve, while running the whole thing, is how a long script gets approved by its
+    /// first sentence. See <see cref="DescribeCall"/>.
+    /// </summary>
     private static string Compact(string json)
     {
         var flattened = json.Replace('\n', ' ').Replace('\r', ' ');
         return flattened.Length <= 120 ? flattened : flattened[..120] + "…";
+    }
+
+    /// <summary>
+    /// The complete action a decision authorises, laid out for a person: each argument in full, on
+    /// its own, with newlines intact — a shell script has to be readable as a script. Falls back to
+    /// the raw JSON when it does not parse, because showing something odd beats showing nothing.
+    /// </summary>
+    private static string DescribeCall(ToolCall call)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(call.ArgumentsJson);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+                return call.ArgumentsJson;
+
+            var sb = new StringBuilder();
+            foreach (var property in doc.RootElement.EnumerateObject())
+            {
+                var value = property.Value.ValueKind == JsonValueKind.String
+                    ? property.Value.GetString() ?? string.Empty
+                    : property.Value.ToString();
+
+                sb.Append(property.Name).AppendLine(":");
+                sb.AppendLine(value);
+                sb.AppendLine();
+            }
+
+            return sb.ToString().TrimEnd();
+        }
+        catch
+        {
+            return call.ArgumentsJson;
+        }
     }
 
     /// <summary>

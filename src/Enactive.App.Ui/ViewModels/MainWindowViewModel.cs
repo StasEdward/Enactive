@@ -193,6 +193,7 @@ internal sealed class MainWindowViewModel : ObservableObject
     private bool _isAgentVisible;
     private bool _isDecisionVisible;
     private string _decisionText = string.Empty;
+    private string _decisionDetail = string.Empty;
     private string _inboxLabel = "Inbox";
     private int _inboxUnread;
     private bool _isBusy;
@@ -630,6 +631,24 @@ internal sealed class MainWindowViewModel : ObservableObject
 
     public bool IsDecisionVisible { get => _isDecisionVisible; set => Set(ref _isDecisionVisible, value); }
     public string DecisionText { get => _decisionText; set => Set(ref _decisionText, value); }
+
+    /// <summary>
+    /// The complete action being approved — every argument, in full, newlines intact. The card used
+    /// to show only a 120-character summary while the whole command ran, so the tail of a long
+    /// script was authorised without ever being on screen.
+    /// </summary>
+    public string DecisionDetail
+    {
+        get => _decisionDetail;
+        set
+        {
+            if (Set(ref _decisionDetail, value))
+                OnPropertyChanged(nameof(HasDecisionDetail));
+        }
+    }
+
+    public bool HasDecisionDetail => !string.IsNullOrWhiteSpace(_decisionDetail);
+
     public ObservableCollection<DecisionOptionViewModel> DecisionOptions { get; } = new();
 
     /// <summary>Artifact cards and staged-change cards, in the order they appeared. Two item types,
