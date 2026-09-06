@@ -1094,8 +1094,9 @@ public sealed class Orchestrator : IOrchestrator
                 {
                     var unresolved = openFailures.Describe();
                     yield return Ev(EventKind.ErrorObserved,
-                        $"Finished without resolving {openFailures.Count} failed tool call(s): {unresolved}");
-                    loopResult.Set(StepOutcomeKind.Incomplete, "unresolved tool failure: " + unresolved);
+                        $"Finished without resolving {openFailures.Count} tool call(s) that did not go through: "
+                        + unresolved);
+                    loopResult.Set(StepOutcomeKind.Incomplete, "unresolved tool call: " + unresolved);
                     yield break;
                 }
 
@@ -1131,6 +1132,12 @@ public sealed class Orchestrator : IOrchestrator
                 // ── Role gate: is this tool available to the worker's role? ──
                 if (!Allows(worker, call.Name))
                 {
+                    // Counted as an open failure, exactly like a tool that ran and failed. A refusal
+                    // used to reach only the transcript, so a model that was denied the one action
+                    // the request needed could still finish with "done" and the run reported
+                    // Completed — a permission system whose whole effect was a sentence nobody
+                    // checked. Not permitted is not performed.
+                    openFailures.Failed(call, $"not available to the {worker.Role} role");
                     yield return Ev(EventKind.DecisionResolved, $"{call.Name}: not available to role '{worker.Role}'");
                     messages.Add(ChatMessage.Tool(call.Id, $"ERROR: tool '{call.Name}' is not available to the {worker.Role} role."));
                     continue;
@@ -1176,6 +1183,12 @@ public sealed class Orchestrator : IOrchestrator
 
                     if (!approved)
                     {
+                        // Same reason as the role gate above: a denial that only appears in the
+                        // transcript lets the step finish green over an action that never happened.
+                        openFailures.Failed(call,
+                            gate == PermissionDecision.Ask
+                                ? "the user did not permit this action"
+                                : "blocked by the permission policy");
                         messages.Add(ChatMessage.Tool(call.Id, "ERROR: the user did not permit this action."));
                         continue;
                     }

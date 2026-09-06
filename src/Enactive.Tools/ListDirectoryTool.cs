@@ -33,20 +33,36 @@ public sealed class ListDirectoryTool : ITool
         try
         {
             var full = WorkspacePaths.ResolveInside(ctx.WorkspaceRoot, path);
-            if (!Directory.Exists(full))
+
+            var entries = new List<string>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            var onDisk = Directory.Exists(full);
+            if (onDisk)
+                foreach (var entry in Directory.EnumerateFileSystemEntries(full))
+                {
+                    var name = Directory.Exists(entry) ? Path.GetFileName(entry) + "/" : Path.GetFileName(entry);
+                    if (seen.Add(name))
+                        entries.Add(name);
+                }
+
+            // What the store is holding but has not written. A staged file that is not on disk yet
+            // still belongs in the listing - otherwise a step "creates" a file and the next listing
+            // says it is not there - and so does the FOLDER it sits in, which may not exist yet
+            // either. Listing that folder used to fail outright with "Directory not found", so a
+            // step could not look at what it had just proposed, and the root listing showed neither
+            // the folder nor anything in it.
+            var proposed = false;
+            foreach (var (name, isDirectory) in PendingEntriesIn(ctx, full))
+            {
+                proposed = true;
+                var display = isDirectory ? name + "/" : name;
+                if (seen.Add(display))
+                    entries.Add(display + "  (proposed, not yet applied)");
+            }
+
+            if (!onDisk && !proposed)
                 return Task.FromResult(ToolResults.Fail($"Directory not found: {path ?? "."}"));
-
-            var entries = Directory.EnumerateFileSystemEntries(full)
-                .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
-                .Select(p => Directory.Exists(p) ? Path.GetFileName(p) + "/" : Path.GetFileName(p))
-                .ToList();
-
-            // A staged file that is not on disk yet still belongs in the listing — otherwise a step
-            // "creates" a file and the next listing says it is not there. It is marked, because
-            // proposed and written are different things.
-            foreach (var pendingName in PendingNamesIn(ctx, full))
-                if (!entries.Contains(pendingName, StringComparer.OrdinalIgnoreCase))
-                    entries.Add(pendingName + "  (proposed, not yet applied)");
 
             entries.Sort(StringComparer.OrdinalIgnoreCase);
 
@@ -62,26 +78,39 @@ public sealed class ListDirectoryTool : ITool
     }
 
     /// <summary>
-    /// File names the artifact store is holding for this directory but has not written yet. Empty
+    /// What the artifact store is holding for this directory: the immediate child of it on the way
+    /// to each pending path, and whether that child is a folder rather than the file itself. Empty
     /// for a store that writes straight through, which is the normal case.
     /// </summary>
-    private static IEnumerable<string> PendingNamesIn(ToolContext ctx, string fullDirectory)
+    private static IEnumerable<(string Name, bool IsDirectory)> PendingEntriesIn(
+        ToolContext ctx, string fullDirectory)
     {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
         foreach (var relative in ctx.Artifacts.PendingPaths)
         {
             string pendingFull;
             try { pendingFull = WorkspacePaths.ResolveInside(ctx.WorkspaceRoot, relative); }
             catch { continue; }
 
-            var directory = Path.GetDirectoryName(pendingFull);
-            if (directory is not null
-                && string.Equals(
-                    Path.TrimEndingDirectorySeparator(directory),
-                    Path.TrimEndingDirectorySeparator(fullDirectory),
-                    WorkspaceGuard.Comparison))
-            {
-                yield return Path.GetFileName(pendingFull);
-            }
+            string within;
+            try { within = Path.GetRelativePath(fullDirectory, pendingFull); }
+            catch { continue; }
+
+            // Not under this directory at all: GetRelativePath answers with a climb, or with an
+            // absolute path when the two share no root.
+            if (within.StartsWith("..", StringComparison.Ordinal) || Path.IsPathRooted(within))
+                continue;
+
+            var segments = within.Split(
+                new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
+                StringSplitOptions.RemoveEmptyEntries);
+
+            if (segments.Length == 0)
+                continue;
+
+            if (seen.Add(segments[0]))
+                yield return (segments[0], segments.Length > 1);
         }
     }
 

@@ -207,16 +207,28 @@ public static class Routers
 /// <summary>Answers every approval request the same way. Records what it was shown.</summary>
 public sealed class ScriptedDecisionHandler : IDecisionHandler
 {
-    private readonly string _answer;
+    public ScriptedDecisionHandler(string answer = "approve") => Answer = answer;
 
-    public ScriptedDecisionHandler(string answer = "approve") => _answer = answer;
+    /// <summary>
+    /// What it says every time. Settable so a test can put the fixture's own handler on "allow" or
+    /// "deny" — the option id the orchestrator actually checks is "allow", and anything else is a
+    /// refusal, which is a distinction worth being able to exercise.
+    /// </summary>
+    public string Answer { get; set; }
+
+    /// <summary>
+    /// Answers for the first few asks, in order, before falling back to <see cref="Answer"/>. One
+    /// run can then be refused and then allowed, which is what it takes to check that a refusal
+    /// stops counting once the same call goes through.
+    /// </summary>
+    public Queue<string> Script { get; } = new();
 
     public List<DecisionRequest> Requests { get; } = new();
 
     public Task<DecisionOutcome> RequestAsync(DecisionRequest request, CancellationToken ct)
     {
         Requests.Add(request);
-        return Task.FromResult(new DecisionOutcome(_answer));
+        return Task.FromResult(new DecisionOutcome(Script.Count > 0 ? Script.Dequeue() : Answer));
     }
 }
 

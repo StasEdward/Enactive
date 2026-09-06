@@ -299,6 +299,59 @@ public sealed class FileToolsTests
         Assert.False((await Call(new ReadFileTool(), fx, arguments)).Success);
     }
 
+    // ── list_dir over what is on disk AND what is only staged ─────────────────────────
+
+    // A staged run writes nothing to disk, so a folder a step has just "created" does not exist.
+    // list_dir asked Directory.Exists first and failed outright — a step could not look at what it
+    // had itself just proposed, and the root listing showed neither the folder nor anything in it.
+    [Fact]
+    public async Task A_directory_that_exists_only_in_staging_can_be_listed()
+    {
+        using var fx = new EngineFixture();
+        var staging = new StagingArtifactStore(fx.Root);
+
+        Assert.True((await Call(new WriteFileTool(), fx,
+            """{"path":"new-folder/doc.txt","content":"proposed"}""", staging)).Success);
+
+        var listing = await Call(new ListDirectoryTool(), fx, """{"path":"new-folder"}""", staging);
+
+        Assert.True(listing.Success, listing.Error);
+        Assert.Contains("doc.txt", listing.Output);
+        Assert.Contains("proposed", listing.Output);
+        Assert.False(Directory.Exists(fx.PathOf("new-folder")), "nothing should have reached disk");
+    }
+
+    // And the folder itself shows up where it would be, rather than the run appearing to have done
+    // nothing at all.
+    [Fact]
+    public async Task The_root_listing_shows_a_folder_that_exists_only_in_staging()
+    {
+        using var fx = new EngineFixture();
+        var staging = new StagingArtifactStore(fx.Root);
+
+        Assert.True((await Call(new WriteFileTool(), fx,
+            """{"path":"new-folder/doc.txt","content":"proposed"}""", staging)).Success);
+
+        var listing = await Call(new ListDirectoryTool(), fx, """{"path":"."}""", staging);
+
+        Assert.True(listing.Success, listing.Error);
+        Assert.Contains("new-folder/", listing.Output);
+    }
+
+    // A directory that is neither on disk nor proposed is still an error — the fix must not turn
+    // every mistyped path into an empty listing.
+    [Fact]
+    public async Task A_directory_that_does_not_exist_anywhere_is_still_an_error()
+    {
+        using var fx = new EngineFixture();
+        var staging = new StagingArtifactStore(fx.Root);
+
+        var listing = await Call(new ListDirectoryTool(), fx, """{"path":"nowhere"}""", staging);
+
+        Assert.False(listing.Success);
+        Assert.Contains("not found", listing.Error!, StringComparison.OrdinalIgnoreCase);
+    }
+
     // ── move_file and create_directory ────────────────────────────────────────────────
 
     [Fact]
