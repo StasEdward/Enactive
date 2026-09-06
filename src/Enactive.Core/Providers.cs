@@ -28,6 +28,19 @@ public interface IChatProvider
 
     /// <summary>Non-streaming completion. Kept as a fallback and for tests.</summary>
     Task<ChatCompletion> CompleteAsync(ChatRequest request, CancellationToken ct);
+
+    /// <summary>
+    /// The TOTAL token window this provider will apply to this request — prompt and generation
+    /// together — when it has one it can state. Null means it does not, which is the answer for
+    /// every cloud provider here: their windows are large and their max_tokens caps output only.
+    ///
+    /// <para>Ollama is the one that can answer, because num_ctx is exactly this: a hard ceiling on
+    /// prompt plus generation. Fill it with prompt and the model is cut off mid-word with
+    /// done_reason "length", which looks identical to a model that ran out of output budget and is
+    /// a completely different problem. The orchestrator needs the number to keep the transcript
+    /// under it, and needs the null to know when not to.</para>
+    /// </summary>
+    int? ContextWindow(ChatRequest request) => null;
 }
 
 /// <summary>Builds an <see cref="IChatProvider"/> for a provider id.</summary>

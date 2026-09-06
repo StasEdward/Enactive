@@ -28,6 +28,15 @@ public enum EventKind
     ArtifactReverted,
 
     UsageReported,
+
+    /// <summary>
+    /// Old tool traffic was dropped from the conversation to keep it inside the model's context
+    /// window. Its own kind because it is neither an error nor nothing: the step continues, but the
+    /// model can no longer see what a file said earlier, and a person reading the run afterwards
+    /// deserves to know that before wondering why it forgot.
+    /// </summary>
+    ContextTrimmed,
+
     TaskCompleted,
     TaskFailed
 }

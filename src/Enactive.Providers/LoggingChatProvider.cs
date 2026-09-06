@@ -27,6 +27,9 @@ public sealed class LoggingChatProvider : IChatProvider
         _providerId = providerId;
     }
 
+    /// <summary>Whatever the real provider says — a decorator that answered for it would be guessing.</summary>
+    public int? ContextWindow(ChatRequest request) => _inner.ContextWindow(request);
+
     public async IAsyncEnumerable<ChatStreamEvent> StreamChatAsync(
         ChatRequest request, [EnumeratorCancellation] CancellationToken ct)
     {

@@ -56,6 +56,14 @@ public sealed class FakeChatProvider : IChatProvider
     /// <summary>Every request the engine made, in order.</summary>
     public List<ChatRequest> Requests { get; } = new();
 
+    /// <summary>
+    /// The hard prompt+generation window this provider claims, as Ollama's num_ctx is one. Null -
+    /// the default - is every cloud provider: no stated window, so the context guard does not apply.
+    /// </summary>
+    public int? Window { get; set; }
+
+    public int? ContextWindow(ChatRequest request) => Window;
+
     public int TurnsLeft => _script.Count;
 
     public async IAsyncEnumerable<ChatStreamEvent> StreamChatAsync(

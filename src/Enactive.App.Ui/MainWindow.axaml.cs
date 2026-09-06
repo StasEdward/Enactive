@@ -571,6 +571,13 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                         AddArtifact(ev.Summary);
                     break;
 
+                // The conversation was pruned to fit the model's window. Shown on the step card, not
+                // buried in the log: from here on the model is working with less than it was given,
+                // and that explains behaviour a person would otherwise blame on the model.
+                case EventKind.ContextTrimmed:
+                    (CardFor(ev) ?? EnsureCurrentCard()).AddNote(ev.Summary);
+                    break;
+
                 // The step's work was put back after the reviewer rejected it. Its cards must stop
                 // offering to open or undo a file that is no longer the file they describe.
                 case EventKind.ArtifactReverted:

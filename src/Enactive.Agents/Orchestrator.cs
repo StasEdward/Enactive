@@ -797,10 +797,69 @@ public sealed class Orchestrator : IOrchestrator
         var repairRequested = false;
         var openFailures = new OpenFailures();
 
+        // How this model's prompt tokens relate to transcript characters, measured as the step runs.
+        var scale = new TokenScale();
+
+        // What the last turn's prompt actually cost, so a cut-off can be explained with the real
+        // number instead of a guess about which budget ran out.
+        int? lastPromptTokens = null;
+
+        var toolDefs = _tools.Definitions.Where(d => Allows(worker, d.Name)).ToArray();
+
+        // The tool schemas are sent with every request and are not part of the message list, so they
+        // have to be counted separately or the estimate is short by a constant few thousand
+        // characters - exactly the margin that decides whether the last turn fits.
+        var toolsOverhead = toolDefs.Sum(d => d.Name.Length + d.Description.Length + d.JsonSchema.Length + 16);
+
         for (var iteration = 1; iteration <= MaxIterations; iteration++)
         {
-            var toolDefs = _tools.Definitions.Where(d => Allows(worker, d.Name)).ToArray();
             var request = new ChatRequest(model, messages, toolDefs, Temperature: 0.2, NumCtx: _numCtx, Think: _think);
+
+            // Does this provider apply a hard window to prompt AND generation together? Only Ollama
+            // answers; a cloud provider returns null and none of what follows applies to it, because
+            // its max_tokens caps the answer and says nothing about how long the transcript may be.
+            if (provider.ContextWindow(request) is { } window && window > 0)
+            {
+                // Room kept back for the model's own answer. Without it the transcript is allowed to
+                // fill the window completely and the reply is cut off mid-token - which is what
+                // happened: 8174 prompt tokens of 8192, and 18 left to answer with.
+                // Never more than half the window: on a small one a fixed floor of 256 would leave
+                // nothing to talk with, and the guard would refuse every request instead of any.
+                var reserve = Math.Min(Math.Clamp(window / 8, 256, 2048), window / 2);
+                var budget = window - reserve;
+                var sizeNow = Transcript.Size(messages) + toolsOverhead;
+
+                if (scale.TokensFor(sizeNow) > budget)
+                {
+                    var elided = Transcript.Elide(messages, scale.CharsFor(budget) - toolsOverhead);
+                    sizeNow = Transcript.Size(messages) + toolsOverhead;
+
+                    if (elided > 0)
+                        yield return Ev(EventKind.ContextTrimmed,
+                            $"Context window nearly full — dropped the contents of {elided} earlier tool "
+                            + $"message(s) to make room (about {scale.TokensFor(sizeNow)} of {window} tokens now).");
+
+                    // Trimming had nothing left to give and the transcript still does not fit. Stop
+                    // here rather than send it: the provider would answer with a fragment, and a
+                    // fragment of a tool call is indistinguishable from a model that lost its way.
+                    if (scale.TokensFor(sizeNow) > budget)
+                    {
+                        var reason =
+                            $"the context window is full: this turn needs about {scale.TokensFor(sizeNow)} "
+                            + $"of the {window} tokens this model was given (num_ctx), and there is nothing "
+                            + "left to trim";
+                        loopResult.Set(StepOutcomeKind.Incomplete, reason);
+                        yield return Ev(EventKind.ErrorObserved,
+                            char.ToUpperInvariant(reason[0]) + reason[1..]
+                            + ". Raise num_ctx in Settings, or use a model with a larger window.");
+                        yield break;
+                    }
+                }
+            }
+
+            // Measured against what this request actually is, so the next estimate uses the model's
+            // real ratio rather than the pessimistic default.
+            var sizeAtRequest = Transcript.Size(messages) + toolsOverhead;
 
             var contentBuilder = new StringBuilder();
             var toolBuilders = new Dictionary<int, ToolCallBuilder>();
@@ -832,6 +891,13 @@ public sealed class Orchestrator : IOrchestrator
                     // the status tile, the run record - could ever say. Providers report totals per
                     // turn, not increments, so each turn is one event and the run adds them up.
                     case UsageDelta usage:
+                        // Also the one honest measurement of how this model tokenizes: the same
+                        // transcript, in characters and in the provider's own count.
+                        if (usage.PromptTokens is { } prompted)
+                        {
+                            lastPromptTokens = prompted;
+                            scale.Observe(sizeAtRequest, prompted);
+                        }
                         yield return Usage(usage.PromptTokens ?? 0, usage.CompletionTokens ?? 0);
                         break;
                 }
@@ -846,11 +912,28 @@ public sealed class Orchestrator : IOrchestrator
             {
                 if (contentBuilder.Length > 0)
                     messages.Add(new ChatMessage(ChatRole.Assistant, contentBuilder.ToString(), null));
+                // Which budget ran out? For Ollama the two are the same number - num_ctx covers
+                // prompt AND generation - so a prompt that nearly fills the window produces exactly
+                // this, and telling the user to raise max_tokens sends them to a setting that does
+                // not exist for their provider. Say which one it was, from what was measured.
+                var hardWindow = provider.ContextWindow(request);
+                var squeezed = hardWindow is { } w && lastPromptTokens is { } used && used > w * 4 / 5;
+
                 loopResult.Set(StepOutcomeKind.Incomplete,
-                    $"the model's output was cut off at the token limit (finish={finishReason})");
+                    squeezed
+                        ? $"the context window filled up: {lastPromptTokens} of {hardWindow} tokens went to the "
+                          + $"prompt, leaving no room to answer (finish={finishReason})"
+                        : $"the model's output was cut off at the token limit (finish={finishReason})");
+
                 yield return Ev(EventKind.ErrorObserved,
-                    $"Model output was cut off at the token limit (finish={finishReason}); stopping this step. "
-                    + "Raise max_tokens, or use a model that doesn't spend the whole budget on reasoning.");
+                    squeezed
+                        ? $"The context window filled up: the prompt used {lastPromptTokens} of the {hardWindow} "
+                          + $"tokens this model was given (num_ctx), leaving no room to answer "
+                          + $"(finish={finishReason}); stopping this step. Raise num_ctx in Settings, or use "
+                          + "a model with a larger window."
+                        : $"Model output was cut off at the token limit (finish={finishReason}); stopping "
+                          + "this step. Raise the provider's max output tokens, or use a model that doesn't "
+                          + "spend the whole budget on reasoning.");
                 yield break;
             }
 

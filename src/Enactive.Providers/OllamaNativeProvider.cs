@@ -30,6 +30,13 @@ public sealed class OllamaNativeProvider : IChatProvider
         _log = log;
     }
 
+    /// <summary>
+    /// num_ctx IS the window: Ollama gives prompt and generation one shared budget, and a prompt
+    /// that fills it leaves the model no room to answer. Null when the request sets none — the
+    /// model then runs with whatever it was loaded with, which this side cannot see.
+    /// </summary>
+    public int? ContextWindow(ChatRequest request) => request.NumCtx;
+
     public async IAsyncEnumerable<ChatStreamEvent> StreamChatAsync(
         ChatRequest request, [EnumeratorCancellation] CancellationToken ct)
     {
