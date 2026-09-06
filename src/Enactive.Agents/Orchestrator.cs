@@ -37,6 +37,7 @@ public sealed class Orchestrator : IOrchestrator
     private readonly PermissionPolicy _policy;
     private readonly IServiceProvider _services;
     private readonly IModelRouter _router;
+    private readonly IModelResolver _modelResolver;
     private readonly int _reviewRetries;
     private readonly int _maxParallelSteps;
     /// <summary>One approval card at a time, however many steps are running.</summary>
@@ -80,6 +81,7 @@ public sealed class Orchestrator : IOrchestrator
         _policy = policy;
         _services = services;
         _router = router ?? new ModelRouter(modelResolver);
+        _modelResolver = modelResolver;
         // How many times a rejected step may be redone. Clamped rather than trusted: this multiplies
         // the cost of a run by the reviewer's price, and a stray large number would be paid for in
         // full before anyone noticed.
@@ -191,14 +193,40 @@ public sealed class Orchestrator : IOrchestrator
                     // from the transcript — see the same note on the DAG path.
                     var writtenHere = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
+                    // The same one-shot fallback the DAG path has: an unreachable model is not the
+                    // model doing bad work, so it costs no review attempt.
+                    var activeRef = model;
+                    var activeProvider = provider;
+                    var triedFallback = false;
+
                     for (var attempt = 1; attempt <= maxQuickAttempts; attempt++)
                     {
                         var evidenceStart = messages.Count;
 
-                        await foreach (var ev in RunToolLoopAsync(
-                            taskId, runId, provider, model.Model, worker, messages, artifacts,
-                            intent.Context, null, quickResult, ct))
-                            quick.Writer.TryWrite(ev);
+                        try
+                        {
+                            await foreach (var ev in RunToolLoopAsync(
+                                taskId, runId, activeProvider, activeRef.Model, worker, messages, artifacts,
+                                intent.Context, null, quickResult, ct))
+                                quick.Writer.TryWrite(ev);
+                        }
+                        catch (Exception ex) when (ex is not OperationCanceledException
+                                                   && !triedFallback
+                                                   && _modelResolver.NextOnFailure(worker.ModelPolicy, activeRef) is not null)
+                        {
+                            var fallback = _modelResolver.NextOnFailure(worker.ModelPolicy, activeRef)!;
+                            triedFallback = true;
+
+                            quick.Writer.TryWrite(Ev(EventKind.Routed,
+                                $"{activeRef.ProviderId}/{activeRef.Model} failed ({ex.Message}) — "
+                                + $"retrying on the fallback {fallback.ProviderId}/{fallback.Model}"));
+
+                            activeRef = fallback;
+                            activeProvider = _providers.Create(fallback.ProviderId);
+
+                            attempt--;   // the retry is the SAME attempt
+                            continue;
+                        }
 
                         foreach (var file in BuildWrittenFiles(messages, evidenceStart))
                             writtenHere.Add(file.RelativePath);
@@ -352,6 +380,9 @@ public sealed class Orchestrator : IOrchestrator
             // invisible to the revert and left behind.
             var writtenThisStep = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
+            // One switch to the fallback model per step — see the catch below.
+            var triedFallback = false;
+
             for (var attempt = 1; attempt <= maxAttempts; attempt++)
             {
                 var evidenceStart = convo.Count;
@@ -372,6 +403,28 @@ public sealed class Orchestrator : IOrchestrator
                 }
                 catch (Exception ex)
                 {
+                    // The worker's fallback model exists for exactly this: the endpoint is down, the
+                    // key is wrong, the local server is not running. It was settable in the worker
+                    // editor and never consulted — IModelResolver.NextOnFailure had no callers at
+                    // all. One switch per step, and it does not spend a review attempt: failing to
+                    // reach a model is not the model producing bad work.
+                    if (!triedFallback
+                        && _modelResolver.NextOnFailure(worker.ModelPolicy, stepRef) is { } fallback)
+                    {
+                        triedFallback = true;
+                        Emit(EventKind.Routed,
+                            $"[{stepNumber}] {stepRef.ProviderId}/{stepRef.Model} failed ({ex.Message}) — "
+                            + $"retrying on the fallback {fallback.ProviderId}/{fallback.Model}");
+
+                        stepRef = fallback;
+                        stepProvider = _providers.Create(fallback.ProviderId);
+                        stepModel = fallback.Model;
+
+                        // Undo this iteration's increment so the retry is the SAME attempt.
+                        attempt--;
+                        continue;
+                    }
+
                     // A throw fails only THIS step (and its dependents), never the whole run.
                     outcome = StepOutcomeKind.Failed;
                     outcomeReason = ex.Message;
@@ -772,7 +825,8 @@ public sealed class Orchestrator : IOrchestrator
                 }
 
                 // ── Permission gate: allow / ask / deny ──────────────────────
-                var gate = _permissions.Evaluate(_policy, call.Name, _tools.RequiredLevelOf(call.Name));
+                var gate = _permissions.Evaluate(
+                    EffectivePolicyFor(worker), call.Name, _tools.RequiredLevelOf(call.Name));
                 if (gate != PermissionDecision.Allow)
                 {
                     var approved = false;
@@ -820,7 +874,7 @@ public sealed class Orchestrator : IOrchestrator
                     RunId: runId,
                     WorkspaceId: _workspace.Id,
                     Context: context,
-                    PermissionPolicy: PermissionPolicy.PermissiveDefault,
+                    PermissionPolicy: EffectivePolicyFor(worker),
                     WorkspaceRoot: _workspace.RootPath,
                     Artifacts: _artifacts,
                     Services: _services);
@@ -1063,6 +1117,22 @@ public sealed class Orchestrator : IOrchestrator
         {
             return call.ArgumentsJson;
         }
+    }
+
+    /// <summary>
+    /// The policy this worker actually runs under: the workspace's autonomy, narrowed by the role's
+    /// own default level.
+    ///
+    /// A role NARROWS, never widens. Worker.DefaultLevel was settable in the worker editor, saved,
+    /// and then read by nothing that mattered — a Reviewer defined as Observe still ran at whatever
+    /// the workspace slider said, so the field described a restriction that did not exist. Narrowing
+    /// does not forbid outright: a tool above the effective level asks for a one-off approval, which
+    /// is what the permission engine already does for anything over the granted autonomy.
+    /// </summary>
+    private PermissionPolicy EffectivePolicyFor(Worker worker)
+    {
+        var level = (PermissionLevel)Math.Min((int)_policy.Level, (int)worker.DefaultLevel);
+        return level == _policy.Level ? _policy : _policy with { Level = level };
     }
 
     /// <summary>

@@ -133,9 +133,10 @@ public sealed class AnthropicProvider : IChatProvider
             };
             httpRequest.Headers.TryAddWithoutValidation("x-api-key", _descriptor.ApiKey ?? "");
             httpRequest.Headers.TryAddWithoutValidation("anthropic-version", AnthropicVersion);
-            if (_descriptor.Headers is { } extraHeaders)
-                foreach (var header in extraHeaders)
-                    httpRequest.Headers.TryAddWithoutValidation(header.Key, header.Value);
+            // One shared helper across all three adapters, so "the provider's custom headers are
+            // sent" is a single behaviour with a single test rather than three near-copies of which
+            // two had gone missing.
+            ProviderHeaders.Apply(httpRequest, _descriptor);
 
             using var response = await _http.SendAsync(httpRequest, HttpCompletionOption.ResponseContentRead, ct);
             var responseBody = await response.Content.ReadAsStringAsync(ct);

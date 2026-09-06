@@ -98,6 +98,13 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
         if (request.Tools is { Count: > 0 } tools)
             payload["tools"] = tools.Select(ToWireTool).ToArray();
 
+        // The request wins over the provider's configured default; neither was being sent at all, so
+        // the "Max tokens" field in the provider editor did nothing on this adapter. A provider that
+        // caps output low would silently truncate every answer and the setting meant to raise it was
+        // never on the wire.
+        if ((request.MaxTokens ?? _descriptor.MaxTokens) is { } maxTokens and > 0)
+            payload["max_tokens"] = maxTokens;
+
         var url = _descriptor.BaseUrl.TrimEnd('/') + "/chat/completions";
         var json = JsonSerializer.Serialize(payload, JsonOpts);
         WireTap.Request(_log, _descriptor.Id, request.Model, json);
@@ -107,6 +114,10 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
         };
         if (!string.IsNullOrEmpty(_descriptor.ApiKey))
             httpRequest.Headers.TryAddWithoutValidation("Authorization", "Bearer " + _descriptor.ApiKey);
+
+        // Applied AFTER Authorization so a provider configured with its own auth header can replace
+        // the default rather than fight it.
+        ProviderHeaders.Apply(httpRequest, _descriptor);
         return httpRequest;
     }
 

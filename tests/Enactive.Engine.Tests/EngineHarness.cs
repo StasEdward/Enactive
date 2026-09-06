@@ -150,6 +150,20 @@ public static class Routers
                 [ModelPurpose.Review] = new ModelRef(Verdicts.ProviderId, Verdicts.Model)
             });
 
+    public const string PlannerProviderId = "planner";
+
+    /// <summary>
+    /// Puts the planner on its own provider id so a test can break the EXECUTING model without also
+    /// breaking planning — which is what it takes to watch the execute-side fallback on its own.
+    /// </summary>
+    public static IModelRouter WithPlannerOn(string providerId = PlannerProviderId)
+        => new ModelRouter(
+            new ModelResolver(),
+            new Dictionary<ModelPurpose, ModelRef>
+            {
+                [ModelPurpose.Plan] = new ModelRef(providerId, "plan-model")
+            });
+
     public const string LightProviderId = "light";
     public const string HeavyProviderId = "heavy";
 

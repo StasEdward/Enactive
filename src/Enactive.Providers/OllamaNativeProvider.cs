@@ -109,6 +109,10 @@ public sealed class OllamaNativeProvider : IChatProvider
         };
         if (!string.IsNullOrEmpty(_descriptor.ApiKey))
             httpRequest.Headers.TryAddWithoutValidation("Authorization", "Bearer " + _descriptor.ApiKey);
+
+        // Ollama itself rarely needs these, but a remote one behind a reverse proxy or a tunnel does,
+        // and the provider editor offers the field either way.
+        ProviderHeaders.Apply(httpRequest, _descriptor);
         return httpRequest;
     }
 
