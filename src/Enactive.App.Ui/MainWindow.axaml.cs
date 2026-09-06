@@ -447,9 +447,16 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                 case EventKind.StepCompleted:
                     var doneCard = CardFor(ev) ?? _currentCard;
                     // A failed step and a dependency-skipped step arrive as StepCompleted too, so the
-                    // card must not go green for either of them.
-                    var wasSkipped = ev.Summary.Contains("skipped (dependency failed)", StringComparison.Ordinal);
-                    var wasFailed = wasSkipped || ev.Summary.Contains("FAILED:", StringComparison.Ordinal);
+                    // card must not go green for either of them. The step's outcome is now a value in
+                    // the payload; the old string search is the fallback for a run recorded by an
+                    // earlier build, and is exactly the fragility it replaces — rewording a summary
+                    // used to turn a red card green.
+                    var stepOutcome = ev.StepOutcome();
+                    var wasSkipped = stepOutcome == StepOutcomeKind.Skipped
+                        || (stepOutcome is null && ev.Summary.Contains("skipped (dependency", StringComparison.Ordinal));
+                    var wasFailed = wasSkipped
+                        || (stepOutcome is not null && stepOutcome != StepOutcomeKind.Succeeded)
+                        || (stepOutcome is null && ev.Summary.Contains("FAILED:", StringComparison.Ordinal));
                     if (wasSkipped)
                     {
                         // Skipped is not failed: nothing went wrong in THIS step, and painting it red
@@ -532,17 +539,33 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                     else
                         AddArtifact(ev.Summary);
                     break;
+                // The pill says what the engine DECIDED, read from the event's typed outcome rather
+                // than from which of the two terminal kinds arrived. "Incomplete" is its own answer:
+                // nothing failed, but the work is not done, and calling that Completed is what let a
+                // truncated or half-run task look finished.
                 case EventKind.TaskCompleted:
-                    _vm.StatusPhase = "Completed";
-                    _vm.CurrentAction = string.Empty;
-                    _currentCard?.SetDone();
-                    _currentCard?.SetActivity("Done");
-                    _vm.IsAgentVisible = false;
-                    break;
                 case EventKind.TaskFailed:
-                    _vm.StatusPhase = "Failed";
-                    _currentCard?.SetFailed();
-                    _currentCard?.SetActivity("Failed");
+                    var outcome = ev.Outcome()
+                        ?? (ev.Kind == EventKind.TaskCompleted
+                            ? RunOutcomeKind.Completed
+                            : RunOutcomeKind.Failed);
+
+                    _vm.StatusPhase = outcome.ToString();
+                    _vm.IsAgentVisible = false;
+
+                    if (outcome == RunOutcomeKind.Completed)
+                    {
+                        _vm.CurrentAction = string.Empty;
+                        _currentCard?.SetDone();
+                        _currentCard?.SetActivity("Done");
+                    }
+                    else
+                    {
+                        // Why it stopped belongs on screen, not only in the log.
+                        _vm.CurrentAction = ev.OutcomeReason() ?? ev.Summary;
+                        _currentCard?.SetFailed();
+                        _currentCard?.SetActivity(outcome.ToString());
+                    }
                     break;
             }
         });

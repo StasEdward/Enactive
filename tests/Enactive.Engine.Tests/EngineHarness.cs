@@ -106,6 +106,51 @@ public sealed class SingleProviderFactory : IChatProviderFactory
     public IChatProvider Create(string providerId) => _provider;
 }
 
+/// <summary>
+/// Routes each provider id to its own provider, with a fallback. Lets a test give the reviewer a
+/// different script — or a broken endpoint — from the one the worker is running on.
+/// </summary>
+public sealed class MapProviderFactory : IChatProviderFactory
+{
+    private readonly Dictionary<string, IChatProvider> _byId;
+    private readonly IChatProvider _fallback;
+
+    public MapProviderFactory(IChatProvider fallback, params (string Id, IChatProvider Provider)[] map)
+    {
+        _fallback = fallback;
+        _byId = map.ToDictionary(x => x.Id, x => x.Provider, StringComparer.OrdinalIgnoreCase);
+    }
+
+    public IChatProvider Create(string providerId)
+        => _byId.TryGetValue(providerId, out var provider) ? provider : _fallback;
+}
+
+/// <summary>A reviewer script: the verdict shape <see cref="Reviewer"/> parses.</summary>
+public static class Verdicts
+{
+    public const string ProviderId = "review";
+    public const string Model = "reviewer-model";
+
+    public static Turn Fail(string notes = "the evidence does not support the claim")
+        => Turn.Says($$"""{"verdict":"fail","notes":"{{notes}}"}""");
+
+    public static Turn Pass(string notes = "looks right")
+        => Turn.Says($$"""{"verdict":"pass","notes":"{{notes}}"}""");
+}
+
+/// <summary>Model routing for a test: by default nothing is bound, so there is no reviewer.</summary>
+public static class Routers
+{
+    /// <summary>Binds the Review phase, which is what switches the reviewer on at all.</summary>
+    public static IModelRouter WithReviewer()
+        => new ModelRouter(
+            new ModelResolver(),
+            new Dictionary<ModelPurpose, ModelRef>
+            {
+                [ModelPurpose.Review] = new ModelRef(Verdicts.ProviderId, Verdicts.Model)
+            });
+}
+
 /// <summary>Answers every approval request the same way. Records what it was shown.</summary>
 public sealed class ScriptedDecisionHandler : IDecisionHandler
 {
@@ -162,7 +207,24 @@ public sealed class EngineFixture : IDisposable
         Worker? worker = null,
         PermissionPolicy? policy = null,
         IArtifactStore? artifacts = null,
-        bool allowImplicitToolCalls = false)
+        bool allowImplicitToolCalls = false,
+        IModelRouter? router = null,
+        IChatProvider? reviewProvider = null,
+        int reviewAttempts = 1)
+        => Build(
+            reviewProvider is null
+                ? new SingleProviderFactory(provider)
+                : new MapProviderFactory(provider, (Verdicts.ProviderId, reviewProvider)),
+            worker, policy, artifacts, allowImplicitToolCalls, router, reviewAttempts);
+
+    public Orchestrator Build(
+        IChatProviderFactory providers,
+        Worker? worker = null,
+        PermissionPolicy? policy = null,
+        IArtifactStore? artifacts = null,
+        bool allowImplicitToolCalls = false,
+        IModelRouter? router = null,
+        int reviewAttempts = 1)
     {
         var tools = new ToolRegistry(new ITool[]
         {
@@ -171,7 +233,7 @@ public sealed class EngineFixture : IDisposable
         });
 
         return new Orchestrator(
-            new SingleProviderFactory(provider),
+            providers,
             new ModelResolver(),
             new StaticWorkerProvider(worker ?? WorkerWith("write_file", "read_file", "list_dir", "run_command")),
             tools,
@@ -182,6 +244,8 @@ public sealed class EngineFixture : IDisposable
             Decisions,
             policy ?? PermissionPolicy.PermissiveDefault,
             new EmptyServices(),
+            router: router,
+            reviewAttempts: reviewAttempts,
             allowImplicitToolCalls: allowImplicitToolCalls);
     }
 

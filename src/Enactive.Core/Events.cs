@@ -25,6 +25,45 @@ public enum EventKind
 }
 
 /// <summary>
+/// How a run ended. The engine had no such type: it only streamed events, so "this failed" had
+/// nowhere to live and every consumer inferred a status from prose. A step could throw, a reviewer
+/// could reject the work, the model could stop at its token limit — and the run still finished with
+/// TaskCompleted, which the UI, the history and the Inbox all read as success.
+/// </summary>
+public enum RunOutcomeKind
+{
+    /// <summary>Every required step ran and was accepted.</summary>
+    Completed,
+
+    /// <summary>Something went wrong: a step threw, or a reviewer rejected the work.</summary>
+    Failed,
+
+    /// <summary>Nothing failed, but the work is not finished — a token limit, an iteration cap, a plan cycle.</summary>
+    Incomplete,
+
+    /// <summary>The user stopped it.</summary>
+    Cancelled
+}
+
+/// <summary>How one unit of work ended. Aggregated into a <see cref="RunOutcomeKind"/>.</summary>
+public enum StepOutcomeKind
+{
+    Succeeded,
+
+    /// <summary>The step threw — a provider error, a tool that could not run.</summary>
+    Failed,
+
+    /// <summary>The reviewer rejected every attempt. Dependent steps must not build on it.</summary>
+    ReviewRejected,
+
+    /// <summary>Ran, but did not finish: cut off at the token limit, or out of iterations.</summary>
+    Incomplete,
+
+    /// <summary>Never ran, because something it depended on did not succeed.</summary>
+    Skipped
+}
+
+/// <summary>
 /// An append-only record of something that happened. Carries RunId so each AgentRun has its
 /// own timeline. Key data is typed in payloads (PLAN_v2 §2A.7); PayloadJson is for extras only.
 /// </summary>
@@ -68,6 +107,95 @@ public static class WorkEventPayload
         => stepNo is { } n
             ? $"{{\"step\":{n},\"in\":{promptTokens},\"out\":{completionTokens}}}"
             : $"{{\"in\":{promptTokens},\"out\":{completionTokens}}}";
+
+    /// <summary>
+    /// Builds the payload of a <see cref="EventKind.StepCompleted"/> event: the step number plus how
+    /// that step ended. The UI used to decide whether a card goes green by searching the summary for
+    /// "FAILED:" and "skipped (dependency failed)", so rewording a message silently turned a red card
+    /// green. A value cannot be reworded.
+    /// </summary>
+    public static string StepPayload(int? stepNo, StepOutcomeKind outcome)
+        => stepNo is { } n
+            ? $"{{\"step\":{n},\"stepOutcome\":\"{outcome}\"}}"
+            : $"{{\"stepOutcome\":\"{outcome}\"}}";
+
+    /// <summary>How the step this event reports ended, when it says so.</summary>
+    public static StepOutcomeKind? StepOutcome(this WorkEvent ev)
+    {
+        if (string.IsNullOrEmpty(ev.PayloadJson))
+            return null;
+
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(ev.PayloadJson);
+            return doc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Object
+                && doc.RootElement.TryGetProperty("stepOutcome", out var value)
+                && value.ValueKind == System.Text.Json.JsonValueKind.String
+                && Enum.TryParse<StepOutcomeKind>(value.GetString(), out var kind)
+                ? kind
+                : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Builds the payload of a terminal event (<see cref="EventKind.TaskCompleted"/> /
+    /// <see cref="EventKind.TaskFailed"/>). The KIND is what consumers should read; the summary text
+    /// is for display. Status used to be inferred from wording, which is why a failed run could read
+    /// as a successful one just by reaching the wrong final event.
+    /// </summary>
+    public static string OutcomePayload(RunOutcomeKind kind, string? reason = null)
+        => System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, string?>
+        {
+            ["outcome"] = kind.ToString(),
+            ["reason"] = string.IsNullOrWhiteSpace(reason) ? null : reason
+        });
+
+    /// <summary>The outcome this event carries, or null when it is not a terminal event.</summary>
+    public static RunOutcomeKind? Outcome(this WorkEvent ev)
+    {
+        if (string.IsNullOrEmpty(ev.PayloadJson))
+            return null;
+
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(ev.PayloadJson);
+            if (doc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Object
+                || !doc.RootElement.TryGetProperty("outcome", out var value)
+                || value.ValueKind != System.Text.Json.JsonValueKind.String)
+                return null;
+
+            return Enum.TryParse<RunOutcomeKind>(value.GetString(), out var kind) ? kind : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Why the run ended the way it did, when the terminal event says so.</summary>
+    public static string? OutcomeReason(this WorkEvent ev)
+    {
+        if (string.IsNullOrEmpty(ev.PayloadJson))
+            return null;
+
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(ev.PayloadJson);
+            return doc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Object
+                && doc.RootElement.TryGetProperty("reason", out var value)
+                && value.ValueKind == System.Text.Json.JsonValueKind.String
+                ? value.GetString()
+                : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
 
     /// <summary>The tokens this event reports, or null when it is not a usage event.</summary>
     public static (int In, int Out)? Usage(this WorkEvent ev)

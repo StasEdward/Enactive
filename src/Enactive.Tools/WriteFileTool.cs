@@ -36,7 +36,16 @@ public sealed class WriteFileTool : ITool
         if (string.IsNullOrWhiteSpace(path))
             return ToolResults.Fail("'path' is required.");
 
-        var text = content ?? string.Empty;
+        // A MISSING content is an error, not an empty file. The schema requires it, so its absence
+        // means the arguments are not what the model meant to send - and the old default silently
+        // turned that into a truncation of whatever was already at that path. (It is how a
+        // mis-merged read+write pair emptied a file: the write arrived carrying the read's
+        // arguments, which have no content.) An explicit "" still writes an empty file.
+        if (content is null)
+            return ToolResults.Fail(
+                "'content' is required. To empty a file, pass an empty string explicitly.");
+
+        var text = content;
 
         try
         {

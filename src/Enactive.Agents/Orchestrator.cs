@@ -141,6 +141,18 @@ public sealed class Orchestrator : IOrchestrator
         };
         var artifacts = new List<ArtifactRef>();
 
+        // The one place a run ends. TaskCompleted is emitted for Completed and NOTHING else — the
+        // whole point of the outcome type is that a failure cannot arrive dressed as a success — and
+        // the kind travels in the payload so the UI, the history and the Inbox read a value instead
+        // of parsing the wording.
+        WorkEvent Terminal(RunOutcomeKind kind, string? reason)
+            => new(Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow,
+                   kind == RunOutcomeKind.Completed ? EventKind.TaskCompleted : EventKind.TaskFailed,
+                   kind == RunOutcomeKind.Completed
+                       ? SummarizeArtifacts(artifacts)
+                       : $"{kind}{(string.IsNullOrWhiteSpace(reason) ? "" : ": " + reason)}",
+                   WorkEventPayload.OutcomePayload(kind, reason));
+
         if (plan.Disposition == IntentDisposition.QuickAction)
         {
             yield return Ev(EventKind.Routed, $"Quick action: {plan.Title}");
@@ -149,14 +161,59 @@ public sealed class Orchestrator : IOrchestrator
             // task that owns the log scope, while this method only yields what the channel hands it.
             var quick = Channel.CreateUnbounded<WorkEvent>(
                 new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
+            var quickResult = new ToolLoopResult();
             var quickPump = Task.Run(async () =>
             {
                 using var _quickScope = LogScope.Begin(runId, taskId);
                 try
                 {
-                    await foreach (var ev in RunToolLoopAsync(
-                        taskId, runId, provider, model.Model, worker, messages, artifacts, intent.Context, null, ct))
-                        quick.Writer.TryWrite(ev);
+                    // A configured reviewer now applies here too. It used to run for plan steps only,
+                    // while the planner was explicitly told to prefer QuickAction — so the reviewer
+                    // setting did nothing for most ordinary requests, file writes and commands included.
+                    var maxQuickAttempts = reviewOn ? _reviewAttempts + 1 : 1;
+
+                    for (var attempt = 1; attempt <= maxQuickAttempts; attempt++)
+                    {
+                        var evidenceStart = messages.Count;
+
+                        await foreach (var ev in RunToolLoopAsync(
+                            taskId, runId, provider, model.Model, worker, messages, artifacts,
+                            intent.Context, null, quickResult, ct))
+                            quick.Writer.TryWrite(ev);
+
+                        if (!reviewOn || !quickResult.Succeeded)
+                            break;
+
+                        quick.Writer.TryWrite(Ev(EventKind.ReviewRequested, "reviewing…"));
+                        var review = await ReviewAsync(
+                            plan.Title, messages, evidenceStart, artifacts, reviewProvider!, reviewModel, ct);
+
+                        if (review.Pass)
+                        {
+                            quick.Writer.TryWrite(Ev(EventKind.ReviewPassed,
+                                $"PASS{(string.IsNullOrEmpty(review.Notes) ? "" : ": " + review.Notes)}"));
+                            break;
+                        }
+
+                        quick.Writer.TryWrite(Ev(EventKind.ReviewFailed, $"FAIL: {review.Notes}"));
+
+                        if (attempt < maxQuickAttempts)
+                        {
+                            messages.Add(ChatMessage.User(
+                                $"A reviewer rejected the previous attempt with this feedback: {review.Notes}\n"
+                                + "Please fix the issues and redo the work."));
+                            continue;
+                        }
+
+                        // Out of attempts and still rejected: the work is NOT done, and saying so is
+                        // the entire point of having a reviewer.
+                        quickResult.Set(StepOutcomeKind.ReviewRejected, "review not passed: " + review.Notes);
+                    }
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    quickResult.Set(StepOutcomeKind.Failed, ex.Message);
+                    quick.Writer.TryWrite(Ev(EventKind.ErrorObserved, ex.Message));
                 }
                 finally
                 {
@@ -169,7 +226,7 @@ public sealed class Orchestrator : IOrchestrator
 
             await quickPump;
 
-            yield return Ev(EventKind.TaskCompleted, SummarizeArtifacts(artifacts));
+            yield return Terminal(RunOutcomeOf(new[] { quickResult.Kind }), quickResult.Reason);
             yield break;
         }
 
@@ -198,6 +255,10 @@ public sealed class Orchestrator : IOrchestrator
 
         // One line per finished step, so a parallel branch knows what its siblings concluded.
         var digest = new List<string>();
+
+        // How each step ended. The run's own outcome is the aggregate of these, computed once at the
+        // end — not assumed to be success because the loop finished.
+        var stepOutcomes = new Dictionary<Guid, StepOutcomeKind>();
 
         async Task RunStepAsync(PlanStep step)
         {
@@ -248,9 +309,9 @@ public sealed class Orchestrator : IOrchestrator
                 Emit(EventKind.Routed, $"[{stepNumber}] {step.Complexity} step -> {stepRef.ProviderId}/{stepRef.Model}");
 
             var maxAttempts = reviewOn ? _reviewAttempts + 1 : 1;
-            var passed = true;
-            var failedHard = false;
-            string? failError = null;
+            var stepResult = new ToolLoopResult();
+            var outcome = StepOutcomeKind.Succeeded;
+            string? outcomeReason = null;
 
             for (var attempt = 1; attempt <= maxAttempts; attempt++)
             {
@@ -260,8 +321,11 @@ public sealed class Orchestrator : IOrchestrator
                 {
                     await foreach (var ev in RunToolLoopAsync(
                         taskId, runId, stepProvider, stepModel, worker, convo, artifacts,
-                        intent.Context, stepNumber, ct))
+                        intent.Context, stepNumber, stepResult, ct))
                         events.Writer.TryWrite(ev);
+
+                    outcome = stepResult.Kind;
+                    outcomeReason = stepResult.Reason;
                 }
                 catch (OperationCanceledException)
                 {
@@ -270,71 +334,85 @@ public sealed class Orchestrator : IOrchestrator
                 catch (Exception ex)
                 {
                     // A throw fails only THIS step (and its dependents), never the whole run.
-                    failedHard = true;
-                    failError = ex.Message;
+                    outcome = StepOutcomeKind.Failed;
+                    outcomeReason = ex.Message;
                     break;
                 }
 
-                if (!reviewOn)
+                if (!reviewOn || outcome != StepOutcomeKind.Succeeded)
                     break;
 
                 Emit(EventKind.ReviewRequested, $"[{stepNumber}] reviewing with reasoner…");
 
-                ReviewResult review;
-                try
-                {
-                    string[] changed;
-                    lock (artifacts)
-                        changed = artifacts.Select(a => a.RelativePath).ToArray();
-                    var evidence = BuildEvidence(convo, evidenceStart);
-                    review = await _reviewer.ReviewAsync(step.Title, LastAssistant(convo), evidence, changed, reviewProvider!, reviewModel, ct);
-                }
-                catch (Exception ex)
-                {
-                    // Fail CLOSED. This used to score an unreachable reviewer as PASS, which meant a
-                    // stopped Ollama or a bad key silently turned every step green — the gate looked
-                    // configured and enforced nothing. A reviewer that cannot answer has not approved.
-                    review = new ReviewResult(false, "review error: " + ex.Message);
-                }
+                var review = await ReviewAsync(
+                    step.Title, convo, evidenceStart, artifacts, reviewProvider!, reviewModel, ct);
 
                 if (review.Pass)
                 {
                     Emit(EventKind.ReviewPassed,
                         $"[{stepNumber}] PASS{(string.IsNullOrEmpty(review.Notes) ? "" : ": " + review.Notes)}");
-                    passed = true;
+                    outcome = StepOutcomeKind.Succeeded;
                     break;
                 }
 
-                passed = false;
                 Emit(EventKind.ReviewFailed, $"[{stepNumber}] FAIL: {review.Notes}");
 
                 if (attempt < maxAttempts)
+                {
                     convo.Add(ChatMessage.User(
                         $"A reviewer rejected the previous attempt with this feedback: {review.Notes}\n"
                         + "Please fix the issues and redo this step."));
+                    continue;
+                }
+
+                // Attempts exhausted and still rejected. This used to call MarkDone anyway, so a step
+                // the reviewer had explicitly refused unblocked its dependents and the run still ended
+                // Completed — which removes the only thing a review gate is for.
+                outcome = StepOutcomeKind.ReviewRejected;
+                outcomeReason = "review not passed: " + review.Notes;
             }
 
-            if (failedHard)
-            {
-                var skippedSteps = scheduler.MarkFailed(step.Id);
-                Emit(EventKind.StepCompleted, $"[{stepNumber}/{total}] {step.Title} — FAILED: {failError}");
-                foreach (var sk in skippedSteps)
-                {
-                    // Stamp the skipped step's own number so the UI marks ITS card, not whichever
-                    // card happened to be current.
-                    var skNo = stepNumbers.TryGetValue(sk.Id, out var n) ? n : 0;
-                    events.Writer.TryWrite(Ev(EventKind.StepCompleted,
-                        $"[{skNo}/{total}] {sk.Title} — skipped (dependency failed)",
-                        skNo > 0 ? skNo : (int?)null));
-                }
-            }
-            else
+            lock (stepOutcomes)
+                stepOutcomes[step.Id] = outcome;
+
+            // The card's colour comes from this payload, not from the wording of the summary.
+            void EmitStepDone(string summary, int? no, StepOutcomeKind kind)
+                => events.Writer.TryWrite(new WorkEvent(
+                    Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow,
+                    EventKind.StepCompleted, summary, WorkEventPayload.StepPayload(no, kind)));
+
+            // Succeeded is the ONLY outcome that unblocks what comes after it.
+            if (outcome == StepOutcomeKind.Succeeded)
             {
                 scheduler.MarkDone(step.Id);
                 lock (digest)
                     digest.Add($"{step.Title}: {Gist(LastAssistant(convo))}");
-                Emit(EventKind.StepCompleted,
-                    $"[{stepNumber}/{total}] {step.Title} — {(passed ? "done" : "done (review not passed)")}");
+                EmitStepDone($"[{stepNumber}/{total}] {step.Title} — done", stepNumber, outcome);
+                return;
+            }
+
+            var label = outcome switch
+            {
+                StepOutcomeKind.ReviewRejected => "REVIEW REJECTED",
+                StepOutcomeKind.Incomplete => "INCOMPLETE",
+                _ => "FAILED"
+            };
+
+            var skippedSteps = scheduler.MarkFailed(step.Id);
+            EmitStepDone(
+                $"[{stepNumber}/{total}] {step.Title} — {label}{(string.IsNullOrWhiteSpace(outcomeReason) ? "" : ": " + outcomeReason)}",
+                stepNumber, outcome);
+
+            foreach (var sk in skippedSteps)
+            {
+                // Stamp the skipped step's own number so the UI marks ITS card, not whichever
+                // card happened to be current.
+                var skNo = stepNumbers.TryGetValue(sk.Id, out var n) ? n : 0;
+                lock (stepOutcomes)
+                    stepOutcomes[sk.Id] = StepOutcomeKind.Skipped;
+                EmitStepDone(
+                    $"[{skNo}/{total}] {sk.Title} — skipped (a dependency did not succeed)",
+                    skNo > 0 ? skNo : (int?)null, StepOutcomeKind.Skipped);
             }
         }
 
@@ -370,11 +448,109 @@ public sealed class Orchestrator : IOrchestrator
         await pump;
 
 
-        if (scheduler.HasPending)
+        var cycle = scheduler.HasPending;
+        if (cycle)
             yield return Ev(EventKind.ErrorObserved,
                 "Plan has unresolvable dependencies (a cycle) — remaining steps could not run.");
 
-        yield return Ev(EventKind.TaskCompleted, SummarizeArtifacts(artifacts));
+        StepOutcomeKind[] outcomes;
+        lock (stepOutcomes)
+            outcomes = stepOutcomes.Values.ToArray();
+
+        var runOutcome = RunOutcomeOf(outcomes);
+        if (cycle && runOutcome == RunOutcomeKind.Completed)
+            runOutcome = RunOutcomeKind.Incomplete;
+
+        yield return Terminal(runOutcome, ExplainOutcome(outcomes, cycle));
+    }
+
+    /// <summary>
+    /// The run's outcome from its steps'. Anything that went wrong outranks anything that went
+    /// right: a plan is not finished because most of it finished. Completed requires that every step
+    /// succeeded — which is exactly the guarantee the engine did not have.
+    /// </summary>
+    private static RunOutcomeKind RunOutcomeOf(IReadOnlyCollection<StepOutcomeKind> steps)
+    {
+        if (steps.Count == 0)
+            return RunOutcomeKind.Incomplete;
+
+        if (steps.Any(s => s is StepOutcomeKind.Failed or StepOutcomeKind.ReviewRejected))
+            return RunOutcomeKind.Failed;
+
+        if (steps.Any(s => s is StepOutcomeKind.Incomplete or StepOutcomeKind.Skipped))
+            return RunOutcomeKind.Incomplete;
+
+        return RunOutcomeKind.Completed;
+    }
+
+    /// <summary>A short, honest summary of why a run did not simply complete.</summary>
+    private static string? ExplainOutcome(IReadOnlyCollection<StepOutcomeKind> steps, bool cycle)
+    {
+        var parts = new List<string>();
+
+        var failed = steps.Count(s => s == StepOutcomeKind.Failed);
+        var rejected = steps.Count(s => s == StepOutcomeKind.ReviewRejected);
+        var incomplete = steps.Count(s => s == StepOutcomeKind.Incomplete);
+        var skipped = steps.Count(s => s == StepOutcomeKind.Skipped);
+
+        if (failed > 0) parts.Add($"{failed} step(s) failed");
+        if (rejected > 0) parts.Add($"{rejected} step(s) rejected by the reviewer");
+        if (incomplete > 0) parts.Add($"{incomplete} step(s) did not finish");
+        if (skipped > 0) parts.Add($"{skipped} step(s) skipped");
+        if (cycle) parts.Add("the plan had unresolvable dependencies");
+
+        return parts.Count == 0 ? null : string.Join("; ", parts);
+    }
+
+    /// <summary>
+    /// How a tool loop ended, filled in by <see cref="RunToolLoopAsync"/>. A class, not a return
+    /// value, because an async iterator has nowhere to put one.
+    /// </summary>
+    private sealed class ToolLoopResult
+    {
+        public StepOutcomeKind Kind { get; private set; } = StepOutcomeKind.Incomplete;
+        public string? Reason { get; private set; }
+
+        public bool Succeeded => Kind == StepOutcomeKind.Succeeded;
+
+        public void Set(StepOutcomeKind kind, string? reason)
+        {
+            Kind = kind;
+            Reason = reason;
+        }
+    }
+
+    /// <summary>
+    /// Asks the reviewer about the work just done. Shared by the QuickAction path and by a DAG step,
+    /// so a configured reviewer applies to both — it used to run for plan steps only, while the
+    /// planner was told to prefer QuickAction, which left most ordinary requests unreviewed.
+    ///
+    /// Fails CLOSED: a reviewer that cannot answer has not approved anything.
+    /// </summary>
+    private async Task<ReviewResult> ReviewAsync(
+        string title, List<ChatMessage> convo, int evidenceStart, List<ArtifactRef> artifacts,
+        IChatProvider reviewProvider, string reviewModel, CancellationToken ct)
+    {
+        try
+        {
+            string[] changed;
+            lock (artifacts)
+                changed = artifacts.Select(a => a.RelativePath).ToArray();
+
+            var evidence = BuildEvidence(convo, evidenceStart);
+            return await _reviewer.ReviewAsync(
+                title, LastAssistant(convo), evidence, changed, reviewProvider, reviewModel, ct);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // This used to score an unreachable reviewer as PASS, so a stopped Ollama or a bad key
+            // silently turned every step green: the gate looked configured and enforced nothing.
+            return new ReviewResult(false, "review error: " + ex.Message);
+        }
     }
 
     /// <summary>
@@ -395,9 +571,16 @@ public sealed class Orchestrator : IOrchestrator
     private async IAsyncEnumerable<WorkEvent> RunToolLoopAsync(
         Guid taskId, Guid runId, IChatProvider provider, string model, Worker worker,
         List<ChatMessage> messages, List<ArtifactRef> artifacts, WorkContext context,
-        int? stepNo,
+        int? stepNo, ToolLoopResult loopResult,
         [EnumeratorCancellation] CancellationToken ct)
     {
+        // An async iterator cannot return a value, so the caller passes in the slot the loop fills.
+        // Without it "how did this end" existed only as English inside an event, and every consumer
+        // guessed. Pessimistic until proven otherwise: falling out of the loop means the iteration
+        // cap was reached, which is not success.
+        loopResult.Set(StepOutcomeKind.Incomplete,
+            $"reached the {MaxIterations}-iteration limit without a final answer");
+
         WorkEvent Ev(EventKind kind, string summary)
             => new(Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow, kind, summary,
                    stepNo is { } n ? $"{{\"step\":{n}}}" : null);
@@ -460,6 +643,8 @@ public sealed class Orchestrator : IOrchestrator
             {
                 if (contentBuilder.Length > 0)
                     messages.Add(new ChatMessage(ChatRole.Assistant, contentBuilder.ToString(), null));
+                loopResult.Set(StepOutcomeKind.Incomplete,
+                    $"the model's output was cut off at the token limit (finish={finishReason})");
                 yield return Ev(EventKind.ErrorObserved,
                     $"Model output was cut off at the token limit (finish={finishReason}); stopping this step. "
                     + "Raise max_tokens, or use a model that doesn't spend the whole budget on reasoning.");
@@ -499,6 +684,7 @@ public sealed class Orchestrator : IOrchestrator
                     continue;
                 }
 
+                loopResult.Set(StepOutcomeKind.Succeeded, null);
                 yield break; // genuine final answer - no tool calls
             }
 

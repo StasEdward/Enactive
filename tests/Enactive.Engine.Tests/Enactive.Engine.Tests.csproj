@@ -23,6 +23,7 @@
     <ProjectReference Include="..\..\src\Enactive.Agents\Enactive.Agents.csproj" />
     <ProjectReference Include="..\..\src\Enactive.Tools\Enactive.Tools.csproj" />
     <ProjectReference Include="..\..\src\Enactive.Workspace\Enactive.Workspace.csproj" />
+    <ProjectReference Include="..\..\src\Enactive.Providers\Enactive.Providers.csproj" />
   </ItemGroup>
 
 </Project>
