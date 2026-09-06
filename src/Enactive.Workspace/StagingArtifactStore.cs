@@ -23,9 +23,10 @@ public sealed class StagedChange
     }
 
     /// <summary>
-    /// Which revert scope proposed this. A rejected step drops the proposals it made and nobody
-    /// else's — with several steps sharing one store, an earlier checkpoint used to sweep away a
-    /// later step's still-pending work.
+    /// WHO proposed this: the owner of the scope it came through. A rejected step drops the
+    /// proposals it made and nobody else's — with several steps sharing one store, taking the value
+    /// off a shared "newest scope" field gave both steps the same number, and rejecting the second
+    /// swept away the first's accepted work.
     /// </summary>
     public int Scope { get; }
 
@@ -102,15 +103,16 @@ public static class FileHash
 /// Still true, and stated rather than papered over: proposals are held in memory and do not survive
 /// closing the app, and shell tools work on the real folder, so a staged run is not a transaction.
 /// </summary>
-public sealed class StagingArtifactStore : IArtifactStore
+public sealed class StagingArtifactStore : IOwnedArtifactStore
 {
     private readonly string _root;
     private readonly List<StagedChange> _changes = new();
     private readonly object _gate = new();
     private int _sequence;
 
-    /// <summary>The newest revert scope handed out by <see cref="Checkpoint"/>; -1 = none yet.</summary>
-    private int _scope = -1;
+    /// <summary>Owner ids handed out so far. -1 is "nobody", and nobody's proposals are undone.</summary>
+    private int _owners = -1;
+    private const int Unowned = -1;
 
     public StagingArtifactStore(string workspaceRoot) => _root = Path.GetFullPath(workspaceRoot);
 
@@ -131,8 +133,14 @@ public sealed class StagingArtifactStore : IArtifactStore
         }
     }
 
-    public async Task<ArtifactRef> CreateAsync(
+    /// <summary>A proposal made outside any step's scope. It is nobody's, and nobody can drop it.</summary>
+    public Task<ArtifactRef> CreateAsync(
         string relativePath, ArtifactKind kind, string title, Func<Stream, Task> write, CancellationToken ct)
+        => CreateAsync(relativePath, kind, title, write, Unowned, ct);
+
+    public async Task<ArtifactRef> CreateAsync(
+        string relativePath, ArtifactKind kind, string title, Func<Stream, Task> write,
+        int owner, CancellationToken ct)
     {
         // Capture the proposed content without touching disk.
         await using var buffer = new MemoryStream();
@@ -151,7 +159,7 @@ public sealed class StagingArtifactStore : IArtifactStore
         var id = Guid.NewGuid();
         lock (_gate)
             _changes.Add(new StagedChange(
-                id, relativePath, key, oldContent, newContent, _sequence++, _scope));
+                id, relativePath, key, oldContent, newContent, _sequence++, owner));
 
         return new ArtifactRef(id, kind, title, relativePath);
     }
@@ -271,13 +279,35 @@ public sealed class StagingArtifactStore : IArtifactStore
     }
 
     /// <summary>
-    /// Opens a revert scope and returns its id — the same contract as the disk store's. Proposals
-    /// made from here on are stamped with it, so a rejected step drops ITS proposals and leaves a
-    /// concurrent step's alone.
+    /// A new owner id — the same contract as the disk store's. A proposal carries the owner of the
+    /// scope that made it, so a rejected step drops ITS proposals and leaves a concurrent step's
+    /// alone. The owner comes from the scope, never from a shared "newest" field: that field gave
+    /// two interleaved steps the same number, and rejecting the second dropped the first's work.
     /// </summary>
-    public int Checkpoint()
+    public int NewOwner()
     {
-        lock (_gate) return ++_scope;
+        lock (_gate) return ++_owners;
+    }
+
+    public IArtifactScope BeginStep() => new ArtifactScope(this, NewOwner());
+
+    /// <summary>
+    /// Staging holds proposals, and a proposal cannot say "this file is gone" — see the contract on
+    /// <see cref="IArtifactStore.RemoveAsync(string, CancellationToken)"/>. The caller must report
+    /// that rather than delete the file itself and leave the staging record lying about the state.
+    /// </summary>
+    public Task RemoveAsync(string relativePath, int owner, CancellationToken ct)
+        => throw new NotSupportedException("Staged changes cannot express a deletion.");
+
+    /// <summary>Every path this owner proposed a change to — the canonical key, not the spelling.</summary>
+    public IReadOnlyCollection<string> TouchedBy(int owner)
+    {
+        lock (_gate)
+            return _changes
+                .Where(c => c.Scope == owner)
+                .Select(c => c.Key)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
     }
 
     /// <summary>
@@ -285,8 +315,8 @@ public sealed class StagingArtifactStore : IArtifactStore
     /// putting the files back. Nothing was written to disk, so there is nothing to restore and
     /// nothing to conflict with: a rejected step's proposals simply stop existing.
     /// </summary>
-    public Task<RevertReport> RevertToAsync(
-        int checkpoint, IReadOnlyCollection<string> paths, CancellationToken ct)
+    public Task<RevertReport> RevertOwnedAsync(
+        int owner, IReadOnlyCollection<string> paths, CancellationToken ct)
     {
         var reverted = new List<string>();
 
@@ -304,7 +334,7 @@ public sealed class StagingArtifactStore : IArtifactStore
         {
             foreach (var change in _changes)
             {
-                if (change.Scope != checkpoint || !change.Pending)
+                if (change.Scope != owner || !change.Pending)
                     continue;
 
                 if (!wanted.Contains(change.Key))

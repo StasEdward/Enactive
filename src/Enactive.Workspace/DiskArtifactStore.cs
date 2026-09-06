@@ -15,10 +15,12 @@ public sealed record FileWriteRecord(
     string? BackupPath,
     // Null when this entry RECORDS A REMOVAL: the path was deleted, so there is no content to hash.
     string? AfterHash,
-    // Which revert scope was open when this write happened — see DiskArtifactStore.Checkpoint.
-    // A revert only undoes writes made in its OWN scope; one made under a later scope belongs to
-    // another step and is a conflict to report, never work to throw away.
-    int Scope = 0);
+    // WHO made this write: the owner of the scope it came through - see DiskArtifactStore.NewOwner.
+    // A revert only undoes its OWN writes; one belonging to another owner is a conflict to report,
+    // never work to throw away. Recorded from the scope that performed the write, never read off a
+    // shared "newest" field, because that field gave two interleaved steps the same number and let
+    // one step's revert destroy the other's accepted work.
+    int Owner = -1);
 
 /// <summary>Why an undo could not be performed, or that it was.</summary>
 public sealed record UndoResult(bool Undone, string? Conflict = null, bool Restored = false)
@@ -36,10 +38,10 @@ public sealed record UndoResult(bool Undone, string? Conflict = null, bool Resto
 /// agent edited an existing source file, undoing the edit deleted the source and reported "undone".
 /// Now the previous bytes are copied into the workspace's own state folder before every write, so a
 /// write can be undone to the state before the RUN (the artifact card) or before a STEP
-/// (<see cref="RevertToAsync"/>, used when a reviewer rejects the work) — and both refuse when the
+/// (<see cref="RevertOwnedAsync"/>, used when a reviewer rejects the work) — and both refuse when the
 /// file has changed since, because at that point undoing would destroy someone else's work.
 /// </summary>
-public sealed class DiskArtifactStore : IArtifactStore
+public sealed class DiskArtifactStore : IOwnedArtifactStore
 {
     private readonly string _root;
     private readonly string _backupRoot;
@@ -55,10 +57,11 @@ public sealed class DiskArtifactStore : IArtifactStore
     private int _backupSequence;
 
     /// <summary>
-    /// The newest revert scope handed out by <see cref="Checkpoint"/>. Every write is stamped with
-    /// it, which is how a revert tells its own work from a concurrent step's.
+    /// A write nobody claimed — made straight through the store rather than through a step's scope.
+    /// It belongs to no owner, so no revert will ever roll it back, and it makes every owner's
+    /// revert treat it as somebody else's work. That is the safe reading of "we do not know".
     /// </summary>
-    private int _scope = -1;
+    private const int Unowned = -1;
 
     public DiskArtifactStore(WorkspaceInfo workspace, Guid runId = default)
     {
@@ -111,25 +114,48 @@ public sealed class DiskArtifactStore : IArtifactStore
     }
 
     /// <summary>
-    /// Opens a revert scope and returns its id. The id is opaque to the caller: it identifies WHO is
-    /// about to write, not just WHEN, which is what lets <see cref="RevertToAsync"/> undo one step's
-    /// work without touching a concurrent step's.
+    /// A new owner id, recorded against the journal as it stands now. The id identifies WHO is about
+    /// to write — not merely when — which is what lets one step's work be undone without touching a
+    /// concurrent step's. It is handed to a scope and never read off a shared field again: the field
+    /// version gave every write whatever value happened to be newest, so two steps that opened in
+    /// one order and wrote in the other both got the second one's number.
     /// </summary>
-    public int Checkpoint()
+    public int NewOwner()
     {
         lock (_journalGate)
         {
-            _scope = _scopePositions.Count;
-            _scopePositions.Add(_journal.Count);
-            return _scope;
+            _ownerPositions.Add(_journal.Count);
+            return _ownerPositions.Count - 1;
         }
     }
 
-    /// <summary>Journal position each scope was opened at, indexed by scope id.</summary>
-    private readonly List<int> _scopePositions = new();
+    public IArtifactScope BeginStep() => new ArtifactScope(this, NewOwner());
+
+    /// <summary>
+    /// Every path this owner wrote or removed, from the journal — the record made when the operation
+    /// happened, not a reading of what the model said it would do.
+    /// </summary>
+    public IReadOnlyCollection<string> TouchedBy(int owner)
+    {
+        lock (_journalGate)
+            return _journal
+                .Where(w => w.Owner == owner)
+                .Select(w => w.RelativePath)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+    }
+
+    /// <summary>Journal position each owner was created at, indexed by owner id.</summary>
+    private readonly List<int> _ownerPositions = new();
+
+    /// <summary>A write made outside any step's scope. It is nobody's, and nobody can undo it.</summary>
+    public Task<ArtifactRef> CreateAsync(
+        string relativePath, ArtifactKind kind, string title, Func<Stream, Task> write, CancellationToken ct)
+        => CreateAsync(relativePath, kind, title, write, Unowned, ct);
 
     public async Task<ArtifactRef> CreateAsync(
-        string relativePath, ArtifactKind kind, string title, Func<Stream, Task> write, CancellationToken ct)
+        string relativePath, ArtifactKind kind, string title, Func<Stream, Task> write,
+        int owner, CancellationToken ct)
     {
         var fullPath = ResolveInsideRoot(relativePath);
 
@@ -150,7 +176,7 @@ public sealed class DiskArtifactStore : IArtifactStore
 
         lock (_journalGate)
             _journal.Add(new FileWriteRecord(
-                relativePath, existed, beforeHash, backupPath, FileHash.OfFile(fullPath)!, _scope));
+                relativePath, existed, beforeHash, backupPath, FileHash.OfFile(fullPath)!, owner));
 
         var id = Guid.NewGuid();
         _paths[id] = fullPath;
@@ -162,7 +188,11 @@ public sealed class DiskArtifactStore : IArtifactStore
     /// backup is taken first and the entry is written before the delete, because after the delete
     /// neither is knowable — the same reason a write records what it displaced.
     /// </summary>
-    public async Task RemoveAsync(string relativePath, CancellationToken ct)
+    public Task RemoveAsync(string relativePath, CancellationToken ct)
+        => RemoveAsync(relativePath, Unowned, ct);
+
+    /// <inheritdoc cref="RemoveAsync(string, CancellationToken)"/>
+    public async Task RemoveAsync(string relativePath, int owner, CancellationToken ct)
     {
         var fullPath = ResolveInsideRoot(relativePath);
 
@@ -179,7 +209,7 @@ public sealed class DiskArtifactStore : IArtifactStore
 
         lock (_journalGate)
             _journal.Add(new FileWriteRecord(
-                relativePath, ExistedBefore: true, beforeHash, backupPath, AfterHash: null, _scope));
+                relativePath, ExistedBefore: true, beforeHash, backupPath, AfterHash: null, owner));
 
         File.Delete(fullPath);
         await Task.CompletedTask;
@@ -208,19 +238,19 @@ public sealed class DiskArtifactStore : IArtifactStore
     }
 
     /// <summary>
-    /// Puts the named paths back to how they were at <paramref name="checkpoint"/> — see the contract
-    /// on <see cref="IArtifactStore.RevertToAsync"/> for why this exists.
+    /// Puts the named paths back to how they were when <paramref name="owner"/> was created — see
+    /// the contract on <see cref="IArtifactScope.RevertAsync"/> for why this exists.
     /// </summary>
-    public Task<RevertReport> RevertToAsync(
-        int checkpoint, IReadOnlyCollection<string> paths, CancellationToken ct)
+    public Task<RevertReport> RevertOwnedAsync(
+        int owner, IReadOnlyCollection<string> paths, CancellationToken ct)
     {
         var reverted = new List<string>();
         var kept = new List<string>();
 
         int position;
         lock (_journalGate)
-            position = checkpoint >= 0 && checkpoint < _scopePositions.Count
-                ? _scopePositions[checkpoint]
+            position = owner >= 0 && owner < _ownerPositions.Count
+                ? _ownerPositions[owner]
                 : 0;
 
         foreach (var path in paths.Distinct(StringComparer.OrdinalIgnoreCase))
@@ -237,17 +267,25 @@ public sealed class DiskArtifactStore : IArtifactStore
             if (after.Length == 0)
                 continue;
 
-            // Somebody else wrote this file after we did. Their step may already have been accepted,
-            // so putting the file back to OUR "before" would destroy approved work — the file is no
-            // longer ours to speak for. The hash check below cannot catch this: what is on disk
-            // matches their write exactly, so it looks untouched. Report it instead.
-            if (after.Any(w => w.Scope != checkpoint))
+            // Somebody else wrote this file AFTER we did. Their step may already have been accepted,
+            // so putting the file back would destroy approved work — the file is no longer ours to
+            // speak for. The hash check below cannot catch this: what is on disk matches their write
+            // exactly, so it looks untouched. Report it instead.
+            if (after[^1].Owner != owner)
             {
                 kept.Add(path);
                 continue;
             }
 
-            var outcome = Restore(path, after[0], after[^1]);
+            // Only OUR entries, and the state to go back to is the one OUR FIRST write displaced —
+            // which may well be a sibling step's accepted content rather than the original file.
+            // Taking the oldest entry after the checkpoint instead would restore the state before
+            // THEIR work too, undoing a step that was never rejected.
+            var mine = after.Where(w => w.Owner == owner).ToArray();
+            if (mine.Length == 0)
+                continue;
+
+            var outcome = Restore(path, mine[0], mine[^1]);
             if (!outcome.Undone)
             {
                 kept.Add(path);
@@ -260,7 +298,7 @@ public sealed class DiskArtifactStore : IArtifactStore
             // other path's writes, stay exactly where they were.
             lock (_journalGate)
                 _journal.RemoveAll(w =>
-                    w.Scope == checkpoint
+                    w.Owner == owner
                     && string.Equals(w.RelativePath, path, WorkspaceGuard.Comparison));
         }
 

@@ -67,27 +67,145 @@ public interface IArtifactStore
         => throw new NotSupportedException("This artifact store cannot remove files.");
 
     /// <summary>
-    /// A marker for "the state the workspace is in right now", to be handed back to
-    /// <see cref="RevertToAsync"/>. Opaque on purpose: what it counts is the store's business.
+    /// Opens a view of this store for one unit of work — a plan step, or a quick action — whose
+    /// writes are all attributed to it and which can undo exactly those.
+    ///
+    /// <para>This replaced a checkpoint id plus a shared "newest scope" field on the store. The
+    /// field could not answer the question it was asked: every write took the value the field
+    /// happened to hold, not the identity of the step that made it. Two steps sharing one store
+    /// need only open in one order and write in the other — A checkpoints, B checkpoints, A writes
+    /// its accepted work, B writes work the reviewer then rejects — and BOTH writes carried B's
+    /// number, so undoing B destroyed A. A view handed to the step cannot be got wrong that way:
+    /// the owner is fixed when the view is made, not read off the store when the write lands.</para>
     /// </summary>
-    int Checkpoint() => 0;
+    IArtifactScope BeginStep() => new UnownedScope(this);
+}
+
+/// <summary>
+/// One unit of work's view of a store. Everything written through it belongs to it, and
+/// <see cref="RevertAsync"/> undoes that and nothing else.
+/// </summary>
+public interface IArtifactScope : IArtifactStore
+{
+    /// <summary>
+    /// Every path this scope has written or removed, as the STORE recorded it at the moment the
+    /// operation happened.
+    ///
+    /// <para>This is the record a revert and a review should be built from, and for a while neither
+    /// was. The orchestrator worked out "what did this step write" by parsing the model's own
+    /// conversation for <c>write_file</c> calls, which was wrong twice over: <c>edit_file</c> and
+    /// <c>move_file</c> do not have that name and so were never rolled back at all, and once the
+    /// conversation had to be shortened to fit the context window the arguments it was reading were
+    /// gone — so a trimmed run silently stopped undoing anything. What was executed is not something
+    /// to reconstruct from a prompt. The store knows.</para>
+    /// </summary>
+    IReadOnlyCollection<string> TouchedPaths => Array.Empty<string>();
 
     /// <summary>
-    /// Undoes what was written to <paramref name="paths"/> since <paramref name="checkpoint"/>,
-    /// restoring each one to the content it had at that moment (removing it if it did not exist).
+    /// Undoes what THIS scope wrote to <paramref name="paths"/>, restoring each one to the content
+    /// it had when the scope opened (removing it if it did not exist).
     ///
     /// This is what makes a rejected step mean something. Without it the review gate stopped the
     /// REPORT — the run said Failed — while the consequence stayed on disk: a guide full of invented
     /// command syntax sat in the workspace under a red status. A gate that leaves the damage behind
     /// is only half a gate.
     ///
-    /// Only the named paths are touched, because several steps may share one store and a step must
-    /// never undo a sibling's work. A file that has changed since the step wrote it is LEFT ALONE
-    /// and reported back: at that point someone else's edit is in there, and discarding it would be
-    /// the very thing this is meant to prevent.
+    /// Only the named paths are touched, and only where this scope is still the last to have
+    /// written them. A path another scope has written since is LEFT ALONE and reported back: their
+    /// step may already have been accepted, and putting the file back to OUR "before" would destroy
+    /// approved work. A hash check cannot catch that — what is on disk matches their write exactly,
+    /// so it looks untouched.
     /// </summary>
-    Task<RevertReport> RevertToAsync(int checkpoint, IReadOnlyCollection<string> paths, CancellationToken ct)
+    Task<RevertReport> RevertAsync(IReadOnlyCollection<string> paths, CancellationToken ct);
+}
+
+/// <summary>
+/// A store that can attribute a write to an owner, which is what makes real scopes possible. The
+/// owner is an opaque id the store hands out; nobody outside interprets it.
+/// </summary>
+public interface IOwnedArtifactStore : IArtifactStore
+{
+    /// <summary>A fresh owner id, recorded against the store's current state.</summary>
+    int NewOwner();
+
+    Task<ArtifactRef> CreateAsync(
+        string relativePath, ArtifactKind kind, string title,
+        Func<Stream, Task> write, int owner, CancellationToken ct);
+
+    Task RemoveAsync(string relativePath, int owner, CancellationToken ct);
+
+    Task<RevertReport> RevertOwnedAsync(
+        int owner, IReadOnlyCollection<string> paths, CancellationToken ct);
+
+    /// <summary>Every path this owner has written or removed, as recorded when it happened.</summary>
+    IReadOnlyCollection<string> TouchedBy(int owner);
+}
+
+/// <summary>
+/// The scope view itself, written once here rather than in each store: it only has to remember
+/// which owner it is and pass that to every write.
+/// </summary>
+public sealed class ArtifactScope : IArtifactScope
+{
+    private readonly IOwnedArtifactStore _store;
+    private readonly int _owner;
+
+    public ArtifactScope(IOwnedArtifactStore store, int owner)
+    {
+        _store = store;
+        _owner = owner;
+    }
+
+    public Task<ArtifactRef> CreateAsync(
+        string relativePath, ArtifactKind kind, string title, Func<Stream, Task> write, CancellationToken ct)
+        => _store.CreateAsync(relativePath, kind, title, write, _owner, ct);
+
+    public Task RemoveAsync(string relativePath, CancellationToken ct)
+        => _store.RemoveAsync(relativePath, _owner, ct);
+
+    public Task<RevertReport> RevertAsync(IReadOnlyCollection<string> paths, CancellationToken ct)
+        => _store.RevertOwnedAsync(_owner, paths, ct);
+
+    public IReadOnlyCollection<string> TouchedPaths => _store.TouchedBy(_owner);
+
+    public Task<Stream> OpenAsync(Guid artifactId, CancellationToken ct) => _store.OpenAsync(artifactId, ct);
+    public Task DeleteAsync(Guid artifactId, CancellationToken ct) => _store.DeleteAsync(artifactId, ct);
+    public Task<string?> TryReadPendingAsync(string relativePath, CancellationToken ct)
+        => _store.TryReadPendingAsync(relativePath, ct);
+    public IReadOnlyCollection<string> PendingPaths => _store.PendingPaths;
+    public bool CanRestore(string relativePath) => _store.CanRestore(relativePath);
+
+    // Steps do not nest, so a scope opened from a scope is a scope on the store beneath it.
+    public IArtifactScope BeginStep() => _store.BeginStep();
+}
+
+/// <summary>
+/// What a store that knows nothing of owners gives back: a pass-through that reverts nothing. Test
+/// doubles and read-only stores land here, and they are honest about it — <see cref="RevertAsync"/>
+/// returning Empty says "nothing was undone", which is exactly the truth for a store that never
+/// recorded who wrote what.
+/// </summary>
+internal sealed class UnownedScope : IArtifactScope
+{
+    private readonly IArtifactStore _store;
+
+    public UnownedScope(IArtifactStore store) => _store = store;
+
+    public Task<RevertReport> RevertAsync(IReadOnlyCollection<string> paths, CancellationToken ct)
         => Task.FromResult(RevertReport.Empty);
+
+    public Task<ArtifactRef> CreateAsync(
+        string relativePath, ArtifactKind kind, string title, Func<Stream, Task> write, CancellationToken ct)
+        => _store.CreateAsync(relativePath, kind, title, write, ct);
+
+    public Task<Stream> OpenAsync(Guid artifactId, CancellationToken ct) => _store.OpenAsync(artifactId, ct);
+    public Task DeleteAsync(Guid artifactId, CancellationToken ct) => _store.DeleteAsync(artifactId, ct);
+    public Task RemoveAsync(string relativePath, CancellationToken ct) => _store.RemoveAsync(relativePath, ct);
+    public Task<string?> TryReadPendingAsync(string relativePath, CancellationToken ct)
+        => _store.TryReadPendingAsync(relativePath, ct);
+    public IReadOnlyCollection<string> PendingPaths => _store.PendingPaths;
+    public bool CanRestore(string relativePath) => _store.CanRestore(relativePath);
+    public IArtifactScope BeginStep() => this;
 }
 
 /// <summary>What a revert actually managed to undo.</summary>

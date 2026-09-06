@@ -229,12 +229,11 @@ public sealed class Orchestrator : IOrchestrator
                     // while the planner was explicitly told to prefer QuickAction — so the reviewer
                     // setting did nothing for most ordinary requests, file writes and commands included.
                     var maxQuickAttempts = reviewOn ? _reviewRetries + 1 : 1;
-                    var storeCheckpoint = _artifacts.Checkpoint();
-                    var conversationStart = messages.Count;
 
-                    // Accumulated across attempts, because a content retry drops the rejected one
-                    // from the transcript — see the same note on the DAG path.
-                    var writtenHere = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    // This run's own view of the store. Everything it writes belongs to it, and it
+                    // is the only thing that can undo those writes - see IArtifactScope.
+                    var store = _artifacts.BeginStep();
+                    var conversationStart = messages.Count;
 
                     // The same one-shot fallback the DAG path has: an unreachable model is not the
                     // model doing bad work, so it costs no review attempt.
@@ -250,7 +249,7 @@ public sealed class Orchestrator : IOrchestrator
                         {
                             await foreach (var ev in RunToolLoopAsync(
                                 taskId, runId, activeProvider, activeRef.Model, worker, messages, artifacts,
-                                intent.Context, null, quickResult, ct, activeRef.ProviderId))
+                                intent.Context, store, null, quickResult, ct, activeRef.ProviderId))
                                 quick.Writer.TryWrite(ev);
                         }
                         catch (Exception ex) when (ex is not OperationCanceledException
@@ -274,15 +273,13 @@ public sealed class Orchestrator : IOrchestrator
                             continue;
                         }
 
-                        foreach (var file in BuildWrittenFiles(messages, evidenceStart))
-                            writtenHere.Add(file.RelativePath);
-
                         if (!reviewOn || !quickResult.Succeeded)
                             break;
 
                         quick.Writer.TryWrite(Ev(EventKind.ReviewRequested, "reviewing…"));
                         var (review, mode) = await ReviewAsync(
-                            plan.Title, messages, evidenceStart, artifacts, reviewProvider!, reviewModel, ct);
+                            plan.Title, messages, evidenceStart, artifacts, store,
+                            reviewProvider!, reviewModel, ct);
 
                         if (review.PromptTokens + review.CompletionTokens > 0)
                             quick.Writer.TryWrite(UsageOutsideLoop(
@@ -310,7 +307,7 @@ public sealed class Orchestrator : IOrchestrator
 
                         if (_revertRejectedSteps)
                         {
-                            var report = await RevertAsync(storeCheckpoint, writtenHere, artifacts, ct);
+                            var report = await RevertAsync(store, artifacts, ct);
                             foreach (var line in DescribeRevert(report))
                                 quick.Writer.TryWrite(Ev(EventKind.ArtifactReverted, line));
                         }
@@ -424,17 +421,12 @@ public sealed class Orchestrator : IOrchestrator
             var outcome = StepOutcomeKind.Succeeded;
             string? outcomeReason = null;
 
-            // Where the workspace and the conversation stood before this step touched either. Both
-            // are needed when a review rejects: the files go back, and the rejected draft comes out
-            // of the transcript instead of being carried into the retry.
-            var storeCheckpoint = _artifacts.Checkpoint();
+            // This step's own view of the store, and where the conversation stood before it began.
+            // Both are needed when a review rejects: the files this step wrote go back - and only
+            // the ones it wrote, whatever a concurrent step is doing - and the rejected draft comes
+            // out of the transcript instead of being carried into the retry.
+            var store = _artifacts.BeginStep();
             var conversationStart = convo.Count;
-
-            // Every path this step wrote, across ALL its attempts. Accumulated rather than read back
-            // off the transcript at the end, because a content retry removes the rejected attempt
-            // from the transcript — a file written only by the first attempt would otherwise be
-            // invisible to the revert and left behind.
-            var writtenThisStep = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             // One switch to the fallback model per step — see the catch below.
             var triedFallback = false;
@@ -447,7 +439,7 @@ public sealed class Orchestrator : IOrchestrator
                 {
                     await foreach (var ev in RunToolLoopAsync(
                         taskId, runId, stepProvider, stepModel, worker, convo, artifacts,
-                        intent.Context, stepNumber, stepResult, ct, stepRef.ProviderId))
+                        intent.Context, store, stepNumber, stepResult, ct, stepRef.ProviderId))
                         events.Writer.TryWrite(ev);
 
                     outcome = stepResult.Kind;
@@ -489,12 +481,6 @@ public sealed class Orchestrator : IOrchestrator
                     outcomeReason = ex.Message;
                     break;
                 }
-                finally
-                {
-                    // Recorded while this attempt is still in the transcript — see writtenThisStep.
-                    foreach (var file in BuildWrittenFiles(convo, evidenceStart))
-                        writtenThisStep.Add(file.RelativePath);
-                }
 
                 if (!reviewOn || outcome != StepOutcomeKind.Succeeded)
                     break;
@@ -502,7 +488,7 @@ public sealed class Orchestrator : IOrchestrator
                 Emit(EventKind.ReviewRequested, $"[{stepNumber}] reviewing with reasoner…");
 
                 var (review, mode) = await ReviewAsync(
-                    step.Title, convo, evidenceStart, artifacts, reviewProvider!, reviewModel, ct);
+                    step.Title, convo, evidenceStart, artifacts, store, reviewProvider!, reviewModel, ct);
 
                 if (review.PromptTokens + review.CompletionTokens > 0)
                     events.Writer.TryWrite(UsageOutsideLoop(
@@ -540,7 +526,7 @@ public sealed class Orchestrator : IOrchestrator
             // workspace, which is the state a person is most likely to pick up and use.
             if (outcome == StepOutcomeKind.ReviewRejected && _revertRejectedSteps)
             {
-                var report = await RevertAsync(storeCheckpoint, writtenThisStep, artifacts, ct);
+                var report = await RevertAsync(store, artifacts, ct);
                 foreach (var line in DescribeRevert(report))
                     Emit(EventKind.ArtifactReverted, $"[{stepNumber}] {line}");
             }
@@ -786,7 +772,7 @@ public sealed class Orchestrator : IOrchestrator
     /// </summary>
     private async Task<(ReviewResult Result, ReviewMode Mode)> ReviewAsync(
         string title, List<ChatMessage> convo, int evidenceStart, List<ArtifactRef> artifacts,
-        IChatProvider reviewProvider, string reviewModel, CancellationToken ct)
+        IArtifactScope store, IChatProvider reviewProvider, string reviewModel, CancellationToken ct)
     {
         try
         {
@@ -801,7 +787,14 @@ public sealed class Orchestrator : IOrchestrator
             // check, so execution review passes anything — which is how a guide full of invented
             // package names and made-up command syntax finished green. There, the content itself is
             // the only thing there is to review.
-            var written = BuildWrittenFiles(convo, evidenceStart);
+            //
+            // What it wrote is read back from the STORE, not scraped out of the conversation. The
+            // conversation is a poor source for it twice over: only write_file was ever recognised
+            // there, so an edit or a move was reviewed as if nothing had happened, and once the
+            // transcript has to be shortened to fit the window the arguments are gone. Reading the
+            // file also means the reviewer judges what is actually on disk rather than what the
+            // model said it would put there.
+            var written = await ReadWrittenAsync(store, ct);
             var mode = _reviewContent && !RanACommand(convo, evidenceStart) && written.Count > 0
                 ? ReviewMode.Content
                 : ReviewMode.Execution;
@@ -824,6 +817,49 @@ public sealed class Orchestrator : IOrchestrator
         }
     }
 
+    /// <summary>Per file, and in total — the same budget the reviewer prompt applies.</summary>
+    private const int MaxReviewFileChars = 8000;
+
+    /// <summary>
+    /// What this step actually changed, as it stands now: the store's own record of the paths, and
+    /// the current content of each. A path the step removed is reported as such rather than
+    /// silently skipped — "this file is gone" is exactly the sort of thing a reviewer should see.
+    /// </summary>
+    private async Task<IReadOnlyList<WrittenFile>> ReadWrittenAsync(
+        IArtifactScope store, CancellationToken ct)
+    {
+        var written = new List<WrittenFile>();
+
+        foreach (var path in store.TouchedPaths)
+        {
+            string? content;
+            try
+            {
+                // A staged run holds the proposal in memory; a direct one has it on disk.
+                content = await store.TryReadPendingAsync(path, ct);
+                if (content is null)
+                {
+                    var full = WorkspaceGuard.ResolveInside(_workspace.RootPath, path);
+                    content = File.Exists(full) ? await File.ReadAllTextAsync(full, ct) : null;
+                }
+            }
+            catch (Exception)
+            {
+                // Unreadable is not the same as unwritten, and neither is worth failing the review
+                // over: say what is known and let the reviewer judge with it.
+                content = null;
+            }
+
+            written.Add(new WrittenFile(
+                path,
+                content is null
+                    ? "(this file was removed, or could not be read back)"
+                    : content.Length > MaxReviewFileChars ? content[..MaxReviewFileChars] : content));
+        }
+
+        return written;
+    }
+
     /// <summary>
     /// Runs one awaited operation under the ambient log scope, so what it logs carries the run (and,
     /// where given, the step). Needed because <see cref="SubmitIntentAsync"/> is an async iterator and
@@ -842,6 +878,10 @@ public sealed class Orchestrator : IOrchestrator
     private async IAsyncEnumerable<WorkEvent> RunToolLoopAsync(
         Guid taskId, Guid runId, IChatProvider provider, string model, Worker worker,
         List<ChatMessage> messages, List<ArtifactRef> artifacts, WorkContext context,
+        // The step's own view of the artifact store. Tools write through THIS, never through the
+        // store itself, so every file they touch is attributed to the step that asked for it and
+        // can be undone without reaching into a concurrent step's work.
+        IArtifactScope store,
         int? stepNo, ToolLoopResult loopResult,
         [EnumeratorCancellation] CancellationToken ct,
         // Only for the usage record. The loop is handed a ready provider and a model NAME, which is
@@ -1150,7 +1190,7 @@ public sealed class Orchestrator : IOrchestrator
                     Context: context,
                     PermissionPolicy: EffectivePolicyFor(worker),
                     WorkspaceRoot: _workspace.RootPath,
-                    Artifacts: _artifacts,
+                    Artifacts: store,
                     Services: _services);
 
                 ToolResult result;
@@ -1480,17 +1520,19 @@ public sealed class Orchestrator : IOrchestrator
     /// Puts back what the rejected work produced, and takes it out of the run's artifact list so the
     /// summary does not go on claiming files that are no longer there.
     /// </summary>
-    private async Task<RevertReport> RevertAsync(
-        int checkpoint, IReadOnlyCollection<string> written,
-        List<ArtifactRef> artifacts, CancellationToken ct)
+    private static async Task<RevertReport> RevertAsync(
+        IArtifactScope store, List<ArtifactRef> artifacts, CancellationToken ct)
     {
+        // What this step touched, from the store's own record - not from the conversation, which
+        // knew only about write_file and lost even that when the transcript had to be shortened.
+        var written = store.TouchedPaths;
         if (written.Count == 0)
             return RevertReport.Empty;
 
         RevertReport report;
         try
         {
-            report = await _artifacts.RevertToAsync(checkpoint, written, ct);
+            report = await store.RevertAsync(written, ct);
         }
         catch (Exception ex)
         {
@@ -1538,54 +1580,6 @@ public sealed class Orchestrator : IOrchestrator
         return false;
     }
 
-    /// <summary>
-    /// The content this step wrote, taken from the write_file calls themselves rather than from disk:
-    /// staging means the file may not be on disk at all, and this is what the step is claiming to have
-    /// produced either way. The LAST write to a path wins — an earlier draft it replaced is not what
-    /// the user ends up with.
-    /// </summary>
-    private static IReadOnlyList<WrittenFile> BuildWrittenFiles(List<ChatMessage> messages, int start)
-    {
-        var byPath = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        var order = new List<string>();
-
-        for (var i = Math.Max(0, start); i < messages.Count; i++)
-        {
-            if (messages[i].Role != ChatRole.Assistant || messages[i].ToolCalls is not { Count: > 0 } calls)
-                continue;
-
-            foreach (var call in calls)
-            {
-                if (!string.Equals(call.Name, "write_file", StringComparison.OrdinalIgnoreCase))
-                    continue;
-
-                try
-                {
-                    using var doc = JsonDocument.Parse(call.ArgumentsJson);
-                    if (doc.RootElement.ValueKind != JsonValueKind.Object
-                        || !doc.RootElement.TryGetProperty("path", out var p)
-                        || p.ValueKind != JsonValueKind.String
-                        || !doc.RootElement.TryGetProperty("content", out var c)
-                        || c.ValueKind != JsonValueKind.String)
-                        continue;
-
-                    var path = p.GetString();
-                    if (string.IsNullOrWhiteSpace(path))
-                        continue;
-
-                    if (!byPath.ContainsKey(path))
-                        order.Add(path);
-                    byPath[path] = c.GetString() ?? "";
-                }
-                catch (JsonException)
-                {
-                    // Arguments the tool itself would reject are not evidence of content.
-                }
-            }
-        }
-
-        return order.Select(path => new WrittenFile(path, byPath[path])).ToArray();
-    }
 
     /// <summary>Accumulates a streamed tool call across deltas.</summary>
     private sealed class ToolCallBuilder

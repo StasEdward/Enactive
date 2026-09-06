@@ -109,15 +109,15 @@ public sealed class FileToolsTests
         using var fx = new EngineFixture();
         fx.Write("doc.md", "before\n");
 
-        var step = fx.Artifacts.Checkpoint();
+        var step = fx.Artifacts.BeginStep();
         var result = await Call(new EditFileTool(), fx,
-            """{"path":"doc.md","old_string":"before","new_string":"after"}""");
+            """{"path":"doc.md","old_string":"before","new_string":"after"}""", step);
 
         Assert.True(result.Success, result.Error);
         Assert.Single(result.Artifacts);
         Assert.Equal("after\n", fx.Read("doc.md"));
 
-        await fx.Artifacts.RevertToAsync(step, new[] { "doc.md" }, default);
+        await step.RevertAsync(new[] { "doc.md" }, default);
         Assert.Equal("before\n", fx.Read("doc.md"));
     }
 
@@ -321,10 +321,10 @@ public sealed class FileToolsTests
         using var fx = new EngineFixture();
         fx.Write("old.md", "the content\n");
 
-        var step = fx.Artifacts.Checkpoint();
-        Assert.True((await Call(new MoveFileTool(), fx, """{"from":"old.md","to":"new.md"}""")).Success);
+        var step = fx.Artifacts.BeginStep();
+        Assert.True((await Call(new MoveFileTool(), fx, """{"from":"old.md","to":"new.md"}""", step)).Success);
 
-        await fx.Artifacts.RevertToAsync(step, new[] { "old.md", "new.md" }, default);
+        await step.RevertAsync(new[] { "old.md", "new.md" }, default);
 
         Assert.Equal("the content\n", fx.Read("old.md"));
         Assert.False(fx.Exists("new.md"));
@@ -391,10 +391,10 @@ public sealed class FileToolsTests
         var original = new byte[] { 0x00, 0xFF, 0xFE, 0x80, 0x41, 0x00 };
         File.WriteAllBytes(fx.PathOf("asset.bin"), original);
 
-        var step = fx.Artifacts.Checkpoint();
-        Assert.True((await Call(new MoveFileTool(), fx, """{"from":"asset.bin","to":"moved.bin"}""")).Success);
+        var step = fx.Artifacts.BeginStep();
+        Assert.True((await Call(new MoveFileTool(), fx, """{"from":"asset.bin","to":"moved.bin"}""", step)).Success);
 
-        await fx.Artifacts.RevertToAsync(step, new[] { "asset.bin", "moved.bin" }, default);
+        await step.RevertAsync(new[] { "asset.bin", "moved.bin" }, default);
 
         Assert.Equal(original, File.ReadAllBytes(fx.PathOf("asset.bin")));
         Assert.False(fx.Exists("moved.bin"));

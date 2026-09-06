@@ -30,6 +30,100 @@ public sealed class RevertOnRejectTests
             WhenExhausted = Turn.Says("done")
         };
 
+    private const string QuickPlan = """{"disposition":"quick_action","title":"fix the guide"}""";
+
+    // ── what "this step wrote" is read from ───────────────────────────────────────────
+
+    // The orchestrator used to answer that by scanning the conversation for write_file calls. An
+    // edit is not a write_file call, so a rejected edit was never put back: the journal held the
+    // backup and nothing ever asked for it. The store knows what it wrote, whatever the tool was
+    // called.
+    [Fact]
+    public async Task A_rejected_edit_is_undone_although_it_was_not_a_write_file_call()
+    {
+        using var fx = new EngineFixture();
+        fx.Write("guide.md", "the version I wrote by hand\n");
+
+        var provider = new FakeChatProvider(
+            Turn.Says(QuickPlan),
+            Turn.Calls1("edit_file",
+                """{"path":"guide.md","old_string":"by hand","new_string":"by the agent"}""", "c1"),
+            Turn.Says("Edited it."))
+        {
+            WhenExhausted = Turn.Says("done")
+        };
+
+        var events = await fx.RunAsync(
+            fx.Build(provider,
+                worker: EngineFixture.WorkerWith("edit_file", "read_file", "write_file"),
+                router: Routers.WithReviewer(),
+                reviewProvider: RejectingReviewer()),
+            "fix the guide");
+
+        Assert.Equal(RunOutcomeKind.Failed, Terminal(events).Outcome());
+        Assert.Equal("the version I wrote by hand\n", fx.Read("guide.md"));
+        Assert.Contains(events, e => e.Kind == EventKind.ArtifactReverted);
+    }
+
+    // Same for a move, where the old scan ignored both of the paths involved.
+    [Fact]
+    public async Task A_rejected_move_puts_the_file_back_under_its_old_name()
+    {
+        using var fx = new EngineFixture();
+        fx.Write("guide.md", "the version I wrote by hand\n");
+
+        var provider = new FakeChatProvider(
+            Turn.Says(QuickPlan),
+            Turn.Calls1("move_file", """{"from":"guide.md","to":"renamed.md"}""", "c1"),
+            Turn.Says("Renamed it."))
+        {
+            WhenExhausted = Turn.Says("done")
+        };
+
+        var events = await fx.RunAsync(
+            fx.Build(provider,
+                worker: EngineFixture.WorkerWith("move_file", "read_file", "write_file"),
+                router: Routers.WithReviewer(),
+                reviewProvider: RejectingReviewer()),
+            "rename the guide");
+
+        Assert.Equal(RunOutcomeKind.Failed, Terminal(events).Outcome());
+        Assert.Equal("the version I wrote by hand\n", fx.Read("guide.md"));
+        Assert.False(fx.Exists("renamed.md"));
+    }
+
+    // And the one that made the whole approach untenable: once the transcript has to be shortened to
+    // fit the model's context window, the write_file arguments it was being read from are gone. A
+    // trimmed run silently stopped undoing anything — the safety net switched itself off exactly
+    // when the run was under the most pressure.
+    [Fact]
+    public async Task A_rejected_write_is_undone_even_after_the_transcript_was_trimmed()
+    {
+        using var fx = new EngineFixture();
+        fx.Write("guide.md", "the version I wrote by hand\n");
+
+        var invented = new string('x', 20000);
+
+        var provider = new FakeChatProvider(
+            Turn.Says(QuickPlan),
+            Turn.Calls1("write_file", $$"""{"path":"guide.md","content":"{{invented}}"}""", "c1"),
+            Turn.Calls1("read_file", """{"path":"guide.md"}""", "c2"),
+            Turn.Says("Wrote it."))
+        {
+            // Small enough that 20 000 characters of argument cannot fit beside it.
+            Window = 4096,
+            WhenExhausted = Turn.Says("done")
+        };
+
+        var events = await fx.RunAsync(
+            fx.Build(provider, router: Routers.WithReviewer(), reviewProvider: RejectingReviewer()),
+            "write a guide");
+
+        Assert.Contains(events, e => e.Kind == EventKind.ContextTrimmed);
+        Assert.Equal(RunOutcomeKind.Failed, Terminal(events).Outcome());
+        Assert.Equal("the version I wrote by hand\n", fx.Read("guide.md"));
+    }
+
     [Fact]
     public async Task A_file_the_rejected_step_created_is_removed()
     {

@@ -82,28 +82,90 @@ public sealed class FollowupReviewTests
 
     // ── F3: reverting one step must not undo another step's accepted work ─────────────
 
-    // Two steps share one store. A takes a checkpoint, B takes a later one, both write the same
-    // path, B's work is accepted — and then A is rejected. Reverting A used to select every write
-    // after A's checkpoint, B's included, and put the file back to A's "before". The hash check did
-    // not catch it: the file matched B's write exactly, so it looked untouched.
+    // Two steps share one store. A opens, B opens, both write the same path, B's work is accepted —
+    // and then A is rejected. Reverting A used to select every write after A's checkpoint, B's
+    // included, and put the file back to A's "before". The hash check did not catch it: the file
+    // matched B's write exactly, so it looked untouched.
     [Fact]
     public async Task Reverting_a_rejected_step_does_not_undo_a_later_steps_write()
     {
         using var fx = new EngineFixture();
         fx.Write("doc.txt", "original");
 
-        var stepA = fx.Artifacts.Checkpoint();
-        var stepB = fx.Artifacts.Checkpoint();
+        var stepA = fx.Artifacts.BeginStep();
+        var stepB = fx.Artifacts.BeginStep();
 
-        await Write(fx.Artifacts, "doc.txt", "step A");
-        await Write(fx.Artifacts, "doc.txt", "step B accepted");
+        await Write(stepA, "doc.txt", "step A");
+        await Write(stepB, "doc.txt", "step B accepted");
 
-        var report = await fx.Artifacts.RevertToAsync(stepA, new[] { "doc.txt" }, default);
+        var report = await stepA.RevertAsync(new[] { "doc.txt" }, default);
 
         Assert.Equal("step B accepted", fx.Read("doc.txt"));
         Assert.Contains("doc.txt", report.Kept);
         Assert.DoesNotContain("doc.txt", report.Reverted);
-        Assert.True(stepB > stepA, "each checkpoint must be its own scope");
+    }
+
+    // The same two steps in the order the scopes are actually opened by a parallel run, and the
+    // rejection on the OTHER side. A opens, B opens, A writes work that is accepted, B writes work
+    // the reviewer rejects. Rejecting B must not touch A's file.
+    //
+    // This is the half the first test could not see. Both writes used to be stamped with whatever
+    // scope was newest — B's — so B's revert claimed A's write as its own and put the file back to
+    // "original", destroying accepted work. A scope handed to the step cannot be got wrong that way.
+    [Fact]
+    public async Task Reverting_the_later_step_does_not_undo_an_earlier_steps_accepted_write()
+    {
+        using var fx = new EngineFixture();
+        fx.Write("doc.txt", "original");
+
+        var stepA = fx.Artifacts.BeginStep();
+        var stepB = fx.Artifacts.BeginStep();
+
+        await Write(stepA, "doc.txt", "step A accepted");
+        await Write(stepB, "doc.txt", "step B rejected");
+
+        var report = await stepB.RevertAsync(new[] { "doc.txt" }, default);
+
+        Assert.Equal("step A accepted", fx.Read("doc.txt"));
+        Assert.Contains("doc.txt", report.Reverted);
+    }
+
+    // And the same thing for a staged run, where a rejection drops proposals rather than restoring
+    // files: B's rejection must leave A's proposal outstanding.
+    [Fact]
+    public async Task Rejecting_the_later_staged_step_leaves_an_earlier_steps_proposal()
+    {
+        using var fx = new EngineFixture();
+        var staging = new StagingArtifactStore(fx.Root);
+
+        var stepA = staging.BeginStep();
+        var stepB = staging.BeginStep();
+
+        await Write(stepA, "doc.txt", "proposal A");
+        await Write(stepB, "doc.txt", "proposal B");
+
+        await stepB.RevertAsync(new[] { "doc.txt" }, default);
+
+        var surviving = staging.Changes.Where(c => c.Pending).ToArray();
+        Assert.Single(surviving);
+        Assert.Equal("proposal A", surviving[0].NewContent);
+    }
+
+    // A step's own record of what it touched, taken from the store rather than from the model's
+    // conversation — which is what a revert and a content review are now built on.
+    [Fact]
+    public async Task A_scope_knows_which_paths_it_touched()
+    {
+        using var fx = new EngineFixture();
+
+        var step = fx.Artifacts.BeginStep();
+        var other = fx.Artifacts.BeginStep();
+
+        await Write(step, "mine.txt", "mine");
+        await Write(other, "theirs.txt", "theirs");
+
+        Assert.Equal(new[] { "mine.txt" }, step.TouchedPaths.ToArray());
+        Assert.Equal(new[] { "theirs.txt" }, other.TouchedPaths.ToArray());
     }
 
     // The ordinary case still has to work, or the fix above would have bought safety by breaking
@@ -114,11 +176,11 @@ public sealed class FollowupReviewTests
         using var fx = new EngineFixture();
         fx.Write("doc.txt", "original");
 
-        var step = fx.Artifacts.Checkpoint();
-        await Write(fx.Artifacts, "doc.txt", "first attempt");
-        await Write(fx.Artifacts, "doc.txt", "second attempt");
+        var step = fx.Artifacts.BeginStep();
+        await Write(step, "doc.txt", "first attempt");
+        await Write(step, "doc.txt", "second attempt");
 
-        var report = await fx.Artifacts.RevertToAsync(step, new[] { "doc.txt" }, default);
+        var report = await step.RevertAsync(new[] { "doc.txt" }, default);
 
         Assert.Equal("original", fx.Read("doc.txt"));
         Assert.Contains("doc.txt", report.Reverted);
