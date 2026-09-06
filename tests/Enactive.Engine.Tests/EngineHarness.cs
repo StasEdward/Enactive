@@ -149,6 +149,20 @@ public static class Routers
             {
                 [ModelPurpose.Review] = new ModelRef(Verdicts.ProviderId, Verdicts.Model)
             });
+
+    public const string LightProviderId = "light";
+    public const string HeavyProviderId = "heavy";
+
+    /// <summary>
+    /// Binds the per-complexity Execute models, which is the lever the planner's complexity rating
+    /// actually pulls: rate a step "complex" and it runs on the expensive model.
+    /// </summary>
+    public static IModelRouter WithComplexityRouting()
+        => new ModelRouter(
+            new ModelResolver(),
+            new Dictionary<ModelPurpose, ModelRef>(),
+            executeLight: new ModelRef(LightProviderId, "small-model"),
+            executeHeavy: new ModelRef(HeavyProviderId, "expensive-model"));
 }
 
 /// <summary>Answers every approval request the same way. Records what it was shown.</summary>
