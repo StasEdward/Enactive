@@ -93,7 +93,7 @@ public sealed class UndoTests
         fx.Write("source.cs", "original");
         await Write(fx, "source.cs", "agent version");
 
-        var record = fx.Artifacts.WriteFor("source.cs");
+        var record = fx.Artifacts.FirstWrite("source.cs");
         Assert.NotNull(record);
         Assert.NotNull(record!.BackupPath);
         Assert.Contains(WorkspaceGuard.ReservedFolder, record.BackupPath!, StringComparison.Ordinal);

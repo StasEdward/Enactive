@@ -37,7 +37,7 @@ public sealed class Orchestrator : IOrchestrator
     private readonly PermissionPolicy _policy;
     private readonly IServiceProvider _services;
     private readonly IModelRouter _router;
-    private readonly int _reviewAttempts;
+    private readonly int _reviewRetries;
     private readonly int _maxParallelSteps;
     /// <summary>One approval card at a time, however many steps are running.</summary>
     private readonly SemaphoreSlim _decisionGate = new(1, 1);
@@ -45,6 +45,7 @@ public sealed class Orchestrator : IOrchestrator
     private readonly bool? _think;
     private readonly bool _allowImplicitToolCalls;
     private readonly bool _reviewContent;
+    private readonly bool _revertRejectedSteps;
     private readonly Reviewer _reviewer = new();
 
     public Orchestrator(
@@ -60,12 +61,13 @@ public sealed class Orchestrator : IOrchestrator
         PermissionPolicy policy,
         IServiceProvider services,
         IModelRouter? router = null,
-        int reviewAttempts = 1,
+        int reviewRetries = 1,
         int? numCtx = null,
         bool disableThinking = false,
         int maxParallelSteps = 1,
         bool allowImplicitToolCalls = false,
-        bool reviewContent = true)
+        bool reviewContent = true,
+        bool revertRejectedSteps = true)
     {
         _providers = providers;
         _workers = workers;
@@ -78,7 +80,10 @@ public sealed class Orchestrator : IOrchestrator
         _policy = policy;
         _services = services;
         _router = router ?? new ModelRouter(modelResolver);
-        _reviewAttempts = reviewAttempts;
+        // How many times a rejected step may be redone. Clamped rather than trusted: this multiplies
+        // the cost of a run by the reviewer's price, and a stray large number would be paid for in
+        // full before anyone noticed.
+        _reviewRetries = Math.Clamp(reviewRetries, 0, 5);
         // 1 = the original behaviour: one step at a time on one shared conversation.
         _maxParallelSteps = Math.Max(1, maxParallelSteps);
         _numCtx = numCtx;
@@ -89,6 +94,9 @@ public sealed class Orchestrator : IOrchestrator
         // On by default: for a step that only writes text, execution review has nothing to check, so
         // without this a configured reviewer passes anything such a step produces.
         _reviewContent = reviewContent;
+        // On by default: a gate that stops the report but leaves the rejected work on disk is the
+        // state a person is most likely to pick up and use.
+        _revertRejectedSteps = revertRejectedSteps;
     }
 
     public async IAsyncEnumerable<WorkEvent> SubmitIntentAsync(
@@ -175,7 +183,13 @@ public sealed class Orchestrator : IOrchestrator
                     // A configured reviewer now applies here too. It used to run for plan steps only,
                     // while the planner was explicitly told to prefer QuickAction — so the reviewer
                     // setting did nothing for most ordinary requests, file writes and commands included.
-                    var maxQuickAttempts = reviewOn ? _reviewAttempts + 1 : 1;
+                    var maxQuickAttempts = reviewOn ? _reviewRetries + 1 : 1;
+                    var storeCheckpoint = _artifacts.Checkpoint();
+                    var conversationStart = messages.Count;
+
+                    // Accumulated across attempts, because a content retry drops the rejected one
+                    // from the transcript — see the same note on the DAG path.
+                    var writtenHere = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
                     for (var attempt = 1; attempt <= maxQuickAttempts; attempt++)
                     {
@@ -185,6 +199,9 @@ public sealed class Orchestrator : IOrchestrator
                             taskId, runId, provider, model.Model, worker, messages, artifacts,
                             intent.Context, null, quickResult, ct))
                             quick.Writer.TryWrite(ev);
+
+                        foreach (var file in BuildWrittenFiles(messages, evidenceStart))
+                            writtenHere.Add(file.RelativePath);
 
                         if (!reviewOn || !quickResult.Succeeded)
                             break;
@@ -204,15 +221,20 @@ public sealed class Orchestrator : IOrchestrator
 
                         if (attempt < maxQuickAttempts)
                         {
-                            messages.Add(ChatMessage.User(
-                                $"A reviewer rejected the previous attempt with this feedback: {review.Notes}\n"
-                                + "Please fix the issues and redo the work."));
+                            RetryAfterReview(messages, conversationStart, mode, review.Notes, "the work");
                             continue;
                         }
 
                         // Out of attempts and still rejected: the work is NOT done, and saying so is
                         // the entire point of having a reviewer.
                         quickResult.Set(StepOutcomeKind.ReviewRejected, "review not passed: " + review.Notes);
+
+                        if (_revertRejectedSteps)
+                        {
+                            var report = await RevertAsync(storeCheckpoint, writtenHere, artifacts, ct);
+                            foreach (var line in DescribeRevert(report))
+                                quick.Writer.TryWrite(Ev(EventKind.ArtifactReverted, line));
+                        }
                     }
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
@@ -313,10 +335,22 @@ public sealed class Orchestrator : IOrchestrator
             if (stepRef.ProviderId != model.ProviderId || stepRef.Model != model.Model)
                 Emit(EventKind.Routed, $"[{stepNumber}] {step.Complexity} step -> {stepRef.ProviderId}/{stepRef.Model}");
 
-            var maxAttempts = reviewOn ? _reviewAttempts + 1 : 1;
+            var maxAttempts = reviewOn ? _reviewRetries + 1 : 1;
             var stepResult = new ToolLoopResult();
             var outcome = StepOutcomeKind.Succeeded;
             string? outcomeReason = null;
+
+            // Where the workspace and the conversation stood before this step touched either. Both
+            // are needed when a review rejects: the files go back, and the rejected draft comes out
+            // of the transcript instead of being carried into the retry.
+            var storeCheckpoint = _artifacts.Checkpoint();
+            var conversationStart = convo.Count;
+
+            // Every path this step wrote, across ALL its attempts. Accumulated rather than read back
+            // off the transcript at the end, because a content retry removes the rejected attempt
+            // from the transcript — a file written only by the first attempt would otherwise be
+            // invisible to the revert and left behind.
+            var writtenThisStep = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             for (var attempt = 1; attempt <= maxAttempts; attempt++)
             {
@@ -343,6 +377,12 @@ public sealed class Orchestrator : IOrchestrator
                     outcomeReason = ex.Message;
                     break;
                 }
+                finally
+                {
+                    // Recorded while this attempt is still in the transcript — see writtenThisStep.
+                    foreach (var file in BuildWrittenFiles(convo, evidenceStart))
+                        writtenThisStep.Add(file.RelativePath);
+                }
 
                 if (!reviewOn || outcome != StepOutcomeKind.Succeeded)
                     break;
@@ -364,9 +404,7 @@ public sealed class Orchestrator : IOrchestrator
 
                 if (attempt < maxAttempts)
                 {
-                    convo.Add(ChatMessage.User(
-                        $"A reviewer rejected the previous attempt with this feedback: {review.Notes}\n"
-                        + "Please fix the issues and redo this step."));
+                    RetryAfterReview(convo, conversationStart, mode, review.Notes, "this step");
                     continue;
                 }
 
@@ -379,6 +417,16 @@ public sealed class Orchestrator : IOrchestrator
 
             lock (stepOutcomes)
                 stepOutcomes[step.Id] = outcome;
+
+            // A rejected step puts its work back. Otherwise the gate stops only the REPORT: the run
+            // says Failed while the rejected document — invented commands and all — stays in the
+            // workspace, which is the state a person is most likely to pick up and use.
+            if (outcome == StepOutcomeKind.ReviewRejected && _revertRejectedSteps)
+            {
+                var report = await RevertAsync(storeCheckpoint, writtenThisStep, artifacts, ct);
+                foreach (var line in DescribeRevert(report))
+                    Emit(EventKind.ArtifactReverted, $"[{stepNumber}] {line}");
+            }
 
             // The card's colour comes from this payload, not from the wording of the summary.
             void EmitStepDone(string summary, int? no, StepOutcomeKind kind)
@@ -1043,6 +1091,75 @@ public sealed class Orchestrator : IOrchestrator
         var text = sb.ToString().Trim();
         if (text.Length == 0) return "(no tools were run in this step)";
         return text.Length > 3000 ? text[..3000] + "\n… (truncated)" : text;
+    }
+
+    /// <summary>
+    /// Prepares the conversation for another attempt after a review rejected the work.
+    ///
+    /// For a step that only WROTE something, the rejected draft is removed from the transcript
+    /// first. Keeping it costs tokens twice over (the tool call carries the whole file, and so does
+    /// the next prompt) and anchors the model on the version it was just told is wrong — with
+    /// num_ctx at 8192 a second retry was measured at 6.7k tokens, close enough to the ceiling that
+    /// Ollama would have started silently dropping the system prompt, honesty rules included. The
+    /// model rewrites the whole file on every attempt anyway, so nothing is lost.
+    ///
+    /// For a step that RAN something, the transcript stays: the command output IS the evidence, and
+    /// discarding it would mean re-running commands that have already had their effect.
+    /// </summary>
+    private static void RetryAfterReview(
+        List<ChatMessage> convo, int conversationStart, ReviewMode mode, string notes, string what)
+    {
+        if (mode == ReviewMode.Content && convo.Count > conversationStart)
+            convo.RemoveRange(conversationStart, convo.Count - conversationStart);
+
+        convo.Add(ChatMessage.User(
+            $"A reviewer rejected the previous attempt with this feedback: {notes}\n"
+            + (mode == ReviewMode.Content
+                ? $"That attempt has been discarded. Redo {what} from scratch, correcting every point above."
+                : $"Please fix the issues and redo {what}.")));
+    }
+
+    /// <summary>
+    /// Puts back what the rejected work produced, and takes it out of the run's artifact list so the
+    /// summary does not go on claiming files that are no longer there.
+    /// </summary>
+    private async Task<RevertReport> RevertAsync(
+        int checkpoint, IReadOnlyCollection<string> written,
+        List<ArtifactRef> artifacts, CancellationToken ct)
+    {
+        if (written.Count == 0)
+            return RevertReport.Empty;
+
+        RevertReport report;
+        try
+        {
+            report = await _artifacts.RevertToAsync(checkpoint, written, ct);
+        }
+        catch (Exception ex)
+        {
+            // Failing to undo is worth saying out loud; it is not worth failing the run twice over.
+            return new RevertReport(Array.Empty<string>(), new[] { $"(revert failed: {ex.Message})" });
+        }
+
+        if (report.Reverted.Count > 0)
+        {
+            lock (artifacts)
+                artifacts.RemoveAll(a =>
+                    report.Reverted.Contains(a.RelativePath, StringComparer.OrdinalIgnoreCase));
+        }
+
+        return report;
+    }
+
+    /// <summary>One line per thing worth telling the user about a revert; nothing when nothing happened.</summary>
+    private static IEnumerable<string> DescribeRevert(RevertReport report)
+    {
+        if (report.Reverted.Count > 0)
+            yield return "Rejected work put back: " + string.Join(", ", report.Reverted);
+
+        if (report.Kept.Count > 0)
+            yield return "Left as it is because it changed after the step wrote it: "
+                       + string.Join(", ", report.Kept);
     }
 
     /// <summary>Tools that make something happen outside the workspace's files.</summary>

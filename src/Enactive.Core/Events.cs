@@ -19,6 +19,14 @@ public enum EventKind
     ReviewPassed,
     ReviewFailed,
     ArtifactProduced,
+
+    /// <summary>
+    /// Work a step produced was put back, because the step did not survive review. Without this the
+    /// gate stopped the report and left the consequence: a rejected document sat in the workspace
+    /// under a red status.
+    /// </summary>
+    ArtifactReverted,
+
     UsageReported,
     TaskCompleted,
     TaskFailed

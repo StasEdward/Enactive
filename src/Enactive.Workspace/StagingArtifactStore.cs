@@ -237,6 +237,40 @@ public sealed class StagingArtifactStore : IArtifactStore
             _changes.Find(c => c.Id == id)?.MarkRejected();
     }
 
+    public int Checkpoint()
+    {
+        lock (_gate) return _sequence;
+    }
+
+    /// <summary>
+    /// Drops the proposals made for these paths since the checkpoint — the staged equivalent of
+    /// putting the files back. Nothing was written to disk, so there is nothing to restore and
+    /// nothing to conflict with: a rejected step's proposals simply stop existing.
+    /// </summary>
+    public Task<RevertReport> RevertToAsync(
+        int checkpoint, IReadOnlyCollection<string> paths, CancellationToken ct)
+    {
+        var reverted = new List<string>();
+
+        lock (_gate)
+        {
+            foreach (var change in _changes)
+            {
+                if (change.Sequence < checkpoint || !change.Pending)
+                    continue;
+
+                if (!paths.Contains(change.RelativePath, StringComparer.OrdinalIgnoreCase))
+                    continue;
+
+                change.MarkRejected();
+                if (!reverted.Contains(change.RelativePath, StringComparer.OrdinalIgnoreCase))
+                    reverted.Add(change.RelativePath);
+            }
+        }
+
+        return Task.FromResult(new RevertReport(reverted, Array.Empty<string>()));
+    }
+
     /// <summary>The shared rule — see the same note on <see cref="DiskArtifactStore"/>.</summary>
     private string ResolveInside(string relativePath)
     {

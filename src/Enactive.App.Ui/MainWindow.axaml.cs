@@ -374,8 +374,8 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             var orchestrator = new Orchestrator(
                 _providerFactory, _modelResolver, _workerProvider, _toolRegistry, artifactStore,
                 workspace, _planner, _permissionEngine, this, policy, new EmptyProvider(),
-                BuildRouter(), 1, _settings.NumCtx, _settings.DisableThinking, _settings.MaxParallelSteps,
-                _settings.AllowImplicitToolCalls, _settings.ReviewContent);
+                BuildRouter(), _settings.ReviewRetries, _settings.NumCtx, _settings.DisableThinking, _settings.MaxParallelSteps,
+                _settings.AllowImplicitToolCalls, _settings.ReviewContent, _settings.RevertRejectedSteps);
             var recorder = new RunRecorder(runStore, MemoryStoreFactory.Create(workspace), workspace.Id, runSettings);
 
             var context = await contextProvider.BuildAsync(new IntentFocus(workspace.Id), _cts.Token);
@@ -549,6 +549,13 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                     else
                         AddArtifact(ev.Summary);
                     break;
+
+                // The step's work was put back after the reviewer rejected it. Its cards must stop
+                // offering to open or undo a file that is no longer the file they describe.
+                case EventKind.ArtifactReverted:
+                    (CardFor(ev) ?? EnsureCurrentCard()).AddNote(ev.Summary);
+                    MarkRevertedArtifacts(ev.Summary);
+                    break;
                 // The pill says what the engine DECIDED, read from the event's typed outcome rather
                 // than from which of the two terminal kinds arrived. "Incomplete" is its own answer:
                 // nothing failed, but the work is not done, and calling that Completed is what let a
@@ -697,6 +704,32 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             item => ShowFile(root, item),
             item => _ = UndoLiveArtifactAsync(root, item, createdByThisRun),
             createdByThisRun ? "Delete" : "Undo"));
+    }
+
+    /// <summary>
+    /// Marks the cards for files a rejected step wrote and the engine put back. The paths come from
+    /// the event's own summary ("Rejected work put back: a.md, b.md"), which is not ideal — but the
+    /// alternative is a payload schema for one line of text, and the card is cosmetic: the file on
+    /// disk has already been restored whatever the card says.
+    /// </summary>
+    private void MarkRevertedArtifacts(string summary)
+    {
+        const string marker = "put back: ";
+        var index = summary.IndexOf(marker, StringComparison.Ordinal);
+        if (index < 0)
+            return;
+
+        var paths = summary[(index + marker.Length)..]
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        foreach (var item in _vm.Artifacts.OfType<ArtifactItemViewModel>())
+        {
+            if (!paths.Contains(item.RelativePath, StringComparer.OrdinalIgnoreCase))
+                continue;
+
+            item.Status = "put back — the reviewer rejected this step";
+            item.CanAct = false;
+        }
     }
 
     private void AddStagedArtifact()
@@ -1048,8 +1081,8 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                 var orchestrator = new Orchestrator(
                     _providerFactory, _modelResolver, _workerProvider, _toolRegistry, new DiskArtifactStore(workspace),
                     workspace, _planner, _permissionEngine, decisions, policy, new EmptyProvider(),
-                    BuildRouter(), 1, _settings.NumCtx, _settings.DisableThinking, _settings.MaxParallelSteps,
-                    _settings.AllowImplicitToolCalls, _settings.ReviewContent);
+                    BuildRouter(), _settings.ReviewRetries, _settings.NumCtx, _settings.DisableThinking, _settings.MaxParallelSteps,
+                    _settings.AllowImplicitToolCalls, _settings.ReviewContent, _settings.RevertRejectedSteps);
                 var recorder = new RunRecorder(runStore, MemoryStoreFactory.Create(workspace), workspace.Id, runSettings);
                 var context = await contextProvider.BuildAsync(new IntentFocus(workspace.Id), CancellationToken.None);
                 var intent = new Intent(Guid.NewGuid(), text, IntentSource.Inbox, context, DateTimeOffset.UtcNow, workerId);

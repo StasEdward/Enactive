@@ -133,6 +133,20 @@ internal sealed class AppSettings
     // because the alternative is a gate that silently checks nothing for every writing task.
     public bool ReviewContent { get; set; } = true;
 
+    // How many times a rejected step may be redone before the run gives up. 1 means two tries in
+    // total, which is what the engine did when this number was hard-coded. It was worth exposing
+    // because it is the dial between "the reviewer's feedback gets used" and "a weak model burns the
+    // budget arguing with a strong one": in a real run one step needed exactly two attempts and
+    // passed, while another used both and was still wrong. Clamped to 0..5 by the orchestrator.
+    public int ReviewRetries { get; set; } = 1;
+
+    // Put a rejected step's files back to how they were before it ran. Without this the gate stops
+    // only the REPORT: the run says Failed while the rejected document stays in the workspace, which
+    // is the version someone is most likely to open next. A file changed since the step wrote it is
+    // left alone and named in the log — reverting over somebody's edit would be the very thing this
+    // is meant to prevent. Turn it off to inspect what a rejected step actually produced.
+    public bool RevertRejectedSteps { get; set; } = true;
+
     // Ask workers to read a file back after writing it, to catch a weak local model fabricating content.
     // Costs an extra LLM round-trip per write — worth turning off when running strong models. On by default.
     public bool VerifyWrites { get; set; } = true;
@@ -319,6 +333,8 @@ internal sealed class AppSettings
         DisableThinking = DisableThinking,
         AllowImplicitToolCalls = AllowImplicitToolCalls,
         ReviewContent = ReviewContent,
+        ReviewRetries = ReviewRetries,
+        RevertRejectedSteps = RevertRejectedSteps,
         VerifyWrites = VerifyWrites,
         MaxParallelSteps = MaxParallelSteps,
         CloseToTray = CloseToTray,

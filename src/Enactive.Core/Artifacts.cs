@@ -43,4 +43,38 @@ public interface IArtifactStore
 
     /// <summary>Paths this store is holding uncommitted content for. Empty when it writes straight through.</summary>
     IReadOnlyCollection<string> PendingPaths => Array.Empty<string>();
+
+    /// <summary>
+    /// A marker for "the state the workspace is in right now", to be handed back to
+    /// <see cref="RevertToAsync"/>. Opaque on purpose: what it counts is the store's business.
+    /// </summary>
+    int Checkpoint() => 0;
+
+    /// <summary>
+    /// Undoes what was written to <paramref name="paths"/> since <paramref name="checkpoint"/>,
+    /// restoring each one to the content it had at that moment (removing it if it did not exist).
+    ///
+    /// This is what makes a rejected step mean something. Without it the review gate stopped the
+    /// REPORT — the run said Failed — while the consequence stayed on disk: a guide full of invented
+    /// command syntax sat in the workspace under a red status. A gate that leaves the damage behind
+    /// is only half a gate.
+    ///
+    /// Only the named paths are touched, because several steps may share one store and a step must
+    /// never undo a sibling's work. A file that has changed since the step wrote it is LEFT ALONE
+    /// and reported back: at that point someone else's edit is in there, and discarding it would be
+    /// the very thing this is meant to prevent.
+    /// </summary>
+    Task<RevertReport> RevertToAsync(int checkpoint, IReadOnlyCollection<string> paths, CancellationToken ct)
+        => Task.FromResult(RevertReport.Empty);
+}
+
+/// <summary>What a revert actually managed to undo.</summary>
+public sealed record RevertReport(
+    IReadOnlyList<string> Reverted,
+    IReadOnlyList<string> Kept)
+{
+    public static readonly RevertReport Empty =
+        new(Array.Empty<string>(), Array.Empty<string>());
+
+    public bool DidSomething => Reverted.Count > 0 || Kept.Count > 0;
 }
