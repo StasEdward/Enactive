@@ -78,7 +78,8 @@ public sealed class RunRecorder
             // The step number is stamped HERE, while the event still carries it. Nothing downstream
             // can work it out again: replaying by order attributes a tool call to whichever step
             // started last, which is the wrong one as soon as two run at once.
-            eventRecords.Add(new RunEventRecord(ev.At, ev.Kind.ToString(), ev.Summary, ev.StepNo()));
+            eventRecords.Add(new RunEventRecord(
+                ev.At, ev.Kind.ToString(), ev.Summary, ev.StepNo(), ev.PayloadJson));
             switch (ev.Kind)
             {
                 case EventKind.IntentReceived:

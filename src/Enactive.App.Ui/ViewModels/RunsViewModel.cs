@@ -116,7 +116,10 @@ internal sealed class PastRunViewModel : ObservableObject
     public PastRunViewModel(
         RunRecord record,
         Action<ArtifactItemViewModel> open,
-        Action<ArtifactItemViewModel> remove)
+        Action<ArtifactItemViewModel> remove,
+        // Passed in rather than looked up here: only the window knows the provider list, and a past
+        // run must be classified by the same rule as a live one.
+        Func<string?, ModelWorkSplit.Reach>? reachOf = null)
     {
         Record = record;
         Title = string.IsNullOrWhiteSpace(record.Title) ? "(untitled run)" : record.Title;
@@ -141,6 +144,7 @@ internal sealed class PastRunViewModel : ObservableObject
 
         // The same three tiles the live run shows, off what was actually recorded.
         Routing = RunRouting.From(record);
+        ModelWork = ModelWorkSplit.From(record, reachOf ?? (_ => ModelWorkSplit.Reach.Unknown));
 
         // Null usage means the run predates the counting, or the provider never reported - which is
         // not the same as zero and does not get to look like it.
@@ -210,6 +214,7 @@ internal sealed class PastRunViewModel : ObservableObject
     public string StagingText { get; } = string.Empty;
 
     public RunRouting Routing { get; }
+    public ModelWorkSplit ModelWork { get; }
     public string TokensText { get; }
     public string TokensDetail { get; }
 

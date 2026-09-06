@@ -26,6 +26,7 @@ using Enactive.Core.Tools;
 using Enactive.Core.Workers;
 using Enactive.Providers;
 using Enactive.Tools;
+using Enactive.Tools.Mcp;
 using Enactive.Workspace;
 
 namespace Enactive.App.Ui;
@@ -88,10 +89,12 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     public MainWindow()
     {
         _settings = AppSettings.Load();
-        _toolRegistry = new LoggingToolRegistry(new ToolRegistry(new ITool[]
+        _toolRegistry = new ToolRegistry(new ITool[]
         {
-            new WriteFileTool(), new ReadFileTool(), new ListDirectoryTool(), new RunCommandTool(), new RunPowerShellTool(), new GitTool(), new DockerTool()
-        }), _log);
+            new WriteFileTool(), new EditFileTool(), new ReadFileTool(), new SearchFilesTool(),
+            new ListDirectoryTool(), new CreateDirectoryTool(), new MoveFileTool(),
+            new RunCommandTool(), new RunPowerShellTool(), new GitTool(), new DockerTool()
+        });
 
         // A settings file the app cannot build from must not make the app unlaunchable. Saving is
         // validated now, but a file edited by hand — or written by an older build — can still be
@@ -140,7 +143,13 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         _vm.SettingsRequested += () =>
             // SettingsWindow reads the live settings and mutates them only when Save is clicked
             // (Cancel/close leave them untouched), so it gets _settings directly, not a partial copy.
-            new SettingsWindow(_settings, saved => { _settings = saved; saved.Save(); ApplySettings(); }).Show(this);
+            new SettingsWindow(_settings, saved =>
+            {
+                if (!saved.Save())
+                    throw new InvalidOperationException("Settings could not be saved. Check disk access and Windows credential encryption.");
+                _settings = saved;
+                ApplySettings();
+            }).Show(this);
         _vm.InputFocusRequested += () =>
         {
             InputBox.Focus();
@@ -376,10 +385,12 @@ public sealed partial class MainWindow : Window, IDecisionHandler
 
         try
         {
+            await using var mcp = await McpRunTools.ConnectAsync(_toolRegistry, _settings.McpServers, fullPath, _cts.Token);
+            IToolRegistry runTools = new LoggingToolRegistry(mcp, _log);
             var runStore = RunStoreFactory.Create(workspace);
             var contextProvider = new ContextProvider(workspace, new EnvironmentProbe());
             var orchestrator = new Orchestrator(
-                _providerFactory, _modelResolver, _workerProvider, _toolRegistry, artifactStore,
+                _providerFactory, _modelResolver, _workerProvider, runTools, artifactStore,
                 workspace, _planner, _permissionEngine, this, policy, new EmptyProvider(),
                 BuildRouter(), _settings.ReviewRetries, _settings.NumCtx, _settings.DisableThinking, _settings.MaxParallelSteps,
                 _settings.AllowImplicitToolCalls, _settings.ReviewContent, _settings.RevertRejectedSteps);
@@ -439,7 +450,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                     _vm.StatusPhase = "Understanding";
                     break;
                 case EventKind.Routed:
-                    _vm.Routing.Apply(ev.Summary);
+                    _vm.Routing.Apply(ev.Summary, ev.PayloadJson);
                     if (ev.Summary.Contains("-> model"))
                         _vm.StatusPhase = "Planning";
                     if (ev.Summary.StartsWith("Quick action: ", StringComparison.Ordinal))
@@ -547,7 +558,10 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                     break;
                 case EventKind.UsageReported:
                     if (ev.Usage() is { } used)
-                        _vm.AddUsage(used.In, used.Out);
+                    {
+                        var usageProvider = ev.ProviderId();
+                        _vm.AddUsage(used.In, used.Out, usageProvider, ReachOf(usageProvider));
+                    }
                     break;
                 case EventKind.ArtifactProduced:
                     (CardFor(ev) ?? EnsureCurrentCard()).AddNote("Artifact: " + ev.Summary);
@@ -1056,6 +1070,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             return;
         }
 
+        var mcpConfigs = _settings.McpServers.Select(c => c.Clone()).ToArray();
         var workspace = WorkspaceFrom(fullPath);
         var policy = PolicyFor(_vm.AutonomyTier);
         var runSettings = CurrentRunSettings();
@@ -1085,8 +1100,10 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                 var runStore = RunStoreFactory.Create(workspace);
                 var contextProvider = new ContextProvider(workspace, new EnvironmentProbe());
                 var decisions = new BackgroundDecisionHandler(inbox, workspace);
+                await using var mcp = await McpRunTools.ConnectAsync(_toolRegistry, mcpConfigs, fullPath, CancellationToken.None);
+                IToolRegistry runTools = new LoggingToolRegistry(mcp, _log);
                 var orchestrator = new Orchestrator(
-                    _providerFactory, _modelResolver, _workerProvider, _toolRegistry, new DiskArtifactStore(workspace),
+                    _providerFactory, _modelResolver, _workerProvider, runTools, new DiskArtifactStore(workspace),
                     workspace, _planner, _permissionEngine, decisions, policy, new EmptyProvider(),
                     BuildRouter(), _settings.ReviewRetries, _settings.NumCtx, _settings.DisableThinking, _settings.MaxParallelSteps,
                     _settings.AllowImplicitToolCalls, _settings.ReviewContent, _settings.RevertRejectedSteps);
@@ -1166,7 +1183,8 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         return new PastRunViewModel(
             record,
             item => ShowFile(root, item),
-            item => _ = DeletePastArtifactAsync(root, item));
+            item => _ = DeletePastArtifactAsync(root, item),
+            ReachOf);
     }
 
     /// <summary>Opens an artifact in the viewer. Reading is safe at any age.</summary>
@@ -1411,6 +1429,34 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             return;
 
         ApprovalStore.Approve(WorkspaceInfo.IdFor(_currentWorkspaceRoot), tool);
+    }
+
+    /// <summary>
+    /// Where a provider runs, by its id. The engine records WHICH provider produced each turn and
+    /// deliberately stops there — it has no idea of a provider's address. This is the only place
+    /// that does, because addresses are settings.
+    ///
+    /// A provider the settings no longer contain is Unknown, not Cloud: a deleted or renamed
+    /// provider is a gap in what we know, and filing it under "cloud" would put made-up numbers next
+    /// to real ones. Same rule as the token tile's em dash.
+    /// </summary>
+    private ModelWorkSplit.Reach ReachOf(string? providerId)
+    {
+        if (string.IsNullOrWhiteSpace(providerId))
+            return ModelWorkSplit.Reach.Unknown;
+
+        var provider = _settings.Providers.FirstOrDefault(
+            p => string.Equals(p.Id, providerId, StringComparison.OrdinalIgnoreCase));
+
+        if (provider is null)
+            return ModelWorkSplit.Reach.Unknown;
+
+        var url = provider.BaseUrl ?? string.Empty;
+        return url.Contains("localhost", StringComparison.OrdinalIgnoreCase)
+            || url.Contains("127.0.0.1", StringComparison.Ordinal)
+            || url.Contains("[::1]", StringComparison.Ordinal)
+                ? ModelWorkSplit.Reach.Local
+                : ModelWorkSplit.Reach.Cloud;
     }
 
     /// <summary>

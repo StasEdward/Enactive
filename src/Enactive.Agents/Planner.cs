@@ -6,8 +6,16 @@ using Enactive.Core.Context;
 using Enactive.Core.Providers;
 using Enactive.Core.Tasks;
 
-/// <summary>The result of the understand/plan phase. For a Task, Plan is a real dependency graph.</summary>
-public sealed record PlanResult(IntentDisposition Disposition, string Title, Plan? Plan);
+/// <summary>
+/// The result of the understand/plan phase. For a Task, Plan is a real dependency graph.
+///
+/// <para>The token counts are carried out with the result because the planning call happens outside
+/// the tool loop, which is where usage events are emitted from: without this the planner's tokens
+/// were spent on every single run and counted on none of them.</para>
+/// </summary>
+public sealed record PlanResult(
+    IntentDisposition Disposition, string Title, Plan? Plan,
+    int PromptTokens = 0, int CompletionTokens = 0);
 
 /// <summary>
 /// Turns an intent into a routing decision + optional DAG plan with one LLM call (PLAN_v2 §3). Steps may
@@ -26,7 +34,11 @@ public sealed class Planner
         };
 
         var completion = await provider.CompleteAsync(new ChatRequest(model, messages, Temperature: 0.0), ct);
-        return Parse(completion.Message.Content ?? "", request);
+        return Parse(completion.Message.Content ?? "", request) with
+        {
+            PromptTokens = completion.PromptTokens ?? 0,
+            CompletionTokens = completion.CompletionTokens ?? 0
+        };
     }
 
     private static PlanResult Parse(string text, string fallbackTitle)

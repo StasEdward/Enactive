@@ -10,7 +10,15 @@ namespace Enactive.Core.History;
 /// before this existed still load - they simply have no step, and replay shows them as a timeline
 /// rather than as cards.</para>
 /// </summary>
-public sealed record RunEventRecord(DateTimeOffset At, string Kind, string Summary, int? Step = null);
+/// <param name="Payload">
+/// The event's typed payload, kept verbatim so a stored run can be read the same way a live one is.
+/// Without it the only machine-readable thing a past run had was its English summary, and reading a
+/// past run meant parsing prose — the exact habit the typed payloads were introduced to end. Null
+/// for runs recorded before this was kept, which is why every reader treats null as "not known"
+/// rather than as a default.
+/// </param>
+public sealed record RunEventRecord(
+    DateTimeOffset At, string Kind, string Summary, int? Step = null, string? Payload = null);
 
 /// <summary>
 /// How the run was set up: the autonomy it was given, the worker role it took, and whether its

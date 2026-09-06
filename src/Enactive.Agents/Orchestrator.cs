@@ -118,6 +118,26 @@ public sealed class Orchestrator : IOrchestrator
             => new(Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow, kind, summary,
                    stepNo is { } n ? $"{{\"step\":{n}}}" : null);
 
+        // A routing decision carries its choice as VALUES, not only as a sentence. The panel that
+        // answers "which model actually ran this" reads the payload, so rewording a summary cannot
+        // change what it shows - the same reason step outcomes stopped being parsed out of prose.
+        WorkEvent Route(string purpose, ModelRef reference, string summary,
+                        int? stepNo = null, StepComplexity? complexity = null)
+            => new(Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow, EventKind.Routed, summary,
+                   WorkEventPayload.RoutePayload(purpose, reference.ProviderId, reference.Model,
+                                                 stepNo, complexity?.ToString().ToLowerInvariant()));
+
+        // Tokens spent OUTSIDE the tool loop. The loop emits its own usage; planning and review call
+        // the provider directly, so their cost was spent on every run and counted on none - which
+        // made the run total execute-only while the reviewer, on the most expensive model bound, read
+        // whole documents for free as far as the UI was concerned.
+        WorkEvent UsageOutsideLoop(
+            string purpose, ModelRef reference, int prompt, int completion, int? stepNo = null)
+            => new(Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow, EventKind.UsageReported,
+                   $"tokens: {prompt} in, {completion} out ({reference.ProviderId}/{reference.Model}, {purpose})",
+                   WorkEventPayload.UsagePayload(prompt, completion, stepNo,
+                                                 reference.ProviderId, reference.Model, purpose));
+
         yield return Ev(EventKind.IntentReceived, $"Intent: {intent.RawText}");
         yield return Ev(EventKind.ContextAssembled,
             $"Workspace '{_workspace.Name}' at {_workspace.RootPath}"
@@ -126,7 +146,7 @@ public sealed class Orchestrator : IOrchestrator
 
         var worker = _workers.Get(intent.WorkerId);
         var model = _router.Resolve(ModelPurpose.Execute, worker) ?? worker.ModelPolicy.Preferred;
-        yield return Ev(EventKind.Routed, $"Worker '{worker.Role}' -> model {model.ProviderId}/{model.Model}");
+        yield return Route("worker", model, $"Worker '{worker.Role}' -> model {model.ProviderId}/{model.Model}");
 
         var provider = _providers.Create(model.ProviderId);
 
@@ -135,7 +155,7 @@ public sealed class Orchestrator : IOrchestrator
         var planProvider = _providers.Create(planRef.ProviderId);
         var planModel = planRef.Model;
         if (planRef.ProviderId != model.ProviderId || planRef.Model != model.Model)
-            yield return Ev(EventKind.Routed, $"Planner -> {planRef.ProviderId}/{planRef.Model}");
+            yield return Route("plan", planRef, $"Planner -> {planRef.ProviderId}/{planRef.Model}");
 
         // Review phase: on iff a Review model is bound.
         var reviewRef = _router.Resolve(ModelPurpose.Review, worker);
@@ -143,11 +163,15 @@ public sealed class Orchestrator : IOrchestrator
         var reviewProvider = reviewOn ? _providers.Create(reviewRef!.ProviderId) : null;
         var reviewModel = reviewRef?.Model ?? "";
         if (reviewOn)
-            yield return Ev(EventKind.Routed, $"Reviewer -> {reviewRef!.ProviderId}/{reviewRef.Model}");
+            yield return Route("review", reviewRef!, $"Reviewer -> {reviewRef!.ProviderId}/{reviewRef.Model}");
 
         // ── Understand / Plan (reasoner when multi-agent) ─────────────────────
         var plan = await InScopeAsync(runId, taskId, null,
             () => _planner.PlanAsync(intent.RawText, intent.Context, planProvider, planModel, ct));
+
+        if (plan.PromptTokens + plan.CompletionTokens > 0)
+            yield return UsageOutsideLoop(
+                WorkEventPayload.WorkPurpose.Plan, planRef, plan.PromptTokens, plan.CompletionTokens);
 
         var messages = new List<ChatMessage>
         {
@@ -207,7 +231,7 @@ public sealed class Orchestrator : IOrchestrator
                         {
                             await foreach (var ev in RunToolLoopAsync(
                                 taskId, runId, activeProvider, activeRef.Model, worker, messages, artifacts,
-                                intent.Context, null, quickResult, ct))
+                                intent.Context, null, quickResult, ct, activeRef.ProviderId))
                                 quick.Writer.TryWrite(ev);
                         }
                         catch (Exception ex) when (ex is not OperationCanceledException
@@ -217,7 +241,10 @@ public sealed class Orchestrator : IOrchestrator
                             var fallback = _modelResolver.NextOnFailure(worker.ModelPolicy, activeRef)!;
                             triedFallback = true;
 
-                            quick.Writer.TryWrite(Ev(EventKind.Routed,
+                            // Routed as the worker's model, because from here on it IS the model
+                            // doing the work: a panel that still named the unreachable one would be
+                            // reporting a binding rather than what ran.
+                            quick.Writer.TryWrite(Route("worker", fallback,
                                 $"{activeRef.ProviderId}/{activeRef.Model} failed ({ex.Message}) — "
                                 + $"retrying on the fallback {fallback.ProviderId}/{fallback.Model}"));
 
@@ -237,6 +264,11 @@ public sealed class Orchestrator : IOrchestrator
                         quick.Writer.TryWrite(Ev(EventKind.ReviewRequested, "reviewing…"));
                         var (review, mode) = await ReviewAsync(
                             plan.Title, messages, evidenceStart, artifacts, reviewProvider!, reviewModel, ct);
+
+                        if (review.PromptTokens + review.CompletionTokens > 0)
+                            quick.Writer.TryWrite(UsageOutsideLoop(
+                                WorkEventPayload.WorkPurpose.Review, reviewRef!,
+                                review.PromptTokens, review.CompletionTokens));
 
                         if (review.Pass)
                         {
@@ -360,8 +392,13 @@ public sealed class Orchestrator : IOrchestrator
             var stepRef = _router.ResolveExecute(worker, step.Complexity) ?? model;
             var stepProvider = _providers.Create(stepRef.ProviderId);
             var stepModel = stepRef.Model;
-            if (stepRef.ProviderId != model.ProviderId || stepRef.Model != model.Model)
-                Emit(EventKind.Routed, $"[{stepNumber}] {step.Complexity} step -> {stepRef.ProviderId}/{stepRef.Model}");
+            // Emitted for EVERY step, not only when it differs from the worker's model. "Which model
+            // ran this step" is the question the panel exists to answer, and answering it only
+            // sometimes is exactly how a run could show a local worker binding while all of its steps
+            // in fact went to the cloud, because the planner had rated them complex.
+            events.Writer.TryWrite(Route("step", stepRef,
+                $"[{stepNumber}] {step.Complexity} step -> {stepRef.ProviderId}/{stepRef.Model}",
+                stepNumber, step.Complexity));
 
             var maxAttempts = reviewOn ? _reviewRetries + 1 : 1;
             var stepResult = new ToolLoopResult();
@@ -391,7 +428,7 @@ public sealed class Orchestrator : IOrchestrator
                 {
                     await foreach (var ev in RunToolLoopAsync(
                         taskId, runId, stepProvider, stepModel, worker, convo, artifacts,
-                        intent.Context, stepNumber, stepResult, ct))
+                        intent.Context, stepNumber, stepResult, ct, stepRef.ProviderId))
                         events.Writer.TryWrite(ev);
 
                     outcome = stepResult.Kind;
@@ -412,9 +449,12 @@ public sealed class Orchestrator : IOrchestrator
                         && _modelResolver.NextOnFailure(worker.ModelPolicy, stepRef) is { } fallback)
                     {
                         triedFallback = true;
-                        Emit(EventKind.Routed,
+                        // Same reason as the quick-action path: after the switch the fallback is
+                        // what runs this step, so that is what the step's routing row must name.
+                        events.Writer.TryWrite(Route("step", fallback,
                             $"[{stepNumber}] {stepRef.ProviderId}/{stepRef.Model} failed ({ex.Message}) — "
-                            + $"retrying on the fallback {fallback.ProviderId}/{fallback.Model}");
+                            + $"retrying on the fallback {fallback.ProviderId}/{fallback.Model}",
+                            stepNumber, step.Complexity));
 
                         stepRef = fallback;
                         stepProvider = _providers.Create(fallback.ProviderId);
@@ -444,6 +484,11 @@ public sealed class Orchestrator : IOrchestrator
 
                 var (review, mode) = await ReviewAsync(
                     step.Title, convo, evidenceStart, artifacts, reviewProvider!, reviewModel, ct);
+
+                if (review.PromptTokens + review.CompletionTokens > 0)
+                    events.Writer.TryWrite(UsageOutsideLoop(
+                        WorkEventPayload.WorkPurpose.Review, reviewRef!,
+                        review.PromptTokens, review.CompletionTokens, stepNumber));
 
                 if (review.Pass)
                 {
@@ -655,7 +700,7 @@ public sealed class Orchestrator : IOrchestrator
             => string.Join("; ", _byCall.Values);
 
         private static string Key(ToolCall call)
-            => call.Name + " " + (call.ArgumentsJson ?? string.Empty).Trim();
+            => call.Name + "\0" + (call.ArgumentsJson ?? string.Empty).Trim();
     }
 
     /// <summary>
@@ -724,7 +769,10 @@ public sealed class Orchestrator : IOrchestrator
         Guid taskId, Guid runId, IChatProvider provider, string model, Worker worker,
         List<ChatMessage> messages, List<ArtifactRef> artifacts, WorkContext context,
         int? stepNo, ToolLoopResult loopResult,
-        [EnumeratorCancellation] CancellationToken ct)
+        [EnumeratorCancellation] CancellationToken ct,
+        // Only for the usage record. The loop is handed a ready provider and a model NAME, which is
+        // all it needs to talk; the id is what makes the tokens attributable afterwards.
+        string? providerId = null)
     {
         // An async iterator cannot return a value, so the caller passes in the slot the loop fills.
         // Without it "how did this end" existed only as English inside an event, and every consumer
@@ -739,8 +787,10 @@ public sealed class Orchestrator : IOrchestrator
 
         WorkEvent Usage(int prompt, int completion)
             => new(Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow, EventKind.UsageReported,
-                   $"tokens: {prompt} in, {completion} out",
-                   WorkEventPayload.UsagePayload(prompt, completion, stepNo));
+                   $"tokens: {prompt} in, {completion} out"
+                   + (providerId is { Length: > 0 } id ? $" ({id}/{model}, execute)" : ""),
+                   WorkEventPayload.UsagePayload(prompt, completion, stepNo, providerId, model,
+                                                 WorkEventPayload.WorkPurpose.Execute));
 
         // A reply that describes a call instead of making one earns exactly ONE re-ask per step; without
         // the cap a model that keeps explaining itself would burn every iteration on the same nudge.
@@ -872,6 +922,8 @@ public sealed class Orchestrator : IOrchestrator
                 // ── Permission gate: allow / ask / deny ──────────────────────
                 var gate = _permissions.Evaluate(
                     EffectivePolicyFor(worker), call.Name, _tools.RequiredLevelOf(call.Name));
+                if (gate == PermissionDecision.Allow && _tools.RequiresApprovalOf(call.Name))
+                    gate = PermissionDecision.Ask;
                 if (gate != PermissionDecision.Allow)
                 {
                     var approved = false;
@@ -889,7 +941,7 @@ public sealed class Orchestrator : IOrchestrator
                             $"Arguments: {Compact(call.ArgumentsJson)}",
                             new[] { new DecisionOption("allow", "Allow"), new DecisionOption("deny", "Deny") },
                             RecommendedOptionId: "allow",
-                            Subject: call.Name,
+                            Subject: _tools.RequiresApprovalOf(call.Name) ? null : call.Name,
                             FullDetail: DescribeCall(call));
 
                         // Parallel steps must not race to put two cards on screen at once.
@@ -1193,7 +1245,10 @@ public sealed class Orchestrator : IOrchestrator
     /// </summary>
     private static bool Allows(Worker worker, string tool)
         => worker.ToolAllowlist.Contains("*")
-        || worker.ToolAllowlist.Contains(tool, StringComparer.OrdinalIgnoreCase);
+        || worker.ToolAllowlist.Contains(tool, StringComparer.OrdinalIgnoreCase)
+        || (tool.StartsWith("mcp__", StringComparison.Ordinal)
+            && worker.ToolAllowlist.Any(pattern => pattern.StartsWith("mcp__", StringComparison.Ordinal)
+                && pattern.EndsWith('*') && tool.StartsWith(pattern[..^1], StringComparison.Ordinal)));
 
     /// <summary>The real commands and tool outputs added during a step — the reviewer's ground truth.</summary>
     private static string BuildEvidence(List<ChatMessage> messages, int start)

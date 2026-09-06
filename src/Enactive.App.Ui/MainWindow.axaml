@@ -584,6 +584,29 @@
                             </ItemsControl>
                         </StackPanel>
 
+                        <!-- Who did the work, not just how much of it there was. Green is this
+                             machine, blue was bought. The percentage is of TOKENS; the call count
+                             is beside it because the two can disagree, and when they do that is
+                             the interesting part. -->
+                        <StackPanel Spacing="2" IsVisible="{Binding ModelWork.HasAny}"
+                                    Margin="0,6,0,0">
+                            <TextBlock Classes="panelHeader" Text="WHERE IT RAN" Margin="0" />
+                            <ItemsControl ItemsSource="{Binding ModelWork.Rows}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:ModelWorkRow">
+                                        <Grid ColumnDefinitions="52,*" Margin="0,1">
+                                            <TextBlock Grid.Column="0" Classes="routingPhase"
+                                                       Text="{Binding Label}"
+                                                       Foreground="{Binding Edge}" />
+                                            <TextBlock Grid.Column="1" Classes="routing"
+                                                       Text="{Binding Detail}"
+                                                       ToolTip.Tip="{Binding Detail}" />
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+
                         <TextBlock Classes="hint" Text="{Binding StatusProgress}" FontSize="12" />
 
                         <Border Background="{Binding AgentBrush}" IsVisible="{Binding IsAgentVisible}"
@@ -860,6 +883,29 @@
                                                 <TextBlock Grid.Column="1" Classes="routing"
                                                            Text="{Binding Model}"
                                                            ToolTip.Tip="{Binding Model}" />
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+
+                            <!-- The same split as the live panel. On a past run this is where the
+                                 routing changes actually get judged: it is the only place "before
+                                 and after I rebound the models" can be compared. A run recorded
+                                 before this was kept has no rows rather than zeroed ones. -->
+                            <StackPanel Spacing="2" IsVisible="{Binding PastRun.ModelWork.HasAny}"
+                                        Margin="0,6,0,0">
+                                <TextBlock Classes="panelHeader" Text="WHERE IT RAN" Margin="0" />
+                                <ItemsControl ItemsSource="{Binding PastRun.ModelWork.Rows}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:ModelWorkRow">
+                                            <Grid ColumnDefinitions="52,*" Margin="0,1">
+                                                <TextBlock Grid.Column="0" Classes="routingPhase"
+                                                           Text="{Binding Label}"
+                                                           Foreground="{Binding Edge}" />
+                                                <TextBlock Grid.Column="1" Classes="routing"
+                                                           Text="{Binding Detail}"
+                                                           ToolTip.Tip="{Binding Detail}" />
                                             </Grid>
                                         </DataTemplate>
                                     </ItemsControl.ItemTemplate>

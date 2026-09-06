@@ -9,11 +9,17 @@ using Enactive.Core.History;
 internal sealed record RoutingRow(string Phase, string Model);
 
 /// <summary>
-/// Which model actually served each phase of a run - the worker's, the planner's, the reviewer's.
+/// Which model actually served each phase of a run - the worker's, the planner's, the reviewer's,
+/// and one row per plan STEP.
 ///
 /// <para>It is read from the run's own Routed events rather than from the settings, and the
 /// difference matters: the settings say what is bound, this says what was used. A phase that fell
 /// back, or a step the router sent to the light model, shows up here and nowhere else.</para>
+///
+/// <para>The step rows exist because the three binding rows alone could actively mislead: a run
+/// bound to a local worker still sends every step it rated "complex" to the expensive model, and the
+/// panel would show the local binding it never used. The step rows name the model that ran, and the
+/// complexity that sent it there — the "why", without opening the log.</para>
 /// </summary>
 internal sealed class RunRouting : ObservableObject
 {
@@ -23,6 +29,9 @@ internal sealed class RunRouting : ObservableObject
     private string _worker = string.Empty;
     private string _plan = string.Empty;
     private string _review = string.Empty;
+
+    /// <summary>Step number -> what served it. Sorted on rebuild; last decision for a step wins.</summary>
+    private readonly SortedDictionary<int, string> _steps = new();
 
     public string Worker { get => _worker; private set => Set(ref _worker, value); }
     public string Plan { get => _plan; private set => Set(ref _plan, value); }
@@ -40,16 +49,26 @@ internal sealed class RunRouting : ObservableObject
     public void Clear()
     {
         Worker = Plan = Review = string.Empty;
+        _steps.Clear();
         Rebuild();
     }
 
     /// <summary>
-    /// Reads one Routed summary. The orchestrator writes three shapes - "Worker 'X' -> model p/m",
-    /// "Planner -> p/m" and "Reviewer -> p/m" - and this is the only place that knows them, so the
-    /// live run and a replayed one cannot disagree about what they mean.
+    /// Reads one Routed event.
+    ///
+    /// <para>The typed payload is the source of truth (see <see cref="WorkEventPayload.RoutePayload"/>):
+    /// the summary is display text, and a panel that parses display text turns every reworded message
+    /// into a silent behaviour change. The prose fallback below stays only for runs recorded before
+    /// the payload existed.</para>
     /// </summary>
-    public void Apply(string summary)
+    public void Apply(string summary, string? payload = null)
     {
+        if (ApplyPayload(payload))
+        {
+            Rebuild();
+            return;
+        }
+
         if (summary.StartsWith("Worker", StringComparison.Ordinal))
             Worker = After(summary, WorkerMarker);
         else if (summary.StartsWith("Planner", StringComparison.Ordinal))
@@ -62,12 +81,54 @@ internal sealed class RunRouting : ObservableObject
         Rebuild();
     }
 
+    /// <summary>Returns true when the event carried a routing payload and it was applied.</summary>
+    private bool ApplyPayload(string? payload)
+    {
+        if (string.IsNullOrEmpty(payload))
+            return false;
+
+        // Only the payload matters to the readers, so a stand-in carrying it reads a stored row
+        // through exactly the same code as a live one.
+        var ev = new WorkEvent(
+            Guid.Empty, Guid.Empty, Guid.Empty, DateTimeOffset.MinValue,
+            EventKind.Routed, string.Empty, payload);
+
+        if (ev.Route() is not { Length: > 0 } route)
+            return false;
+        if (ev.ProviderId() is not { Length: > 0 } provider || ev.ModelName() is not { Length: > 0 } model)
+            return false;
+
+        var served = $"{provider}/{model}";
+
+        switch (route)
+        {
+            case "worker":
+                Worker = served;
+                return true;
+            case "plan":
+                Plan = served;
+                return true;
+            case "review":
+                Review = served;
+                return true;
+            case "step" when ev.StepNo() is { } stepNo:
+                // The complexity is the REASON this step went where it did, which is the whole
+                // question when a local worker binding produced an all-cloud run.
+                _steps[stepNo] = ev.RouteComplexity() is { Length: > 0 } complexity
+                    ? $"{served} ({complexity})"
+                    : served;
+                return true;
+            default:
+                return false;
+        }
+    }
+
     public static RunRouting From(RunRecord record)
     {
         var routing = new RunRouting();
         foreach (var e in record.Events)
             if (e.Kind == nameof(EventKind.Routed))
-                routing.Apply(e.Summary);
+                routing.Apply(e.Summary, e.Payload);
         return routing;
     }
 
@@ -77,6 +138,8 @@ internal sealed class RunRouting : ObservableObject
         Add("worker", _worker);
         Add("plan", _plan);
         Add("review", _review);
+        foreach (var (stepNo, served) in _steps)
+            Add($"step {stepNo}", served);
         OnPropertyChanged(nameof(HasAny));
 
         void Add(string phase, string model)

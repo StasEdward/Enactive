@@ -5,8 +5,16 @@ using System.Text.Json;
 using Enactive.Core.Chat;
 using Enactive.Core.Providers;
 
-/// <summary>Reviewer verdict for a step.</summary>
-public sealed record ReviewResult(bool Pass, string Notes);
+/// <summary>
+/// Reviewer verdict for a step, plus what asking cost.
+///
+/// <para>The review call sits outside the tool loop, so its tokens were never counted; on a run that
+/// reviews content, the reviewer reads whole documents on the most expensive model bound, which made
+/// the uncounted share the LARGEST part of some runs. The counts cover the re-ask too, when there
+/// was one - two calls were made, and two calls were paid for.</para>
+/// </summary>
+public sealed record ReviewResult(
+    bool Pass, string Notes, int PromptTokens = 0, int CompletionTokens = 0);
 
 /// <summary>One file the step wrote, as the reviewer needs to see it.</summary>
 public sealed record WrittenFile(string RelativePath, string Content);
@@ -63,8 +71,11 @@ public sealed class Reviewer
         var completion = await provider.CompleteAsync(new ChatRequest(model, messages, Temperature: 0.0), ct);
         var answer = completion.Message.Content ?? "";
 
+        var prompt = completion.PromptTokens ?? 0;
+        var output = completion.CompletionTokens ?? 0;
+
         if (Parse(answer) is { } verdict)
-            return verdict;
+            return verdict with { PromptTokens = prompt, CompletionTokens = output };
 
         // No verdict in there. Ask once more, showing what came back and what was wanted, because a
         // model that wandered off format usually recovers when told exactly what shape to produce.
@@ -78,12 +89,16 @@ public sealed class Reviewer
 
         var retry = await provider.CompleteAsync(new ChatRequest(model, messages, Temperature: 0.0), ct);
 
+        prompt += retry.PromptTokens ?? 0;
+        output += retry.CompletionTokens ?? 0;
+
         if (Parse(retry.Message.Content ?? "") is { } retried)
-            return retried;
+            return retried with { PromptTokens = prompt, CompletionTokens = output };
 
         // Twice with no verdict. A reviewer that cannot answer has not approved anything.
         return new ReviewResult(false,
-            "the reviewer did not return a verdict, twice — treating the step as not reviewed");
+            "the reviewer did not return a verdict, twice — treating the step as not reviewed",
+            prompt, output);
     }
 
     private static string BuildExecutionUserPrompt(

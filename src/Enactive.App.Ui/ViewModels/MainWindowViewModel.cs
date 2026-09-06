@@ -596,10 +596,12 @@ internal sealed class MainWindowViewModel : ObservableObject
         ? "nothing reported"
         : $"{Compact(PromptTokens)} in · {Compact(CompletionTokens)} out";
 
-    public void AddUsage(int promptTokens, int completionTokens)
+    public void AddUsage(int promptTokens, int completionTokens,
+        string? providerId = null, ModelWorkSplit.Reach where = ModelWorkSplit.Reach.Unknown)
     {
         PromptTokens += promptTokens;
         CompletionTokens += completionTokens;
+        ModelWork.Add(providerId, where, promptTokens, completionTokens);
         OnPropertyChanged(nameof(TokensText));
         OnPropertyChanged(nameof(TokensDetail));
     }
@@ -607,9 +609,13 @@ internal sealed class MainWindowViewModel : ObservableObject
     public void ResetUsage()
     {
         PromptTokens = CompletionTokens = 0;
+        ModelWork.Clear();
         OnPropertyChanged(nameof(TokensText));
         OnPropertyChanged(nameof(TokensDetail));
     }
+
+    /// <summary>How much of this run ran on this machine and how much was bought.</summary>
+    public ModelWorkSplit ModelWork { get; } = new();
 
     /// <summary>A tile is about four characters wide, and 128000 does not fit in four.</summary>
     internal static string Compact(int tokens) => tokens switch

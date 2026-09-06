@@ -111,10 +111,119 @@ public static class WorkEventPayload
     /// Builds the payload of a <see cref="EventKind.UsageReported"/> event. Here rather than in the
     /// orchestrator so the shape is written once and read once.
     /// </summary>
-    public static string UsagePayload(int promptTokens, int completionTokens, int? stepNo)
-        => stepNo is { } n
-            ? $"{{\"step\":{n},\"in\":{promptTokens},\"out\":{completionTokens}}}"
-            : $"{{\"in\":{promptTokens},\"out\":{completionTokens}}}";
+    /// <param name="providerId">
+    /// WHICH provider produced these tokens. Recorded here rather than worked out later because
+    /// afterwards it cannot be: a run's totals said nothing about whether the local model did the
+    /// work or the expensive one did, which is the only question the light/heavy routing exists to
+    /// answer. Whether that provider is local or remote is deliberately NOT decided here — the
+    /// engine does not know a provider's address, and the app that does can classify it later.
+    /// </param>
+    /// <param name="purpose">
+    /// WHICH phase spent these tokens - see <see cref="WorkPurpose"/>. Planning and review call the
+    /// provider outside the tool loop, so their tokens used to be spent and never counted: the run
+    /// total was execute-only, which understates a run whose reviewer reads whole documents on an
+    /// expensive model.
+    /// </param>
+    public static string UsagePayload(
+        int promptTokens, int completionTokens, int? stepNo,
+        string? providerId = null, string? model = null, string? purpose = null)
+    {
+        var parts = new List<string>(6);
+        if (stepNo is { } n) parts.Add($"\"step\":{n}");
+        parts.Add($"\"in\":{promptTokens}");
+        parts.Add($"\"out\":{completionTokens}");
+        if (!string.IsNullOrWhiteSpace(providerId)) parts.Add($"\"provider\":{Quote(providerId)}");
+        if (!string.IsNullOrWhiteSpace(model)) parts.Add($"\"model\":{Quote(model)}");
+        if (!string.IsNullOrWhiteSpace(purpose)) parts.Add($"\"purpose\":{Quote(purpose)}");
+        return "{" + string.Join(',', parts) + "}";
+    }
+
+    /// <summary>
+    /// Which phase an event belongs to. Written as a value rather than inferred from the summary,
+    /// for the same reason step outcomes are: wording changes, values do not.
+    /// </summary>
+    public static class WorkPurpose
+    {
+        /// <summary>The planner's own call - one turn, before any step exists.</summary>
+        public const string Plan = "plan";
+
+        /// <summary>A worker turn inside the tool loop.</summary>
+        public const string Execute = "execute";
+
+        /// <summary>A reviewer call (including its one re-ask).</summary>
+        public const string Review = "review";
+    }
+
+    /// <summary>The phase this event belongs to, or null when it does not say.</summary>
+    public static string? Purpose(this WorkEvent ev) => Field(ev.PayloadJson, PurposeRegex);
+
+    /// <summary>
+    /// Builds the payload of a routing (<see cref="EventKind.Routed"/>) event: which model was
+    /// chosen for what.
+    ///
+    /// <para>The UI used to learn a run's routing by parsing the summary - "Worker 'X' -> model p/m"
+    /// - which made the wording load-bearing, and could only ever show the three BINDINGS. What a
+    /// person actually wants to know is which model each STEP ran on: a run can bind a local worker
+    /// and still send every step to the cloud because the planner rated them complex, and the panel
+    /// would happily report the local binding it never used.</para>
+    /// </summary>
+    /// <param name="purpose">"worker", "plan", "review" or "step".</param>
+    /// <param name="complexity">The step's rated complexity - the REASON a step went where it did.</param>
+    public static string RoutePayload(
+        string purpose, string providerId, string model, int? stepNo = null, string? complexity = null)
+    {
+        var parts = new List<string>(5);
+        if (stepNo is { } n) parts.Add($"\"step\":{n}");
+        parts.Add($"\"route\":{Quote(purpose)}");
+        parts.Add($"\"provider\":{Quote(providerId)}");
+        parts.Add($"\"model\":{Quote(model)}");
+        if (!string.IsNullOrWhiteSpace(complexity)) parts.Add($"\"complexity\":{Quote(complexity)}");
+        return "{" + string.Join(',', parts) + "}";
+    }
+
+    /// <summary>What this routing event decided - "worker", "plan", "review", "step" - or null.</summary>
+    public static string? Route(this WorkEvent ev) => Field(ev.PayloadJson, RouteRegex);
+
+    /// <summary>The complexity a routing event names, or null.</summary>
+    public static string? RouteComplexity(this WorkEvent ev) => Field(ev.PayloadJson, ComplexityRegex);
+
+    /// <summary>Minimal JSON string escaping — provider ids and model names are not free text, but a
+    /// backslash or quote in one must not produce a payload nothing can parse.</summary>
+    private static string Quote(string value)
+        => "\"" + value.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
+
+    /// <summary>
+    /// The provider id an event names, or null. Null for a run recorded before this was written
+    /// down: unknown is a different fact from "none", and the UI shows it as such.
+    /// </summary>
+    public static string? ProviderId(this WorkEvent ev)
+        => Field(ev.PayloadJson, ProviderRegex);
+
+    /// <summary>The model an event names, or null.</summary>
+    public static string? ModelName(this WorkEvent ev)
+        => Field(ev.PayloadJson, ModelRegex);
+
+    private static string? Field(string? payload, System.Text.RegularExpressions.Regex regex)
+    {
+        if (string.IsNullOrEmpty(payload)) return null;
+        var match = regex.Match(payload);
+        return match.Success ? match.Groups[1].Value.Replace("\\\"", "\"").Replace("\\\\", "\\") : null;
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex ProviderRegex =
+        new("\"provider\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    private static readonly System.Text.RegularExpressions.Regex ModelRegex =
+        new("\"model\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    private static readonly System.Text.RegularExpressions.Regex PurposeRegex =
+        new("\"purpose\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    private static readonly System.Text.RegularExpressions.Regex RouteRegex =
+        new("\"route\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    private static readonly System.Text.RegularExpressions.Regex ComplexityRegex =
+        new("\"complexity\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"", System.Text.RegularExpressions.RegexOptions.Compiled);
 
     /// <summary>
     /// Builds the payload of a <see cref="EventKind.StepCompleted"/> event: the step number plus how
