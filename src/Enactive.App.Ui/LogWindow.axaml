@@ -28,7 +28,7 @@
                 <Border Width="14" />
                 <CheckBox Content="Capture raw wire (Trace)" IsChecked="{Binding CaptureRaw}" />
                 <Border Width="14" />
-                <TextBox Width="200" Text="{Binding SearchText}" Watermark="search… (#2 = one step)" />
+                <TextBox Width="200" Text="{Binding SearchText}" PlaceholderText="search… (#2 = one step)" />
                 <Border Width="14" />
                 <CheckBox Content="Auto-scroll" IsChecked="{Binding AutoScroll}" />
                 <CheckBox Content="Pause" IsChecked="{Binding Pause}" />
@@ -80,7 +80,7 @@
                          FontFamily="Consolas, Menlo, monospace"
                          FontSize="12"
                          Text="{Binding DetailText}"
-                         Watermark="Select a row to see its full payload (prompt / response / arguments)…" />
+                         PlaceholderText="Select a row to see its full payload (prompt / response / arguments)…" />
             </Border>
 
             <TextBlock Grid.Row="4" Classes="hint" Margin="8,2,8,4" Text="{Binding Status}" />

@@ -25,32 +25,32 @@
 
                 <TextBlock Classes="label" Text="Id" />
                 <TextBox Text="{Binding Id}"
-                         Watermark="id — e.g. ollama, anthropic, openrouter (used in providerId/model)" />
+                         PlaceholderText="id — e.g. ollama, anthropic, openrouter (used in providerId/model)" />
 
                 <TextBlock Classes="label" Text="Display name" />
-                <TextBox Text="{Binding DisplayName}" Watermark="display name" />
+                <TextBox Text="{Binding DisplayName}" PlaceholderText="display name" />
 
                 <TextBlock Classes="label" Text="Kind" />
                 <ComboBox ItemsSource="{Binding Kinds}" SelectedItem="{Binding Kind}" />
 
                 <TextBlock Classes="label" Text="Base URL" />
-                <TextBox Text="{Binding BaseUrl}" Watermark="base URL — e.g. http://localhost:11434/v1" />
+                <TextBox Text="{Binding BaseUrl}" PlaceholderText="base URL — e.g. http://localhost:11434/v1" />
 
                 <TextBlock Classes="label" Text="API key" />
                 <TextBox Text="{Binding ApiKey}" PasswordChar="•"
-                         Watermark="API key (blank for local providers)" />
+                         PlaceholderText="API key (blank for local providers)" />
 
                 <TextBlock Classes="label" Text="Max output tokens" />
                 <TextBox Text="{Binding MaxTokensText}"
-                         Watermark="blank = auto (adjusts to the model's cap)" />
+                         PlaceholderText="blank = auto (adjusts to the model's cap)" />
 
                 <TextBlock Classes="label" Text="Headers" />
                 <TextBox Classes="multiline" MinHeight="60" Text="{Binding HeadersText}"
-                         Watermark="extra headers — one Header-Name: value per line" />
+                         PlaceholderText="extra headers — one Header-Name: value per line" />
 
                 <TextBlock Classes="label" Text="Models" />
                 <TextBox Classes="multiline" MinHeight="100" Text="{Binding ModelsText}"
-                         Watermark="models — one per line" />
+                         PlaceholderText="models — one per line" />
 
                 <!-- Ask the provider what it actually serves, then pick one to add to the list above. -->
                 <Grid ColumnDefinitions="*,Auto" Margin="0,6,0,0">

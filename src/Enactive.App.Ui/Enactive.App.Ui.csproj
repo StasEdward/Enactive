@@ -14,6 +14,15 @@
     <!-- The name generator otherwise emits this.AttachDevTools() into the generated
          InitializeComponent, which needs the Avalonia.Diagnostics package. We do not ship it. -->
     <AvaloniaNameGeneratorAttachDevTools>false</AvaloniaNameGeneratorAttachDevTools>
+    <!-- AVLN3001 warns that a view without a public parameterless constructor cannot be built by
+         the RUNTIME XAML loader. That loader is used exactly once here - App.axaml.cs calls
+         AvaloniaXamlLoader.Load(this) for the Application itself. Every window is constructed in
+         C# with the collaborators it needs (LogWindow takes the LogHub whose entries it shows,
+         SettingsWindow the settings it edits, and so on), and the compiled InitializeComponent is
+         what builds their trees. Satisfying the warning would mean adding a parameterless
+         constructor that fabricates those collaborators - a log window wired to an empty LogHub
+         that stays blank forever - which is a worse failure than the warning it silences. -->
+    <NoWarn>$(NoWarn);AVLN3001</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

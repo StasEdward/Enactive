@@ -349,7 +349,7 @@
                     <TextBox x:Name="InputBox"
                              Text="{Binding InputText}"
                              IsEnabled="{Binding IsIdle}"
-                             Watermark="What do you want to accomplish?"
+                             PlaceholderText="What do you want to accomplish?"
                              AcceptsReturn="True" MinHeight="56" TextWrapping="Wrap" />
                 </DockPanel>
             </StackPanel>

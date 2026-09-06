@@ -24,14 +24,14 @@
             <StackPanel Classes="form">
 
                 <TextBlock Classes="label" Text="Id" />
-                <TextBox Text="{Binding Id}" Watermark="id — unique, e.g. developer, architect" />
+                <TextBox Text="{Binding Id}" PlaceholderText="id — unique, e.g. developer, architect" />
 
                 <TextBlock Classes="label" Text="Role" />
-                <TextBox Text="{Binding Role}" Watermark="role name shown in the picker" />
+                <TextBox Text="{Binding Role}" PlaceholderText="role name shown in the picker" />
 
                 <TextBlock Classes="label" Text="Instructions" />
                 <TextBox Classes="multiline" MinHeight="160" Text="{Binding Instructions}"
-                         Watermark="base instructions (honesty rules + global instructions are added automatically)" />
+                         PlaceholderText="base instructions (honesty rules + global instructions are added automatically)" />
 
                 <!-- The tools list is data now: one row per tool, not a loop building checkboxes. -->
                 <TextBlock Classes="label" Text="Tools" />

@@ -142,12 +142,12 @@
                             <TextBlock Classes="hint"
                                        Text="How much context to load Ollama models with. Bigger costs VRAM and can spill onto the CPU (check `ollama ps`). Leave blank to not override it." />
                             <TextBox Text="{Binding NumCtxText}"
-                                     Watermark="e.g. 8192 — blank uses whatever the model already has loaded" />
+                                     PlaceholderText="e.g. 8192 — blank uses whatever the model already has loaded" />
 
                             <TextBlock Classes="label" Text="Global instructions" />
                             <TextBlock Classes="hint" Text="Applied to every run and appended to every worker's instructions." />
                             <TextBox Classes="multiline" MinHeight="220" Text="{Binding GlobalInstructions}"
-                                     Watermark="Global instructions — applied to every run" />
+                                     PlaceholderText="Global instructions — applied to every run" />
 
                             <TextBlock Classes="label" Text="Local model behaviour" />
                             <TextBlock Classes="hint"
@@ -170,8 +170,6 @@
                             <TextBlock Classes="label" Text="Review retries" />
                             <TextBlock Classes="hint"
                                        Text="How many times a rejected step may be redone before the run gives up. 1 means two tries in total. Each retry costs another run of the worker AND another reviewer call, so this is the dial between using the reviewer's feedback and letting a weak model argue with an expensive one. 0–5." />
-                            <!-- PlaceholderText, not the obsolete Watermark: no reason for a new
-                                 control to add to the deprecation warnings already in this file. -->
                             <TextBox Text="{Binding ReviewRetriesText}" PlaceholderText="1 = two tries in total" />
 
                             <CheckBox IsChecked="{Binding AllowImplicitToolCalls}"
@@ -182,7 +180,7 @@
                             <TextBlock Classes="label" Text="Parallel steps" />
                             <TextBlock Classes="hint"
                                        Text="How many independent steps of a plan may run at once. 1 keeps one step at a time on a single conversation. Above 1 each concurrent step gets its own forked conversation and sees only what its siblings concluded — faster on wide plans, and worth it mainly when steps route to different providers, since two steps on one Ollama queue on the GPU." />
-                            <TextBox Text="{Binding MaxParallelStepsText}" Watermark="1 = one step at a time" />
+                            <TextBox Text="{Binding MaxParallelStepsText}" PlaceholderText="1 = one step at a time" />
 
                         </StackPanel>
                     </ScrollViewer>
