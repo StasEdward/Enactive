@@ -17,12 +17,21 @@ using Enactive.Workspace;
 /// One scripted assistant turn. The engine is driven entirely by what a provider streams back, so a
 /// turn is the unit a test writes: either plain text, or one or more structured tool calls.
 /// </summary>
-public sealed record Turn(string? Text = null, IReadOnlyList<ToolCall>? Calls = null, string? FinishReason = "stop")
+public sealed record Turn(
+    string? Text = null, IReadOnlyList<ToolCall>? Calls = null, string? FinishReason = "stop",
+    // Tokens this turn reports. Null on both = a provider that does not count, which is a real case
+    // and a different fact from zero. Set them and the turn emits a UsageDelta, which is the only
+    // way anything about token accounting can be tested at all.
+    int? PromptTokens = null, int? CompletionTokens = null)
 {
     public static Turn Says(string text) => new(text);
 
     public static Turn Calls1(string name, string argsJson, string id = "call_1")
         => new(null, new[] { new ToolCall(id, name, argsJson) });
+
+    /// <summary>The same turn, reporting tokens.</summary>
+    public Turn Reporting(int prompt = 10, int completion = 5)
+        => this with { PromptTokens = prompt, CompletionTokens = completion };
 }
 
 /// <summary>
@@ -63,6 +72,9 @@ public sealed class FakeChatProvider : IChatProvider
             for (var i = 0; i < calls.Count; i++)
                 yield return new ToolCallDelta(i, calls[i].Id, calls[i].Name, calls[i].ArgumentsJson);
 
+        if (turn.PromptTokens is not null || turn.CompletionTokens is not null)
+            yield return new UsageDelta(turn.PromptTokens, turn.CompletionTokens);
+
         yield return new FinishDelta(turn.FinishReason);
         await Task.CompletedTask;
     }
@@ -71,8 +83,13 @@ public sealed class FakeChatProvider : IChatProvider
     {
         Requests.Add(request);
         var turn = _script.Count > 0 ? _script.Dequeue() : WhenExhausted;
+
+        // The turn's tokens are reported here too, not only on the streaming path. Planning and
+        // review are the two phases that go through CompleteAsync, and returning null here made
+        // their cost untestable — which is precisely how it went uncounted in the first place.
         return Task.FromResult(new ChatCompletion(
-            new ChatMessage(ChatRole.Assistant, turn.Text, turn.Calls), turn.FinishReason, null, null));
+            new ChatMessage(ChatRole.Assistant, turn.Text, turn.Calls), turn.FinishReason,
+            turn.PromptTokens, turn.CompletionTokens));
     }
 }
 
@@ -261,7 +278,8 @@ public sealed class EngineFixture : IDisposable
     {
         var tools = new ToolRegistry(new ITool[]
         {
-            new WriteFileTool(), new ReadFileTool(), new ListDirectoryTool(),
+            new WriteFileTool(), new EditFileTool(), new ReadFileTool(), new SearchFilesTool(),
+            new ListDirectoryTool(), new CreateDirectoryTool(), new MoveFileTool(),
             new RunCommandTool(), new RunPowerShellTool()
         });
 

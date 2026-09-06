@@ -13,7 +13,8 @@ public sealed record FileWriteRecord(
     bool ExistedBefore,
     string? BeforeHash,
     string? BackupPath,
-    string AfterHash,
+    // Null when this entry RECORDS A REMOVAL: the path was deleted, so there is no content to hash.
+    string? AfterHash,
     // Which revert scope was open when this write happened — see DiskArtifactStore.Checkpoint.
     // A revert only undoes writes made in its OWN scope; one made under a later scope belongs to
     // another step and is a conflict to report, never work to throw away.
@@ -157,6 +158,34 @@ public sealed class DiskArtifactStore : IArtifactStore
     }
 
     /// <summary>
+    /// Deletes a file and journals the deletion, so a rejected step or an Undo puts it back. The
+    /// backup is taken first and the entry is written before the delete, because after the delete
+    /// neither is knowable — the same reason a write records what it displaced.
+    /// </summary>
+    public async Task RemoveAsync(string relativePath, CancellationToken ct)
+    {
+        var fullPath = ResolveInsideRoot(relativePath);
+
+        if (!File.Exists(fullPath))
+            throw new FileNotFoundException($"No such file in this workspace: {relativePath}", relativePath);
+
+        var beforeHash = FileHash.OfFile(fullPath);
+        var backupPath = BackUp(fullPath);
+
+        if (backupPath is null)
+            throw new IOException(
+                $"Could not keep a copy of '{relativePath}', so removing it could not be undone. "
+                + "Nothing was deleted.");
+
+        lock (_journalGate)
+            _journal.Add(new FileWriteRecord(
+                relativePath, ExistedBefore: true, beforeHash, backupPath, AfterHash: null, _scope));
+
+        File.Delete(fullPath);
+        await Task.CompletedTask;
+    }
+
+    /// <summary>
     /// Undoes this store's whole effect on a path: a file that existed before the run is restored,
     /// one the run created is deleted. Only when the file still holds exactly what the run left
     /// there — otherwise undoing would throw away an edit made since.
@@ -249,7 +278,11 @@ public sealed class DiskArtifactStore : IArtifactStore
         catch (Exception ex) { return UndoResult.Blocked(ex.Message); }
 
         var currentHash = FileHash.OfFile(fullPath);
-        if (currentHash is null)
+
+        // Both null is the removal case: the last entry deleted this path and it is still gone, so
+        // the file is exactly as this store left it and the backup can go back. Comparing the two
+        // hashes directly covers that as well as the ordinary "unchanged since we wrote it".
+        if (currentHash is null && current.AfterHash is not null)
             return UndoResult.Blocked("The file is already gone.");
 
         if (!string.Equals(currentHash, current.AfterHash, StringComparison.Ordinal))

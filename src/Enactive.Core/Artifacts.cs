@@ -54,6 +54,19 @@ public interface IArtifactStore
     bool CanRestore(string relativePath) => false;
 
     /// <summary>
+    /// Removes a file, recording it the same way a write is recorded so it can be put back.
+    ///
+    /// Exists because a rename is a write plus a removal, and doing the removal outside the store —
+    /// with <c>run_command</c>, as the model had to before — leaves no journal entry, no backup and
+    /// nothing for a rejected step to undo. Half a rename inside the safety net is worse than none.
+    ///
+    /// Throws <see cref="NotSupportedException"/> for a store that cannot express a deletion, which
+    /// the caller must report rather than fall back to deleting the file itself.
+    /// </summary>
+    Task RemoveAsync(string relativePath, CancellationToken ct)
+        => throw new NotSupportedException("This artifact store cannot remove files.");
+
+    /// <summary>
     /// A marker for "the state the workspace is in right now", to be handed back to
     /// <see cref="RevertToAsync"/>. Opaque on purpose: what it counts is the store's business.
     /// </summary>
