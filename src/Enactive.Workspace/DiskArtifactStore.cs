@@ -13,15 +13,36 @@ public sealed class DiskArtifactStore : IArtifactStore
     private readonly string _root;
     private readonly ConcurrentDictionary<Guid, string> _paths = new();
 
+    /// <summary>
+    /// Relative path -> did this store CREATE the file, or overwrite one that was already there.
+    /// Recorded at the first write, because afterwards the answer is unknowable: the file exists
+    /// either way. It is what lets the UI say "delete the file this run created" instead of offering
+    /// an "Undo" that cannot restore anything (code review finding #6). Full undo — keeping the old
+    /// bytes and comparing hashes — is a separate change; this only stops the false promise.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, bool> _createdHere = new(StringComparer.OrdinalIgnoreCase);
+
     public DiskArtifactStore(WorkspaceInfo workspace)
         => _root = Path.GetFullPath(workspace.RootPath);
 
     public string Root => _root;
 
+    /// <summary>
+    /// True when this store created the file rather than overwriting an existing one. False for a
+    /// path it never wrote, so the caller can only ever be told LESS than it is safe to delete.
+    /// </summary>
+    public bool CreatedHere(string relativePath)
+        => _createdHere.TryGetValue(relativePath, out var created) && created;
+
     public async Task<ArtifactRef> CreateAsync(
         string relativePath, ArtifactKind kind, string title, Func<Stream, Task> write, CancellationToken ct)
     {
         var fullPath = ResolveInsideRoot(relativePath);
+
+        // Only the FIRST write decides: a second write in the same run overwrites what the first one
+        // produced, which does not make a pre-existing file ours to delete.
+        _createdHere.GetOrAdd(relativePath, _ => !File.Exists(fullPath));
+
         var directory = Path.GetDirectoryName(fullPath);
         if (!string.IsNullOrEmpty(directory))
             Directory.CreateDirectory(directory);

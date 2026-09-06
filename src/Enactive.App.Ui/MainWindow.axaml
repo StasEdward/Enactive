@@ -439,7 +439,8 @@
                                                         VerticalAlignment="Center">
                                                 <Button Content="Review" Command="{Binding ReviewCommand}"
                                                         FontSize="11" Padding="8,2" />
-                                                <Button Content="Undo" Command="{Binding UndoCommand}"
+                                                <Button Content="{Binding ActionLabel}" Command="{Binding UndoCommand}"
+                                                        Foreground="{DynamicResource Brand.Danger}"
                                                         FontSize="11" Padding="8,2" />
                                             </StackPanel>
                                         </Grid>

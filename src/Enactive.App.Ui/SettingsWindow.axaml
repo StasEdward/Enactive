@@ -158,6 +158,10 @@
                                       Content="Verify writes by reading files back — helps weak local models, adds a round-trip" />
                             <TextBlock Classes="hint"
                                        Text="Reading a file back after writing catches a weak model inventing content. It's an extra call per write, so turn it off when you mostly run strong models." />
+                            <CheckBox IsChecked="{Binding AllowImplicitToolCalls}"
+                                      Content="Run tool calls the model only described in text — unsafe, off by default" />
+                            <TextBlock Classes="hint"
+                                       Text="Normally a JSON block in a reply executes nothing and the model is asked to send a real tool call. Turning this on executes it — which means an example, a quote or a file the agent just read can become an action. Only for a local model that cannot emit structured tool calls." />
 
                             <TextBlock Classes="label" Text="Parallel steps" />
                             <TextBlock Classes="hint"

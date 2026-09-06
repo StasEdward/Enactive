@@ -78,6 +78,9 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     private int _backgroundRuns;
     private bool _forceClose;
     private StagingArtifactStore? _staging;
+    /// <summary>The current run's disk store, when it is writing straight to the workspace. Kept so the
+    /// artifact cards can ask whether a file was CREATED by this run or only overwritten.</summary>
+    private DiskArtifactStore? _disk;
     private int _stagedShown;
 
     public MainWindow()
@@ -339,12 +342,15 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         {
             var staging = new StagingArtifactStore(fullPath);
             _staging = staging;
+            _disk = null;
             artifactStore = staging;
         }
         else
         {
             _staging = null;
-            artifactStore = new DiskArtifactStore(workspace);
+            var disk = new DiskArtifactStore(workspace);
+            _disk = disk;
+            artifactStore = disk;
         }
         _stagedShown = 0;
 
@@ -355,7 +361,8 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             var orchestrator = new Orchestrator(
                 _providerFactory, _modelResolver, _workerProvider, _toolRegistry, artifactStore,
                 workspace, _planner, _permissionEngine, this, policy, new EmptyProvider(),
-                BuildRouter(), 1, _settings.NumCtx, _settings.DisableThinking, _settings.MaxParallelSteps);
+                BuildRouter(), 1, _settings.NumCtx, _settings.DisableThinking, _settings.MaxParallelSteps,
+                _settings.AllowImplicitToolCalls);
             var recorder = new RunRecorder(runStore, MemoryStoreFactory.Create(workspace), workspace.Id, runSettings);
 
             var context = await contextProvider.BuildAsync(new IntentFocus(workspace.Id), _cts.Token);
@@ -643,24 +650,19 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             return;
 
         var root = _currentWorkspaceRoot;
+
+        // "Undo" used to be an unconditional File.Delete: if the agent EDITED an existing source file,
+        // pressing it deleted the source outright and reported "undone". Nothing here can restore a
+        // previous version yet, so the button no longer claims to. A file this run created can be
+        // removed in one click; anything that was already on disk gets a plain delete confirmation
+        // that says the old content was not kept.
+        var createdByThisRun = _disk?.CreatedHere(relative) == true;
+
         _vm.Artifacts.Add(new ArtifactItemViewModel(
             relative,
             item => ShowFile(root, item),
-            item =>
-            {
-                try
-                {
-                    var full = Path.Combine(root, item.RelativePath);
-                    if (File.Exists(full))
-                        File.Delete(full);
-                    item.Status = "undone";
-                    item.CanAct = false;
-                }
-                catch (Exception ex)
-                {
-                    item.Status = "error: " + ex.Message;
-                }
-            }));
+            item => _ = RemoveLiveArtifactAsync(root, item, createdByThisRun),
+            createdByThisRun ? "Delete" : "Delete…"));
     }
 
     private void AddStagedArtifact()
@@ -957,6 +959,19 @@ public sealed partial class MainWindow : Window, IDecisionHandler
 
     private void StartBackground(string text, string fullPath)
     {
+        // Background runs always wrote straight to disk while the run settings — and the history —
+        // said "staged". Rather than lie about it, refuse the combination: staging that survives a
+        // background run needs a store that persists its proposals, which does not exist yet.
+        if (_vm.StageChanges)
+        {
+            _vm.StatusPhase = "Not started";
+            _vm.CurrentAction =
+                "Stage changes is on, and a background run cannot stage: it would write to your files "
+                + "directly while the history claimed the changes were staged. Turn Stage changes off "
+                + "to run in the background, or run this in the foreground.";
+            return;
+        }
+
         var workspace = WorkspaceFrom(fullPath);
         var policy = PolicyFor(_vm.AutonomyTier);
         var runSettings = CurrentRunSettings();
@@ -989,7 +1004,8 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                 var orchestrator = new Orchestrator(
                     _providerFactory, _modelResolver, _workerProvider, _toolRegistry, new DiskArtifactStore(workspace),
                     workspace, _planner, _permissionEngine, decisions, policy, new EmptyProvider(),
-                    BuildRouter(), 1, _settings.NumCtx, _settings.DisableThinking, _settings.MaxParallelSteps);
+                    BuildRouter(), 1, _settings.NumCtx, _settings.DisableThinking, _settings.MaxParallelSteps,
+                    _settings.AllowImplicitToolCalls);
                 var recorder = new RunRecorder(runStore, MemoryStoreFactory.Create(workspace), workspace.Id, runSettings);
                 var context = await contextProvider.BuildAsync(new IntentFocus(workspace.Id), CancellationToken.None);
                 var intent = new Intent(Guid.NewGuid(), text, IntentSource.Inbox, context, DateTimeOffset.UtcNow, workerId);
@@ -1080,6 +1096,47 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         catch (Exception ex)
         {
             ShowViewer(item.RelativePath, "Error: " + ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Removes a file the CURRENT run produced. A file the run created is deleted straight away —
+    /// that really does undo the write. A file that already existed is only overwritten, and the old
+    /// bytes are gone, so deleting it destroys the user's content: that path asks first and says so.
+    /// </summary>
+    private async Task RemoveLiveArtifactAsync(string root, ArtifactItemViewModel item, bool createdByThisRun)
+    {
+        var full = Path.Combine(root, item.RelativePath);
+        if (!File.Exists(full))
+        {
+            item.Status = "already gone";
+            item.CanAct = false;
+            return;
+        }
+
+        if (!createdByThisRun)
+        {
+            var go = await ConfirmWindow.AskAsync(
+                this,
+                $"Delete “{item.RelativePath}”?",
+                "This file existed before the run and was overwritten, so deleting it does NOT restore "
+                + "the previous version - that content was not kept. The file will simply be gone.",
+                "Delete",
+                "Keep");
+
+            if (!go)
+                return;
+        }
+
+        try
+        {
+            File.Delete(full);
+            item.Status = createdByThisRun ? "deleted (was created by this run)" : "deleted";
+            item.CanAct = false;
+        }
+        catch (Exception ex)
+        {
+            item.Status = "error: " + ex.Message;
         }
     }
 

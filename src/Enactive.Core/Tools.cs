@@ -29,8 +29,16 @@ public static class ToolResults
         IReadOnlyDictionary<string, object?>? metadata = null)
         => new(true, output, null, artifacts ?? Array.Empty<ArtifactRef>(), metadata ?? EmptyMeta);
 
-    public static ToolResult Fail(string error)
-        => new(false, null, error, Array.Empty<ArtifactRef>(), EmptyMeta);
+    /// <summary>
+    /// A failed tool call. <paramref name="output"/> and <paramref name="metadata"/> are kept on the
+    /// failure path too: a command that fails is exactly when its stdout/stderr and exit code matter,
+    /// and dropping them would force the model to guess what went wrong.
+    /// </summary>
+    public static ToolResult Fail(
+        string error,
+        string? output = null,
+        IReadOnlyDictionary<string, object?>? metadata = null)
+        => new(false, output, error, Array.Empty<ArtifactRef>(), metadata ?? EmptyMeta);
 }
 
 /// <summary>The only surface a tool sees (PLAN_v2 §2A.1). No UI / Orchestrator back-channel.</summary>

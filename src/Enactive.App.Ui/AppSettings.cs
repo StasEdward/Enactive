@@ -94,6 +94,18 @@ internal sealed class PhaseBindings
 /// </summary>
 internal sealed class AppSettings
 {
+    /// <summary>The newest settings.json schema this build writes. See <see cref="SchemaVersion"/>.</summary>
+    public const int CurrentSchemaVersion = 2;
+
+    /// <summary>
+    /// settings.json schema version. Files written before 2026-09-06 have no such field and read as 1,
+    /// where an EMPTY worker tool list meant "every tool" — the inverted permission the code review
+    /// flagged. In version 2 an empty list means "no tools" and full access is spelled "*", so a v1
+    /// file's empty lists are rewritten to ["*"] on load: that preserves what those workers were
+    /// actually able to do instead of silently disarming them.
+    /// </summary>
+    public int SchemaVersion { get; set; } = 1;
+
     // ── Team-of-models schema (Docs/MODELS.md) ────────────────────────────────
     public List<ProviderConfig> Providers { get; set; } = new();
     public List<WorkerConfig> Workers { get; set; } = new();
@@ -107,6 +119,12 @@ internal sealed class AppSettings
     // Send think:false to the local model so a reasoning model (qwen3, ...) answers directly instead of
     // burning a whole turn in <think> with empty content. On by default; only OllamaNative honors it.
     public bool DisableThinking { get; set; } = true;
+
+    // Execute a tool call the model only DESCRIBED in its reply (a ```json block) instead of invoking it.
+    // Off by default and deliberately so: a parser cannot tell an intended call from a quoted example,
+    // which means anything that can put text in front of the model can put an action in front of the
+    // engine. Turn it on only for a weak local model that cannot emit structured tool calls at all.
+    public bool AllowImplicitToolCalls { get; set; }
 
     // Ask workers to read a file back after writing it, to catch a weak local model fabricating content.
     // Costs an extra LLM round-trip per write — worth turning off when running strong models. On by default.
@@ -206,11 +224,31 @@ internal sealed class AppSettings
     }
 
     /// <summary>
+    /// Brings an older settings.json up to <see cref="CurrentSchemaVersion"/>. Unlike the team-schema
+    /// migration below, this runs on EVERY load, because it must also reach a file that already has
+    /// providers. It is written to be idempotent.
+    /// </summary>
+    private void MigrateSchemaVersion()
+    {
+        if (SchemaVersion < 2)
+        {
+            // v1 semantics: an empty tool list meant "every tool". Spell that out as "*" so the worker
+            // keeps the access it had, while the new, honest meaning of [] applies from here on.
+            foreach (var w in Workers.Where(w => w.Tools.Count == 0))
+                w.Tools.Add("*");
+        }
+
+        SchemaVersion = CurrentSchemaVersion;
+    }
+
+    /// <summary>
     /// First load of a file that predates the team schema: synthesize Providers / Workers / Bindings from the
     /// legacy fields. Runs only while <see cref="Providers"/> is empty, so it never clobbers a migrated file.
     /// </summary>
     private void MigrateIfNeeded()
     {
+        MigrateSchemaVersion();
+
         if (Providers.Count > 0)
             return;
 
@@ -266,9 +304,13 @@ internal sealed class AppSettings
     /// <summary>Deep copy — so an editor can work on a throwaway copy and discard it on Cancel.</summary>
     public AppSettings Clone() => new()
     {
+        // Must be copied: a clone that fell back to 1 would be saved as a v1 file, and the next load
+        // would re-run the migration and hand "*" back to a worker the user had just emptied.
+        SchemaVersion = SchemaVersion,
         GlobalInstructions = GlobalInstructions,
         NumCtx = NumCtx,
         DisableThinking = DisableThinking,
+        AllowImplicitToolCalls = AllowImplicitToolCalls,
         VerifyWrites = VerifyWrites,
         MaxParallelSteps = MaxParallelSteps,
         CloseToTray = CloseToTray,

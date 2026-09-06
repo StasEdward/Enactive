@@ -43,6 +43,7 @@ public sealed class Orchestrator : IOrchestrator
     private readonly SemaphoreSlim _decisionGate = new(1, 1);
     private readonly int? _numCtx;
     private readonly bool? _think;
+    private readonly bool _allowImplicitToolCalls;
     private readonly Reviewer _reviewer = new();
 
     public Orchestrator(
@@ -61,7 +62,8 @@ public sealed class Orchestrator : IOrchestrator
         int reviewAttempts = 1,
         int? numCtx = null,
         bool disableThinking = false,
-        int maxParallelSteps = 1)
+        int maxParallelSteps = 1,
+        bool allowImplicitToolCalls = false)
     {
         _providers = providers;
         _workers = workers;
@@ -80,6 +82,8 @@ public sealed class Orchestrator : IOrchestrator
         _numCtx = numCtx;
         // Disable the local model's <think> phase by sending think:false; null leaves it to the model.
         _think = disableThinking ? false : null;
+        // Off by default: executing JSON found in a reply is a way to talk the agent into acting.
+        _allowImplicitToolCalls = allowImplicitToolCalls;
     }
 
     public async IAsyncEnumerable<WorkEvent> SubmitIntentAsync(
@@ -287,7 +291,10 @@ public sealed class Orchestrator : IOrchestrator
                 }
                 catch (Exception ex)
                 {
-                    review = new ReviewResult(true, "review skipped: " + ex.Message);
+                    // Fail CLOSED. This used to score an unreachable reviewer as PASS, which meant a
+                    // stopped Ollama or a bad key silently turned every step green — the gate looked
+                    // configured and enforced nothing. A reviewer that cannot answer has not approved.
+                    review = new ReviewResult(false, "review error: " + ex.Message);
                 }
 
                 if (review.Pass)
@@ -400,6 +407,10 @@ public sealed class Orchestrator : IOrchestrator
                    $"tokens: {prompt} in, {completion} out",
                    WorkEventPayload.UsagePayload(prompt, completion, stepNo));
 
+        // A reply that describes a call instead of making one earns exactly ONE re-ask per step; without
+        // the cap a model that keeps explaining itself would burn every iteration on the same nudge.
+        var repairRequested = false;
+
         for (var iteration = 1; iteration <= MaxIterations; iteration++)
         {
             var toolDefs = _tools.Definitions.Where(d => Allows(worker, d.Name)).ToArray();
@@ -456,29 +467,46 @@ public sealed class Orchestrator : IOrchestrator
             }
 
             var toolCalls = BuildToolCalls(toolBuilders);
+            var replyText = contentBuilder.Length > 0 ? contentBuilder.ToString() : null;
             var recovered = false;
-            if (toolCalls is null && contentBuilder.Length > 0)
+
+            // Prose is NOT an action. A parser cannot tell an intended call from a quoted example, an
+            // explanation or a snippet the user pasted, so by default a JSON-looking reply executes
+            // nothing: the model is asked to re-emit a real tool call instead. The old behaviour stays
+            // available for a weak local model that cannot emit structured calls at all, but it is
+            // opt-in (AllowImplicitToolCalls) precisely because it is a way to talk the agent into acting.
+            var described = toolCalls is null && replyText is not null ? TryRecoverImplicitToolCall(replyText) : null;
+            if (described is not null && _allowImplicitToolCalls)
             {
-                var implicitCall = TryRecoverImplicitToolCall(contentBuilder.ToString());
-                if (implicitCall is not null)
-                {
-                    toolCalls = new List<ToolCall> { implicitCall };
-                    recovered = true;
-                }
+                toolCalls = new List<ToolCall> { described };
+                recovered = true;
             }
 
-            messages.Add(new ChatMessage(
-                ChatRole.Assistant,
-                contentBuilder.Length > 0 ? contentBuilder.ToString() : null,
-                toolCalls));
+            messages.Add(new ChatMessage(ChatRole.Assistant, replyText, toolCalls));
 
             if (toolCalls is null)
-                yield break; // genuine final answer - no tool calls, nothing recoverable either
+            {
+                if (described is not null && !repairRequested)
+                {
+                    repairRequested = true;
+                    messages.Add(ChatMessage.User(
+                        $"Your reply described a '{described.Name}' call in plain text instead of invoking it. "
+                        + "Nothing was executed. If you meant to act, send it again as a real tool call. "
+                        + "If that JSON was only an example or an explanation, reply with your final answer."));
+                    yield return Ev(EventKind.ErrorObserved,
+                        $"The model described a '{described.Name}' call in plain text instead of invoking it — "
+                        + "nothing was executed; asked it to re-send the call properly.");
+                    continue;
+                }
+
+                yield break; // genuine final answer - no tool calls
+            }
 
             if (recovered)
                 yield return Ev(EventKind.ErrorObserved,
                     $"The model described a '{toolCalls[0].Name}' call in plain text instead of "
-                    + "actually invoking it - recovered automatically. Verify the result below.");
+                    + "actually invoking it - executed anyway because AllowImplicitToolCalls is on. "
+                    + "Verify the result below.");
 
             foreach (var call in toolCalls)
             {
@@ -585,11 +613,10 @@ public sealed class Orchestrator : IOrchestrator
         foreach (Match m in JsonFenceRegex.Matches(text))
             candidates.Add(m.Groups[1].Value);
 
-        // Fallback: the model may not have fenced it at all - try the outermost {...} span too.
-        var braceStart = text.IndexOf('{');
-        var braceEnd = text.LastIndexOf('}');
-        if (braceStart >= 0 && braceEnd > braceStart)
-            candidates.Add(text[braceStart..(braceEnd + 1)]);
+        // The old "outermost {...} span" fallback is gone on purpose: it turned any prose containing a
+        // brace into a candidate action, which is how a reply reading "Example, do not execute:" wrote a
+        // file. Only a fenced ```json block is even considered, and even that is a signal to ASK for a
+        // real tool call — never, by itself, permission to run one (see the caller).
 
         foreach (var candidate in candidates)
         {
@@ -743,10 +770,14 @@ public sealed class Orchestrator : IOrchestrator
         return flattened.Length <= 120 ? flattened : flattened[..120] + "…";
     }
 
-    /// <summary>Whether a worker's role is allowed to call the given tool (empty or "*" = all).</summary>
+    /// <summary>
+    /// Whether a worker's role is allowed to call the given tool. An EMPTY list means NO tools:
+    /// unchecking every box in the worker editor must narrow the role, not turn it into full access.
+    /// Full access is stated explicitly with "*". Settings written before SchemaVersion 2 are migrated
+    /// on load (see AppSettings.Migrate), so an old empty list does not silently lose its tools.
+    /// </summary>
     private static bool Allows(Worker worker, string tool)
-        => worker.ToolAllowlist.Count == 0
-        || worker.ToolAllowlist.Contains("*")
+        => worker.ToolAllowlist.Contains("*")
         || worker.ToolAllowlist.Contains(tool, StringComparer.OrdinalIgnoreCase);
 
     /// <summary>The real commands and tool outputs added during a step — the reviewer's ground truth.</summary>

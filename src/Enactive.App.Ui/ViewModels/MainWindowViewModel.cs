@@ -46,14 +46,26 @@ internal sealed class ArtifactItemViewModel : ObservableObject
     /// what it honestly means changes: undoing what just happened, or deleting a file that has had
     /// a week to be edited since. The label says which; the button is labelled by its caller.
     /// </summary>
-    public ArtifactItemViewModel(string relativePath, Action<ArtifactItemViewModel> open, Action<ArtifactItemViewModel> remove)
+    public ArtifactItemViewModel(
+        string relativePath,
+        Action<ArtifactItemViewModel> open,
+        Action<ArtifactItemViewModel> remove,
+        string actionLabel = "Delete")
     {
         RelativePath = relativePath;
+        ActionLabel = actionLabel;
         ReviewCommand = new RelayCommand(() => open(this), () => CanAct);
         UndoCommand = new RelayCommand(() => remove(this), () => CanAct);
     }
 
     public string RelativePath { get; }
+
+    /// <summary>
+    /// What the second button actually does. It used to be hard-coded "Undo" in the view while the
+    /// handler only ever deleted the file — so undoing an edit to an existing source deleted the
+    /// source. The label is now the caller's, and it never says "undo" unless it can undo.
+    /// </summary>
+    public string ActionLabel { get; }
 
     public string Status { get => _status; set => Set(ref _status, value); }
 

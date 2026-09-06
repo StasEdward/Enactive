@@ -88,17 +88,7 @@ public sealed class RunPowerShellTool : ITool
             return ToolResults.Fail($"Could not run PowerShell: {ex.Message}");
         }
 
-        var combined = stdout.ToString();
-        if (stderr.Length > 0)
-            combined += "\n[stderr]\n" + stderr;
-        combined = combined.Trim();
-        if (combined.Length > MaxOutputChars)
-            combined = combined[..MaxOutputChars] + "\n… (truncated)";
-
-        var output = $"exit code {process.ExitCode}\n----- command output (this is the result) -----\n{combined}";
-        return ToolResults.Ok(
-            output: output,
-            metadata: new Dictionary<string, object?> { ["exitCode"] = process.ExitCode });
+        return ProcessExec.BuildResult("PowerShell", process.ExitCode, stdout.ToString(), stderr.ToString());
     }
 
     private const string Schema = """
