@@ -55,6 +55,7 @@ public sealed record ToolContext(
 /// <summary>A capability the agent can invoke.</summary>
 public interface ITool
 {
+    bool RequiresApproval => false;
     ToolDefinition Definition { get; }
     PermissionLevel RequiredLevel { get; }
     Task<ToolResult> InvokeAsync(string argumentsJson, ToolContext ctx, CancellationToken ct);
@@ -63,6 +64,7 @@ public interface ITool
 /// <summary>Resolves and invokes tools by name.</summary>
 public interface IToolRegistry
 {
+    bool RequiresApprovalOf(string toolName) => false;
     IReadOnlyList<ToolDefinition> Definitions { get; }
     PermissionLevel RequiredLevelOf(string toolName);
     Task<ToolResult> InvokeAsync(ToolCall call, ToolContext ctx, CancellationToken ct);

@@ -25,12 +25,14 @@ internal sealed partial class SettingsWindow : Window
         viewModel.ConfirmRequested += (headline, detail) =>
             ConfirmWindow.AskAsync(this, headline, detail, "Remove", "Keep");
 
+        viewModel.McpEditRequested += (config, saved) => new McpEditWindow(config, saved).ShowDialog(this);
         DataContext = viewModel;
         InitializeComponent();
 
         // Double-click opens the row, the way a list of things has opened them since Windows 3.
         ProviderList.DoubleTapped += (_, e) => OpenTapped<ProviderRow>(e, row => row.EditCommand);
         WorkerList.DoubleTapped += (_, e) => OpenTapped<WorkerRow>(e, row => row.EditCommand);
+        McpList.DoubleTapped += (_, e) => OpenTapped<McpServerRow>(e, row => row.EditCommand);
     }
 
     /// <summary>

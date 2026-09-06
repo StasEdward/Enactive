@@ -20,10 +20,16 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Enactive.Core\Enactive.Core.csproj" />
+    <ProjectReference Include="..\Enactive.Mcp.TestServer\Enactive.Mcp.TestServer.csproj" />
     <ProjectReference Include="..\..\src\Enactive.Agents\Enactive.Agents.csproj" />
     <ProjectReference Include="..\..\src\Enactive.Tools\Enactive.Tools.csproj" />
     <ProjectReference Include="..\..\src\Enactive.Workspace\Enactive.Workspace.csproj" />
     <ProjectReference Include="..\..\src\Enactive.Providers\Enactive.Providers.csproj" />
   </ItemGroup>
+
+  <Target Name="CopyMcpTestRuntime" AfterTargets="Build">
+    <Copy SourceFiles="../Enactive.Mcp.TestServer/bin/$(Configuration)/$(TargetFramework)/Enactive.Mcp.TestServer.runtimeconfig.json"
+          DestinationFolder="$(OutDir)" />
+  </Target>
 
 </Project>

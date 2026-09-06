@@ -24,6 +24,7 @@ public sealed class LoggingToolRegistry : IToolRegistry
     }
 
     public IReadOnlyList<ToolDefinition> Definitions => _inner.Definitions;
+    public bool RequiresApprovalOf(string toolName) => _inner.RequiresApprovalOf(toolName);
 
     public PermissionLevel RequiredLevelOf(string toolName) => _inner.RequiredLevelOf(toolName);
 

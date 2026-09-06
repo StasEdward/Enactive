@@ -90,7 +90,7 @@ internal sealed class WorkerRow : ObservableObject
 /// ItemsSource from inside another control's SelectionChanged - which is what used to crash, and then
 /// hang, this window.
 /// </summary>
-internal sealed class SettingsViewModel : ObservableObject
+internal sealed partial class SettingsViewModel : ObservableObject
 {
     public const string NoneLabel = "(none)";
 
@@ -148,6 +148,7 @@ internal sealed class SettingsViewModel : ObservableObject
             OnPropertyChanged(nameof(IsAiProviders));
             OnPropertyChanged(nameof(IsAiTeam));
             OnPropertyChanged(nameof(IsAiPhases));
+            OnPropertyChanged(nameof(IsMcp));
         }
     }
 
@@ -171,6 +172,7 @@ internal sealed class SettingsViewModel : ObservableObject
     {
         _working = settings.Clone();
         _onSaved = onSaved;
+        InitializeMcp();
 
         _numCtxText = _working.NumCtx?.ToString() ?? string.Empty;
         _globalInstructions = _working.GlobalInstructions;
@@ -442,7 +444,8 @@ internal sealed class SettingsViewModel : ObservableObject
             return;
         }
 
-        _onSaved(_working);
+        try { _onSaved(_working); }
+        catch (Exception ex) { StartupNote = "Not saved — " + ex.Message; return; }
 
         // Everything else is saved either way. The window stays open only when there is something
         // the user has not seen yet - a note nobody reads because the window closed on top of it is

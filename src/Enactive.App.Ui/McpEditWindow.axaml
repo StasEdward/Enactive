@@ -1,0 +1,47 @@
+<Window xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="using:Enactive.App.Ui" xmlns:vm="using:Enactive.App.Ui.ViewModels"
+        x:Class="Enactive.App.Ui.McpEditWindow" x:DataType="vm:McpEditViewModel"
+        Title="MCP server" Width="740" Height="800" WindowStartupLocation="CenterOwner"
+        Background="{DynamicResource Brand.Bg}" WindowDecorations="BorderOnly" ExtendClientAreaToDecorationsHint="True">
+    <Grid RowDefinitions="Auto,*" Margin="{Binding $parent[Window].OffScreenMargin}">
+        <local:TitleBarView />
+        <DockPanel Grid.Row="1" Margin="16">
+            <StackPanel DockPanel.Dock="Bottom" Classes="actions">
+                <Button Content="Test connection" Command="{Binding TestCommand}" />
+                <Button Classes="primary" Content="Save" Command="{Binding SaveCommand}" />
+                <Button Content="Cancel" Command="{Binding CancelCommand}" />
+            </StackPanel>
+            <ScrollViewer>
+                <StackPanel Spacing="6">
+                    <TextBlock Classes="label" Text="Server ID" />
+                    <TextBox Text="{Binding Id}" PlaceholderText="e.g. desktop-commander" />
+                    <CheckBox Content="Enabled for new runs" IsChecked="{Binding Enabled}" />
+                    <CheckBox Content="Ask before every tool call" IsChecked="{Binding RequireApproval}" />
+                    <TextBlock Classes="label" Text="Transport" />
+                    <ComboBox ItemsSource="{Binding Transports}" SelectedItem="{Binding Transport}" />
+                    <StackPanel IsVisible="{Binding IsStdio}" Spacing="6">
+                        <TextBlock Classes="label" Text="Executable" />
+                        <TextBox Text="{Binding Command}" PlaceholderText="node, npx.cmd, uvx, or an executable path" />
+                        <TextBlock Classes="label" Text="Arguments (JSON array)" />
+                        <TextBox Classes="multiline" MinHeight="70" Text="{Binding ArgumentsJson}" />
+                        <TextBlock Classes="label" Text="Working directory" />
+                        <TextBox Text="{Binding WorkingDirectory}" PlaceholderText="Blank uses the run's workspace" />
+                        <TextBlock Classes="label" Text="Environment (JSON object)" />
+                        <TextBox Classes="multiline" MinHeight="70" Text="{Binding EnvironmentJson}" />
+                    </StackPanel>
+                    <StackPanel IsVisible="{Binding IsHttp}" Spacing="6">
+                        <TextBlock Classes="label" Text="Endpoint" />
+                        <TextBox Text="{Binding Url}" PlaceholderText="https://host/mcp" />
+                        <TextBlock Classes="label" Text="HTTP headers (JSON object)" />
+                        <TextBox Classes="multiline" MinHeight="70" Text="{Binding HeadersJson}" />
+                    </StackPanel>
+                    <TextBlock Classes="label" Text="Connection / call timeout (seconds)" />
+                    <TextBox Text="{Binding TimeoutText}" />
+                    <TextBlock Classes="hint" Text="Test starts the configured program or contacts the endpoint and lists tools. A package runner may download software. No tool is called. Environment and headers are encrypted on Windows when Settings are saved." />
+                    <TextBlock Classes="hint" Text="External servers have their own access to files and services. Enactive's staging and Undo do not cover their changes. Enable MCP access under AI · Team for the worker that should use it." />
+                    <TextBlock Text="{Binding Status}" TextWrapping="Wrap" Foreground="{DynamicResource Brand.TextBody}" />
+                </StackPanel>
+            </ScrollViewer>
+        </DockPanel>
+    </Grid>
+</Window>

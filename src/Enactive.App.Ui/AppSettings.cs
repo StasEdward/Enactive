@@ -92,7 +92,7 @@ internal sealed class PhaseBindings
 /// Persisted app settings. The team-of-models schema (Providers / Workers / Bindings) is authoritative;
 /// the legacy single-endpoint + Anthropic-reasoner fields are read once to migrate an old file, then inert.
 /// </summary>
-internal sealed class AppSettings
+internal sealed partial class AppSettings
 {
     /// <summary>The newest settings.json schema this build writes. See <see cref="SchemaVersion"/>.</summary>
     public const int CurrentSchemaVersion = 2;
@@ -205,6 +205,7 @@ internal sealed class AppSettings
                     if (!string.IsNullOrEmpty(loaded.AnthropicApiKeyProtected))
                         loaded.AnthropicApiKey = Secret.Unprotect(loaded.AnthropicApiKeyProtected);
 
+                    loaded.LoadMcpSecrets();
                     loaded.MigrateIfNeeded();
 
                     // A file written by an older version can hold duplicate ids, which used to reach
@@ -245,11 +246,12 @@ internal sealed class AppSettings
         catch { /* the repaired settings are in memory either way */ }
     }
 
-    public void Save()
+    public bool Save()
     {
         try
         {
             var file = SettingsFile();
+            SaveMcpSecrets();
             Directory.CreateDirectory(Path.GetDirectoryName(file)!);
 
             // Encrypt every provider key; plaintext is [JsonIgnore] so it never reaches disk.
@@ -262,14 +264,17 @@ internal sealed class AppSettings
             AnthropicApiKey = string.Empty;
             try
             {
-                File.WriteAllText(file, JsonSerializer.Serialize(this, JsonOptions));
+                var temporary = file + ".tmp";
+                File.WriteAllText(temporary, JsonSerializer.Serialize(this, JsonOptions));
+                File.Move(temporary, file, overwrite: true);
             }
             finally
             {
                 AnthropicApiKey = legacyPlain;
             }
         }
-        catch { /* ignore */ }
+        catch { return false; }
+        return true;
     }
 
     /// <summary>
@@ -378,6 +383,7 @@ internal sealed class AppSettings
         WindowWidth = WindowWidth,
         WindowHeight = WindowHeight,
         Bindings = Bindings.Clone(),
+        McpServers = McpServers.Select(x => x.Clone()).ToList(),
         Providers = Providers.Select(x => x.Clone()).ToList(),
         Workers = Workers.Select(x => x.Clone()).ToList()
     };
@@ -454,6 +460,10 @@ internal sealed class AppSettings
     public IReadOnlyList<string> Validate()
     {
         var problems = new List<string>();
+        foreach (var server in McpServers)
+            if (server.Validate() is { } error) problems.Add($"MCP '{server.Id}': {error}");
+        if (McpServers.GroupBy(s => s.Id, StringComparer.OrdinalIgnoreCase).Any(g => g.Count() > 1))
+            problems.Add("MCP server IDs must be unique.");
 
         foreach (var provider in Providers)
             if (string.IsNullOrWhiteSpace(provider.Id))

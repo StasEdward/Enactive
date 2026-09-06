@@ -12,6 +12,7 @@ public sealed class ToolRegistry : IToolRegistry
         => _tools = tools.ToDictionary(t => t.Definition.Name, StringComparer.OrdinalIgnoreCase);
 
     public IReadOnlyList<ToolDefinition> Definitions => _tools.Values.Select(t => t.Definition).ToArray();
+    public bool RequiresApprovalOf(string toolName) => _tools.TryGetValue(toolName, out var tool) && tool.RequiresApproval;
 
     public PermissionLevel RequiredLevelOf(string toolName)
         => _tools.TryGetValue(toolName, out var tool) ? tool.RequiredLevel : PermissionLevel.Execute;

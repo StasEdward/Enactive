@@ -32,7 +32,7 @@ internal sealed class WorkerEditViewModel : ObservableObject
     /// purpose: since an empty list means "no tools", there has to be a visible way to say "all".
     /// </summary>
     private static readonly string[] KnownTools =
-        { "write_file", "read_file", "list_dir", "run_command", "run_powershell", "git", "docker", "*" };
+        { "write_file", "read_file", "list_dir", "run_command", "run_powershell", "git", "docker", "mcp__*", "*" };
 
     private const string NoneItem = "(none)";
 
