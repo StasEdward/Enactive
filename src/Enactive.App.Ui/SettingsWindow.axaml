@@ -158,6 +158,10 @@
                                       Content="Verify writes by reading files back — helps weak local models, adds a round-trip" />
                             <TextBlock Classes="hint"
                                        Text="Reading a file back after writing catches a weak model inventing content. It's an extra call per write, so turn it off when you mostly run strong models." />
+                            <CheckBox IsChecked="{Binding ReviewContent}"
+                                      Content="Review what a step WROTE when it ran no commands" />
+                            <TextBlock Classes="hint"
+                                       Text="A step that only writes a document has no exit code to check, so the ordinary review has nothing to look at and passes anything. With this on, the reviewer reads the text instead and fails invented package names, made-up command syntax, wrong ports and corrupted identifiers. Needs a Review model bound under AI · Phases; costs one reviewer call on the written text." />
                             <CheckBox IsChecked="{Binding AllowImplicitToolCalls}"
                                       Content="Run tool calls the model only described in text — unsafe, off by default" />
                             <TextBlock Classes="hint"

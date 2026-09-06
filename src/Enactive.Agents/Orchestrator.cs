@@ -44,6 +44,7 @@ public sealed class Orchestrator : IOrchestrator
     private readonly int? _numCtx;
     private readonly bool? _think;
     private readonly bool _allowImplicitToolCalls;
+    private readonly bool _reviewContent;
     private readonly Reviewer _reviewer = new();
 
     public Orchestrator(
@@ -63,7 +64,8 @@ public sealed class Orchestrator : IOrchestrator
         int? numCtx = null,
         bool disableThinking = false,
         int maxParallelSteps = 1,
-        bool allowImplicitToolCalls = false)
+        bool allowImplicitToolCalls = false,
+        bool reviewContent = true)
     {
         _providers = providers;
         _workers = workers;
@@ -84,6 +86,9 @@ public sealed class Orchestrator : IOrchestrator
         _think = disableThinking ? false : null;
         // Off by default: executing JSON found in a reply is a way to talk the agent into acting.
         _allowImplicitToolCalls = allowImplicitToolCalls;
+        // On by default: for a step that only writes text, execution review has nothing to check, so
+        // without this a configured reviewer passes anything such a step produces.
+        _reviewContent = reviewContent;
     }
 
     public async IAsyncEnumerable<WorkEvent> SubmitIntentAsync(
@@ -185,17 +190,17 @@ public sealed class Orchestrator : IOrchestrator
                             break;
 
                         quick.Writer.TryWrite(Ev(EventKind.ReviewRequested, "reviewing…"));
-                        var review = await ReviewAsync(
+                        var (review, mode) = await ReviewAsync(
                             plan.Title, messages, evidenceStart, artifacts, reviewProvider!, reviewModel, ct);
 
                         if (review.Pass)
                         {
                             quick.Writer.TryWrite(Ev(EventKind.ReviewPassed,
-                                $"PASS{(string.IsNullOrEmpty(review.Notes) ? "" : ": " + review.Notes)}"));
+                                $"PASS ({mode} review){(string.IsNullOrEmpty(review.Notes) ? "" : ": " + review.Notes)}"));
                             break;
                         }
 
-                        quick.Writer.TryWrite(Ev(EventKind.ReviewFailed, $"FAIL: {review.Notes}"));
+                        quick.Writer.TryWrite(Ev(EventKind.ReviewFailed, $"FAIL ({mode} review): {review.Notes}"));
 
                         if (attempt < maxQuickAttempts)
                         {
@@ -344,18 +349,18 @@ public sealed class Orchestrator : IOrchestrator
 
                 Emit(EventKind.ReviewRequested, $"[{stepNumber}] reviewing with reasoner…");
 
-                var review = await ReviewAsync(
+                var (review, mode) = await ReviewAsync(
                     step.Title, convo, evidenceStart, artifacts, reviewProvider!, reviewModel, ct);
 
                 if (review.Pass)
                 {
                     Emit(EventKind.ReviewPassed,
-                        $"[{stepNumber}] PASS{(string.IsNullOrEmpty(review.Notes) ? "" : ": " + review.Notes)}");
+                        $"[{stepNumber}] PASS ({mode} review){(string.IsNullOrEmpty(review.Notes) ? "" : ": " + review.Notes)}");
                     outcome = StepOutcomeKind.Succeeded;
                     break;
                 }
 
-                Emit(EventKind.ReviewFailed, $"[{stepNumber}] FAIL: {review.Notes}");
+                Emit(EventKind.ReviewFailed, $"[{stepNumber}] FAIL ({mode} review): {review.Notes}");
 
                 if (attempt < maxAttempts)
                 {
@@ -527,7 +532,7 @@ public sealed class Orchestrator : IOrchestrator
     ///
     /// Fails CLOSED: a reviewer that cannot answer has not approved anything.
     /// </summary>
-    private async Task<ReviewResult> ReviewAsync(
+    private async Task<(ReviewResult Result, ReviewMode Mode)> ReviewAsync(
         string title, List<ChatMessage> convo, int evidenceStart, List<ArtifactRef> artifacts,
         IChatProvider reviewProvider, string reviewModel, CancellationToken ct)
     {
@@ -538,8 +543,22 @@ public sealed class Orchestrator : IOrchestrator
                 changed = artifacts.Select(a => a.RelativePath).ToArray();
 
             var evidence = BuildEvidence(convo, evidenceStart);
-            return await _reviewer.ReviewAsync(
-                title, LastAssistant(convo), evidence, changed, reviewProvider, reviewModel, ct);
+
+            // Which question can even be asked about this step? A step that RAN something is judged
+            // on whether it ran and succeeded. A step that only WROTE something has no exit code to
+            // check, so execution review passes anything — which is how a guide full of invented
+            // package names and made-up command syntax finished green. There, the content itself is
+            // the only thing there is to review.
+            var written = BuildWrittenFiles(convo, evidenceStart);
+            var mode = _reviewContent && !RanACommand(convo, evidenceStart) && written.Count > 0
+                ? ReviewMode.Content
+                : ReviewMode.Execution;
+
+            var result = await _reviewer.ReviewAsync(
+                title, LastAssistant(convo), evidence, changed, reviewProvider, reviewModel, ct,
+                mode, written);
+
+            return (result, mode);
         }
         catch (OperationCanceledException)
         {
@@ -549,7 +568,7 @@ public sealed class Orchestrator : IOrchestrator
         {
             // This used to score an unreachable reviewer as PASS, so a stopped Ollama or a bad key
             // silently turned every step green: the gate looked configured and enforced nothing.
-            return new ReviewResult(false, "review error: " + ex.Message);
+            return (new ReviewResult(false, "review error: " + ex.Message), ReviewMode.Execution);
         }
     }
 
@@ -1024,6 +1043,74 @@ public sealed class Orchestrator : IOrchestrator
         var text = sb.ToString().Trim();
         if (text.Length == 0) return "(no tools were run in this step)";
         return text.Length > 3000 ? text[..3000] + "\n… (truncated)" : text;
+    }
+
+    /// <summary>Tools that make something happen outside the workspace's files.</summary>
+    private static readonly HashSet<string> CommandTools =
+        new(StringComparer.OrdinalIgnoreCase) { "run_command", "run_powershell", "git", "docker" };
+
+    /// <summary>
+    /// Whether this step actually executed anything. Decides which question the reviewer is asked:
+    /// a step with a command has a real exit code to be judged on, a step without one does not.
+    /// </summary>
+    private static bool RanACommand(List<ChatMessage> messages, int start)
+    {
+        for (var i = Math.Max(0, start); i < messages.Count; i++)
+            if (messages[i].Role == ChatRole.Assistant && messages[i].ToolCalls is { Count: > 0 } calls)
+                foreach (var call in calls)
+                    if (CommandTools.Contains(call.Name))
+                        return true;
+
+        return false;
+    }
+
+    /// <summary>
+    /// The content this step wrote, taken from the write_file calls themselves rather than from disk:
+    /// staging means the file may not be on disk at all, and this is what the step is claiming to have
+    /// produced either way. The LAST write to a path wins — an earlier draft it replaced is not what
+    /// the user ends up with.
+    /// </summary>
+    private static IReadOnlyList<WrittenFile> BuildWrittenFiles(List<ChatMessage> messages, int start)
+    {
+        var byPath = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var order = new List<string>();
+
+        for (var i = Math.Max(0, start); i < messages.Count; i++)
+        {
+            if (messages[i].Role != ChatRole.Assistant || messages[i].ToolCalls is not { Count: > 0 } calls)
+                continue;
+
+            foreach (var call in calls)
+            {
+                if (!string.Equals(call.Name, "write_file", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                try
+                {
+                    using var doc = JsonDocument.Parse(call.ArgumentsJson);
+                    if (doc.RootElement.ValueKind != JsonValueKind.Object
+                        || !doc.RootElement.TryGetProperty("path", out var p)
+                        || p.ValueKind != JsonValueKind.String
+                        || !doc.RootElement.TryGetProperty("content", out var c)
+                        || c.ValueKind != JsonValueKind.String)
+                        continue;
+
+                    var path = p.GetString();
+                    if (string.IsNullOrWhiteSpace(path))
+                        continue;
+
+                    if (!byPath.ContainsKey(path))
+                        order.Add(path);
+                    byPath[path] = c.GetString() ?? "";
+                }
+                catch (JsonException)
+                {
+                    // Arguments the tool itself would reject are not evidence of content.
+                }
+            }
+        }
+
+        return order.Select(path => new WrittenFile(path, byPath[path])).ToArray();
     }
 
     /// <summary>Accumulates a streamed tool call across deltas.</summary>

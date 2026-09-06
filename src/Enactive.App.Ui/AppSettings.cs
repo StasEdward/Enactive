@@ -126,6 +126,13 @@ internal sealed class AppSettings
     // engine. Turn it on only for a weak local model that cannot emit structured tool calls at all.
     public bool AllowImplicitToolCalls { get; set; }
 
+    // When a step runs no commands and only writes text, review the TEXT instead of the (empty)
+    // execution evidence. Without this a configured reviewer passes anything such a step produces:
+    // there is no exit code in a document, so the execution question has no answer to give. Costs one
+    // reviewer call on the written content, which is why it is a switch — but it is on by default,
+    // because the alternative is a gate that silently checks nothing for every writing task.
+    public bool ReviewContent { get; set; } = true;
+
     // Ask workers to read a file back after writing it, to catch a weak local model fabricating content.
     // Costs an extra LLM round-trip per write — worth turning off when running strong models. On by default.
     public bool VerifyWrites { get; set; } = true;
@@ -311,6 +318,7 @@ internal sealed class AppSettings
         NumCtx = NumCtx,
         DisableThinking = DisableThinking,
         AllowImplicitToolCalls = AllowImplicitToolCalls,
+        ReviewContent = ReviewContent,
         VerifyWrites = VerifyWrites,
         MaxParallelSteps = MaxParallelSteps,
         CloseToTray = CloseToTray,

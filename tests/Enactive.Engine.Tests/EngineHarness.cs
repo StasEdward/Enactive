@@ -210,12 +210,13 @@ public sealed class EngineFixture : IDisposable
         bool allowImplicitToolCalls = false,
         IModelRouter? router = null,
         IChatProvider? reviewProvider = null,
-        int reviewAttempts = 1)
+        int reviewAttempts = 1,
+        bool reviewContent = true)
         => Build(
             reviewProvider is null
                 ? new SingleProviderFactory(provider)
                 : new MapProviderFactory(provider, (Verdicts.ProviderId, reviewProvider)),
-            worker, policy, artifacts, allowImplicitToolCalls, router, reviewAttempts);
+            worker, policy, artifacts, allowImplicitToolCalls, router, reviewAttempts, reviewContent);
 
     public Orchestrator Build(
         IChatProviderFactory providers,
@@ -224,7 +225,8 @@ public sealed class EngineFixture : IDisposable
         IArtifactStore? artifacts = null,
         bool allowImplicitToolCalls = false,
         IModelRouter? router = null,
-        int reviewAttempts = 1)
+        int reviewAttempts = 1,
+        bool reviewContent = true)
     {
         var tools = new ToolRegistry(new ITool[]
         {
@@ -246,7 +248,8 @@ public sealed class EngineFixture : IDisposable
             new EmptyServices(),
             router: router,
             reviewAttempts: reviewAttempts,
-            allowImplicitToolCalls: allowImplicitToolCalls);
+            allowImplicitToolCalls: allowImplicitToolCalls,
+            reviewContent: reviewContent);
     }
 
     /// <summary>Runs one intent to completion and returns every event it produced.</summary>

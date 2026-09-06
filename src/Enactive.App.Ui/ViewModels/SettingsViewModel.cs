@@ -102,6 +102,7 @@ internal sealed class SettingsViewModel : ObservableObject
     private bool _disableThinking;
     private bool _verifyWrites;
     private bool _allowImplicitToolCalls;
+    private bool _reviewContent;
     private string _maxParallelStepsText;
     private bool _closeToTray;
     private bool _runAtStartup;
@@ -174,6 +175,7 @@ internal sealed class SettingsViewModel : ObservableObject
         _disableThinking = _working.DisableThinking;
         _verifyWrites = _working.VerifyWrites;
         _allowImplicitToolCalls = _working.AllowImplicitToolCalls;
+        _reviewContent = _working.ReviewContent;
         _maxParallelStepsText = _working.MaxParallelSteps.ToString();
         _closeToTray = _working.CloseToTray;
 
@@ -231,6 +233,7 @@ internal sealed class SettingsViewModel : ObservableObject
     public bool DisableThinking { get => _disableThinking; set => Set(ref _disableThinking, value); }
     public bool VerifyWrites { get => _verifyWrites; set => Set(ref _verifyWrites, value); }
     public bool AllowImplicitToolCalls { get => _allowImplicitToolCalls; set => Set(ref _allowImplicitToolCalls, value); }
+    public bool ReviewContent { get => _reviewContent; set => Set(ref _reviewContent, value); }
     public string MaxParallelStepsText { get => _maxParallelStepsText; set => Set(ref _maxParallelStepsText, value); }
 
     /// <summary>
@@ -398,6 +401,7 @@ internal sealed class SettingsViewModel : ObservableObject
         _working.DisableThinking = DisableThinking;
         _working.VerifyWrites = VerifyWrites;
         _working.AllowImplicitToolCalls = AllowImplicitToolCalls;
+        _working.ReviewContent = ReviewContent;
         _working.MaxParallelSteps = int.TryParse(MaxParallelStepsText.Trim(), out var p) && p > 0 ? p : 1;
         _working.CloseToTray = CloseToTray;
 
