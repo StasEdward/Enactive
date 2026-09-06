@@ -41,9 +41,13 @@ public sealed class AnthropicProvider : IChatProvider
         var completion = await CompleteAsync(request, ct);
         if (completion.Message.Content is { Length: > 0 } text)
             yield return new TextDelta(text);
+        // Each call needs its OWN index. Every one used to be emitted as index 0, and the orchestrator
+        // merges deltas by index: two calls in one completion collapsed into a single call carrying the
+        // LAST name and id with the FIRST call's arguments, and the other action vanished. A read+write
+        // pair on the same path was the dangerous case — the write inherited the read's arguments.
         if (completion.Message.ToolCalls is { Count: > 0 } calls)
-            foreach (var call in calls)
-                yield return new ToolCallDelta(0, call.Id, call.Name, call.ArgumentsJson);
+            for (var i = 0; i < calls.Count; i++)
+                yield return new ToolCallDelta(i, calls[i].Id, calls[i].Name, calls[i].ArgumentsJson);
 
         // The counts were already in the response and were being thrown away here, which is why a
         // run on Claude reported no tokens at all while a local one did.
@@ -129,9 +133,10 @@ public sealed class AnthropicProvider : IChatProvider
             };
             httpRequest.Headers.TryAddWithoutValidation("x-api-key", _descriptor.ApiKey ?? "");
             httpRequest.Headers.TryAddWithoutValidation("anthropic-version", AnthropicVersion);
-            if (_descriptor.Headers is { } extraHeaders)
-                foreach (var header in extraHeaders)
-                    httpRequest.Headers.TryAddWithoutValidation(header.Key, header.Value);
+            // One shared helper across all three adapters, so "the provider's custom headers are
+            // sent" is a single behaviour with a single test rather than three near-copies of which
+            // two had gone missing.
+            ProviderHeaders.Apply(httpRequest, _descriptor);
 
             using var response = await _http.SendAsync(httpRequest, HttpCompletionOption.ResponseContentRead, ct);
             var responseBody = await response.Content.ReadAsStringAsync(ct);

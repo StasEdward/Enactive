@@ -60,6 +60,8 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     /// <summary>Everything the window shows. Nothing below touches a control - it sets a property here.</summary>
     private readonly MainWindowViewModel _vm = new();
     private readonly HashSet<string> _shownArtifacts = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>Workspaces already told about their ignored legacy approvals file — say it once.</summary>
+    private readonly HashSet<string> _legacyApprovalsNoted = new(StringComparer.OrdinalIgnoreCase);
 
     // ── Run state ────────────────────────────────────────────────────────────
     private CancellationTokenSource? _cts;
@@ -78,6 +80,9 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     private int _backgroundRuns;
     private bool _forceClose;
     private StagingArtifactStore? _staging;
+    /// <summary>The current run's disk store, when it is writing straight to the workspace. Kept so the
+    /// artifact cards can ask whether a file was CREATED by this run or only overwritten.</summary>
+    private DiskArtifactStore? _disk;
     private int _stagedShown;
 
     public MainWindow()
@@ -87,8 +92,18 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         {
             new WriteFileTool(), new ReadFileTool(), new ListDirectoryTool(), new RunCommandTool(), new RunPowerShellTool(), new GitTool(), new DockerTool()
         }), _log);
-        ApplySettings();
+
+        // A settings file the app cannot build from must not make the app unlaunchable. Saving is
+        // validated now, but a file edited by hand — or written by an older build — can still be
+        // impossible, and the constructor is the one place where throwing means the window never
+        // opens. Start on defaults instead, keep the file, and say so.
+        var settingsProblem = TryApplySettings();
+
         _log.Info(LogSource.System, $"Enactive UI started — logs at {FileLogSink.DefaultDirectory()}");
+        if (settingsProblem is not null)
+            _log.Error(LogSource.System,
+                $"settings.json could not be applied ({settingsProblem}). Running on defaults — your file "
+                + "has NOT been overwritten; fix it in Settings, or edit it and restart.");
 
         // Where to start: the environment wins, then the workspace last opened. The old default -
         // the current directory - made the folder the .exe happens to sit in a workspace, complete
@@ -325,6 +340,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
 
         var fullPath = Path.GetFullPath(workspacePath);
         _currentWorkspaceRoot = fullPath;
+        NoteLegacyApprovalsIfAny(fullPath);
         _registry.Touch(fullPath);
         RefreshWorkspaces();
         var name = Path.GetFileName(Path.TrimEndingDirectorySeparator(fullPath));
@@ -339,12 +355,15 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         {
             var staging = new StagingArtifactStore(fullPath);
             _staging = staging;
+            _disk = null;
             artifactStore = staging;
         }
         else
         {
             _staging = null;
-            artifactStore = new DiskArtifactStore(workspace);
+            var disk = new DiskArtifactStore(workspace);
+            _disk = disk;
+            artifactStore = disk;
         }
         _stagedShown = 0;
 
@@ -355,7 +374,8 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             var orchestrator = new Orchestrator(
                 _providerFactory, _modelResolver, _workerProvider, _toolRegistry, artifactStore,
                 workspace, _planner, _permissionEngine, this, policy, new EmptyProvider(),
-                BuildRouter(), 1, _settings.NumCtx, _settings.DisableThinking, _settings.MaxParallelSteps);
+                BuildRouter(), _settings.ReviewRetries, _settings.NumCtx, _settings.DisableThinking, _settings.MaxParallelSteps,
+                _settings.AllowImplicitToolCalls, _settings.ReviewContent, _settings.RevertRejectedSteps);
             var recorder = new RunRecorder(runStore, MemoryStoreFactory.Create(workspace), workspace.Id, runSettings);
 
             var context = await contextProvider.BuildAsync(new IntentFocus(workspace.Id), _cts.Token);
@@ -437,9 +457,16 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                 case EventKind.StepCompleted:
                     var doneCard = CardFor(ev) ?? _currentCard;
                     // A failed step and a dependency-skipped step arrive as StepCompleted too, so the
-                    // card must not go green for either of them.
-                    var wasSkipped = ev.Summary.Contains("skipped (dependency failed)", StringComparison.Ordinal);
-                    var wasFailed = wasSkipped || ev.Summary.Contains("FAILED:", StringComparison.Ordinal);
+                    // card must not go green for either of them. The step's outcome is now a value in
+                    // the payload; the old string search is the fallback for a run recorded by an
+                    // earlier build, and is exactly the fragility it replaces — rewording a summary
+                    // used to turn a red card green.
+                    var stepOutcome = ev.StepOutcome();
+                    var wasSkipped = stepOutcome == StepOutcomeKind.Skipped
+                        || (stepOutcome is null && ev.Summary.Contains("skipped (dependency", StringComparison.Ordinal));
+                    var wasFailed = wasSkipped
+                        || (stepOutcome is not null && stepOutcome != StepOutcomeKind.Succeeded)
+                        || (stepOutcome is null && ev.Summary.Contains("FAILED:", StringComparison.Ordinal));
                     if (wasSkipped)
                     {
                         // Skipped is not failed: nothing went wrong in THIS step, and painting it red
@@ -522,17 +549,40 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                     else
                         AddArtifact(ev.Summary);
                     break;
-                case EventKind.TaskCompleted:
-                    _vm.StatusPhase = "Completed";
-                    _vm.CurrentAction = string.Empty;
-                    _currentCard?.SetDone();
-                    _currentCard?.SetActivity("Done");
-                    _vm.IsAgentVisible = false;
+
+                // The step's work was put back after the reviewer rejected it. Its cards must stop
+                // offering to open or undo a file that is no longer the file they describe.
+                case EventKind.ArtifactReverted:
+                    (CardFor(ev) ?? EnsureCurrentCard()).AddNote(ev.Summary);
+                    MarkRevertedArtifacts(ev.Summary);
                     break;
+                // The pill says what the engine DECIDED, read from the event's typed outcome rather
+                // than from which of the two terminal kinds arrived. "Incomplete" is its own answer:
+                // nothing failed, but the work is not done, and calling that Completed is what let a
+                // truncated or half-run task look finished.
+                case EventKind.TaskCompleted:
                 case EventKind.TaskFailed:
-                    _vm.StatusPhase = "Failed";
-                    _currentCard?.SetFailed();
-                    _currentCard?.SetActivity("Failed");
+                    var outcome = ev.Outcome()
+                        ?? (ev.Kind == EventKind.TaskCompleted
+                            ? RunOutcomeKind.Completed
+                            : RunOutcomeKind.Failed);
+
+                    _vm.StatusPhase = outcome.ToString();
+                    _vm.IsAgentVisible = false;
+
+                    if (outcome == RunOutcomeKind.Completed)
+                    {
+                        _vm.CurrentAction = string.Empty;
+                        _currentCard?.SetDone();
+                        _currentCard?.SetActivity("Done");
+                    }
+                    else
+                    {
+                        // Why it stopped belongs on screen, not only in the log.
+                        _vm.CurrentAction = ev.OutcomeReason() ?? ev.Summary;
+                        _currentCard?.SetFailed();
+                        _currentCard?.SetActivity(outcome.ToString());
+                    }
                     break;
             }
         });
@@ -643,24 +693,43 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             return;
 
         var root = _currentWorkspaceRoot;
+
+        // "Undo" used to be an unconditional File.Delete: if the agent EDITED an existing source
+        // file, pressing it deleted the source outright and reported "undone". The store now keeps
+        // what it overwrote, so the button can say which of the two things it will actually do.
+        var createdByThisRun = _disk?.CreatedHere(relative) == true;
+
         _vm.Artifacts.Add(new ArtifactItemViewModel(
             relative,
             item => ShowFile(root, item),
-            item =>
-            {
-                try
-                {
-                    var full = Path.Combine(root, item.RelativePath);
-                    if (File.Exists(full))
-                        File.Delete(full);
-                    item.Status = "undone";
-                    item.CanAct = false;
-                }
-                catch (Exception ex)
-                {
-                    item.Status = "error: " + ex.Message;
-                }
-            }));
+            item => _ = UndoLiveArtifactAsync(root, item, createdByThisRun),
+            createdByThisRun ? "Delete" : "Undo"));
+    }
+
+    /// <summary>
+    /// Marks the cards for files a rejected step wrote and the engine put back. The paths come from
+    /// the event's own summary ("Rejected work put back: a.md, b.md"), which is not ideal — but the
+    /// alternative is a payload schema for one line of text, and the card is cosmetic: the file on
+    /// disk has already been restored whatever the card says.
+    /// </summary>
+    private void MarkRevertedArtifacts(string summary)
+    {
+        const string marker = "put back: ";
+        var index = summary.IndexOf(marker, StringComparison.Ordinal);
+        if (index < 0)
+            return;
+
+        var paths = summary[(index + marker.Length)..]
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        foreach (var item in _vm.Artifacts.OfType<ArtifactItemViewModel>())
+        {
+            if (!paths.Contains(item.RelativePath, StringComparer.OrdinalIgnoreCase))
+                continue;
+
+            item.Status = "put back — the reviewer rejected this step";
+            item.CanAct = false;
+        }
     }
 
     private void AddStagedArtifact()
@@ -680,7 +749,17 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             diff,
             item =>
             {
-                staging.Apply(change.Id);
+                // Apply can refuse now: if the file changed after the proposal was made, writing it
+                // would erase that edit. The card says so and stays actionable, so the user can look
+                // at the file and decide, instead of finding out afterwards.
+                var result = staging.Apply(change.Id);
+                if (!result.Applied)
+                {
+                    item.Status = result.Conflict ?? "could not apply";
+                    item.StatusBrush = Brand.Amber;
+                    return;
+                }
+
                 item.Status = "applied";
                 item.StatusBrush = Brand.Success;
                 item.CanAct = false;
@@ -957,6 +1036,19 @@ public sealed partial class MainWindow : Window, IDecisionHandler
 
     private void StartBackground(string text, string fullPath)
     {
+        // Background runs always wrote straight to disk while the run settings — and the history —
+        // said "staged". Rather than lie about it, refuse the combination: staging that survives a
+        // background run needs a store that persists its proposals, which does not exist yet.
+        if (_vm.StageChanges)
+        {
+            _vm.StatusPhase = "Not started";
+            _vm.CurrentAction =
+                "Stage changes is on, and a background run cannot stage: it would write to your files "
+                + "directly while the history claimed the changes were staged. Turn Stage changes off "
+                + "to run in the background, or run this in the foreground.";
+            return;
+        }
+
         var workspace = WorkspaceFrom(fullPath);
         var policy = PolicyFor(_vm.AutonomyTier);
         var runSettings = CurrentRunSettings();
@@ -989,7 +1081,8 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                 var orchestrator = new Orchestrator(
                     _providerFactory, _modelResolver, _workerProvider, _toolRegistry, new DiskArtifactStore(workspace),
                     workspace, _planner, _permissionEngine, decisions, policy, new EmptyProvider(),
-                    BuildRouter(), 1, _settings.NumCtx, _settings.DisableThinking, _settings.MaxParallelSteps);
+                    BuildRouter(), _settings.ReviewRetries, _settings.NumCtx, _settings.DisableThinking, _settings.MaxParallelSteps,
+                    _settings.AllowImplicitToolCalls, _settings.ReviewContent, _settings.RevertRejectedSteps);
                 var recorder = new RunRecorder(runStore, MemoryStoreFactory.Create(workspace), workspace.Id, runSettings);
                 var context = await contextProvider.BuildAsync(new IntentFocus(workspace.Id), CancellationToken.None);
                 var intent = new Intent(Guid.NewGuid(), text, IntentSource.Inbox, context, DateTimeOffset.UtcNow, workerId);
@@ -1083,6 +1176,48 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         }
     }
 
+    /// <summary>
+    /// Undoes what the CURRENT run did to a file: a file it created is removed, a file it overwrote
+    /// is restored from the copy the store took first. Both refuse when the file has changed since,
+    /// because at that point undoing would throw away an edit the run did not make.
+    /// </summary>
+    private async Task UndoLiveArtifactAsync(string root, ArtifactItemViewModel item, bool createdByThisRun)
+    {
+        if (_disk is null)
+        {
+            item.Status = "this run cannot be undone";
+            item.CanAct = false;
+            return;
+        }
+
+        // Removing a generated file is cheap to redo; replacing the file the user has been looking
+        // at is not, so only that one asks.
+        if (!createdByThisRun)
+        {
+            var go = await ConfirmWindow.AskAsync(
+                this,
+                $"Restore the previous version of “{item.RelativePath}”?",
+                "The file as this run left it will be replaced by the version that was there before "
+                + "the run started.",
+                "Restore",
+                "Keep");
+
+            if (!go)
+                return;
+        }
+
+        var result = _disk.Undo(item.RelativePath);
+        if (!result.Undone)
+        {
+            // A conflict is not an error to swallow: the user needs to know the file moved on.
+            item.Status = result.Conflict ?? "could not undo";
+            return;
+        }
+
+        item.Status = result.Restored ? "previous version restored" : "deleted (created by this run)";
+        item.CanAct = false;
+    }
+
     private async Task DeletePastArtifactAsync(string root, ArtifactItemViewModel item)
     {
         var full = Path.Combine(root, item.RelativePath);
@@ -1169,14 +1304,35 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             return Task.FromResult(new DecisionOutcome(AllowOptionId(request)));
 
         var tcs = new TaskCompletionSource<DecisionOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
-        ct.Register(() => tcs.TrySetCanceled());
+
+        // Cancelling used to complete the task and stop there: the card stayed on screen and
+        // _pendingDecision stayed set, so the NEXT run returned immediately from RunAsync because
+        // "a decision is pending" — a decision belonging to a task that had already been stopped.
+        // The lifetime of the card is now tied to the lifetime of the request, in one place.
+        var registration = ct.Register(() =>
+        {
+            tcs.TrySetCanceled();
+            Dispatcher.UIThread.Post(() => ClearDecision(tcs));
+        });
+
+        // The continuation runs whichever way the request ends — clicked, cancelled or faulted — so
+        // the cancellation registration is always released.
+        _ = tcs.Task.ContinueWith(
+            _ => registration.Dispose(),
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
 
         Dispatcher.UIThread.Post(() =>
         {
+            // Cancelled before the post ran: do not put a card on screen for a dead request.
+            if (tcs.Task.IsCompleted)
+                return;
+
             _pendingDecision = tcs;
-            _vm.DecisionText = string.IsNullOrEmpty(request.Detail)
-                ? request.Topic
-                : request.Topic + "\n" + request.Detail;
+            _vm.DecisionText = request.Topic;
+            // The full action, not the summary: this is what the click authorises.
+            _vm.DecisionDetail = request.FullText;
 
             _vm.DecisionOptions.Clear();
             foreach (var option in request.Options)
@@ -1204,10 +1360,26 @@ public sealed partial class MainWindow : Window, IDecisionHandler
 
     private void ResolveDecision(string optionId)
     {
-        _vm.IsDecisionVisible = false;
         var tcs = _pendingDecision;
-        _pendingDecision = null;
+        ClearDecision(tcs);
         tcs?.TrySetResult(new DecisionOutcome(optionId));
+    }
+
+    /// <summary>
+    /// Takes THIS request's card off screen. Checking which request it belongs to matters: by the
+    /// time a cancellation is dispatched, a later run may already have put its own card up, and
+    /// clearing that one would leave the new run waiting on something the user can no longer answer.
+    /// </summary>
+    private void ClearDecision(TaskCompletionSource<DecisionOutcome>? tcs)
+    {
+        if (tcs is not null && !ReferenceEquals(_pendingDecision, tcs))
+            return;
+
+        _pendingDecision = null;
+        _vm.IsDecisionVisible = false;
+        _vm.DecisionOptions.Clear();
+        _vm.DecisionText = string.Empty;
+        _vm.DecisionDetail = string.Empty;
     }
 
     private static string AllowOptionId(DecisionRequest request)
@@ -1216,42 +1388,36 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         ?? request.Options.FirstOrDefault()?.Id
         ?? "allow";
 
-    // Workspace-scoped approvals persist in <workspace>/.enactive/permissions.json (a JSON array of tool names).
+    // Workspace-scoped approvals live OUTSIDE the workspace now — see ApprovalStore for why. The
+    // old <workspace>/.enactive/permissions.json is ignored, not imported.
     private bool WorkspaceApproves(string tool)
     {
-        try { return LoadWorkspaceApprovals(_currentWorkspaceRoot).Contains(tool, StringComparer.OrdinalIgnoreCase); }
-        catch { return false; }
-    }
+        if (string.IsNullOrEmpty(_currentWorkspaceRoot))
+            return false;
 
-    private static List<string> LoadWorkspaceApprovals(string root)
-    {
-        try
-        {
-            if (string.IsNullOrEmpty(root)) return new List<string>();
-            var path = Path.Combine(root, ".enactive", "permissions.json");
-            if (!File.Exists(path)) return new List<string>();
-            return System.Text.Json.JsonSerializer.Deserialize<List<string>>(File.ReadAllText(path)) ?? new List<string>();
-        }
-        catch { return new List<string>(); }
+        return ApprovalStore.Approves(WorkspaceInfo.IdFor(_currentWorkspaceRoot), tool);
     }
 
     private void SaveWorkspaceApproval(string tool)
     {
-        try
-        {
-            var root = _currentWorkspaceRoot;
-            if (string.IsNullOrEmpty(root)) return;
-            var dir = Path.Combine(root, ".enactive");
-            Directory.CreateDirectory(dir);
-            var list = LoadWorkspaceApprovals(root);
-            if (!list.Contains(tool, StringComparer.OrdinalIgnoreCase))
-            {
-                list.Add(tool);
-                File.WriteAllText(Path.Combine(dir, "permissions.json"),
-                    System.Text.Json.JsonSerializer.Serialize(list, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
-            }
-        }
-        catch { /* ignore */ }
+        if (string.IsNullOrEmpty(_currentWorkspaceRoot))
+            return;
+
+        ApprovalStore.Approve(WorkspaceInfo.IdFor(_currentWorkspaceRoot), tool);
+    }
+
+    /// <summary>
+    /// Says once per workspace that an old in-folder approvals file is being ignored, so being asked
+    /// again looks like the deliberate change it is rather than a bug.
+    /// </summary>
+    private void NoteLegacyApprovalsIfAny(string root)
+    {
+        if (!_legacyApprovalsNoted.Add(root) || !ApprovalStore.HasLegacyFile(root))
+            return;
+
+        _log.Info(LogSource.System,
+            $"Ignoring {WorkspaceGuard.ReservedFolder}/permissions.json in {root}: remembered approvals now "
+            + "live outside the workspace, where a tool cannot write them. Approve again to restore them.");
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
@@ -1283,6 +1449,35 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         _settings.WindowWidth = (int)Width;
         _settings.WindowHeight = (int)Height;
         _settings.Save();
+    }
+
+    /// <summary>
+    /// Applies the loaded settings, falling back to defaults if they cannot be built. Returns what
+    /// went wrong, or null. The saved file is left exactly as it is: overwriting it with defaults
+    /// would destroy the configuration the user is about to fix.
+    /// </summary>
+    private string? TryApplySettings()
+    {
+        try
+        {
+            ApplySettings();
+            return null;
+        }
+        catch (Exception ex)
+        {
+            try
+            {
+                _settings = new AppSettings();
+                ApplySettings();
+            }
+            catch
+            {
+                // Defaults themselves failing is not something to paper over.
+                throw;
+            }
+
+            return ex.Message;
+        }
     }
 
     private void ApplySettings()

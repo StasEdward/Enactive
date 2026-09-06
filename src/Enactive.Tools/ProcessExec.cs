@@ -33,8 +33,39 @@ internal static class ProcessExec
         return list;
     }
 
+    /// <summary>
+    /// Turns a finished process into a <see cref="ToolResult"/>, shared by every process-running tool.
+    /// A non-zero exit code is a FAILED result: "the process started" and "the command succeeded" are
+    /// two different things, and reporting the second when only the first is true pushes the detection
+    /// of a failure onto the model and an optional reviewer. Output is preserved either way.
+    /// <paramref name="allowedExitCodes"/> covers the commands whose codes carry meaning
+    /// (e.g. <c>git diff --exit-code</c>); the default is {0}.
+    /// </summary>
+    public static ToolResult BuildResult(
+        string what, int exitCode, string stdout, string stderr, IReadOnlyCollection<int>? allowedExitCodes = null)
+    {
+        var combined = stdout;
+        if (stderr.Length > 0)
+            combined += "\n[stderr]\n" + stderr;
+        combined = combined.Trim();
+        if (combined.Length > MaxOutputChars)
+            combined = combined[..MaxOutputChars] + "\n… (truncated)";
+
+        // Label the result clearly so the model uses the OUTPUT (not the command text) when asked to save it.
+        var output = $"exit code {exitCode}\n----- command output (this is the result) -----\n{combined}";
+        var metadata = new Dictionary<string, object?> { ["exitCode"] = exitCode };
+
+        var allowed = allowedExitCodes is { Count: > 0 } ? allowedExitCodes : DefaultAllowedExitCodes;
+        return allowed.Contains(exitCode)
+            ? ToolResults.Ok(output: output, metadata: metadata)
+            : ToolResults.Fail($"{what} exited with code {exitCode}.", output, metadata);
+    }
+
+    private static readonly IReadOnlyCollection<int> DefaultAllowedExitCodes = new[] { 0 };
+
     public static async Task<ToolResult> RunAsync(
-        string fileName, IReadOnlyList<string> args, string workingDir, int timeoutSeconds, CancellationToken ct)
+        string fileName, IReadOnlyList<string> args, string workingDir, int timeoutSeconds,
+        CancellationToken ct, IReadOnlyCollection<int>? allowedExitCodes = null)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -75,16 +106,6 @@ internal static class ProcessExec
             return ToolResults.Fail($"Could not run {fileName}: {ex.Message}");
         }
 
-        var combined = stdout.ToString();
-        if (stderr.Length > 0)
-            combined += "\n[stderr]\n" + stderr;
-        combined = combined.Trim();
-        if (combined.Length > MaxOutputChars)
-            combined = combined[..MaxOutputChars] + "\n… (truncated)";
-
-        var output = $"exit code {process.ExitCode}\n----- command output (this is the result) -----\n{combined}";
-        return ToolResults.Ok(
-            output: output,
-            metadata: new Dictionary<string, object?> { ["exitCode"] = process.ExitCode });
+        return BuildResult(fileName, process.ExitCode, stdout.ToString(), stderr.ToString(), allowedExitCodes);
     }
 }

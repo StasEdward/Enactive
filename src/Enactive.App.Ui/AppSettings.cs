@@ -94,6 +94,18 @@ internal sealed class PhaseBindings
 /// </summary>
 internal sealed class AppSettings
 {
+    /// <summary>The newest settings.json schema this build writes. See <see cref="SchemaVersion"/>.</summary>
+    public const int CurrentSchemaVersion = 2;
+
+    /// <summary>
+    /// settings.json schema version. Files written before 2026-09-06 have no such field and read as 1,
+    /// where an EMPTY worker tool list meant "every tool" — the inverted permission the code review
+    /// flagged. In version 2 an empty list means "no tools" and full access is spelled "*", so a v1
+    /// file's empty lists are rewritten to ["*"] on load: that preserves what those workers were
+    /// actually able to do instead of silently disarming them.
+    /// </summary>
+    public int SchemaVersion { get; set; } = 1;
+
     // ── Team-of-models schema (Docs/MODELS.md) ────────────────────────────────
     public List<ProviderConfig> Providers { get; set; } = new();
     public List<WorkerConfig> Workers { get; set; } = new();
@@ -107,6 +119,33 @@ internal sealed class AppSettings
     // Send think:false to the local model so a reasoning model (qwen3, ...) answers directly instead of
     // burning a whole turn in <think> with empty content. On by default; only OllamaNative honors it.
     public bool DisableThinking { get; set; } = true;
+
+    // Execute a tool call the model only DESCRIBED in its reply (a ```json block) instead of invoking it.
+    // Off by default and deliberately so: a parser cannot tell an intended call from a quoted example,
+    // which means anything that can put text in front of the model can put an action in front of the
+    // engine. Turn it on only for a weak local model that cannot emit structured tool calls at all.
+    public bool AllowImplicitToolCalls { get; set; }
+
+    // When a step runs no commands and only writes text, review the TEXT instead of the (empty)
+    // execution evidence. Without this a configured reviewer passes anything such a step produces:
+    // there is no exit code in a document, so the execution question has no answer to give. Costs one
+    // reviewer call on the written content, which is why it is a switch — but it is on by default,
+    // because the alternative is a gate that silently checks nothing for every writing task.
+    public bool ReviewContent { get; set; } = true;
+
+    // How many times a rejected step may be redone before the run gives up. 1 means two tries in
+    // total, which is what the engine did when this number was hard-coded. It was worth exposing
+    // because it is the dial between "the reviewer's feedback gets used" and "a weak model burns the
+    // budget arguing with a strong one": in a real run one step needed exactly two attempts and
+    // passed, while another used both and was still wrong. Clamped to 0..5 by the orchestrator.
+    public int ReviewRetries { get; set; } = 1;
+
+    // Put a rejected step's files back to how they were before it ran. Without this the gate stops
+    // only the REPORT: the run says Failed while the rejected document stays in the workspace, which
+    // is the version someone is most likely to open next. A file changed since the step wrote it is
+    // left alone and named in the log — reverting over somebody's edit would be the very thing this
+    // is meant to prevent. Turn it off to inspect what a rejected step actually produced.
+    public bool RevertRejectedSteps { get; set; } = true;
 
     // Ask workers to read a file back after writing it, to catch a weak local model fabricating content.
     // Costs an extra LLM round-trip per write — worth turning off when running strong models. On by default.
@@ -206,11 +245,31 @@ internal sealed class AppSettings
     }
 
     /// <summary>
+    /// Brings an older settings.json up to <see cref="CurrentSchemaVersion"/>. Unlike the team-schema
+    /// migration below, this runs on EVERY load, because it must also reach a file that already has
+    /// providers. It is written to be idempotent.
+    /// </summary>
+    private void MigrateSchemaVersion()
+    {
+        if (SchemaVersion < 2)
+        {
+            // v1 semantics: an empty tool list meant "every tool". Spell that out as "*" so the worker
+            // keeps the access it had, while the new, honest meaning of [] applies from here on.
+            foreach (var w in Workers.Where(w => w.Tools.Count == 0))
+                w.Tools.Add("*");
+        }
+
+        SchemaVersion = CurrentSchemaVersion;
+    }
+
+    /// <summary>
     /// First load of a file that predates the team schema: synthesize Providers / Workers / Bindings from the
     /// legacy fields. Runs only while <see cref="Providers"/> is empty, so it never clobbers a migrated file.
     /// </summary>
     private void MigrateIfNeeded()
     {
+        MigrateSchemaVersion();
+
         if (Providers.Count > 0)
             return;
 
@@ -266,9 +325,16 @@ internal sealed class AppSettings
     /// <summary>Deep copy — so an editor can work on a throwaway copy and discard it on Cancel.</summary>
     public AppSettings Clone() => new()
     {
+        // Must be copied: a clone that fell back to 1 would be saved as a v1 file, and the next load
+        // would re-run the migration and hand "*" back to a worker the user had just emptied.
+        SchemaVersion = SchemaVersion,
         GlobalInstructions = GlobalInstructions,
         NumCtx = NumCtx,
         DisableThinking = DisableThinking,
+        AllowImplicitToolCalls = AllowImplicitToolCalls,
+        ReviewContent = ReviewContent,
+        ReviewRetries = ReviewRetries,
+        RevertRejectedSteps = RevertRejectedSteps,
         VerifyWrites = VerifyWrites,
         MaxParallelSteps = MaxParallelSteps,
         CloseToTray = CloseToTray,
@@ -287,6 +353,69 @@ internal sealed class AppSettings
         Providers = Providers.Select(x => x.Clone()).ToList(),
         Workers = Workers.Select(x => x.Clone()).ToList()
     };
+
+    /// <summary>
+    /// Everything wrong with this configuration, in plain language, or empty when it is sound.
+    ///
+    /// Save used to write settings.json FIRST and build the runtime objects afterwards, where
+    /// <c>ToDictionary</c> rejects duplicate ids. The exception took down the settings window — and
+    /// then the next launch read the same file, hit the same exception in the MainWindow
+    /// constructor, and the app would not start at all. Validating before writing means a
+    /// configuration that cannot be built is never persisted. Ids are compared case-insensitively
+    /// because the dictionaries are: "foo" and "Foo" are one id here.
+    /// </summary>
+    public IReadOnlyList<string> Validate()
+    {
+        var problems = new List<string>();
+
+        foreach (var provider in Providers)
+            if (string.IsNullOrWhiteSpace(provider.Id))
+                problems.Add("A provider has no id.");
+
+        foreach (var duplicate in Providers
+                     .Where(p => !string.IsNullOrWhiteSpace(p.Id))
+                     .GroupBy(p => p.Id.Trim(), StringComparer.OrdinalIgnoreCase)
+                     .Where(g => g.Count() > 1))
+            problems.Add($"Two providers share the id \"{duplicate.Key}\" (ids ignore case).");
+
+        foreach (var worker in Workers)
+            if (string.IsNullOrWhiteSpace(worker.Id))
+                problems.Add("A worker has no id.");
+
+        foreach (var duplicate in Workers
+                     .Where(w => !string.IsNullOrWhiteSpace(w.Id))
+                     .GroupBy(w => w.Id.Trim(), StringComparer.OrdinalIgnoreCase)
+                     .Where(g => g.Count() > 1))
+            problems.Add($"Two workers share the id \"{duplicate.Key}\" (ids ignore case).");
+
+        // A model bound to a provider that is not configured cannot run; better to say so here than
+        // to fail on the first request.
+        foreach (var (label, reference) in new[]
+                 {
+                     ("Plan", Bindings.Plan),
+                     ("Review", Bindings.Review),
+                     ("Execute · light", Bindings.ExecuteLight),
+                     ("Execute · heavy", Bindings.ExecuteHeavy)
+                 })
+        {
+            if (ParseRef(reference) is { } model
+                && !Providers.Any(p => string.Equals(p.Id, model.ProviderId, StringComparison.OrdinalIgnoreCase)))
+            {
+                problems.Add($"The {label} model uses provider \"{model.ProviderId}\", which is not configured.");
+            }
+        }
+
+        foreach (var worker in Workers)
+        {
+            if (ParseRef(worker.Model) is { } model
+                && !Providers.Any(p => string.Equals(p.Id, model.ProviderId, StringComparison.OrdinalIgnoreCase)))
+            {
+                problems.Add($"Worker \"{worker.Id}\" uses provider \"{model.ProviderId}\", which is not configured.");
+            }
+        }
+
+        return problems;
+    }
 
     /// <summary>All configured models as "providerId/model" strings, for model pickers.</summary>
     public IReadOnlyList<string> ModelCatalog()

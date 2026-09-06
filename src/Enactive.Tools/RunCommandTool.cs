@@ -87,18 +87,7 @@ public sealed class RunCommandTool : ITool
             return ToolResults.Fail($"Could not run command: {ex.Message}");
         }
 
-        var combined = stdout.ToString();
-        if (stderr.Length > 0)
-            combined += "\n[stderr]\n" + stderr;
-        combined = combined.Trim();
-        if (combined.Length > MaxOutputChars)
-            combined = combined[..MaxOutputChars] + "\n… (truncated)";
-
-        // Label the result clearly so the model uses the OUTPUT (not the command text) when asked to save it.
-        var output = $"exit code {process.ExitCode}\n----- command output (this is the result) -----\n{combined}";
-        return ToolResults.Ok(
-            output: output,
-            metadata: new Dictionary<string, object?> { ["exitCode"] = process.ExitCode });
+        return ProcessExec.BuildResult("Command", process.ExitCode, stdout.ToString(), stderr.ToString());
     }
 
     private const string Schema = """

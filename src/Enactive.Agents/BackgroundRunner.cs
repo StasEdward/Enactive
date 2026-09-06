@@ -30,8 +30,19 @@ public static class BackgroundRunner
                     case EventKind.ArtifactProduced: artifacts++; break;
                     case EventKind.DecisionRequested: decisions++; break;
                     case EventKind.ErrorObserved: error = ev.Summary; break;
-                    case EventKind.TaskCompleted: status = "Completed"; break;
-                    case EventKind.TaskFailed: status = "Failed"; break;
+
+                    // Read the typed outcome, not the event kind: "Incomplete" and "Failed" are
+                    // different things to tell someone who was not watching, and the reason the
+                    // engine recorded is more use in an Inbox line than the last error seen.
+                    case EventKind.TaskCompleted:
+                    case EventKind.TaskFailed:
+                        var outcome = ev.Outcome()
+                            ?? (ev.Kind == EventKind.TaskCompleted
+                                ? RunOutcomeKind.Completed
+                                : RunOutcomeKind.Failed);
+                        status = outcome.ToString();
+                        error = ev.OutcomeReason() ?? error;
+                        break;
                 }
             }
         }
@@ -45,7 +56,11 @@ public static class BackgroundRunner
             error = ex.Message;
         }
 
-        var kind = status == "Failed" ? "error" : decisions > 0 ? "decision" : "result";
+        // Anything that is not a completed run is worth flagging as such: an Inbox line saying
+        // "result" for a run that stopped half-way is the same lie as a green status pill.
+        var kind = status is "Failed" or "Incomplete" ? "error"
+                 : decisions > 0 ? "decision"
+                 : "result";
         var summary = $"{status} · {artifacts} artifact(s)"
             + (decisions > 0 ? $" · {decisions} decision(s) needed your approval" : "")
             + (error is not null ? " · " + error : "");

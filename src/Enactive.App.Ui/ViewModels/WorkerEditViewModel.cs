@@ -26,9 +26,13 @@ internal sealed class ToolToggle : ObservableObject
 /// </summary>
 internal sealed class WorkerEditViewModel : ObservableObject
 {
-    /// <summary>The tools the app ships. A worker carrying an unknown tool keeps it - see the ctor.</summary>
+    /// <summary>
+    /// The tools the app ships, plus the "*" wildcard. A worker carrying an unknown tool keeps it - see
+    /// the ctor. "*" is a row of its own so unrestricted access is something the user has to tick on
+    /// purpose: since an empty list means "no tools", there has to be a visible way to say "all".
+    /// </summary>
     private static readonly string[] KnownTools =
-        { "write_file", "read_file", "list_dir", "run_command", "run_powershell", "git", "docker" };
+        { "write_file", "read_file", "list_dir", "run_command", "run_powershell", "git", "docker", "*" };
 
     private const string NoneItem = "(none)";
 
@@ -55,7 +59,13 @@ internal sealed class WorkerEditViewModel : ObservableObject
         // The known tools first, then anything this worker already has that we do not know about, so
         // an unrecognised tool survives a round trip through this dialog instead of being dropped.
         foreach (var tool in KnownTools.Concat(config.Tools.Where(t => !KnownTools.Contains(t))).Distinct())
-            Tools.Add(new ToolToggle(tool, config.Tools.Contains(tool)));
+        {
+            var toggle = new ToolToggle(tool, config.Tools.Contains(tool));
+            // An empty selection now means NO tools, which is invisible in a list of unticked boxes —
+            // so the hint under the list has to react to every toggle, not just to Save.
+            toggle.PropertyChanged += (_, _) => OnPropertyChanged(nameof(ToolsHint));
+            Tools.Add(toggle);
+        }
 
         // A saved model that is no longer in the catalog is kept as an item, so opening the dialog
         // and pressing Save does not quietly retarget the worker.
@@ -88,6 +98,24 @@ internal sealed class WorkerEditViewModel : ObservableObject
     public string? Fallback { get => _fallback; set => Set(ref _fallback, value); }
 
     public ObservableCollection<ToolToggle> Tools { get; } = new();
+
+    /// <summary>
+    /// What the current selection actually permits. Spelled out because the dangerous states are the
+    /// silent ones: nothing ticked is a worker that cannot act at all, and "*" is unrestricted access
+    /// regardless of the other boxes.
+    /// </summary>
+    public string ToolsHint
+    {
+        get
+        {
+            var selected = Tools.Where(t => t.IsSelected).Select(t => t.Name).ToList();
+            if (selected.Contains("*"))
+                return "\"*\" is selected — this worker may call EVERY tool, including shell commands.";
+            return selected.Count == 0
+                ? "Nothing selected — this worker cannot call any tool. Tick \"*\" for unrestricted access."
+                : $"{selected.Count} tool(s): {string.Join(", ", selected)}.";
+        }
+    }
     public ObservableCollection<string> Models { get; } = new();
     public ObservableCollection<string> Fallbacks { get; } = new();
 

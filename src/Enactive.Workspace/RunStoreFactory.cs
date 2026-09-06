@@ -17,11 +17,15 @@ public static class RunStoreFactory
         return kind switch
         {
             "json" => new JsonRunStore(workspace),
+            // The workspace goes in, exactly as it does for the memory and inbox stores: one MySQL
+            // instance serves several projects, and a history that does not know which project a run
+            // belongs to shows them all to all of them.
             "mysql" => new MySqlRunStore(
                 Environment.GetEnvironmentVariable("ENACTIVE_MYSQL")
                 ?? throw new InvalidOperationException(
                     "ENACTIVE_STORE=mysql requires the ENACTIVE_MYSQL connection string, e.g. "
-                    + "\"Server=localhost;Database=enactive;User ID=root;Password=...\".")),
+                    + "\"Server=localhost;Database=enactive;User ID=root;Password=...\"."),
+                workspace.Id),
             _ => new SqliteRunStore(workspace)
         };
     }

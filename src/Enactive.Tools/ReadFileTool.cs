@@ -36,15 +36,28 @@ public sealed class ReadFileTool : ITool
         try
         {
             var full = WorkspacePaths.ResolveInside(ctx.WorkspaceRoot, path);
-            if (!File.Exists(full))
+
+            // A staged write is content that exists as far as this run is concerned. Reading past it
+            // to the disk is what made the instructed write-then-read verification report the OLD
+            // file, or none at all, right after the agent had written it.
+            var staged = await ctx.Artifacts.TryReadPendingAsync(path, ct);
+
+            if (staged is null && !File.Exists(full))
                 return ToolResults.Fail($"File not found: {path}");
 
-            var text = await File.ReadAllTextAsync(full, ct);
+            var text = staged ?? await File.ReadAllTextAsync(full, ct);
             var truncated = text.Length > MaxChars ? text[..MaxChars] + "\n… (truncated)" : text;
 
             return ToolResults.Ok(
                 output: truncated,
-                metadata: new Dictionary<string, object?> { ["path"] = path, ["bytes"] = text.Length });
+                metadata: new Dictionary<string, object?>
+                {
+                    ["path"] = path,
+                    ["bytes"] = text.Length,
+                    // Say which version this is. "Proposed" and "on disk" are different facts, and a
+                    // reviewer judging from evidence has to be able to tell them apart.
+                    ["staged"] = staged is not null
+                });
         }
         catch (Exception ex)
         {

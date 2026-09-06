@@ -158,6 +158,26 @@
                                       Content="Verify writes by reading files back — helps weak local models, adds a round-trip" />
                             <TextBlock Classes="hint"
                                        Text="Reading a file back after writing catches a weak model inventing content. It's an extra call per write, so turn it off when you mostly run strong models." />
+                            <CheckBox IsChecked="{Binding ReviewContent}"
+                                      Content="Review what a step WROTE when it ran no commands" />
+                            <TextBlock Classes="hint"
+                                       Text="A step that only writes a document has no exit code to check, so the ordinary review has nothing to look at and passes anything. With this on, the reviewer reads the text instead and fails invented package names, made-up command syntax, wrong ports and corrupted identifiers. Needs a Review model bound under AI · Phases; costs one reviewer call on the written text." />
+                            <CheckBox IsChecked="{Binding RevertRejectedSteps}"
+                                      Content="Put a rejected step's files back to how they were" />
+                            <TextBlock Classes="hint"
+                                       Text="When the reviewer rejects a step for good, undo what it wrote. Otherwise the run says Failed while the rejected version stays in your workspace — which is the one you would open next. A file you changed after the step wrote it is left alone and named in the log." />
+
+                            <TextBlock Classes="label" Text="Review retries" />
+                            <TextBlock Classes="hint"
+                                       Text="How many times a rejected step may be redone before the run gives up. 1 means two tries in total. Each retry costs another run of the worker AND another reviewer call, so this is the dial between using the reviewer's feedback and letting a weak model argue with an expensive one. 0–5." />
+                            <!-- PlaceholderText, not the obsolete Watermark: no reason for a new
+                                 control to add to the deprecation warnings already in this file. -->
+                            <TextBox Text="{Binding ReviewRetriesText}" PlaceholderText="1 = two tries in total" />
+
+                            <CheckBox IsChecked="{Binding AllowImplicitToolCalls}"
+                                      Content="Run tool calls the model only described in text — unsafe, off by default" />
+                            <TextBlock Classes="hint"
+                                       Text="Normally a JSON block in a reply executes nothing and the model is asked to send a real tool call. Turning this on executes it — which means an example, a quote or a file the agent just read can become an action. Only for a local model that cannot emit structured tool calls." />
 
                             <TextBlock Classes="label" Text="Parallel steps" />
                             <TextBlock Classes="hint"

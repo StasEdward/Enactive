@@ -46,14 +46,26 @@ internal sealed class ArtifactItemViewModel : ObservableObject
     /// what it honestly means changes: undoing what just happened, or deleting a file that has had
     /// a week to be edited since. The label says which; the button is labelled by its caller.
     /// </summary>
-    public ArtifactItemViewModel(string relativePath, Action<ArtifactItemViewModel> open, Action<ArtifactItemViewModel> remove)
+    public ArtifactItemViewModel(
+        string relativePath,
+        Action<ArtifactItemViewModel> open,
+        Action<ArtifactItemViewModel> remove,
+        string actionLabel = "Delete")
     {
         RelativePath = relativePath;
+        ActionLabel = actionLabel;
         ReviewCommand = new RelayCommand(() => open(this), () => CanAct);
         UndoCommand = new RelayCommand(() => remove(this), () => CanAct);
     }
 
     public string RelativePath { get; }
+
+    /// <summary>
+    /// What the second button actually does. It used to be hard-coded "Undo" in the view while the
+    /// handler only ever deleted the file — so undoing an edit to an existing source deleted the
+    /// source. The label is now the caller's, and it never says "undo" unless it can undo.
+    /// </summary>
+    public string ActionLabel { get; }
 
     public string Status { get => _status; set => Set(ref _status, value); }
 
@@ -181,6 +193,7 @@ internal sealed class MainWindowViewModel : ObservableObject
     private bool _isAgentVisible;
     private bool _isDecisionVisible;
     private string _decisionText = string.Empty;
+    private string _decisionDetail = string.Empty;
     private string _inboxLabel = "Inbox";
     private int _inboxUnread;
     private bool _isBusy;
@@ -618,6 +631,24 @@ internal sealed class MainWindowViewModel : ObservableObject
 
     public bool IsDecisionVisible { get => _isDecisionVisible; set => Set(ref _isDecisionVisible, value); }
     public string DecisionText { get => _decisionText; set => Set(ref _decisionText, value); }
+
+    /// <summary>
+    /// The complete action being approved — every argument, in full, newlines intact. The card used
+    /// to show only a 120-character summary while the whole command ran, so the tail of a long
+    /// script was authorised without ever being on screen.
+    /// </summary>
+    public string DecisionDetail
+    {
+        get => _decisionDetail;
+        set
+        {
+            if (Set(ref _decisionDetail, value))
+                OnPropertyChanged(nameof(HasDecisionDetail));
+        }
+    }
+
+    public bool HasDecisionDetail => !string.IsNullOrWhiteSpace(_decisionDetail);
+
     public ObservableCollection<DecisionOptionViewModel> DecisionOptions { get; } = new();
 
     /// <summary>Artifact cards and staged-change cards, in the order they appeared. Two item types,

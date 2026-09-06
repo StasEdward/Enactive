@@ -5,23 +5,105 @@ using Enactive.Core.Artifacts;
 using Enactive.Core.Context;
 
 /// <summary>
+/// What one write did to one path, kept so it can be undone. Recorded at write time because
+/// afterwards none of it is knowable: the file exists either way, and its previous bytes are gone.
+/// </summary>
+public sealed record FileWriteRecord(
+    string RelativePath,
+    bool ExistedBefore,
+    string? BeforeHash,
+    string? BackupPath,
+    string AfterHash);
+
+/// <summary>Why an undo could not be performed, or that it was.</summary>
+public sealed record UndoResult(bool Undone, string? Conflict = null, bool Restored = false)
+{
+    public static UndoResult Deleted => new(true);
+    public static UndoResult RestoredPrevious => new(true, Restored: true);
+    public static UndoResult Blocked(string reason) => new(false, reason);
+}
+
+/// <summary>
 /// Disk-backed artifact store rooted at the workspace. The rest of the app addresses artifacts by
 /// id / <see cref="ArtifactRef"/> and never learns the physical path (PLAN_v2 §2A.4).
+///
+/// It also keeps what it overwrote. "Undo" used to be an unconditional <c>File.Delete</c>: if the
+/// agent edited an existing source file, undoing the edit deleted the source and reported "undone".
+/// Now the previous bytes are copied into the workspace's own state folder before every write, so a
+/// write can be undone to the state before the RUN (the artifact card) or before a STEP
+/// (<see cref="RevertToAsync"/>, used when a reviewer rejects the work) — and both refuse when the
+/// file has changed since, because at that point undoing would destroy someone else's work.
 /// </summary>
 public sealed class DiskArtifactStore : IArtifactStore
 {
     private readonly string _root;
+    private readonly string _backupRoot;
     private readonly ConcurrentDictionary<Guid, string> _paths = new();
 
-    public DiskArtifactStore(WorkspaceInfo workspace)
-        => _root = Path.GetFullPath(workspace.RootPath);
+    /// <summary>
+    /// Every write, in order. A journal rather than one record per path: reverting to "before this
+    /// step" needs the state at an arbitrary point, not just the state before the run, and a second
+    /// write to a path must not erase what the first one displaced.
+    /// </summary>
+    private readonly List<FileWriteRecord> _journal = new();
+    private readonly object _journalGate = new();
+    private int _backupSequence;
+
+    public DiskArtifactStore(WorkspaceInfo workspace, Guid runId = default)
+    {
+        _root = Path.GetFullPath(workspace.RootPath);
+        _backupRoot = Path.Combine(
+            _root, WorkspaceGuard.ReservedFolder, "undo",
+            (runId == Guid.Empty ? Guid.NewGuid() : runId).ToString("N"));
+    }
 
     public string Root => _root;
+
+    /// <summary>Every write this store made, oldest first.</summary>
+    public IReadOnlyList<FileWriteRecord> Writes
+    {
+        get { lock (_journalGate) return _journal.ToArray(); }
+    }
+
+    /// <summary>
+    /// True when this store created the file rather than overwriting an existing one — judged by the
+    /// FIRST write, since a later write in the same run overwrites this store's own output and does
+    /// not make a pre-existing file ours to delete. False for a path it never wrote, so the caller
+    /// can only ever be told LESS than it is safe to delete.
+    /// </summary>
+    public bool CreatedHere(string relativePath)
+        => FirstWrite(relativePath) is { ExistedBefore: false };
+
+    /// <summary>The state this path was in before the run first touched it.</summary>
+    public FileWriteRecord? FirstWrite(string relativePath)
+    {
+        lock (_journalGate)
+            return _journal.FirstOrDefault(
+                w => string.Equals(w.RelativePath, relativePath, WorkspaceGuard.Comparison));
+    }
+
+    /// <summary>What the last write to this path left behind.</summary>
+    public FileWriteRecord? LastWrite(string relativePath)
+    {
+        lock (_journalGate)
+            return _journal.LastOrDefault(
+                w => string.Equals(w.RelativePath, relativePath, WorkspaceGuard.Comparison));
+    }
+
+    public int Checkpoint()
+    {
+        lock (_journalGate) return _journal.Count;
+    }
 
     public async Task<ArtifactRef> CreateAsync(
         string relativePath, ArtifactKind kind, string title, Func<Stream, Task> write, CancellationToken ct)
     {
         var fullPath = ResolveInsideRoot(relativePath);
+
+        var existed = File.Exists(fullPath);
+        var beforeHash = existed ? FileHash.OfFile(fullPath) : null;
+        var backupPath = existed ? BackUp(fullPath) : null;
+
         var directory = Path.GetDirectoryName(fullPath);
         if (!string.IsNullOrEmpty(directory))
             Directory.CreateDirectory(directory);
@@ -29,9 +111,125 @@ public sealed class DiskArtifactStore : IArtifactStore
         await using (var stream = new FileStream(fullPath, FileMode.Create, FileAccess.Write, FileShare.None))
             await write(stream);
 
+        lock (_journalGate)
+            _journal.Add(new FileWriteRecord(
+                relativePath, existed, beforeHash, backupPath, FileHash.OfFile(fullPath)!));
+
         var id = Guid.NewGuid();
         _paths[id] = fullPath;
         return new ArtifactRef(id, kind, title, relativePath);
+    }
+
+    /// <summary>
+    /// Undoes this store's whole effect on a path: a file that existed before the run is restored,
+    /// one the run created is deleted. Only when the file still holds exactly what the run left
+    /// there — otherwise undoing would throw away an edit made since.
+    /// </summary>
+    public UndoResult Undo(string relativePath)
+    {
+        var first = FirstWrite(relativePath);
+        var last = LastWrite(relativePath);
+        if (first is null || last is null)
+            return UndoResult.Blocked("This run did not write that file.");
+
+        var outcome = Restore(relativePath, first, last);
+        if (!outcome.Undone)
+            return outcome;
+
+        lock (_journalGate)
+            _journal.RemoveAll(w => string.Equals(w.RelativePath, relativePath, WorkspaceGuard.Comparison));
+
+        return outcome;
+    }
+
+    /// <summary>
+    /// Puts the named paths back to how they were at <paramref name="checkpoint"/> — see the contract
+    /// on <see cref="IArtifactStore.RevertToAsync"/> for why this exists.
+    /// </summary>
+    public Task<RevertReport> RevertToAsync(
+        int checkpoint, IReadOnlyCollection<string> paths, CancellationToken ct)
+    {
+        var reverted = new List<string>();
+        var kept = new List<string>();
+
+        foreach (var path in paths.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            // The state to go back to is the one the FIRST write after the checkpoint displaced; the
+            // file on disk has to still hold what the LAST one left there.
+            FileWriteRecord[] after;
+            lock (_journalGate)
+                after = _journal
+                    .Skip(checkpoint)
+                    .Where(w => string.Equals(w.RelativePath, path, WorkspaceGuard.Comparison))
+                    .ToArray();
+
+            if (after.Length == 0)
+                continue;
+
+            var outcome = Restore(path, after[0], after[^1]);
+            if (!outcome.Undone)
+            {
+                kept.Add(path);
+                continue;
+            }
+
+            reverted.Add(path);
+
+            // Drop only THIS path's post-checkpoint entries; everything before the checkpoint, and
+            // every other path's writes, stay exactly where they were.
+            lock (_journalGate)
+            {
+                var head = _journal.Take(checkpoint).ToList();
+                var tail = _journal
+                    .Skip(checkpoint)
+                    .Where(w => !string.Equals(w.RelativePath, path, WorkspaceGuard.Comparison))
+                    .ToList();
+
+                _journal.Clear();
+                _journal.AddRange(head);
+                _journal.AddRange(tail);
+            }
+        }
+
+        return Task.FromResult(new RevertReport(reverted, kept));
+    }
+
+    /// <summary>
+    /// Restores one path to the state <paramref name="target"/> displaced, provided the file still
+    /// holds what <paramref name="current"/> left there.
+    /// </summary>
+    private UndoResult Restore(string relativePath, FileWriteRecord target, FileWriteRecord current)
+    {
+        string fullPath;
+        try { fullPath = ResolveInsideRoot(relativePath); }
+        catch (Exception ex) { return UndoResult.Blocked(ex.Message); }
+
+        var currentHash = FileHash.OfFile(fullPath);
+        if (currentHash is null)
+            return UndoResult.Blocked("The file is already gone.");
+
+        if (!string.Equals(currentHash, current.AfterHash, StringComparison.Ordinal))
+            return UndoResult.Blocked(
+                "The file has changed since the run wrote it — undoing now would discard that edit.");
+
+        try
+        {
+            if (!target.ExistedBefore)
+            {
+                File.Delete(fullPath);
+                return UndoResult.Deleted;
+            }
+
+            if (target.BackupPath is null || !File.Exists(target.BackupPath))
+                return UndoResult.Blocked("The previous version is no longer available.");
+
+            File.Copy(target.BackupPath, fullPath, overwrite: true);
+            return UndoResult.RestoredPrevious;
+        }
+        catch (Exception ex)
+        {
+            return UndoResult.Blocked(ex.Message);
+        }
     }
 
     public Task<Stream> OpenAsync(Guid artifactId, CancellationToken ct)
@@ -50,21 +248,64 @@ public sealed class DiskArtifactStore : IArtifactStore
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// Copies the current file into the workspace's state folder and returns where it went, or null
+    /// if that could not be done — in which case the write still goes ahead and undo will say it has
+    /// no previous version, rather than pretending it has one.
+    /// </summary>
+    private string? BackUp(string fullPath)
+    {
+        try
+        {
+            Directory.CreateDirectory(_backupRoot);
+            PruneOldBackups();
+            var sequence = Interlocked.Increment(ref _backupSequence);
+            var backup = Path.Combine(_backupRoot, $"{sequence:D4}{Path.GetExtension(fullPath)}.bak");
+            File.Copy(fullPath, backup, overwrite: true);
+            return backup;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Keeps the most recent runs' backups and drops the rest. Undo only ever reaches back into the
+    /// CURRENT run, so older copies are there for a person digging something out by hand — worth
+    /// keeping a few of, not worth growing without limit inside the user's project.
+    /// </summary>
+    private void PruneOldBackups()
+    {
+        const int Keep = 20;
+
+        try
+        {
+            var parent = Path.GetDirectoryName(_backupRoot);
+            if (parent is null || !Directory.Exists(parent))
+                return;
+
+            var stale = new DirectoryInfo(parent)
+                .GetDirectories()
+                .OrderByDescending(d => d.LastWriteTimeUtc)
+                .Skip(Keep);
+
+            foreach (var directory in stale)
+                try { directory.Delete(recursive: true); } catch { /* in use, or gone already */ }
+        }
+        catch { /* housekeeping must never break a write */ }
+    }
+
+    /// <summary>
+    /// One shared rule (<see cref="WorkspaceGuard"/>) instead of this store's own copy of it. The
+    /// copy compared strings only, so a junction inside the workspace passed the check and the write
+    /// then landed wherever the junction pointed.
+    /// </summary>
     private string ResolveInsideRoot(string relativePath)
     {
         if (string.IsNullOrWhiteSpace(relativePath))
             throw new ArgumentException("Path is empty.", nameof(relativePath));
-        if (Path.IsPathRooted(relativePath))
-            throw new ArgumentException("Absolute paths are not allowed.", nameof(relativePath));
 
-        var fullPath = Path.GetFullPath(Path.Combine(_root, relativePath));
-        var rootWithSeparator = _root.EndsWith(Path.DirectorySeparatorChar)
-            ? _root
-            : _root + Path.DirectorySeparatorChar;
-
-        if (!fullPath.StartsWith(rootWithSeparator, StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException("Path escapes the workspace root.", nameof(relativePath));
-
-        return fullPath;
+        return WorkspaceGuard.ResolveInside(_root, relativePath);
     }
 }

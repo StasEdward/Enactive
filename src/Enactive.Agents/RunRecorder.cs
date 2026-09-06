@@ -68,8 +68,7 @@ public sealed class RunRecorder
         var artifacts = new List<string>();
         var decisions = new List<string>();
         var eventRecords = new List<RunEventRecord>();
-        var failed = false;
-        var completed = false;
+        RunOutcomeKind? outcome = null;
         var promptTokens = 0;
         var completionTokens = 0;
         var sawUsage = false;
@@ -99,16 +98,22 @@ public sealed class RunRecorder
                     completionTokens += used.Out;
                     sawUsage = true;
                     break;
+                // The terminal event carries a typed outcome now, so the history stores what the
+                // engine DECIDED instead of a status inferred from which event happened to arrive
+                // last. The event kind is the fallback for a record written by an older build.
                 case EventKind.TaskFailed:
-                    failed = true;
-                    break;
                 case EventKind.TaskCompleted:
-                    completed = true;
+                    outcome = ev.Outcome()
+                        ?? (ev.Kind == EventKind.TaskCompleted
+                            ? RunOutcomeKind.Completed
+                            : RunOutcomeKind.Failed);
                     break;
             }
         }
 
-        var status = failed ? "Failed" : completed ? "Completed" : "Incomplete";
+        // No terminal event at all means the stream stopped early — a crash or a cancellation. That
+        // is not success, and it is not a failure the engine reported either.
+        var status = (outcome ?? RunOutcomeKind.Incomplete).ToString();
         return new RunRecord(
             first.RunId, first.TaskId, title, model,
             first.At, last.At, status, eventRecords, artifacts, decisions, settings,

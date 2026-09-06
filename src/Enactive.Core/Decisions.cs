@@ -13,7 +13,20 @@ public sealed record DecisionRequest(
     string Detail,
     IReadOnlyList<DecisionOption> Options,
     string? RecommendedOptionId,
-    string? Subject = null);   // the tool name, so a UI can remember approvals per tool
+    string? Subject = null,    // the tool name, so a UI can remember approvals per tool
+    string? FullDetail = null) // the COMPLETE action, unabridged — see below
+{
+    /// <summary>
+    /// Everything the decision authorises, in full. <see cref="Detail"/> is a one-line summary and
+    /// may be elided; this never is.
+    ///
+    /// The card used to show only the shortened form, which meant a long shell script was approved
+    /// with its tail behind an ellipsis while the whole thing was executed. A person cannot consent
+    /// to what they were not shown, so the full text is now carried with the request and the UI is
+    /// expected to make all of it reachable before the buttons are usable.
+    /// </summary>
+    public string FullText => string.IsNullOrEmpty(FullDetail) ? Detail : FullDetail!;
+}
 
 /// <summary>The user's choice at a fork.</summary>
 public sealed record DecisionOutcome(string OptionId);

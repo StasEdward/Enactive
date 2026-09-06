@@ -200,8 +200,10 @@ sealed class ConsoleDecisionHandler : IDecisionHandler
         Console.WriteLine();
         Console.WriteLine("  !! USER DECISION REQUIRED");
         Console.WriteLine($"  {request.Topic}");
-        if (!string.IsNullOrEmpty(request.Detail))
-            Console.WriteLine($"  {request.Detail}");
+        // FullText, not Detail: the console is approving the same action the UI is, and it must not
+        // be asked to consent to a summary either.
+        if (!string.IsNullOrEmpty(request.FullText))
+            Console.WriteLine($"  {request.FullText}");
         foreach (var option in request.Options)
             Console.WriteLine($"    [{option.Id}] {option.Label}");
         Console.Write($"  Choose (default {request.RecommendedOptionId}): ");

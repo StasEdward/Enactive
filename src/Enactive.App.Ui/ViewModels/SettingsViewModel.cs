@@ -101,6 +101,10 @@ internal sealed class SettingsViewModel : ObservableObject
     private string _globalInstructions;
     private bool _disableThinking;
     private bool _verifyWrites;
+    private bool _allowImplicitToolCalls;
+    private bool _reviewContent;
+    private string _reviewRetriesText = "1";
+    private bool _revertRejectedSteps;
     private string _maxParallelStepsText;
     private bool _closeToTray;
     private bool _runAtStartup;
@@ -172,6 +176,10 @@ internal sealed class SettingsViewModel : ObservableObject
         _globalInstructions = _working.GlobalInstructions;
         _disableThinking = _working.DisableThinking;
         _verifyWrites = _working.VerifyWrites;
+        _allowImplicitToolCalls = _working.AllowImplicitToolCalls;
+        _reviewContent = _working.ReviewContent;
+        _reviewRetriesText = _working.ReviewRetries.ToString();
+        _revertRejectedSteps = _working.RevertRejectedSteps;
         _maxParallelStepsText = _working.MaxParallelSteps.ToString();
         _closeToTray = _working.CloseToTray;
 
@@ -228,6 +236,10 @@ internal sealed class SettingsViewModel : ObservableObject
     public string GlobalInstructions { get => _globalInstructions; set => Set(ref _globalInstructions, value); }
     public bool DisableThinking { get => _disableThinking; set => Set(ref _disableThinking, value); }
     public bool VerifyWrites { get => _verifyWrites; set => Set(ref _verifyWrites, value); }
+    public bool AllowImplicitToolCalls { get => _allowImplicitToolCalls; set => Set(ref _allowImplicitToolCalls, value); }
+    public bool ReviewContent { get => _reviewContent; set => Set(ref _reviewContent, value); }
+    public string ReviewRetriesText { get => _reviewRetriesText; set => Set(ref _reviewRetriesText, value); }
+    public bool RevertRejectedSteps { get => _revertRejectedSteps; set => Set(ref _revertRejectedSteps, value); }
     public string MaxParallelStepsText { get => _maxParallelStepsText; set => Set(ref _maxParallelStepsText, value); }
 
     /// <summary>
@@ -394,6 +406,12 @@ internal sealed class SettingsViewModel : ObservableObject
         _working.GlobalInstructions = GlobalInstructions;
         _working.DisableThinking = DisableThinking;
         _working.VerifyWrites = VerifyWrites;
+        _working.AllowImplicitToolCalls = AllowImplicitToolCalls;
+        _working.ReviewContent = ReviewContent;
+        // Clamped here as well as in the orchestrator: what is saved should be what will be used, or
+        // the settings window shows one number while the engine quietly runs another.
+        _working.ReviewRetries = int.TryParse(ReviewRetriesText.Trim(), out var r) ? Math.Clamp(r, 0, 5) : 1;
+        _working.RevertRejectedSteps = RevertRejectedSteps;
         _working.MaxParallelSteps = int.TryParse(MaxParallelStepsText.Trim(), out var p) && p > 0 ? p : 1;
         _working.CloseToTray = CloseToTray;
 
@@ -413,6 +431,16 @@ internal sealed class SettingsViewModel : ObservableObject
         _working.Bindings.Review = FromSelection(Review);
         _working.Bindings.ExecuteLight = FromSelection(ExecuteLight);
         _working.Bindings.ExecuteHeavy = FromSelection(ExecuteHeavy);
+
+        // Validate BEFORE handing this over to be written. A configuration that cannot be built —
+        // two providers with the same id, say — used to be saved anyway, and then took the app down
+        // on every launch afterwards, because startup reads the same file and fails the same way.
+        var problems = _working.Validate();
+        if (problems.Count > 0)
+        {
+            StartupNote = "Not saved — " + string.Join(" ", problems);
+            return;
+        }
 
         _onSaved(_working);
 

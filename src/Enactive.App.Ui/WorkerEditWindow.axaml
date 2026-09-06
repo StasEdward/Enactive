@@ -49,6 +49,7 @@
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
+                <TextBlock Classes="hint" TextWrapping="Wrap" Text="{Binding ToolsHint}" />
 
                 <TextBlock Classes="label" Text="Permission level" />
                 <ComboBox ItemsSource="{Binding Levels}" SelectedItem="{Binding Level}" />

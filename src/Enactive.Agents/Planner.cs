@@ -143,9 +143,13 @@ public sealed class Planner
         + "For each step also set \"complexity\", which decides WHICH MODEL runs it: \"trivial\" (a rename, one "
         + "obvious edit, a one-line command) goes to a small fast model, \"normal\" to the standard one, and "
         + "\"complex\" to a much slower and far more expensive model. \"normal\" IS THE DEFAULT — use it unless the "
-        + "step clearly does not fit. Mark a step \"complex\" ONLY when it needs reasoning across several files, a "
-        + "non-obvious algorithm, or judgement a competent junior developer would get wrong. Writing a document, "
-        + "running a command, editing one file or producing straightforward boilerplate is NOT complex, however long "
-        + "its output is. At most ONE step in a plan may be \"complex\"; if two steps look equally hard, both are "
-        + "\"normal\".";
+        + "step clearly does not fit. Mark a step \"complex\" when it needs reasoning across several files, a "
+        + "non-obvious algorithm, judgement a competent junior developer would get wrong, OR when its output has to "
+        + "ASSERT EXTERNAL FACTS the model must recall rather than read — exact command syntax and flags, package "
+        + "names, port numbers, configuration keys, API names, version requirements for software that is not in this "
+        + "workspace. A small model cannot tell that it is wrong about those and will invent confident, plausible "
+        + "detail instead. LENGTH IS NOT COMPLEXITY: a long document, boilerplate, formatting, or writing up what a "
+        + "tool actually returned stays \"normal\", however many pages it is, and so does describing files that ARE "
+        + "in this workspace — those can be read instead of recalled. No more than TWO steps in a plan may be "
+        + "\"complex\".";
 }

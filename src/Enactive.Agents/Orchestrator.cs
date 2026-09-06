@@ -37,12 +37,16 @@ public sealed class Orchestrator : IOrchestrator
     private readonly PermissionPolicy _policy;
     private readonly IServiceProvider _services;
     private readonly IModelRouter _router;
-    private readonly int _reviewAttempts;
+    private readonly IModelResolver _modelResolver;
+    private readonly int _reviewRetries;
     private readonly int _maxParallelSteps;
     /// <summary>One approval card at a time, however many steps are running.</summary>
     private readonly SemaphoreSlim _decisionGate = new(1, 1);
     private readonly int? _numCtx;
     private readonly bool? _think;
+    private readonly bool _allowImplicitToolCalls;
+    private readonly bool _reviewContent;
+    private readonly bool _revertRejectedSteps;
     private readonly Reviewer _reviewer = new();
 
     public Orchestrator(
@@ -58,10 +62,13 @@ public sealed class Orchestrator : IOrchestrator
         PermissionPolicy policy,
         IServiceProvider services,
         IModelRouter? router = null,
-        int reviewAttempts = 1,
+        int reviewRetries = 1,
         int? numCtx = null,
         bool disableThinking = false,
-        int maxParallelSteps = 1)
+        int maxParallelSteps = 1,
+        bool allowImplicitToolCalls = false,
+        bool reviewContent = true,
+        bool revertRejectedSteps = true)
     {
         _providers = providers;
         _workers = workers;
@@ -74,12 +81,24 @@ public sealed class Orchestrator : IOrchestrator
         _policy = policy;
         _services = services;
         _router = router ?? new ModelRouter(modelResolver);
-        _reviewAttempts = reviewAttempts;
+        _modelResolver = modelResolver;
+        // How many times a rejected step may be redone. Clamped rather than trusted: this multiplies
+        // the cost of a run by the reviewer's price, and a stray large number would be paid for in
+        // full before anyone noticed.
+        _reviewRetries = Math.Clamp(reviewRetries, 0, 5);
         // 1 = the original behaviour: one step at a time on one shared conversation.
         _maxParallelSteps = Math.Max(1, maxParallelSteps);
         _numCtx = numCtx;
         // Disable the local model's <think> phase by sending think:false; null leaves it to the model.
         _think = disableThinking ? false : null;
+        // Off by default: executing JSON found in a reply is a way to talk the agent into acting.
+        _allowImplicitToolCalls = allowImplicitToolCalls;
+        // On by default: for a step that only writes text, execution review has nothing to check, so
+        // without this a configured reviewer passes anything such a step produces.
+        _reviewContent = reviewContent;
+        // On by default: a gate that stops the report but leaves the rejected work on disk is the
+        // state a person is most likely to pick up and use.
+        _revertRejectedSteps = revertRejectedSteps;
     }
 
     public async IAsyncEnumerable<WorkEvent> SubmitIntentAsync(
@@ -137,6 +156,18 @@ public sealed class Orchestrator : IOrchestrator
         };
         var artifacts = new List<ArtifactRef>();
 
+        // The one place a run ends. TaskCompleted is emitted for Completed and NOTHING else — the
+        // whole point of the outcome type is that a failure cannot arrive dressed as a success — and
+        // the kind travels in the payload so the UI, the history and the Inbox read a value instead
+        // of parsing the wording.
+        WorkEvent Terminal(RunOutcomeKind kind, string? reason)
+            => new(Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow,
+                   kind == RunOutcomeKind.Completed ? EventKind.TaskCompleted : EventKind.TaskFailed,
+                   kind == RunOutcomeKind.Completed
+                       ? SummarizeArtifacts(artifacts)
+                       : $"{kind}{(string.IsNullOrWhiteSpace(reason) ? "" : ": " + reason)}",
+                   WorkEventPayload.OutcomePayload(kind, reason));
+
         if (plan.Disposition == IntentDisposition.QuickAction)
         {
             yield return Ev(EventKind.Routed, $"Quick action: {plan.Title}");
@@ -145,14 +176,99 @@ public sealed class Orchestrator : IOrchestrator
             // task that owns the log scope, while this method only yields what the channel hands it.
             var quick = Channel.CreateUnbounded<WorkEvent>(
                 new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
+            var quickResult = new ToolLoopResult();
             var quickPump = Task.Run(async () =>
             {
                 using var _quickScope = LogScope.Begin(runId, taskId);
                 try
                 {
-                    await foreach (var ev in RunToolLoopAsync(
-                        taskId, runId, provider, model.Model, worker, messages, artifacts, intent.Context, null, ct))
-                        quick.Writer.TryWrite(ev);
+                    // A configured reviewer now applies here too. It used to run for plan steps only,
+                    // while the planner was explicitly told to prefer QuickAction — so the reviewer
+                    // setting did nothing for most ordinary requests, file writes and commands included.
+                    var maxQuickAttempts = reviewOn ? _reviewRetries + 1 : 1;
+                    var storeCheckpoint = _artifacts.Checkpoint();
+                    var conversationStart = messages.Count;
+
+                    // Accumulated across attempts, because a content retry drops the rejected one
+                    // from the transcript — see the same note on the DAG path.
+                    var writtenHere = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+                    // The same one-shot fallback the DAG path has: an unreachable model is not the
+                    // model doing bad work, so it costs no review attempt.
+                    var activeRef = model;
+                    var activeProvider = provider;
+                    var triedFallback = false;
+
+                    for (var attempt = 1; attempt <= maxQuickAttempts; attempt++)
+                    {
+                        var evidenceStart = messages.Count;
+
+                        try
+                        {
+                            await foreach (var ev in RunToolLoopAsync(
+                                taskId, runId, activeProvider, activeRef.Model, worker, messages, artifacts,
+                                intent.Context, null, quickResult, ct))
+                                quick.Writer.TryWrite(ev);
+                        }
+                        catch (Exception ex) when (ex is not OperationCanceledException
+                                                   && !triedFallback
+                                                   && _modelResolver.NextOnFailure(worker.ModelPolicy, activeRef) is not null)
+                        {
+                            var fallback = _modelResolver.NextOnFailure(worker.ModelPolicy, activeRef)!;
+                            triedFallback = true;
+
+                            quick.Writer.TryWrite(Ev(EventKind.Routed,
+                                $"{activeRef.ProviderId}/{activeRef.Model} failed ({ex.Message}) — "
+                                + $"retrying on the fallback {fallback.ProviderId}/{fallback.Model}"));
+
+                            activeRef = fallback;
+                            activeProvider = _providers.Create(fallback.ProviderId);
+
+                            attempt--;   // the retry is the SAME attempt
+                            continue;
+                        }
+
+                        foreach (var file in BuildWrittenFiles(messages, evidenceStart))
+                            writtenHere.Add(file.RelativePath);
+
+                        if (!reviewOn || !quickResult.Succeeded)
+                            break;
+
+                        quick.Writer.TryWrite(Ev(EventKind.ReviewRequested, "reviewing…"));
+                        var (review, mode) = await ReviewAsync(
+                            plan.Title, messages, evidenceStart, artifacts, reviewProvider!, reviewModel, ct);
+
+                        if (review.Pass)
+                        {
+                            quick.Writer.TryWrite(Ev(EventKind.ReviewPassed,
+                                $"PASS ({mode} review){(string.IsNullOrEmpty(review.Notes) ? "" : ": " + review.Notes)}"));
+                            break;
+                        }
+
+                        quick.Writer.TryWrite(Ev(EventKind.ReviewFailed, $"FAIL ({mode} review): {review.Notes}"));
+
+                        if (attempt < maxQuickAttempts)
+                        {
+                            RetryAfterReview(messages, conversationStart, mode, review.Notes, "the work");
+                            continue;
+                        }
+
+                        // Out of attempts and still rejected: the work is NOT done, and saying so is
+                        // the entire point of having a reviewer.
+                        quickResult.Set(StepOutcomeKind.ReviewRejected, "review not passed: " + review.Notes);
+
+                        if (_revertRejectedSteps)
+                        {
+                            var report = await RevertAsync(storeCheckpoint, writtenHere, artifacts, ct);
+                            foreach (var line in DescribeRevert(report))
+                                quick.Writer.TryWrite(Ev(EventKind.ArtifactReverted, line));
+                        }
+                    }
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    quickResult.Set(StepOutcomeKind.Failed, ex.Message);
+                    quick.Writer.TryWrite(Ev(EventKind.ErrorObserved, ex.Message));
                 }
                 finally
                 {
@@ -165,7 +281,7 @@ public sealed class Orchestrator : IOrchestrator
 
             await quickPump;
 
-            yield return Ev(EventKind.TaskCompleted, SummarizeArtifacts(artifacts));
+            yield return Terminal(RunOutcomeOf(new[] { quickResult.Kind }), quickResult.Reason);
             yield break;
         }
 
@@ -194,6 +310,10 @@ public sealed class Orchestrator : IOrchestrator
 
         // One line per finished step, so a parallel branch knows what its siblings concluded.
         var digest = new List<string>();
+
+        // How each step ended. The run's own outcome is the aggregate of these, computed once at the
+        // end — not assumed to be success because the loop finished.
+        var stepOutcomes = new Dictionary<Guid, StepOutcomeKind>();
 
         async Task RunStepAsync(PlanStep step)
         {
@@ -243,10 +363,25 @@ public sealed class Orchestrator : IOrchestrator
             if (stepRef.ProviderId != model.ProviderId || stepRef.Model != model.Model)
                 Emit(EventKind.Routed, $"[{stepNumber}] {step.Complexity} step -> {stepRef.ProviderId}/{stepRef.Model}");
 
-            var maxAttempts = reviewOn ? _reviewAttempts + 1 : 1;
-            var passed = true;
-            var failedHard = false;
-            string? failError = null;
+            var maxAttempts = reviewOn ? _reviewRetries + 1 : 1;
+            var stepResult = new ToolLoopResult();
+            var outcome = StepOutcomeKind.Succeeded;
+            string? outcomeReason = null;
+
+            // Where the workspace and the conversation stood before this step touched either. Both
+            // are needed when a review rejects: the files go back, and the rejected draft comes out
+            // of the transcript instead of being carried into the retry.
+            var storeCheckpoint = _artifacts.Checkpoint();
+            var conversationStart = convo.Count;
+
+            // Every path this step wrote, across ALL its attempts. Accumulated rather than read back
+            // off the transcript at the end, because a content retry removes the rejected attempt
+            // from the transcript — a file written only by the first attempt would otherwise be
+            // invisible to the revert and left behind.
+            var writtenThisStep = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            // One switch to the fallback model per step — see the catch below.
+            var triedFallback = false;
 
             for (var attempt = 1; attempt <= maxAttempts; attempt++)
             {
@@ -256,8 +391,11 @@ public sealed class Orchestrator : IOrchestrator
                 {
                     await foreach (var ev in RunToolLoopAsync(
                         taskId, runId, stepProvider, stepModel, worker, convo, artifacts,
-                        intent.Context, stepNumber, ct))
+                        intent.Context, stepNumber, stepResult, ct))
                         events.Writer.TryWrite(ev);
+
+                    outcome = stepResult.Kind;
+                    outcomeReason = stepResult.Reason;
                 }
                 catch (OperationCanceledException)
                 {
@@ -265,69 +403,122 @@ public sealed class Orchestrator : IOrchestrator
                 }
                 catch (Exception ex)
                 {
+                    // The worker's fallback model exists for exactly this: the endpoint is down, the
+                    // key is wrong, the local server is not running. It was settable in the worker
+                    // editor and never consulted — IModelResolver.NextOnFailure had no callers at
+                    // all. One switch per step, and it does not spend a review attempt: failing to
+                    // reach a model is not the model producing bad work.
+                    if (!triedFallback
+                        && _modelResolver.NextOnFailure(worker.ModelPolicy, stepRef) is { } fallback)
+                    {
+                        triedFallback = true;
+                        Emit(EventKind.Routed,
+                            $"[{stepNumber}] {stepRef.ProviderId}/{stepRef.Model} failed ({ex.Message}) — "
+                            + $"retrying on the fallback {fallback.ProviderId}/{fallback.Model}");
+
+                        stepRef = fallback;
+                        stepProvider = _providers.Create(fallback.ProviderId);
+                        stepModel = fallback.Model;
+
+                        // Undo this iteration's increment so the retry is the SAME attempt.
+                        attempt--;
+                        continue;
+                    }
+
                     // A throw fails only THIS step (and its dependents), never the whole run.
-                    failedHard = true;
-                    failError = ex.Message;
+                    outcome = StepOutcomeKind.Failed;
+                    outcomeReason = ex.Message;
                     break;
                 }
+                finally
+                {
+                    // Recorded while this attempt is still in the transcript — see writtenThisStep.
+                    foreach (var file in BuildWrittenFiles(convo, evidenceStart))
+                        writtenThisStep.Add(file.RelativePath);
+                }
 
-                if (!reviewOn)
+                if (!reviewOn || outcome != StepOutcomeKind.Succeeded)
                     break;
 
                 Emit(EventKind.ReviewRequested, $"[{stepNumber}] reviewing with reasoner…");
 
-                ReviewResult review;
-                try
-                {
-                    string[] changed;
-                    lock (artifacts)
-                        changed = artifacts.Select(a => a.RelativePath).ToArray();
-                    var evidence = BuildEvidence(convo, evidenceStart);
-                    review = await _reviewer.ReviewAsync(step.Title, LastAssistant(convo), evidence, changed, reviewProvider!, reviewModel, ct);
-                }
-                catch (Exception ex)
-                {
-                    review = new ReviewResult(true, "review skipped: " + ex.Message);
-                }
+                var (review, mode) = await ReviewAsync(
+                    step.Title, convo, evidenceStart, artifacts, reviewProvider!, reviewModel, ct);
 
                 if (review.Pass)
                 {
                     Emit(EventKind.ReviewPassed,
-                        $"[{stepNumber}] PASS{(string.IsNullOrEmpty(review.Notes) ? "" : ": " + review.Notes)}");
-                    passed = true;
+                        $"[{stepNumber}] PASS ({mode} review){(string.IsNullOrEmpty(review.Notes) ? "" : ": " + review.Notes)}");
+                    outcome = StepOutcomeKind.Succeeded;
                     break;
                 }
 
-                passed = false;
-                Emit(EventKind.ReviewFailed, $"[{stepNumber}] FAIL: {review.Notes}");
+                Emit(EventKind.ReviewFailed, $"[{stepNumber}] FAIL ({mode} review): {review.Notes}");
 
                 if (attempt < maxAttempts)
-                    convo.Add(ChatMessage.User(
-                        $"A reviewer rejected the previous attempt with this feedback: {review.Notes}\n"
-                        + "Please fix the issues and redo this step."));
+                {
+                    RetryAfterReview(convo, conversationStart, mode, review.Notes, "this step");
+                    continue;
+                }
+
+                // Attempts exhausted and still rejected. This used to call MarkDone anyway, so a step
+                // the reviewer had explicitly refused unblocked its dependents and the run still ended
+                // Completed — which removes the only thing a review gate is for.
+                outcome = StepOutcomeKind.ReviewRejected;
+                outcomeReason = "review not passed: " + review.Notes;
             }
 
-            if (failedHard)
+            lock (stepOutcomes)
+                stepOutcomes[step.Id] = outcome;
+
+            // A rejected step puts its work back. Otherwise the gate stops only the REPORT: the run
+            // says Failed while the rejected document — invented commands and all — stays in the
+            // workspace, which is the state a person is most likely to pick up and use.
+            if (outcome == StepOutcomeKind.ReviewRejected && _revertRejectedSteps)
             {
-                var skippedSteps = scheduler.MarkFailed(step.Id);
-                Emit(EventKind.StepCompleted, $"[{stepNumber}/{total}] {step.Title} — FAILED: {failError}");
-                foreach (var sk in skippedSteps)
-                {
-                    // Stamp the skipped step's own number so the UI marks ITS card, not whichever
-                    // card happened to be current.
-                    var skNo = stepNumbers.TryGetValue(sk.Id, out var n) ? n : 0;
-                    events.Writer.TryWrite(Ev(EventKind.StepCompleted,
-                        $"[{skNo}/{total}] {sk.Title} — skipped (dependency failed)",
-                        skNo > 0 ? skNo : (int?)null));
-                }
+                var report = await RevertAsync(storeCheckpoint, writtenThisStep, artifacts, ct);
+                foreach (var line in DescribeRevert(report))
+                    Emit(EventKind.ArtifactReverted, $"[{stepNumber}] {line}");
             }
-            else
+
+            // The card's colour comes from this payload, not from the wording of the summary.
+            void EmitStepDone(string summary, int? no, StepOutcomeKind kind)
+                => events.Writer.TryWrite(new WorkEvent(
+                    Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow,
+                    EventKind.StepCompleted, summary, WorkEventPayload.StepPayload(no, kind)));
+
+            // Succeeded is the ONLY outcome that unblocks what comes after it.
+            if (outcome == StepOutcomeKind.Succeeded)
             {
                 scheduler.MarkDone(step.Id);
                 lock (digest)
                     digest.Add($"{step.Title}: {Gist(LastAssistant(convo))}");
-                Emit(EventKind.StepCompleted,
-                    $"[{stepNumber}/{total}] {step.Title} — {(passed ? "done" : "done (review not passed)")}");
+                EmitStepDone($"[{stepNumber}/{total}] {step.Title} — done", stepNumber, outcome);
+                return;
+            }
+
+            var label = outcome switch
+            {
+                StepOutcomeKind.ReviewRejected => "REVIEW REJECTED",
+                StepOutcomeKind.Incomplete => "INCOMPLETE",
+                _ => "FAILED"
+            };
+
+            var skippedSteps = scheduler.MarkFailed(step.Id);
+            EmitStepDone(
+                $"[{stepNumber}/{total}] {step.Title} — {label}{(string.IsNullOrWhiteSpace(outcomeReason) ? "" : ": " + outcomeReason)}",
+                stepNumber, outcome);
+
+            foreach (var sk in skippedSteps)
+            {
+                // Stamp the skipped step's own number so the UI marks ITS card, not whichever
+                // card happened to be current.
+                var skNo = stepNumbers.TryGetValue(sk.Id, out var n) ? n : 0;
+                lock (stepOutcomes)
+                    stepOutcomes[sk.Id] = StepOutcomeKind.Skipped;
+                EmitStepDone(
+                    $"[{skNo}/{total}] {sk.Title} — skipped (a dependency did not succeed)",
+                    skNo > 0 ? skNo : (int?)null, StepOutcomeKind.Skipped);
             }
         }
 
@@ -363,11 +554,123 @@ public sealed class Orchestrator : IOrchestrator
         await pump;
 
 
-        if (scheduler.HasPending)
+        var cycle = scheduler.HasPending;
+        if (cycle)
             yield return Ev(EventKind.ErrorObserved,
                 "Plan has unresolvable dependencies (a cycle) — remaining steps could not run.");
 
-        yield return Ev(EventKind.TaskCompleted, SummarizeArtifacts(artifacts));
+        StepOutcomeKind[] outcomes;
+        lock (stepOutcomes)
+            outcomes = stepOutcomes.Values.ToArray();
+
+        var runOutcome = RunOutcomeOf(outcomes);
+        if (cycle && runOutcome == RunOutcomeKind.Completed)
+            runOutcome = RunOutcomeKind.Incomplete;
+
+        yield return Terminal(runOutcome, ExplainOutcome(outcomes, cycle));
+    }
+
+    /// <summary>
+    /// The run's outcome from its steps'. Anything that went wrong outranks anything that went
+    /// right: a plan is not finished because most of it finished. Completed requires that every step
+    /// succeeded — which is exactly the guarantee the engine did not have.
+    /// </summary>
+    private static RunOutcomeKind RunOutcomeOf(IReadOnlyCollection<StepOutcomeKind> steps)
+    {
+        if (steps.Count == 0)
+            return RunOutcomeKind.Incomplete;
+
+        if (steps.Any(s => s is StepOutcomeKind.Failed or StepOutcomeKind.ReviewRejected))
+            return RunOutcomeKind.Failed;
+
+        if (steps.Any(s => s is StepOutcomeKind.Incomplete or StepOutcomeKind.Skipped))
+            return RunOutcomeKind.Incomplete;
+
+        return RunOutcomeKind.Completed;
+    }
+
+    /// <summary>A short, honest summary of why a run did not simply complete.</summary>
+    private static string? ExplainOutcome(IReadOnlyCollection<StepOutcomeKind> steps, bool cycle)
+    {
+        var parts = new List<string>();
+
+        var failed = steps.Count(s => s == StepOutcomeKind.Failed);
+        var rejected = steps.Count(s => s == StepOutcomeKind.ReviewRejected);
+        var incomplete = steps.Count(s => s == StepOutcomeKind.Incomplete);
+        var skipped = steps.Count(s => s == StepOutcomeKind.Skipped);
+
+        if (failed > 0) parts.Add($"{failed} step(s) failed");
+        if (rejected > 0) parts.Add($"{rejected} step(s) rejected by the reviewer");
+        if (incomplete > 0) parts.Add($"{incomplete} step(s) did not finish");
+        if (skipped > 0) parts.Add($"{skipped} step(s) skipped");
+        if (cycle) parts.Add("the plan had unresolvable dependencies");
+
+        return parts.Count == 0 ? null : string.Join("; ", parts);
+    }
+
+    /// <summary>
+    /// How a tool loop ended, filled in by <see cref="RunToolLoopAsync"/>. A class, not a return
+    /// value, because an async iterator has nowhere to put one.
+    /// </summary>
+    private sealed class ToolLoopResult
+    {
+        public StepOutcomeKind Kind { get; private set; } = StepOutcomeKind.Incomplete;
+        public string? Reason { get; private set; }
+
+        public bool Succeeded => Kind == StepOutcomeKind.Succeeded;
+
+        public void Set(StepOutcomeKind kind, string? reason)
+        {
+            Kind = kind;
+            Reason = reason;
+        }
+    }
+
+    /// <summary>
+    /// Asks the reviewer about the work just done. Shared by the QuickAction path and by a DAG step,
+    /// so a configured reviewer applies to both — it used to run for plan steps only, while the
+    /// planner was told to prefer QuickAction, which left most ordinary requests unreviewed.
+    ///
+    /// Fails CLOSED: a reviewer that cannot answer has not approved anything.
+    /// </summary>
+    private async Task<(ReviewResult Result, ReviewMode Mode)> ReviewAsync(
+        string title, List<ChatMessage> convo, int evidenceStart, List<ArtifactRef> artifacts,
+        IChatProvider reviewProvider, string reviewModel, CancellationToken ct)
+    {
+        try
+        {
+            string[] changed;
+            lock (artifacts)
+                changed = artifacts.Select(a => a.RelativePath).ToArray();
+
+            var evidence = BuildEvidence(convo, evidenceStart);
+
+            // Which question can even be asked about this step? A step that RAN something is judged
+            // on whether it ran and succeeded. A step that only WROTE something has no exit code to
+            // check, so execution review passes anything — which is how a guide full of invented
+            // package names and made-up command syntax finished green. There, the content itself is
+            // the only thing there is to review.
+            var written = BuildWrittenFiles(convo, evidenceStart);
+            var mode = _reviewContent && !RanACommand(convo, evidenceStart) && written.Count > 0
+                ? ReviewMode.Content
+                : ReviewMode.Execution;
+
+            var result = await _reviewer.ReviewAsync(
+                title, LastAssistant(convo), evidence, changed, reviewProvider, reviewModel, ct,
+                mode, written);
+
+            return (result, mode);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // This used to score an unreachable reviewer as PASS, so a stopped Ollama or a bad key
+            // silently turned every step green: the gate looked configured and enforced nothing.
+            return (new ReviewResult(false, "review error: " + ex.Message), ReviewMode.Execution);
+        }
     }
 
     /// <summary>
@@ -388,9 +691,16 @@ public sealed class Orchestrator : IOrchestrator
     private async IAsyncEnumerable<WorkEvent> RunToolLoopAsync(
         Guid taskId, Guid runId, IChatProvider provider, string model, Worker worker,
         List<ChatMessage> messages, List<ArtifactRef> artifacts, WorkContext context,
-        int? stepNo,
+        int? stepNo, ToolLoopResult loopResult,
         [EnumeratorCancellation] CancellationToken ct)
     {
+        // An async iterator cannot return a value, so the caller passes in the slot the loop fills.
+        // Without it "how did this end" existed only as English inside an event, and every consumer
+        // guessed. Pessimistic until proven otherwise: falling out of the loop means the iteration
+        // cap was reached, which is not success.
+        loopResult.Set(StepOutcomeKind.Incomplete,
+            $"reached the {MaxIterations}-iteration limit without a final answer");
+
         WorkEvent Ev(EventKind kind, string summary)
             => new(Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow, kind, summary,
                    stepNo is { } n ? $"{{\"step\":{n}}}" : null);
@@ -399,6 +709,10 @@ public sealed class Orchestrator : IOrchestrator
             => new(Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow, EventKind.UsageReported,
                    $"tokens: {prompt} in, {completion} out",
                    WorkEventPayload.UsagePayload(prompt, completion, stepNo));
+
+        // A reply that describes a call instead of making one earns exactly ONE re-ask per step; without
+        // the cap a model that keeps explaining itself would burn every iteration on the same nudge.
+        var repairRequested = false;
 
         for (var iteration = 1; iteration <= MaxIterations; iteration++)
         {
@@ -449,6 +763,8 @@ public sealed class Orchestrator : IOrchestrator
             {
                 if (contentBuilder.Length > 0)
                     messages.Add(new ChatMessage(ChatRole.Assistant, contentBuilder.ToString(), null));
+                loopResult.Set(StepOutcomeKind.Incomplete,
+                    $"the model's output was cut off at the token limit (finish={finishReason})");
                 yield return Ev(EventKind.ErrorObserved,
                     $"Model output was cut off at the token limit (finish={finishReason}); stopping this step. "
                     + "Raise max_tokens, or use a model that doesn't spend the whole budget on reasoning.");
@@ -456,29 +772,47 @@ public sealed class Orchestrator : IOrchestrator
             }
 
             var toolCalls = BuildToolCalls(toolBuilders);
+            var replyText = contentBuilder.Length > 0 ? contentBuilder.ToString() : null;
             var recovered = false;
-            if (toolCalls is null && contentBuilder.Length > 0)
+
+            // Prose is NOT an action. A parser cannot tell an intended call from a quoted example, an
+            // explanation or a snippet the user pasted, so by default a JSON-looking reply executes
+            // nothing: the model is asked to re-emit a real tool call instead. The old behaviour stays
+            // available for a weak local model that cannot emit structured calls at all, but it is
+            // opt-in (AllowImplicitToolCalls) precisely because it is a way to talk the agent into acting.
+            var described = toolCalls is null && replyText is not null ? TryRecoverImplicitToolCall(replyText) : null;
+            if (described is not null && _allowImplicitToolCalls)
             {
-                var implicitCall = TryRecoverImplicitToolCall(contentBuilder.ToString());
-                if (implicitCall is not null)
-                {
-                    toolCalls = new List<ToolCall> { implicitCall };
-                    recovered = true;
-                }
+                toolCalls = new List<ToolCall> { described };
+                recovered = true;
             }
 
-            messages.Add(new ChatMessage(
-                ChatRole.Assistant,
-                contentBuilder.Length > 0 ? contentBuilder.ToString() : null,
-                toolCalls));
+            messages.Add(new ChatMessage(ChatRole.Assistant, replyText, toolCalls));
 
             if (toolCalls is null)
-                yield break; // genuine final answer - no tool calls, nothing recoverable either
+            {
+                if (described is not null && !repairRequested)
+                {
+                    repairRequested = true;
+                    messages.Add(ChatMessage.User(
+                        $"Your reply described a '{described.Name}' call in plain text instead of invoking it. "
+                        + "Nothing was executed. If you meant to act, send it again as a real tool call. "
+                        + "If that JSON was only an example or an explanation, reply with your final answer."));
+                    yield return Ev(EventKind.ErrorObserved,
+                        $"The model described a '{described.Name}' call in plain text instead of invoking it — "
+                        + "nothing was executed; asked it to re-send the call properly.");
+                    continue;
+                }
+
+                loopResult.Set(StepOutcomeKind.Succeeded, null);
+                yield break; // genuine final answer - no tool calls
+            }
 
             if (recovered)
                 yield return Ev(EventKind.ErrorObserved,
                     $"The model described a '{toolCalls[0].Name}' call in plain text instead of "
-                    + "actually invoking it - recovered automatically. Verify the result below.");
+                    + "actually invoking it - executed anyway because AllowImplicitToolCalls is on. "
+                    + "Verify the result below.");
 
             foreach (var call in toolCalls)
             {
@@ -491,7 +825,8 @@ public sealed class Orchestrator : IOrchestrator
                 }
 
                 // ── Permission gate: allow / ask / deny ──────────────────────
-                var gate = _permissions.Evaluate(_policy, call.Name, _tools.RequiredLevelOf(call.Name));
+                var gate = _permissions.Evaluate(
+                    EffectivePolicyFor(worker), call.Name, _tools.RequiredLevelOf(call.Name));
                 if (gate != PermissionDecision.Allow)
                 {
                     var approved = false;
@@ -500,13 +835,17 @@ public sealed class Orchestrator : IOrchestrator
                         yield return Ev(EventKind.DecisionRequested,
                             $"Approve tool '{call.Name}'? {Compact(call.ArgumentsJson)}");
 
+                        // Detail is the one-line summary; FullDetail is what will actually run. The
+                        // card must show the second before it can be approved — a 400-character
+                        // PowerShell script used to be approved on its first 120 characters.
                         var decisionRequest = new DecisionRequest(
                             taskId,
                             $"Run tool '{call.Name}'?",
                             $"Arguments: {Compact(call.ArgumentsJson)}",
                             new[] { new DecisionOption("allow", "Allow"), new DecisionOption("deny", "Deny") },
                             RecommendedOptionId: "allow",
-                            Subject: call.Name);
+                            Subject: call.Name,
+                            FullDetail: DescribeCall(call));
 
                         // Parallel steps must not race to put two cards on screen at once.
                         DecisionOutcome outcome;
@@ -535,7 +874,7 @@ public sealed class Orchestrator : IOrchestrator
                     RunId: runId,
                     WorkspaceId: _workspace.Id,
                     Context: context,
-                    PermissionPolicy: PermissionPolicy.PermissiveDefault,
+                    PermissionPolicy: EffectivePolicyFor(worker),
                     WorkspaceRoot: _workspace.RootPath,
                     Artifacts: _artifacts,
                     Services: _services);
@@ -585,11 +924,10 @@ public sealed class Orchestrator : IOrchestrator
         foreach (Match m in JsonFenceRegex.Matches(text))
             candidates.Add(m.Groups[1].Value);
 
-        // Fallback: the model may not have fenced it at all - try the outermost {...} span too.
-        var braceStart = text.IndexOf('{');
-        var braceEnd = text.LastIndexOf('}');
-        if (braceStart >= 0 && braceEnd > braceStart)
-            candidates.Add(text[braceStart..(braceEnd + 1)]);
+        // The old "outermost {...} span" fallback is gone on purpose: it turned any prose containing a
+        // brace into a candidate action, which is how a reply reading "Example, do not execute:" wrote a
+        // file. Only a fenced ```json block is even considered, and even that is a signal to ASK for a
+        // real tool call — never, by itself, permission to run one (see the caller).
 
         foreach (var candidate in candidates)
         {
@@ -737,16 +1075,74 @@ public sealed class Orchestrator : IOrchestrator
         return sb.ToString();
     }
 
+    /// <summary>
+    /// A one-line form for an EVENT LINE. Never for a decision card: shortening what a person is
+    /// asked to approve, while running the whole thing, is how a long script gets approved by its
+    /// first sentence. See <see cref="DescribeCall"/>.
+    /// </summary>
     private static string Compact(string json)
     {
         var flattened = json.Replace('\n', ' ').Replace('\r', ' ');
         return flattened.Length <= 120 ? flattened : flattened[..120] + "…";
     }
 
-    /// <summary>Whether a worker's role is allowed to call the given tool (empty or "*" = all).</summary>
+    /// <summary>
+    /// The complete action a decision authorises, laid out for a person: each argument in full, on
+    /// its own, with newlines intact — a shell script has to be readable as a script. Falls back to
+    /// the raw JSON when it does not parse, because showing something odd beats showing nothing.
+    /// </summary>
+    private static string DescribeCall(ToolCall call)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(call.ArgumentsJson);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+                return call.ArgumentsJson;
+
+            var sb = new StringBuilder();
+            foreach (var property in doc.RootElement.EnumerateObject())
+            {
+                var value = property.Value.ValueKind == JsonValueKind.String
+                    ? property.Value.GetString() ?? string.Empty
+                    : property.Value.ToString();
+
+                sb.Append(property.Name).AppendLine(":");
+                sb.AppendLine(value);
+                sb.AppendLine();
+            }
+
+            return sb.ToString().TrimEnd();
+        }
+        catch
+        {
+            return call.ArgumentsJson;
+        }
+    }
+
+    /// <summary>
+    /// The policy this worker actually runs under: the workspace's autonomy, narrowed by the role's
+    /// own default level.
+    ///
+    /// A role NARROWS, never widens. Worker.DefaultLevel was settable in the worker editor, saved,
+    /// and then read by nothing that mattered — a Reviewer defined as Observe still ran at whatever
+    /// the workspace slider said, so the field described a restriction that did not exist. Narrowing
+    /// does not forbid outright: a tool above the effective level asks for a one-off approval, which
+    /// is what the permission engine already does for anything over the granted autonomy.
+    /// </summary>
+    private PermissionPolicy EffectivePolicyFor(Worker worker)
+    {
+        var level = (PermissionLevel)Math.Min((int)_policy.Level, (int)worker.DefaultLevel);
+        return level == _policy.Level ? _policy : _policy with { Level = level };
+    }
+
+    /// <summary>
+    /// Whether a worker's role is allowed to call the given tool. An EMPTY list means NO tools:
+    /// unchecking every box in the worker editor must narrow the role, not turn it into full access.
+    /// Full access is stated explicitly with "*". Settings written before SchemaVersion 2 are migrated
+    /// on load (see AppSettings.Migrate), so an old empty list does not silently lose its tools.
+    /// </summary>
     private static bool Allows(Worker worker, string tool)
-        => worker.ToolAllowlist.Count == 0
-        || worker.ToolAllowlist.Contains("*")
+        => worker.ToolAllowlist.Contains("*")
         || worker.ToolAllowlist.Contains(tool, StringComparer.OrdinalIgnoreCase);
 
     /// <summary>The real commands and tool outputs added during a step — the reviewer's ground truth.</summary>
@@ -765,6 +1161,143 @@ public sealed class Orchestrator : IOrchestrator
         var text = sb.ToString().Trim();
         if (text.Length == 0) return "(no tools were run in this step)";
         return text.Length > 3000 ? text[..3000] + "\n… (truncated)" : text;
+    }
+
+    /// <summary>
+    /// Prepares the conversation for another attempt after a review rejected the work.
+    ///
+    /// For a step that only WROTE something, the rejected draft is removed from the transcript
+    /// first. Keeping it costs tokens twice over (the tool call carries the whole file, and so does
+    /// the next prompt) and anchors the model on the version it was just told is wrong — with
+    /// num_ctx at 8192 a second retry was measured at 6.7k tokens, close enough to the ceiling that
+    /// Ollama would have started silently dropping the system prompt, honesty rules included. The
+    /// model rewrites the whole file on every attempt anyway, so nothing is lost.
+    ///
+    /// For a step that RAN something, the transcript stays: the command output IS the evidence, and
+    /// discarding it would mean re-running commands that have already had their effect.
+    /// </summary>
+    private static void RetryAfterReview(
+        List<ChatMessage> convo, int conversationStart, ReviewMode mode, string notes, string what)
+    {
+        if (mode == ReviewMode.Content && convo.Count > conversationStart)
+            convo.RemoveRange(conversationStart, convo.Count - conversationStart);
+
+        convo.Add(ChatMessage.User(
+            $"A reviewer rejected the previous attempt with this feedback: {notes}\n"
+            + (mode == ReviewMode.Content
+                ? $"That attempt has been discarded. Redo {what} from scratch, correcting every point above."
+                : $"Please fix the issues and redo {what}.")));
+    }
+
+    /// <summary>
+    /// Puts back what the rejected work produced, and takes it out of the run's artifact list so the
+    /// summary does not go on claiming files that are no longer there.
+    /// </summary>
+    private async Task<RevertReport> RevertAsync(
+        int checkpoint, IReadOnlyCollection<string> written,
+        List<ArtifactRef> artifacts, CancellationToken ct)
+    {
+        if (written.Count == 0)
+            return RevertReport.Empty;
+
+        RevertReport report;
+        try
+        {
+            report = await _artifacts.RevertToAsync(checkpoint, written, ct);
+        }
+        catch (Exception ex)
+        {
+            // Failing to undo is worth saying out loud; it is not worth failing the run twice over.
+            return new RevertReport(Array.Empty<string>(), new[] { $"(revert failed: {ex.Message})" });
+        }
+
+        if (report.Reverted.Count > 0)
+        {
+            lock (artifacts)
+                artifacts.RemoveAll(a =>
+                    report.Reverted.Contains(a.RelativePath, StringComparer.OrdinalIgnoreCase));
+        }
+
+        return report;
+    }
+
+    /// <summary>One line per thing worth telling the user about a revert; nothing when nothing happened.</summary>
+    private static IEnumerable<string> DescribeRevert(RevertReport report)
+    {
+        if (report.Reverted.Count > 0)
+            yield return "Rejected work put back: " + string.Join(", ", report.Reverted);
+
+        if (report.Kept.Count > 0)
+            yield return "Left as it is because it changed after the step wrote it: "
+                       + string.Join(", ", report.Kept);
+    }
+
+    /// <summary>Tools that make something happen outside the workspace's files.</summary>
+    private static readonly HashSet<string> CommandTools =
+        new(StringComparer.OrdinalIgnoreCase) { "run_command", "run_powershell", "git", "docker" };
+
+    /// <summary>
+    /// Whether this step actually executed anything. Decides which question the reviewer is asked:
+    /// a step with a command has a real exit code to be judged on, a step without one does not.
+    /// </summary>
+    private static bool RanACommand(List<ChatMessage> messages, int start)
+    {
+        for (var i = Math.Max(0, start); i < messages.Count; i++)
+            if (messages[i].Role == ChatRole.Assistant && messages[i].ToolCalls is { Count: > 0 } calls)
+                foreach (var call in calls)
+                    if (CommandTools.Contains(call.Name))
+                        return true;
+
+        return false;
+    }
+
+    /// <summary>
+    /// The content this step wrote, taken from the write_file calls themselves rather than from disk:
+    /// staging means the file may not be on disk at all, and this is what the step is claiming to have
+    /// produced either way. The LAST write to a path wins — an earlier draft it replaced is not what
+    /// the user ends up with.
+    /// </summary>
+    private static IReadOnlyList<WrittenFile> BuildWrittenFiles(List<ChatMessage> messages, int start)
+    {
+        var byPath = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var order = new List<string>();
+
+        for (var i = Math.Max(0, start); i < messages.Count; i++)
+        {
+            if (messages[i].Role != ChatRole.Assistant || messages[i].ToolCalls is not { Count: > 0 } calls)
+                continue;
+
+            foreach (var call in calls)
+            {
+                if (!string.Equals(call.Name, "write_file", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                try
+                {
+                    using var doc = JsonDocument.Parse(call.ArgumentsJson);
+                    if (doc.RootElement.ValueKind != JsonValueKind.Object
+                        || !doc.RootElement.TryGetProperty("path", out var p)
+                        || p.ValueKind != JsonValueKind.String
+                        || !doc.RootElement.TryGetProperty("content", out var c)
+                        || c.ValueKind != JsonValueKind.String)
+                        continue;
+
+                    var path = p.GetString();
+                    if (string.IsNullOrWhiteSpace(path))
+                        continue;
+
+                    if (!byPath.ContainsKey(path))
+                        order.Add(path);
+                    byPath[path] = c.GetString() ?? "";
+                }
+                catch (JsonException)
+                {
+                    // Arguments the tool itself would reject are not evidence of content.
+                }
+            }
+        }
+
+        return order.Select(path => new WrittenFile(path, byPath[path])).ToArray();
     }
 
     /// <summary>Accumulates a streamed tool call across deltas.</summary>
