@@ -1,4 +1,4 @@
-﻿namespace Enactive.Core.Templates;
+namespace Enactive.Core.Templates;
 
 using Enactive.Core.Permissions;
 
@@ -172,9 +172,17 @@ public static class BuiltinTemplates
                     Description: "Relative to the workspace root.", Default: "review.md")
             },
             // It writes its report, so write_file stays; editing and moving source do not.
+            //
+            // git is NOT denied, and that was a defect on the day this shipped. The goal's own
+            // default scope is "everything that has changed since the last commit", so the template
+            // asked the model to review a diff and then forbade the only tool that produces one. A
+            // deny that contradicts the template's own goal is not caution, it is a template that
+            // cannot do its job - and since run_command is allowed here, denying git never stopped
+            // anything anyway. What keeps this review from committing is that it is a review: the
+            // goal says to change nothing except the report, and the reviewer checks that.
             Permissions: new PermissionCeiling(
                 MaxLevel: PermissionLevel.Execute,
-                Deny: new[] { "edit_file", "move_file", "git", "docker" }),
+                Deny: new[] { "edit_file", "move_file", "docker" }),
             // No criteria, deliberately. A review's verdict IS an opinion, and there is no exit code
             // for one - so the run report will say "nothing verified this run", which is true.
             Limits: new ExecutionLimits(MaxSteps: 8),

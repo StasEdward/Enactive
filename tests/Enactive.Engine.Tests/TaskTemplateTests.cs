@@ -351,7 +351,7 @@ public sealed class TaskTemplateTests : IDisposable
         Assert.Contains("create_directory", real);
 
         foreach (var template in BuiltinTemplates.All)
-        foreach (var named in (template.Ceiling.Deny ?? Array.Empty<string>()).Concat(template.Ceiling.AskBefore ?? Array.Empty<string>()))
+        foreach (var named in template.Ceiling.DenyList.Concat(template.Ceiling.AskBeforeList))
             Assert.True(
                 real.Contains(named),
                 $"'{template.Id}' names the tool '{named}', which does not exist. "

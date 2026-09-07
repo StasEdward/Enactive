@@ -66,6 +66,11 @@ public sealed record PermissionCeiling(
     IReadOnlyList<string>? Deny = null)
 {
     public static readonly PermissionCeiling Open = new();
+
+    /// <summary>The lists as lists, so a caller never writes <c>?? Array.Empty&lt;string&gt;()</c>.</summary>
+    public IReadOnlyList<string> DenyList => Deny ?? Array.Empty<string>();
+
+    public IReadOnlyList<string> AskBeforeList => AskBefore ?? Array.Empty<string>();
 }
 
 /// <summary>

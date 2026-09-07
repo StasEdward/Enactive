@@ -1389,7 +1389,19 @@ public sealed class Orchestrator : IOrchestrator
                         openFailures.Failed(call, why);
                         journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson),
                                        ActionOutcome.Refused, why);
-                        messages.Add(ChatMessage.Tool(call.Id, "ERROR: the user did not permit this action."));
+
+                        // The model is told WHICH refusal this was. Both used to arrive as "the user
+                        // did not permit this action" - the distinction was computed, recorded in the
+                        // journal, and then thrown away on the one path where it changes behaviour.
+                        // A model told a person refused it stops and apologises, which is right; a
+                        // model told a tool is off for this run should stop asking for that tool and
+                        // do the job another way, and it could not tell the two apart.
+                        messages.Add(ChatMessage.Tool(call.Id, gate == PermissionDecision.Ask
+                            ? "ERROR: the user did not permit this action."
+                            : $"ERROR: the tool '{call.Name}' is not permitted for this run and will "
+                              + "not become permitted. Do not call it again. If another permitted tool "
+                              + "can do the same job, use that instead; if none can, say what you "
+                              + "could not do and why."));
                         continue;
                     }
                 }
