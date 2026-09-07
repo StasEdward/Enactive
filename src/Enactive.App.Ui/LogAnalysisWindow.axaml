@@ -15,12 +15,25 @@
 
             <StackPanel DockPanel.Dock="Bottom" Classes="actions">
                 <TextBlock Classes="hint" VerticalAlignment="Center" Margin="0,0,10,0" x:Name="Cost" />
-                <Button Content="Copy" Click="OnCopy" />
+                <ToggleButton x:Name="ShowSource" Content="Source"
+                              ToolTip.Tip="Show the model's answer as it was written, in Markdown." />
+                <Button Content="Copy" Click="OnCopy"
+                        ToolTip.Tip="Copies the answer as Markdown, whichever view is showing." />
                 <Button Classes="primary" Content="Close" Click="OnClose" />
             </StackPanel>
 
-            <TextBox x:Name="Answer" Classes="multiline" IsReadOnly="True"
-                     AcceptsReturn="True" TextWrapping="Wrap" />
+            <Panel>
+                <!-- Rendered: headings, bullets, bold and code, all still selectable. -->
+                <ScrollViewer x:Name="Rendered">
+                    <ContentControl x:Name="Body" />
+                </ScrollViewer>
+
+                <!-- And the source, because a renderer that handles a subset must never be the only
+                     way to see the answer: anything it did not understand is readable here. -->
+                <TextBox x:Name="Source" Classes="multiline" IsReadOnly="True" IsVisible="False"
+                         AcceptsReturn="True" TextWrapping="Wrap"
+                         FontFamily="Consolas, Cascadia Mono, monospace" />
+            </Panel>
         </DockPanel>
     </Grid>
 </Window>
