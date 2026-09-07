@@ -2,6 +2,7 @@ namespace Enactive.App.Ui.ViewModels;
 
 using System.Collections.ObjectModel;
 using Enactive.App.Ui.Mvvm;
+using Enactive.Providers;
 using Enactive.Core.Providers;
 
 /// <summary>
@@ -91,12 +92,9 @@ internal sealed class ProviderEditViewModel : ObservableObject
         Status = "loading…";
         try
         {
-            var models = Kind == ProviderKind.Anthropic
-                ? await ModelFetch.AnthropicAsync(
-                    Http,
-                    ApiKey,
-                    ModelFetch.ParseHeaders(HeadersText).TryGetValue("anthropic-workspace-id", out var wid) ? wid : null)
-                : await ModelFetch.OllamaAsync(Http, BaseUrl);
+            // Which catalogue a provider has is a fact about the provider, and lives with it.
+            var models = await ModelFetch.ForAsync(
+                Http, Kind, BaseUrl, ApiKey, ModelFetch.ParseHeaders(HeadersText));
 
             FetchedModels.Clear();
             foreach (var m in models)
