@@ -128,7 +128,7 @@ public sealed class Reviewer
             prompt, output);
     }
 
-    private static string BuildExecutionUserPrompt(
+    internal static string BuildExecutionUserPrompt(
         string stepTitle, string coderOutput, string executionEvidence, IReadOnlyList<string> artifacts)
     {
         var files = artifacts.Count == 0 ? "(none)" : string.Join(", ", artifacts);
@@ -138,9 +138,12 @@ public sealed class Reviewer
              + $"Tool execution evidence — the ACTUAL commands run and their real stdout/stderr/exit codes "
              + $"(this is the ground truth; the agent's own words above may be wrong or invented):\n{executionEvidence}\n\n"
              + $"Files changed: {files}\n\n"
-             + "Judge ONLY from the evidence. FAIL if: the step required running a command but none was actually "
-             + "run; a required command failed (non-zero exit or an error in its output); or the reported/saved "
-             + "result is fabricated or a placeholder value not present in the real tool output. Otherwise PASS.";
+             + "Judge ONLY from the evidence, and judge the ANSWER — not which tools it was reached with. "
+             + "FAIL if: the report above leans on a command that is not in the evidence (it claims a build "
+             + "succeeded, a test passed, a value was printed); a command that DID run failed (non-zero exit "
+             + "or an error in its output) and the report does not account for it; or the reported/saved result "
+             + "is fabricated or a placeholder value not present in the real tool output. A step that only read "
+             + "and listed has not failed for that — for an analysis step, reading IS the work. Otherwise PASS.";
     }
 
     internal static string BuildContentUserPrompt(
@@ -234,8 +237,12 @@ public sealed class Reviewer
         + "Trust the execution evidence (actual commands + their real output/exit codes) over the agent's own summary, "
         + "which may be mistaken or fabricated. Respond with ONLY a JSON object, no prose and no code fences: "
         + "{\"verdict\":\"pass\" or \"fail\",\"notes\":\"short, specific feedback\"}. "
-        + "Fail if the required command was never actually run, a required command failed, or a reported/saved value "
-        + "is fabricated or a placeholder not present in the real output. Otherwise pass.\n\n"
+        // "the REQUIRED command" was the wording, and it made the reviewer decide for itself what a
+        // step required. Anchored to the report instead: a command matters here when the answer
+        // leans on it. See the paragraph on choosing tools below.
+        + "Fail if the agent's report leans on a command that was never run, a command it did run "
+        + "failed, or a reported/saved value is fabricated or a placeholder not present in the real "
+        + "output. Otherwise pass.\n\n"
         // The clause that stops the reviewer failing work it simply could not see. On 2026-09-07 the
         // evidence was cut after the first two calls and it concluded, correctly from what it had,
         // that no source files were ever read. Five had been. Every call is listed now, and this
@@ -244,7 +251,19 @@ public sealed class Reviewer
         + "A result may be shortened and says so where it is: a shortened result is still a call that "
         + "HAPPENED, and is never grounds to say the work was not done. Judge by the calls listed. If "
         + "a call you would expect is genuinely absent from the list, that is a real finding; if you "
-        + "can see the call and only part of its output, it is not.";
+        + "can see the call and only part of its output, it is not.\n\n"
+        // Added 2026-09-07 20:16. A step titled "Analyze test coverage and identify gaps" read the
+        // test project and two source files and produced a specific, correct analysis. It was failed
+        // for "no actual analysis or test coverage commands were executed" — a requirement nobody
+        // stated, inferred from the step's TITLE. The retry then ran commands to satisfy the
+        // reviewer rather than to learn anything, and the run died on one of them.
+        + "WHICH TOOLS a step uses are the agent's to choose. Reading and listing IS the work of an "
+        + "analysis, review or planning step, and many steps correctly run no command at all — a "
+        + "step is never deficient merely for not having run one. So do not ask whether a command "
+        + "OUGHT to have been run; ask whether THE ANSWER IS SUPPORTED. Fail when the agent reports "
+        + "something only a command could have produced — a build that succeeded, a test that "
+        + "passed, a version or a measurement it printed — and no such call is in the evidence. An "
+        + "answer drawn from files the evidence shows it read is supported, however few commands it ran.";
 
     // Deliberately narrow. A content reviewer that fails on anything it is merely unsure about blocks
     // every run and gets switched off, so it is told to fail only on a specific, nameable falsehood —
