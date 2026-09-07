@@ -1,4 +1,4 @@
-﻿namespace Enactive.Workspace;
+namespace Enactive.Workspace;
 
 using System.Globalization;
 using System.Text.Json;
@@ -68,6 +68,25 @@ public sealed class MySqlRunStore : IRunStore
         command.Parameters.AddWithValue("@usage",
             record.Usage is null ? DBNull.Value : JsonSerializer.Serialize(record.Usage, Json));
 
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    /// <summary>
+    /// Scoped to THIS workspace, like every other query here. One database can hold several
+    /// workspaces' runs, and a delete that matched on run id alone would reach into another
+    /// workspace's history from a window that is not showing it.
+    /// </summary>
+    public async Task DeleteAsync(Guid runId, CancellationToken ct)
+    {
+        await EnsureSchemaAsync(ct);
+
+        await using var connection = new MySqlConnection(_connectionString);
+        await connection.OpenAsync(ct);
+
+        using var command = connection.CreateCommand();
+        command.CommandText = "DELETE FROM runs WHERE run_id = @run_id AND workspace_id = @workspace_id;";
+        command.Parameters.AddWithValue("@run_id", runId.ToString());
+        command.Parameters.AddWithValue("@workspace_id", _workspaceId.ToString());
         await command.ExecuteNonQueryAsync(ct);
     }
 

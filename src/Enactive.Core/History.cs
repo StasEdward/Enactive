@@ -1,4 +1,4 @@
-﻿namespace Enactive.Core.History;
+namespace Enactive.Core.History;
 
 /// <summary>
 /// A persisted event within a run (Timeline is a projection over these).
@@ -74,4 +74,14 @@ public interface IRunStore
 {
     Task SaveAsync(RunRecord record, CancellationToken ct);
     Task<IReadOnlyList<RunRecord>> LoadAllAsync(CancellationToken ct);
+
+    /// <summary>
+    /// Forgets one run. A run that is not there is not an error - it is the goal.
+    ///
+    /// <para>This removes the RECORD: what was asked, what the engine did, and the paths it wrote.
+    /// It does not touch the files themselves. Those are the user's work sitting in their workspace,
+    /// and a history window is no place to delete them from - somebody clearing a list of old runs
+    /// is tidying a list, not asking for their code back.</para>
+    /// </summary>
+    Task DeleteAsync(Guid runId, CancellationToken ct);
 }

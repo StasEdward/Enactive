@@ -274,15 +274,32 @@
                         <DataTemplate x:DataType="vm:RunListItemViewModel">
                             <Border Classes="card" BorderBrush="{Binding StatusBrush}"
                                     ToolTip.Tip="{Binding Tooltip}">
-                                <StackPanel>
-                                    <!-- NoWrap as well as trimming: trimming alone cuts a long
-                                         line, and a title with a newline in it still became four.
-                                         The title is one line now; this is what keeps it one. -->
-                                    <TextBlock Classes="cardTitle" Text="{Binding Title}"
-                                               TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
-                                    <TextBlock Classes="cardMeta" Text="{Binding Meta}"
-                                               TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
-                                </StackPanel>
+                                <Grid ColumnDefinitions="*,Auto">
+                                    <StackPanel>
+                                        <!-- NoWrap as well as trimming: trimming alone cuts a long
+                                             line, and a title with a newline in it still became four.
+                                             The title is one line now; this is what keeps it one. -->
+                                        <TextBlock Classes="cardTitle" Text="{Binding Title}"
+                                                   TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
+                                        <TextBlock Classes="cardMeta" Text="{Binding Meta}"
+                                                   TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
+                                    </StackPanel>
+                                    <!-- Visible, like the row actions in every other list here.
+                                         Hiding it until hover would leave an invisible button that
+                                         still takes the click - a trap on a delete, and the reason
+                                         to make it discoverable instead is that the confirmation is
+                                         what actually guards it. -->
+                                    <Button Grid.Column="1" Classes="rowIcon destructive"
+                                            VerticalAlignment="Top" Margin="6,0,0,0"
+                                            Command="{Binding RemoveCommand}"
+                                            ToolTip.Tip="Delete this run from the history">
+                                        <Viewbox Width="15" Height="15">
+                                            <Canvas Width="24" Height="24">
+                                                <Path Data="M 5,7 L 19,7 M 10,7 L 10,5 L 14,5 L 14,7 M 7,7 L 8,20 L 16,20 L 17,7 M 10.5,10 L 10.5,17 M 13.5,10 L 13.5,17" />
+                                            </Canvas>
+                                        </Viewbox>
+                                    </Button>
+                                </Grid>
                             </Border>
                         </DataTemplate>
                     </ListBox.ItemTemplate>

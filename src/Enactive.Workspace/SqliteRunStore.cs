@@ -1,4 +1,4 @@
-﻿namespace Enactive.Workspace;
+namespace Enactive.Workspace;
 
 using System.Globalization;
 using System.Text.Json;
@@ -59,6 +59,19 @@ public sealed class SqliteRunStore : IRunStore
         // what the run started from, so two runs can be compared by comparing their specifications.
         command.Parameters.AddWithValue("$spec", (object?)record.Spec ?? DBNull.Value);
 
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task DeleteAsync(Guid runId, CancellationToken ct)
+    {
+        await EnsureSchemaAsync(ct);
+
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(ct);
+
+        using var command = connection.CreateCommand();
+        command.CommandText = "DELETE FROM runs WHERE run_id = $run_id;";
+        command.Parameters.AddWithValue("$run_id", runId.ToString());
         await command.ExecuteNonQueryAsync(ct);
     }
 

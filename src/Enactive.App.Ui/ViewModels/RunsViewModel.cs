@@ -15,9 +15,10 @@ using Enactive.Core.Templates;
 /// </summary>
 internal sealed class RunListItemViewModel
 {
-    public RunListItemViewModel(RunRecord record)
+    public RunListItemViewModel(RunRecord record, Action<RunListItemViewModel>? remove = null)
     {
         Record = record;
+        RemoveCommand = new RelayCommand(() => remove?.Invoke(this), () => remove is not null);
 
         // Repaired on the way OUT, not only on the way in: history recorded before titles were
         // one line still has to read properly, and rewriting somebody's stored runs in place to fix
@@ -32,6 +33,9 @@ internal sealed class RunListItemViewModel
 
     public RunRecord Record { get; }
     public string Title { get; }
+
+    /// <summary>Forgets this run. The window asks first; the row only reports the click.</summary>
+    public RelayCommand RemoveCommand { get; }
     public string Meta { get; }
     public string Tooltip { get; }
     public IBrush StatusBrush { get; }
@@ -372,6 +376,12 @@ internal sealed class RunsViewModel : ObservableObject
     /// <summary>A row was picked. The window decides what "open" means; the list only reports it.</summary>
     public event Action<RunRecord>? OpenRequested;
 
+    /// <summary>
+    /// A row's bin was pressed. The window owns the store and the confirmation dialog, so it does
+    /// the asking and the deleting; the list only reports the click.
+    /// </summary>
+    public event Action<RunRecord>? DeleteRequested;
+
     public ObservableCollection<RunListItemViewModel> Items { get; } = new();
 
     public string Status { get => _status; set => Set(ref _status, value); }
@@ -405,7 +415,7 @@ internal sealed class RunsViewModel : ObservableObject
 
         Items.Clear();
         foreach (var record in records.OrderByDescending(r => r.StartedAt))
-            Items.Add(new RunListItemViewModel(record));
+            Items.Add(new RunListItemViewModel(record, row => DeleteRequested?.Invoke(row.Record)));
 
         Status = Items.Count == 0
             ? "No runs recorded in this workspace."

@@ -136,6 +136,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         _vm.TemplatesRequested += ShowTemplates;
         _vm.Runs.RefreshRequested += () => _ = LoadRunsAsync();
         _vm.Runs.OpenRequested += record => _vm.ShowPastRun(BuildPastRun(record));
+        _vm.Runs.DeleteRequested += record => _ = DeleteRunAsync(record);
         _vm.WorkspacePathChanged += RefreshWorkspaces;
         _vm.WorkspaceSwitchRequested += SwitchWorkspace;
         _vm.WorkspaceRenameRequested += path => _ = RenameWorkspaceAsync(path);
@@ -1448,6 +1449,53 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         {
             item.Status = "error: " + ex.Message;
         }
+    }
+
+    /// <summary>
+    /// Forgets one run, after asking.
+    ///
+    /// <para>What goes is the RECORD - what was asked, what the engine did, and the paths it wrote.
+    /// The files themselves stay exactly where they are: they are the user's work sitting in their
+    /// workspace, and somebody pruning a list of old runs is tidying a list, not asking for their
+    /// code back. The dialog says so, because a delete that is vaguer than what it does gets
+    /// answered by guessing.</para>
+    /// </summary>
+    private async Task DeleteRunAsync(RunRecord record)
+    {
+        var artifacts = record.Artifacts.Count;
+        if (!await ConfirmWindow.AskAsync(
+                this,
+                $"Delete the run “{RunTitle.For(record)}”?",
+                $"Its history goes: what was asked, every step, and the {record.Events.Count} events "
+                + "behind it. This cannot be undone."
+                + (artifacts > 0
+                    ? $" The {artifacts} file(s) it wrote stay in your workspace — only the record of "
+                      + "them goes."
+                    : ""),
+                "Delete", "Keep"))
+            return;
+
+        var path = _vm.WorkspacePath.Trim();
+        if (string.IsNullOrEmpty(path))
+            return;
+
+        try
+        {
+            await RunStoreFactory.Create(WorkspaceFrom(path)).DeleteAsync(record.RunId, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            // Said out loud and the list left alone. A row that vanishes from the screen while the
+            // record is still in the store is a lie the next Refresh exposes.
+            _vm.Runs.Fail("Could not delete that run: " + ex.Message);
+            return;
+        }
+
+        // Reading a run that no longer exists is worse than being sent back to the live one.
+        if (_vm.PastRun?.Record.RunId == record.RunId)
+            _vm.ShowLiveRun();
+
+        await LoadRunsAsync();
     }
 
     /// <summary>

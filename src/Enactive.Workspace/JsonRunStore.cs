@@ -31,6 +31,22 @@ public sealed class JsonRunStore : IRunStore
         await JsonSerializer.SerializeAsync(stream, record, Options, ct);
     }
 
+    /// <summary>
+    /// Deletes the file this run lives in. The id is in the NAME, so nothing has to be opened to
+    /// find it - which also means a file too corrupt to read can still be removed, and that is
+    /// exactly the one somebody most wants gone.
+    /// </summary>
+    public Task DeleteAsync(Guid runId, CancellationToken ct)
+    {
+        if (Directory.Exists(_directory))
+            foreach (var file in Directory.EnumerateFiles(_directory, $"*_{runId:N}.json"))
+                try { File.Delete(file); }
+                catch (IOException) { throw; }
+                catch (UnauthorizedAccessException) { throw; }
+
+        return Task.CompletedTask;
+    }
+
     public async Task<IReadOnlyList<RunRecord>> LoadAllAsync(CancellationToken ct)
     {
         if (!Directory.Exists(_directory))

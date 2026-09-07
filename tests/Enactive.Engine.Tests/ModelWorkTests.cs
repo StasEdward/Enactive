@@ -216,5 +216,11 @@ public sealed class ModelWorkTests
 
         public Task<IReadOnlyList<Enactive.Core.History.RunRecord>> LoadAllAsync(CancellationToken ct)
             => Task.FromResult<IReadOnlyList<Enactive.Core.History.RunRecord>>(Saved);
+
+        public Task DeleteAsync(Guid runId, CancellationToken ct)
+        {
+            Saved.RemoveAll(r => r.RunId == runId);
+            return Task.CompletedTask;
+        }
     }
 }
