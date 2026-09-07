@@ -15,7 +15,40 @@ using Enactive.Core.Tasks;
 /// </summary>
 public sealed record PlanResult(
     IntentDisposition Disposition, string Title, Plan? Plan,
-    int PromptTokens = 0, int CompletionTokens = 0);
+    int PromptTokens = 0, int CompletionTokens = 0,
+    PlanReadout Readout = PlanReadout.Understood);
+
+/// <summary>
+/// On what basis this run is doing what it is doing.
+///
+/// <para>Three different things used to arrive as the same value — a QuickAction under a title cut
+/// from the request — and nothing anywhere could tell them apart: the model DECIDING the request is
+/// one action, the model answering "task" with no steps in it, and nobody being able to read the
+/// answer at all. The last of those is a fallback, not a decision, and a genuine multi-step request
+/// collapsing into one unplanned action is exactly the kind of thing a person needs told.</para>
+///
+/// <para>It is a value rather than a sentence for the usual reason: rewording a summary must not
+/// change what a reader of the run can find out.</para>
+/// </summary>
+public enum PlanReadout
+{
+    /// <summary>The model answered in the shape it was asked for, and this is what it said.</summary>
+    Understood,
+
+    /// <summary>
+    /// It said "task" and listed no steps. A task with nothing in it is a quick action, which is a
+    /// documented rule rather than a failure - but it is still not the same as being told "one
+    /// action", and a planner that keeps doing it is a planner that is not working.
+    /// </summary>
+    TaskWithNoSteps,
+
+    /// <summary>
+    /// Two answers, neither of them readable. This runs as a single action because the request still
+    /// has to be acted on and refusing it would be worse - NOT because anything decided it has one
+    /// step. The run says so out loud.
+    /// </summary>
+    Unreadable
+}
 
 /// <summary>
 /// Turns an intent into a routing decision + optional DAG plan with one LLM call (PLAN_v2 §3). Steps may
@@ -34,16 +67,42 @@ public sealed class Planner
         };
 
         var completion = await provider.CompleteAsync(new ChatRequest(model, messages, Temperature: 0.0), ct);
-        return Parse(completion.Message.Content ?? "", request) with
-        {
-            PromptTokens = completion.PromptTokens ?? 0,
-            CompletionTokens = completion.CompletionTokens ?? 0
-        };
+        var answer = completion.Message.Content ?? "";
+
+        var prompt = completion.PromptTokens ?? 0;
+        var output = completion.CompletionTokens ?? 0;
+
+        if (Parse(answer, request) is { } plan)
+            return plan with { PromptTokens = prompt, CompletionTokens = output };
+
+        // Nothing readable came back. Ask once more, showing what arrived and exactly what shape was
+        // wanted - the same recovery the reviewer does, and for the same reason: a model that
+        // wandered off format usually returns to it when told precisely what to produce. The cost is
+        // one round trip on a path that should be rare, and what it buys is a real plan instead of a
+        // multi-step request silently becoming one unplanned action.
+        messages.Add(new ChatMessage(ChatRole.Assistant, answer, null));
+        messages.Add(ChatMessage.User(RepairPrompt));
+
+        var retry = await provider.CompleteAsync(new ChatRequest(model, messages, Temperature: 0.0), ct);
+
+        prompt += retry.PromptTokens ?? 0;
+        output += retry.CompletionTokens ?? 0;
+
+        if (Parse(retry.Message.Content ?? "", request) is { } retried)
+            return retried with { PromptTokens = prompt, CompletionTokens = output };
+
+        // Twice with nothing readable. The request is still acted on - refusing it would be worse
+        // than doing the obvious thing with it - but this is a FALLBACK and the difference travels
+        // with the result instead of disappearing into a title.
+        return new PlanResult(
+            IntentDisposition.QuickAction, Truncate(request, 80), null,
+            prompt, output, PlanReadout.Unreadable);
     }
 
-    private static PlanResult Parse(string text, string fallbackTitle)
+    /// <summary>Returns the plan, or null when the answer carried none.</summary>
+    private static PlanResult? Parse(string text, string fallbackTitle)
     {
-        var json = ExtractJson(StripThink(text));
+        var json = ModelText.ExtractJsonObject(ModelText.StripThink(text));
         if (json is not null)
         {
             try
@@ -51,8 +110,27 @@ public sealed class Planner
                 using var doc = JsonDocument.Parse(json);
                 var root = doc.RootElement;
 
-                var disposition = root.TryGetProperty("disposition", out var d)
-                    && string.Equals(d.GetString(), "task", StringComparison.OrdinalIgnoreCase)
+                // The answer has to be recognisably OUR shape. Any JSON object at all used to be
+                // accepted, and one without a "disposition" became a QuickAction - so {"a":1}, or a
+                // fragment of something else the model was writing, came back indistinguishable from
+                // a decision. It has to SAY one of the two dispositions, or list steps, which is an
+                // unambiguous statement of a plan on its own.
+                var stated = root.TryGetProperty("disposition", out var d)
+                             && d.ValueKind == JsonValueKind.String
+                             ? d.GetString()
+                             : null;
+
+                var isTask = string.Equals(stated, "task", StringComparison.OrdinalIgnoreCase);
+                var isQuick = string.Equals(stated, "quick_action", StringComparison.OrdinalIgnoreCase);
+
+                var listsSteps = root.TryGetProperty("steps", out var statedSteps)
+                                 && statedSteps.ValueKind == JsonValueKind.Array
+                                 && statedSteps.GetArrayLength() > 0;
+
+                if (!isTask && !isQuick && !listsSteps)
+                    return null;
+
+                var disposition = isTask || (!isQuick && listsSteps)
                     ? IntentDisposition.Task
                     : IntentDisposition.QuickAction;
 
@@ -95,29 +173,25 @@ public sealed class Planner
                     }
                 }
 
-                // A "task" with no steps is really a quick action.
+                // A "task" with no steps is really a quick action - a documented rule, and still
+                // worth recording as what it was rather than as a decision to do one thing.
+                var readout = PlanReadout.Understood;
                 if (disposition == IntentDisposition.Task && specs.Count == 0)
+                {
                     disposition = IntentDisposition.QuickAction;
+                    readout = PlanReadout.TaskWithNoSteps;
+                }
 
                 var plan = disposition == IntentDisposition.Task ? DagPlan.FromSpecs(specs) : null;
-                return new PlanResult(disposition, Truncate(title, 80), plan);
+                return new PlanResult(disposition, Truncate(title, 80), plan, Readout: readout);
             }
             catch (JsonException)
             {
-                // fall through to the safe default
+                // Not readable. The caller re-asks once and, failing that, says so.
             }
         }
 
-        return new PlanResult(IntentDisposition.QuickAction, Truncate(fallbackTitle, 80), null);
-    }
-
-    private static string StripThink(string text)
-    {
-        const string open = "<think>";
-        const string close = "</think>";
-        var start = text.IndexOf(open, StringComparison.OrdinalIgnoreCase);
-        var end = text.IndexOf(close, StringComparison.OrdinalIgnoreCase);
-        return start >= 0 && end > start ? text.Remove(start, end + close.Length - start) : text;
+        return null;
     }
 
     private static StepComplexity ParseComplexity(JsonElement el)
@@ -132,15 +206,17 @@ public sealed class Planner
         return StepComplexity.Normal;
     }
 
-    private static string? ExtractJson(string text)
-    {
-        var start = text.IndexOf('{');
-        var end = text.LastIndexOf('}');
-        return start >= 0 && end > start ? text[start..(end + 1)] : null;
-    }
-
     private static string Truncate(string value, int max)
         => value.Length <= max ? value : value[..max];
+
+    /// <summary>Shown when the first answer could not be read: what was wanted, and nothing else.</summary>
+    private const string RepairPrompt =
+        "That reply did not contain a plan. Reply with NOTHING but a single JSON object, no prose, "
+        + "no code fences, no explanation before or after it, in exactly this shape:\n"
+        + "{\"disposition\":\"quick_action\",\"title\":\"short title\",\"steps\":[]}\n"
+        + "or, when the request genuinely needs several stages:\n"
+        + "{\"disposition\":\"task\",\"title\":\"short title\","
+        + "\"steps\":[{\"title\":\"...\",\"dependsOn\":[],\"complexity\":\"normal\"}]}";
 
     private const string SystemPrompt =
         "You are a planning assistant for a developer agent. Decide whether the request is a single action or "

@@ -1,4 +1,4 @@
-﻿namespace Enactive.Agents;
+namespace Enactive.Agents;
 
 using System.Text;
 using System.Text.Json;
@@ -194,7 +194,7 @@ public sealed class Reviewer
     /// <summary>Returns the verdict, or null when the answer carried none.</summary>
     private static ReviewResult? Parse(string text)
     {
-        var json = ExtractJson(StripThink(text));
+        var json = ModelText.ExtractJsonObject(ModelText.StripThink(text));
         if (json is null)
             return null;
 
@@ -227,22 +227,6 @@ public sealed class Reviewer
         {
             return null;
         }
-    }
-
-    private static string StripThink(string text)
-    {
-        const string open = "<think>";
-        const string close = "</think>";
-        var start = text.IndexOf(open, StringComparison.OrdinalIgnoreCase);
-        var end = text.IndexOf(close, StringComparison.OrdinalIgnoreCase);
-        return start >= 0 && end > start ? text.Remove(start, end + close.Length - start) : text;
-    }
-
-    private static string? ExtractJson(string text)
-    {
-        var start = text.IndexOf('{');
-        var end = text.LastIndexOf('}');
-        return start >= 0 && end > start ? text[start..(end + 1)] : null;
     }
 
     private const string ExecutionSystemPrompt =

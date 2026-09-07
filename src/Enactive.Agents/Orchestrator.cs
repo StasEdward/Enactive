@@ -1,4 +1,4 @@
-﻿namespace Enactive.Agents;
+namespace Enactive.Agents;
 
 using System.Runtime.CompilerServices;
 using System.Text;
@@ -224,6 +224,15 @@ public sealed class Orchestrator : IOrchestrator
         if (plan.PromptTokens + plan.CompletionTokens > 0)
             yield return UsageOutsideLoop(
                 WorkEventPayload.WorkPurpose.Plan, planRef, plan.PromptTokens, plan.CompletionTokens);
+
+        // A plan nobody could read is not a decision to do one thing. The two were the same value
+        // and the same title until now, so a genuine multi-step request that arrived back as prose
+        // became one unplanned action under a heading cut from the request - and the run showed
+        // nothing at all. The work still happens; what changes is that the run says on what basis.
+        if (plan.Readout == PlanReadout.Unreadable)
+            yield return Ev(EventKind.ErrorObserved,
+                "The planner's answer could not be read, twice. Running this as a single action — "
+                + "that is a fallback, not a decision that the request has one step.");
 
         var messages = new List<ChatMessage>
         {
