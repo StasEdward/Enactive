@@ -192,13 +192,26 @@ public static class BuiltinTemplates
         new TaskTemplate(
             Id: "improve-tests",
             Name: "Improve Test Coverage",
+            // The goal, the parameter and the criterion below are the ones that survived a day of
+            // running this template against two real projects (FIX_PLAN.md 9j-9s). Each sentence
+            // that looks like over-explanation is there because a run went wrong without it.
             Goal: "Add tests to this workspace for {area}.\n\n"
                 + "Write tests for behaviour that is not covered yet, in the style of the tests that "
                 + "are already here. Each test must FAIL if the behaviour it describes is broken — "
                 + "check that by breaking it temporarily and putting it back. Do not change any "
                 + "source file to make a test pass.\n\n"
-                + "Test command: {test_command}",
-            Version: 1,
+                + "Test command: {test_command}\n\n"
+                + "Run the tests with THAT command and no other. If it exits 0 and prints nothing at "
+                + "all it ran no tests — say so and find the command that does, rather than reporting "
+                + "a pass.\n\n"
+                + "EVERY time you run the test command — at any step, including immediately after "
+                + "writing a new test — pass \"expectedExitCodes\": [0, 1] to run_command. This task "
+                + "writes tests for behaviour that is not covered and may well be broken, so a "
+                + "non-zero exit from the TEST COMMAND is expected at every step: it is the finding, "
+                + "not a malfunction. Report which tests failed and why. Do NOT pass expectedExitCodes "
+                + "to a build or a restore — those are meant to succeed, and a non-zero exit there is "
+                + "a real failure to fix.",
+            Version: 2,
             Description: "Add tests for what is not covered, and prove they can fail.",
             Category: "Development",
             Parameters: new[]
@@ -206,15 +219,26 @@ public static class BuiltinTemplates
                 new TemplateParameter("area", "What to cover", TemplateParameterType.Text,
                     Description: "A file, a class, or an area of behaviour.",
                     Default: "the behaviour with the least coverage you can identify from the tests already here"),
+                // Deliberately no default. 'dotnet test' on a console-app test project and
+                // 'dotnet run --project' on an xunit project both exit 0 having run nothing, and a
+                // green result that means nothing is worse than a form field that has to be filled.
                 new TemplateParameter("test_command", "Test command", TemplateParameterType.Text,
-                    Description: "Run to test the project.", Default: "dotnet test")
+                    Description: "How THIS project runs its tests. 'dotnet test' for a normal test "
+                        + "project; 'dotnet run --project <path>.csproj' where the tests are a console "
+                        + "app of their own. No default: projects differ, and the wrong command exits "
+                        + "0 having run nothing.")
             },
             Permissions: new PermissionCeiling(
                 MaxLevel: PermissionLevel.Execute,
                 Deny: new[] { "git", "docker" }),
+            // "Builds", not "tests pass": the goal REQUIRES that new tests can fail, and forbids
+            // touching source to make one pass, so a criterion demanding green would fight the
+            // template's purpose. What this asks is the one thing nothing else in the run asks -
+            // did it leave compilable code - and a model rewriting a test file wholesale is exactly
+            // what breaks that.
             SuccessCriteria: new[]
             {
-                new SuccessCriterionDefinition("Tests pass", "dotnet test", 0)
+                new SuccessCriterionDefinition("Builds", "dotnet build", 0)
             },
             Limits: new ExecutionLimits(MaxSteps: 10),
             ReviewRequired: true,

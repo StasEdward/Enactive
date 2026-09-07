@@ -29,6 +29,7 @@ var isTimeline = args.Length > 0 && string.Equals(args[0], "timeline", StringCom
 
 // ── Scheduled mode ────────────────────────────────────────────────────────────
 //   Enactive.App.Console --template release-check --workspace c:\repos\Enactive [--report run.txt]
+//                        [--param test_command="dotnet test" --param area=Parser]
 //
 // This is what makes a saved task a DAILY task: Windows Task Scheduler, cron or a pipeline step
 // drives it. Nothing here is interactive, and that is enforced rather than assumed - see
@@ -41,8 +42,32 @@ string? Option(string name)
     return null;
 }
 
+// Every "--param id=value" on the command line. A template parameter with no default is a
+// question, and unattended there is nobody to ask - so the scheduler answers it here, once, in the
+// job definition. Without this a required parameter made a template un-schedulable, and the only
+// way out was a default that was wrong for most projects (FIX_PLAN.md 9l, 9q).
+Dictionary<string, string> Params()
+{
+    var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    for (var i = 0; i < args.Length - 1; i++)
+    {
+        if (!string.Equals(args[i], "--param", StringComparison.OrdinalIgnoreCase))
+            continue;
+        var pair = args[i + 1];
+        var eq = pair.IndexOf('=');
+        if (eq <= 0)
+        {
+            Console.Error.WriteLine($"--param expects id=value, got '{pair}'.");
+            continue;
+        }
+        values[pair[..eq].Trim()] = pair[(eq + 1)..];
+    }
+    return values;
+}
+
 var templateId = Option("--template");
 var reportPath = Option("--report");
+var parameters = Params();
 
 var baseUrl = Environment.GetEnvironmentVariable("ENACTIVE_OLLAMA_URL") ?? "http://localhost:11434/v1";
 var model = Environment.GetEnvironmentVariable("ENACTIVE_MODEL") ?? "qwen2.5-coder";
@@ -157,7 +182,7 @@ if (templateId is { Length: > 0 })
         return 64;   // EX_USAGE: the invocation is wrong, not the work
     }
 
-    var resolution = TemplateResolution.Resolve(template, workspace, permissionPolicy);
+    var resolution = TemplateResolution.Resolve(template, workspace, permissionPolicy, parameters);
     if (resolution.Spec is null)
     {
         // Almost always a required parameter with no default. Unattended there is nobody to ask, so
@@ -165,7 +190,7 @@ if (templateId is { Length: > 0 })
         Console.Error.WriteLine($"'{template.Name}' cannot run unattended as it stands:");
         foreach (var problem in resolution.Problems)
             Console.Error.WriteLine("  - " + problem);
-        Console.Error.WriteLine("Give the missing parameters a default in the template, or run it from the app.");
+        Console.Error.WriteLine("Supply the missing parameters with --param id=value, give them a default in the template, or run it from the app.");
         return 64;
     }
 
