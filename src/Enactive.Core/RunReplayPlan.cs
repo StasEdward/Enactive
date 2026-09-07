@@ -163,7 +163,11 @@ public static class RunReplayPlan
     private static WorkEvent Stand(RunEventRecord e)
         => new(Guid.Empty, Guid.Empty, Guid.Empty, e.At, EventKind.TaskCompleted, e.Summary, e.Payload);
 
-    /// <summary>The step titles out of "&lt;title&gt; — N steps: a | b".</summary>
+    /// <summary>
+    /// The step titles. From the event's payload, where they are values; the sentence is read only
+    /// for a run recorded before the payload existed. Splitting "&lt;title&gt; — N steps: a | b" made
+    /// a step whose own title contains " | " into two cards.
+    /// </summary>
     private static List<string> PlanTitles(RunRecord record)
     {
         var titles = new List<string>();
@@ -171,6 +175,12 @@ public static class RunReplayPlan
         var plan = record.Events.FirstOrDefault(e => e.Kind == nameof(EventKind.PlanCreated));
         if (plan is null)
             return titles;
+
+        if (Stand(plan).PlanSteps() is { Count: > 0 } typed)
+        {
+            titles.AddRange(typed);
+            return titles;
+        }
 
         var index = plan.Summary.IndexOf(StepsMarker, StringComparison.Ordinal);
         if (index < 0)

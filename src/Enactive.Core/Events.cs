@@ -235,6 +235,89 @@ public static class WorkEventPayload
         new("\"complexity\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"", System.Text.RegularExpressions.RegexOptions.Compiled);
 
     /// <summary>
+    /// Builds the payload of a <see cref="EventKind.PlanCreated"/> event: the plan's title and its
+    /// step titles, as values.
+    ///
+    /// <para>These were read out of the summary — "&lt;title&gt; — N steps: a | b" — by everything
+    /// that wanted them: the live step cards, the replayed ones, the window header. A step whose
+    /// title happens to contain " | " became two steps, a plan title containing " — " lost its tail,
+    /// and rewording the sentence would have quietly changed how many cards a run appears to have
+    /// had. Serialized properly, so a title is a title whatever is in it.</para>
+    /// </summary>
+    public static string PlanPayload(string title, IReadOnlyList<string> stepTitles)
+        => System.Text.Json.JsonSerializer.Serialize(new PlanPayloadShape(title, stepTitles), PayloadJson);
+
+    /// <summary>
+    /// camelCase, because the other payloads in this file are hand-written that way and the step
+    /// number is found with a regex over <c>"step"</c>. One spelling, or a serialized payload stops
+    /// being readable by the accessors the hand-written ones are read by.
+    /// </summary>
+    private static readonly System.Text.Json.JsonSerializerOptions PayloadJson = new()
+    {
+        PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase,
+        PropertyNameCaseInsensitive = true
+    };
+
+    /// <summary>The plan title this event carries, or null for a run recorded before it did.</summary>
+    public static string? PlanTitle(this WorkEvent ev) => Plan(ev)?.Title;
+
+    /// <summary>The step titles this event carries, or null when it carries none.</summary>
+    public static IReadOnlyList<string>? PlanSteps(this WorkEvent ev) => Plan(ev)?.Steps;
+
+    private static PlanPayloadShape? Plan(WorkEvent ev)
+    {
+        if (string.IsNullOrEmpty(ev.PayloadJson))
+            return null;
+
+        try
+        {
+            var shape = System.Text.Json.JsonSerializer.Deserialize<PlanPayloadShape>(ev.PayloadJson, PayloadJson);
+            return shape is { Steps: not null } ? shape : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private sealed record PlanPayloadShape(string Title, IReadOnlyList<string> Steps);
+
+    /// <summary>
+    /// Builds the payload of an <see cref="EventKind.ArtifactProduced"/> event: what was produced and
+    /// where. The path used to be recovered by splitting the summary on its first ": ", which is a
+    /// guess about a sentence, not a fact about a file.
+    /// </summary>
+    public static string ArtifactPayload(string kind, string relativePath, int? stepNo = null)
+        => System.Text.Json.JsonSerializer.Serialize(
+            new ArtifactPayloadShape(kind, relativePath, stepNo), PayloadJson);
+
+    /// <summary>The path this artifact event names, or null when it names none.</summary>
+    public static string? ArtifactPath(this WorkEvent ev) => Artifact(ev)?.Path;
+
+    /// <summary>The artifact kind this event names, or null.</summary>
+    public static string? ArtifactKindName(this WorkEvent ev) => Artifact(ev)?.Kind;
+
+    private static ArtifactPayloadShape? Artifact(WorkEvent ev)
+    {
+        if (string.IsNullOrEmpty(ev.PayloadJson))
+            return null;
+
+        try
+        {
+            var shape = System.Text.Json.JsonSerializer.Deserialize<ArtifactPayloadShape>(ev.PayloadJson, PayloadJson);
+            return shape is { Path.Length: > 0 } ? shape : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>The step rides along, because an artifact belongs to the step that produced it and
+    /// that is how every consumer attributes one.</summary>
+    private sealed record ArtifactPayloadShape(string Kind, string Path, int? Step);
+
+    /// <summary>
     /// Builds the payload of a <see cref="EventKind.StepCompleted"/> event: the step number plus how
     /// that step ended. The UI used to decide whether a card goes green by searching the summary for
     /// "FAILED:" and "skipped (dependency failed)", so rewording a message silently turned a red card

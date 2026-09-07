@@ -336,8 +336,13 @@ public sealed class Orchestrator : IOrchestrator
         // ── Task with a DAG plan ──────────────────────────────────────────
         var builtPlan = plan.Plan ?? LinearPlan.FromTitles(new[] { plan.Title });
         var total = builtPlan.Steps.Count;
-        yield return Ev(EventKind.PlanCreated,
-            $"{plan.Title} — {total} steps: {string.Join(" | ", builtPlan.Steps.Select(x => x.Title))}");
+        var stepTitles = builtPlan.Steps.Select(x => x.Title).ToArray();
+        yield return new WorkEvent(
+            Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow, EventKind.PlanCreated,
+            $"{plan.Title} — {total} steps: {string.Join(" | ", stepTitles)}",
+            // The titles as VALUES. Read out of the sentence, a step title containing " | " became
+            // two cards and a plan title containing " — " lost its tail.
+            WorkEventPayload.PlanPayload(plan.Title, stepTitles));
 
         var scheduler = new DagScheduler(builtPlan);
         // Step numbers are PLAN positions, not a dispatch counter. The UI resolves an event to its
@@ -1229,7 +1234,11 @@ public sealed class Orchestrator : IOrchestrator
                 {
                     lock (artifacts)
                         artifacts.Add(reference);
-                    yield return Ev(EventKind.ArtifactProduced, $"{reference.Kind}: {reference.RelativePath}");
+                    yield return new WorkEvent(
+                        Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow, EventKind.ArtifactProduced,
+                        $"{reference.Kind}: {reference.RelativePath}",
+                        WorkEventPayload.ArtifactPayload(
+                            reference.Kind.ToString(), reference.RelativePath, stepNo));
                 }
 
                 messages.Add(ChatMessage.Tool(

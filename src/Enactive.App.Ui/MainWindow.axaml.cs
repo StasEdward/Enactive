@@ -463,12 +463,18 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                     break;
                 case EventKind.PlanCreated:
                     _vm.StatusPhase = "Executing";
-                    // "<title> — N steps: a | b" — the planner's title is a better header than the
-                    // raw request, which is often a paragraph.
-                    var dash = ev.Summary.IndexOf(" — ", StringComparison.Ordinal);
-                    if (dash > 0)
-                        _vm.TaskTitle = ev.Summary[..dash];
-                    CreateStepCards(ev.Summary);
+                    // The planner's title is a better header than the raw request, which is often a
+                    // paragraph. From the payload; the sentence is read only for a run produced by a
+                    // build that predates it, where a title containing " — " lost its tail.
+                    if (ev.PlanTitle() is { Length: > 0 } plannedTitle)
+                        _vm.TaskTitle = plannedTitle;
+                    else
+                    {
+                        var dash = ev.Summary.IndexOf(" — ", StringComparison.Ordinal);
+                        if (dash > 0)
+                            _vm.TaskTitle = ev.Summary[..dash];
+                    }
+                    CreateStepCards(ev);
                     break;
                 case EventKind.StepStarted:
                     _vm.SetAgent("Coder", Brand.PillCoder);
@@ -571,7 +577,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                     if (_staging is not null)
                         AddStagedArtifact();
                     else
-                        AddArtifact(ev.Summary);
+                        AddArtifact(ev);
                     break;
 
                 // The conversation was pruned to fit the model's window. Shown on the step card, not
@@ -619,14 +625,15 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         });
     }
 
-    private void CreateStepCards(string planSummary)
+    private void CreateStepCards(WorkEvent ev)
     {
-        var marker = " steps: ";
-        var index = planSummary.IndexOf(marker, StringComparison.Ordinal);
-        if (index < 0)
+        // Values first. Splitting the sentence on " | " turned a step whose own title contains one
+        // into two cards, and every event afterwards was attributed to the wrong card. The sentence
+        // is read only for a run produced by a build that predates the payload.
+        var titles = ev.PlanSteps()?.ToArray() ?? FromSummary(ev.Summary);
+        if (titles.Length == 0)
             return;
 
-        var titles = planSummary[(index + marker.Length)..].Split(" | ", StringSplitOptions.RemoveEmptyEntries);
         _totalSteps = titles.Length;
         foreach (var title in titles)
         {
@@ -635,6 +642,15 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             _vm.Steps.Add(card);
         }
         UpdateProgress();
+
+        static string[] FromSummary(string summary)
+        {
+            const string marker = " steps: ";
+            var index = summary.IndexOf(marker, StringComparison.Ordinal);
+            return index < 0
+                ? Array.Empty<string>()
+                : summary[(index + marker.Length)..].Split(" | ", StringSplitOptions.RemoveEmptyEntries);
+        }
     }
 
     private void BeginStep(WorkEvent ev)
@@ -716,11 +732,14 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         return $"{span.Seconds}s";
     }
 
-    private void AddArtifact(string summary)
+    private void AddArtifact(WorkEvent ev)
     {
-        var relative = summary.Contains(": ", StringComparison.Ordinal)
-            ? summary[(summary.IndexOf(": ", StringComparison.Ordinal) + 2)..]
-            : summary;
+        // The path as a value. Splitting the summary on its first ": " is a guess about a sentence,
+        // and a path is not a sentence.
+        var relative = ev.ArtifactPath()
+                       ?? (ev.Summary.Contains(": ", StringComparison.Ordinal)
+                           ? ev.Summary[(ev.Summary.IndexOf(": ", StringComparison.Ordinal) + 2)..]
+                           : ev.Summary);
 
         // One card per file: repeated writes to the same path say nothing new.
         if (!_shownArtifacts.Add(relative))

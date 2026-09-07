@@ -2,6 +2,7 @@ namespace Enactive.App.Ui.ViewModels;
 
 using System.Collections.ObjectModel;
 using Avalonia.Media;
+using Enactive.Core.Artifacts;
 using Enactive.App.Ui.Mvvm;
 using Enactive.Core.Events;
 using Enactive.Core.History;
@@ -260,11 +261,20 @@ internal sealed class PastRunViewModel : ObservableObject
         return seconds >= 60 ? $"{(int)(seconds / 60)}m {(int)(seconds % 60)}s" : $"{seconds:0}s";
     }
 
-    /// <summary>An artifact is recorded as "FileSet: path" - the path is the part you can open.</summary>
+    /// <summary>
+    /// A recorded artifact is the path. Older records kept the whole sentence — "FileSet: path" —
+    /// and only a KNOWN artifact kind is stripped off the front of one, because splitting on the
+    /// first ": " would eat the start of any path that happens to contain one.
+    /// </summary>
     private static string PathOf(string artifact)
     {
         var colon = artifact.IndexOf(": ", StringComparison.Ordinal);
-        return colon >= 0 ? artifact[(colon + 2)..] : artifact;
+        if (colon < 0)
+            return artifact;
+
+        return Enum.TryParse<ArtifactKind>(artifact[..colon], ignoreCase: true, out _)
+            ? artifact[(colon + 2)..]
+            : artifact;
     }
 }
 

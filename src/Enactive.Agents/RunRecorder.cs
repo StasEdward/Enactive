@@ -89,7 +89,9 @@ public sealed class RunRecorder
                     model = ExtractAfter(ev.Summary, "-> model ");
                     break;
                 case EventKind.ArtifactProduced:
-                    artifacts.Add(ev.Summary);
+                    // The path, when the event carries it as a value. Older records kept the whole
+                    // sentence ("FileSet: path") and are still read that way where they are opened.
+                    artifacts.Add(ev.ArtifactPath() ?? ev.Summary);
                     break;
                 case EventKind.DecisionResolved:
                     decisions.Add(ev.Summary);
