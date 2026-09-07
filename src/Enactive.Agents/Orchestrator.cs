@@ -1313,14 +1313,29 @@ public sealed class Orchestrator : IOrchestrator
                     var thought = reasoningBuilder.Length;
                     var spent = lastCompletionTokens is { } t and > 0 ? $" while reporting {t} output token(s)" : "";
 
+                    // Only when the prompt is actually near the window. Suggesting num_ctx to somebody
+                    // whose prompt used 1786 of 131072 tokens sends them to tune a setting that has
+                    // nothing to do with it, which is how a diagnosis becomes a list of everything it
+                    // might be.
+                    var declaredWindow = provider.ContextWindow(request);
+                    var tight = declaredWindow is { } w && lastPromptTokens is { } used && used > w * 4 / 5
+                        ? $" The prompt also used {used} of this model's {w} tokens, so raising num_ctx may help."
+                        : "";
+
                     var why = thought > 0
                         ? $"The model spent the whole turn reasoning ({thought:N0} characters of it) and "
                           + "produced no answer and no tool call. Turn Thinking off in Settings, or use a "
-                          + "model that answers as well as reasons."
-                        : $"The model returned nothing{spent} — no text and no tool call — so its output "
-                          + "never reached the engine. A reasoning model that spends the turn thinking does "
-                          + "this: turn Thinking off in Settings. Otherwise try another model, or raise "
-                          + "num_ctx if the prompt is close to the window.";
+                          + "model that answers as well as reasons." + tight
+                        // What was OBSERVED first, then the causes - and reasoning is named as ruled
+                        // out rather than led with, because the provider reported none and saying
+                        // "a reasoning model does this" over evidence to the contrary is the habit
+                        // the rest of this engine exists to break.
+                        : $"The model returned nothing{spent} — no text, no tool call, and no reasoning "
+                          + "either — so its output never reached the engine. The usual cause is a model "
+                          + "that cannot emit tool calls in the format the provider expects: a small "
+                          + "local model often answers with something the provider then drops. Tick "
+                          + "\"Capture raw wire (Trace)\" in the log window and run it again to see "
+                          + "exactly what came back, or use a model known to call tools." + tight;
 
                     yield return Ev(EventKind.ErrorObserved, why);
                     loopResult.Set(StepOutcomeKind.Failed, why);

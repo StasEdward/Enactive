@@ -66,7 +66,46 @@ public sealed class EmptyTurnTests
 
         Assert.Contains("returned nothing", problems);
         Assert.Contains("never reached the engine", problems);
-        Assert.Contains("Thinking", problems);
+        Assert.Contains("Capture raw wire", problems);
+    }
+
+    /// <summary>
+    /// Reported the same evening the fix shipped: the message led with "a reasoning model that
+    /// spends the turn thinking does this" over a turn the provider had reported NO reasoning for.
+    /// Leading with a cause the evidence rules out is the habit the rest of this engine exists to
+    /// break, and it does not get an exemption for being in an error message.
+    /// </summary>
+    [Fact]
+    public async Task Reasoning_is_not_blamed_when_none_was_reported()
+    {
+        using var fx = new EngineFixture();
+
+        var events = await fx.RunAsync(
+            fx.Build(new FakeChatProvider(Turn.Says(Plan), Turn.Silent()), EngineFixture.Role("developer")),
+            "review what changed");
+
+        var problems = string.Join("\n", events.OfKind(EventKind.ErrorObserved).Select(e => e.Summary));
+
+        Assert.Contains("no reasoning either", problems);
+        Assert.DoesNotContain("spent the whole turn reasoning", problems);
+    }
+
+    /// <summary>
+    /// And num_ctx is only mentioned when the prompt is actually near the window. The reported case
+    /// used 1786 of 131072 tokens; telling that person to raise num_ctx sends them to tune a setting
+    /// with nothing to do with it, which is how a diagnosis decays into a list of everything it
+    /// might be.
+    /// </summary>
+    [Fact]
+    public async Task A_prompt_nowhere_near_the_window_is_not_blamed_on_the_window()
+    {
+        using var fx = new EngineFixture();
+        var provider = new FakeChatProvider(Turn.Says(Plan), Turn.Silent()) { Window = 131_072 };
+
+        var events = await fx.RunAsync(fx.Build(provider, EngineFixture.Role("developer")), "review");
+
+        Assert.DoesNotContain(events.OfKind(EventKind.ErrorObserved).Select(e => e.Summary),
+                              s => s.Contains("num_ctx", StringComparison.Ordinal));
     }
 
     /// <summary>
