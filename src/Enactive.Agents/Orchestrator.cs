@@ -10,6 +10,7 @@ using Enactive.Core.Chat;
 using Enactive.Core.Context;
 using Enactive.Core.Diagnostics;
 using Enactive.Core.Events;
+using Enactive.Core.Execution;
 using Enactive.Core.Intents;
 using Enactive.Core.Orchestration;
 using Enactive.Core.Permissions;
@@ -233,6 +234,11 @@ public sealed class Orchestrator : IOrchestrator
                     // This run's own view of the store. Everything it writes belongs to it, and it
                     // is the only thing that can undo those writes - see IArtifactScope.
                     var store = _artifacts.BeginStep();
+
+                    // What this run actually DID, written down as it happens. The reviewer's
+                    // evidence used to be read back out of the conversation, which is the model's
+                    // working memory and gets shortened when the window fills.
+                    var journal = new ExecutionJournal();
                     var conversationStart = messages.Count;
 
                     // The same one-shot fallback the DAG path has: an unreachable model is not the
@@ -243,13 +249,13 @@ public sealed class Orchestrator : IOrchestrator
 
                     for (var attempt = 1; attempt <= maxQuickAttempts; attempt++)
                     {
-                        var evidenceStart = messages.Count;
+                        var evidenceStart = journal.Mark();
 
                         try
                         {
                             await foreach (var ev in RunToolLoopAsync(
                                 taskId, runId, activeProvider, activeRef.Model, worker, messages, artifacts,
-                                intent.Context, store, null, quickResult, ct, activeRef.ProviderId))
+                                intent.Context, store, journal, null, quickResult, ct, activeRef.ProviderId))
                                 quick.Writer.TryWrite(ev);
                         }
                         catch (Exception ex) when (ex is not OperationCanceledException
@@ -278,7 +284,7 @@ public sealed class Orchestrator : IOrchestrator
 
                         quick.Writer.TryWrite(Ev(EventKind.ReviewRequested, "reviewing…"));
                         var (review, mode) = await ReviewAsync(
-                            plan.Title, messages, evidenceStart, artifacts, store,
+                            plan.Title, messages, journal, evidenceStart, artifacts, store,
                             reviewProvider!, reviewModel, ct);
 
                         if (review.PromptTokens + review.CompletionTokens > 0)
@@ -431,6 +437,9 @@ public sealed class Orchestrator : IOrchestrator
             // the ones it wrote, whatever a concurrent step is doing - and the rejected draft comes
             // out of the transcript instead of being carried into the retry.
             var store = _artifacts.BeginStep();
+
+            // This step's own record of what it did - see the note on the quick-action path.
+            var journal = new ExecutionJournal();
             var conversationStart = convo.Count;
 
             // One switch to the fallback model per step — see the catch below.
@@ -438,13 +447,13 @@ public sealed class Orchestrator : IOrchestrator
 
             for (var attempt = 1; attempt <= maxAttempts; attempt++)
             {
-                var evidenceStart = convo.Count;
+                var evidenceStart = journal.Mark();
 
                 try
                 {
                     await foreach (var ev in RunToolLoopAsync(
                         taskId, runId, stepProvider, stepModel, worker, convo, artifacts,
-                        intent.Context, store, stepNumber, stepResult, ct, stepRef.ProviderId))
+                        intent.Context, store, journal, stepNumber, stepResult, ct, stepRef.ProviderId))
                         events.Writer.TryWrite(ev);
 
                     outcome = stepResult.Kind;
@@ -493,7 +502,7 @@ public sealed class Orchestrator : IOrchestrator
                 Emit(EventKind.ReviewRequested, $"[{stepNumber}] reviewing with reasoner…");
 
                 var (review, mode) = await ReviewAsync(
-                    step.Title, convo, evidenceStart, artifacts, store, reviewProvider!, reviewModel, ct);
+                    step.Title, convo, journal, evidenceStart, artifacts, store, reviewProvider!, reviewModel, ct);
 
                 if (review.PromptTokens + review.CompletionTokens > 0)
                     events.Writer.TryWrite(UsageOutsideLoop(
@@ -776,8 +785,9 @@ public sealed class Orchestrator : IOrchestrator
     /// Fails CLOSED: a reviewer that cannot answer has not approved anything.
     /// </summary>
     private async Task<(ReviewResult Result, ReviewMode Mode)> ReviewAsync(
-        string title, List<ChatMessage> convo, int evidenceStart, List<ArtifactRef> artifacts,
-        IArtifactScope store, IChatProvider reviewProvider, string reviewModel, CancellationToken ct)
+        string title, List<ChatMessage> convo, ExecutionJournal journal, int evidenceStart,
+        List<ArtifactRef> artifacts, IArtifactScope store,
+        IChatProvider reviewProvider, string reviewModel, CancellationToken ct)
     {
         try
         {
@@ -785,7 +795,10 @@ public sealed class Orchestrator : IOrchestrator
             lock (artifacts)
                 changed = artifacts.Select(a => a.RelativePath).ToArray();
 
-            var evidence = BuildEvidence(convo, evidenceStart);
+            // From the journal, not from the transcript. The transcript is the model's working
+            // memory: once it has to be shortened to fit the window, the tool results become a stub,
+            // and the reviewer was handed less evidence with nothing saying so.
+            var evidence = journal.Describe(evidenceStart);
 
             // Which question can even be asked about this step? A step that RAN something is judged
             // on whether it ran and succeeded. A step that only WROTE something has no exit code to
@@ -800,7 +813,7 @@ public sealed class Orchestrator : IOrchestrator
             // file also means the reviewer judges what is actually on disk rather than what the
             // model said it would put there.
             var written = await ReadWrittenAsync(store, ct);
-            var mode = _reviewContent && !RanACommand(convo, evidenceStart) && written.Count > 0
+            var mode = _reviewContent && !journal.UsedAny(CommandTools, evidenceStart) && written.Count > 0
                 ? ReviewMode.Content
                 : ReviewMode.Execution;
 
@@ -887,6 +900,9 @@ public sealed class Orchestrator : IOrchestrator
         // store itself, so every file they touch is attributed to the step that asked for it and
         // can be undone without reaching into a concurrent step's work.
         IArtifactScope store,
+        // What this step actually did, recorded as it happens rather than read back out of the
+        // conversation afterwards.
+        ExecutionJournal journal,
         int? stepNo, ToolLoopResult loopResult,
         [EnumeratorCancellation] CancellationToken ct,
         // Only for the usage record. The loop is handed a ready provider and a model NAME, which is
@@ -1143,6 +1159,8 @@ public sealed class Orchestrator : IOrchestrator
                     // Completed — a permission system whose whole effect was a sentence nobody
                     // checked. Not permitted is not performed.
                     openFailures.Failed(call, $"not available to the {worker.Role} role");
+                    journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Refused,
+                                   $"not available to the {worker.Role} role");
                     yield return Ev(EventKind.DecisionResolved, $"{call.Name}: not available to role '{worker.Role}'");
                     messages.Add(ChatMessage.Tool(call.Id, $"ERROR: tool '{call.Name}' is not available to the {worker.Role} role."));
                     continue;
@@ -1190,10 +1208,12 @@ public sealed class Orchestrator : IOrchestrator
                     {
                         // Same reason as the role gate above: a denial that only appears in the
                         // transcript lets the step finish green over an action that never happened.
-                        openFailures.Failed(call,
-                            gate == PermissionDecision.Ask
-                                ? "the user did not permit this action"
-                                : "blocked by the permission policy");
+                        var why = gate == PermissionDecision.Ask
+                            ? "the user did not permit this action"
+                            : "blocked by the permission policy";
+                        openFailures.Failed(call, why);
+                        journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson),
+                                       ActionOutcome.Refused, why);
                         messages.Add(ChatMessage.Tool(call.Id, "ERROR: the user did not permit this action."));
                         continue;
                     }
@@ -1225,6 +1245,13 @@ public sealed class Orchestrator : IOrchestrator
                     openFailures.Succeeded(call);
                 else
                     openFailures.Failed(call, result.Error);
+
+                // The evidence, written down at the moment it exists. Nothing that shortens the
+                // prompt afterwards can take it away.
+                journal.Record(
+                    stepNo, call.Name, Compact(call.ArgumentsJson),
+                    result.Success ? ActionOutcome.Succeeded : ActionOutcome.Failed,
+                    result.Success ? result.Output : result.Error);
 
                 yield return result.Success
                     ? Ev(EventKind.ToolResult, $"{call.Name} -> ok: {result.Output}")
@@ -1494,23 +1521,6 @@ public sealed class Orchestrator : IOrchestrator
             && worker.ToolAllowlist.Any(pattern => pattern.StartsWith("mcp__", StringComparison.Ordinal)
                 && pattern.EndsWith('*') && tool.StartsWith(pattern[..^1], StringComparison.Ordinal)));
 
-    /// <summary>The real commands and tool outputs added during a step — the reviewer's ground truth.</summary>
-    private static string BuildEvidence(List<ChatMessage> messages, int start)
-    {
-        var sb = new StringBuilder();
-        for (var i = Math.Max(0, start); i < messages.Count; i++)
-        {
-            var m = messages[i];
-            if (m.Role == ChatRole.Assistant && m.ToolCalls is { Count: > 0 } calls)
-                foreach (var call in calls)
-                    sb.Append("-> ").Append(call.Name).Append(' ').AppendLine(Compact(call.ArgumentsJson));
-            else if (m.Role == ChatRole.Tool && !string.IsNullOrEmpty(m.Content))
-                sb.Append("<- ").AppendLine(m.Content);
-        }
-        var text = sb.ToString().Trim();
-        if (text.Length == 0) return "(no tools were run in this step)";
-        return text.Length > 3000 ? text[..3000] + "\n… (truncated)" : text;
-    }
 
     /// <summary>
     /// Prepares the conversation for another attempt after a review rejected the work.
@@ -1583,24 +1593,14 @@ public sealed class Orchestrator : IOrchestrator
                        + string.Join(", ", report.Kept);
     }
 
-    /// <summary>Tools that make something happen outside the workspace's files.</summary>
+    /// <summary>
+    /// Tools that make something happen outside the workspace's files. Which question the reviewer
+    /// is asked turns on this: a step that ran one has a real exit code to be judged on, a step that
+    /// only wrote text does not.
+    /// </summary>
     private static readonly HashSet<string> CommandTools =
         new(StringComparer.OrdinalIgnoreCase) { "run_command", "run_powershell", "git", "docker" };
 
-    /// <summary>
-    /// Whether this step actually executed anything. Decides which question the reviewer is asked:
-    /// a step with a command has a real exit code to be judged on, a step without one does not.
-    /// </summary>
-    private static bool RanACommand(List<ChatMessage> messages, int start)
-    {
-        for (var i = Math.Max(0, start); i < messages.Count; i++)
-            if (messages[i].Role == ChatRole.Assistant && messages[i].ToolCalls is { Count: > 0 } calls)
-                foreach (var call in calls)
-                    if (CommandTools.Contains(call.Name))
-                        return true;
-
-        return false;
-    }
 
 
     /// <summary>Accumulates a streamed tool call across deltas.</summary>
