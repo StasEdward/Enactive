@@ -23,13 +23,43 @@ using System.Text;
 /// </summary>
 public static class AtomicWrite
 {
+    /// <summary>
+    /// The synchronous overload, and it is synchronous ALL THE WAY DOWN. It used to call the async
+    /// one and block on <c>GetAwaiter().GetResult()</c>, which is the classic sync-over-async
+    /// deadlock and it was a real one, not a theoretical one.
+    ///
+    /// <para>On a thread with a SynchronizationContext — which is to say the UI thread —
+    /// <c>FileStream.DisposeAsync</c> flushes buffered bytes, and a flush that does not complete
+    /// synchronously posts its continuation back to that context. The context is the dispatcher.
+    /// The dispatcher is blocked inside <c>GetResult()</c> waiting for that very continuation.
+    /// Nothing moves again: pressing Save hangs the application, with no exception and nothing in
+    /// the log. It surfaced the day a settings window first saved a file, and the Apply button on a
+    /// staged change has been one unlucky flush away from the same thing for as long as it has
+    /// existed.</para>
+    ///
+    /// <para>The lesson is not "add ConfigureAwait" — that hides this instance and leaves the shape.
+    /// A synchronous caller gets a synchronous implementation.</para>
+    /// </summary>
     public static void Replace(string fullPath, string content)
-        => Replace(fullPath, stream =>
+    {
+        var temp = ReserveTemp(fullPath, out var stream);
+
+        try
         {
-            var bytes = Encoding.UTF8.GetBytes(content);
-            stream.Write(bytes, 0, bytes.Length);
-            return Task.CompletedTask;
-        }).GetAwaiter().GetResult();
+            using (stream)
+            {
+                var bytes = Encoding.UTF8.GetBytes(content);
+                stream.Write(bytes, 0, bytes.Length);
+            }
+
+            File.Move(temp, fullPath, overwrite: true);
+        }
+        catch
+        {
+            try { if (File.Exists(temp)) File.Delete(temp); } catch { /* nothing left to try */ }
+            throw;
+        }
+    }
 
     /// <summary>
     /// Runs <paramref name="write"/> against a temp file and moves it over <paramref name="fullPath"/>
@@ -41,8 +71,12 @@ public static class AtomicWrite
 
         try
         {
-            await using (stream)
-                await write(stream);
+            // ConfigureAwait(false) throughout: this is library code with no reason to resume on
+            // anybody's UI thread, and a caller that blocks on this Task must not be able to
+            // deadlock itself against it. The synchronous overload above no longer does that, but
+            // this is the property that makes the next such caller safe too.
+            await using (stream.ConfigureAwait(false))
+                await write(stream).ConfigureAwait(false);
 
             File.Move(temp, fullPath, overwrite: true);
         }
