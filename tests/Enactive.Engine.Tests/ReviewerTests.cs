@@ -1,4 +1,4 @@
-namespace Enactive.Engine.Tests;
+﻿namespace Enactive.Engine.Tests;
 
 using Enactive.Agents;
 using Enactive.Core.Chat;
@@ -206,5 +206,79 @@ public sealed class ContentReviewTests
         var prompt = reviewer.Requests.Last().Messages.Last().Content ?? "";
         Assert.Contains("CORRECTED VERSION", prompt, StringComparison.Ordinal);
         Assert.DoesNotContain("FIRST DRAFT", prompt, StringComparison.Ordinal);
+    }
+
+    // ── an excerpt has to announce itself ─────────────────────────────────
+
+    /// <summary>
+    /// 2026-09-07, third run of the menu-button task. The edit was perfect - a one-line diff adding
+    /// exactly the requested link - and the step failed anyway.
+    ///
+    /// <para>Content review was handed the first 8000 characters of a 21400-character page: 161
+    /// lines of 414, ending mid-&lt;article&gt;, with nothing saying it was an excerpt. The reviewer
+    /// is instructed to fail on "a truncated line", so it failed - and, asked to name the offending
+    /// lines, produced a specific and entirely invented one: a &lt;div&gt; supposedly closed with
+    /// "&lt;/div" at line 43. The worker then tried three times to fix a defect that did not exist
+    /// and the stall detector stopped it. TaskFailed, over a file that was correct.</para>
+    ///
+    /// <para>The notice existed. It could not fire: <c>ReadWrittenAsync</c> had already cut the
+    /// content to 8000 characters, so the prompt's own check compared 8000 against 8000. Two caps of
+    /// the same size in two places, and the honesty of the second was defeated by the silence of the
+    /// first.</para>
+    /// </summary>
+    [Fact]
+    public void An_excerpt_says_so_even_when_the_caller_did_the_cutting()
+    {
+        var whole = new string('x', 21_400);
+        // Exactly the shape ReadWrittenAsync produces: content already trimmed, real size carried.
+        var file = new WrittenFile("web-site/index.html", whole[..8_000], whole.Length);
+
+        var prompt = Reviewer.BuildContentUserPrompt("Add the link", "done", new[] { file });
+
+        Assert.Contains("END OF EXCERPT", prompt);
+        Assert.Contains("8000", prompt);
+        Assert.Contains("21400", prompt);
+    }
+
+    /// <summary>A file shown whole must not be announced as an excerpt - that would teach the
+    /// reviewer to discount the ending of every document it is given.</summary>
+    [Fact]
+    public void A_file_shown_whole_is_not_announced_as_an_excerpt()
+    {
+        var prompt = Reviewer.BuildContentUserPrompt("Write notes", "done", new[]
+        {
+            new WrittenFile("notes.md", "all of it, and not one character more")
+        });
+
+        Assert.DoesNotContain("EXCERPT", prompt);
+    }
+
+    /// <summary>
+    /// The convenience constructor is what makes the whole-file case honest by default: a
+    /// WrittenFile built from content alone is, by definition, all of that content.
+    /// </summary>
+    [Fact]
+    public void A_written_file_knows_whether_it_is_an_excerpt()
+    {
+        Assert.False(new WrittenFile("a.txt", "abc").IsExcerpt);
+        Assert.True(new WrittenFile("a.txt", "abc", 99).IsExcerpt);
+
+        // The removed-file placeholder is not an excerpt of anything.
+        Assert.False(new WrittenFile("gone.txt", "(this file was removed, or could not be read back)").IsExcerpt);
+    }
+
+    /// <summary>
+    /// The instruction that primed the confabulation. The reviewer is told to fail on a truncated
+    /// line - correct in general, and exactly wrong when we are the ones doing the truncating - and
+    /// it is told to name offending lines, which is what turned "this looks cut off" into an invented
+    /// line 43.
+    /// </summary>
+    [Fact]
+    public void The_reviewer_is_told_not_to_judge_an_excerpt_by_how_it_ends()
+    {
+        var instructions = Reviewer.ContentSystemPrompt;
+
+        Assert.Contains("excerpt", instructions, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Only name something you can actually see", instructions);
     }
 }

@@ -1,4 +1,4 @@
-namespace Enactive.Agents;
+﻿namespace Enactive.Agents;
 
 using System.Text;
 using System.Text.Json;
@@ -17,7 +17,34 @@ public sealed record ReviewResult(
     bool Pass, string Notes, int PromptTokens = 0, int CompletionTokens = 0);
 
 /// <summary>One file the step wrote, as the reviewer needs to see it.</summary>
-public sealed record WrittenFile(string RelativePath, string Content);
+/// <param name="Content">
+/// What the reviewer is shown. May be an excerpt.
+/// </param>
+/// <param name="TotalChars">
+/// How long the file ACTUALLY is, however much of it <paramref name="Content"/> carries.
+///
+/// <para>Without this the prompt could not tell whether it was looking at a whole file. It measured
+/// truncation by comparing its own slice against the string it had been handed - and the caller had
+/// already cut that string to the same 8000 characters, so the comparison was 8000 &lt; 8000 and the
+/// "showing the first N of M" line never appeared. On 2026-09-07 a 414-line page was reviewed as its
+/// first 161 lines, ending mid-&lt;article&gt;, with nothing saying so. The reviewer is instructed to
+/// fail on "a truncated line", so it did - and then, asked to name the offending lines, invented a
+/// specific one: a &lt;div&gt; supposedly closed with "&lt;/div" at line 43. Nothing was wrong with
+/// the file. The worker spent the rest of the run chasing that phantom until the stall detector
+/// stopped it.</para>
+///
+/// <para>Two caps in two places, equal by coincidence, and the honesty check of the second was
+/// defeated by the silence of the first. The size travels with the content now, so the notice fires
+/// whoever did the cutting.</para>
+/// </param>
+public sealed record WrittenFile(string RelativePath, string Content, int TotalChars)
+{
+    public WrittenFile(string relativePath, string content)
+        : this(relativePath, content, content.Length) { }
+
+    /// <summary>Whether the reviewer is being shown less than the whole file.</summary>
+    public bool IsExcerpt => Content.Length < TotalChars;
+}
 
 /// <summary>
 /// What a step should be judged ON.
@@ -116,7 +143,7 @@ public sealed class Reviewer
              + "result is fabricated or a placeholder value not present in the real tool output. Otherwise PASS.";
     }
 
-    private static string BuildContentUserPrompt(
+    internal static string BuildContentUserPrompt(
         string stepTitle, string coderOutput, IReadOnlyList<WrittenFile> writtenFiles)
     {
         var sb = new StringBuilder();
@@ -146,8 +173,13 @@ public sealed class Reviewer
             budget -= slice.Length;
             sb.AppendLine(slice);
 
-            if (slice.Length < file.Content.Length)
-                sb.AppendLine($"… (showing the first {slice.Length} of {file.Content.Length} characters)");
+            // Against the file's REAL size, not against the string handed to us - which the caller
+            // may already have cut to exactly this budget, making the comparison always false.
+            if (slice.Length < file.TotalChars)
+                sb.AppendLine()
+                  .AppendLine($"----- END OF EXCERPT: the {file.RelativePath} above is the first "
+                            + $"{slice.Length} characters of {file.TotalChars}. The rest of the file "
+                            + "was not shown to you and is NOT missing from it. -----");
 
             if (budget <= 0)
             {
@@ -224,7 +256,7 @@ public sealed class Reviewer
     // Deliberately narrow. A content reviewer that fails on anything it is merely unsure about blocks
     // every run and gets switched off, so it is told to fail only on a specific, nameable falsehood —
     // and told explicitly that style, length and completeness are none of its business.
-    private const string ContentSystemPrompt =
+    internal const string ContentSystemPrompt =
         "You are a senior technical reviewer checking a document another agent just wrote, for FACTUAL "
         + "correctness. The agent may be a small model that invents plausible-looking detail.\n\n"
         + "Respond with ONLY a JSON object, no prose and no code fences: "
@@ -236,7 +268,11 @@ public sealed class Reviewer
         + "- steps that contradict each other, or that cannot work in the stated order;\n"
         + "- text corruption: stray characters from another script or language inside an identifier, "
         + "mojibake, or a truncated line.\n\n"
-        + "In notes, name the offending lines so the agent can fix exactly those.\n\n"
+        + "In notes, name the offending lines so the agent can fix exactly those. Only name something "
+        + "you can actually see in the text above; if you cannot point at it, do not report it.\n\n"
+        + "Where an excerpt is marked as such, judge ONLY what it contains. It stops where the excerpt "
+        + "stops, not where the file does: an unclosed tag, bracket or sentence at the very end is the "
+        + "cut, never a defect, and neither is anything you expected to find further down.\n\n"
         + "Do NOT fail for style, tone, formatting, length, or for being incomplete — a short document is "
         + "not a wrong one. Do NOT fail because you would have written it differently. If you are unsure "
         + "whether something exists, do not fail on it: say so in notes and pass. Judge the content, not "

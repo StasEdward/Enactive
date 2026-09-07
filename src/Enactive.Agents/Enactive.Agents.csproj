@@ -1,5 +1,12 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
     <ProjectReference Include="..\Enactive.Core\Enactive.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- So the prompt builders can be asserted on directly. What the reviewer is SHOWN is the thing
+         that decides its verdict, and it is worth a test of its own: a 414-line page reviewed as its
+         first 161 lines, with nothing saying so, failed a run over an invented defect. -->
+    <InternalsVisibleTo Include="Enactive.Engine.Tests" />
   </ItemGroup>
 </Project>

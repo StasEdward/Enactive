@@ -1,4 +1,4 @@
-namespace Enactive.Agents;
+﻿namespace Enactive.Agents;
 
 using System.Runtime.CompilerServices;
 using System.Text;
@@ -868,11 +868,13 @@ public sealed class Orchestrator : IOrchestrator
                 content = null;
             }
 
-            written.Add(new WrittenFile(
-                path,
-                content is null
-                    ? "(this file was removed, or could not be read back)"
-                    : content.Length > MaxReviewFileChars ? content[..MaxReviewFileChars] : content));
+            // The real size travels with the excerpt. Cutting here and saying nothing is what let a
+            // 414-line page be reviewed as its first 161 lines as though that were the whole thing.
+            var shown = content is null
+                ? "(this file was removed, or could not be read back)"
+                : content.Length > MaxReviewFileChars ? content[..MaxReviewFileChars] : content;
+
+            written.Add(new WrittenFile(path, shown, content?.Length ?? shown.Length));
         }
 
         return written;
