@@ -149,6 +149,7 @@ internal sealed partial class SettingsViewModel : ObservableObject
             OnPropertyChanged(nameof(IsAiTeam));
             OnPropertyChanged(nameof(IsAiPhases));
             OnPropertyChanged(nameof(IsMcp));
+            OnPropertyChanged(nameof(IsTemplates));
         }
     }
 
@@ -168,11 +169,25 @@ internal sealed partial class SettingsViewModel : ObservableObject
     public RelayCommand ShowAiTeamCommand { get; }
     public RelayCommand ShowAiPhasesCommand { get; }
 
-    public SettingsViewModel(AppSettings settings, Action<AppSettings> onSaved)
+    /// <param name="workspaceRoot">
+    /// The workspace open in the main window, or null. Templates need it: a template saved "for this
+    /// workspace" lives in its .enactive folder, and with no workspace open that scope does not exist
+    /// - which the pane says rather than offering a choice that cannot be honoured.
+    /// </param>
+    /// <param name="toolNames">
+    /// The tools this build registers. The template editor lists them so a restriction is chosen from
+    /// what exists instead of typed - three built-ins once denied "create_dir" while the tool is
+    /// called "create_directory", which restricted nothing at all.
+    /// </param>
+    public SettingsViewModel(
+        AppSettings settings, Action<AppSettings> onSaved,
+        string? workspaceRoot = null, IReadOnlyList<string>? toolNames = null)
     {
         _working = settings.Clone();
         _onSaved = onSaved;
+        ToolNames = toolNames ?? Array.Empty<string>();
         InitializeMcp();
+        InitializeTemplates(workspaceRoot);
 
         _numCtxText = _working.NumCtx?.ToString() ?? string.Empty;
         _globalInstructions = _working.GlobalInstructions;

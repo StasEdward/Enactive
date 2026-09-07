@@ -1,4 +1,4 @@
-﻿using System.Collections.ObjectModel;
+using System.Collections.ObjectModel;
 using System.Diagnostics;
 using Avalonia;
 using Avalonia.Controls;
@@ -145,7 +145,9 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         _vm.SettingsRequested += () =>
             // SettingsWindow reads the live settings and mutates them only when Save is clicked
             // (Cancel/close leave them untouched), so it gets _settings directly, not a partial copy.
-            new SettingsWindow(_settings, saved =>
+            new SettingsWindow(_settings, workspaceRoot: WorkspaceRootOrNull(),
+                toolNames: _toolRegistry.Definitions.Select(d => d.Name).ToArray(),
+                onSaved: saved =>
             {
                 if (!saved.Save())
                     throw new InvalidOperationException(
@@ -293,6 +295,13 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     /// Opens the template library. It resolves a specification and hands it back; starting the run
     /// stays here, where the providers, the tools and the artifact store already are.
     /// </summary>
+    /// <summary>The open workspace as a full path, or null when the box is empty.</summary>
+    private string? WorkspaceRootOrNull()
+    {
+        var root = _vm.WorkspacePath.Trim();
+        return string.IsNullOrWhiteSpace(root) ? null : Path.GetFullPath(root);
+    }
+
     private void ShowTemplates()
     {
         var root = _vm.WorkspacePath.Trim();

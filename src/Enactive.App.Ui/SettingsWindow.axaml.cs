@@ -14,9 +14,11 @@ namespace Enactive.App.Ui;
 /// </summary>
 internal sealed partial class SettingsWindow : Window
 {
-    public SettingsWindow(AppSettings settings, Action<AppSettings> onSaved)
+    public SettingsWindow(
+        AppSettings settings, Action<AppSettings> onSaved,
+        string? workspaceRoot = null, IReadOnlyList<string>? toolNames = null)
     {
-        var viewModel = new SettingsViewModel(settings, onSaved);
+        var viewModel = new SettingsViewModel(settings, onSaved, workspaceRoot, toolNames);
         viewModel.CloseRequested += () => Close();
         viewModel.ProviderEditRequested += (config, saved) =>
             new ProviderEditWindow(config, saved).Show(this);
@@ -26,6 +28,8 @@ internal sealed partial class SettingsWindow : Window
             ConfirmWindow.AskAsync(this, headline, detail, "Remove", "Keep");
 
         viewModel.McpEditRequested += (config, saved) => new McpEditWindow(config, saved).ShowDialog(this);
+        viewModel.TemplateEditRequested += (draft, idEditable, scopes, saved) =>
+            new TemplateEditWindow(draft, idEditable, scopes, viewModel.ToolNames, saved).ShowDialog(this);
         DataContext = viewModel;
         InitializeComponent();
 
@@ -33,6 +37,7 @@ internal sealed partial class SettingsWindow : Window
         ProviderList.DoubleTapped += (_, e) => OpenTapped<ProviderRow>(e, row => row.EditCommand);
         WorkerList.DoubleTapped += (_, e) => OpenTapped<WorkerRow>(e, row => row.EditCommand);
         McpList.DoubleTapped += (_, e) => OpenTapped<McpServerRow>(e, row => row.EditCommand);
+        TemplateList.DoubleTapped += (_, e) => OpenTapped<TemplateRow>(e, row => row.EditCommand);
     }
 
     /// <summary>

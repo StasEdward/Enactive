@@ -1,4 +1,4 @@
-﻿namespace Enactive.Workspace;
+namespace Enactive.Workspace;
 
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -11,6 +11,41 @@ public enum TemplateScope
     Global,
 
     /// <summary>&lt;workspace&gt;/.enactive/templates - lives with the project.</summary>
+    Workspace
+}
+
+/// <summary>
+/// Where a template in the library came from, and what it replaced.
+/// </summary>
+/// <param name="Origin">
+/// Which of the three places this copy was read from. A user needs it before deciding to edit
+/// anything: "Release Check" behaving differently in one project than another is bewildering until
+/// you can see that the project has its own.
+/// </param>
+/// <param name="Shadows">
+/// What this entry replaced, if anything. Null when nothing of that id existed below it. Shadowing
+/// is the whole point of the scopes and it is invisible in a merged list - a person who edits the
+/// global copy of a template their workspace overrides will watch their change do nothing.
+/// </param>
+public sealed record StoredTemplate(
+    TaskTemplate Template, TemplateOrigin Origin, TemplateOrigin? Shadows = null)
+{
+    public bool IsBuiltin => Origin == TemplateOrigin.Builtin;
+
+    /// <summary>The scope this copy lives in, or null for a built-in, which is in neither.</summary>
+    public TemplateScope? Scope => Origin switch
+    {
+        TemplateOrigin.Global => TemplateScope.Global,
+        TemplateOrigin.Workspace => TemplateScope.Workspace,
+        _ => null
+    };
+}
+
+/// <summary>The three places a template can come from, narrowest last.</summary>
+public enum TemplateOrigin
+{
+    Builtin,
+    Global,
     Workspace
 }
 
@@ -70,22 +105,40 @@ public sealed class TemplateStore
     /// have no idea which file to fix, which is a worse failure than the one it reports.</para>
     /// </summary>
     public IReadOnlyList<TaskTemplate> Load()
+        => Inventory().Select(entry => entry.Template).ToArray();
+
+    /// <summary>
+    /// The same library, with where each template came from and what it replaced.
+    ///
+    /// <para><see cref="Load"/> answers "what can I run"; this answers "why does this one look like
+    /// that". Shadowing is the mechanism behind a project having its own Release Check, and in a
+    /// merged list it is completely invisible - so somebody edits the global copy, watches their
+    /// change do nothing, and has no way to find out why.</para>
+    /// </summary>
+    public IReadOnlyList<StoredTemplate> Inventory()
     {
-        var byId = new Dictionary<string, TaskTemplate>(StringComparer.OrdinalIgnoreCase);
+        var byId = new Dictionary<string, StoredTemplate>(StringComparer.OrdinalIgnoreCase);
+
+        void Put(TaskTemplate template, TemplateOrigin origin)
+            => byId[template.Id] = new StoredTemplate(
+                template, origin,
+                byId.TryGetValue(template.Id, out var replaced) ? replaced.Origin : null);
 
         // Built-ins first, so a file of the same id replaces one. That is the customisation path
         // for someone who wants THIS project's Release Check rather than a copy under a new name.
         foreach (var template in BuiltinTemplates.All)
-            byId[template.Id] = template;
+            Put(template, TemplateOrigin.Builtin);
 
         foreach (var template in ReadFolder(GlobalFolder))
-            byId[template.Id] = template;
+            Put(template, TemplateOrigin.Global);
 
         if (WorkspaceFolder is { } local)
             foreach (var template in ReadFolder(local))
-                byId[template.Id] = template;
+                Put(template, TemplateOrigin.Workspace);
 
-        return byId.Values.OrderBy(t => t.Name, StringComparer.CurrentCultureIgnoreCase).ToArray();
+        return byId.Values
+            .OrderBy(e => e.Template.Name, StringComparer.CurrentCultureIgnoreCase)
+            .ToArray();
     }
 
     public TaskTemplate? Find(string id)

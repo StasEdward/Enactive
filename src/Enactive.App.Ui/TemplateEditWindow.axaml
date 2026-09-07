@@ -1,0 +1,181 @@
+<Window xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="using:Enactive.App.Ui" xmlns:vm="using:Enactive.App.Ui.ViewModels"
+        x:Class="Enactive.App.Ui.TemplateEditWindow" x:DataType="vm:TemplateEditViewModel"
+        Title="Template" Width="820" Height="900" WindowStartupLocation="CenterOwner"
+        Background="{DynamicResource Brand.Bg}" WindowDecorations="BorderOnly" ExtendClientAreaToDecorationsHint="True">
+    <Grid RowDefinitions="Auto,*" Margin="{Binding $parent[Window].OffScreenMargin}">
+        <local:TitleBarView />
+        <DockPanel Grid.Row="1" Margin="16">
+
+            <StackPanel DockPanel.Dock="Bottom" Classes="actions">
+                <TextBlock Classes="hint" VerticalAlignment="Center" Margin="0,0,10,0"
+                           Text="Save writes the file now. Cancel in Settings does not undo it." />
+                <ComboBox ItemsSource="{Binding Scopes}" SelectedItem="{Binding Scope}" MinWidth="150" />
+                <Button Classes="primary" Content="Save" Command="{Binding SaveCommand}" />
+                <Button Content="Cancel" Command="{Binding CancelCommand}" />
+            </StackPanel>
+
+            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="4" Margin="0,0,0,10">
+                <Button Classes="tab" Classes.on="{Binding IsForm}" Content="Form"
+                        Command="{Binding ShowFormCommand}" />
+                <Button Classes="tab" Classes.on="{Binding IsJson}" Content="JSON"
+                        Command="{Binding ShowJsonCommand}" />
+            </StackPanel>
+
+            <TextBlock DockPanel.Dock="Bottom" Text="{Binding Status}" TextWrapping="Wrap"
+                       Margin="0,10,0,0" IsVisible="{Binding HasStatus}"
+                       Foreground="{DynamicResource Brand.Warning}" />
+
+            <Panel>
+                <!-- ── the form ──────────────────────────────────────────── -->
+                <ScrollViewer IsVisible="{Binding IsForm}">
+                    <StackPanel Spacing="6">
+
+                        <TextBlock Classes="label" Text="Id" />
+                        <TextBox Text="{Binding Id}" IsEnabled="{Binding IdEditable}"
+                                 PlaceholderText="lowercase-with-dashes" />
+                        <TextBlock Classes="hint"
+                                   Text="The id is the file name and it is how a scheduled run names this template. An existing template keeps its id — duplicate it to make one under another name. Saving under a built-in's id replaces that built-in until you delete the file." />
+
+                        <TextBlock Classes="label" Text="Name" />
+                        <TextBox Text="{Binding Name}" PlaceholderText="Release Check" />
+
+                        <TextBlock Classes="label" Text="Description" />
+                        <TextBox Text="{Binding Description}" PlaceholderText="One line, shown in the library" />
+
+                        <TextBlock Classes="label" Text="Category" />
+                        <TextBox Text="{Binding Category}" PlaceholderText="Development, Maintenance, …" />
+
+                        <TextBlock Classes="label" Text="Goal" Margin="0,8,0,0" />
+                        <TextBox Classes="multiline" MinHeight="180" Text="{Binding Goal}"
+                                 PlaceholderText="What to do. Write {parameter_id} where a value goes." />
+                        <TextBlock Classes="hint"
+                                   Text="Every {placeholder} here must match a parameter below. A parameter nobody filled in leaves nothing behind — not its own name." />
+
+                        <!-- parameters -->
+                        <TextBlock Classes="label" Text="Parameters" Margin="0,10,0,0" />
+                        <ItemsControl ItemsSource="{Binding Parameters}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:ParameterRow">
+                                    <Border Classes="card" Margin="0,0,0,6">
+                                        <StackPanel Spacing="4">
+                                            <Grid ColumnDefinitions="*,*,Auto">
+                                                <TextBox Text="{Binding Id}" PlaceholderText="id" Margin="0,0,6,0" />
+                                                <TextBox Grid.Column="1" Text="{Binding Name}" PlaceholderText="Label shown to you" />
+                                                <Button Grid.Column="2" Classes="rowIcon destructive" Margin="6,0,0,0"
+                                                        Command="{Binding RemoveCommand}" ToolTip.Tip="Remove">
+                                                    <Viewbox Width="15" Height="15">
+                                                        <Canvas Width="24" Height="24">
+                                                            <Path Data="M 6,6 L 18,18 M 18,6 L 6,18" />
+                                                        </Canvas>
+                                                    </Viewbox>
+                                                </Button>
+                                            </Grid>
+                                            <Grid ColumnDefinitions="Auto,*,Auto">
+                                                <ComboBox ItemsSource="{Binding Types}" SelectedItem="{Binding Type}" MinWidth="140" />
+                                                <TextBox Grid.Column="1" Text="{Binding Default}" Margin="6,0,6,0"
+                                                         PlaceholderText="Default value (blank = none)" />
+                                                <CheckBox Grid.Column="2" Content="Required" IsChecked="{Binding Required}" />
+                                            </Grid>
+                                            <TextBox Text="{Binding Description}" PlaceholderText="What this is, in one line" />
+                                            <TextBox IsVisible="{Binding IsChoice}" Text="{Binding Choices}"
+                                                     PlaceholderText="Choices, comma separated" />
+                                        </StackPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <Button Content="Add parameter" Command="{Binding AddParameterCommand}" HorizontalAlignment="Left" />
+
+                        <!-- success criteria -->
+                        <TextBlock Classes="label" Text="Checks that decide whether it finished" Margin="0,14,0,0" />
+                        <TextBlock Classes="hint"
+                                   Text="Each runs as a command; its exit code decides. A required check that fails keeps the run out of Completed. With no checks at all, the run report says nothing was verified — which is true." />
+                        <ItemsControl ItemsSource="{Binding Criteria}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:CriterionRow">
+                                    <Border Classes="card" Margin="0,0,0,6">
+                                        <Grid ColumnDefinitions="*,2*,Auto,Auto,Auto">
+                                            <TextBox Text="{Binding Name}" PlaceholderText="Builds" Margin="0,0,6,0" />
+                                            <TextBox Grid.Column="1" Text="{Binding Command}" PlaceholderText="dotnet build" Margin="0,0,6,0" />
+                                            <TextBox Grid.Column="2" Text="{Binding ExitCode}" Width="60" ToolTip.Tip="Expected exit code" />
+                                            <CheckBox Grid.Column="3" Content="Required" IsChecked="{Binding Required}" Margin="6,0,0,0" />
+                                            <Button Grid.Column="4" Classes="rowIcon destructive" Margin="6,0,0,0"
+                                                    Command="{Binding RemoveCommand}" ToolTip.Tip="Remove">
+                                                <Viewbox Width="15" Height="15">
+                                                    <Canvas Width="24" Height="24">
+                                                        <Path Data="M 6,6 L 18,18 M 18,6 L 6,18" />
+                                                    </Canvas>
+                                                </Viewbox>
+                                            </Button>
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <Button Content="Add check" Command="{Binding AddCriterionCommand}" HorizontalAlignment="Left" />
+
+                        <!-- permissions -->
+                        <TextBlock Classes="label" Text="Permissions" Margin="0,14,0,0" />
+                        <TextBlock Classes="hint"
+                                   Text="A template can only NARROW what the workspace already allows — there is no way to grant more. Denying a tool steers the model away from it; while a shell is allowed it is not a sandbox, because most tools can be reached through a command." />
+                        <TextBlock Classes="label" Text="Highest autonomy this template may use" />
+                        <ComboBox ItemsSource="{Binding Levels}" SelectedItem="{Binding MaxLevel}" MinWidth="200" />
+
+                        <Border Classes="card" IsVisible="{Binding HasUnknownTools}" Margin="0,6,0,0">
+                            <TextBlock Text="{Binding UnknownToolsText}" TextWrapping="Wrap"
+                                       Foreground="{DynamicResource Brand.Warning}" />
+                        </Border>
+
+                        <ItemsControl ItemsSource="{Binding Tools}" Margin="0,6,0,0">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:ToolPermissionRow">
+                                    <Grid ColumnDefinitions="*,Auto,Auto" Margin="0,0,0,2">
+                                        <TextBlock Text="{Binding Name}" VerticalAlignment="Center" />
+                                        <CheckBox Grid.Column="1" Content="Ask first" IsChecked="{Binding Ask}" Margin="0,0,10,0" />
+                                        <CheckBox Grid.Column="2" Content="Deny" IsChecked="{Binding Deny}" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+
+                        <!-- limits -->
+                        <TextBlock Classes="label" Text="Limits" Margin="0,14,0,0" />
+                        <TextBlock Classes="hint"
+                                   Text="Blank means no limit of its own, which is not the same as zero. Limits are checked between steps, never inside one — a step that has started always finishes." />
+                        <Grid ColumnDefinitions="*,*,*">
+                            <StackPanel Margin="0,0,6,0">
+                                <TextBlock Classes="hint" Text="Max steps" />
+                                <TextBox Text="{Binding MaxSteps}" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Margin="0,0,6,0">
+                                <TextBlock Classes="hint" Text="Max tokens" />
+                                <TextBox Text="{Binding MaxTokens}" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="2">
+                                <TextBlock Classes="hint" Text="Max seconds" />
+                                <TextBox Text="{Binding MaxSeconds}" />
+                            </StackPanel>
+                        </Grid>
+
+                        <CheckBox Content="Review each step before it counts as done"
+                                  IsChecked="{Binding ReviewRequired}" Margin="0,10,0,0" />
+
+                        <TextBlock Classes="label" Text="Run as worker" Margin="0,8,0,0" />
+                        <TextBox Text="{Binding WorkerId}" PlaceholderText="Blank uses the workspace's default worker" />
+
+                    </StackPanel>
+                </ScrollViewer>
+
+                <!-- ── the JSON ──────────────────────────────────────────── -->
+                <DockPanel IsVisible="{Binding IsJson}">
+                    <TextBlock DockPanel.Dock="Top" Classes="hint" Margin="0,0,0,6"
+                               Text="The whole template, exactly as it is stored. Switching back to the form applies what is here; JSON that will not parse keeps you on this tab and changes nothing." />
+                    <TextBox Classes="multiline" AcceptsReturn="True" AcceptsTab="True"
+                             FontFamily="Consolas, Cascadia Mono, monospace"
+                             Text="{Binding JsonText}" />
+                </DockPanel>
+            </Panel>
+        </DockPanel>
+    </Grid>
+</Window>
