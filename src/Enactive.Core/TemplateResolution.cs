@@ -1,4 +1,4 @@
-namespace Enactive.Core.Templates;
+﻿namespace Enactive.Core.Templates;
 
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -50,6 +50,26 @@ public sealed record ResolvedTaskSpec(
                 .ToDictionary(p => p.Key, p => p.Value, StringComparer.Ordinal)
         };
         return JsonSerializer.Serialize(ordered, SnapshotJson);
+    }
+
+    /// <summary>
+    /// Reads a snapshot back. Returns null for anything it cannot make sense of - a run recorded
+    /// before specifications existed, a truncated column, a shape from a future version - because a
+    /// history view must render a run it cannot fully understand rather than refuse to open it.
+    /// </summary>
+    public static ResolvedTaskSpec? Parse(string? snapshot)
+    {
+        if (string.IsNullOrWhiteSpace(snapshot))
+            return null;
+
+        try
+        {
+            return JsonSerializer.Deserialize<ResolvedTaskSpec>(snapshot!, SnapshotJson);
+        }
+        catch
+        {
+            return null;
+        }
     }
 }
 

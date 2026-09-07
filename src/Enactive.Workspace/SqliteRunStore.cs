@@ -1,4 +1,4 @@
-namespace Enactive.Workspace;
+﻿namespace Enactive.Workspace;
 
 using System.Globalization;
 using System.Text.Json;
@@ -37,9 +37,9 @@ public sealed class SqliteRunStore : IRunStore
         command.CommandText =
             """
             INSERT OR REPLACE INTO runs
-              (run_id, task_id, title, model, started_at, finished_at, status, events_json, artifacts_json, decisions_json, settings_json, usage_json)
+              (run_id, task_id, title, model, started_at, finished_at, status, events_json, artifacts_json, decisions_json, settings_json, usage_json, spec_json)
             VALUES
-              ($run_id, $task_id, $title, $model, $started_at, $finished_at, $status, $events, $artifacts, $decisions, $settings, $usage);
+              ($run_id, $task_id, $title, $model, $started_at, $finished_at, $status, $events, $artifacts, $decisions, $settings, $usage, $spec);
             """;
         command.Parameters.AddWithValue("$run_id", record.RunId.ToString());
         command.Parameters.AddWithValue("$task_id", record.TaskId.ToString());
@@ -55,6 +55,9 @@ public sealed class SqliteRunStore : IRunStore
             record.Settings is null ? DBNull.Value : JsonSerializer.Serialize(record.Settings, Json));
         command.Parameters.AddWithValue("$usage",
             record.Usage is null ? DBNull.Value : JsonSerializer.Serialize(record.Usage, Json));
+        // Stored verbatim, not re-serialized: the snapshot's whole value is that it is byte-for-byte
+        // what the run started from, so two runs can be compared by comparing their specifications.
+        command.Parameters.AddWithValue("$spec", (object?)record.Spec ?? DBNull.Value);
 
         await command.ExecuteNonQueryAsync(ct);
     }
@@ -72,7 +75,7 @@ public sealed class SqliteRunStore : IRunStore
         command.CommandText =
             """
             SELECT run_id, task_id, title, model, started_at, finished_at, status,
-                   events_json, artifacts_json, decisions_json, settings_json, usage_json
+                   events_json, artifacts_json, decisions_json, settings_json, usage_json, spec_json
             FROM runs
             ORDER BY started_at DESC;
             """;
@@ -89,6 +92,7 @@ public sealed class SqliteRunStore : IRunStore
             var usage = reader.IsDBNull(11)
                 ? null
                 : JsonSerializer.Deserialize<RunUsage>(reader.GetString(11), Json);
+            var spec = reader.IsDBNull(12) ? null : reader.GetString(12);
 
             results.Add(new RunRecord(
                 Guid.Parse(reader.GetString(0)),
@@ -98,7 +102,7 @@ public sealed class SqliteRunStore : IRunStore
                 DateTimeOffset.Parse(reader.GetString(4), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
                 DateTimeOffset.Parse(reader.GetString(5), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
                 reader.GetString(6),
-                events, artifacts, decisions, settings, usage));
+                events, artifacts, decisions, settings, usage, spec));
         }
 
         return results;
@@ -133,7 +137,8 @@ public sealed class SqliteRunStore : IRunStore
                   artifacts_json TEXT,
                   decisions_json TEXT,
                   settings_json  TEXT,
-                  usage_json     TEXT
+                  usage_json     TEXT,
+                  spec_json      TEXT
                 );
                 """;
             await command.ExecuteNonQueryAsync(ct);
@@ -149,6 +154,11 @@ public sealed class SqliteRunStore : IRunStore
             using var upgradeUsage = connection.CreateCommand();
             upgradeUsage.CommandText = "ALTER TABLE runs ADD COLUMN usage_json TEXT;";
             try { await upgradeUsage.ExecuteNonQueryAsync(ct); }
+            catch (SqliteException) { /* already has it */ }
+
+            using var upgradeSpec = connection.CreateCommand();
+            upgradeSpec.CommandText = "ALTER TABLE runs ADD COLUMN spec_json TEXT;";
+            try { await upgradeSpec.ExecuteNonQueryAsync(ct); }
             catch (SqliteException) { /* already has it */ }
 
             _initialized = true;

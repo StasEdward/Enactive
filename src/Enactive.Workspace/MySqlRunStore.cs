@@ -1,4 +1,4 @@
-namespace Enactive.Workspace;
+﻿namespace Enactive.Workspace;
 
 using System.Globalization;
 using System.Text.Json;
@@ -40,14 +40,14 @@ public sealed class MySqlRunStore : IRunStore
         command.CommandText =
             """
             INSERT INTO runs
-              (run_id, workspace_id, task_id, title, model, started_at, finished_at, status, events_json, artifacts_json, decisions_json, settings_json, usage_json)
+              (run_id, workspace_id, task_id, title, model, started_at, finished_at, status, events_json, artifacts_json, decisions_json, settings_json, usage_json, spec_json)
             VALUES
-              (@run_id, @workspace_id, @task_id, @title, @model, @started_at, @finished_at, @status, @events, @artifacts, @decisions, @settings, @usage)
+              (@run_id, @workspace_id, @task_id, @title, @model, @started_at, @finished_at, @status, @events, @artifacts, @decisions, @settings, @usage, @spec)
             ON DUPLICATE KEY UPDATE
               workspace_id=@workspace_id, task_id=@task_id, title=@title, model=@model,
               started_at=@started_at, finished_at=@finished_at,
               status=@status, events_json=@events, artifacts_json=@artifacts, decisions_json=@decisions,
-              settings_json=@settings, usage_json=@usage;
+              settings_json=@settings, usage_json=@usage, spec_json=@spec;
             """;
         command.Parameters.AddWithValue("@run_id", record.RunId.ToString());
         command.Parameters.AddWithValue("@workspace_id", _workspaceId.ToString());
@@ -57,6 +57,9 @@ public sealed class MySqlRunStore : IRunStore
         command.Parameters.AddWithValue("@started_at", record.StartedAt.ToString("o"));
         command.Parameters.AddWithValue("@finished_at", record.FinishedAt.ToString("o"));
         command.Parameters.AddWithValue("@status", record.Status);
+        // Verbatim, not re-serialized: the snapshot's value is that it is byte-for-byte what the run
+        // started from, so two runs can be compared by comparing their specifications.
+        command.Parameters.AddWithValue("@spec", (object?)record.Spec ?? DBNull.Value);
         command.Parameters.AddWithValue("@events", JsonSerializer.Serialize(record.Events, Json));
         command.Parameters.AddWithValue("@artifacts", JsonSerializer.Serialize(record.Artifacts, Json));
         command.Parameters.AddWithValue("@decisions", JsonSerializer.Serialize(record.Decisions, Json));
@@ -81,7 +84,7 @@ public sealed class MySqlRunStore : IRunStore
         command.CommandText =
             """
             SELECT run_id, task_id, title, model, started_at, finished_at, status,
-                   events_json, artifacts_json, decisions_json, settings_json, usage_json
+                   events_json, artifacts_json, decisions_json, settings_json, usage_json, spec_json
             FROM runs
             WHERE workspace_id = @workspace_id
             ORDER BY started_at DESC;
@@ -100,6 +103,7 @@ public sealed class MySqlRunStore : IRunStore
             var usage = reader.IsDBNull(11)
                 ? null
                 : JsonSerializer.Deserialize<RunUsage>(reader.GetString(11), Json);
+            var spec = reader.IsDBNull(12) ? null : reader.GetString(12);
 
             results.Add(new RunRecord(
                 Guid.Parse(reader.GetString(0)),
@@ -109,7 +113,7 @@ public sealed class MySqlRunStore : IRunStore
                 DateTimeOffset.Parse(reader.GetString(4), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
                 DateTimeOffset.Parse(reader.GetString(5), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
                 reader.GetString(6),
-                events, artifacts, decisions, settings, usage));
+                events, artifacts, decisions, settings, usage, spec));
         }
 
         return results;
@@ -145,7 +149,8 @@ public sealed class MySqlRunStore : IRunStore
                   artifacts_json LONGTEXT,
                   decisions_json LONGTEXT,
                   settings_json  LONGTEXT,
-                  usage_json     LONGTEXT
+                  usage_json     LONGTEXT,
+                  spec_json      LONGTEXT
                 );
                 """;
             await command.ExecuteNonQueryAsync(ct);
@@ -161,6 +166,11 @@ public sealed class MySqlRunStore : IRunStore
             using var upgradeUsage = connection.CreateCommand();
             upgradeUsage.CommandText = "ALTER TABLE runs ADD COLUMN usage_json LONGTEXT;";
             try { await upgradeUsage.ExecuteNonQueryAsync(ct); }
+            catch (MySqlException) { /* already has it */ }
+
+            using var upgradeSpec = connection.CreateCommand();
+            upgradeSpec.CommandText = "ALTER TABLE runs ADD COLUMN spec_json LONGTEXT;";
+            try { await upgradeSpec.ExecuteNonQueryAsync(ct); }
             catch (MySqlException) { /* already has it */ }
 
             // Rows written before this column existed keep workspace_id NULL and are therefore not

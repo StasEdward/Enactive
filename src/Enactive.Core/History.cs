@@ -1,4 +1,4 @@
-namespace Enactive.Core.History;
+﻿namespace Enactive.Core.History;
 
 /// <summary>
 /// A persisted event within a run (Timeline is a projection over these).
@@ -56,7 +56,18 @@ public sealed record RunRecord(
     RunSettings? Settings = null,
     /// <summary>Null for runs recorded before tokens were counted, and for a provider that does not
     /// report them - which is a different thing from zero and is shown differently.</summary>
-    RunUsage? Usage = null);
+    RunUsage? Usage = null,
+    /// <summary>
+    /// The resolved specification this run was started from, verbatim - the canonical JSON of a
+    /// <c>ResolvedTaskSpec</c>. Null for a run that was typed rather than started from a template.
+    ///
+    /// <para>A STRING for the same reason <see cref="RunEventRecord.Payload"/> is one: it is a
+    /// snapshot, and a snapshot's job is to still mean what it meant. The template it came from is
+    /// editable and its version moves on; reading a finished run against the template as it is
+    /// TODAY answers the wrong question. Parse it with <c>ResolvedTaskSpec.Parse</c>, which gives
+    /// values back rather than leaving anyone to pick at the text.</para>
+    /// </summary>
+    string? Spec = null);
 
 /// <summary>Persists and loads run records for a workspace.</summary>
 public interface IRunStore
