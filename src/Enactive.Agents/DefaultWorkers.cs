@@ -1,4 +1,4 @@
-namespace Enactive.Agents;
+﻿namespace Enactive.Agents;
 
 using Enactive.Core.Permissions;
 using Enactive.Core.Providers;
@@ -42,12 +42,13 @@ public static class DefaultWorkers
     private static readonly (string Id, string Role, string Instructions, string[] Tools, PermissionLevel Level)[] Roles =
     {
         ("developer", "Developer",
-            "You are a developer agent working inside the user's workspace. You can create and "
-            + "edit files, read files, list directories, run shell commands (run_command) and run "
+            "You are a developer agent working inside the user's workspace. You can create files "
+            + "(write_file), change PART of an existing file (edit_file — prefer it: it does not make "
+            + "you retype the rest), read files, list directories, run shell commands (run_command) and run "
             + "PowerShell (run_powershell — prefer it on Windows for WMI/CIM, Get-PSDrive, pipes), plus git and "
             + "docker tools for version control and containers. Use the "
             + "tools to accomplish the request, then reply with a short confirmation of what you actually did.",
-            new[] { "write_file", "read_file", "list_dir", "run_command", "run_powershell", "git", "docker" },
+            new[] { "write_file", "edit_file", "read_file", "list_dir", "run_command", "run_powershell", "git", "docker" },
             PermissionLevel.Execute),
 
         ("reviewer", "Reviewer",
@@ -68,7 +69,7 @@ public static class DefaultWorkers
         ("writer", "Writer",
             "You are a technical writer. Create and edit documentation and text files, reading "
             + "existing files for context. Do not run shell commands.",
-            new[] { "write_file", "read_file", "list_dir" },
+            new[] { "write_file", "edit_file", "read_file", "list_dir" },
             PermissionLevel.Execute),
     };
 

@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using System.Text.Json.Serialization;
 using Enactive.Agents;
 using Enactive.Core.Permissions;
@@ -96,7 +96,7 @@ internal sealed class PhaseBindings
 internal sealed partial class AppSettings
 {
     /// <summary>The newest settings.json schema this build writes. See <see cref="SchemaVersion"/>.</summary>
-    public const int CurrentSchemaVersion = 2;
+    public const int CurrentSchemaVersion = 3;
 
     /// <summary>
     /// settings.json schema version. Files written before 2026-09-06 have no such field and read as 1,
@@ -306,6 +306,24 @@ internal sealed partial class AppSettings
             // keeps the access it had, while the new, honest meaning of [] applies from here on.
             foreach (var w in Workers.Where(w => w.Tools.Count == 0))
                 w.Tools.Add("*");
+        }
+
+        if (SchemaVersion < 3)
+        {
+            // edit_file shipped without ever being handed to anyone: it was registered by the host and
+            // named by no worker, so the only way to change a file stayed write_file - a full rewrite.
+            // A 12B model asked to add one menu entry to a 414-line page returned 168 lines of it, and
+            // nothing about that was the model misbehaving: it was asked to retype a document to
+            // express a two-line change.
+            //
+            // Adding it to the DEFAULT roles does not reach a settings.json that already lists its
+            // workers, which is every installation that has been opened once. A worker that may write
+            // a file may edit one - the capability is strictly narrower, so this cannot widen anyone's
+            // access.
+            foreach (var w in Workers.Where(w =>
+                         w.Tools.Contains("write_file", StringComparer.OrdinalIgnoreCase)
+                         && !w.Tools.Contains("edit_file", StringComparer.OrdinalIgnoreCase)))
+                w.Tools.Insert(w.Tools.IndexOf("write_file") + 1, "edit_file");
         }
 
         SchemaVersion = CurrentSchemaVersion;

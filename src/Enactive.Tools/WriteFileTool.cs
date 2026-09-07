@@ -1,4 +1,4 @@
-namespace Enactive.Tools;
+﻿namespace Enactive.Tools;
 
 using System.Text;
 using System.Text.Json;
@@ -21,12 +21,14 @@ public sealed class WriteFileTool : ITool
     {
         string? path;
         string? content;
+        bool allowShrink;
         try
         {
             using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(argumentsJson) ? "{}" : argumentsJson);
             var root = doc.RootElement;
             path = root.TryGetProperty("path", out var p) && p.ValueKind == JsonValueKind.String ? p.GetString() : null;
             content = root.TryGetProperty("content", out var c) && c.ValueKind == JsonValueKind.String ? c.GetString() : null;
+            allowShrink = root.TryGetProperty("allow_shrink", out var a) && a.ValueKind == JsonValueKind.True;
         }
         catch (JsonException ex)
         {
@@ -54,16 +56,42 @@ public sealed class WriteFileTool : ITool
             // the exact statement the reviewer is handed as ground truth. A staged proposal counts as
             // existing content — that is what the next read would return.
             bool replacing;
+            long previousBytes = 0;
             try
             {
-                replacing = await ctx.Artifacts.TryReadPendingAsync(path, ct) is not null
-                            || File.Exists(WorkspacePaths.ResolveInside(ctx.WorkspaceRoot, path));
+                // A staged proposal counts as the existing content - that is what the next read
+                // would return - so it is what a replacement is measured against too.
+                var pending = await ctx.Artifacts.TryReadPendingAsync(path, ct);
+                if (pending is not null)
+                {
+                    replacing = true;
+                    previousBytes = Encoding.UTF8.GetByteCount(pending);
+                }
+                else
+                {
+                    var existing = WorkspacePaths.ResolveInside(ctx.WorkspaceRoot, path);
+                    replacing = File.Exists(existing);
+                    if (replacing)
+                        previousBytes = new FileInfo(existing).Length;
+                }
             }
             catch
             {
                 // A path the guard refuses fails properly in CreateAsync below, with its own message.
                 replacing = false;
+                previousBytes = 0;
             }
+
+            var newBytes = Encoding.UTF8.GetByteCount(text);
+
+            if (replacing && !allowShrink && WouldLoseMostOfTheFile(previousBytes, newBytes))
+                return ToolResults.Fail(
+                    $"Refusing to replace '{path}': the new content is {newBytes} bytes against "
+                    + $"{previousBytes} already there, so most of the file would be gone. This is "
+                    + "almost always a whole-file rewrite attempted for a change to one PART of it - "
+                    + "use edit_file, which replaces an exact passage and does not make you reproduce "
+                    + "the rest. If the file really is meant to shrink this much, send the same "
+                    + "write_file call again with \"allow_shrink\": true.");
 
             var reference = await ctx.Artifacts.CreateAsync(
                 path, ArtifactKind.FileSet, path,
@@ -76,7 +104,7 @@ public sealed class WriteFileTool : ITool
 
             // Bytes, not "chars": the two differ the moment the content is not ASCII, and the result
             // line and the metadata disagreeing by four is a puzzle nobody should have to solve.
-            var bytes = Encoding.UTF8.GetByteCount(text);
+            var bytes = newBytes;
 
             // Only claim the old version is recoverable when it actually is. Taking the backup is
             // best-effort by design, and this sentence is what the reviewer is handed as ground
@@ -104,12 +132,34 @@ public sealed class WriteFileTool : ITool
         }
     }
 
+    /// <summary>
+    /// Whether replacing a file this way would throw most of it away.
+    ///
+    /// <para>Found on 2026-09-07. Asked to add one menu entry to a 414-line page, a 12B model read
+    /// 400 of those lines and called write_file with 168 lines - 21164 bytes replaced by 7982. It
+    /// was reported as a plain success, twice in a row, and the user's page was gone both times.
+    /// The model was not misbehaving: no worker had been given edit_file, so the only way it had to
+    /// change one line was to retype the document, and retyping a document from context is
+    /// summarising it. edit_file is now handed out; this is the second half, because the same shape
+    /// of loss is possible whenever a model chooses write_file on something long.</para>
+    ///
+    /// <para>Small files are exempt: below <see cref="ShrinkGuardFloorBytes"/> a rewrite is cheap,
+    /// a model reproduces it reliably, and halving one is ordinary editing rather than a symptom.
+    /// The check is on BYTES, so it costs a stat rather than a read.</para>
+    /// </summary>
+    internal static bool WouldLoseMostOfTheFile(long previousBytes, long newBytes)
+        => previousBytes >= ShrinkGuardFloorBytes && newBytes * 2 < previousBytes;
+
+    /// <summary>Below this, a file is short enough that rewriting it whole is not the risky act.</summary>
+    private const int ShrinkGuardFloorBytes = 2_000;
+
     private const string Schema = """
     {
       "type": "object",
       "properties": {
         "path": { "type": "string", "description": "File path relative to the workspace root, e.g. list_files.py" },
-        "content": { "type": "string", "description": "The full text content of the file." }
+        "content": { "type": "string", "description": "The full text content of the file." },
+        "allow_shrink": { "type": "boolean", "description": "Set true only when an existing file is genuinely meant to lose most of its content. Without it a replacement that drops most of a file is refused, because that is nearly always a whole-file rewrite of a file that should have been edited in part." }
       },
       "required": ["path", "content"]
     }

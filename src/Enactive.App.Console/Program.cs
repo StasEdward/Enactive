@@ -1,4 +1,4 @@
-using Enactive.Agents;
+﻿using Enactive.Agents;
 using Enactive.Core.Context;
 using Enactive.Core.Diagnostics;
 using Enactive.Core.Events;
@@ -97,6 +97,7 @@ var artifactStore = new DiskArtifactStore(workspace);
 IToolRegistry toolRegistry = new LoggingToolRegistry(new ToolRegistry(new ITool[]
 {
     new WriteFileTool(),
+    new EditFileTool(),
     new ReadFileTool(),
     new ListDirectoryTool(),
     new RunCommandTool(),
