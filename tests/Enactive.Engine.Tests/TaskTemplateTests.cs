@@ -1,4 +1,4 @@
-namespace Enactive.Engine.Tests;
+﻿namespace Enactive.Engine.Tests;
 
 using Enactive.Core.Permissions;
 using Enactive.Core.Templates;
@@ -225,7 +225,49 @@ public sealed class TaskTemplateTests : IDisposable
 
         Assert.NotNull(found);
         Assert.Equal("Local", found!.Name);
-        Assert.Single(store.Load());
+        Assert.Single(store.Load(), t => t.Id == "shadow-me");
+    }
+
+    /// <summary>
+    /// The library is never empty, so the feature can be tried the moment it is opened - and every
+    /// shipped template has to survive the same validator a hand-written one does. A built-in that
+    /// does not validate could not be saved by anyone who duplicated it.
+    /// </summary>
+    [Fact]
+    public void Every_built_in_template_is_valid_read_only_and_uniquely_named()
+    {
+        Assert.NotEmpty(BuiltinTemplates.All);
+
+        foreach (var template in BuiltinTemplates.All)
+        {
+            Assert.True(template.Builtin, $"'{template.Id}' is shipped but not marked built-in.");
+            Assert.Empty(TemplateValidator.Validate(template));
+        }
+
+        Assert.Equal(
+            BuiltinTemplates.All.Count,
+            BuiltinTemplates.All.Select(t => t.Id).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+    }
+
+    /// <summary>
+    /// The customisation path for someone who wants THIS project's Release Check rather than a copy
+    /// under a new name: a file of the same id replaces the shipped one.
+    /// </summary>
+    [Fact]
+    public void A_file_of_the_same_id_replaces_a_built_in()
+    {
+        var store = Store();
+        var builtin = BuiltinTemplates.All[0];
+
+        var mine = builtin.Duplicate(builtin.Id, "My " + builtin.Name) with { Goal = "do it my way" };
+        store.Save(mine, TemplateScope.Workspace);
+
+        var found = store.Find(builtin.Id);
+
+        Assert.NotNull(found);
+        Assert.Equal("do it my way", found!.Goal);
+        Assert.False(found.Builtin);
+        Assert.Single(store.Load(), t => t.Id == builtin.Id);
     }
 
     /// <summary>
@@ -244,8 +286,9 @@ public sealed class TaskTemplateTests : IDisposable
 
         var loaded = store.Load();
 
-        Assert.Single(loaded);
-        Assert.Equal("good-one", loaded[0].Id);
+        Assert.Single(loaded, t => t.Id == "good-one");
+        Assert.DoesNotContain(loaded, t => t.Id.Contains("escape", StringComparison.Ordinal));
+        Assert.DoesNotContain(loaded, t => t.Id == "broken");
     }
 
     [Fact]
@@ -273,6 +316,9 @@ public sealed class TaskTemplateTests : IDisposable
         var store = Store();
 
         Assert.Throws<ArgumentException>(() => store.Save(Simple() with { Goal = "" }, TemplateScope.Workspace));
-        Assert.Empty(store.Load());
+
+        // The built-ins are always there, so "nothing was written" is about this id, not about the
+        // library being empty.
+        Assert.DoesNotContain(store.Load(), t => t.Id == "fix-bug");
     }
 }

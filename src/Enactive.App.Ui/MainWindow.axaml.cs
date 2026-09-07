@@ -22,6 +22,7 @@ using Enactive.Core.Inbox;
 using Enactive.Core.Intents;
 using Enactive.Core.Permissions;
 using Enactive.Core.Providers;
+using Enactive.Core.Templates;
 using Enactive.Core.Tools;
 using Enactive.Core.Workers;
 using Enactive.Providers;
@@ -132,6 +133,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         _vm.LogRequested += ShowLogWindow;
         _vm.EnvironmentRequested += () => _ = ShowEnvironmentAsync();
         _vm.InboxRequested += ShowInbox;
+        _vm.TemplatesRequested += ShowTemplates;
         _vm.Runs.RefreshRequested += () => _ = LoadRunsAsync();
         _vm.Runs.OpenRequested += record => _vm.ShowPastRun(BuildPastRun(record));
         _vm.WorkspacePathChanged += RefreshWorkspaces;
@@ -287,12 +289,31 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     /// pressed, not from a setting: the same words typed into the same box should not do two
     /// different things depending on state the user cannot see from here.
     /// </summary>
-    private async Task RunAsync(bool background)
+    /// <summary>
+    /// Opens the template library. It resolves a specification and hands it back; starting the run
+    /// stays here, where the providers, the tools and the artifact store already are.
+    /// </summary>
+    private void ShowTemplates()
+    {
+        var root = _vm.WorkspacePath.Trim();
+        new TemplatesWindow(
+            string.IsNullOrWhiteSpace(root) ? null : Path.GetFullPath(root),
+            PolicyFor(_vm.AutonomyTier),
+            spec =>
+            {
+                // The goal goes into the command bar as well as into the run. Otherwise a templated
+                // run has no visible request at all, and the header shows a task nobody typed.
+                _vm.InputText = spec.Goal;
+                _ = RunAsync(background: false, spec);
+            }).Show(this);
+    }
+
+    private async Task RunAsync(bool background, ResolvedTaskSpec? spec = null)
     {
         if (_pendingDecision is not null)
             return;
 
-        var text = _vm.InputText.Trim();
+        var text = spec?.Goal.Trim() ?? _vm.InputText.Trim();
         if (string.IsNullOrEmpty(text))
             return;
 
@@ -367,7 +388,11 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             name = "workspace";
 
         var workspace = new WorkspaceInfo(WorkspaceInfo.IdFor(fullPath), name, fullPath);
-        var policy = PolicyFor(_vm.AutonomyTier);
+
+        // A template's permissions are already the INTERSECTION of its own ceiling and the
+        // workspace's tier - TemplateResolution.Narrow did that when the specification was resolved,
+        // and a ceiling has no way to widen anything. So this is never more than the slider allows.
+        var policy = spec?.Permissions ?? PolicyFor(_vm.AutonomyTier);
 
         IArtifactStore artifactStore;
         if (_vm.StageChanges)
@@ -396,13 +421,19 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                 _providerFactory, _modelResolver, _workerProvider, runTools, artifactStore,
                 workspace, _planner, _permissionEngine, this, policy, new EmptyProvider(),
                 BuildRouter(), _settings.ReviewRetries, _settings.NumCtx, _settings.DisableThinking, _settings.MaxParallelSteps,
-                _settings.AllowImplicitToolCalls, _settings.ReviewContent, _settings.RevertRejectedSteps);
-            var recorder = new RunRecorder(runStore, MemoryStoreFactory.Create(workspace), workspace.Id, runSettings);
+                _settings.AllowImplicitToolCalls, _settings.ReviewContent, _settings.RevertRejectedSteps,
+                spec?.SuccessCriteria, spec?.Limits);
+            // The specification is recorded WITH the run, so reading it back later shows the template
+            // as it was rather than as it has since been edited.
+            var recorder = new RunRecorder(
+                runStore, MemoryStoreFactory.Create(workspace), workspace.Id, runSettings, spec?.Snapshot());
 
             var context = await contextProvider.BuildAsync(new IntentFocus(workspace.Id), _cts.Token);
-            var workerId = _workerProvider.All.Count > 0
-                && _vm.SelectedWorkerIndex >= 0 && _vm.SelectedWorkerIndex < _workerProvider.All.Count
-                ? _workerProvider.All[_vm.SelectedWorkerIndex].Id : null;
+            // The template names the role it needs; the picker decides only when it does not.
+            var workerId = spec?.WorkerId
+                ?? (_workerProvider.All.Count > 0
+                    && _vm.SelectedWorkerIndex >= 0 && _vm.SelectedWorkerIndex < _workerProvider.All.Count
+                    ? _workerProvider.All[_vm.SelectedWorkerIndex].Id : null);
             var intent = new Intent(Guid.NewGuid(), text, IntentSource.CommandBar, context, DateTimeOffset.UtcNow, workerId);
             var envLine = context.Environment?.OneLine();
             Dispatcher.UIThread.Post(() => _vm.EnvironmentSummary = envLine ?? "(no environment data)");

@@ -23,9 +23,10 @@ public enum TemplateScope
 /// that is true of a row. The cost is that two processes writing the same template can clobber each
 /// other, which is not a situation this feature creates.</para>
 ///
-/// <para>A workspace template SHADOWS a global one with the same id. That is the mechanism behind
-/// "generic template, project-specific build command": the generic one stays generic, and the
-/// project keeps its own next to the code rather than editing the shared copy.</para>
+/// <para>A workspace template SHADOWS a global one with the same id, and both shadow a built-in.
+/// That is the mechanism behind "generic template, project-specific build command": the generic one
+/// stays generic, and the project keeps its own next to the code rather than editing the shared
+/// copy.</para>
 /// </summary>
 public sealed class TemplateStore
 {
@@ -71,6 +72,11 @@ public sealed class TemplateStore
     public IReadOnlyList<TaskTemplate> Load()
     {
         var byId = new Dictionary<string, TaskTemplate>(StringComparer.OrdinalIgnoreCase);
+
+        // Built-ins first, so a file of the same id replaces one. That is the customisation path
+        // for someone who wants THIS project's Release Check rather than a copy under a new name.
+        foreach (var template in BuiltinTemplates.All)
+            byId[template.Id] = template;
 
         foreach (var template in ReadFolder(GlobalFolder))
             byId[template.Id] = template;

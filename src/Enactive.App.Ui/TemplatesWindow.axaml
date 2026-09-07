@@ -1,0 +1,112 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="using:Enactive.App.Ui"
+        xmlns:vm="using:Enactive.App.Ui.ViewModels"
+        x:Class="Enactive.App.Ui.TemplatesWindow"
+        x:DataType="vm:TemplatesViewModel"
+        Title="Enactive — Templates"
+        Width="980" Height="620"
+        Background="{DynamicResource Brand.Bg}"
+        WindowDecorations="BorderOnly"
+        ExtendClientAreaToDecorationsHint="True">
+
+    <Grid RowDefinitions="Auto,*" Margin="{Binding $parent[Window].OffScreenMargin}">
+
+        <local:TitleBarView Grid.Row="0" />
+
+        <DockPanel Grid.Row="1" LastChildFill="True">
+
+            <TextBlock DockPanel.Dock="Bottom" Classes="hint" Margin="10,4,10,8"
+                       Text="{Binding WorkspaceRoot}" />
+
+            <Grid ColumnDefinitions="300,*">
+
+                <!-- The library. Built-ins are always here, so it is never empty. -->
+                <ListBox Grid.Column="0" Classes="cards" Margin="10,10,5,0"
+                         ItemsSource="{Binding Templates}"
+                         SelectedItem="{Binding Selected}">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate x:DataType="vm:TemplateListItem">
+                            <StackPanel Margin="2,4">
+                                <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                <TextBlock Text="{Binding Meta}" Classes="hint" Margin="0,2,0,0" />
+                                <TextBlock Text="{Binding Description}" Classes="hint"
+                                           TextWrapping="Wrap" Margin="0,2,0,0"
+                                           IsVisible="{Binding HasDescription}" />
+                            </StackPanel>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+
+                <DockPanel Grid.Column="1" Margin="5,10,10,0" LastChildFill="True"
+                           IsVisible="{Binding HasSelection}">
+
+                    <!-- What running this would mean, before it is run: how much it may do, what it
+                         may not use, whether anything checks it, and how far it may go. -->
+                    <TextBlock DockPanel.Dock="Top" Text="{Binding SelectedSummary}"
+                               Classes="hint" TextWrapping="Wrap" Margin="0,0,0,8" />
+
+                    <StackPanel DockPanel.Dock="Bottom" Margin="0,8,0,10">
+                        <Border Background="{DynamicResource Brand.Scrim}"
+                                CornerRadius="4" Padding="10,8" Margin="0,0,0,8"
+                                IsVisible="{Binding HasProblems}">
+                            <TextBlock Text="{Binding Problems}" TextWrapping="Wrap"
+                                       Foreground="{DynamicResource Brand.Warning}" />
+                        </Border>
+
+                        <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
+                            <Button Content="Cancel" Click="OnCancel" />
+                            <Button Content="Run" Classes="primary" Click="OnRun"
+                                    IsEnabled="{Binding CanRun}" />
+                        </StackPanel>
+                    </StackPanel>
+
+                    <ScrollViewer>
+                        <StackPanel Spacing="10">
+
+                            <!-- The form, generated from what the template declares. A template
+                                 added as a JSON file gets its inputs without touching this file. -->
+                            <ItemsControl ItemsSource="{Binding Parameters}"
+                                          IsVisible="{Binding HasParameters}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:TemplateParameterInput">
+                                        <StackPanel Margin="0,0,0,10">
+                                            <TextBlock Text="{Binding Label}" FontWeight="SemiBold" />
+                                            <TextBlock Text="{Binding Hint}" Classes="hint"
+                                                       TextWrapping="Wrap" Margin="0,1,0,3"
+                                                       IsVisible="{Binding HasHint}" />
+
+                                            <TextBox Text="{Binding Value}"
+                                                     IsVisible="{Binding IsLine}" />
+
+                                            <TextBox Text="{Binding Value}"
+                                                     AcceptsReturn="True" TextWrapping="Wrap"
+                                                     Height="110"
+                                                     IsVisible="{Binding IsMultiline}" />
+
+                                            <CheckBox IsChecked="{Binding Flag}"
+                                                      Content="{Binding Label}"
+                                                      IsVisible="{Binding IsBoolean}" />
+
+                                            <ComboBox ItemsSource="{Binding Choices}"
+                                                      SelectedItem="{Binding Value}"
+                                                      HorizontalAlignment="Stretch"
+                                                      IsVisible="{Binding IsChoice}" />
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+
+                            <TextBlock Text="What it will be asked to do" FontWeight="SemiBold" />
+                            <Border Background="{DynamicResource Brand.Scrim}" CornerRadius="4" Padding="10,8">
+                                <TextBlock Text="{Binding SelectedGoal}" TextWrapping="Wrap"
+                                           Foreground="{DynamicResource Brand.TextBody}" />
+                            </Border>
+
+                        </StackPanel>
+                    </ScrollViewer>
+                </DockPanel>
+            </Grid>
+        </DockPanel>
+    </Grid>
+</Window>

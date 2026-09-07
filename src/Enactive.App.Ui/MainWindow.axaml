@@ -41,6 +41,18 @@
                     </Viewbox>
                 </Button>
 
+                <!-- The template library: a saved task, run without typing a prompt. -->
+                <Button DockPanel.Dock="Top" Classes="rail" Command="{Binding TemplatesCommand}"
+                        ToolTip.Tip="Templates · a saved task">
+                    <Viewbox Width="18" Height="18">
+                        <Canvas Width="24" Height="24">
+                            <Path Data="M 4,4 H 20 V 8 H 4 Z" />
+                            <Path Data="M 4,11 H 20 V 15 H 4 Z" />
+                            <Path Data="M 4,18 H 13 V 20 H 4 Z" />
+                        </Canvas>
+                    </Viewbox>
+                </Button>
+
                 <Button DockPanel.Dock="Top" Classes="rail" Command="{Binding InboxCommand}"
                         ToolTip.Tip="{Binding InboxTooltip}">
                     <Panel>

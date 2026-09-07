@@ -210,6 +210,7 @@ internal sealed class MainWindowViewModel : ObservableObject
         LogCommand = new RelayCommand(() => LogRequested?.Invoke());
         EnvironmentCommand = new RelayCommand(() => EnvironmentRequested?.Invoke());
         InboxCommand = new RelayCommand(() => InboxRequested?.Invoke());
+        TemplatesCommand = new RelayCommand(() => TemplatesRequested?.Invoke());
         SettingsCommand = new RelayCommand(() => SettingsRequested?.Invoke());
 
         UpdateAutonomyLabel();
@@ -257,6 +258,7 @@ internal sealed class MainWindowViewModel : ObservableObject
     public event Action? LogRequested;
     public event Action? EnvironmentRequested;
     public event Action? InboxRequested;
+    public event Action? TemplatesRequested;
     public event Action? SettingsRequested;
 
     /// <summary>Raised after the input text was changed from here, so the view can restore focus.</summary>
@@ -453,6 +455,9 @@ internal sealed class MainWindowViewModel : ObservableObject
     public RelayCommand LogCommand { get; }
     public RelayCommand EnvironmentCommand { get; }
     public RelayCommand InboxCommand { get; }
+
+    /// <summary>Opens the template library - a saved task, run without typing a prompt.</summary>
+    public RelayCommand TemplatesCommand { get; }
     public RelayCommand SettingsCommand { get; }
 
     // ── Centre: the plan-step feed ────────────────────────────────────────────
