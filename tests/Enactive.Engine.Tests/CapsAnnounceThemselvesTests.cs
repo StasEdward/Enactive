@@ -55,7 +55,10 @@ public sealed class CapsAnnounceThemselvesTests
         ["SearchFilesTool.MaxOutputChars"] = nameof(A_search_that_stops_early_says_it_stopped),
         ["SearchFilesTool.MaxLineChars"] = nameof(A_very_long_matching_line_is_shown_cut),
         ["SearchFilesTool.MaxFileBytes"] = nameof(A_file_too_large_to_search_is_reported_not_skipped_in_silence),
-        ["WriteFileTool.ShrinkGuardFloorBytes"] = "The_rule_itself"
+        ["WriteFileTool.ShrinkGuardFloorBytes"] = "The_rule_itself",
+        // Caught by this census the day it was written, which is what the census is for: a new
+        // constant with "Chars" in its name and nothing driving it past its limit.
+        ["LogAnalyst.CharsPerToken"] = "The_missing_middle_announces_itself_and_says_how_much"
     };
 
     /// <summary>

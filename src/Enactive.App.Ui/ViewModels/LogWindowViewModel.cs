@@ -6,6 +6,7 @@ using System.Text;
 using Avalonia.Media;
 using Avalonia.Threading;
 using Enactive.App.Ui.Mvvm;
+using Enactive.Agents;
 using Enactive.Core.Diagnostics;
 using Enactive.Workspace;
 
@@ -110,6 +111,7 @@ internal sealed class LogWindowViewModel : ObservableObject
 
         ClearCommand = new RelayCommand(() => { _all.Clear(); _hub.Clear(); Rebuild(); });
         ExportCommand = new RelayCommand(Export);
+        AnalyzeCommand = new RelayCommand(() => _ = AnalyzeAsync());
 
         foreach (var entry in _hub.Snapshot())
             _all.Add(entry);
@@ -189,6 +191,28 @@ internal sealed class LogWindowViewModel : ObservableObject
 
     public RelayCommand ClearCommand { get; }
     public RelayCommand ExportCommand { get; }
+    public RelayCommand AnalyzeCommand { get; }
+
+    /// <summary>
+    /// How the visible log is analysed. Supplied by the window that owns the providers - the log
+    /// view model knows what is on screen and nothing about models, and keeping it that way is what
+    /// makes the excerpt logic testable without an Avalonia application.
+    /// </summary>
+    public Func<string, CancellationToken, Task<LogAnalysisResult>>? Analyse { get; set; }
+
+    /// <summary>Raised with the finished analysis; the window opens it.</summary>
+    public event Action<LogAnalysisResult>? AnalysisReady;
+
+    private bool _isAnalyzing;
+
+    /// <summary>True while a model is reading. The button is disabled, so one click is one request.</summary>
+    public bool IsAnalyzing
+    {
+        get => _isAnalyzing;
+        private set { Set(ref _isAnalyzing, value); OnPropertyChanged(nameof(CanAnalyze)); }
+    }
+
+    public bool CanAnalyze => !_isAnalyzing;
 
     /// <summary>Stops following the hub. The window calls this when it closes.</summary>
     public void Detach()
@@ -281,23 +305,82 @@ internal sealed class LogWindowViewModel : ObservableObject
             var dir = FileLogSink.DefaultDirectory();
             Directory.CreateDirectory(dir);
             var path = Path.Combine(dir, $"export-{DateTime.Now:yyyyMMdd-HHmmss}.log");
-            using var writer = new StreamWriter(path);
-            // The live list is in ARRIVAL order: domain events reach the log through the run's event
-            // channel and the UI, so they land after wire lines they actually preceded. That is fine
-            // while tailing, but an exported file is read later as a timeline - so sort it by time
-            // (Seq breaks ties, being monotonic in the hub).
-            foreach (var row in Rows.OrderBy(r => r.Entry.At).ThenBy(r => r.Entry.Seq))
-            {
-                writer.WriteLine(row.Line);
-                if (!string.IsNullOrEmpty(row.Entry.Detail))
-                    foreach (var line in row.Entry.Detail.Replace("\r\n", "\n").Split('\n'))
-                        writer.WriteLine("    | " + line);
-            }
+            File.WriteAllText(path, Render());
             Status = $"Exported {Rows.Count} rows → {path}";
         }
         catch (Exception ex)
         {
             Status = "Export failed: " + ex.Message;
+        }
+    }
+
+    /// <summary>
+    /// The visible log as text, exactly as Export writes it.
+    ///
+    /// <para>One renderer for both on purpose: what the analysis is given and what the exported file
+    /// contains have to be the same thing, or a person comparing an answer against the file they
+    /// were sent is comparing it against something else.</para>
+    ///
+    /// <para>The live list is in ARRIVAL order - domain events reach the log through the run's event
+    /// channel and the UI, so they land after wire lines they actually preceded. That is fine while
+    /// tailing, but read later as a timeline it is wrong, so it is sorted by time (Seq breaks ties,
+    /// being monotonic in the hub).</para>
+    /// </summary>
+    private string Render()
+    {
+        var text = new StringBuilder();
+        foreach (var row in Rows.OrderBy(r => r.Entry.At).ThenBy(r => r.Entry.Seq))
+        {
+            text.AppendLine(row.Line);
+            if (!string.IsNullOrEmpty(row.Entry.Detail))
+                foreach (var line in row.Entry.Detail.Replace("\r\n", "\n").Split('\n'))
+                    text.Append("    | ").AppendLine(line);
+        }
+        return text.ToString();
+    }
+
+    /// <summary>
+    /// Hands the visible log to a model and asks what went wrong with it.
+    ///
+    /// <para>The FILTERED log, not the whole buffer: the level, the sources and the search box are
+    /// how a person narrows down what they are looking at, and an analysis of something other than
+    /// what is on screen would answer a question nobody asked. Narrowing first is also the way to
+    /// analyse a run that does not fit whole.</para>
+    /// </summary>
+    private async Task AnalyzeAsync()
+    {
+        if (Analyse is null)
+        {
+            Status = "No model is configured to read the log. Set one under Settings · AI.";
+            return;
+        }
+
+        if (IsAnalyzing)
+            return;
+
+        var text = Render();
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            Status = "There is nothing on screen to analyse.";
+            return;
+        }
+
+        IsAnalyzing = true;
+        Status = $"Reading {Rows.Count:N0} rows…";
+        try
+        {
+            AnalysisReady?.Invoke(await Analyse(text, CancellationToken.None));
+            Status = string.Empty;
+        }
+        catch (Exception ex)
+        {
+            // Said plainly and left on screen. A failed analysis that clears itself looks exactly
+            // like an analysis that found nothing.
+            Status = "The analysis did not run: " + ex.Message;
+        }
+        finally
+        {
+            IsAnalyzing = false;
         }
     }
 }

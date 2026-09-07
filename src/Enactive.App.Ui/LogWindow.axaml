@@ -34,6 +34,9 @@
                 <CheckBox Content="Pause" IsChecked="{Binding Pause}" />
                 <Button Content="Clear" Command="{Binding ClearCommand}" />
                 <Button Content="Export" Command="{Binding ExportCommand}" />
+                <Button Content="AI Analyze" Command="{Binding AnalyzeCommand}"
+                        IsEnabled="{Binding CanAnalyze}"
+                        ToolTip.Tip="Hand the log as it is filtered on screen to a model and ask what went wrong." />
             </WrapPanel>
 
             <!-- Which planes of the log to show. Filtering here never changes what is recorded. -->

@@ -1,4 +1,5 @@
 using Avalonia.Controls;
+using Enactive.Agents;
 using Enactive.App.Ui.ViewModels;
 using Enactive.Workspace;
 
@@ -12,9 +13,14 @@ namespace Enactive.App.Ui;
 /// </summary>
 public sealed partial class LogWindow : Window
 {
-    public LogWindow(LogHub hub)
+    /// <param name="analyse">
+    /// How to have a model read the log, or null when none is configured. Supplied by the main
+    /// window, which owns the providers and the routing; this window only knows what is on screen.
+    /// </param>
+    public LogWindow(LogHub hub, Func<string, CancellationToken, Task<LogAnalysisResult>>? analyse = null)
     {
-        var viewModel = new LogWindowViewModel(hub);
+        var viewModel = new LogWindowViewModel(hub) { Analyse = analyse };
+        viewModel.AnalysisReady += result => new LogAnalysisWindow(result).Show(this);
         DataContext = viewModel;
         InitializeComponent();
 

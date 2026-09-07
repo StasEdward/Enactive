@@ -1064,11 +1064,30 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     }
 
 
+    /// <summary>
+    /// Reads the log with the model bound to Review, falling back to the one the worker runs on.
+    ///
+    /// <para>Review because that is the phase already chosen for judging evidence rather than
+    /// producing work, and reading a log is exactly that; the worker's model because a build with no
+    /// Review binding still has one model that is known to work. Null when neither exists, and then
+    /// the button says so instead of failing when it is pressed.</para>
+    /// </summary>
+    private Func<string, CancellationToken, Task<LogAnalysisResult>>? LogAnalysis()
+    {
+        var worker = _workerProvider.Get(CurrentWorkerRole());
+        var reference = BuildRouter().Resolve(ModelPurpose.Review, worker) ?? worker?.ModelPolicy.Preferred;
+        if (reference is null)
+            return null;
+
+        return async (text, ct) => await new LogAnalyst().AnalyseAsync(
+            text, _providerFactory.Create(reference.ProviderId), reference.Model, _settings.NumCtx, ct);
+    }
+
     private void ShowLogWindow()
     {
         if (_logWindow is null)
         {
-            _logWindow = new LogWindow(_log);
+            _logWindow = new LogWindow(_log, LogAnalysis());
             _logWindow.Closed += (_, _) => _logWindow = null;
         }
         _logWindow.Show();
