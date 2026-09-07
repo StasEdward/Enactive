@@ -1,6 +1,7 @@
 namespace Enactive.App.Ui.ViewModels;
 
 using System.Collections.ObjectModel;
+using Avalonia.Media;
 using Enactive.App.Ui.Mvvm;
 using Enactive.Core.Context;
 using Enactive.Core.Permissions;
@@ -68,14 +69,33 @@ internal sealed class TemplateParameterInput : ObservableObject
 /// </summary>
 internal sealed class TemplatesViewModel : ObservableObject
 {
-    private readonly WorkspaceInfo _workspace;
-    private readonly PermissionPolicy _workspacePolicy;
+    // Placeholders until SetWorkspace runs, which the constructor does before anything can read
+    // them. The policy starts at the NARROWEST there is rather than at the permissive default: a
+    // permission field whose placeholder allows everything is one refactor away from being the
+    // value something actually used.
+    private WorkspaceInfo _workspace = new(Guid.Empty, "workspace", string.Empty);
+    private PermissionPolicy _workspacePolicy =
+        new(PermissionLevel.Observe, Array.Empty<string>(), Array.Empty<string>());
+    private string _workspaceRoot = string.Empty;
 
     private TemplateListItem? _selected;
     private string _problems = string.Empty;
     private bool _canRun;
 
     public TemplatesViewModel(string? workspaceRoot, PermissionPolicy workspacePolicy)
+        => SetWorkspace(workspaceRoot, workspacePolicy);
+
+    public string WorkspaceRoot { get => _workspaceRoot; private set => Set(ref _workspaceRoot, value); }
+
+    /// <summary>
+    /// Points the library at a workspace and rereads it.
+    ///
+    /// <para>The policy comes with it: a template may only NARROW what the workspace allows, so the
+    /// summary line under each template ("runs at Execute · may not use…") is a statement about a
+    /// particular workspace's autonomy. Moving the library to another folder without its policy
+    /// would leave that line describing the one you left.</para>
+    /// </summary>
+    public void SetWorkspace(string? workspaceRoot, PermissionPolicy workspacePolicy)
     {
         WorkspaceRoot = workspaceRoot ?? string.Empty;
         _workspace = string.IsNullOrWhiteSpace(workspaceRoot)
@@ -83,14 +103,32 @@ internal sealed class TemplatesViewModel : ObservableObject
             : WorkspaceInfo.For(workspaceRoot);
         _workspacePolicy = workspacePolicy;
 
-        var store = new TemplateStore(workspaceRoot);
-        foreach (var template in store.Load())
-            Templates.Add(new TemplateListItem(template));
-
-        Selected = Templates.FirstOrDefault();
+        Reload();
     }
 
-    public string WorkspaceRoot { get; }
+    /// <summary>
+    /// Rereads the library for THIS workspace.
+    ///
+    /// <para>Called when the window opens and again whenever the main window changes workspace. A
+    /// library left over from the folder you were in five minutes ago offers a project's own Release
+    /// Check for a project it knows nothing about, and the run would be resolved against the
+    /// workspace you are actually in — the list and the truth would disagree, silently.</para>
+    /// </summary>
+    public void Reload()
+    {
+        var keep = Selected?.Template.Id;
+
+        Templates.Clear();
+        foreach (var entry in new TemplateStore(
+                     string.IsNullOrWhiteSpace(WorkspaceRoot) ? null : WorkspaceRoot).Inventory())
+            Templates.Add(new TemplateListItem(entry));
+
+        // The same template by id, if this workspace also has one - not the same row by position,
+        // which after a workspace change is a different template wearing the old one's place.
+        Selected = Templates.FirstOrDefault(
+                       t => string.Equals(t.Template.Id, keep, StringComparison.OrdinalIgnoreCase))
+                   ?? Templates.FirstOrDefault();
+    }
 
     public ObservableCollection<TemplateListItem> Templates { get; } = new();
 
@@ -101,8 +139,12 @@ internal sealed class TemplatesViewModel : ObservableObject
         get => _selected;
         set
         {
+            var previous = _selected;
             if (!Set(ref _selected, value))
                 return;
+
+            if (previous is not null) previous.IsSelected = false;
+            if (value is not null) value.IsSelected = true;
 
             Parameters.Clear();
             if (value is not null)
@@ -215,23 +257,69 @@ internal sealed class TemplatesViewModel : ObservableObject
 }
 
 /// <summary>A row in the library. Carries the template so the window never re-reads the store.</summary>
-internal sealed class TemplateListItem
+internal sealed class TemplateListItem : ObservableObject
 {
-    public TemplateListItem(TaskTemplate template)
+    private bool _isSelected;
+
+    public TemplateListItem(StoredTemplate entry)
     {
-        Template = template;
+        Entry = entry;
+        Template = entry.Template;
+
         Meta = string.Join(" · ", new[]
         {
-            template.Category,
-            template.Builtin ? "built-in" : "yours",
-            "v" + template.Version
+            Template.Category,
+            Where,
+            entry.Shadows is { } shadowed ? $"replaces the {shadowed.ToString().ToLowerInvariant()} one" : null,
+            "v" + Template.Version
         }.Where(s => !string.IsNullOrWhiteSpace(s)));
     }
 
+    public StoredTemplate Entry { get; }
     public TaskTemplate Template { get; }
 
     public string Name => Template.Name;
     public string Meta { get; }
     public string Description => Template.Description ?? string.Empty;
     public bool HasDescription => !string.IsNullOrWhiteSpace(Template.Description);
+
+    /// <summary>Which of the three places this copy came from, in a word.</summary>
+    public string Where => Entry.Origin switch
+    {
+        TemplateOrigin.Builtin => "built-in",
+        TemplateOrigin.Global => "global",
+        _ => "this workspace"
+    };
+
+    /// <summary>
+    /// The one you are about to run. Set by the list, because only the list knows.
+    /// </summary>
+    public bool IsSelected
+    {
+        get => _isSelected;
+        set { if (Set(ref _isSelected, value)) OnPropertyChanged(nameof(EdgeBrush)); }
+    }
+
+    /// <summary>
+    /// The card's left edge: amber for the one that is selected, and otherwise by where the
+    /// template lives — grey for a built-in, blue for one of yours, green for one that belongs to
+    /// this project. The three place colours are the ones the Settings list uses, because it is the
+    /// same distinction and a person should only have to learn it once.
+    ///
+    /// <para>Selection wins over place on the selected row, and that is the right way round: where
+    /// a template comes from is still a word in the line underneath, while "this is the one whose
+    /// form I am filling in" is only ever shown by the highlight. Losing the second to preserve the
+    /// first would be trading the urgent fact for the durable one.</para>
+    ///
+    /// <para>It is a binding rather than a style because a style setter cannot win against one: a
+    /// bound BorderBrush is a local value, and <c>ListBoxItem:selected</c> would never take effect.</para>
+    /// </summary>
+    public IBrush EdgeBrush => IsSelected
+        ? Brand.Amber
+        : Entry.Origin switch
+        {
+            TemplateOrigin.Builtin => Brand.Line,
+            TemplateOrigin.Global => Brand.Info,
+            _ => Brand.Success
+        };
 }

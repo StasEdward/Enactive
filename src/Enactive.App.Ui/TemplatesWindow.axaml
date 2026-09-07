@@ -21,19 +21,24 @@
 
             <Grid ColumnDefinitions="300,*">
 
-                <!-- The library. Built-ins are always here, so it is never empty. -->
+                <!-- The library for THIS workspace: the built-ins, your global templates, and the
+                     ones that live with this project. Cards with a coloured left edge, like every
+                     other list here - amber for the selected one, and otherwise the colour of where
+                     the template lives. -->
                 <ListBox Grid.Column="0" Classes="cards" Margin="10,10,5,0"
                          ItemsSource="{Binding Templates}"
                          SelectedItem="{Binding Selected}">
                     <ListBox.ItemTemplate>
                         <DataTemplate x:DataType="vm:TemplateListItem">
-                            <StackPanel Margin="2,4">
-                                <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextWrapping="Wrap" />
-                                <TextBlock Text="{Binding Meta}" Classes="hint" Margin="0,2,0,0" />
-                                <TextBlock Text="{Binding Description}" Classes="hint"
-                                           TextWrapping="Wrap" Margin="0,2,0,0"
-                                           IsVisible="{Binding HasDescription}" />
-                            </StackPanel>
+                            <Border Classes="card" BorderBrush="{Binding EdgeBrush}">
+                                <StackPanel>
+                                    <TextBlock Classes="cardTitle" Text="{Binding Name}" TextWrapping="Wrap" />
+                                    <TextBlock Classes="cardMeta" Text="{Binding Meta}" TextWrapping="Wrap" />
+                                    <TextBlock Classes="cardMeta" Text="{Binding Description}"
+                                               TextWrapping="Wrap" Margin="0,3,0,0"
+                                               IsVisible="{Binding HasDescription}" />
+                                </StackPanel>
+                            </Border>
                         </DataTemplate>
                     </ListBox.ItemTemplate>
                 </ListBox>

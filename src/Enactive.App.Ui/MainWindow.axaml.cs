@@ -303,11 +303,22 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         return string.IsNullOrWhiteSpace(root) ? null : Path.GetFullPath(root);
     }
 
+    private TemplatesWindow? _templatesWindow;
+
     private void ShowTemplates()
     {
-        var root = _vm.WorkspacePath.Trim();
-        new TemplatesWindow(
-            string.IsNullOrWhiteSpace(root) ? null : Path.GetFullPath(root),
+        // One library, kept and re-shown. Opening a second copy of a list that has to follow the
+        // workspace is two lists that can disagree about which workspace that is.
+        if (_templatesWindow is not null)
+        {
+            _templatesWindow.FollowWorkspace(WorkspaceRootOrNull(), PolicyFor(_vm.AutonomyTier));
+            _templatesWindow.Show();
+            _templatesWindow.Activate();
+            return;
+        }
+
+        _templatesWindow = new TemplatesWindow(
+            WorkspaceRootOrNull(),
             PolicyFor(_vm.AutonomyTier),
             spec =>
             {
@@ -315,7 +326,9 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                 // run has no visible request at all, and the header shows a task nobody typed.
                 _vm.InputText = spec.Goal;
                 _ = RunAsync(background: false, spec);
-            }).Show(this);
+            });
+        _templatesWindow.Closed += (_, _) => _templatesWindow = null;
+        _templatesWindow.Show(this);
     }
 
     /// <param name="taskId">
@@ -951,6 +964,9 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         RefreshWorkspaces();
         ApplyWorkspaceDefaults();
         RefreshInboxButton();
+        // A library left open across the switch would go on offering the previous project's
+        // templates for a project that has never heard of them.
+        _templatesWindow?.FollowWorkspace(WorkspaceRootOrNull(), PolicyFor(_vm.AutonomyTier));
     }
 
     /// <summary>

@@ -156,6 +156,51 @@ public sealed class TemplateInventoryTests : IDisposable
             store.Inventory().Select(e => e.Template.Id));
     }
 
+    /// <summary>
+    /// The library is per-workspace, and this is the property that says so: a template that lives
+    /// with one project must not appear in another. Global templates and the built-ins follow you
+    /// everywhere; a project's own do not, which is the entire reason the workspace scope exists.
+    /// </summary>
+    [Fact]
+    public void A_projects_own_template_does_not_follow_you_to_another_project()
+    {
+        var other = Path.Combine(_root, "another-project");
+        Directory.CreateDirectory(other);
+
+        var here = new TemplateStore(_root, _global);
+        var there = new TemplateStore(other, _global);
+
+        here.Save(Sample("ours-only", "Ours only"), TemplateScope.Workspace);
+        here.Save(Sample("everywhere", "Everywhere"), TemplateScope.Global);
+
+        Assert.Contains(here.Inventory(), e => e.Template.Id == "ours-only");
+        Assert.DoesNotContain(there.Inventory(), e => e.Template.Id == "ours-only");
+
+        // ...while the global one is in both, which is what makes the distinction worth drawing.
+        Assert.Contains(there.Inventory(), e => e.Template.Id == "everywhere");
+    }
+
+    /// <summary>
+    /// And a workspace's override of a template applies only there. "Generic template, this
+    /// project's build command" is the case the two scopes were built for, and it is only safe if
+    /// the override stays put.
+    /// </summary>
+    [Fact]
+    public void An_override_applies_only_in_the_workspace_that_made_it()
+    {
+        var other = Path.Combine(_root, "another-project");
+        Directory.CreateDirectory(other);
+
+        var here = new TemplateStore(_root, _global);
+        var there = new TemplateStore(other, _global);
+
+        here.Save(Sample("code-review", "Ours here"), TemplateScope.Workspace);
+
+        Assert.Equal("Ours here", here.Inventory().Single(e => e.Template.Id == "code-review").Template.Name);
+        Assert.Equal("Code Review", there.Inventory().Single(e => e.Template.Id == "code-review").Template.Name);
+        Assert.True(there.Inventory().Single(e => e.Template.Id == "code-review").IsBuiltin);
+    }
+
     [Fact]
     public void A_store_with_no_workspace_still_lists_the_global_ones()
     {

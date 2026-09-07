@@ -29,6 +29,18 @@ internal sealed partial class TemplatesWindow : Window
         InitializeComponent();
     }
 
+    /// <summary>
+    /// Points an already-open library at another workspace.
+    ///
+    /// <para>The library is per-workspace: the built-ins, your global templates, and the ones that
+    /// live in THIS project's .enactive folder. Left open across a workspace switch it would go on
+    /// offering the previous project's Release Check while the run resolved against the folder you
+    /// are actually in - the list and the truth disagreeing, silently, which is the one failure this
+    /// codebase keeps coming back to.</para>
+    /// </summary>
+    public void FollowWorkspace(string? workspaceRoot, PermissionPolicy workspacePolicy)
+        => _viewModel.SetWorkspace(workspaceRoot, workspacePolicy);
+
     private void OnCancel(object? sender, RoutedEventArgs e) => Close();
 
     private void OnRun(object? sender, RoutedEventArgs e)
