@@ -185,7 +185,12 @@ public sealed class Orchestrator : IOrchestrator
                                                      reference.ProviderId, reference.Model, purpose));
         }
 
-        yield return Ev(EventKind.IntentReceived, $"Intent: {intent.RawText}");
+        yield return new WorkEvent(
+            Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow, EventKind.IntentReceived,
+            $"Intent: {intent.RawText}",
+            // The request as a value, so a retry can ask for the same thing rather than reconstruct
+            // it from the wording of a log line.
+            WorkEventPayload.RequestPayload(intent.RawText));
         yield return Ev(EventKind.ContextAssembled,
             $"Workspace '{_workspace.Name}' at {_workspace.RootPath}"
             + (intent.Context.GitBranch is { } branch ? $" (git: {branch})" : "")

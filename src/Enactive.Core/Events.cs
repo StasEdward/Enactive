@@ -365,6 +365,39 @@ public static class WorkEventPayload
     /// as a successful one just by reaching the wrong final event.
     /// </summary>
     /// <summary>
+    /// What was asked for, as a VALUE rather than as the prefix of a sentence.
+    ///
+    /// <para>The summary is "Intent: &lt;text&gt;", and taking the text back out of it would be the
+    /// habit these payloads exist to end - besides breaking on the first request that begins with
+    /// something looking like a prefix. Retrying a run means asking for the same thing again, so the
+    /// same thing has to be recoverable exactly.</para>
+    /// </summary>
+    public static string RequestPayload(string rawText)
+        => System.Text.Json.JsonSerializer.Serialize(
+            new Dictionary<string, string?> { ["request"] = rawText }, PayloadJson);
+
+    /// <summary>The request an IntentReceived payload carries, or null when it carries none.</summary>
+    public static string? RequestTextIn(string? payloadJson)
+    {
+        if (string.IsNullOrEmpty(payloadJson))
+            return null;
+
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(payloadJson);
+            return doc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Object
+                   && doc.RootElement.TryGetProperty("request", out var value)
+                   && value.ValueKind == System.Text.Json.JsonValueKind.String
+                ? value.GetString()
+                : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
     /// One success criterion's result, as VALUES. The panel that will show a run's checks reads
     /// these; nothing has to take the sentence apart.
     /// </summary>

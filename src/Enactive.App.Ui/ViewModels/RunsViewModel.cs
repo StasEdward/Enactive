@@ -1,4 +1,4 @@
-namespace Enactive.App.Ui.ViewModels;
+﻿namespace Enactive.App.Ui.ViewModels;
 
 using System.Collections.ObjectModel;
 using Avalonia.Media;
@@ -6,6 +6,7 @@ using Enactive.Core.Artifacts;
 using Enactive.App.Ui.Mvvm;
 using Enactive.Core.Events;
 using Enactive.Core.History;
+using Enactive.Core.Templates;
 
 /// <summary>
 /// One finished run, as a CARD in the context column: a coloured edge for how it ended, the title
@@ -114,16 +115,72 @@ internal sealed class PastRunViewModel : ObservableObject
 {
     private int _selectedTab;
 
+    /// <summary>Which attempt of its task this is, or empty when it is the only one.</summary>
+    public string AttemptLabel { get; } = string.Empty;
+    public bool HasAttempts { get; }
+
+    /// <summary>The specification this run was started from, when it came from a template.</summary>
+    public ResolvedTaskSpec? Spec { get; }
+
+    /// <summary>What was originally asked for, when the run is new enough to have recorded it.</summary>
+    public string? Request { get; }
+
+    public bool CanRetry { get; }
+    public bool CanRunAgain { get; }
+    public string RunAgainTooltip { get; } = string.Empty;
+
+    public RelayCommand RetryCommand { get; }
+    public RelayCommand RunAgainCommand { get; }
+
+    /// <summary>Run this again, exactly as it was.</summary>
+    public event Action<PastRunViewModel>? RetryRequested;
+
+    /// <summary>Run it again from the template as it stands now.</summary>
+    public event Action<PastRunViewModel>? RunAgainRequested;
+
     public PastRunViewModel(
         RunRecord record,
         Action<ArtifactItemViewModel> open,
         Action<ArtifactItemViewModel> remove,
         // Passed in rather than looked up here: only the window knows the provider list, and a past
         // run must be classified by the same rule as a live one.
-        Func<string?, ModelWorkSplit.Reach>? reachOf = null)
+        Func<string?, ModelWorkSplit.Reach>? reachOf = null,
+        // Every attempt at the same task, newest first. Passed in because only the window has the
+        // whole history; a run cannot know its siblings from inside itself.
+        IReadOnlyList<RunRecord>? attempts = null,
+        Func<TaskTemplate?>? currentTemplate = null)
     {
         Record = record;
         Title = string.IsNullOrWhiteSpace(record.Title) ? "(untitled run)" : record.Title;
+
+        var siblings = attempts is { Count: > 0 } ? attempts : new[] { record };
+        var attemptNo = RunHistory.AttemptNumber(siblings, record.RunId);
+        AttemptLabel = siblings.Count > 1
+            ? $"attempt {attemptNo} of {siblings.Count}"
+            : string.Empty;
+        HasAttempts = AttemptLabel.Length > 0;
+
+        Spec = ResolvedTaskSpec.Parse(record.Spec);
+        Request = RunHistory.RequestOf(record);
+
+        // Retry re-runs THIS specification, exactly as it was. For a run that was typed rather than
+        // started from a template there is no specification, so it re-runs the request instead -
+        // which is why the request is recorded as a value.
+        CanRetry = Spec is not null || !string.IsNullOrWhiteSpace(Request);
+
+        // Run again re-resolves the template as it stands NOW. Only offered when the template is
+        // still there: a template that has been deleted or renamed has no current version, and a
+        // button that fails when pressed is worse than one that is not there.
+        var live = Spec is null ? null : currentTemplate?.Invoke();
+        CanRunAgain = live is not null;
+        RunAgainTooltip = Spec is null
+            ? "This run did not come from a template."
+            : live is null
+                ? $"Template '{Spec.TemplateId}' is no longer in this library."
+                : $"Re-resolve '{live.Name}' v{live.Version} — this run used v{Spec.TemplateVersion}.";
+
+        RetryCommand = new RelayCommand(() => RetryRequested?.Invoke(this), () => CanRetry);
+        RunAgainCommand = new RelayCommand(() => RunAgainRequested?.Invoke(this), () => CanRunAgain);
         Status = record.Status;
         // The pill is a tint with the colour in the word - see Brand. The 3px edge on a run
         // CARD stays saturated: an edge that thin has nowhere to put a tint.
@@ -317,8 +374,15 @@ internal sealed class RunsViewModel : ObservableObject
 
     public RelayCommand RefreshCommand { get; }
 
+    /// <summary>
+    /// Every record behind the list. Kept because a run's SIBLINGS - the other attempts at the same
+    /// task - are not visible from the run itself, and the window is the only thing that has them.
+    /// </summary>
+    public IReadOnlyList<RunRecord> All { get; private set; } = Array.Empty<RunRecord>();
+
     public void Show(IReadOnlyList<RunRecord> records)
     {
+        All = records;
         // Rebuilding drops the selection, so the row the user is reading is re-selected by run id
         // rather than by position - a finished run pushes everything down by one.
         var keep = _selected?.Record.RunId;

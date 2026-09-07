@@ -704,10 +704,30 @@
                                        TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
                                        ToolTip.Tip="{Binding PastRun.Meta}" />
                         </StackPanel>
-                        <Border Grid.Column="2" Classes="pill" Background="{Binding PastRun.StatusBrush}">
-                            <TextBlock Text="{Binding PastRun.Status}"
-                                       Foreground="{Binding PastRun.StatusTextBrush}" />
-                        </Border>
+                        <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8"
+                                    VerticalAlignment="Center">
+                            <!-- Which attempt of its task this is. Absent when it is the only one:
+                                 "attempt 1 of 1" is noise on every run that was never retried. -->
+                            <TextBlock Classes="hint" Text="{Binding PastRun.AttemptLabel}"
+                                       FontSize="11" VerticalAlignment="Center"
+                                       IsVisible="{Binding PastRun.HasAttempts}" />
+
+                            <!-- Retry repeats THIS run exactly; Run again re-resolves the template
+                                 as it stands now. Both are new attempts at the same task. -->
+                            <Button Content="Retry" FontSize="11" Padding="8,2"
+                                    Command="{Binding PastRun.RetryCommand}"
+                                    IsVisible="{Binding PastRun.CanRetry}"
+                                    ToolTip.Tip="Run this again, exactly as it was" />
+                            <Button Content="Run again" FontSize="11" Padding="8,2"
+                                    Command="{Binding PastRun.RunAgainCommand}"
+                                    IsVisible="{Binding PastRun.CanRunAgain}"
+                                    ToolTip.Tip="{Binding PastRun.RunAgainTooltip}" />
+
+                            <Border Classes="pill" Background="{Binding PastRun.StatusBrush}">
+                                <TextBlock Text="{Binding PastRun.Status}"
+                                           Foreground="{Binding PastRun.StatusTextBrush}" />
+                            </Border>
+                        </StackPanel>
                     </Grid>
                 </Border>
 

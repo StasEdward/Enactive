@@ -308,7 +308,12 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             }).Show(this);
     }
 
-    private async Task RunAsync(bool background, ResolvedTaskSpec? spec = null)
+    /// <param name="taskId">
+    /// The task this run is an attempt at. Null starts a new task - which is every run typed into
+    /// the command bar. Retry and Run again pass the original, which is what makes them ATTEMPTS
+    /// rather than unrelated runs that happen to ask the same thing.
+    /// </param>
+    private async Task RunAsync(bool background, ResolvedTaskSpec? spec = null, Guid? taskId = null)
     {
         if (_pendingDecision is not null)
             return;
@@ -434,7 +439,10 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                 ?? (_workerProvider.All.Count > 0
                     && _vm.SelectedWorkerIndex >= 0 && _vm.SelectedWorkerIndex < _workerProvider.All.Count
                     ? _workerProvider.All[_vm.SelectedWorkerIndex].Id : null);
-            var intent = new Intent(Guid.NewGuid(), text, IntentSource.CommandBar, context, DateTimeOffset.UtcNow, workerId);
+            // The intent's id IS the task id - the orchestrator takes it as one - so continuing a
+            // task is a matter of handing back the id it had.
+            var intent = new Intent(
+                taskId ?? Guid.NewGuid(), text, IntentSource.CommandBar, context, DateTimeOffset.UtcNow, workerId);
             var envLine = context.Environment?.OneLine();
             Dispatcher.UIThread.Post(() => _vm.EnvironmentSummary = envLine ?? "(no environment data)");
 
@@ -1243,11 +1251,83 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     {
         var root = WorkspaceRegistry.Normalise(_vm.WorkspacePath);
 
-        return new PastRunViewModel(
+        var past = new PastRunViewModel(
             record,
             item => ShowFile(root, item),
             item => _ = DeletePastArtifactAsync(root, item),
-            ReachOf);
+            ReachOf,
+            RunHistory.AttemptsOf(_vm.Runs.All, record),
+            // Looked up lazily: whether a template is still there is a fact about NOW, and building
+            // a past run should not be the moment the library is read from disk if nobody asks.
+            () => record.Spec is null
+                ? null
+                : ResolvedTaskSpec.Parse(record.Spec) is { } s
+                    ? new TemplateStore(root).Find(s.TemplateId)
+                    : null);
+
+        past.RetryRequested += Retry;
+        past.RunAgainRequested += RunAgain;
+        return past;
+    }
+
+    /// <summary>
+    /// The same run again, exactly as it was: the specification it recorded, or - for a run that was
+    /// typed rather than started from a template - the request it recorded.
+    ///
+    /// <para>It keeps the task id, which is the whole point of M4: these are attempts at ONE task,
+    /// not unrelated runs that happen to say the same thing.</para>
+    /// </summary>
+    private void Retry(PastRunViewModel past)
+    {
+        var taskId = past.Record.TaskId == Guid.Empty ? Guid.NewGuid() : past.Record.TaskId;
+
+        if (past.Spec is { } spec)
+        {
+            _vm.InputText = spec.Goal;
+            _ = RunAsync(background: false, spec, taskId);
+            return;
+        }
+
+        if (past.Request is { Length: > 0 } request)
+        {
+            _vm.InputText = request;
+            _ = RunAsync(background: false, spec: null, taskId);
+        }
+    }
+
+    /// <summary>
+    /// The template as it stands NOW, with the answers this run used. The difference from Retry is
+    /// the whole reason both exist: one repeats what happened, the other asks the current version of
+    /// the same question.
+    /// </summary>
+    private void RunAgain(PastRunViewModel past)
+    {
+        if (past.Spec is not { } old)
+            return;
+
+        var root = WorkspaceRegistry.Normalise(_vm.WorkspacePath);
+        if (new TemplateStore(root).Find(old.TemplateId) is not { } template)
+            return;
+
+        var workspace = WorkspaceInfo.For(root);
+        var resolved = TemplateResolution.Resolve(
+            template, workspace, PolicyFor(_vm.AutonomyTier), old.Parameters);
+
+        if (resolved.Spec is not { } spec)
+        {
+            // The template has changed under it - a new required parameter, a value its type no
+            // longer accepts. Say which, rather than doing nothing when a button is pressed.
+            _vm.StatusPhase = "Error";
+            _vm.CurrentAction =
+                $"'{template.Name}' has changed since this run: "
+                + string.Join("; ", resolved.Problems.Select(p => p.Message))
+                + " Open Templates and fill it in again.";
+            return;
+        }
+
+        var taskId = past.Record.TaskId == Guid.Empty ? Guid.NewGuid() : past.Record.TaskId;
+        _vm.InputText = spec.Goal;
+        _ = RunAsync(background: false, spec, taskId);
     }
 
     /// <summary>Opens an artifact in the viewer. Reading is safe at any age.</summary>
