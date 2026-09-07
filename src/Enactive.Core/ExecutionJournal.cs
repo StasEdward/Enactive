@@ -130,8 +130,9 @@ public sealed class ExecutionJournal
         // Said ONCE. Per result it cost eighty-five characters times the number of calls, which is
         // the budget the calls were rescued from - a notice that crowds out what it is annotating.
         var header = $"{slice.Length} tool call(s) in this step, oldest first{Tally(slice)}. "
-                   + "A result ending \"… (N of M)\" was shortened to fit; the call it belongs to "
-                   + "still happened.";
+                   + "A result too long to show keeps its START and its END, with the cut marked "
+                   + "between them — so a command's closing summary is always here; the call it "
+                   + "belongs to still happened.";
         var calls = slice.Select(Call).ToArray();
 
         // How many can be shown AT ALL. Each costs its call line plus the floor under its output -
@@ -241,8 +242,37 @@ public sealed class ExecutionJournal
             _ => action.Output ?? "OK"
         };
 
-        return text.Length <= budget
-            ? text
-            : text[..budget] + $"… ({budget:N0} of {text.Length:N0})";
+        return text.Length <= budget ? text : HeadAndTail(text, budget);
+    }
+
+    /// <summary>
+    /// A shortened result: the START and the END of it, with the cut marked between them.
+    ///
+    /// <para>Keeping the first N characters is the obvious implementation and it is wrong for the
+    /// results that matter most. A command puts its restore and build noise first and its VERDICT
+    /// last, so head-only shortening reliably hands over the part with no answer in it. Reported
+    /// 2026-09-07 22:22, twice in one run, and the reviewer named the cause itself: <i>"the provided
+    /// tool output for 'dotnet test' is truncated and does not contain these specific numbers. The
+    /// agent fabricated the test summary."</i> The numbers were real — <c>Passed! Failed: 0, Passed:
+    /// 22</c> — and they were in the line after the cut.</para>
+    ///
+    /// <para>Weighted to the end for the same reason the log analyst weights its excerpt that way:
+    /// the head says what was attempted, the tail says how it went, and only one of those is what a
+    /// reviewer is being asked about.</para>
+    /// </summary>
+    private static string HeadAndTail(string text, int budget)
+    {
+        // Enough head to recognise WHAT ran; the rest to the end, which is where the answer is.
+        var head = Math.Max(1, budget * 2 / 5);
+        var tail = budget - head;
+
+        // Below this there is no room for two pieces and a marker between them, and half a marker
+        // is worse than a clean cut.
+        if (tail < 40)
+            return text[..budget] + $"… ({budget:N0} of {text.Length:N0})";
+
+        return text[..head]
+             + $"\n… ({text.Length - budget:N0} characters cut from the middle; the end follows) …\n"
+             + text[^tail..];
     }
 }

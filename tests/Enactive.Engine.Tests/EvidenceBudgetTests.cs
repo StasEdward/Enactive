@@ -98,7 +98,9 @@ public sealed class EvidenceBudgetTests
     {
         var evidence = Journal(("read_file", """{"path":"big.cs"}""", new string('x', 50_000))).Describe();
 
-        Assert.Contains("of 50,000)", evidence, StringComparison.Ordinal);
+        // The mark moved into the middle when shortening started keeping the END too — see
+        // ResultTailTests. What it has to do is unchanged: say a cut happened, and how big it was.
+        Assert.Contains("cut from the middle", evidence, StringComparison.Ordinal);
         // ...and what that mark MEANS is said once, at the top, rather than eighty-five characters
         // at a time next to every result it annotates.
         Assert.Contains("the call it belongs to still happened", evidence, StringComparison.Ordinal);
