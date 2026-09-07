@@ -60,6 +60,11 @@ public sealed class ExecutionJournalTests
         Assert.Contains("SECOND ATTEMPT", journal.Describe(second), StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// Still capped, and still says so — but the cap now falls on the OUTPUTS and the calls survive.
+    /// It used to cut the whole text at the tail, which lost the LAST calls of a step and let a
+    /// reviewer conclude that work it could not see had never happened (see EvidenceBudgetTests).
+    /// </summary>
     [Fact]
     public void A_long_transcript_of_actions_is_capped_and_says_so()
     {
@@ -69,8 +74,9 @@ public sealed class ExecutionJournalTests
 
         var evidence = journal.Describe(maxChars: 3000);
 
-        Assert.True(evidence.Length < 3200, $"{evidence.Length} characters");
-        Assert.Contains("truncated", evidence, StringComparison.Ordinal);
+        Assert.True(evidence.Length < 3600, $"{evidence.Length} characters");
+        Assert.Contains("200 tool call(s)", evidence, StringComparison.Ordinal);
+        Assert.Contains("not shown here", evidence, StringComparison.Ordinal);
     }
 
     [Fact]

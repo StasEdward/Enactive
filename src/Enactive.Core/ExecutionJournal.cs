@@ -82,10 +82,27 @@ public sealed class ExecutionJournal
 
     /// <summary>
     /// The evidence, in the shape the reviewer prompt has always been written for: what was asked,
-    /// then what came back. Capped, because a reviewer prompt is not the place to send a whole
-    /// build log — and the cap is stated rather than applied silently.
+    /// then what came back.
+    ///
+    /// <para><b>Every call is listed. Only the OUTPUTS are shortened.</b> This used to build the
+    /// whole thing and then cut the tail at 3000 characters, which meant one long result at the
+    /// start ate the budget and every call after it vanished — from the evidence, not from the run.
+    /// On 2026-09-07 a step listed a directory, read the README, and then read five source files;
+    /// the reviewer was shown the first two and correctly concluded, by its own instructions, that
+    /// "no source files in the src/ directory were ever read". It failed work that had been done,
+    /// three times, and the run died with the second step skipped.</para>
+    ///
+    /// <para>That is §8i again in the one place built to prevent it. The journal fixed WHERE the
+    /// evidence comes from and left the same hole in how it is rendered: a record shortened at the
+    /// front, judged as if it were whole.</para>
+    ///
+    /// <para>So the budget is split. A call line is a dozen characters and is what proves the call
+    /// happened; a result is bulky and is only supporting detail. Each action keeps its call line
+    /// and gets an equal share of what is left for its output, and a shortened output says how much
+    /// of it is shown. If even the call lines do not fit, the newest are kept and the number of
+    /// older ones is stated — an evidence list that quietly stops is the whole defect.</para>
     /// </summary>
-    public string Describe(int from = 0, int maxChars = 3000)
+    public string Describe(int from = 0, int maxChars = 6000)
     {
         ExecutedAction[] slice;
         lock (_gate)
@@ -94,22 +111,89 @@ public sealed class ExecutionJournal
         if (slice.Length == 0)
             return "(no tools were run in this step)";
 
-        var sb = new StringBuilder();
-        foreach (var action in slice)
+        // The count first, as a fact rather than something to infer by counting arrows. A reviewer
+        // that can compare "nine calls" against what it can see can tell a short list from a
+        // shortened one.
+        // Said ONCE. Per result it cost eighty-five characters times the number of calls, which is
+        // the budget the calls were rescued from - a notice that crowds out what it is annotating.
+        var header = $"{slice.Length} tool call(s) in this step, oldest first. A result ending "
+                   + "\"… (N of M)\" was shortened to fit; the call it belongs to still happened.";
+        var calls = slice.Select(Call).ToArray();
+
+        // How many can be shown AT ALL. Each costs its call line plus the floor under its output -
+        // budgeting the call lines alone was the first version of this and it overran by a factor of
+        // twelve, because the floor is paid per action whether or not there is room for it.
+        var kept = slice.Length;
+        var dropped = 0;
+        while (kept > 1 && header.Length + Cost(calls, kept) > maxChars)
         {
-            sb.Append("-> ").Append(action.Tool).Append(' ').AppendLine(action.Arguments);
-
-            var answer = action.Outcome switch
-            {
-                ActionOutcome.Refused => "REFUSED: " + (action.Output ?? "not permitted"),
-                ActionOutcome.Failed => "ERROR: " + (action.Output ?? "failed"),
-                _ => action.Output ?? "OK"
-            };
-
-            sb.Append("<- ").AppendLine(answer);
+            kept--;
+            dropped++;
         }
 
-        var text = sb.ToString().Trim();
-        return text.Length > maxChars ? text[..maxChars] + "\n… (truncated)" : text;
+        var note = dropped > 0
+            ? $"… the {dropped} oldest call(s) of this step are not shown here.\n"
+            : "";
+
+        // What is left over, shared EQUALLY. Equal rather than first-come is the whole point: the
+        // old behaviour was first-come, and one README took all of it.
+        var spare = maxChars - header.Length - note.Length - Cost(calls, kept);
+        var each = MinOutputChars + Math.Max(0, spare) / kept;
+
+        var sb = new StringBuilder(header).AppendLine().Append(note);
+
+        for (var i = slice.Length - kept; i < slice.Length; i++)
+        {
+            sb.AppendLine(calls[i]);
+            sb.Append("<- ").AppendLine(Answer(slice[i], each));
+        }
+
+        return sb.ToString().TrimEnd();
+    }
+
+    /// <summary>The least the newest <paramref name="kept"/> actions can be shown in.</summary>
+    private static int Cost(string[] calls, int kept)
+    {
+        var total = 0;
+        for (var i = calls.Length - kept; i < calls.Length; i++)
+            // The call, "<- ", the floor under its output, and the notice that says it was shortened -
+            // which has to be paid for or the budget is a number the result does not obey.
+            total += calls[i].Length + 1 + MinOutputChars + 4 + ShortenedNoticeChars;
+        return total;
+    }
+
+    /// <summary>
+    /// Enough of a result to recognise what it was, however many calls have to share the budget.
+    /// A step with thirty calls gets a thin slice of each, which is the right trade: what the
+    /// reviewer must not lose is the LIST.
+    /// </summary>
+    private const int MinOutputChars = 120;
+
+    /// <summary>Room reserved for the "… (N of M)" that marks a shortened result.</summary>
+    private const int ShortenedNoticeChars = 24;
+
+    /// <summary>The call itself. Arguments are clipped because write_file carries a whole file.</summary>
+    private static string Call(ExecutedAction action)
+    {
+        const int maxArguments = 300;
+        var arguments = action.Arguments ?? "";
+        if (arguments.Length > maxArguments)
+            arguments = arguments[..maxArguments] + $"… ({arguments.Length:N0} characters of arguments)";
+
+        return $"-> {action.Tool} {arguments}";
+    }
+
+    private static string Answer(ExecutedAction action, int budget)
+    {
+        var text = action.Outcome switch
+        {
+            ActionOutcome.Refused => "REFUSED: " + (action.Output ?? "not permitted"),
+            ActionOutcome.Failed => "ERROR: " + (action.Output ?? "failed"),
+            _ => action.Output ?? "OK"
+        };
+
+        return text.Length <= budget
+            ? text
+            : text[..budget] + $"… ({budget:N0} of {text.Length:N0})";
     }
 }

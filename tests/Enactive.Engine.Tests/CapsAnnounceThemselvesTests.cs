@@ -59,7 +59,11 @@ public sealed class CapsAnnounceThemselvesTests
         // Caught by this census the day it was written, which is what the census is for: a new
         // constant with "Chars" in its name and nothing driving it past its limit.
         ["LogAnalyst.CharsPerToken"] = "The_missing_middle_announces_itself_and_says_how_much",
-        ["RunTitle.MaxChars"] = "A_long_title_is_cut_and_says_it_was"
+        ["RunTitle.MaxChars"] = "A_long_title_is_cut_and_says_it_was",
+        // The floor under a shared budget: with enough calls each gets very little, and what must
+        // never be lost is the LIST of them.
+        ["ExecutionJournal.MinOutputChars"] = "A_list_too_long_to_show_says_how_much_is_missing",
+        ["ExecutionJournal.ShortenedNoticeChars"] = "A_shortened_result_says_so_and_says_the_call_happened"
     };
 
     /// <summary>
@@ -68,7 +72,11 @@ public sealed class CapsAnnounceThemselvesTests
     /// </summary>
     private static readonly Dictionary<string, string> LimitsWithNoConstant = new(StringComparer.Ordinal)
     {
-        ["ExecutionJournal.Describe(maxChars: 3000)"] = "Evidence_past_the_cap_says_it_was_truncated",
+        // Not a whole-text cut any more: the calls are always listed and only the outputs share a
+        // budget, because cutting the tail lost the LAST calls and the reviewer failed work it
+        // could not see.
+        ["ExecutionJournal.Describe(maxChars: 6000, shared between outputs)"]
+            = "A_shortened_result_says_so_and_says_the_call_happened",
         ["McpConnection content (32000)"] = "(none — a remote server's own output, cut with '… (truncated)')",
         ["Transcript.Elide"] = "(EventKind.ContextTrimmed — ContextWindowTests)"
     };

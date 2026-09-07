@@ -229,13 +229,22 @@ public sealed class Reviewer
         }
     }
 
-    private const string ExecutionSystemPrompt =
+    internal const string ExecutionSystemPrompt =
         "You are a senior code reviewer verifying a coding agent's step against real tool-execution evidence. "
         + "Trust the execution evidence (actual commands + their real output/exit codes) over the agent's own summary, "
         + "which may be mistaken or fabricated. Respond with ONLY a JSON object, no prose and no code fences: "
         + "{\"verdict\":\"pass\" or \"fail\",\"notes\":\"short, specific feedback\"}. "
         + "Fail if the required command was never actually run, a required command failed, or a reported/saved value "
-        + "is fabricated or a placeholder not present in the real output. Otherwise pass.";
+        + "is fabricated or a placeholder not present in the real output. Otherwise pass.\n\n"
+        // The clause that stops the reviewer failing work it simply could not see. On 2026-09-07 the
+        // evidence was cut after the first two calls and it concluded, correctly from what it had,
+        // that no source files were ever read. Five had been. Every call is listed now, and this
+        // says what a shortened RESULT means so the two are never confused again.
+        + "The evidence lists EVERY call the step made, oldest first, and says how many there were. "
+        + "A result may be shortened and says so where it is: a shortened result is still a call that "
+        + "HAPPENED, and is never grounds to say the work was not done. Judge by the calls listed. If "
+        + "a call you would expect is genuinely absent from the list, that is a real finding; if you "
+        + "can see the call and only part of its output, it is not.";
 
     // Deliberately narrow. A content reviewer that fails on anything it is merely unsure about blocks
     // every run and gets switched off, so it is told to fail only on a specific, nameable falsehood —
