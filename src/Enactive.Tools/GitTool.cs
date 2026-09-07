@@ -16,9 +16,12 @@ public sealed class GitTool : ITool
     public ToolDefinition Definition { get; } = new(
         Name: "git",
         Description: "Run a git command in the workspace and return its stdout/stderr + exit code. "
-                   + "Pass 'args' as an array of strings (preferred), e.g. [\"status\"] or "
-                   + "[\"log\",\"--oneline\",\"-5\"] or [\"commit\",\"-m\",\"message with spaces\"]; a single "
-                   + "string also works for simple commands. Do NOT include the leading 'git'.",
+                   + "ONE ARGUMENT PER ELEMENT: [\"diff\",\"HEAD\"], NOT [\"diff HEAD\"] - a whole command "
+                   + "line in one element is passed through as one argument and git will not "
+                   + "recognise it. More examples: [\"status\"], [\"log\",\"--oneline\",\"-5\"], "
+                   + "[\"commit\",\"-m\",\"message with spaces\"] - a later argument may contain spaces, the "
+                   + "subcommand never does. A plain string is also accepted and is split on spaces. "
+                   + "Do NOT include the leading 'git'.",
         JsonSchema: Schema);
 
     public PermissionLevel RequiredLevel => PermissionLevel.Execute;
@@ -39,6 +42,12 @@ public sealed class GitTool : ITool
         if (args.Count == 0)
             return ToolResults.Fail("'args' is required (e.g. [\"status\"]).");
 
+        // One whole command line in one array element is the mistake these tools attract.
+        // Refused with the fix spelled out, because exit code 1 and "is not a git command" is
+        // not something a model can act on - and on 2026-09-07 it did not, eighteen times.
+        if (ProcessExec.WrongShapeOfArgs("git", args) is { } wrongShape)
+            return ToolResults.Fail(wrongShape);
+
         return await ProcessExec.RunAsync("git", args, ctx.WorkspaceRoot, TimeoutSeconds, ct);
     }
 
@@ -47,7 +56,7 @@ public sealed class GitTool : ITool
       "type": "object",
       "properties": {
         "args": {
-          "description": "Git arguments without the leading 'git' — an array of strings (preferred) or a single string.",
+          "description": "Git arguments without the leading 'git'. An array with ONE ARGUMENT PER ELEMENT ([\"diff\",\"HEAD\"], not [\"diff HEAD\"]), or a single string that is split on spaces.",
           "type": ["array", "string"],
           "items": { "type": "string" }
         }

@@ -15,9 +15,11 @@ public sealed class DockerTool : ITool
 
     public ToolDefinition Definition { get; } = new(
         Name: "docker",
-        Description: "Run a docker command and return its stdout/stderr + exit code. Pass 'args' as an "
-                   + "array of strings (preferred), e.g. [\"ps\",\"-a\"] or [\"logs\",\"mysql\"] or "
-                   + "[\"compose\",\"up\",\"-d\"]; a single string also works. Do NOT include the leading 'docker'.",
+        Description: "Run a docker command and return its stdout/stderr + exit code. "
+                   + "ONE ARGUMENT PER ELEMENT: [\"ps\",\"-a\"], NOT [\"ps -a\"] - a whole command line in "
+                   + "one element is passed through as one argument and docker will not recognise it. "
+                   + "More examples: [\"logs\",\"mysql\"], [\"compose\",\"up\",\"-d\"]. A plain string is also "
+                   + "accepted and is split on spaces. Do NOT include the leading 'docker'.",
         JsonSchema: Schema);
 
     public PermissionLevel RequiredLevel => PermissionLevel.Execute;
@@ -37,6 +39,12 @@ public sealed class DockerTool : ITool
 
         if (args.Count == 0)
             return ToolResults.Fail("'args' is required (e.g. [\"ps\",\"-a\"]).");
+
+        // One whole command line in one array element is the mistake these tools attract.
+        // Refused with the fix spelled out, because exit code 1 and "is not a docker command" is
+        // not something a model can act on - and on 2026-09-07 it did not, eighteen times.
+        if (ProcessExec.WrongShapeOfArgs("docker", args) is { } wrongShape)
+            return ToolResults.Fail(wrongShape);
 
         return await ProcessExec.RunAsync("docker", args, ctx.WorkspaceRoot, TimeoutSeconds, ct);
     }

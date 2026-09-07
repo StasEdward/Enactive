@@ -1455,9 +1455,22 @@ public sealed class Orchestrator : IOrchestrator
                             reference.Kind.ToString(), reference.RelativePath, stepNo));
                 }
 
+                // A FAILURE carries its output too. This dropped it: the model was told
+                // "ERROR: git exited with code 1." and nothing else, while the output holding
+                // "git: 'diff HEAD' is not a git command" sat in the journal, in the log and on
+                // screen - visible to everyone except the only party that could act on it.
+                //
+                // On 2026-09-07 that cost a run 18 git calls in ten different formulations, none of
+                // which could work, and ended with a review of a diff the model never saw. The same
+                // class as every other defect this month: the record somebody works from is
+                // shortened, and nothing says so.
                 messages.Add(ChatMessage.Tool(
                     call.Id,
-                    result.Success ? (result.Output ?? "OK") : $"ERROR: {result.Error}"));
+                    result.Success
+                        ? (result.Output ?? "OK")
+                        : string.IsNullOrWhiteSpace(result.Output)
+                            ? $"ERROR: {result.Error}"
+                            : $"ERROR: {result.Error}\n{result.Output}"));
             }
         }
 

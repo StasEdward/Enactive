@@ -43,6 +43,38 @@ internal static class ProcessExec
     }
 
     /// <summary>
+    /// The one argument mistake a model makes with these tools, named rather than run.
+    ///
+    /// <para>A whole command line arrives as a SINGLE array element - <c>["diff HEAD"]</c> instead of
+    /// <c>["diff", "HEAD"]</c> - and each element is passed to the process verbatim, so git is asked
+    /// to run a subcommand called "diff HEAD" and answers "is not a git command", with exit code 1
+    /// and nothing else the model can use.</para>
+    ///
+    /// <para>Checking only the FIRST element is what makes this exact rather than clever: no git or
+    /// docker subcommand contains whitespace, while later arguments legitimately do
+    /// (<c>["commit", "-m", "message with spaces"]</c>) and must be left alone.</para>
+    ///
+    /// <para>It refuses instead of quietly splitting. The model is now shown why a call failed, so a
+    /// refusal that names the fix costs one turn - and silently rewriting the arguments somebody
+    /// passed is how a wrong action becomes one nobody can see.</para>
+    /// </summary>
+    public static string? WrongShapeOfArgs(string program, IReadOnlyList<string> args)
+    {
+        if (args.Count == 0 || args[0].AsSpan().IndexOfAny(' ', '\t', '\n') < 0)
+            return null;
+
+        var pieces = args[0].Split(
+            new[] { ' ', '\t', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+
+        return $"'{args[0]}' is not a {program} subcommand - it is a whole command line in one "
+             + "argument. Each element of 'args' is passed through as ONE argument, so pass "
+             + $"[{string.Join(", ", pieces.Select(p => $"\"{p}\""))}"
+             + (args.Count > 1 ? ", ..." : "")
+             + "] instead. An argument may contain spaces (a commit message, a path); the "
+             + "subcommand never does.";
+    }
+
+    /// <summary>
     /// Turns a finished process into a <see cref="ToolResult"/>, shared by every process-running tool.
     /// A non-zero exit code is a FAILED result: "the process started" and "the command succeeded" are
     /// two different things, and reporting the second when only the first is true pushes the detection
