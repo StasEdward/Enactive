@@ -61,8 +61,9 @@ public sealed class ListDirectoryTool : ITool
                     entries.Add(display + "  (proposed, not yet applied)");
             }
 
+            // NotFound, not Fail: a listing of somewhere that is not there has answered the question.
             if (!onDisk && !proposed)
-                return Task.FromResult(ToolResults.Fail($"Directory not found: {path ?? "."}"));
+                return Task.FromResult(ToolResults.NotFound($"Directory not found: {path ?? "."}"));
 
             entries.Sort(StringComparer.OrdinalIgnoreCase);
 

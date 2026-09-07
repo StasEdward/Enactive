@@ -76,8 +76,9 @@ public sealed class SearchFilesTool : ITool
         try { searchRoot = WorkspacePaths.ResolveInside(ctx.WorkspaceRoot, subPath); }
         catch (ArgumentException ex) { return ToolResults.Fail(ex.Message); }
 
+        // NotFound, not Fail: searching somewhere that does not exist is answered by saying so.
         if (!Directory.Exists(searchRoot))
-            return ToolResults.Fail($"Not a folder in this workspace: {subPath ?? "."}");
+            return ToolResults.NotFound($"Not a folder in this workspace: {subPath ?? "."}");
 
         var output = new StringBuilder();
         var matches = 0;

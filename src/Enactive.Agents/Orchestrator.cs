@@ -840,20 +840,49 @@ public sealed class Orchestrator : IOrchestrator
     /// says nothing about the one that failed. The cost is that an agent which reaches the goal by
     /// another route still leaves the step Incomplete, which is the honest reading: what it was
     /// asked to do did not happen, whatever else did.
+    ///
+    /// A lookup that found nothing is held to a different standard. <see cref="ToolResult.IsAnswer"/>
+    /// marks the failures that ANSWERED — read_file on a path that does not exist, list_dir on a
+    /// folder that is not there — and guessing at a name and being told no is how anything explores
+    /// a tree it has not seen. Those are forgiven, with one condition: <b>unless they are all the
+    /// step has to show for itself.</b> A step whose every action was a lookup that found nothing
+    /// produced nothing, and "Done" over that is the exact shape this class was built to catch. One
+    /// call that WORKED is what separates a step exploring from a step with nothing.
     /// </summary>
     private sealed class OpenFailures
     {
         private readonly Dictionary<string, string> _byCall = new(StringComparer.Ordinal);
 
-        public int Count => _byCall.Count;
+        /// <summary>Lookups that found nothing — see the note above about when these count.</summary>
+        private readonly Dictionary<string, string> _foundNothing = new(StringComparer.Ordinal);
+
+        private bool _anythingWorked;
+
+        public int Count => _byCall.Count + (_anythingWorked ? 0 : _foundNothing.Count);
+
+        /// <summary>True when the step's whole record is lookups that found nothing.</summary>
+        public bool NothingButMisses
+            => !_anythingWorked && _byCall.Count == 0 && _foundNothing.Count > 0;
 
         public void Failed(ToolCall call, string? error)
-            => _byCall[Key(call)] = $"{call.Name} {Compact(call.ArgumentsJson)} — {error ?? "failed"}";
+            => _byCall[Key(call)] = Line(call, error);
 
-        public void Succeeded(ToolCall call) => _byCall.Remove(Key(call));
+        /// <summary>A lookup whose target is not there. An answer — unless the step has nothing else.</summary>
+        public void FoundNothing(ToolCall call, string? error)
+            => _foundNothing[Key(call)] = Line(call, error);
+
+        public void Succeeded(ToolCall call)
+        {
+            _anythingWorked = true;
+            _byCall.Remove(Key(call));
+            _foundNothing.Remove(Key(call));
+        }
 
         public string Describe()
-            => string.Join("; ", _byCall.Values);
+            => string.Join("; ", _anythingWorked ? _byCall.Values : _byCall.Values.Concat(_foundNothing.Values));
+
+        private static string Line(ToolCall call, string? error)
+            => $"{call.Name} {Compact(call.ArgumentsJson)} — {error ?? "failed"}";
 
         private static string Key(ToolCall call) => KeyOf(call);
 
@@ -1348,10 +1377,18 @@ public sealed class Orchestrator : IOrchestrator
                 if (openFailures.Count > 0)
                 {
                     var unresolved = openFailures.Describe();
-                    yield return Ev(EventKind.ErrorObserved,
-                        $"Finished without resolving {openFailures.Count} tool call(s) that did not go through: "
-                        + unresolved);
-                    loopResult.Set(StepOutcomeKind.Incomplete, "unresolved tool call: " + unresolved);
+
+                    // Two different things end a step here, and saying which one is the difference
+                    // between a person fixing a broken command and a person checking a path.
+                    yield return Ev(EventKind.ErrorObserved, openFailures.NothingButMisses
+                        ? $"Finished with nothing done: all {openFailures.Count} lookup(s) this step "
+                          + "made found nothing, and nothing else was tried: " + unresolved
+                        : $"Finished without resolving {openFailures.Count} tool call(s) that did not "
+                          + "go through: " + unresolved);
+
+                    loopResult.Set(StepOutcomeKind.Incomplete, openFailures.NothingButMisses
+                        ? "nothing found and nothing done: " + unresolved
+                        : "unresolved tool call: " + unresolved);
                     yield break;
                 }
 
@@ -1490,6 +1527,8 @@ public sealed class Orchestrator : IOrchestrator
 
                 if (result.Success)
                     openFailures.Succeeded(call);
+                else if (result.IsAnswer)
+                    openFailures.FoundNothing(call, result.Error);
                 else
                     openFailures.Failed(call, result.Error);
 

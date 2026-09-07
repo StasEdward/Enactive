@@ -61,8 +61,10 @@ public sealed class ReadFileTool : ITool
             // file, or none at all, right after the agent had written it.
             var staged = await ctx.Artifacts.TryReadPendingAsync(path, ct);
 
+            // NotFound, not Fail: a read that finds nothing there has ANSWERED. Guessing at a path
+            // and being told no is how a model explores a tree it has not seen.
             if (staged is null && !File.Exists(full))
-                return ToolResults.Fail($"File not found: {path}");
+                return ToolResults.NotFound($"File not found: {path}");
 
             // Only the window is held. This used to read the whole file into a string, split it into
             // an array of every line, and then keep a handful of them - so asking for twenty lines of
