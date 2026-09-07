@@ -1,4 +1,4 @@
-namespace Enactive.App.Ui.ViewModels;
+﻿namespace Enactive.App.Ui.ViewModels;
 
 using Avalonia.Media;
 using Enactive.App.Ui.Mvvm;
@@ -30,7 +30,7 @@ internal sealed class WorkspaceItemViewModel
         // is the whole point, because "which of these is gone" is what you came here to see.
         // A missing folder outranks being current: the name is already red, and the edge agrees.
         EdgeBrush = !exists ? Brand.Danger
-            : isCurrent ? Brand.Accent
+            : isCurrent ? Brand.Current
             : Brand.LineStrong;
 
         // The row you are in sits a little brighter. Same light, more of it - the edge carries the

@@ -102,6 +102,16 @@ internal static class Brand
     /// <summary>Info light enough to read on its own tint - see <see cref="PhaseText"/>.</summary>
     public static readonly IBrush InfoSoft = Of(InfoLight);
 
+    /// <summary>
+    /// "You are here": the selected tab, the current workspace. NOT an action.
+    ///
+    /// <para>These used to be Ember, which is the one thing the palette says at the top of this file
+    /// that Ember must not be - a selection is not the action you are meant to take. It also read as
+    /// a warning, which is what got it reported. Ember is now down to the primary button, the focus
+    /// ring and caret, and the unread dot; being rarer is what lets it still mean something.</para>
+    /// </summary>
+    public static readonly IBrush Current = Info;
+
     // ── Plan step status ────────────────────────────────────────────────────
     public static readonly IBrush StepPending = TextFaint;
 
@@ -258,6 +268,7 @@ internal static class Brand
         r["Brand.Warning"] = Warning;
         r["Brand.Danger"] = Danger;
         r["Brand.Info"] = Info;
+        r["Brand.Current"] = Current;
 
         r["Brand.StepPending"] = StepPending;
         r["Brand.StepRunning"] = StepRunning;

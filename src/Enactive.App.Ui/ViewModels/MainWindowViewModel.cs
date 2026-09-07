@@ -1,4 +1,4 @@
-namespace Enactive.App.Ui.ViewModels;
+﻿namespace Enactive.App.Ui.ViewModels;
 
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
@@ -341,7 +341,7 @@ internal sealed class MainWindowViewModel : ObservableObject
 
     /// <summary>The card wears the same edge as its row in the switcher, so the two read as one
     /// object seen closed and open.</summary>
-    public IBrush WorkspaceEdgeBrush => _workspaceMissing ? Brand.Danger : Brand.Accent;
+    public IBrush WorkspaceEdgeBrush => _workspaceMissing ? Brand.Danger : Brand.Current;
 
     /// <summary>Every workspace the app knows about. Rebuilt by the window from the registry.</summary>
     public ObservableCollection<WorkspaceItemViewModel> Workspaces { get; } = new();

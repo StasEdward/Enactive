@@ -410,12 +410,13 @@
         <Setter Property="Background" Value="Transparent" />
     </Style>
     <!-- Last, so the selected tab keeps its underline while the pointer is over it. -->
+    <!-- The underline says which tab you are ON, which is not an action - see Brand.Current. -->
     <Style Selector="Button.tab.on /template/ ContentPresenter#PART_ContentPresenter">
-        <Setter Property="BorderBrush" Value="{DynamicResource Brand.Accent}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Brand.Current}" />
         <Setter Property="Foreground" Value="{DynamicResource Brand.Text}" />
     </Style>
     <Style Selector="Button.tab.on:pointerover /template/ ContentPresenter#PART_ContentPresenter">
-        <Setter Property="BorderBrush" Value="{DynamicResource Brand.Accent}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Brand.Current}" />
         <Setter Property="Foreground" Value="{DynamicResource Brand.Text}" />
     </Style>
 
