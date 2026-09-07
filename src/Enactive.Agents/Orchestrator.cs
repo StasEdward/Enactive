@@ -1,5 +1,6 @@
 namespace Enactive.Agents;
 
+using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
@@ -46,6 +47,14 @@ public sealed class Orchestrator : IOrchestrator
     /// deciding outcomes it is the flat cap again under a new name.
     /// </summary>
     private const int RunawayCeiling = 250;
+
+    /// <summary>
+    /// The tools that CHANGE the workspace. Shared by <see cref="OpenFailures"/> (a later file of
+    /// theirs can close an earlier failure) and by <see cref="StepProgress"/> (after one of these
+    /// lands, everything read afterwards is being read off a different tree).
+    /// </summary>
+    private static readonly HashSet<string> MutatingTools =
+        new(StringComparer.Ordinal) { "write_file", "edit_file", "move_file", "create_directory" };
 
     private readonly IChatProviderFactory _providers;
     private readonly IWorkerProvider _workers;
@@ -902,8 +911,7 @@ public sealed class Orchestrator : IOrchestrator
         /// The tools whose work IS a file, so a later file of theirs can show the work happened.
         /// A command is not one of them: nothing it produces says the earlier one succeeded.
         /// </summary>
-        private static readonly HashSet<string> ProducesFiles =
-            new(StringComparer.Ordinal) { "write_file", "edit_file", "move_file", "create_directory" };
+        private static HashSet<string> ProducesFiles => MutatingTools;
 
         /// <summary>A lookup whose target is not there. An answer — unless the step has nothing else.</summary>
         public void FoundNothing(ToolCall call, string? error)
@@ -1056,14 +1064,38 @@ public sealed class Orchestrator : IOrchestrator
     /// this step has not made before. Success is not required — a command that fails teaches the
     /// model something and an unresolved failure is already caught at the end of the loop — so what
     /// is left is exactly repetition, which is what a stuck model actually does.</para>
+    ///
+    /// <para>With one correction, which is the whole point of this class existing after a run that
+    /// proved it wrong. A REPAIR LOOP is made of repeated calls by construction: read the file,
+    /// edit it, build, read it again, edit again, build again. Counted naively, the second read and
+    /// the second build are "calls it had already made" — and a step that had just broken the build
+    /// and was in the middle of fixing it was stopped for doing the fixing. But those calls are not
+    /// the same calls: the file they read and the tree they build no longer exist as they were. So
+    /// a successful <see cref="MutatingTools">write</see> advances a GENERATION, and everything
+    /// that only observes — reads, commands — is identified together with the generation it
+    /// observed. After a real change, looking again is new.</para>
+    ///
+    /// <para>The writes themselves carry no generation, which is what keeps this bounded: escaping
+    /// a stall costs a write nobody has made before. Two edits alternating forever are still two
+    /// calls already made, and still stall. And <see cref="RunawayCeiling"/> remains behind all of
+    /// it for the case this cannot see.</para>
     /// </summary>
     private sealed class StepProgress
     {
         private readonly HashSet<string> _seen = new(StringComparer.Ordinal);
         private readonly List<string> _repeats = new();
 
+        /// <summary>How many times the workspace has changed under this step.</summary>
+        private int _generation;
+
         /// <summary>Turns in a row that did nothing new.</summary>
         public int Stalled { get; private set; }
+
+        /// <summary>
+        /// A write landed. Everything observed from here on is observing something else — said once,
+        /// here, rather than by each caller deciding what counts as a change.
+        /// </summary>
+        public void WorkspaceChanged() => _generation++;
 
         /// <summary>Records one turn's calls and says whether any of them was new.</summary>
         public bool Advanced(IReadOnlyList<ToolCall> calls)
@@ -1072,7 +1104,7 @@ public sealed class Orchestrator : IOrchestrator
             var repeatedHere = new List<string>();
 
             foreach (var call in calls)
-                if (_seen.Add(CallIdentity.Of(call)))
+                if (_seen.Add(Identity(call)))
                     advanced = true;
                 else
                     repeatedHere.Add($"{call.Name} {Compact(call.ArgumentsJson)}");
@@ -1092,6 +1124,15 @@ public sealed class Orchestrator : IOrchestrator
 
             return advanced;
         }
+
+        /// <summary>
+        /// What makes this call this call, HERE. A write is itself; anything else is itself plus the
+        /// state of the workspace it is about to look at.
+        /// </summary>
+        private string Identity(ToolCall call)
+            => MutatingTools.Contains(call.Name)
+                ? CallIdentity.Of(call)
+                : CallIdentity.Of(call) + "\0#" + _generation.ToString(CultureInfo.InvariantCulture);
 
         /// <summary>What it kept asking for, for the message that stops it.</summary>
         public string Describe()
@@ -1681,7 +1722,14 @@ public sealed class Orchestrator : IOrchestrator
                 }
 
                 if (result.Success)
+                {
                     openFailures.Succeeded(call, result.Artifacts);
+
+                    // The tree just moved. A read or a build that comes after this is not the one
+                    // that came before it, whatever its arguments say.
+                    if (MutatingTools.Contains(call.Name))
+                        progress.WorkspaceChanged();
+                }
                 else if (result.IsAnswer)
                     openFailures.FoundNothing(call, result.Error);
                 else
