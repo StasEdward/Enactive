@@ -6,6 +6,7 @@ using Enactive.Core.History;
 using Enactive.Core.Intents;
 using Enactive.Core.Permissions;
 using Enactive.Core.Providers;
+using Enactive.Core.Templates;
 using Enactive.Core.Tools;
 using Enactive.Core.Workers;
 using Enactive.Providers;
@@ -26,14 +27,33 @@ using Enactive.Workspace;
 //   dotnet run --project src/Enactive.App.Console -- timeline "<workspace path>"
 var isTimeline = args.Length > 0 && string.Equals(args[0], "timeline", StringComparison.OrdinalIgnoreCase);
 
+// ── Scheduled mode ────────────────────────────────────────────────────────────
+//   Enactive.App.Console --template release-check --workspace c:\repos\Enactive [--report run.txt]
+//
+// This is what makes a saved task a DAILY task: Windows Task Scheduler, cron or a pipeline step
+// drives it. Nothing here is interactive, and that is enforced rather than assumed - see
+// UnattendedDecisionHandler.
+string? Option(string name)
+{
+    for (var i = 0; i < args.Length - 1; i++)
+        if (string.Equals(args[i], name, StringComparison.OrdinalIgnoreCase))
+            return args[i + 1];
+    return null;
+}
+
+var templateId = Option("--template");
+var reportPath = Option("--report");
+
 var baseUrl = Environment.GetEnvironmentVariable("ENACTIVE_OLLAMA_URL") ?? "http://localhost:11434/v1";
 var model = Environment.GetEnvironmentVariable("ENACTIVE_MODEL") ?? "qwen2.5-coder";
 var command = args.Length > 0 && !string.IsNullOrWhiteSpace(args[0])
     ? args[0]
     : "Create a Python script named list_files.py in the current workspace that prints the list of files in the current directory.";
-var workspaceRoot = Path.GetFullPath(args.Length > 1 && !string.IsNullOrWhiteSpace(args[1])
-    ? args[1]
-    : Directory.GetCurrentDirectory());
+var workspaceRoot = Path.GetFullPath(
+    Option("--workspace")
+    ?? (args.Length > 1 && !string.IsNullOrWhiteSpace(args[1]) && !args[1].StartsWith("--", StringComparison.Ordinal)
+        ? args[1]
+        : Directory.GetCurrentDirectory()));
 
 Directory.CreateDirectory(workspaceRoot);
 
@@ -113,7 +133,6 @@ var workerProvider = new StaticWorkerProvider(
     DefaultWorkers.DefaultId);
 var planner = new Planner();
 var permissionEngine = new PermissionEngine();
-var decisionHandler = new ConsoleDecisionHandler();
 
 // Workspace autonomy policy: everything is allowed at Execute level, but run_command always asks first.
 var permissionPolicy = new PermissionPolicy(
@@ -121,11 +140,45 @@ var permissionPolicy = new PermissionPolicy(
     Allow: new[] { "*" },
     AskBefore: new[] { "run_command", "run_powershell", "git", "docker" });
 
+// ── A saved task, run without a prompt ────────────────────────────────────────
+ResolvedTaskSpec? spec = null;
+if (templateId is { Length: > 0 })
+{
+    var template = new TemplateStore(workspaceRoot).Find(templateId);
+    if (template is null)
+    {
+        Console.Error.WriteLine($"No template '{templateId}' in {workspaceRoot} or the global library.");
+        return 64;   // EX_USAGE: the invocation is wrong, not the work
+    }
+
+    var resolution = TemplateResolution.Resolve(template, workspace, permissionPolicy);
+    if (resolution.Spec is null)
+    {
+        // Almost always a required parameter with no default. Unattended there is nobody to ask, so
+        // the honest answer is to refuse the invocation rather than run a half-filled task.
+        Console.Error.WriteLine($"'{template.Name}' cannot run unattended as it stands:");
+        foreach (var problem in resolution.Problems)
+            Console.Error.WriteLine("  - " + problem);
+        Console.Error.WriteLine("Give the missing parameters a default in the template, or run it from the app.");
+        return 64;
+    }
+
+    spec = resolution.Spec;
+    command = spec.Goal;
+}
+
+// Unattended when a template drove it: nobody is at this console, and an approval nobody can give
+// must not default to yes. See UnattendedDecisionHandler.
+IDecisionHandler decisionHandler = spec is null
+    ? new ConsoleDecisionHandler()
+    : new UnattendedDecisionHandler();
+
 var orchestrator = new Orchestrator(
     providerFactory, modelResolver, workerProvider, toolRegistry,
     artifactStore, workspace, planner, permissionEngine, decisionHandler,
-    permissionPolicy, new EmptyServiceProvider());
-var runRecorder = new RunRecorder(runStore, memoryStore, workspace.Id);
+    spec?.Permissions ?? permissionPolicy, new EmptyServiceProvider(),
+    successCriteria: spec?.SuccessCriteria, limits: spec?.Limits);
+var runRecorder = new RunRecorder(runStore, memoryStore, workspace.Id, spec: spec?.Snapshot());
 
 // ── Run ──────────────────────────────────────────────────────────────────────
 using var cts = new CancellationTokenSource();
@@ -140,9 +193,15 @@ Console.WriteLine(new string('-', 72));
 
 var focus = new IntentFocus(workspace.Id);
 var workContext = await contextProvider.BuildAsync(focus, cts.Token);
-var intent = new Intent(Guid.NewGuid(), command, IntentSource.CommandBar, workContext, DateTimeOffset.UtcNow);
+var intent = new Intent(
+    Guid.NewGuid(), command,
+    // A scheduled run says so about itself. IntentSource.Schedule existed from the first version
+    // and had never been used by anything.
+    spec is null ? IntentSource.CommandBar : IntentSource.Schedule,
+    workContext, DateTimeOffset.UtcNow, spec?.WorkerId);
 
 var streaming = false;
+RunOutcomeKind? outcome = null;
 try
 {
     await foreach (var ev in runRecorder.RecordAsync(orchestrator.SubmitIntentAsync(intent, cts.Token).TeeToLog(logHub, cts.Token), cts.Token))
@@ -164,6 +223,9 @@ try
             Console.WriteLine();
             streaming = false;
         }
+        if (ev.Kind is EventKind.TaskCompleted or EventKind.TaskFailed)
+            outcome = ev.Outcome();
+
         Console.WriteLine($"[{ev.At.ToLocalTime():HH:mm:ss}] {ev.Kind,-16} {ev.Summary}");
     }
     if (streaming)
@@ -184,8 +246,43 @@ catch (OperationCanceledException)
 }
 
 Console.WriteLine(new string('-', 72));
+
+// ── The report, and an exit code a scheduler can read ─────────────────────────
+// A run nobody watched has to be able to say what happened, and the scheduler's own log is usually
+// gone by the time anyone looks. So: the report to stdout always, to a file when asked.
+// The intent id IS the task id, and this invocation made exactly one run under it.
+var finished = (await runStore.LoadAllAsync(CancellationToken.None))
+    .Where(r => r.TaskId == intent.Id)
+    .OrderByDescending(r => r.StartedAt)
+    .FirstOrDefault();
+
+if (finished is not null)
+{
+    var report = RunReport.Render(finished, workspace.RootPath);
+    Console.WriteLine(report);
+
+    if (reportPath is { Length: > 0 })
+    {
+        try
+        {
+            var full = Path.GetFullPath(reportPath);
+            Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+            await File.WriteAllTextAsync(full, report, CancellationToken.None);
+            Console.WriteLine($"Report written to {full}");
+        }
+        catch (Exception ex)
+        {
+            // The run happened; failing to file the paperwork does not unhappen it. Say so and let
+            // the exit code still describe the WORK.
+            Console.Error.WriteLine($"Could not write the report to '{reportPath}': {ex.Message}");
+        }
+    }
+
+    outcome ??= RunReport.OutcomeOf(finished);
+}
+
 Console.WriteLine("Done.");
-return 0;
+return RunReport.ExitCodeFor(outcome ?? RunOutcomeKind.Incomplete);
 
 // A no-op service provider: the slice's tools do not resolve anything from DI yet.
 sealed class EmptyServiceProvider : IServiceProvider
@@ -210,6 +307,22 @@ sealed class ConsoleDecisionHandler : IDecisionHandler
         Console.Write($"  Choose (default {request.RecommendedOptionId}): ");
 
         var line = Console.ReadLine();
+
+        // NULL is end of input - there is no console, or nothing is attached to it. That is not
+        // "the user pressed enter", and it must not become the RECOMMENDED option, which for a tool
+        // approval is "allow": a run with nobody watching would then approve every command it was
+        // asked about, silently, on the grounds that nobody objected. Nobody was there to object.
+        if (line is null)
+        {
+            Console.WriteLine();
+            Console.WriteLine("  (no input available — refusing, because nobody is here to approve it)");
+            var refuse = request.Options.FirstOrDefault(
+                             o => string.Equals(o.Id, "deny", StringComparison.OrdinalIgnoreCase))
+                         ?? request.Options[^1];
+            return Task.FromResult(new DecisionOutcome(refuse.Id));
+        }
+
+        // An empty line IS an answer: the person pressed enter at a prompt showing a default.
         var choice = string.IsNullOrWhiteSpace(line)
             ? request.RecommendedOptionId ?? request.Options[0].Id
             : line.Trim();

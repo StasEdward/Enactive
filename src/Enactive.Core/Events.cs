@@ -447,14 +447,21 @@ public static class WorkEventPayload
         });
 
     /// <summary>The outcome this event carries, or null when it is not a terminal event.</summary>
-    public static RunOutcomeKind? Outcome(this WorkEvent ev)
+    public static RunOutcomeKind? Outcome(this WorkEvent ev) => OutcomeIn(ev.PayloadJson);
+
+    /// <summary>
+    /// The same, from a STORED event's payload. A live event and a recorded one carry the same
+    /// bytes, and a reader of history is entitled to the same values a reader of a live run gets -
+    /// having two implementations of that is how the two drift apart.
+    /// </summary>
+    public static RunOutcomeKind? OutcomeIn(string? payloadJson)
     {
-        if (string.IsNullOrEmpty(ev.PayloadJson))
+        if (string.IsNullOrEmpty(payloadJson))
             return null;
 
         try
         {
-            using var doc = System.Text.Json.JsonDocument.Parse(ev.PayloadJson);
+            using var doc = System.Text.Json.JsonDocument.Parse(payloadJson);
             if (doc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Object
                 || !doc.RootElement.TryGetProperty("outcome", out var value)
                 || value.ValueKind != System.Text.Json.JsonValueKind.String)
@@ -469,14 +476,17 @@ public static class WorkEventPayload
     }
 
     /// <summary>Why the run ended the way it did, when the terminal event says so.</summary>
-    public static string? OutcomeReason(this WorkEvent ev)
+    public static string? OutcomeReason(this WorkEvent ev) => OutcomeReasonIn(ev.PayloadJson);
+
+    /// <summary>The same, from a stored event's payload.</summary>
+    public static string? OutcomeReasonIn(string? payloadJson)
     {
-        if (string.IsNullOrEmpty(ev.PayloadJson))
+        if (string.IsNullOrEmpty(payloadJson))
             return null;
 
         try
         {
-            using var doc = System.Text.Json.JsonDocument.Parse(ev.PayloadJson);
+            using var doc = System.Text.Json.JsonDocument.Parse(payloadJson);
             return doc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Object
                 && doc.RootElement.TryGetProperty("reason", out var value)
                 && value.ValueKind == System.Text.Json.JsonValueKind.String
