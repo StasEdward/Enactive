@@ -58,7 +58,7 @@
 
   /* --- Product semantics: plan step status --------------------------------- */
   --step-pending: var(--ink-400);
-  --step-running: var(--ember-500);
+  --step-running: var(--info);        /* blue, not ember: beside --step-failed, warm reads as a milder red */
   --step-done:    var(--success);
   --step-skipped: var(--ink-500);
   --step-failed:  var(--danger);

@@ -1,4 +1,4 @@
-using Avalonia;
+﻿using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
 using Avalonia.Media.Immutable;
@@ -45,6 +45,7 @@ internal static class Brand
     public static readonly Color WarningColor = Color.Parse("#FBBF24");
     public static readonly Color DangerColor = Color.Parse("#FF5D7A");
     public static readonly Color InfoColor = Color.Parse("#4C8DFF");
+    public static readonly Color InfoLight = Color.Parse("#94B8FF");   // info text on dark
 
     // Deep variants — for a filled pill or button carrying WHITE text, where the
     // bright variant above would not reach 4.5:1.
@@ -98,10 +99,21 @@ internal static class Brand
     public static readonly IBrush Warning = Of(WarningColor);
     public static readonly IBrush Danger = Of(DangerColor);
     public static readonly IBrush Info = Of(InfoColor);
+    /// <summary>Info light enough to read on its own tint - see <see cref="PhaseText"/>.</summary>
+    public static readonly IBrush InfoSoft = Of(InfoLight);
 
     // ── Plan step status ────────────────────────────────────────────────────
     public static readonly IBrush StepPending = TextFaint;
-    public static readonly IBrush StepRunning = Accent;
+
+    // Info, not Ember. Two reasons, and the second is the one that decided it.
+    //
+    // The palette's own rule says Ember means the action YOU are meant to take, never a level of
+    // danger and never a block of status - and a running step is neither. But the practical
+    // complaint came first: next to the red of a failed step, Ember at this size reads as a milder
+    // red, so a list of steps looked like a list of problems while it was simply working. Blue is
+    // already the palette's "in progress, nothing is wrong" (it is Suggest on the autonomy scale)
+    // and it cannot be mistaken for the failure colour at a glance.
+    public static readonly IBrush StepRunning = Info;
     public static readonly IBrush StepDone = Success;
     public static readonly IBrush StepSkipped = LineStrong;
     public static readonly IBrush StepFailed = Danger;
@@ -138,7 +150,11 @@ internal static class Brand
     // as one - a running task painted in full Ember looked like something had gone
     // wrong. So a pill is a TINT with the colour carried by its text: enough to spot
     // across the window, not enough to shout.
-    public static readonly IBrush PillRunningFill = new ImmutableSolidColorBrush(Ember500, 0.18);
+    //
+    // The tint went from Ember to Info for the same reason the step edge did: warm orange beside
+    // the failure red says "problem" before the word on it is read, and a run in progress is not
+    // one.
+    public static readonly IBrush PillRunningFill = new ImmutableSolidColorBrush(InfoColor, 0.18);
     public static readonly IBrush PillDoneFill = new ImmutableSolidColorBrush(SuccessColor, 0.18);
     public static readonly IBrush PillFailedFill = new ImmutableSolidColorBrush(DangerColor, 0.18);
     public static readonly IBrush PillOpenFill = new ImmutableSolidColorBrush(Amber400, 0.18);
@@ -154,15 +170,15 @@ internal static class Brand
         _ => PillRunningFill
     };
 
-    /// <summary>The word on the pill. Ember500 is too dark on its own tint, so running takes
-    /// Ember300 - the ember made for text on dark.</summary>
+    /// <summary>The word on the pill. The base colour is too dark on its own tint, so running
+    /// takes <see cref="InfoLight"/> - the info blue made for text on dark.</summary>
     public static IBrush PhaseText(string phase) => Phase(phase) switch
     {
         PhaseKind.Done => Success,
         PhaseKind.Failed => Danger,
         PhaseKind.Open => Amber,
         PhaseKind.Idle => TextMuted,
-        _ => AccentSoft
+        _ => InfoSoft
     };
 
     private enum PhaseKind { Running, Done, Failed, Open, Idle }
