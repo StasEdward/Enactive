@@ -1736,6 +1736,19 @@ public sealed class Orchestrator : IOrchestrator
                 else
                     openFailures.Failed(call, result.Error);
 
+                // What a failure SAYS: the error, and the output under it when there is one. Built
+                // once, here, because the model and the reviewer each get a copy and on 2026-09-07
+                // 23:42 they got different ones. The model was told "Command exited with code
+                // -532462766" and, beneath it, the stderr: "Unhandled exception.
+                // System.ArgumentException: HTML cannot be null or empty" - the very crash the step
+                // was there to cause. The journal recorded the first line only. So the reviewer,
+                // handed evidence with no exception in it, read the agent's true account of the
+                // crash and called it fabricated. The failure-carries-its-output fix below had
+                // been made for the transcript alone; the evidence is the record that gets judged.
+                var failure = string.IsNullOrWhiteSpace(result.Output)
+                    ? result.Error
+                    : $"{result.Error}\n{result.Output}";
+
                 // The evidence, written down at the moment it exists. Nothing that shortens the
                 // prompt afterwards can take it away.
                 journal.Record(
@@ -1743,7 +1756,7 @@ public sealed class Orchestrator : IOrchestrator
                     result.Success ? ActionOutcome.Succeeded
                         : result.IsAnswer ? ActionOutcome.Answered
                         : ActionOutcome.Failed,
-                    result.Success ? result.Output : result.Error);
+                    result.Success ? result.Output : failure);
 
                 yield return result.Success
                     ? Ev(EventKind.ToolResult, $"{call.Name} -> ok: {result.Output}")
@@ -1771,9 +1784,7 @@ public sealed class Orchestrator : IOrchestrator
                 // shortened, and nothing says so.
                 var reply = result.Success
                     ? (result.Output ?? "OK")
-                    : string.IsNullOrWhiteSpace(result.Output)
-                        ? $"ERROR: {result.Error}"
-                        : $"ERROR: {result.Error}\n{result.Output}";
+                    : $"ERROR: {failure}";
 
                 // A repeat is executed and answered like any call - but the model is TOLD it is
                 // one. The stall detector knew from the first repeat; the model learned nothing
