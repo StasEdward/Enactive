@@ -1,4 +1,4 @@
-namespace Enactive.Agents;
+﻿namespace Enactive.Agents;
 
 using Enactive.Core.Permissions;
 
@@ -11,6 +11,12 @@ public sealed class PermissionEngine : IPermissionEngine
 {
     public PermissionDecision Evaluate(PermissionPolicy policy, string toolName, PermissionLevel requiredLevel)
     {
+        // Deny first, and it is not overridable. A tool that is both denied and listed as
+        // ask-before is denied: the narrower of two answers is the one that was meant, and asking
+        // about something that is forbidden invites an approval that cannot be honoured.
+        if (Contains(policy.Deny, toolName))
+            return PermissionDecision.Deny;
+
         if (Contains(policy.AskBefore, toolName))
             return PermissionDecision.Ask;
 
