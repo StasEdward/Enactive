@@ -1,4 +1,4 @@
-namespace Enactive.Engine.Tests;
+﻿namespace Enactive.Engine.Tests;
 
 using Enactive.Core.Artifacts;
 using Enactive.Core.Context;
@@ -588,5 +588,142 @@ public sealed class FileToolsTests
         Assert.Contains("search_files", offered);
         Assert.Contains("move_file", offered);
         Assert.Contains("create_directory", offered);
+    }
+
+    // ── line endings ──────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// 2026-09-07, the second half of the menu-button failure. Once edit_file was finally handed to
+    /// a worker, three calls in a row were refused with "'old_string' does not appear" — and the
+    /// passage the model sent was character-for-character the right one. The file had CRLF on all
+    /// 413 lines; the model sent five LFs and no CR, because a carriage return is invisible in what
+    /// read_file returns and a model cannot reproduce a character it cannot see.
+    ///
+    /// <para>The refusal told it to "copy the passage exactly, including line breaks" — advice it
+    /// had already followed and could never satisfy. On Windows that is most text files.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_passage_typed_with_LF_still_matches_a_CRLF_file()
+    {
+        using var fx = new EngineFixture();
+        fx.Write("index.html", "<header>\r\n  <nav>\r\n    <a>Home</a>\r\n  </nav>\r\n</header>\r\n");
+
+        var result = await Call(new EditFileTool(), fx,
+            System.Text.Json.JsonSerializer.Serialize(new
+            {
+                path = "index.html",
+                old_string = "  <nav>\n    <a>Home</a>\n  </nav>",
+                new_string = "  <nav>\n    <a>Home</a>\n    <a>Remote</a>\n  </nav>"
+            }));
+
+        Assert.True(result.Success, result.Error);
+        Assert.Contains("<a>Remote</a>", fx.Read("index.html"));
+    }
+
+    /// <summary>
+    /// Matching is only half of it. Splicing an LF passage into a CRLF file leaves it with mixed
+    /// endings: a diff that shows the whole block rewritten, and a repository with autocrlf churning
+    /// on it, for an edit meant to touch one line.
+    /// </summary>
+    [Fact]
+    public async Task The_replacement_takes_the_line_endings_the_file_already_had()
+    {
+        using var fx = new EngineFixture();
+        fx.Write("index.html", "<header>\r\n  <nav>\r\n    <a>Home</a>\r\n  </nav>\r\n</header>\r\n");
+
+        Assert.True((await Call(new EditFileTool(), fx,
+            System.Text.Json.JsonSerializer.Serialize(new
+            {
+                path = "index.html",
+                old_string = "  <nav>\n    <a>Home</a>\n  </nav>",
+                new_string = "  <nav>\n    <a>Home</a>\n    <a>Remote</a>\n  </nav>"
+            }))).Success);
+
+        var after = fx.Read("index.html");
+
+        // Every newline in the file is still part of a CRLF pair - including the one the edit added.
+        Assert.Equal(after.Split('\n').Length - 1, CountCrLf(after));
+        Assert.Contains("<a>Home</a>\r\n    <a>Remote</a>\r\n", after);
+    }
+
+    /// <summary>The other direction, for a model or a file that disagrees the other way round.</summary>
+    [Fact]
+    public async Task A_passage_typed_with_CRLF_still_matches_an_LF_file()
+    {
+        using var fx = new EngineFixture();
+        fx.Write("notes.md", "alpha\nbeta\ngamma\n");
+
+        Assert.True((await Call(new EditFileTool(), fx,
+            System.Text.Json.JsonSerializer.Serialize(new
+            {
+                path = "notes.md",
+                old_string = "alpha\r\nbeta",
+                new_string = "alpha\r\nBETA"
+            }))).Success);
+
+        var after = fx.Read("notes.md");
+        Assert.Equal("alpha\nBETA\ngamma\n", after);
+        Assert.DoesNotContain('\r', after);
+    }
+
+    /// <summary>
+    /// Retyping must not make a passage match in more places than it did. Uniqueness is the tool's
+    /// safety property: two matches mean the model cannot know which one it meant.
+    /// </summary>
+    [Fact]
+    public async Task Line_endings_do_not_excuse_an_ambiguous_passage()
+    {
+        using var fx = new EngineFixture();
+        fx.Write("dup.html", "<li>x</li>\r\n<li>x</li>\r\n");
+
+        var result = await Call(new EditFileTool(), fx,
+            System.Text.Json.JsonSerializer.Serialize(new
+            {
+                path = "dup.html",
+                old_string = "<li>x</li>\n",
+                new_string = "<li>y</li>\n"
+            }));
+
+        Assert.False(result.Success);
+        Assert.Contains("2 times", result.Error);
+    }
+
+    /// <summary>A passage that is genuinely absent is still absent - the retyping is not a fuzzy match.</summary>
+    [Fact]
+    public async Task A_passage_that_is_simply_not_there_is_still_refused()
+    {
+        using var fx = new EngineFixture();
+        fx.Write("index.html", "<header>\r\n  <nav>\r\n  </nav>\r\n</header>\r\n");
+
+        var result = await Call(new EditFileTool(), fx,
+            System.Text.Json.JsonSerializer.Serialize(new
+            {
+                path = "index.html",
+                old_string = "  <footer>\n    <a>Home</a>\n  </footer>",
+                new_string = "gone"
+            }));
+
+        Assert.False(result.Success);
+        Assert.Contains("does not appear", result.Error);
+    }
+
+    [Theory]
+    // file, passage, what it should be retyped to (null = leave it alone)
+    [InlineData("a\r\nb\r\n", "a\nb", "a\r\nb")]
+    [InlineData("a\nb\n", "a\r\nb", "a\nb")]
+    [InlineData("a\r\nb\r\n", "a\r\nb", null)]      // already agrees
+    [InlineData("a\nb\n", "a\nb", null)]            // already agrees
+    [InlineData("a\r\nb\r\n", "", null)]            // a deletion has nothing to retype
+    [InlineData("no newlines here", "a\nb", null)]  // a file with no CRLF is treated as LF
+    public void The_rule_itself(string file, string passage, string? expected)
+        => Assert.Equal(expected, EditFileTool.RetypedForFile(file, passage));
+
+    private static int CountCrLf(string text)
+    {
+        var n = 0;
+        for (var i = 0; i + 1 < text.Length; i++)
+            if (text[i] == '\r' && text[i + 1] == '\n')
+                n++;
+        return n;
     }
 }
