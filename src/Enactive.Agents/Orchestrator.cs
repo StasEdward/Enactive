@@ -295,6 +295,10 @@ public sealed class Orchestrator : IOrchestrator
                     var activeProvider = provider;
                     var triedFallback = false;
 
+                    // See the same line on the DAG path: the evidence window moves only when a
+                    // retry discards the attempt before it.
+                    var evidenceStart = journal.Mark();
+
                     for (var attempt = 1; attempt <= maxQuickAttempts; attempt++)
                     {
                         // A quick action runs no plan steps, so a STEP limit never bites here - but
@@ -307,8 +311,6 @@ public sealed class Orchestrator : IOrchestrator
                             quick.Writer.TryWrite(Ev(EventKind.ErrorObserved, spent));
                             break;
                         }
-
-                        var evidenceStart = journal.Mark();
 
                         try
                         {
@@ -362,7 +364,9 @@ public sealed class Orchestrator : IOrchestrator
 
                         if (attempt < maxQuickAttempts)
                         {
-                            RetryAfterReview(messages, conversationStart, mode, review.Notes, "the work");
+                            // See the DAG path: the evidence window follows the transcript window.
+                            if (RetryAfterReview(messages, conversationStart, mode, review.Notes, "the work"))
+                                evidenceStart = journal.Mark();
                             continue;
                         }
 
@@ -523,10 +527,12 @@ public sealed class Orchestrator : IOrchestrator
             // One switch to the fallback model per step — see the catch below.
             var triedFallback = false;
 
+            // Where the reviewer's evidence starts. It moves only when a retry DISCARDS the attempt
+            // before it — see the note at RetryAfterReview below.
+            var evidenceStart = journal.Mark();
+
             for (var attempt = 1; attempt <= maxAttempts; attempt++)
             {
-                var evidenceStart = journal.Mark();
-
                 try
                 {
                     await foreach (var ev in RunToolLoopAsync(
@@ -599,7 +605,14 @@ public sealed class Orchestrator : IOrchestrator
 
                 if (attempt < maxAttempts)
                 {
-                    RetryAfterReview(convo, conversationStart, mode, review.Notes, "this step");
+                    // The evidence window has to be the same window the ANSWER is drawn from.
+                    // A discarded attempt is gone from the model's memory too, so the retry starts
+                    // clean and the evidence starts with it. A KEPT transcript is the opposite: the
+                    // model can still cite what it did on the first attempt — correctly — and
+                    // evidence beginning after those calls makes an honest answer look invented.
+                    // That is what happened on 2026-09-07 19:36; see FIX_PLAN §9f.
+                    if (RetryAfterReview(convo, conversationStart, mode, review.Notes, "this step"))
+                        evidenceStart = journal.Mark();
                     continue;
                 }
 
@@ -1834,17 +1847,25 @@ public sealed class Orchestrator : IOrchestrator
     /// For a step that RAN something, the transcript stays: the command output IS the evidence, and
     /// discarding it would mean re-running commands that have already had their effect.
     /// </summary>
-    private static void RetryAfterReview(
+    /// <returns>
+    /// Whether the rejected attempt was DISCARDED from the transcript. The caller needs this to keep
+    /// the evidence window and the transcript window the same length — see the note at the call site.
+    /// </returns>
+    private static bool RetryAfterReview(
         List<ChatMessage> convo, int conversationStart, ReviewMode mode, string notes, string what)
     {
-        if (mode == ReviewMode.Content && convo.Count > conversationStart)
+        var discarded = mode == ReviewMode.Content;
+
+        if (discarded && convo.Count > conversationStart)
             convo.RemoveRange(conversationStart, convo.Count - conversationStart);
 
         convo.Add(ChatMessage.User(
             $"A reviewer rejected the previous attempt with this feedback: {notes}\n"
-            + (mode == ReviewMode.Content
+            + (discarded
                 ? $"That attempt has been discarded. Redo {what} from scratch, correcting every point above."
                 : $"Please fix the issues and redo {what}.")));
+
+        return discarded;
     }
 
     /// <summary>
