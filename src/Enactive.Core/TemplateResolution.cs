@@ -148,7 +148,7 @@ public static class TemplateResolution
             Goal: Substitute(template.Goal, resolved),
             Parameters: resolved,
             Permissions: Narrow(workspacePolicy, template.Ceiling),
-            SuccessCriteria: template.CriteriaList,
+            SuccessCriteria: Fill(template.CriteriaList, resolved),
             Limits: template.LimitsOrNone,
             WorkerId: template.WorkerId,
             ReviewRequired: template.ReviewRequired));
@@ -189,6 +189,30 @@ public static class TemplateResolution
 
         return TemplateValidator.Placeholder.Replace(goal, match =>
             values.TryGetValue(match.Groups[1].Value, out var value) ? value : match.Value);
+    }
+
+    /// <summary>
+    /// The same filling-in, for the commands a run is judged by.
+    ///
+    /// <para>Noticed 2026-09-07 while writing a criterion for a GLOBAL template: parameters exist so
+    /// one template can serve every workspace, and the criteria were the single place they did not
+    /// reach — the goal was substituted and the criteria were passed through verbatim. Writing
+    /// <c>{test_command}</c> in a criterion therefore sent those eight literal characters to the
+    /// shell, and it did so silently, which is the part that makes it worth fixing rather than
+    /// documenting.</para>
+    ///
+    /// <para>Only the command is filled in. A criterion's NAME is what a person reads in the run's
+    /// outcome, and a name that changes with its parameters stops being a name.</para>
+    /// </summary>
+    public static IReadOnlyList<SuccessCriterionDefinition> Fill(
+        IReadOnlyList<SuccessCriterionDefinition> criteria, IReadOnlyDictionary<string, string> values)
+    {
+        if (criteria.Count == 0 || values.Count == 0)
+            return criteria;
+
+        return criteria
+            .Select(c => c with { Command = Substitute(c.Command, values) })
+            .ToArray();
     }
 
     private static IReadOnlyList<string> Union(IReadOnlyList<string> left, IReadOnlyList<string>? right)
