@@ -8,11 +8,24 @@ public enum ActionOutcome
     /// <summary>It ran and the tool reported success.</summary>
     Succeeded,
 
-    /// <summary>It ran and the tool reported failure — a non-zero exit, a missing file.</summary>
+    /// <summary>It ran and the tool reported failure — a non-zero exit, an edit that did not apply.</summary>
     Failed,
 
     /// <summary>It never ran: the role does not offer it, the policy blocked it, the user said no.</summary>
-    Refused
+    Refused,
+
+    /// <summary>
+    /// It ran, produced nothing, and that IS the result: a file that is not there, an offset past
+    /// the end of one. See <see cref="ToolResult.IsAnswer"/>.
+    ///
+    /// <para>Recorded apart from <see cref="Failed"/> because the reviewer reads this and is told to
+    /// fail work whose report does not account for an error. On 2026-09-07 21:43 it did exactly
+    /// that — <i>"the evidence shows errors for offsets 800 and 400 being past the end of the file.
+    /// The agent's report does not account for these errors"</i> — over two reads the engine had
+    /// already, correctly, stopped counting against the step. Forgiving something in one half of
+    /// the system and holding it against the work in the other is worse than either alone.</para>
+    /// </summary>
+    Answered
 }
 
 /// <summary>
@@ -189,6 +202,9 @@ public sealed class ExecutionJournal
         {
             ActionOutcome.Refused => "REFUSED: " + (action.Output ?? "not permitted"),
             ActionOutcome.Failed => "ERROR: " + (action.Output ?? "failed"),
+            // Not "ERROR". The call worked and the answer is that there is nothing there — which is
+            // information, and reads as a defect only if it is labelled as one.
+            ActionOutcome.Answered => "NOTHING THERE: " + (action.Output ?? "nothing to return"),
             _ => action.Output ?? "OK"
         };
 

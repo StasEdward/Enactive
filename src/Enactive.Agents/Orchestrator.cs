@@ -1691,7 +1691,9 @@ public sealed class Orchestrator : IOrchestrator
                 // prompt afterwards can take it away.
                 journal.Record(
                     stepNo, call.Name, Compact(call.ArgumentsJson),
-                    result.Success ? ActionOutcome.Succeeded : ActionOutcome.Failed,
+                    result.Success ? ActionOutcome.Succeeded
+                        : result.IsAnswer ? ActionOutcome.Answered
+                        : ActionOutcome.Failed,
                     result.Success ? result.Output : result.Error);
 
                 yield return result.Success

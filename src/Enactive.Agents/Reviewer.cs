@@ -272,7 +272,15 @@ public sealed class Reviewer
         + "malfunctioning, and a call that got a code it declared is recorded as succeeded — its exit "
         + "code alone is then not a finding. What IS a finding: a declaration that does not fit the "
         + "command (a build declaring failure acceptable), or a report that contradicts the output "
-        + "under it, such as \"all tests pass\" over output listing failures.";
+        + "under it, such as \"all tests pass\" over output listing failures.\n\n"
+        // Added after this clause's own words were turned against a step: "the evidence shows errors
+        // for offsets 800 and 400 being past the end of the file. The agent's report does not
+        // account for these errors." Those calls answered. Nothing was wrong.
+        + "A result marked NOTHING THERE is not an error and is not something the report has to "
+        + "account for. It is a lookup that ran and found nothing: a file that does not exist, an "
+        + "offset past the end of one. Asking and being told no is how anything explores a tree it "
+        + "has not seen, and the agent is free to say nothing about it. ERROR is the label for a "
+        + "call that went wrong; judge only those.";
 
     // Deliberately narrow. A content reviewer that fails on anything it is merely unsure about blocks
     // every run and gets switched off, so it is told to fail only on a specific, nameable falsehood —
