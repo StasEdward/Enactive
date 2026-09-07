@@ -129,8 +129,9 @@ public sealed class ExecutionJournal
         // shortened one.
         // Said ONCE. Per result it cost eighty-five characters times the number of calls, which is
         // the budget the calls were rescued from - a notice that crowds out what it is annotating.
-        var header = $"{slice.Length} tool call(s) in this step, oldest first. A result ending "
-                   + "\"… (N of M)\" was shortened to fit; the call it belongs to still happened.";
+        var header = $"{slice.Length} tool call(s) in this step, oldest first{Tally(slice)}. "
+                   + "A result ending \"… (N of M)\" was shortened to fit; the call it belongs to "
+                   + "still happened.";
         var calls = slice.Select(Call).ToArray();
 
         // How many can be shown AT ALL. Each costs its call line plus the floor under its output -
@@ -162,6 +163,38 @@ public sealed class ExecutionJournal
         }
 
         return sb.ToString().TrimEnd();
+    }
+
+    /// <summary>
+    /// How the step's calls ended, as a count.
+    ///
+    /// <para>Reported 2026-09-07 21:54: a step that made four successful edits and one that did not
+    /// match was rejected because <i>"the RunEdgeCaseTests method was never actually added … as
+    /// indicated by the ERROR in the evidence"</i>. The method had been added — by the LAST of those
+    /// edits, whose own output names the line it went in at. One ERROR was read as the state of the
+    /// file, with four successes beside it.</para>
+    ///
+    /// <para>A tally is much harder to misread than a list: "17 worked, 1 failed" cannot be reached
+    /// by noticing one line. Same reasoning as the call count itself, which is here because a
+    /// shortened list was read as a short one.</para>
+    /// </summary>
+    private static string Tally(ExecutedAction[] slice)
+    {
+        var parts = new List<string>();
+        Add(ActionOutcome.Succeeded, "worked");
+        Add(ActionOutcome.Failed, "failed");
+        Add(ActionOutcome.Answered, "found nothing");
+        Add(ActionOutcome.Refused, "were refused");
+
+        // Nothing to compare when they all ended the same way, and the count above already says it.
+        return parts.Count > 1 ? " — " + string.Join(", ", parts) : "";
+
+        void Add(ActionOutcome outcome, string label)
+        {
+            var count = slice.Count(a => a.Outcome == outcome);
+            if (count > 0)
+                parts.Add($"{count} {label}");
+        }
     }
 
     /// <summary>The least the newest <paramref name="kept"/> actions can be shown in.</summary>
