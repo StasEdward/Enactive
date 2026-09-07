@@ -6,6 +6,7 @@
         x:DataType="vm:TemplatesViewModel"
         Title="Enactive — Templates"
         Width="980" Height="620"
+        WindowStartupLocation="CenterOwner"
         Background="{DynamicResource Brand.Bg}"
         WindowDecorations="BorderOnly"
         ExtendClientAreaToDecorationsHint="True">

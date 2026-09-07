@@ -6,6 +6,7 @@
         x:DataType="vm:LogWindowViewModel"
         Title="Enactive — Global Log"
         Width="1040" Height="680"
+        WindowStartupLocation="CenterOwner"
         Background="{DynamicResource Brand.Bg}"
         WindowDecorations="BorderOnly"
         ExtendClientAreaToDecorationsHint="True">
