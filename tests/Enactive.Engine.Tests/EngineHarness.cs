@@ -23,9 +23,20 @@ public sealed record Turn(
     // Tokens this turn reports. Null on both = a provider that does not count, which is a real case
     // and a different fact from zero. Set them and the turn emits a UsageDelta, which is the only
     // way anything about token accounting can be tested at all.
-    int? PromptTokens = null, int? CompletionTokens = null)
+    int? PromptTokens = null, int? CompletionTokens = null,
+    // A reasoning model's own deliberation, which some providers return in a field of its own. A
+    // turn that has ONLY this is the shape that used to arrive as an inexplicable silence.
+    string? Thinking = null)
 {
     public static Turn Says(string text) => new(text);
+
+    /// <summary>A turn spent entirely on reasoning: tokens generated, nothing delivered.</summary>
+    public static Turn Thinks(string reasoning, int tokens = 15)
+        => new(null, null, "stop", PromptTokens: 100, CompletionTokens: tokens, Thinking: reasoning);
+
+    /// <summary>A turn that produced nothing at all - no text, no call, no reasoning we can see.</summary>
+    public static Turn Silent(int tokens = 15)
+        => new(null, null, "stop", PromptTokens: 100, CompletionTokens: tokens);
 
     public static Turn Calls1(string name, string argsJson, string id = "call_1")
         => new(null, new[] { new ToolCall(id, name, argsJson) });
@@ -74,6 +85,9 @@ public sealed class FakeChatProvider : IChatProvider
         Requests.Add(request);
         var turn = _script.Count > 0 ? _script.Dequeue() : WhenExhausted;
 
+        if (turn.Thinking is { Length: > 0 } reasoning)
+            yield return new ReasoningDelta(reasoning);
+
         if (turn.Text is { Length: > 0 } text)
             yield return new TextDelta(text);
 
@@ -98,7 +112,7 @@ public sealed class FakeChatProvider : IChatProvider
         // their cost untestable — which is precisely how it went uncounted in the first place.
         return Task.FromResult(new ChatCompletion(
             new ChatMessage(ChatRole.Assistant, turn.Text, turn.Calls), turn.FinishReason,
-            turn.PromptTokens, turn.CompletionTokens));
+            turn.PromptTokens, turn.CompletionTokens, turn.Thinking));
     }
 }
 

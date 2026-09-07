@@ -148,6 +148,15 @@ public sealed class OllamaNativeProvider : IChatProvider
                 events.Add(new TextDelta(text));
             }
 
+            // Ollama returns a reasoning model's deliberation in its own field. Reading only
+            // "content" made such a turn arrive completely empty - see ReasoningDelta.
+            if (message.TryGetProperty("thinking", out var thinking)
+                && thinking.ValueKind == JsonValueKind.String
+                && thinking.GetString() is { Length: > 0 } reasoning)
+            {
+                events.Add(new ReasoningDelta(reasoning));
+            }
+
             if (message.TryGetProperty("tool_calls", out var toolCalls) && toolCalls.ValueKind == JsonValueKind.Array)
             {
                 // Ollama emits each tool call fully formed in one chunk (no incremental argument
@@ -275,8 +284,12 @@ public sealed class OllamaNativeProvider : IChatProvider
         int? promptTokens = root.TryGetProperty("prompt_eval_count", out var pt) && pt.TryGetInt32(out var ptv) ? ptv : null;
         int? completionTokens = root.TryGetProperty("eval_count", out var ec) && ec.TryGetInt32(out var ecv) ? ecv : null;
 
+        var thinking = message.TryGetProperty("thinking", out var th) && th.ValueKind == JsonValueKind.String
+            ? th.GetString()
+            : null;
+
         var assistant = new ChatMessage(ChatRole.Assistant, content, toolCalls);
-        return new ChatCompletion(assistant, finishReason, promptTokens, completionTokens);
+        return new ChatCompletion(assistant, finishReason, promptTokens, completionTokens, thinking);
     }
 
     private static string Truncate(string value, int max)

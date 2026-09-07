@@ -38,6 +38,7 @@ public sealed class LoggingChatProvider : IChatProvider
             RenderPrompt(request), request.Model);
 
         var text = new StringBuilder();
+        var reasoning = new StringBuilder();
         var calls = new SortedDictionary<int, (string? Id, string? Name, StringBuilder Args)>();
         string? finish = null;
         int? promptTokens = null, completionTokens = null;
@@ -60,6 +61,12 @@ public sealed class LoggingChatProvider : IChatProvider
                         if (d.ArgumentsJson is { Length: > 0 } part)
                             acc.Args.Append(part);
                         break;
+                    // Logged because a turn made ENTIRELY of reasoning is otherwise a blank line in
+                    // the log with a token count beside it, and no way to see what the model was
+                    // doing with them.
+                    case ReasoningDelta r:
+                        reasoning.Append(r.Text);
+                        break;
                     case UsageDelta u:
                         promptTokens = u.PromptTokens ?? promptTokens;
                         completionTokens = u.CompletionTokens ?? completionTokens;
@@ -77,9 +84,11 @@ public sealed class LoggingChatProvider : IChatProvider
             _log.Write(faulted ? LogLevel.Warn : LogLevel.Info, LogSource.Llm,
                 $"response ← {_providerId}/{request.Model}"
                     + $" ({text.Length} chars, {calls.Count} tool call(s)"
+                    + (reasoning.Length > 0 ? $", {reasoning.Length} chars of reasoning" : "")
                     + (finish is null ? "" : $", finish={finish}")
                     + (completionTokens is { } c ? $", {c} out-tokens" : "") + ")",
-                RenderResponse(text.ToString(), calls, finish, promptTokens, completionTokens),
+                RenderResponse(text.ToString(), calls, finish, promptTokens, completionTokens,
+                               reasoning.ToString()),
                 request.Model);
         }
     }
@@ -105,6 +114,7 @@ public sealed class LoggingChatProvider : IChatProvider
         _log.Info(LogSource.Llm,
             $"response ← {_providerId}/{request.Model}"
                 + $" ({(msg.Content?.Length ?? 0)} chars, {(msg.ToolCalls?.Count ?? 0)} tool call(s)"
+                + (completion.Thinking is { Length: > 0 } th ? $", {th.Length} chars of reasoning" : "")
                 + (completion.FinishReason is { } fr ? $", finish={fr}" : "") + ")",
             RenderCompletion(completion), request.Model);
         return completion;
@@ -137,10 +147,14 @@ public sealed class LoggingChatProvider : IChatProvider
 
     private static string RenderResponse(
         string text, SortedDictionary<int, (string? Id, string? Name, StringBuilder Args)> calls,
-        string? finish, int? promptTokens, int? completionTokens)
+        string? finish, int? promptTokens, int? completionTokens, string? reasoning = null)
     {
         var sb = new StringBuilder();
         if (text.Length > 0) sb.AppendLine(text);
+        // Marked as what it is. A reasoning block read as an answer is how a draft - including what
+        // the model was considering and rejecting - gets taken for a conclusion.
+        if (reasoning is { Length: > 0 })
+            sb.AppendLine("----- reasoning (not part of the answer) -----").AppendLine(reasoning);
         foreach (var kv in calls)
             sb.Append("  [tool_call ").Append(kv.Value.Name).Append("] ").AppendLine(kv.Value.Args.ToString());
         if (finish is not null) sb.Append("finish=").Append(finish).Append("  ");
@@ -153,6 +167,8 @@ public sealed class LoggingChatProvider : IChatProvider
     {
         var sb = new StringBuilder();
         if (!string.IsNullOrEmpty(completion.Message.Content)) sb.AppendLine(completion.Message.Content);
+        if (completion.Thinking is { Length: > 0 } thinking)
+            sb.AppendLine("----- reasoning (not part of the answer) -----").AppendLine(thinking);
         if (completion.Message.ToolCalls is { Count: > 0 } calls)
             foreach (var c in calls)
                 sb.Append("  [tool_call ").Append(c.Name).Append("] ").AppendLine(c.ArgumentsJson);

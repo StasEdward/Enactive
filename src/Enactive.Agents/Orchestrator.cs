@@ -1114,6 +1114,15 @@ public sealed class Orchestrator : IOrchestrator
         // number instead of a guess about which budget ran out.
         int? lastPromptTokens = null;
 
+        // What the last turn GENERATED. A turn that spent tokens and delivered neither text nor a
+        // tool call is the signature of output that never reached us, and it is the difference
+        // between "the model had nothing to say" and "the model's answer was lost".
+        int? lastCompletionTokens = null;
+
+        // Whether anything at all has been executed in this step, which decides what an empty
+        // closing turn MEANS: after real work it is a missing sentence, before any it is silence.
+        var actionsTaken = 0;
+
         var toolDefs = _tools.Definitions.Where(d => Allows(worker, d.Name)).ToArray();
 
         // The tool schemas are sent with every request and are not part of the message list, so they
@@ -1175,6 +1184,7 @@ public sealed class Orchestrator : IOrchestrator
             var sizeAtRequest = Transcript.Size(messages) + toolsOverhead;
 
             var contentBuilder = new StringBuilder();
+            var reasoningBuilder = new StringBuilder();
             var toolBuilders = new Dictionary<int, ToolCallBuilder>();
             string? finishReason = null;
 
@@ -1196,6 +1206,13 @@ public sealed class Orchestrator : IOrchestrator
                         if (call.ArgumentsJson is not null) builder.Arguments.Append(call.ArgumentsJson);
                         break;
 
+                    // Kept apart from the content on purpose: it is a draft, not an answer, and it
+                    // never enters the transcript. It exists so a turn that produced ONLY reasoning
+                    // can be diagnosed instead of arriving as an inexplicable silence.
+                    case ReasoningDelta reasoning:
+                        reasoningBuilder.Append(reasoning.Text);
+                        break;
+
                     case FinishDelta finish:
                         finishReason = finish.Reason;
                         break;
@@ -1204,6 +1221,7 @@ public sealed class Orchestrator : IOrchestrator
                     // the status tile, the run record - could ever say. Providers report totals per
                     // turn, not increments, so each turn is one event and the run adds them up.
                     case UsageDelta usage:
+                        lastCompletionTokens = usage.CompletionTokens;
                         // Also the one honest measurement of how this model tokenizes: the same
                         // transcript, in characters and in the provider's own count.
                         if (usage.PromptTokens is { } prompted)
@@ -1281,6 +1299,32 @@ public sealed class Orchestrator : IOrchestrator
                         $"The model described a '{described.Name}' call in plain text instead of invoking it — "
                         + "nothing was executed; asked it to re-send the call properly.");
                     continue;
+                }
+
+                // NOTHING came back. Not an answer, not a call - and this used to fall through to
+                // "genuine final answer" below and mark the step SUCCEEDED. The reviewer then failed
+                // it for the only thing it could see ("no tools were run and no files were
+                // changed"), the retry produced the same silence, and the run died with a message
+                // about the reviewer while the cause - the model's output never arrived - appeared
+                // nowhere. An absence is not an answer, which is the same rule as everywhere else
+                // here; this was the last place still breaking it.
+                if (replyText is null && actionsTaken == 0)
+                {
+                    var thought = reasoningBuilder.Length;
+                    var spent = lastCompletionTokens is { } t and > 0 ? $" while reporting {t} output token(s)" : "";
+
+                    var why = thought > 0
+                        ? $"The model spent the whole turn reasoning ({thought:N0} characters of it) and "
+                          + "produced no answer and no tool call. Turn Thinking off in Settings, or use a "
+                          + "model that answers as well as reasons."
+                        : $"The model returned nothing{spent} — no text and no tool call — so its output "
+                          + "never reached the engine. A reasoning model that spends the turn thinking does "
+                          + "this: turn Thinking off in Settings. Otherwise try another model, or raise "
+                          + "num_ctx if the prompt is close to the window.";
+
+                    yield return Ev(EventKind.ErrorObserved, why);
+                    loopResult.Set(StepOutcomeKind.Failed, why);
+                    yield break;
                 }
 
                 // A final answer only settles the step if the actions behind it actually worked. The
@@ -1406,6 +1450,7 @@ public sealed class Orchestrator : IOrchestrator
                     }
                 }
 
+                actionsTaken++;
                 yield return Ev(EventKind.ToolInvoked, $"{call.Name} {Compact(call.ArgumentsJson)}");
 
                 var toolContext = new ToolContext(

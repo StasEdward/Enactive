@@ -42,7 +42,9 @@ public sealed record ChatCompletion(
     ChatMessage Message,
     string? FinishReason,
     int? PromptTokens,
-    int? CompletionTokens);
+    int? CompletionTokens,
+    /// <summary>The model's own deliberation, where the provider returns it separately. See <see cref="ReasoningDelta"/>.</summary>
+    string? Thinking = null);
 
 /// <summary>One event out of the streaming pipeline. Adapters map raw SSE to these.</summary>
 public abstract record ChatStreamEvent;
@@ -55,6 +57,19 @@ public sealed record ToolCallDelta(int Index, string? Id, string? Name, string? 
 
 /// <summary>Token usage, when the provider reports it.</summary>
 public sealed record UsageDelta(int? PromptTokens, int? CompletionTokens) : ChatStreamEvent;
+
+/// <summary>
+/// A reasoning model's own deliberation, which some providers return in a field of its own rather
+/// than as content.
+///
+/// <para>It is NOT content and must never be appended to the transcript as an answer - it is a
+/// draft, complete with what the model was considering and rejecting. It is carried because losing
+/// it entirely is worse: a turn that spends every token thinking then arrives as content=null with
+/// no tool calls, which reads exactly like a model that had nothing to say. On 2026-09-07 that ended
+/// a run twice with "no tools were run and no files were changed" - a true sentence about a
+/// symptom, with the cause nowhere in the log.</para>
+/// </summary>
+public sealed record ReasoningDelta(string Text) : ChatStreamEvent;
 
 /// <summary>End of the turn, carrying the finish reason.</summary>
 public sealed record FinishDelta(string? Reason) : ChatStreamEvent;
