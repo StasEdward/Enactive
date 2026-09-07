@@ -46,5 +46,6 @@
     <ProjectReference Include="..\Enactive.Tools\Enactive.Tools.csproj" />
     <ProjectReference Include="..\Enactive.Workspace\Enactive.Workspace.csproj" />
     <ProjectReference Include="..\Enactive.Agents\Enactive.Agents.csproj" />
+    <ProjectReference Include="..\Enactive.Secrets\Enactive.Secrets.csproj" />
   </ItemGroup>
 </Project>

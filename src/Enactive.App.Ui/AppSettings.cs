@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 using Enactive.Agents;
 using Enactive.Core.Permissions;
 using Enactive.Core.Providers;
+using Enactive.Secrets;
 
 namespace Enactive.App.Ui;
 
@@ -246,8 +247,18 @@ internal sealed partial class AppSettings
         catch { /* the repaired settings are in memory either way */ }
     }
 
+    /// <summary>
+    /// Why the last <see cref="Save"/> failed, or null when it did not. A caller that only knows
+    /// "false" can say nothing useful: "check disk access and Windows credential encryption" is a
+    /// shrug, and the one failure that matters here - the secret could not be encrypted - has a
+    /// precise thing to tell the user.
+    /// </summary>
+    [JsonIgnore]
+    public string? LastSaveError { get; private set; }
+
     public bool Save()
     {
+        LastSaveError = null;
         try
         {
             var file = SettingsFile();
@@ -273,7 +284,12 @@ internal sealed partial class AppSettings
                 AnthropicApiKey = legacyPlain;
             }
         }
-        catch { return false; }
+        catch (Exception ex)
+        {
+            LastSaveError = ex.Message;
+            return false;
+        }
+
         return true;
     }
 
@@ -415,9 +431,28 @@ internal sealed partial class AppSettings
         repairs.AddRange(DropUnnamed(Workers, w => w.Id, "worker"));
         repairs.AddRange(RenameDuplicates(Providers, p => p.Id, (p, id) => p.Id = id, "provider"));
         repairs.AddRange(RenameDuplicates(Workers, w => w.Id, (w, id) => w.Id = id, "worker"));
+        repairs.AddRange(UnencryptedSecrets());
 
         LoadProblems = repairs;
         return repairs;
+    }
+
+    /// <summary>
+    /// Keys sitting in settings.json in the clear. Left working - locking someone out of their own
+    /// settings would be worse - but never left unsaid. This is the residue of a build whose
+    /// encryption failed quietly and stored the plaintext in the field named "protected"; the next
+    /// successful save encrypts them.
+    /// </summary>
+    private IEnumerable<string> UnencryptedSecrets()
+    {
+        foreach (var provider in Providers)
+            if (!string.IsNullOrEmpty(provider.ApiKeyProtected) && !Secret.IsProtected(provider.ApiKeyProtected))
+                yield return $"The API key for provider '{provider.Id}' is stored UNENCRYPTED in settings.json. "
+                           + "It will be encrypted the next time settings are saved.";
+
+        if (!string.IsNullOrEmpty(AnthropicApiKeyProtected) && !Secret.IsProtected(AnthropicApiKeyProtected))
+            yield return "The stored Anthropic API key is UNENCRYPTED in settings.json. "
+                       + "It will be encrypted the next time settings are saved.";
     }
 
     private static IEnumerable<string> DropUnnamed<T>(List<T> items, Func<T, string> id, string what)

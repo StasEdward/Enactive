@@ -146,7 +146,10 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             new SettingsWindow(_settings, saved =>
             {
                 if (!saved.Save())
-                    throw new InvalidOperationException("Settings could not be saved. Check disk access and Windows credential encryption.");
+                    throw new InvalidOperationException(
+                        saved.LastSaveError is { Length: > 0 } why
+                            ? "Settings were not saved. " + why
+                            : "Settings could not be saved. Check disk access and Windows credential encryption.");
                 _settings = saved;
                 ApplySettings();
             }).Show(this);

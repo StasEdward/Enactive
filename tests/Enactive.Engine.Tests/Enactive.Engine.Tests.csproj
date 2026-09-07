@@ -25,6 +25,7 @@
     <ProjectReference Include="..\..\src\Enactive.Tools\Enactive.Tools.csproj" />
     <ProjectReference Include="..\..\src\Enactive.Workspace\Enactive.Workspace.csproj" />
     <ProjectReference Include="..\..\src\Enactive.Providers\Enactive.Providers.csproj" />
+    <ProjectReference Include="..\..\src\Enactive.Secrets\Enactive.Secrets.csproj" />
   </ItemGroup>
 
   <!--

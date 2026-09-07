@@ -2,6 +2,7 @@ namespace Enactive.App.Ui;
 
 using System.Text.Json;
 using Enactive.Tools.Mcp;
+using Enactive.Secrets;
 
 internal sealed partial class AppSettings
 {
@@ -31,9 +32,20 @@ internal sealed partial class AppSettings
             if (server.CredentialsUnavailable) continue;
             if (server.Environment.Count == 0 && server.Headers.Count == 0)
             { server.SecretsProtected = ""; continue; }
-            var encrypted = Secret.Protect(JsonSerializer.Serialize(new McpSecrets(server.Environment, server.Headers)));
-            if (!encrypted.StartsWith("dpapi:", StringComparison.Ordinal))
-                throw new InvalidOperationException("MCP credentials could not be encrypted. Settings were not saved.");
+            // Protect throws rather than handing back anything unencrypted; the wrapper is only here
+            // to say WHICH server it was, since the save takes the whole file down with it.
+            string encrypted;
+            try
+            {
+                encrypted = Secret.Protect(JsonSerializer.Serialize(new McpSecrets(server.Environment, server.Headers)));
+            }
+            catch (SecretProtectionException ex)
+            {
+                throw new InvalidOperationException(
+                    $"The credentials for MCP server '{server.Id}' could not be encrypted, so nothing was saved. "
+                    + ex.Message, ex);
+            }
+
             server.SecretsProtected = encrypted;
         }
     }
