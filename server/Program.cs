@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.HttpOverrides;
 
 var builder = WebApplication.CreateBuilder(args);
 var ownerKey = builder.Configuration["ENACTIVE_OWNER_KEY"];
@@ -54,6 +55,13 @@ builder.Services.AddRateLimiter(o =>
 });
 
 var app = builder.Build();
+// Only trust the local connector. Keep the framework's loopback proxy allowlist.
+if (builder.Configuration.GetValue<bool>("ENACTIVE_LOCAL_PROXY"))
+    app.UseForwardedHeaders(new ForwardedHeadersOptions
+    {
+        ForwardedHeaders = ForwardedHeaders.XForwardedProto,
+        ForwardLimit = 1
+    });
 app.Use(async (context, next) =>
 {
     context.Response.Headers["X-Content-Type-Options"] = "nosniff";

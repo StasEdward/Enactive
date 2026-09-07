@@ -65,6 +65,16 @@ node --test tests/gateway.test.mjs
 
 ## Конфигурация и хранение
 
+### Ubuntu 24.04 и Cloudflare Tunnel
+
+Соберите `dotnet publish server/Enactive.Server.csproj -c Release -r linux-x64 --self-contained true -o artifacts/server-linux-x64` из корня репозитория. Перенесите содержимое публикации в `app/` рядом с `scripts/install-ubuntu.sh` на Ubuntu и выполните `sudo bash install-ubuntu.sh`. Скрипт предназначен для первой установки: существующую службу или `/opt/enactive-server` он не перезаписывает.
+
+Установка создаёт службу `enactive-server`, пользователя без входа, данные в `/var/lib/enactive-server` и случайный ключ в `/etc/enactive-server/server.env` (доступен root). Устанавливает `cloudflared` из официального APT-репозитория; сам туннель нужно подключить отдельно. Для текущего развёртывания разрешён Host `remote.enactive.dev`, адрес службы `http://127.0.0.1:5187`. В Cloudflare настройте публичный маршрут `remote.enactive.dev` на этот адрес и установите службу туннеля командой из панели Cloudflare.
+
+`ENACTIVE_LOCAL_PROXY=true` включает обработку `X-Forwarded-Proto` только от доверенных по умолчанию loopback-прокси. Не используйте этот режим с приложением, доступным в обход локального коннектора. IP клиента не переназначается: лимит входа общий для подключений через коннектор. HTTPS-порт редиректа — 443, среда — Production. `scripts/smoke-linux.py`, помещённый рядом с `app/`, проверяет запуск публикации на Linux без root, используя временную базу и порт 15187.
+
+Проверка службы: `systemctl status enactive-server`; журнал: `sudo journalctl -u enactive-server -n 50`. Ключ входа: `sudo cat /etc/enactive-server/server.env` (не отправляйте его в чат). Для согласованной резервной копии остановите службу и сохраните весь `/var/lib/enactive-server` вместе с `/etc/enactive-server/server.env` в защищённое хранилище, затем запустите службу. Self-contained публикация включает .NET; обновления runtime требуют новой публикации приложения.
+
 | Параметр | Значение |
 |---|---|
 | `ENACTIVE_OWNER_KEY` | Обязательный приватный ключ владельца длиной от 24 символов |
