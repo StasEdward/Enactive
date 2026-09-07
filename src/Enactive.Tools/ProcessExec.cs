@@ -15,6 +15,15 @@ internal static class ProcessExec
 {
     private const int MaxOutputChars = 6000;
 
+    /// <summary>
+    /// How much of one stream is held in memory while a process runs. Far more than
+    /// <see cref="MaxOutputChars"/>, which is what actually reaches the model, because this is not a
+    /// display budget - it is the ceiling that stops a command from deciding how much memory this
+    /// application uses. A build that prints a gigabyte used to be accumulated in full and then
+    /// truncated to six thousand characters: every byte paid for, none of it read.
+    /// </summary>
+    private const int MaxCapturedChars = 64_000;
+
     /// <summary>Reads an "args" element that is either an array of strings or a single whitespace-split string.</summary>
     public static List<string> ParseArgs(JsonElement args)
     {
@@ -80,10 +89,10 @@ internal static class ProcessExec
             startInfo.ArgumentList.Add(a);
 
         using var process = new Process { StartInfo = startInfo };
-        var stdout = new StringBuilder();
-        var stderr = new StringBuilder();
-        process.OutputDataReceived += (_, e) => { if (e.Data is not null) stdout.AppendLine(e.Data); };
-        process.ErrorDataReceived += (_, e) => { if (e.Data is not null) stderr.AppendLine(e.Data); };
+        var stdout = new CapturedStream();
+        var stderr = new CapturedStream();
+        process.OutputDataReceived += (_, e) => stdout.Add(e.Data);
+        process.ErrorDataReceived += (_, e) => stderr.Add(e.Data);
 
         try
         {
@@ -107,5 +116,40 @@ internal static class ProcessExec
         }
 
         return BuildResult(fileName, process.ExitCode, stdout.ToString(), stderr.ToString(), allowedExitCodes);
+    }
+
+    /// <summary>
+    /// One process stream, captured up to a ceiling. Past it the lines are counted and dropped
+    /// rather than kept: the caller only ever shows the first few thousand characters anyway, and a
+    /// command's output is not a budget this application should let the command set.
+    ///
+    /// <para>Says so when it happens. Silently keeping the first N characters of a build log and
+    /// calling that "the output" is how a model comes to believe a build succeeded because the
+    /// errors were off the end.</para>
+    /// </summary>
+    public sealed class CapturedStream
+    {
+        private readonly StringBuilder _text = new();
+        private int _dropped;
+
+        public void Add(string? line)
+        {
+            if (line is null)
+                return;
+
+            if (_text.Length + line.Length + 1 > MaxCapturedChars)
+            {
+                _dropped++;
+                return;
+            }
+
+            _text.AppendLine(line);
+        }
+
+        public override string ToString()
+            => _dropped == 0
+                ? _text.ToString()
+                : _text + $"… ({_dropped} more line(s) produced and dropped — output passed "
+                        + $"{MaxCapturedChars:N0} characters)\n";
     }
 }

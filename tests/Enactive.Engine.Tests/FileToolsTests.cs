@@ -299,6 +299,60 @@ public sealed class FileToolsTests
         Assert.False((await Call(new ReadFileTool(), fx, arguments)).Success);
     }
 
+    // ── read_file keeps only the window ───────────────────────────────────────────────
+
+    // It used to read the whole file into a string, split it into an array of every line, and keep a
+    // handful — so twenty lines of a two-gigabyte log cost two gigabytes to answer with a screenful.
+    // Streaming it changes how the lines are found, so what these pin is that the ANSWER did not
+    // change: the same separators, the same counts, the same awkward edges.
+    [Fact]
+    public async Task A_window_is_the_same_text_the_whole_file_would_have_given()
+    {
+        using var fx = new EngineFixture();
+
+        var body = string.Join('\n', Enumerable.Range(1, 500).Select(i => $"line {i} — ключевое слово"));
+        fx.Write("doc.md", body);
+
+        var result = await Call(new ReadFileTool(), fx, """{"path":"doc.md","offset":100,"limit":3}""");
+
+        Assert.True(result.Success, result.Error);
+        Assert.StartsWith(
+            "line 100 — ключевое слово\nline 101 — ключевое слово\nline 102 — ключевое слово",
+            result.Output);
+        Assert.Equal(500, Assert.Contains("totalLines", result.Metadata));
+        Assert.Equal(100, Assert.Contains("firstLine", result.Metadata));
+        Assert.Equal(102, Assert.Contains("lastLine", result.Metadata));
+    }
+
+    // A file ending in a newline has a last, empty line — Split('\n') said so, and the streaming
+    // reader has to agree or every count shifts by one.
+    [Fact]
+    public async Task A_trailing_newline_is_still_a_final_empty_line()
+    {
+        using var fx = new EngineFixture();
+        fx.Write("doc.md", "one\ntwo\n");
+
+        var result = await Call(new ReadFileTool(), fx, """{"path":"doc.md"}""");
+
+        Assert.Equal(3, Assert.Contains("totalLines", result.Metadata));
+        Assert.Equal("one\ntwo\n", result.Output);
+    }
+
+    // CRLF: lines are separated by the \n, and the \r stays on the end of the line where it was.
+    // Tidying it here would quietly change what a tool hands back.
+    [Fact]
+    public async Task Windows_line_endings_come_back_untouched()
+    {
+        using var fx = new EngineFixture();
+        fx.Write("doc.md", "one\r\ntwo\r\nthree");
+
+        var result = await Call(new ReadFileTool(), fx, """{"path":"doc.md","offset":2,"limit":1}""");
+
+        // The line itself, then the note saying there is more of the file.
+        Assert.StartsWith("two\r\n\n… showing lines 2–2 of 3.", result.Output);
+        Assert.Equal(3, Assert.Contains("totalLines", result.Metadata));
+    }
+
     // ── list_dir over what is on disk AND what is only staged ─────────────────────────
 
     // A staged run writes nothing to disk, so a folder a step has just "created" does not exist.

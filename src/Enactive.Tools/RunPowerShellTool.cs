@@ -63,10 +63,12 @@ public sealed class RunPowerShellTool : ITool
         startInfo.ArgumentList.Add(encoded);
 
         using var process = new Process { StartInfo = startInfo };
-        var stdout = new StringBuilder();
-        var stderr = new StringBuilder();
-        process.OutputDataReceived += (_, e) => { if (e.Data is not null) stdout.AppendLine(e.Data); };
-        process.ErrorDataReceived += (_, e) => { if (e.Data is not null) stderr.AppendLine(e.Data); };
+        // Bounded on purpose - see ProcessExec.CapturedStream. A command's output is not a budget
+        // this application should let the command set.
+        var stdout = new ProcessExec.CapturedStream();
+        var stderr = new ProcessExec.CapturedStream();
+        process.OutputDataReceived += (_, e) => stdout.Add(e.Data);
+        process.ErrorDataReceived += (_, e) => stderr.Add(e.Data);
 
         try
         {

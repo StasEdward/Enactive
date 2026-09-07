@@ -3,4 +3,11 @@
     <ProjectReference Include="..\Enactive.Core\Enactive.Core.csproj" />
     <PackageReference Include="ModelContextProtocol.Core" Version="2.2.0" />
   </ItemGroup>
+
+  <ItemGroup>
+    <!-- The bounded process-output collector is an implementation detail with a limit worth pinning:
+         a command's output must not decide how much memory this application uses. -->
+    <InternalsVisibleTo Include="Enactive.Engine.Tests" />
+  </ItemGroup>
+
 </Project>

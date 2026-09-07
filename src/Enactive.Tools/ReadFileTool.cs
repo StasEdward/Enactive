@@ -1,5 +1,6 @@
 namespace Enactive.Tools;
 
+using System.Text;
 using System.Text.Json;
 using Enactive.Core.Permissions;
 using Enactive.Core.Tools;
@@ -63,17 +64,22 @@ public sealed class ReadFileTool : ITool
             if (staged is null && !File.Exists(full))
                 return ToolResults.Fail($"File not found: {path}");
 
-            var text = staged ?? await File.ReadAllTextAsync(full, ct);
-            var lines = text.Split('\n');
-            var total = lines.Length;
+            // Only the window is held. This used to read the whole file into a string, split it into
+            // an array of every line, and then keep a handful of them - so asking for twenty lines of
+            // a two-gigabyte log cost two gigabytes plus the array, to answer with a screenful. A
+            // staged write is already a string in memory and is windowed as it stands.
+            var slice = staged is null
+                ? await ReadWindowAsync(full, offset, limit, ct)
+                : Window(staged, offset, limit);
+
+            var total = slice.TotalLines;
 
             if (offset > total)
                 return ToolResults.Fail(
                     $"'{path}' has {total} line(s); offset {offset} is past the end.");
 
-            var window = lines.Skip(offset - 1).Take(limit).ToArray();
-            var lastLine = offset + window.Length - 1;
-            var body = string.Join('\n', window);
+            var lastLine = offset + slice.WindowLines - 1;
+            var body = slice.Text;
 
             // The character cap still applies inside the window — a few very long lines can exceed
             // it on their own — but now it is one of two limits the caller is told about, not the
@@ -83,14 +89,14 @@ public sealed class ReadFileTool : ITool
 
             var more = lastLine < total
                 ? $"\n\n… showing lines {offset}–{lastLine} of {total}. Read on with offset {lastLine + 1}."
-                : total > window.Length ? $"\n\n… showing lines {offset}–{lastLine} of {total}." : "";
+                : total > slice.WindowLines ? $"\n\n… showing lines {offset}–{lastLine} of {total}." : "";
 
             return ToolResults.Ok(
                 output: body + more,
                 metadata: new Dictionary<string, object?>
                 {
                     ["path"] = path,
-                    ["bytes"] = text.Length,
+                    ["bytes"] = slice.TotalChars,
                     ["totalLines"] = total,
                     ["firstLine"] = offset,
                     ["lastLine"] = lastLine,
@@ -104,6 +110,78 @@ public sealed class ReadFileTool : ITool
         {
             return ToolResults.Fail($"Could not read '{path}': {ex.Message}");
         }
+    }
+
+    /// <summary>The requested lines, and what it takes to describe where they came from.</summary>
+    private readonly record struct Slice(string Text, int TotalLines, int WindowLines, int TotalChars);
+
+    /// <summary>
+    /// Reads a file once, keeping only the requested lines. Lines are separated exactly as
+    /// <c>Split('\n')</c> separated them - a file ending in a newline has a final empty line, and a
+    /// CR before the LF stays where it was - because the window this returns has to be the same text
+    /// the previous implementation returned, not a tidied version of it.
+    /// </summary>
+    private static async Task<Slice> ReadWindowAsync(
+        string fullPath, int offset, int limit, CancellationToken ct)
+    {
+        var last = offset + limit - 1;
+        var window = new StringBuilder();
+        var buffer = new char[8192];
+
+        var line = 1;
+        var totalLines = 1;
+        var totalChars = 0;
+        var windowLines = 0;
+        var started = false;
+
+        using var reader = new StreamReader(fullPath);
+
+        EnterLine(1);
+
+        int read;
+        while ((read = await reader.ReadAsync(buffer, ct)) > 0)
+        {
+            for (var i = 0; i < read; i++)
+            {
+                var c = buffer[i];
+                totalChars++;
+
+                if (c == '\n')
+                {
+                    line++;
+                    totalLines++;
+                    EnterLine(line);
+                    continue;
+                }
+
+                // One character past the display cap is enough to know it was exceeded; everything
+                // beyond that is discarded rather than gathered and then thrown away.
+                if (line >= offset && line <= last && window.Length <= MaxChars)
+                    window.Append(c);
+            }
+        }
+
+        return new Slice(window.ToString(), totalLines, windowLines, totalChars);
+
+        void EnterLine(int number)
+        {
+            if (number < offset || number > last)
+                return;
+
+            if (started)
+                window.Append('\n');
+
+            started = true;
+            windowLines++;
+        }
+    }
+
+    /// <summary>The same window over content already in memory - a staged write.</summary>
+    private static Slice Window(string text, int offset, int limit)
+    {
+        var lines = text.Split('\n');
+        var window = lines.Skip(offset - 1).Take(limit).ToArray();
+        return new Slice(string.Join('\n', window), lines.Length, window.Length, text.Length);
     }
 
     private static int Number(JsonElement root, string name, int fallback)
