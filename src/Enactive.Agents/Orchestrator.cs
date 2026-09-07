@@ -869,6 +869,16 @@ public sealed class Orchestrator : IOrchestrator
         /// <summary>Lookups that found nothing — see the note above about when these count.</summary>
         private readonly Dictionary<string, string> _foundNothing = new(StringComparer.Ordinal);
 
+        /// <summary>The file each open failure was trying to change, where it named one.</summary>
+        private readonly Dictionary<string, string> _fileOf = new(StringComparer.Ordinal);
+
+        /// <summary>
+        /// Open failures that named NO file, by the tool that produced them — a call refused for a
+        /// missing required argument, which is a sentence that did not parse rather than an action
+        /// that did not happen. See <see cref="Succeeded"/>.
+        /// </summary>
+        private readonly Dictionary<string, string> _namedNothing = new(StringComparer.Ordinal);
+
         private bool _anythingWorked;
 
         public int Count => _byCall.Count + (_anythingWorked ? 0 : _foundNothing.Count);
@@ -878,18 +888,108 @@ public sealed class Orchestrator : IOrchestrator
             => !_anythingWorked && _byCall.Count == 0 && _foundNothing.Count > 0;
 
         public void Failed(ToolCall call, string? error)
-            => _byCall[Key(call)] = Line(call, error);
+        {
+            var key = Key(call);
+            _byCall[key] = Line(call, error);
+
+            if (FileNamedBy(call) is { } file)
+                _fileOf[key] = file;
+            else if (ProducesFiles.Contains(call.Name))
+                _namedNothing[key] = call.Name;
+        }
+
+        /// <summary>
+        /// The tools whose work IS a file, so a later file of theirs can show the work happened.
+        /// A command is not one of them: nothing it produces says the earlier one succeeded.
+        /// </summary>
+        private static readonly HashSet<string> ProducesFiles =
+            new(StringComparer.Ordinal) { "write_file", "edit_file", "move_file", "create_directory" };
 
         /// <summary>A lookup whose target is not there. An answer — unless the step has nothing else.</summary>
         public void FoundNothing(ToolCall call, string? error)
             => _foundNothing[Key(call)] = Line(call, error);
 
-        public void Succeeded(ToolCall call)
+        /// <summary>
+        /// A call that worked, and the files it produced.
+        ///
+        /// <para>Those files close any failure that was trying to change one of them. Reported
+        /// 2026-09-07 21:01: an <c>edit_file</c> whose <c>old_string</c> did not match, and a
+        /// <c>write_file</c> sent without its <c>path</c> — both on Program.cs, both followed
+        /// immediately by a <c>write_file</c> of that same file that WORKED. The tests were written.
+        /// The step was marked Incomplete for two calls the model had already made good, plus a
+        /// third, and the step after it was skipped.</para>
+        ///
+        /// <para>The old rule — recovered only when the same call, same arguments, succeeds — took a
+        /// tool call for the goal. It is not: the model was never asked to call edit_file with that
+        /// exact old_string, it chose to, and when the choice did not work it rewrote the file
+        /// instead. The FILE is the thing that was asked for, and the artifact store says which files
+        /// a call actually produced, so this is evidence rather than inference.</para>
+        /// </summary>
+        /// <param name="produced">
+        /// <para>A second case, from the same log: <c>write_file {"content":"…"}</c> with the path
+        /// left out, refused with <i>'path' is required</i> before it touched anything, and sent
+        /// again correctly twenty-two seconds later. That call names no file, so nothing above can
+        /// close it — and it is not work that did not happen, it is a sentence that did not parse.
+        /// The same tool succeeding afterwards is the model having said it properly.</para>
+        ///
+        /// <para>The hole that leaves: a model could send a malformed write, never correct it, and
+        /// have an unrelated successful write close it. Small, visible in the evidence either way,
+        /// and much smaller than the alternative — every mistyped argument poisoning its step for
+        /// good, which is what the log showed.</para>
+        /// </param>
+        public void Succeeded(ToolCall call, IReadOnlyList<ArtifactRef> produced)
         {
             _anythingWorked = true;
-            _byCall.Remove(Key(call));
-            _foundNothing.Remove(Key(call));
+            Close(Key(call));
+
+            foreach (var reference in produced)
+                foreach (var open in _fileOf.Where(p => SameFile(p.Value, reference.RelativePath))
+                                            .Select(p => p.Key).ToArray())
+                    Close(open);
+
+            foreach (var open in _namedNothing.Where(p => p.Value == call.Name)
+                                              .Select(p => p.Key).ToArray())
+                Close(open);
         }
+
+        private void Close(string key)
+        {
+            _byCall.Remove(key);
+            _foundNothing.Remove(key);
+            _fileOf.Remove(key);
+            _namedNothing.Remove(key);
+        }
+
+        /// <summary>The file a call was trying to change, from its own arguments.</summary>
+        private static string? FileNamedBy(ToolCall call)
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(
+                    string.IsNullOrWhiteSpace(call.ArgumentsJson) ? "{}" : call.ArgumentsJson);
+                if (doc.RootElement.ValueKind != JsonValueKind.Object)
+                    return null;
+
+                // "path" for write/edit/create; "to" is where a move puts the file, which is the
+                // one that has to exist afterwards.
+                foreach (var name in new[] { "path", "to" })
+                    if (doc.RootElement.TryGetProperty(name, out var value)
+                        && value.ValueKind == JsonValueKind.String
+                        && value.GetString() is { Length: > 0 } text)
+                        return text;
+
+                return null;
+            }
+            catch (JsonException)
+            {
+                return null;
+            }
+        }
+
+        /// <summary>Workspace-relative paths, compared as this platform compares them.</summary>
+        private static bool SameFile(string a, string b)
+            => string.Equals(a.Replace('\\', '/').Trim('/'), b.Replace('\\', '/').Trim('/'),
+                             StringComparison.OrdinalIgnoreCase);
 
         public string Describe()
             => string.Join("; ", _anythingWorked ? _byCall.Values : _byCall.Values.Concat(_foundNothing.Values));
@@ -1581,7 +1681,7 @@ public sealed class Orchestrator : IOrchestrator
                 }
 
                 if (result.Success)
-                    openFailures.Succeeded(call);
+                    openFailures.Succeeded(call, result.Artifacts);
                 else if (result.IsAnswer)
                     openFailures.FoundNothing(call, result.Error);
                 else
