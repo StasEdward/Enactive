@@ -39,7 +39,6 @@
         <a href="#features">Features</a>
         <a href="#models">Models</a>
         <a href="#architecture">Architecture</a>
-        <a href="https://remote.enactive.dev/" target="_blank" rel="noopener">Remote Access</a>
       </nav>
       <!-- ====== SOURCE BUTTON ====== -->
       <a href="https://github.com/StasEdward/Enactive" class="btn btn--sm btn--ghost">Source</a>
@@ -139,7 +138,7 @@
         <article class="card">
           <div class="card__icon">03</div>
           <h3>The artifact is the centre</h3>
-          <p>A run ends in a diff, a file set, a report — with <strong class="bold">Apply</strong>, <strong class="bold">Review</strong> and <strong class="bold">Reject</strong> on it. Not fifty chat bubbles you have to read.</p>
+          <p>A run ends in a diff, a file set, a report — with <strong>Apply</strong>, <strong>Review</strong> and <strong>Reject</strong> on it. Not fifty chat bubbles you have to read.</p>
         </article>
         <article class="card">
           <div class="card__icon">04</div>
@@ -163,5 +162,252 @@
           <p>The planner emits step dependencies. The scheduler runs steps by readiness, cascade-skips dependents when one fails, and detects cycles.</p>
         </article>
         <article class="card">
-          <h3>An autonomy 
-...
+          <h3>An autonomy slider you can trust</h3>
+          <p><strong>Observe → Suggest → Execute → Autonomous.</strong> Shell and PowerShell ask first; you can remember an approval for the session or for the workspace.</p>
+        </article>
+        <article class="card">
+          <h3>Workers as roles</h3>
+          <p>Developer, Reviewer (read-only), Ops, Writer — each with its own tool allowlist, permission level and model. You pick a role, not a model.</p>
+        </article>
+        <article class="card">
+          <h3>The agent sees the machine</h3>
+          <p>Read-only discovery of host and OS, Git branch, remote and dirty state, Docker, WSL and services — fed into the prompt and shown in the UI.</p>
+        </article>
+        <article class="card">
+          <h3>A timeline, not a chat history</h3>
+          <p>Decisions and artifacts across every run fold into a persistent project memory, so the next run starts knowing what the last one did.</p>
+        </article>
+        <article class="card">
+          <h3>Inbox and background runs</h3>
+          <p>Drop ten tasks in the evening. The agent runs headless, declines to guess at forks, and leaves results and questions in your Inbox.</p>
+        </article>
+        <article class="card">
+          <h3>Nothing is written behind your back</h3>
+          <p>Optional staging: every write becomes a diff you Apply or Reject before it touches the disk.</p>
+        </article>
+        <article class="card">
+          <h3>A log that shows the wire</h3>
+          <p>Every prompt, response, tool call and event — with a raw-wire option. Live window plus a daily file, so a bad run can be read afterwards.</p>
+        </article>
+        <article class="card">
+          <h3>Local by default</h3>
+          <p>API keys are DPAPI-encrypted in <code>settings.json</code>. Run history, memory and approvals live in <code>.enactive/</code> inside your own workspace.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ====== DECISION ====== -->
+  <section>
+    <div class="container decision__grid">
+      <div>
+        <p class="eyebrow">The fork</p>
+        <h2>Autonomous by default.<br />Human where it matters.</h2>
+        <p class="section-lead">
+          The agent scans, plans, writes and tests on its own. When it reaches an ambiguity it cannot
+          resolve honestly, it stops and asks — with the options laid out and a recommendation — instead
+          of guessing and reporting success.
+        </p>
+        <p class="section-lead">
+          That pause is the whole point of the autonomy slider, and it is the gap in the logo.
+        </p>
+      </div>
+      <div class="window window--wait">
+        <div class="window__bar">
+          <span class="window__title">DECISION REQUIRED</span>
+          <span class="status status--wait">● Waiting</span>
+        </div>
+        <div class="window__body">
+          <p class="decision__text">The replica on <code>ate-db-02</code> is 40 s behind. Probing it will hold a read lock for about a second.</p>
+          <div class="options">
+            <div class="option option--rec">
+              <div class="option__name">OPTION A</div>
+              <div class="option__body">Probe anyway — the lock is short</div>
+              <div class="option__tag">Recommended</div>
+            </div>
+            <div class="option">
+              <div class="option__name">OPTION B</div>
+              <div class="option__body">Skip this instance and report it</div>
+            </div>
+          </div>
+          <div class="window__actions">
+            <span class="chip">Choose A</span>
+            <span class="chip chip--muted">Choose B</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ====== TEAM OF MODELS ====== -->
+  <section id="models">
+    <div class="container">
+      <p class="eyebrow">Team of models</p>
+      <h2>A team, not a model picker</h2>
+      <p class="section-lead">
+        Configure any number of providers and bind a model to each phase of a run. One local model
+        doing everything is just the simplest case of the same setup.
+      </p>
+
+      <div class="phases">
+        <div class="phase">
+          <div class="phase__name">Plan</div>
+          <p>A reasoner turns the intent into a dependency graph and rates every step <em>trivial</em>, <em>normal</em> or <em>complex</em>.</p>
+        </div>
+        <div class="phase">
+          <div class="phase__name">Execute</div>
+          <p>Steps route themselves by that rating: trivial to a light model, normal to the worker's own, complex to the heavy one.</p>
+        </div>
+        <div class="phase">
+          <div class="phase__name">Review</div>
+          <p>Each step is judged against the <strong>real tool transcript</strong> — not the model's summary of it. On a fail, the step is retried with the feedback.</p>
+        </div>
+      </div>
+
+      <div class="providers">
+        <span class="tag">Ollama — native, per-run <code>num_ctx</code></span>
+        <span class="tag">Anthropic</span>
+        <span class="tag">OpenAI-compatible</span>
+        <span class="tag">OpenRouter · Groq · a second Ollama…</span>
+      </div>
+      <p class="fineprint fineprint--note">
+        The awkward parts are handled for you: local <code>&lt;think&gt;</code> is off by default, Anthropic's
+        <code>temperature</code> is dropped for models that reject it, <code>max_tokens</code> is auto-sized to each
+        model's real cap, a truncation guard stops a half-written tool call from looping, and writes can be
+        verified by reading the file back.
+      </p>
+    </div>
+  </section>
+
+  <!-- ====== ARCHITECTURE ====== -->
+  <section id="architecture">
+    <div class="container arch__grid">
+      <div>
+        <p class="eyebrow">Architecture</p>
+        <h2>Light on dependencies, on purpose</h2>
+        <p class="section-lead">
+          Seven projects on <strong>.NET 10</strong>. Core, Providers, Tools, Agents and the console host
+          pull in <strong>zero external NuGet packages</strong>. Only storage and the Avalonia UI have
+          dependencies at all.
+        </p>
+        <ul class="arch__list">
+          <li><strong>Core</strong> — domain and abstractions only: Intent, Plan and PlanStep as a DAG, Worker, Decision, Permissions, Memory, Inbox. No transport types.</li>
+          <li><strong>Providers</strong> — OpenAI-compatible, Ollama native and Anthropic behind one factory, with logging and a wire tap.</li>
+          <li><strong>Tools</strong> — files, <code>run_command</code>, <code>run_powershell</code>, git and docker, each gated by permission level.</li>
+          <li><strong>Workspace</strong> — run stores in SQLite, MySQL or JSON; artifact staging; memory; inbox; the environment probe.</li>
+          <li><strong>Agents</strong> — Orchestrator, Planner, DagScheduler, the evidence-aware Reviewer, BackgroundRunner.</li>
+          <li><strong>App.Console</strong> and <strong>App.Ui</strong> — a headless host and the Avalonia desktop UI.</li>
+        </ul>
+      </div>
+
+      <svg class="arch__svg" viewBox="0 0 520 306" role="img" aria-label="Layered architecture: hosts on top, agents, then providers, tools and workspace, all resting on a dependency-free core">
+        <g font-family="JetBrains Mono, ui-monospace, monospace">
+          <!-- hosts -->
+          <rect x="20" y="8" width="230" height="46" rx="10" fill="#171A20" stroke="#2E3440" />
+          <text x="135" y="30" fill="#F2F4F7" font-size="13" text-anchor="middle">App.Ui</text>
+          <text x="135" y="45" fill="#5C6575" font-size="10" text-anchor="middle">Avalonia desktop</text>
+
+          <rect x="270" y="8" width="230" height="46" rx="10" fill="#171A20" stroke="#2E3440" />
+          <text x="385" y="30" fill="#F2F4F7" font-size="13" text-anchor="middle">App.Console</text>
+          <text x="385" y="45" fill="#5C6575" font-size="10" text-anchor="middle">headless host</text>
+
+          <path d="M 260 60 L 260 72" stroke="#2E3440" stroke-width="1.5" />
+          <path d="M 255 68 L 260 74 L 265 68" fill="none" stroke="#2E3440" stroke-width="1.5" stroke-linecap="round" />
+
+          <!-- agents -->
+          <rect x="20" y="80" width="480" height="46" rx="10" fill="#171A20" stroke="#2E3440" />
+          <text x="260" y="102" fill="#F2F4F7" font-size="13" text-anchor="middle">Agents</text>
+          <text x="260" y="117" fill="#5C6575" font-size="10" text-anchor="middle">Orchestrator · Planner · DagScheduler · Reviewer</text>
+
+          <path d="M 260 132 L 260 144" stroke="#2E3440" stroke-width="1.5" />
+          <path d="M 255 140 L 260 146 L 265 140" fill="none" stroke="#2E3440" stroke-width="1.5" stroke-linecap="round" />
+
+          <!-- adapters -->
+          <rect x="20" y="152" width="150" height="46" rx="10" fill="#171A20" stroke="#2E3440" />
+          <text x="95" y="174" fill="#F2F4F7" font-size="13" text-anchor="middle">Providers</text>
+          <text x="95" y="189" fill="#5C6575" font-size="10" text-anchor="middle">the models</text>
+
+          <rect x="185" y="152" width="150" height="46" rx="10" fill="#171A20" stroke="#2E3440" />
+          <text x="260" y="174" fill="#F2F4F7" font-size="13" text-anchor="middle">Tools</text>
+          <text x="260" y="189" fill="#5C6575" font-size="10" text-anchor="middle">the machine</text>
+
+          <rect x="350" y="152" width="150" height="46" rx="10" fill="#171A20" stroke="#2E3440" />
+          <text x="425" y="174" fill="#F2F4F7" font-size="13" text-anchor="middle">Workspace</text>
+          <text x="425" y="189" fill="#5C6575" font-size="10" text-anchor="middle">what happened</text>
+
+          <path d="M 260 204 L 260 216" stroke="#2E3440" stroke-width="1.5" />
+          <path d="M 255 212 L 260 218 L 265 212" fill="none" stroke="#2E3440" stroke-width="1.5" stroke-linecap="round" />
+
+          <!-- core -->
+          <rect x="20" y="224" width="480" height="56" rx="10" fill="#1A1109" stroke="#FF5F26" />
+          <text x="260" y="248" fill="#FF9C72" font-size="13" text-anchor="middle">Core</text>
+          <text x="260" y="264" fill="#8A93A3" font-size="10" text-anchor="middle">domain model + abstractions · zero external packages</text>
+
+          <text x="260" y="298" fill="#5C6575" font-size="10" text-anchor="middle">every layer depends downward, and nothing depends on a host</text>
+        </g>
+      </svg>
+    </div>
+  </section>
+
+  <!-- ====== GET STARTED ====== 
+  <section id="start">
+    <div class="container">
+      <p class="eyebrow">Get started</p>
+      <h2>Clone, build, assign a task</h2>
+      <p class="section-lead">
+        You need the .NET 10 SDK and Ollama with a tool-capable model. An Anthropic key is optional —
+        it buys you a reasoner that plans and reviews the local model's work.
+      </p>
+
+      <pre class="code"><span class="c"># a local model that can call tools</span>
+ollama pull qwen2.5-coder
+
+<span class="c"># build</span>
+dotnet build
+
+<span class="c"># the desktop UI</span>
+dotnet run <span class="p">--project</span> src/Enactive.App.Ui
+
+<span class="c"># or headless — run one task, then read back what happened</span>
+dotnet run <span class="p">--project</span> src/Enactive.App.Console -- "Add a health probe for the MySQL replica" "C:\ws\gate"
+dotnet run <span class="p">--project</span> src/Enactive.App.Console -- timeline "C:\ws\gate"</pre>
+
+      <div class="status-note">
+        <div class="status-note__k">STATUS</div>
+        <p>
+          Enactive is built and used daily, but it is not packaged yet — there is no installer, and you
+          run it from source. Windows is the tested platform; Avalonia means Linux and macOS should work,
+          and neither is verified.
+        </p>
+      </div>
+
+      <div class="hero__cta">
+        <a href="https://github.com/StasEdward/Enactive" class="btn">View the source</a>
+        <a href="#how" class="btn btn--ghost">Read how it works</a>
+      </div>
+    </div>
+  </section>
+-->
+  <!-- ====== FOOTER ====== -->
+  <footer class="footer">
+    <div class="container footer__inner">
+      <div class="logo">
+        <svg viewBox="0 0 64 64" aria-hidden="true">
+          <defs><linearGradient id="footMark" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="#FF5F26" /><stop offset="1" stop-color="#FFB020" />
+          </linearGradient></defs>
+          <path d="M 36.37 11.46 A 21 21 0 1 0 52.19 26.21" fill="none" stroke="url(#footMark)" stroke-width="8" stroke-linecap="round" />
+          <path d="M 49.02 15.16 L 59.27 26.26 L 46.20 30.01 Z" fill="#FFB020" stroke="#FFB020" stroke-width="2" stroke-linejoin="round" />
+          <circle cx="32" cy="32" r="6.5" fill="url(#footMark)" />
+        </svg>
+        <span>enactive<span class="logo__tld">.dev</span></span>
+      </div>
+      <p>The interface becomes the agent's tool, rather than the agent being squeezed into a chat box.</p>
+      <p class="fineprint">© 2026 Enactive · Built on .NET 10 and Avalonia</p>
+    </div>
+  </footer>
+
+  <script src="assets/hero.js" defer></script>
+
+</body>
+</html>
