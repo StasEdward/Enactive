@@ -1,8 +1,11 @@
 ﻿namespace Enactive.Engine.Tests;
 
 using Enactive.Core.Permissions;
+using Enactive.Core.Context;
 using Enactive.Core.Templates;
+using Enactive.Core.Tools;
 using Enactive.Workspace;
+using Enactive.Tools;
 using Xunit;
 
 /// <summary>
@@ -34,8 +37,13 @@ public sealed class TaskTemplateTests : IDisposable
         try { Directory.Delete(_root, recursive: true); } catch { /* a temp folder */ }
     }
 
-    private static TaskTemplate Simple(string id = "fix-bug")
-        => new(id, "Fix Bug", "Fix the reported problem.");
+    /// <summary>
+    /// A throwaway template. The id deliberately matches NO built-in: "fix-bug" used to be the
+    /// default here and became a shipped template, so a test asserting "this id is not in the
+    /// library" started failing over a name collision rather than over what it was testing.
+    /// </summary>
+    private static TaskTemplate Simple(string id = "sample-task")
+        => new(id, "Sample Task", "Do the sample thing.");
 
     // ── the id is a path component ──────────────────────────────────────────
 
@@ -319,6 +327,107 @@ public sealed class TaskTemplateTests : IDisposable
 
         // The built-ins are always there, so "nothing was written" is about this id, not about the
         // library being empty.
-        Assert.DoesNotContain(store.Load(), t => t.Id == "fix-bug");
+        Assert.DoesNotContain(store.Load(), t => t.Id == "sample-task");
+    }
+
+    // ── the built-in library ────────────────────────────────────────────────
+
+    /// <summary>
+    /// Every tool a built-in names must EXIST.
+    ///
+    /// <para>Shipped 2026-09-07 and found an hour later: all three built-ins denied
+    /// <c>create_dir</c>, and the tool is called <c>create_directory</c>. The permission engine
+    /// matches names exactly, so that entry forbade nothing at all — a restriction written down,
+    /// displayed in the template, and connected to nothing. The same class as <c>edit_file</c>
+    /// shipping in no worker's allowlist, twice in one day.</para>
+    ///
+    /// <para>The tool set comes from the assembly rather than a list typed here, because a
+    /// hand-copied list is the same bug wearing a different hat.</para>
+    /// </summary>
+    [Fact]
+    public void Every_tool_a_built_in_names_is_a_real_tool()
+    {
+        var real = ShippedToolNames();
+        Assert.Contains("create_directory", real);
+
+        foreach (var template in BuiltinTemplates.All)
+        foreach (var named in template.Ceiling.Deny.Concat(template.Ceiling.AskBefore ?? Array.Empty<string>()))
+            Assert.True(
+                real.Contains(named),
+                $"'{template.Id}' names the tool '{named}', which does not exist. "
+                + "The permission engine matches names exactly, so this restricts nothing. "
+                + "Real tools: " + string.Join(", ", real.OrderBy(n => n)));
+    }
+
+    /// <summary>Every ITool this build ships, by the name the permission engine matches on.</summary>
+    private static HashSet<string> ShippedToolNames()
+        => typeof(WriteFileTool).Assembly
+            .GetTypes()
+            .Where(t => typeof(ITool).IsAssignableFrom(t) && t is { IsAbstract: false, IsInterface: false })
+            .Where(t => t.GetConstructor(Type.EmptyTypes) is not null)
+            .Select(t => ((ITool)Activator.CreateInstance(t)!).Definition.Name)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// A built-in either runs with nothing supplied, or names exactly which parameter stops it.
+    /// That is what makes the console's refusal actionable instead of "it did not work".
+    /// </summary>
+    [Fact]
+    public void Every_built_in_either_resolves_unattended_or_says_what_is_missing()
+    {
+        var workspace = WorkspaceInfo.For(_root);
+        var policy = new PermissionPolicy(PermissionLevel.Execute, new[] { "*" }, Array.Empty<string>());
+
+        foreach (var template in BuiltinTemplates.All)
+        {
+            var result = TemplateResolution.Resolve(template, workspace, policy);
+
+            if (result.Ok)
+                continue;
+
+            Assert.All(result.Problems, p =>
+                Assert.True(
+                    p.Field.StartsWith("Parameter '", StringComparison.Ordinal),
+                    $"'{template.Id}' cannot run unattended for a reason nobody can act on: {p}"));
+        }
+    }
+
+    /// <summary>
+    /// A criteria list made only of optional checks is a gate that gates nothing - it reports and
+    /// changes no outcome. Either a template means its checks or it should not carry any.
+    /// </summary>
+    [Fact]
+    public void A_built_in_that_carries_checks_means_at_least_one_of_them()
+    {
+        foreach (var template in BuiltinTemplates.All.Where(t => t.CriteriaList.Count > 0))
+            Assert.True(
+                template.CriteriaList.Any(c => c.Required),
+                $"'{template.Id}' has only optional checks, so nothing it checks can affect its outcome.");
+    }
+
+    /// <summary>
+    /// An optional parameter nobody filled in leaves NOTHING behind, not its own name. Skipping it
+    /// left the literal text "{area}" in the prompt: a token the model has no way to read as "the
+    /// author left this blank", and every chance of treating as something to interpret.
+    /// </summary>
+    [Fact]
+    public void An_unfilled_optional_parameter_disappears_from_the_goal()
+    {
+        var template = Simple() with
+        {
+            Goal = "Cover {area} in the tests.",
+            Parameters = new[]
+            {
+                new TemplateParameter("area", "Area", TemplateParameterType.Text, Required: false)
+            }
+        };
+
+        var spec = TemplateResolution.Resolve(
+            template, WorkspaceInfo.For(_root),
+            new PermissionPolicy(PermissionLevel.Execute, new[] { "*" }, Array.Empty<string>())).Spec;
+
+        Assert.NotNull(spec);
+        Assert.DoesNotContain("{area}", spec!.Goal);
+        Assert.Equal("Cover  in the tests.", spec.Goal);
     }
 }

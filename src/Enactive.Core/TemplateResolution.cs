@@ -111,8 +111,17 @@ public static class TemplateResolution
             if (string.IsNullOrEmpty(value))
             {
                 if (parameter.Required)
+                {
                     problems.Add(new TemplateProblem($"Parameter '{parameter.Id}'",
                         $"'{parameter.Name}' is required and was not supplied."));
+                    continue;
+                }
+
+                // An OPTIONAL parameter nobody filled in resolves to nothing at all, so its
+                // placeholder disappears from the goal. Skipping it here instead left the literal
+                // text "{area}" in the prompt - a token the model has no way to read as "the author
+                // left this blank", and every chance of treating as something to interpret.
+                resolved[parameter.Id] = string.Empty;
                 continue;
             }
 
