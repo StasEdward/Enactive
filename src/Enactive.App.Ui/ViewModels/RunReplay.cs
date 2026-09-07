@@ -1,4 +1,4 @@
-namespace Enactive.App.Ui.ViewModels;
+﻿namespace Enactive.App.Ui.ViewModels;
 
 using Enactive.Core.Events;
 using Enactive.Core.History;
@@ -59,7 +59,7 @@ internal static class RunReplay
 
             case nameof(EventKind.ErrorObserved):
                 card.AddNote("⚠ " + e.Summary);
-                card.ExpandForAttention();
+                card.SetNeedsAttention();
                 break;
 
             case nameof(EventKind.ReviewRequested):

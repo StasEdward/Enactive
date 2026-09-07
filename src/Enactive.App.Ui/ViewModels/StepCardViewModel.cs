@@ -1,4 +1,4 @@
-namespace Enactive.App.Ui.ViewModels;
+﻿namespace Enactive.App.Ui.ViewModels;
 
 using System.Collections.ObjectModel;
 using System.Text;
@@ -143,11 +143,29 @@ internal sealed class StepCardViewModel : ObservableObject
     /// Pops the card open so something that needs the user's attention - a recovered implicit tool
     /// call, an error - is not hidden behind the collapsed default. Only auto-expands once: if the
     /// user has already collapsed it back by hand, that choice stands.
+    ///
+    /// <para>It EXPANDS and nothing else. It used to also repaint the status amber, which is how a
+    /// failed step came out amber instead of red: the failure path sets the status and THEN asks for
+    /// the card to be opened, so the second call quietly undid the first. A method named for
+    /// expanding had no business deciding what colour the step was, and the bug was invisible in the
+    /// code because both lines read as if they were doing different things.</para>
     /// </summary>
     public void ExpandForAttention()
     {
         if (!_userExpanded)
             IsExpanded = true;
+    }
+
+    /// <summary>
+    /// Something is waiting on the user, or went wrong mid-step and the step may yet recover: open
+    /// the card AND mark it amber. Amber, not red - the step has not failed, it is asking.
+    ///
+    /// <para>Whatever status the step ends with overwrites this, because that one is the truth about
+    /// how it finished and this is only the truth about right now.</para>
+    /// </summary>
+    public void SetNeedsAttention()
+    {
+        ExpandForAttention();
         StatusBrush = Brand.Warning;
     }
 

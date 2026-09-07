@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using System.Diagnostics;
 using Avalonia;
 using Avalonia.Controls;
@@ -541,7 +541,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                     var warnCard = CardFor(ev) ?? EnsureCurrentCard();
                     warnCard.AddNote("⚠ " + ev.Summary);
                     warnCard.SetActivity("⚠ " + ev.Summary);
-                    warnCard.ExpandForAttention();
+                    warnCard.SetNeedsAttention();
                     break;
                 case EventKind.ReviewRequested:
                 case EventKind.ReviewPassed:
@@ -562,7 +562,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                     if (ev.Kind == EventKind.DecisionRequested)
                     {
                         decisionCard.SetActivity("Waiting for your approval…");
-                        decisionCard.ExpandForAttention();
+                        decisionCard.SetNeedsAttention();
                     }
                     break;
                 case EventKind.UsageReported:
