@@ -98,7 +98,7 @@ public sealed class RunPowerShellTool : ITool
         }
 
         return ProcessExec.BuildResult(
-            "PowerShell", process.ExitCode, stdout.ToString(), stderr.ToString(), expected);
+            "PowerShell", process.ExitCode, stdout.ToString(), stderr.ToString(), expected, declarable: true);
     }
 
     private static readonly string Schema = $$"""

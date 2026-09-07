@@ -10,6 +10,22 @@ public sealed record ToolDefinition(string Name, string Description, string Json
 /// <summary>A tool invocation requested by the model.</summary>
 public sealed record ToolCall(string Id, string Name, string ArgumentsJson);
 
+/// <summary>
+/// Argument names the ENGINE has to know about as well as the tool that reads them. Kept here
+/// because Core is the only layer both sides share, and a name spelled twice is a name that drifts.
+/// </summary>
+public static class ToolArguments
+{
+    /// <summary>
+    /// The exit codes a caller declares it expects from a command (see the command-running tools).
+    ///
+    /// <para>The engine cares because it says how to READ a result, not what to do: a command and
+    /// the same command declaring that 1 is an answer are the same action, and a run-again-and-
+    /// declare that produced a different identity would leave the first failure open forever.</para>
+    /// </summary>
+    public const string ExpectedExitCodes = "expectedExitCodes";
+}
+
 /// <summary>Structured tool result (PLAN_v2 §2A.2) — never a bare string.</summary>
 /// <param name="IsAnswer">
 /// Set on a FAILED result that is nevertheless the answer to what was asked: the file the model

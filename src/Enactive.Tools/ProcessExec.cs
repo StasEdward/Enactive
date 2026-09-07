@@ -82,8 +82,23 @@ internal static class ProcessExec
     /// <paramref name="allowedExitCodes"/> covers the commands whose codes carry meaning
     /// (e.g. <c>git diff --exit-code</c>); the default is {0}.
     /// </summary>
+    /// <param name="declarable">
+    /// Whether this tool accepts <see cref="ExpectedExitCodes"/> — if it does, a failure says so.
+    ///
+    /// <para>Found 2026-09-07 20:49, the first run after the declaration shipped: the model ran the
+    /// test project three times, never declared anything, and ended its report with "the fallback
+    /// parsing failure specifically confirms that the behavior I identified as a gap is indeed
+    /// broken… satisfying the requirement to implement tests that fail if the behavior is broken."
+    /// It KNEW the failure was the answer. It said so in prose. It did not say so in the arguments,
+    /// because nothing asked it to at the moment it wrote them.</para>
+    ///
+    /// <para>So the failure itself says how. That is the pattern every other correction in this
+    /// codebase follows — the git argument shape, the CRLF edit, the denied tool: put the fix in the
+    /// message the model is actually reading, at the moment it is stuck.</para>
+    /// </param>
     public static ToolResult BuildResult(
-        string what, int exitCode, string stdout, string stderr, IReadOnlyCollection<int>? allowedExitCodes = null)
+        string what, int exitCode, string stdout, string stderr,
+        IReadOnlyCollection<int>? allowedExitCodes = null, bool declarable = false)
     {
         var combined = stdout;
         if (stderr.Length > 0)
@@ -97,9 +112,20 @@ internal static class ProcessExec
         var metadata = new Dictionary<string, object?> { ["exitCode"] = exitCode };
 
         var allowed = allowedExitCodes is { Count: > 0 } ? allowedExitCodes : DefaultAllowedExitCodes;
-        return allowed.Contains(exitCode)
-            ? ToolResults.Ok(output: output, metadata: metadata)
-            : ToolResults.Fail($"{what} exited with code {exitCode}.", output, metadata);
+        if (allowed.Contains(exitCode))
+            return ToolResults.Ok(output: output, metadata: metadata);
+
+        // Said only when nothing was declared: repeating the option to somebody who used it and
+        // still failed is noise, and worse, reads as an invitation to widen the declaration.
+        var howTo = declarable && allowedExitCodes is null
+            ? $" If this exit code IS the answer you wanted — a test runner reporting failing tests, "
+              + $"a linter reporting findings — run the same command again with "
+              + $"\"{ExpectedExitCodes}\": [0, {exitCode}] and the result will count as a finding "
+              + $"instead of a failure. If the command was meant to succeed, do NOT do that: the "
+              + $"output above says what went wrong, so fix the cause."
+            : "";
+
+        return ToolResults.Fail($"{what} exited with code {exitCode}.{howTo}", output, metadata);
     }
 
     private static readonly IReadOnlyCollection<int> DefaultAllowedExitCodes = new[] { 0 };
@@ -156,8 +182,9 @@ internal static class ProcessExec
         return true;
     }
 
-    /// <summary>The argument name, in one place — it appears in two schemas and two descriptions.</summary>
-    public const string ExpectedExitCodes = "expectedExitCodes";
+    /// <summary>The argument name. Defined in Core, which the engine can see too — it has to key
+    /// calls without it, so the spelling cannot live only on this side.</summary>
+    public const string ExpectedExitCodes = ToolArguments.ExpectedExitCodes;
 
     /// <summary>
     /// The schema property and the guidance that goes with it, shared by every command-running tool.

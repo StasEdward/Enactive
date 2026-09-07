@@ -97,7 +97,7 @@ public sealed class RunCommandTool : ITool
         }
 
         return ProcessExec.BuildResult(
-            "Command", process.ExitCode, stdout.ToString(), stderr.ToString(), expected);
+            "Command", process.ExitCode, stdout.ToString(), stderr.ToString(), expected, declarable: true);
     }
 
     private static readonly string Schema = $$"""
