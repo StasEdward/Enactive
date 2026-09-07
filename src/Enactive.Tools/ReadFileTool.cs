@@ -76,8 +76,13 @@ public sealed class ReadFileTool : ITool
 
             var total = slice.TotalLines;
 
+            // NotFound for the same reason as a missing file: this ANSWERED. "Is there more after
+            // line 800?" — "no, the file has 263 lines" is the whole information the caller wanted,
+            // and it is how paging through a file of unknown length works. Reported 2026-09-07
+            // 21:35: two of these, both right after a successful read of the same file, left a step
+            // Incomplete and skipped the two steps behind it.
             if (offset > total)
-                return ToolResults.Fail(
+                return ToolResults.NotFound(
                     $"'{path}' has {total} line(s); offset {offset} is past the end.");
 
             var lastLine = offset + slice.WindowLines - 1;
