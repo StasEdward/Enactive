@@ -1,8 +1,9 @@
-﻿namespace Enactive.Agents;
+namespace Enactive.Agents;
 
 using System.Runtime.CompilerServices;
 using Enactive.Core.Events;
 using Enactive.Core.History;
+using Enactive.Core.Templates;
 using Enactive.Core.Memory;
 
 /// <summary>
@@ -93,7 +94,10 @@ public sealed class RunRecorder
             switch (ev.Kind)
             {
                 case EventKind.IntentReceived:
-                    title = StripPrefix(ev.Summary, "Intent: ");
+                    // One line, always. The request itself used to be the title, line breaks and
+                    // all, which was fine while a request was a sentence somebody typed and became
+                    // four identical-looking paragraphs per card the moment templates arrived.
+                    title = RunTitle.OneLine(StripPrefix(ev.Summary, "Intent: "));
                     break;
                 case EventKind.Routed when model is null && ev.Summary.Contains("-> model "):
                     model = ExtractAfter(ev.Summary, "-> model ");
@@ -127,6 +131,11 @@ public sealed class RunRecorder
         // No terminal event at all means the stream stopped early — a crash or a cancellation. That
         // is not success, and it is not a failure the engine reported either.
         var status = (outcome ?? RunOutcomeKind.Incomplete).ToString();
+        // A templated run is named by its TEMPLATE - "Code Review" is what somebody scanning the
+        // list is looking for, and it is the truth about where the run came from.
+        if (ResolvedTaskSpec.Parse(spec) is { TemplateName: { Length: > 0 } named })
+            title = RunTitle.OneLine(named);
+
         return new RunRecord(
             first.RunId, first.TaskId, title, model,
             first.At, last.At, status, eventRecords, artifacts, decisions, settings,

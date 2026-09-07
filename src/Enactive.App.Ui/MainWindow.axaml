@@ -275,8 +275,13 @@
                             <Border Classes="card" BorderBrush="{Binding StatusBrush}"
                                     ToolTip.Tip="{Binding Tooltip}">
                                 <StackPanel>
-                                    <TextBlock Classes="cardTitle" Text="{Binding Title}" />
-                                    <TextBlock Classes="cardMeta" Text="{Binding Meta}" />
+                                    <!-- NoWrap as well as trimming: trimming alone cuts a long
+                                         line, and a title with a newline in it still became four.
+                                         The title is one line now; this is what keeps it one. -->
+                                    <TextBlock Classes="cardTitle" Text="{Binding Title}"
+                                               TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
+                                    <TextBlock Classes="cardMeta" Text="{Binding Meta}"
+                                               TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
                                 </StackPanel>
                             </Border>
                         </DataTemplate>
@@ -699,7 +704,13 @@
                                 ToolTip.Tip="Back to the current run" />
                         <StackPanel Grid.Column="1" Spacing="2" Margin="12,0">
                             <TextBlock Text="{Binding PastRun.Title}" FontSize="15" FontWeight="SemiBold"
-                                       TextTrimming="CharacterEllipsis" />
+                                       TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
+                            <!-- What was asked for. It used to BE the title, four paragraphs of it;
+                                 it belongs here, on one line, with the whole thing in the tooltip. -->
+                            <TextBlock Classes="hint" Text="{Binding PastRun.Subtitle}" FontSize="11"
+                                       IsVisible="{Binding PastRun.HasSubtitle}"
+                                       TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
+                                       ToolTip.Tip="{Binding PastRun.Request}" />
                             <TextBlock Classes="hint" Text="{Binding PastRun.Meta}" FontSize="11"
                                        TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
                                        ToolTip.Tip="{Binding PastRun.Meta}" />

@@ -1,4 +1,4 @@
-﻿namespace Enactive.App.Ui.ViewModels;
+namespace Enactive.App.Ui.ViewModels;
 
 using System.Collections.ObjectModel;
 using Avalonia.Media;
@@ -19,7 +19,10 @@ internal sealed class RunListItemViewModel
     {
         Record = record;
 
-        Title = string.IsNullOrWhiteSpace(record.Title) ? "(untitled run)" : record.Title;
+        // Repaired on the way OUT, not only on the way in: history recorded before titles were
+        // one line still has to read properly, and rewriting somebody's stored runs in place to fix
+        // a display problem is the wrong trade.
+        Title = RunTitle.For(record);
         Meta = $"{Ago(record.StartedAt)} · {Outcome(record)}";
         StatusBrush = BrushFor(record.Status);
 
@@ -125,6 +128,14 @@ internal sealed class PastRunViewModel : ObservableObject
     /// <summary>What was originally asked for, when the run is new enough to have recorded it.</summary>
     public string? Request { get; }
 
+    /// <summary>
+    /// The request on one line, under the title. It used to BE the title - four paragraphs of a
+    /// template's goal, which made every card in the list look the same. It is information worth
+    /// keeping and worth keeping in its place.
+    /// </summary>
+    public string Subtitle { get; } = string.Empty;
+    public bool HasSubtitle => Subtitle.Length > 0;
+
     public bool CanRetry { get; }
     public bool CanRunAgain { get; }
     public string RunAgainTooltip { get; } = string.Empty;
@@ -151,7 +162,7 @@ internal sealed class PastRunViewModel : ObservableObject
         Func<TaskTemplate?>? currentTemplate = null)
     {
         Record = record;
-        Title = string.IsNullOrWhiteSpace(record.Title) ? "(untitled run)" : record.Title;
+        Title = RunTitle.For(record);
 
         var siblings = attempts is { Count: > 0 } ? attempts : new[] { record };
         var attemptNo = RunHistory.AttemptNumber(siblings, record.RunId);
@@ -162,6 +173,11 @@ internal sealed class PastRunViewModel : ObservableObject
 
         Spec = ResolvedTaskSpec.Parse(record.Spec);
         Request = RunHistory.RequestOf(record);
+
+        // Only when it says something the title does not: a typed request IS the title, and
+        // repeating it underneath is noise.
+        var asked = RunTitle.OneLine(Request, 160);
+        Subtitle = asked.StartsWith(Title, StringComparison.Ordinal) ? string.Empty : asked;
 
         // Retry re-runs THIS specification, exactly as it was. For a run that was typed rather than
         // started from a template there is no specification, so it re-runs the request instead -

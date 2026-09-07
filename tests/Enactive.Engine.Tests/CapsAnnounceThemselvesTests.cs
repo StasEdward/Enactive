@@ -58,7 +58,8 @@ public sealed class CapsAnnounceThemselvesTests
         ["WriteFileTool.ShrinkGuardFloorBytes"] = "The_rule_itself",
         // Caught by this census the day it was written, which is what the census is for: a new
         // constant with "Chars" in its name and nothing driving it past its limit.
-        ["LogAnalyst.CharsPerToken"] = "The_missing_middle_announces_itself_and_says_how_much"
+        ["LogAnalyst.CharsPerToken"] = "The_missing_middle_announces_itself_and_says_how_much",
+        ["RunTitle.MaxChars"] = "A_long_title_is_cut_and_says_it_was"
     };
 
     /// <summary>
