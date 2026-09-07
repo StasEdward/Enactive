@@ -1,4 +1,4 @@
-﻿namespace Enactive.Engine.Tests;
+namespace Enactive.Engine.Tests;
 
 using Enactive.Agents;
 using Enactive.Core.Artifacts;
@@ -263,10 +263,55 @@ public sealed class EngineFixture : IDisposable
         File.WriteAllText(full, content);
     }
 
+    /// <summary>
+    /// Writes the same text with the line endings a test asks for.
+    ///
+    /// <para>Every test but a handful handed <see cref="Write"/> a string full of <c>\n</c>, so the
+    /// world the suite exercised was LF-only — and the product ships on Windows, where most text
+    /// files are not. <c>edit_file</c> was therefore never tried against a CRLF file until the day a
+    /// user found it refusing every edit on one. A test that wants an ending now says which, and
+    /// <see cref="Endings"/> makes running a test over both a one-line change.</para>
+    /// </summary>
+    public void Write(string relative, string content, Newline endings)
+        => Write(relative, Normalize(content, endings));
+
+    /// <summary>The same text with exactly one kind of line ending, whatever it arrived with.</summary>
+    public static string Normalize(string content, Newline endings)
+    {
+        var lf = content.Replace("\r\n", "\n").Replace("\r", "\n");
+        return endings == Newline.Lf ? lf : lf.Replace("\n", "\r\n");
+    }
+
+    /// <summary>Both, for a <c>[Theory]</c>: a file tool has to work on either.</summary>
+    public static TheoryData<Newline> Endings => new() { Newline.Lf, Newline.Crlf };
+
     /// <summary>A worker with the given tool allowlist; everything else is the Developer role.</summary>
+    ///
+    /// <remarks>
+    /// Prefer <see cref="Role"/> for anything that could depend on what a role may actually DO. A
+    /// hand-written allowlist here is a world of the test's own making, and a tool missing from a
+    /// SHIPPING role is invisible to it by construction — which is exactly how edit_file shipped
+    /// registered, documented, and reachable by nobody.
+    /// </remarks>
     public static Worker WorkerWith(params string[] tools)
         => new("developer", "Developer", "You are a developer.", tools,
                PermissionLevel.Execute, new ModelPolicy(new ModelRef("fake", "fake-model")));
+
+    /// <summary>A role exactly as this build ships it — allowlist, level and instructions.</summary>
+    public static Worker Role(string id)
+        => DefaultWorkers.Seed(new ModelRef("fake", "fake-model")).Single(w => w.Id == id);
+
+    /// <summary>Every role this build ships, by id — for a <c>[Theory]</c> that must cover all of them.</summary>
+    public static TheoryData<string> ShippingRoles
+    {
+        get
+        {
+            var data = new TheoryData<string>();
+            foreach (var worker in DefaultWorkers.Seed(new ModelRef("fake", "fake-model")))
+                data.Add(worker.Id);
+            return data;
+        }
+    }
 
     public Orchestrator Build(
         IChatProvider provider,
@@ -301,12 +346,10 @@ public sealed class EngineFixture : IDisposable
         IReadOnlyList<SuccessCriterionDefinition>? successCriteria = null,
         ExecutionLimits? limits = null)
     {
-        var tools = new ToolRegistry(new ITool[]
-        {
-            new WriteFileTool(), new EditFileTool(), new ReadFileTool(), new SearchFilesTool(),
-            new ListDirectoryTool(), new CreateDirectoryTool(), new MoveFileTool(),
-            new RunCommandTool(), new RunPowerShellTool()
-        });
+        // The set a host registers, not a convenient subset: a role's allowlist can only be
+        // exercised against the tools that actually exist, and git/docker were missing here while
+        // both shipping hosts register them.
+        var tools = new ToolRegistry(ShippedTools());
 
         return new Orchestrator(
             providers,
@@ -344,6 +387,17 @@ public sealed class EngineFixture : IDisposable
         return events;
     }
 
+    /// <summary>
+    /// Every tool a shipping host registers. Kept here so one list serves the whole suite, and so
+    /// "a tool nobody can reach" is a question a test can ask.
+    /// </summary>
+    public static ITool[] ShippedTools() => new ITool[]
+    {
+        new WriteFileTool(), new EditFileTool(), new ReadFileTool(), new SearchFilesTool(),
+        new ListDirectoryTool(), new CreateDirectoryTool(), new MoveFileTool(),
+        new RunCommandTool(), new RunPowerShellTool(), new GitTool(), new DockerTool()
+    };
+
     public void Dispose()
     {
         try { Directory.Delete(Root, recursive: true); } catch { /* a temp folder that outlives a test is not a failure */ }
@@ -366,4 +420,11 @@ public static class EventAssertions
 
     public static IEnumerable<WorkEvent> OfKind(this IEnumerable<WorkEvent> events, EventKind kind)
         => events.Where(e => e.Kind == kind);
+}
+
+/// <summary>Which line endings a file is written with. The product ships on Windows; both are real.</summary>
+public enum Newline
+{
+    Lf,
+    Crlf
 }

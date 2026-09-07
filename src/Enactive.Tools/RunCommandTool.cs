@@ -12,7 +12,6 @@ using Enactive.Core.Tools;
 public sealed class RunCommandTool : ITool
 {
     private const int TimeoutSeconds = 60;
-    private const int MaxOutputChars = 4000;
 
     public ToolDefinition Definition { get; } = new(
         Name: "run_command",

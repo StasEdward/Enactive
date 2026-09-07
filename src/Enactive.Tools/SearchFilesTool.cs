@@ -85,6 +85,12 @@ public sealed class SearchFilesTool : ITool
         var scanned = 0;
         var capped = false;
 
+        // Files this search did not look inside. Counted rather than ignored: a search that skipped
+        // the file holding the answer and reported "no matches in 40 file(s)" is a wrong answer
+        // stated as a fact, and the model has no way to tell it apart from a real absence.
+        var skippedLarge = 0;
+        var skippedBinary = 0;
+
         try
         {
             foreach (var file in Enumerate(searchRoot, glob))
@@ -92,8 +98,8 @@ public sealed class SearchFilesTool : ITool
                 ct.ThrowIfCancellationRequested();
 
                 var info = new FileInfo(file);
-                if (info.Length > MaxFileBytes || Binary(file))
-                    continue;
+                if (info.Length > MaxFileBytes) { skippedLarge++; continue; }
+                if (Binary(file)) { skippedBinary++; continue; }
 
                 scanned++;
                 var hit = false;
@@ -131,24 +137,59 @@ public sealed class SearchFilesTool : ITool
             return ToolResults.Fail($"Search failed: {ex.Message}");
         }
 
+        var skipped = Skipped(skippedLarge, skippedBinary);
+
         if (matches == 0)
             return ToolResults.Ok(
-                output: $"No matches for /{pattern}/ in {scanned} file(s).",
-                metadata: new Dictionary<string, object?> { ["matches"] = 0, ["filesScanned"] = scanned });
+                output: $"No matches for /{pattern}/ in {scanned} file(s)." + skipped,
+                metadata: Metadata(0, 0, scanned, capped, skippedLarge, skippedBinary));
 
         if (capped)
             output.AppendLine($"… stopped at {matches} matches. Narrow the pattern or the glob to see the rest.");
 
+        if (skipped.Length > 0)
+            output.AppendLine(skipped.TrimStart('\n'));
+
         return ToolResults.Ok(
             output: output.ToString().TrimEnd(),
-            metadata: new Dictionary<string, object?>
-            {
-                ["matches"] = matches,
-                ["files"] = filesWithMatches,
-                ["filesScanned"] = scanned,
-                ["truncated"] = capped
-            });
+            metadata: Metadata(matches, filesWithMatches, scanned, capped, skippedLarge, skippedBinary));
     }
+
+    /// <summary>
+    /// What this search did not read, in the result itself.
+    ///
+    /// <para>The skips were a <c>continue</c> and nothing else: a file over the size ceiling, or one
+    /// that looked binary, was passed over and the count of files "scanned" never included it. The
+    /// answer then read "No matches for /X/ in 40 file(s)" — a sentence about 40 files presented as
+    /// a fact about the workspace. A 3 MB generated file is exactly the kind that holds the string
+    /// somebody is looking for.</para>
+    /// </summary>
+    private static string Skipped(int large, int binary)
+    {
+        if (large == 0 && binary == 0)
+            return "";
+
+        var parts = new List<string>(2);
+        if (large > 0)
+            parts.Add($"{large} file(s) larger than {MaxFileBytes / (1024 * 1024)} MB");
+        if (binary > 0)
+            parts.Add($"{binary} binary file(s)");
+
+        return $"\n… not searched: {string.Join(" and ", parts)}. "
+             + "Read one directly with read_file if the answer might be in it.";
+    }
+
+    private static Dictionary<string, object?> Metadata(
+        int matches, int files, int scanned, bool capped, int skippedLarge, int skippedBinary)
+        => new()
+        {
+            ["matches"] = matches,
+            ["files"] = files,
+            ["filesScanned"] = scanned,
+            ["truncated"] = capped,
+            ["skippedTooLarge"] = skippedLarge,
+            ["skippedBinary"] = skippedBinary
+        };
 
     /// <summary>
     /// Files under the search root, skipping the places nobody means to search: the workspace's own

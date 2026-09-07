@@ -1,4 +1,4 @@
-﻿using Enactive.Agents;
+using Enactive.Agents;
 using Enactive.Core.Context;
 using Enactive.Core.Diagnostics;
 using Enactive.Core.Events;
@@ -119,7 +119,13 @@ IToolRegistry toolRegistry = new LoggingToolRegistry(new ToolRegistry(new ITool[
     new WriteFileTool(),
     new EditFileTool(),
     new ReadFileTool(),
+    // Registered here because the roles name them. A tool a role names but the host does not
+    // register is the same defect as a tool the host registers and no role names, seen from the
+    // other side: the model is told about a capability that is not there.
+    new SearchFilesTool(),
     new ListDirectoryTool(),
+    new CreateDirectoryTool(),
+    new MoveFileTool(),
     new RunCommandTool(),
     new RunPowerShellTool(),
     new GitTool(),

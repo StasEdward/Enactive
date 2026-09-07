@@ -178,7 +178,7 @@ public sealed class SuccessEvaluator
     /// </summary>
     private const int MaxDetailChars = 1200;
 
-    private static string Trim(string? text)
+    internal static string Trim(string? text)
     {
         if (string.IsNullOrWhiteSpace(text))
             return "";

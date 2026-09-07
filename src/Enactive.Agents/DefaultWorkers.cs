@@ -1,4 +1,4 @@
-﻿namespace Enactive.Agents;
+namespace Enactive.Agents;
 
 using Enactive.Core.Permissions;
 using Enactive.Core.Providers;
@@ -39,37 +39,56 @@ public static class DefaultWorkers
         "\n- After writing a file that should hold real data, read it back to confirm it contains the real output.";
 
     // The role table, defined once. Instructions here are the BASE (pre-augmentation) text.
+    //
+    // An allowlist here is the ONLY thing that makes a registered tool reachable: the host registers
+    // a tool, and if no role names it the model is never offered it and the tool may as well not
+    // exist. edit_file shipped that way for a day and cost three destroyed files; search_files,
+    // create_directory and move_file shipped that way for longer and were found by the test that now
+    // asserts every shipped tool is named by somebody.
+    //
+    // The rule the lists follow, so a new tool has an obvious home:
+    //   - anything read-only (Observe) goes to every role, reviewer included;
+    //   - a role that may write_file may also create_directory and move_file, which are strictly
+    //     within what writing and reading files already allow;
+    //   - running things stays with developer and ops.
     private static readonly (string Id, string Role, string Instructions, string[] Tools, PermissionLevel Level)[] Roles =
     {
         ("developer", "Developer",
             "You are a developer agent working inside the user's workspace. You can create files "
             + "(write_file), change PART of an existing file (edit_file — prefer it: it does not make "
-            + "you retype the rest), read files, list directories, run shell commands (run_command) and run "
+            + "you retype the rest), read files, FIND things by content (search_files — prefer it over "
+            + "reading files one by one to look for something), list directories, create folders and move "
+            + "files, run shell commands (run_command) and run "
             + "PowerShell (run_powershell — prefer it on Windows for WMI/CIM, Get-PSDrive, pipes), plus git and "
             + "docker tools for version control and containers. Use the "
             + "tools to accomplish the request, then reply with a short confirmation of what you actually did.",
-            new[] { "write_file", "edit_file", "read_file", "list_dir", "run_command", "run_powershell", "git", "docker" },
+            new[] { "write_file", "edit_file", "read_file", "search_files", "list_dir", "create_directory",
+                    "move_file", "run_command", "run_powershell", "git", "docker" },
             PermissionLevel.Execute),
 
         ("reviewer", "Reviewer",
             "You are a code reviewer and analyst. Investigate the workspace and explain findings. "
-            + "You may ONLY read files and list directories — you must not modify anything or run "
+            + "Use search_files to locate things by content instead of reading files one by one. "
+            + "You may ONLY read, search and list — you must not modify anything or run "
             + "commands. Report issues, risks and suggestions clearly.",
-            new[] { "read_file", "list_dir" },
+            new[] { "read_file", "search_files", "list_dir" },
             PermissionLevel.Observe),
 
         ("ops", "Ops",
             "You are a DevOps/operations agent. Use the dedicated git and docker tools for version "
             + "control and containers; run_command/run_powershell for other shell (prefer run_powershell "
-            + "on Windows for system/WMI queries); read files and list directories for context. Avoid "
+            + "on Windows for system/WMI queries); read files, search them by content (search_files) and "
+            + "list directories for context. Avoid "
             + "editing source files unless explicitly asked. Prefer safe, read-only commands first.",
-            new[] { "read_file", "list_dir", "run_command", "run_powershell", "git", "docker" },
+            new[] { "read_file", "search_files", "list_dir", "run_command", "run_powershell", "git", "docker" },
             PermissionLevel.Execute),
 
         ("writer", "Writer",
             "You are a technical writer. Create and edit documentation and text files, reading "
-            + "existing files for context. Do not run shell commands.",
-            new[] { "write_file", "edit_file", "read_file", "list_dir" },
+            + "existing files for context and using search_files to find where something is written. "
+            + "You may also create folders and move files. Do not run shell commands.",
+            new[] { "write_file", "edit_file", "read_file", "search_files", "list_dir",
+                    "create_directory", "move_file" },
             PermissionLevel.Execute),
     };
 

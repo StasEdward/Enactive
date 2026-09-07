@@ -16,7 +16,6 @@ using Enactive.Core.Tools;
 public sealed class RunPowerShellTool : ITool
 {
     private const int TimeoutSeconds = 90;
-    private const int MaxOutputChars = 6000;
 
     public ToolDefinition Definition { get; } = new(
         Name: "run_powershell",
