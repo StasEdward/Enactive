@@ -16,15 +16,38 @@ using Enactive.Core.Providers;
 /// </summary>
 public sealed class LoggingChatProvider : IChatProvider
 {
+    /// <summary>
+    /// What stands in for a prompt this log must not contain — see <see cref="LoggingChatProvider(IChatProvider, ILogSink, string, bool)"/>.
+    /// </summary>
+    internal const string BodyWithheld =
+        "(the prompt is not shown here: it carries this log's own contents, and writing it "
+        + "into the log would fold the log into itself. The call above did happen.)";
+
     private readonly IChatProvider _inner;
     private readonly ILogSink _log;
     private readonly string _providerId;
+    private readonly bool _promptBodies;
 
-    public LoggingChatProvider(IChatProvider inner, ILogSink log, string providerId)
+    /// <param name="promptBodies">
+    /// Whether the rendered PROMPT is written to the log. False for a call whose prompt is the log
+    /// itself — the "AI Analyze" button on the log window.
+    ///
+    /// <para>Found 2026-09-07 19:54: a run of 10,429 lines, analysed once, became 15,214 — the
+    /// analysis prompt carries a 4,700-line excerpt of the log and was written straight back into
+    /// it. Analysed twice, the file was 19,664 lines, 47% of it previous analysis prompts, and the
+    /// excerpt the model was given had shrunk from 4,740 lines of the run to 4,427 lines of mostly
+    /// itself. The feature was eating the record it exists to read.</para>
+    ///
+    /// <para>The line still goes in — the same rule as everywhere else here: elide content, never
+    /// remove the record that something happened. So does the model's ANSWER, which is short and is
+    /// the useful part.</para>
+    /// </param>
+    public LoggingChatProvider(IChatProvider inner, ILogSink log, string providerId, bool promptBodies = true)
     {
         _inner = inner;
         _log = log;
         _providerId = providerId;
+        _promptBodies = promptBodies;
     }
 
     /// <summary>Whatever the real provider says — a decorator that answered for it would be guessing.</summary>
@@ -35,7 +58,7 @@ public sealed class LoggingChatProvider : IChatProvider
     {
         _log.Info(LogSource.Prompt,
             $"prompt → {_providerId}/{request.Model} ({request.Messages.Count} messages)",
-            RenderPrompt(request), request.Model);
+            Body(request), request.Model);
 
         var text = new StringBuilder();
         var reasoning = new StringBuilder();
@@ -97,7 +120,7 @@ public sealed class LoggingChatProvider : IChatProvider
     {
         _log.Info(LogSource.Prompt,
             $"prompt → {_providerId}/{request.Model} ({request.Messages.Count} messages, non-stream)",
-            RenderPrompt(request), request.Model);
+            Body(request), request.Model);
 
         ChatCompletion completion;
         try
@@ -120,7 +143,17 @@ public sealed class LoggingChatProvider : IChatProvider
         return completion;
     }
 
-    private static string RenderPrompt(ChatRequest request)
+    /// <summary>
+    /// The prompt as the log should carry it: rendered, or — for a call whose prompt IS the log —
+    /// the settings line and a note in place of the messages. Never nothing: an entry with no body
+    /// at all reads as a call that produced no prompt.
+    /// </summary>
+    private string Body(ChatRequest request)
+        => _promptBodies ? RenderPrompt(request) : Settings(request) + BodyWithheld;
+
+    /// <summary>How the call was made — model, sampling, window, tools. Cheap, and true of every
+    /// call whether or not its messages can be shown.</summary>
+    private static string Settings(ChatRequest request)
     {
         var sb = new StringBuilder();
         sb.Append("model=").Append(request.Model);
@@ -130,6 +163,12 @@ public sealed class LoggingChatProvider : IChatProvider
         sb.AppendLine();
         if (request.Tools is { Count: > 0 } tools)
             sb.Append("tools: ").AppendLine(string.Join(", ", tools.Select(x => x.Name)));
+        return sb.ToString();
+    }
+
+    private static string RenderPrompt(ChatRequest request)
+    {
+        var sb = new StringBuilder(Settings(request));
         sb.AppendLine(new string('-', 40));
 
         foreach (var m in request.Messages)

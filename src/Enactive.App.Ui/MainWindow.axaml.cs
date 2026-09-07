@@ -1096,8 +1096,12 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         if (reference is null)
             return null;
 
+        // promptBodies: false — this prompt CARRIES the log, and the provider decorator would write
+        // it straight back into it. One analysis of a 10,429-line run added 4,785 lines; the second
+        // then read a log that was half its own previous prompt. See LoggingChatProvider.
         return async (text, ct) => await new LogAnalyst().AnalyseAsync(
-            text, _providerFactory.Create(reference.ProviderId), reference.Model, _settings.NumCtx, ct);
+            text, _providerFactory.Create(reference.ProviderId, promptBodies: false),
+            reference.Model, _settings.NumCtx, ct);
     }
 
     private void ShowLogWindow()

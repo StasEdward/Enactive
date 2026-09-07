@@ -17,7 +17,15 @@ public sealed class ChatProviderFactory : IChatProviderFactory
         _log = log;
     }
 
-    public IChatProvider Create(string providerId)
+    public IChatProvider Create(string providerId) => Create(providerId, promptBodies: true);
+
+    /// <param name="promptBodies">
+    /// False for a caller whose prompts carry the log itself — the log window's "AI Analyze". The
+    /// call is still logged; only its messages are left out. See
+    /// <see cref="LoggingChatProvider(IChatProvider, ILogSink, string, bool)"/> for what happened
+    /// without this.
+    /// </param>
+    public IChatProvider Create(string providerId, bool promptBodies)
     {
         if (!_descriptors.TryGetValue(providerId, out var descriptor))
             throw new InvalidOperationException($"Unknown provider '{providerId}'.");
@@ -31,6 +39,6 @@ public sealed class ChatProviderFactory : IChatProviderFactory
         };
 
         // Wrap in the readable-plane decorator when logging is on (raw byte-level dump is inside each provider).
-        return _log is null ? provider : new LoggingChatProvider(provider, _log, descriptor.Id);
+        return _log is null ? provider : new LoggingChatProvider(provider, _log, descriptor.Id, promptBodies);
     }
 }
