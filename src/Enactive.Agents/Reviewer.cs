@@ -263,7 +263,16 @@ public sealed class Reviewer
         + "OUGHT to have been run; ask whether THE ANSWER IS SUPPORTED. Fail when the agent reports "
         + "something only a command could have produced — a build that succeeded, a test that "
         + "passed, a version or a measurement it printed — and no such call is in the evidence. An "
-        + "answer drawn from files the evidence shows it read is supported, however few commands it ran.";
+        + "answer drawn from files the evidence shows it read is supported, however few commands it "
+        + "ran.\n\n"
+        // Without this the reviewer reads "exit code 1" and fails the step by its own rule, which
+        // would put the run back exactly where it was.
+        + "A call may DECLARE the exit codes it expects, in an \"expectedExitCodes\" argument you can "
+        + "see in the evidence. A test runner that returns 1 because a test failed is reporting, not "
+        + "malfunctioning, and a call that got a code it declared is recorded as succeeded — its exit "
+        + "code alone is then not a finding. What IS a finding: a declaration that does not fit the "
+        + "command (a build declaring failure acceptable), or a report that contradicts the output "
+        + "under it, such as \"all tests pass\" over output listing failures.";
 
     // Deliberately narrow. A content reviewer that fails on anything it is merely unsure about blocks
     // every run and gets switched off, so it is told to fail only on a specific, nameable falsehood —

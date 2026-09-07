@@ -104,6 +104,74 @@ internal static class ProcessExec
 
     private static readonly IReadOnlyCollection<int> DefaultAllowedExitCodes = new[] { 0 };
 
+    /// <summary>
+    /// The exit codes a caller DECLARED it expects, read from the tool's own arguments.
+    ///
+    /// <para>Reported 2026-09-07: a step whose whole job was "verify the tests fail when the
+    /// behaviour is broken" ran the test project, got exit 1 because tests failed — which is the
+    /// answer, not a malfunction — and the run died on it. <see cref="BuildResult"/> is right that
+    /// "the process started" and "the command succeeded" are different things, and it cannot tell a
+    /// broken build from a test runner reporting. The caller can: it knows what it asked for.</para>
+    ///
+    /// <para>So the caller says so IN THE ARGUMENTS, which it writes before it has seen any exit
+    /// code or output. That makes it a prediction rather than an excuse — asked afterwards, anything
+    /// would be declared expected. It is recorded in the evidence with the rest of the arguments,
+    /// where the reviewer reads it alongside the output and can see whether it was honest.</para>
+    ///
+    /// <para>0 is always in the set. A command that succeeded has succeeded, whatever was declared,
+    /// and no declaration can turn a clean exit into a failure.</para>
+    /// </summary>
+    /// <param name="error">Set when the property is present but not a list of integers.</param>
+    public static bool TryReadExpectedExitCodes(
+        JsonElement arguments, out IReadOnlyCollection<int>? codes, out string? error)
+    {
+        codes = null;
+        error = null;
+
+        if (!arguments.TryGetProperty(ExpectedExitCodes, out var declared)
+            || declared.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+            return true;
+
+        if (declared.ValueKind != JsonValueKind.Array)
+        {
+            error = $"'{ExpectedExitCodes}' must be an array of integers, e.g. [0, 1].";
+            return false;
+        }
+
+        var set = new HashSet<int> { 0 };
+        foreach (var element in declared.EnumerateArray())
+        {
+            if (element.ValueKind != JsonValueKind.Number || !element.TryGetInt32(out var code))
+            {
+                error = $"'{ExpectedExitCodes}' must contain integers only, e.g. [0, 1]; "
+                      + $"got {element.ValueKind}.";
+                return false;
+            }
+
+            set.Add(code);
+        }
+
+        // An empty list declares nothing; the default already says 0.
+        codes = set;
+        return true;
+    }
+
+    /// <summary>The argument name, in one place — it appears in two schemas and two descriptions.</summary>
+    public const string ExpectedExitCodes = "expectedExitCodes";
+
+    /// <summary>
+    /// The schema property and the guidance that goes with it, shared by every command-running tool.
+    /// The guidance is the part that matters: a model told only that the field exists will reach for
+    /// it whenever something is red.
+    /// </summary>
+    public const string ExpectedExitCodesSchema = """
+        "expectedExitCodes": {
+          "type": "array",
+          "items": { "type": "integer" },
+          "description": "Exit codes that mean this command DID its job, declared before you run it. Use ONLY when the exit code is part of the answer you are asking for - a test runner that returns 1 when tests fail, 'git diff --exit-code', a linter that returns non-zero when it finds something. Do NOT use it to excuse a command that was supposed to succeed: a build that fails is a failure whatever you declare, and the declaration is recorded and reviewed. 0 always counts as success and does not need listing. Default: [0]."
+        }
+        """;
+
     public static async Task<ToolResult> RunAsync(
         string fileName, IReadOnlyList<string> args, string workingDir, int timeoutSeconds,
         CancellationToken ct, IReadOnlyCollection<int>? allowedExitCodes = null)

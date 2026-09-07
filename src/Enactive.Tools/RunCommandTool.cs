@@ -16,7 +16,10 @@ public sealed class RunCommandTool : ITool
     public ToolDefinition Definition { get; } = new(
         Name: "run_command",
         Description: "Run a shell command in the workspace directory and return its stdout/stderr and exit code. "
-                   + "Use for builds, tests, git, etc.",
+                   + "Use for builds, tests, git, etc. A non-zero exit code is a FAILURE unless you declared it "
+                   + "in 'expectedExitCodes' before running - do that when the exit code is part of the answer "
+                   + "you want (a test runner reporting failing tests), never to excuse a command that was "
+                   + "supposed to succeed.",
         JsonSchema: Schema);
 
     public PermissionLevel RequiredLevel => PermissionLevel.Execute;
@@ -24,11 +27,17 @@ public sealed class RunCommandTool : ITool
     public async Task<ToolResult> InvokeAsync(string argumentsJson, ToolContext ctx, CancellationToken ct)
     {
         string? command;
+        IReadOnlyCollection<int>? expected;
         try
         {
             using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(argumentsJson) ? "{}" : argumentsJson);
             command = doc.RootElement.TryGetProperty("command", out var c) && c.ValueKind == JsonValueKind.String
                 ? c.GetString() : null;
+
+            // Read here, used at the very end - so a malformed declaration is refused BEFORE the
+            // command runs rather than after it has had its effect.
+            if (!ProcessExec.TryReadExpectedExitCodes(doc.RootElement, out expected, out var badCodes))
+                return ToolResults.Fail(badCodes!);
         }
         catch (JsonException ex)
         {
@@ -87,14 +96,16 @@ public sealed class RunCommandTool : ITool
             return ToolResults.Fail($"Could not run command: {ex.Message}");
         }
 
-        return ProcessExec.BuildResult("Command", process.ExitCode, stdout.ToString(), stderr.ToString());
+        return ProcessExec.BuildResult(
+            "Command", process.ExitCode, stdout.ToString(), stderr.ToString(), expected);
     }
 
-    private const string Schema = """
+    private static readonly string Schema = $$"""
     {
       "type": "object",
       "properties": {
-        "command": { "type": "string", "description": "The shell command to run in the workspace directory." }
+        "command": { "type": "string", "description": "The shell command to run in the workspace directory." },
+        {{ProcessExec.ExpectedExitCodesSchema}}
       },
       "required": ["command"]
     }
