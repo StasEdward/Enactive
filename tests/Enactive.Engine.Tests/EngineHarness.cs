@@ -1,4 +1,4 @@
-namespace Enactive.Engine.Tests;
+﻿namespace Enactive.Engine.Tests;
 
 using Enactive.Agents;
 using Enactive.Core.Artifacts;
@@ -8,6 +8,7 @@ using Enactive.Core.Events;
 using Enactive.Core.Intents;
 using Enactive.Core.Permissions;
 using Enactive.Core.Providers;
+using Enactive.Core.Templates;
 using Enactive.Core.Tools;
 using Enactive.Core.Workers;
 using Enactive.Tools;
@@ -277,13 +278,14 @@ public sealed class EngineFixture : IDisposable
         IChatProvider? reviewProvider = null,
         int reviewRetries = 1,
         bool reviewContent = true,
-        bool revertRejectedSteps = true)
+        bool revertRejectedSteps = true,
+        IReadOnlyList<SuccessCriterionDefinition>? successCriteria = null)
         => Build(
             reviewProvider is null
                 ? new SingleProviderFactory(provider)
                 : new MapProviderFactory(provider, (Verdicts.ProviderId, reviewProvider)),
             worker, policy, artifacts, allowImplicitToolCalls, router, reviewRetries, reviewContent,
-            revertRejectedSteps);
+            revertRejectedSteps, successCriteria);
 
     public Orchestrator Build(
         IChatProviderFactory providers,
@@ -294,7 +296,8 @@ public sealed class EngineFixture : IDisposable
         IModelRouter? router = null,
         int reviewRetries = 1,
         bool reviewContent = true,
-        bool revertRejectedSteps = true)
+        bool revertRejectedSteps = true,
+        IReadOnlyList<SuccessCriterionDefinition>? successCriteria = null)
     {
         var tools = new ToolRegistry(new ITool[]
         {
@@ -319,7 +322,8 @@ public sealed class EngineFixture : IDisposable
             reviewRetries: reviewRetries,
             allowImplicitToolCalls: allowImplicitToolCalls,
             reviewContent: reviewContent,
-            revertRejectedSteps: revertRejectedSteps);
+            revertRejectedSteps: revertRejectedSteps,
+            successCriteria: successCriteria);
     }
 
     /// <summary>Runs one intent to completion and returns every event it produced.</summary>

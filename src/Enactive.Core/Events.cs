@@ -1,4 +1,4 @@
-namespace Enactive.Core.Events;
+﻿namespace Enactive.Core.Events;
 
 /// <summary>Kinds of events emitted during a run. The Timeline is a projection over these.</summary>
 public enum EventKind
@@ -36,6 +36,14 @@ public enum EventKind
     /// deserves to know that before wondering why it forgot.
     /// </summary>
     ContextTrimmed,
+
+    /// <summary>
+    /// One of the run's success criteria was checked. Its own kind because it is the only evidence
+    /// in a run that is not a model's opinion of anything: a command ran and returned a number.
+    /// A criterion that could not be checked emits this too - "not checked" is a result, and the
+    /// silence it replaces is what let a run finish green over work nobody had verified.
+    /// </summary>
+    CriterionEvaluated,
 
     TaskCompleted,
     TaskFailed
@@ -356,6 +364,48 @@ public static class WorkEventPayload
     /// is for display. Status used to be inferred from wording, which is why a failed run could read
     /// as a successful one just by reaching the wrong final event.
     /// </summary>
+    /// <summary>
+    /// One success criterion's result, as VALUES. The panel that will show a run's checks reads
+    /// these; nothing has to take the sentence apart.
+    /// </summary>
+    public static string CriterionPayload(
+        string name, string outcome, bool required, int? exitCode)
+        => System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, object?>
+        {
+            ["criterion"] = name,
+            ["outcome"] = outcome,
+            ["required"] = required,
+            ["exitCode"] = exitCode
+        }, PayloadJson);
+
+    /// <summary>The criterion outcome this event carries, or null when it carries none.</summary>
+    public static string? CriterionOutcomeName(this WorkEvent ev)
+        => StringField(ev, "outcome");
+
+    /// <summary>The criterion's name, when the event is a criterion result.</summary>
+    public static string? CriterionName(this WorkEvent ev)
+        => StringField(ev, "criterion");
+
+    private static string? StringField(WorkEvent ev, string field)
+    {
+        if (string.IsNullOrEmpty(ev.PayloadJson))
+            return null;
+
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(ev.PayloadJson);
+            return doc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Object
+                   && doc.RootElement.TryGetProperty(field, out var value)
+                   && value.ValueKind == System.Text.Json.JsonValueKind.String
+                ? value.GetString()
+                : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     public static string OutcomePayload(RunOutcomeKind kind, string? reason = null)
         => System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, string?>
         {

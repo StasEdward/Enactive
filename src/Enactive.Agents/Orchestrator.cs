@@ -16,6 +16,7 @@ using Enactive.Core.Orchestration;
 using Enactive.Core.Permissions;
 using Enactive.Core.Providers;
 using Enactive.Core.Tasks;
+using Enactive.Core.Templates;
 using Enactive.Core.Tools;
 using Enactive.Core.Workers;
 
@@ -69,6 +70,14 @@ public sealed class Orchestrator : IOrchestrator
     private readonly bool _revertRejectedSteps;
     private readonly Reviewer _reviewer = new();
 
+    /// <summary>
+    /// The checks that decide whether this run is finished, independently of what the model says
+    /// about it. Empty is the behaviour that existed before them: the only voices were the worker's
+    /// own closing sentence and a reviewer's opinion of free text.
+    /// </summary>
+    private readonly IReadOnlyList<SuccessCriterionDefinition> _successCriteria;
+    private readonly SuccessEvaluator _successEvaluator = new();
+
     public Orchestrator(
         IChatProviderFactory providers,
         IModelResolver modelResolver,
@@ -88,8 +97,10 @@ public sealed class Orchestrator : IOrchestrator
         int maxParallelSteps = 1,
         bool allowImplicitToolCalls = false,
         bool reviewContent = true,
-        bool revertRejectedSteps = true)
+        bool revertRejectedSteps = true,
+        IReadOnlyList<SuccessCriterionDefinition>? successCriteria = null)
     {
+        _successCriteria = successCriteria ?? Array.Empty<SuccessCriterionDefinition>();
         _providers = providers;
         _workers = workers;
         _tools = tools;
@@ -211,6 +222,13 @@ public sealed class Orchestrator : IOrchestrator
                        ? SummarizeArtifacts(artifacts)
                        : $"{kind}{(string.IsNullOrWhiteSpace(reason) ? "" : ": " + reason)}",
                    WorkEventPayload.OutcomePayload(kind, reason));
+
+        // A criterion's result as VALUES as well as a sentence - the same reason every other event
+        // carries a payload: rewording a summary must not change what a reader of the run sees.
+        WorkEvent Criterion(CriterionResult r)
+            => new(Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow, EventKind.CriterionEvaluated,
+                   r.Describe(),
+                   WorkEventPayload.CriterionPayload(r.Name, r.Outcome.ToString(), r.Required, r.ExitCode));
 
         if (plan.Disposition == IntentDisposition.QuickAction)
         {
@@ -335,7 +353,26 @@ public sealed class Orchestrator : IOrchestrator
 
             await quickPump;
 
-            yield return Terminal(RunOutcomeOf(new[] { quickResult.Kind }), quickResult.Reason);
+            var quickOutcome = RunOutcomeOf(new[] { quickResult.Kind });
+            var quickReason = quickResult.Reason;
+
+            if (quickOutcome == RunOutcomeKind.Completed)
+            {
+                var report = await InScopeAsync(runId, taskId, null,
+                    () => CheckSuccessAsync(taskId, runId, intent.Context, ct));
+
+                foreach (var checkResult in report.Results)
+                    yield return Criterion(checkResult);
+
+                var adjusted = report.Apply(quickOutcome);
+                if (adjusted != quickOutcome)
+                {
+                    quickOutcome = adjusted;
+                    quickReason = report.Explain();
+                }
+            }
+
+            yield return Terminal(quickOutcome, quickReason);
             yield break;
         }
 
@@ -631,7 +668,29 @@ public sealed class Orchestrator : IOrchestrator
         if (cycle && runOutcome == RunOutcomeKind.Completed)
             runOutcome = RunOutcomeKind.Incomplete;
 
-        yield return Terminal(runOutcome, ExplainOutcome(outcomes, cycle));
+        var runReason = ExplainOutcome(outcomes, cycle);
+
+        // The last word, and the only one in the run that is not somebody's opinion. Checked only
+        // when everything else says the work is done: a run that already failed had its outcome
+        // decided by something that actually went wrong, and a build result on top of that would
+        // bury it - besides costing a build to learn nothing.
+        if (runOutcome == RunOutcomeKind.Completed)
+        {
+            var report = await InScopeAsync(runId, taskId, null,
+                () => CheckSuccessAsync(taskId, runId, intent.Context, ct));
+
+            foreach (var checkResult in report.Results)
+                yield return Criterion(checkResult);
+
+            var adjusted = report.Apply(runOutcome);
+            if (adjusted != runOutcome)
+            {
+                runOutcome = adjusted;
+                runReason = report.Explain();
+            }
+        }
+
+        yield return Terminal(runOutcome, runReason);
     }
 
     /// <summary>
@@ -833,6 +892,34 @@ public sealed class Orchestrator : IOrchestrator
             // silently turned every step green: the gate looked configured and enforced nothing.
             return (new ReviewResult(false, "review error: " + ex.Message), ReviewMode.Execution);
         }
+    }
+
+    /// <summary>
+    /// Runs the criteria this run was given, if any.
+    ///
+    /// <para>They are the answer to the question the engine could not answer before: everything it
+    /// had to decide "is this done" went through a language model — the worker's closing sentence,
+    /// and a reviewer judging free text, which on 2026-09-07 failed a correct run over a defect it
+    /// had invented complete with a line number. An exit code does not confabulate.</para>
+    /// </summary>
+    private async Task<SuccessReport> CheckSuccessAsync(
+        Guid taskId, Guid runId, WorkContext context, CancellationToken ct)
+    {
+        if (_successCriteria.Count == 0)
+            return SuccessReport.NothingToCheck;
+
+        var toolContext = new ToolContext(
+            TaskId: taskId,
+            RunId: runId,
+            WorkspaceId: _workspace.Id,
+            Context: context,
+            PermissionPolicy: _policy,
+            WorkspaceRoot: _workspace.RootPath,
+            Artifacts: _artifacts,
+            Services: _services);
+
+        return await _successEvaluator.EvaluateAsync(
+            _successCriteria, _tools, _permissions, _policy, _decisions, toolContext, taskId, ct);
     }
 
     /// <summary>Per file, and in total — the same budget the reviewer prompt applies.</summary>
