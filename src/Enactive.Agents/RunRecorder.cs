@@ -1,4 +1,4 @@
-namespace Enactive.Agents;
+﻿namespace Enactive.Agents;
 
 using System.Runtime.CompilerServices;
 using Enactive.Core.Events;
@@ -16,10 +16,19 @@ public sealed class RunRecorder
     private readonly IMemoryStore? _memory;
     private readonly Guid _workspaceId;
     private readonly RunSettings? _settings;
+    private readonly string? _spec;
 
+    /// <param name="spec">
+    /// The resolved specification this run was started from, as its canonical JSON - null for a run
+    /// that was typed rather than started from a template.
+    ///
+    /// <para>Handed in for the same reason <paramref name="settings"/> is: the template is editable
+    /// and its version moves on, so reading a finished run against the template as it stands later
+    /// answers "what would this do now" rather than "what did it do".</para>
+    /// </param>
     public RunRecorder(
         IRunStore store, IMemoryStore? memory = null, Guid workspaceId = default,
-        RunSettings? settings = null)
+        RunSettings? settings = null, string? spec = null)
     {
         _store = store;
         _memory = memory;
@@ -27,6 +36,7 @@ public sealed class RunRecorder
         // Handed in rather than read back later: what the run was allowed to do is a fact about the
         // moment it started, and the slider will have moved by the time anyone asks.
         _settings = settings;
+        _spec = spec;
     }
 
     public async IAsyncEnumerable<WorkEvent> RecordAsync(
@@ -45,7 +55,7 @@ public sealed class RunRecorder
         {
             if (events.Count > 0)
             {
-                var record = Build(events, _settings);
+                var record = Build(events, _settings, _spec);
                 await _store.SaveAsync(record, CancellationToken.None);
 
                 // Fold each resolved decision into the project's durable memory (PLAN_v2 §2.6).
@@ -58,7 +68,7 @@ public sealed class RunRecorder
         }
     }
 
-    private static RunRecord Build(List<WorkEvent> events, RunSettings? settings)
+    private static RunRecord Build(List<WorkEvent> events, RunSettings? settings, string? spec)
     {
         var first = events[0];
         var last = events[^1];
@@ -122,7 +132,8 @@ public sealed class RunRecorder
             first.At, last.At, status, eventRecords, artifacts, decisions, settings,
             // Null rather than zero when nothing reported: "this provider does not tell us" and
             // "this run used no tokens" are different facts and are shown differently.
-            sawUsage ? new RunUsage(promptTokens, completionTokens) : null);
+            sawUsage ? new RunUsage(promptTokens, completionTokens) : null,
+            spec);
     }
 
     private static string StripPrefix(string value, string prefix)

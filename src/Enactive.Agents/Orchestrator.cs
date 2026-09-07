@@ -78,6 +78,12 @@ public sealed class Orchestrator : IOrchestrator
     private readonly IReadOnlyList<SuccessCriterionDefinition> _successCriteria;
     private readonly SuccessEvaluator _successEvaluator = new();
 
+    /// <summary>
+    /// What this run may spend. Null everywhere it is not set, which is the behaviour that existed
+    /// before limits were enforced at all - they shipped as data in M0 and were read by nothing.
+    /// </summary>
+    private readonly ExecutionLimits _limits;
+
     public Orchestrator(
         IChatProviderFactory providers,
         IModelResolver modelResolver,
@@ -98,9 +104,11 @@ public sealed class Orchestrator : IOrchestrator
         bool allowImplicitToolCalls = false,
         bool reviewContent = true,
         bool revertRejectedSteps = true,
-        IReadOnlyList<SuccessCriterionDefinition>? successCriteria = null)
+        IReadOnlyList<SuccessCriterionDefinition>? successCriteria = null,
+        ExecutionLimits? limits = null)
     {
         _successCriteria = successCriteria ?? Array.Empty<SuccessCriterionDefinition>();
+        _limits = limits ?? ExecutionLimits.None;
         _providers = providers;
         _workers = workers;
         _tools = tools;
@@ -162,12 +170,20 @@ public sealed class Orchestrator : IOrchestrator
         // the provider directly, so their cost was spent on every run and counted on none - which
         // made the run total execute-only while the reviewer, on the most expensive model bound, read
         // whole documents for free as far as the UI was concerned.
+        // What this run may spend, and what is gone. Every phase counts against it - planning,
+        // execution and review - because the budget is what the RUN costs, and a reviewer on a large
+        // cloud model can be the larger half of that.
+        var budget = new RunBudget(_limits, DateTimeOffset.UtcNow);
+
         WorkEvent UsageOutsideLoop(
             string purpose, ModelRef reference, int prompt, int completion, int? stepNo = null)
-            => new(Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow, EventKind.UsageReported,
-                   $"tokens: {prompt} in, {completion} out ({reference.ProviderId}/{reference.Model}, {purpose})",
-                   WorkEventPayload.UsagePayload(prompt, completion, stepNo,
-                                                 reference.ProviderId, reference.Model, purpose));
+        {
+            budget.TokensUsed(prompt, completion);
+            return new(Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow, EventKind.UsageReported,
+                       $"tokens: {prompt} in, {completion} out ({reference.ProviderId}/{reference.Model}, {purpose})",
+                       WorkEventPayload.UsagePayload(prompt, completion, stepNo,
+                                                     reference.ProviderId, reference.Model, purpose));
+        }
 
         yield return Ev(EventKind.IntentReceived, $"Intent: {intent.RawText}");
         yield return Ev(EventKind.ContextAssembled,
@@ -267,13 +283,24 @@ public sealed class Orchestrator : IOrchestrator
 
                     for (var attempt = 1; attempt <= maxQuickAttempts; attempt++)
                     {
+                        // A quick action runs no plan steps, so a STEP limit never bites here - but
+                        // a token or time limit can, and a retry is the natural place to notice: it
+                        // is the only point in this path where more spending is about to be chosen
+                        // rather than already under way.
+                        if (budget.Exhausted is { } spent)
+                        {
+                            quickResult.Set(StepOutcomeKind.Incomplete, spent);
+                            quick.Writer.TryWrite(Ev(EventKind.ErrorObserved, spent));
+                            break;
+                        }
+
                         var evidenceStart = journal.Mark();
 
                         try
                         {
                             await foreach (var ev in RunToolLoopAsync(
                                 taskId, runId, activeProvider, activeRef.Model, worker, messages, artifacts,
-                                intent.Context, store, journal, null, quickResult, ct, activeRef.ProviderId))
+                                intent.Context, store, journal, null, quickResult, budget, ct, activeRef.ProviderId))
                                 quick.Writer.TryWrite(ev);
                         }
                         catch (Exception ex) when (ex is not OperationCanceledException
@@ -490,7 +517,7 @@ public sealed class Orchestrator : IOrchestrator
                 {
                     await foreach (var ev in RunToolLoopAsync(
                         taskId, runId, stepProvider, stepModel, worker, convo, artifacts,
-                        intent.Context, store, journal, stepNumber, stepResult, ct, stepRef.ProviderId))
+                        intent.Context, store, journal, stepNumber, stepResult, budget, ct, stepRef.ProviderId))
                         events.Writer.TryWrite(ev);
 
                     outcome = stepResult.Kind;
@@ -623,6 +650,10 @@ public sealed class Orchestrator : IOrchestrator
             }
         }
 
+        // Set when a limit stops the run, so the terminal event can say which one rather than
+        // reporting a pile of skipped steps with no explanation for them.
+        string? limitReason = null;
+
         // Dispatcher: keep up to maxParallel steps in flight, topping up as each one finishes.
         var pump = Task.Run(async () =>
         {
@@ -632,8 +663,35 @@ public sealed class Orchestrator : IOrchestrator
             {
                 while (true)
                 {
+                    // BEFORE dispatching, never during: a limit stops the next step, it does not kill
+                    // the one running. Cancelling work in flight throws away what that step had
+                    // already done and leaves the workspace in a state nobody chose.
+                    if (limitReason is null && budget.Exhausted is { } spent)
+                    {
+                        limitReason = spent;
+                        events.Writer.TryWrite(Ev(EventKind.ErrorObserved, spent));
+
+                        // Pending steps become Skipped rather than staying Pending: the run's outcome
+                        // is built from its steps', so a step with no recorded outcome would quietly
+                        // not count at all.
+                        foreach (var abandoned in scheduler.AbandonPending())
+                        {
+                            var abNo = stepNumbers.TryGetValue(abandoned.Id, out var an) ? an : 0;
+                            lock (stepOutcomes)
+                                stepOutcomes[abandoned.Id] = StepOutcomeKind.Skipped;
+                            events.Writer.TryWrite(new WorkEvent(
+                                Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow,
+                                EventKind.StepCompleted,
+                                $"[{(abNo > 0 ? abNo : 0)}/{total}] {abandoned.Title} — skipped ({spent})",
+                                WorkEventPayload.StepPayload(abNo > 0 ? abNo : null, StepOutcomeKind.Skipped)));
+                        }
+                    }
+
                     foreach (var ready in scheduler.NextReadyBatch(maxParallel - inFlight.Count))
+                    {
+                        budget.StepStarted();
                         inFlight.Add(RunStepAsync(ready));
+                    }
 
                     if (inFlight.Count == 0)
                         break;
@@ -668,7 +726,7 @@ public sealed class Orchestrator : IOrchestrator
         if (cycle && runOutcome == RunOutcomeKind.Completed)
             runOutcome = RunOutcomeKind.Incomplete;
 
-        var runReason = ExplainOutcome(outcomes, cycle);
+        var runReason = ExplainOutcome(outcomes, cycle, limitReason);
 
         // The last word, and the only one in the run that is not somebody's opinion. Checked only
         // when everything else says the work is done: a run that already failed had its outcome
@@ -713,9 +771,15 @@ public sealed class Orchestrator : IOrchestrator
     }
 
     /// <summary>A short, honest summary of why a run did not simply complete.</summary>
-    private static string? ExplainOutcome(IReadOnlyCollection<StepOutcomeKind> steps, bool cycle)
+    private static string? ExplainOutcome(
+        IReadOnlyCollection<StepOutcomeKind> steps, bool cycle, string? limit = null)
     {
         var parts = new List<string>();
+
+        // First, because it EXPLAINS the skipped steps that follow it: without it a run that hit its
+        // ceiling reports "4 step(s) skipped" and nothing about why.
+        if (!string.IsNullOrWhiteSpace(limit))
+            parts.Add(limit!);
 
         var failed = steps.Count(s => s == StepOutcomeKind.Failed);
         var rejected = steps.Count(s => s == StepOutcomeKind.ReviewRejected);
@@ -993,6 +1057,11 @@ public sealed class Orchestrator : IOrchestrator
         // conversation afterwards.
         ExecutionJournal journal,
         int? stepNo, ToolLoopResult loopResult,
+        // The run's budget. The loop reports its own tokens, so this is where execution spending is
+        // counted; it is never CHECKED in here - see RunBudget on why limits bite between steps.
+        // Named runBudget because this method already has a `budget` of its own: the room left in
+        // the model's context window, which is a different thing entirely.
+        RunBudget runBudget,
         [EnumeratorCancellation] CancellationToken ct,
         // Only for the usage record. The loop is handed a ready provider and a model NAME, which is
         // all it needs to talk; the id is what makes the tokens attributable afterwards.
@@ -1010,11 +1079,14 @@ public sealed class Orchestrator : IOrchestrator
                    stepNo is { } n ? $"{{\"step\":{n}}}" : null);
 
         WorkEvent Usage(int prompt, int completion)
-            => new(Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow, EventKind.UsageReported,
-                   $"tokens: {prompt} in, {completion} out"
-                   + (providerId is { Length: > 0 } id ? $" ({id}/{model}, execute)" : ""),
-                   WorkEventPayload.UsagePayload(prompt, completion, stepNo, providerId, model,
-                                                 WorkEventPayload.WorkPurpose.Execute));
+        {
+            runBudget.TokensUsed(prompt, completion);
+            return new(Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow, EventKind.UsageReported,
+                       $"tokens: {prompt} in, {completion} out"
+                       + (providerId is { Length: > 0 } id ? $" ({id}/{model}, execute)" : ""),
+                       WorkEventPayload.UsagePayload(prompt, completion, stepNo, providerId, model,
+                                                     WorkEventPayload.WorkPurpose.Execute));
+        }
 
         // A reply that describes a call instead of making one earns exactly ONE re-ask per step; without
         // the cap a model that keeps explaining itself would burn every iteration on the same nudge.

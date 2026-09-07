@@ -1,4 +1,4 @@
-namespace Enactive.Agents;
+﻿namespace Enactive.Agents;
 
 using Enactive.Core.Tasks;
 
@@ -75,6 +75,31 @@ public sealed class DagScheduler
             if (_status.ContainsKey(id))
                 _status[id] = StepStatus.Done;
         }
+    }
+
+    /// <summary>
+    /// Gives up on everything still waiting, and says what it gave up on.
+    ///
+    /// <para>For a run that has hit a limit: the steps that never started are Skipped rather than
+    /// left Pending, because a Pending step at the end of a run is indistinguishable from a
+    /// scheduler bug - and because the run's own outcome is built from its steps', so a step with no
+    /// recorded outcome would quietly not count. Steps already RUNNING are left alone: they cannot
+    /// be recalled and they finish and record normally.</para>
+    /// </summary>
+    public IReadOnlyList<PlanStep> AbandonPending()
+    {
+        var abandoned = new List<PlanStep>();
+        lock (_gate)
+        {
+            foreach (var s in _steps)
+            {
+                if (_status[s.Id] != StepStatus.Pending)
+                    continue;
+                _status[s.Id] = StepStatus.Skipped;
+                abandoned.Add(s);
+            }
+        }
+        return abandoned;
     }
 
     /// <summary>Marks the step failed and cascade-skips every step that (transitively) depends on it.</summary>
