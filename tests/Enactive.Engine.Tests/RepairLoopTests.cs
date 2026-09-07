@@ -1,5 +1,6 @@
 namespace Enactive.Engine.Tests;
 
+using Enactive.Core.Chat;
 using Enactive.Core.Events;
 using Enactive.Core.Workers;
 using Xunit;
@@ -189,4 +190,67 @@ public sealed class RepairLoopTests
         // read, write, read (new generation), then two repeats; the third is recognised and not run.
         Assert.Equal(5, events.Count(e => e.Kind == EventKind.ToolInvoked));
     }
+
+    /// <summary>
+    /// A repeat is answered, and the model is told it was one. The detector counts from the first
+    /// repeat; the model used to find out on the third, from a step that had already ended. On
+    /// 2026-09-07 23:34 one fixed a build error, hit the next, and read the same file and ran the
+    /// same build three turns running with nothing changed between them - each answer identical,
+    /// nothing saying so. The nudge is what the engine can do about that; the second one says the
+    /// next repeat ends the step, because a countdown the model cannot see is not a countdown.
+    /// </summary>
+    [Fact]
+    public async Task A_repeated_call_is_answered_with_a_note_that_it_is_one()
+    {
+        using var fx = new EngineFixture();
+        fx.Write("Program.cs", "alpha\n");
+
+        var look = Reads("Program.cs", "r");
+        var provider = new FakeChatProvider(Turn.Says(QuickPlan), look, look, look, look)
+        {
+            WhenExhausted = look
+        };
+
+        await fx.RunAsync(fx.Build(provider, Editor()), "read it until told to stop");
+
+        // One tool reply per executed call, oldest first.
+        var replies = ToolReplies(provider);
+        Assert.Equal(3, replies.Count);
+
+        // The first read is a new call and carries no note ...
+        Assert.DoesNotContain("already made", replies[0]);
+
+        // ... the first repeat is told it is one ...
+        Assert.Contains("already made in this step", replies[1]);
+        Assert.DoesNotContain("will be stopped", replies[1]);
+
+        // ... and the second repeat is told the next one ends the step.
+        Assert.Contains("will be stopped", replies[2]);
+
+        // The third repeat is not executed: three replies, not four.
+    }
+
+    /// <summary>A look at something that changed is not a repeat, and gets no note.</summary>
+    [Fact]
+    public async Task A_look_after_a_change_is_not_told_it_is_repeating()
+    {
+        using var fx = new EngineFixture();
+        fx.Write("Program.cs", "alpha\n");
+
+        var look = Reads("Program.cs", "r");
+        var provider = new FakeChatProvider(
+            Turn.Says(QuickPlan),
+            look,
+            Edits("Program.cs", "alpha", "beta", "e"),
+            look,
+            Turn.Says("Done."));
+
+        await fx.RunAsync(fx.Build(provider, Editor()), "look, change, look");
+
+        Assert.All(ToolReplies(provider), reply => Assert.DoesNotContain("already made", reply));
+    }
+
+    /// <summary>Every tool reply the model was ever sent, oldest first, from the final request.</summary>
+    private static List<string> ToolReplies(FakeChatProvider provider)
+        => provider.Requests[^1].Messages.Where(m => m.Role == ChatRole.Tool).Select(m => m.Content ?? "").ToList();
 }

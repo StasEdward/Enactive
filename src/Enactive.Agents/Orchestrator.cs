@@ -1597,7 +1597,8 @@ public sealed class Orchestrator : IOrchestrator
             // stops it. That is the shape worth detecting, and unlike a turn count it does not grow
             // with the size of the job: seven new files are seven turns of progress, while one file
             // read three times is three turns of nothing however big the project is.
-            if (!progress.Advanced(toolCalls) && progress.Stalled >= StallLimit)
+            var advanced = progress.Advanced(toolCalls);
+            if (!advanced && progress.Stalled >= StallLimit)
             {
                 var repeated = progress.Describe();
                 loopResult.Set(StepOutcomeKind.Incomplete,
@@ -1768,13 +1769,30 @@ public sealed class Orchestrator : IOrchestrator
                 // which could work, and ended with a review of a diff the model never saw. The same
                 // class as every other defect this month: the record somebody works from is
                 // shortened, and nothing says so.
-                messages.Add(ChatMessage.Tool(
-                    call.Id,
-                    result.Success
-                        ? (result.Output ?? "OK")
-                        : string.IsNullOrWhiteSpace(result.Output)
-                            ? $"ERROR: {result.Error}"
-                            : $"ERROR: {result.Error}\n{result.Output}"));
+                var reply = result.Success
+                    ? (result.Output ?? "OK")
+                    : string.IsNullOrWhiteSpace(result.Output)
+                        ? $"ERROR: {result.Error}"
+                        : $"ERROR: {result.Error}\n{result.Output}";
+
+                // A repeat is executed and answered like any call - but the model is TOLD it is
+                // one. The stall detector knew from the first repeat; the model learned nothing
+                // until the third, when the step was already over. On 2026-09-07 23:34 a model
+                // fixed one build error, hit the next, and spent its remaining three turns reading
+                // the same file and running the same build with nothing changed between them,
+                // each result identical to the last and nothing saying so. Whether a nudge would
+                // have moved it is not knowable; that it was owed one is.
+                if (!advanced)
+                    reply += progress.Stalled >= StallLimit - 1
+                        ? "\n\n[This is a call you have already made in this step, and it is being "
+                          + "counted as no progress. One more turn that only repeats earlier calls "
+                          + "and this step will be stopped as stuck. Change something, or say what "
+                          + "you are stuck on and stop.]"
+                        : "\n\n[This is a call you have already made in this step, and it is being "
+                          + "counted as no progress. If you know what to change, change it now; if "
+                          + "you are finished, say so.]";
+
+                messages.Add(ChatMessage.Tool(call.Id, reply));
             }
         }
 
