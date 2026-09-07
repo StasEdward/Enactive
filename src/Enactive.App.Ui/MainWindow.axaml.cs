@@ -1106,12 +1106,21 @@ public sealed partial class MainWindow : Window, IDecisionHandler
 
     private void ShowLogWindow()
     {
+        // The owner is passed on the FIRST show and only then, the same shape ShowTemplates uses:
+        // CenterOwner has nothing to centre on without one, so the window opened wherever the
+        // window manager put it — on a multi-monitor desk, often not the screen the application is
+        // on. Re-showing the same instance keeps the owner it was given.
         if (_logWindow is null)
         {
             _logWindow = new LogWindow(_log, LogAnalysis());
             _logWindow.Closed += (_, _) => _logWindow = null;
+            _logWindow.Show(this);
         }
-        _logWindow.Show();
+        else
+        {
+            _logWindow.Show();
+        }
+
         _logWindow.Activate();
     }
 
