@@ -59,6 +59,28 @@ builder.Services.AddSingleton<Projection>();
 builder.Services.AddSingleton<HostConnections>();
 builder.Services.AddHostedService<RetentionLoop>();
 
+// The panel's half of the wire, on the same terms as the Host's.
+//
+// ASP.NET's default writes an enum as a NUMBER and refuses to read one written as a name, which
+// broke this in both directions at once: the panel was shown "status": 3 and could not answer a
+// permission at all, because "Approve" failed to bind and came back as a 400 with no code in it.
+// A number is also the brittle form - inserting a member into the middle of RemoteRunStatus would
+// renumber every status the panel had been taught, and it would go on rendering, wrongly.
+//
+// So there is ONE serialisation contract in this system, and RemoteJson holds it. Unknown members
+// are refused here too: a field the reader does not recognise is a message from a version it does
+// not understand, and quietly dropping it is how half an instruction gets carried out.
+builder.Services.ConfigureHttpJsonOptions(o =>
+{
+    foreach (var converter in RemoteJson.Options.Converters)
+    {
+        o.SerializerOptions.Converters.Add(converter);
+    }
+
+    o.SerializerOptions.PropertyNamingPolicy = RemoteJson.Options.PropertyNamingPolicy;
+    o.SerializerOptions.UnmappedMemberHandling = RemoteJson.Options.UnmappedMemberHandling;
+});
+
 builder.WebHost.ConfigureKestrel(o => o.Limits.MaxRequestBodySize = 65536);
 builder.Services.AddSignalR(o => o.MaximumReceiveMessageSize = 65536)
     .AddJsonProtocol(o =>

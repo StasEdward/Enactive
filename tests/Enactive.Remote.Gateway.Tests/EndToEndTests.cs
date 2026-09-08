@@ -121,9 +121,13 @@ public sealed class EndToEndTests(TestDatabase database) : IClassFixture<TestDat
 
     /// <summary>
     /// A refusal has to arrive as a CODE, not as a sentence. It is the only thing that tells a Host
-    /// whether to keep an event or throw it away, and it crosses the wire inside a hub error's
-    /// message - the one place SignalR leaves for it. If that convention breaks, every refusal
-    /// becomes a retry, for ever.
+    /// whether to keep an event or throw it away, and if it does not survive the wire, every
+    /// refusal becomes a retry, for ever.
+    ///
+    /// <para>This test is why the code is a RETURN VALUE. Its first version put it in a hub error's
+    /// message, on the reasoning that a message is all an exception carries - and the message never
+    /// arrives: SignalR puts its own text in front of it, and outside Development it does not send
+    /// the exception's text at all. <c>HostReply&lt;T&gt;</c> came out of that.</para>
     /// </summary>
     [Fact]
     public async Task A_refusal_arrives_as_a_code_the_host_can_act_on()

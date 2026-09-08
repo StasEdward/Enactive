@@ -1,0 +1,228 @@
+/* =============================================================================
+   Enactive Remote — the panel.
+   Phone first: one column, a bottom tab bar within thumb reach, and nothing that
+   needs a pointer. Wider screens get width and a little air, not a new layout.
+   Every colour, size and radius is a token from brand.css. No raw hex here.
+   ============================================================================= */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--step-0);
+  line-height: 1.5;
+  -webkit-text-size-adjust: 100%;
+}
+
+h1, h2, h3 { font-family: var(--font-display); letter-spacing: var(--track-display); margin: 0; }
+h1 { font-size: var(--step-3); }
+h2 { font-size: var(--step-2); }
+h3 { font-size: var(--step-1); }
+p { margin: 0 0 var(--space-3); }
+
+.muted { color: var(--text-muted); }
+.note { color: var(--text-muted); font-size: var(--step--1); margin: 0 0 var(--space-4); }
+.error { color: var(--danger); font-size: var(--step--1); min-height: 1.2em; margin: var(--space-2) 0 0; }
+.empty { color: var(--text-faint); text-align: center; padding: var(--space-7) var(--space-4); }
+[hidden] { display: none !important; }
+
+/* --- controls --------------------------------------------------------------- */
+
+button {
+  font: inherit;
+  border-radius: var(--radius);
+  border: 1px solid transparent;
+  padding: var(--space-3) var(--space-4);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+  /* 44px is the smallest thing a thumb hits reliably; below it the panel is
+     technically usable on a phone and actually is not. */
+  min-height: 44px;
+}
+
+.primary { background: var(--accent); color: var(--on-accent); font-weight: 600; }
+.primary:hover { background: var(--ember-600); }
+.secondary { background: var(--bg-card); color: var(--text); border-color: var(--border); }
+.secondary:hover { border-color: var(--ink-500); }
+.danger { background: transparent; color: var(--danger); border-color: var(--border); }
+.icon-button {
+  background: transparent; color: var(--text-muted); border: 0;
+  min-width: 44px; padding: var(--space-2); font-size: var(--step-1);
+}
+.icon-button:hover { color: var(--text); }
+button:disabled { opacity: 0.5; cursor: default; }
+
+input, select, textarea {
+  font: inherit; width: 100%;
+  background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--radius);
+  padding: var(--space-3);
+  margin: 0 0 var(--space-4);
+}
+textarea { resize: vertical; font-family: var(--font-sans); }
+label { display: block; font-size: var(--step--1); color: var(--text-muted); margin-bottom: var(--space-2); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* --- signing in ------------------------------------------------------------- */
+
+.login { min-height: 100dvh; display: grid; place-items: center; padding: var(--space-5); }
+.login-card {
+  width: 100%; max-width: 26rem;
+  background: var(--bg-elevated); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); padding: var(--space-6); box-shadow: var(--shadow-2);
+}
+.login-card h1 { margin: var(--space-4) 0 var(--space-2); }
+.login-card button { width: 100%; }
+
+/* --- frame ------------------------------------------------------------------ */
+
+.topbar {
+  position: sticky; top: 0; z-index: 2;
+  display: flex; align-items: center; gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  padding-top: max(var(--space-3), env(safe-area-inset-top));
+  background: var(--bg-elevated); border-bottom: 1px solid var(--border);
+}
+.brand { display: inline-flex; align-items: center; gap: var(--space-2); }
+.wordmark { font-family: var(--font-display); font-weight: 700; letter-spacing: var(--track-display); }
+.spacer { flex: 1; }
+
+.link-state { display: inline-flex; align-items: center; gap: var(--space-2); font-size: var(--step--1); color: var(--text-muted); }
+.dot { width: 8px; height: 8px; border-radius: var(--radius-pill); background: var(--ink-500); }
+.link-state.is-live .dot { background: var(--success); }
+.link-state.is-stale .dot { background: var(--warning); }
+
+.banner {
+  margin: 0; padding: var(--space-3) var(--space-4);
+  background: var(--grad-ember-soft); color: var(--accent-text);
+  border-bottom: 1px solid var(--border); font-size: var(--step--1);
+}
+
+main {
+  max-width: 44rem; margin: 0 auto;
+  padding: var(--space-4) var(--space-4) calc(76px + env(safe-area-inset-bottom));
+}
+.view-head { display: flex; align-items: center; gap: var(--space-3); margin-bottom: var(--space-4); }
+.view-head h2 { flex: 1; }
+
+.tabs {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 2;
+  display: grid; grid-template-columns: repeat(4, 1fr);
+  background: var(--bg-elevated); border-top: 1px solid var(--border);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.tab {
+  border-radius: 0; background: transparent; color: var(--text-muted);
+  font-size: var(--step--1); padding: var(--space-3) var(--space-1);
+  border-top: 2px solid transparent;
+}
+.tab.is-current { color: var(--text); border-top-color: var(--accent); }
+.count {
+  display: none; margin-left: var(--space-2); padding: 0 var(--space-2);
+  background: var(--accent); color: var(--on-accent);
+  border-radius: var(--radius-pill); font-size: var(--step--1);
+}
+.count.is-shown { display: inline-block; }
+
+/* --- cards ------------------------------------------------------------------ */
+
+.list { display: grid; gap: var(--space-3); }
+
+.card {
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); padding: var(--space-4);
+}
+.card-head { display: flex; align-items: baseline; gap: var(--space-3); margin-bottom: var(--space-2); }
+.card-head h3 { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.card .meta { color: var(--text-faint); font-size: var(--step--1); margin: 0; }
+.card .actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-4); }
+
+.status {
+  font-size: var(--step--1); font-weight: 600; white-space: nowrap;
+  padding: var(--space-1) var(--space-3); border-radius: var(--radius-pill);
+  background: var(--bg-elevated); color: var(--text-muted);
+}
+.status.is-running { color: var(--ember-300); background: var(--grad-ember-soft); }
+.status.is-waiting { color: var(--warning); }
+.status.is-done    { color: var(--success); }
+.status.is-failed  { color: var(--danger); }
+
+/* An action the owner is being asked to allow, shown whole. A truncated command
+   is a command nobody actually read, and this is the one place in the product
+   where reading it is the entire point. */
+.action {
+  font-family: var(--font-mono); font-size: var(--step--1);
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: var(--space-3); margin: var(--space-3) 0 0;
+  white-space: pre-wrap; overflow-wrap: anywhere; max-height: 18rem; overflow: auto;
+}
+.tool { font-family: var(--font-mono); color: var(--accent-text); }
+
+/* Not a disabled button. A shell can only be answered at the machine, and the
+   card says why rather than showing a control that would refuse. */
+.local-only {
+  margin-top: var(--space-4); padding: var(--space-3);
+  border-left: 2px solid var(--warning); background: var(--bg-elevated);
+  color: var(--text-muted); font-size: var(--step--1);
+}
+
+.timeline { display: grid; gap: var(--space-3); margin-top: var(--space-4); }
+.entry { display: grid; grid-template-columns: auto 1fr; gap: var(--space-3); align-items: baseline; }
+.entry time { color: var(--text-faint); font-size: var(--step--1); font-variant-numeric: tabular-nums; }
+.entry .body { overflow-wrap: anywhere; }
+.entry.is-failed .body { color: var(--danger); }
+
+.workspaces { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-3); }
+.chip {
+  font-size: var(--step--1); padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--border); border-radius: var(--radius-pill); color: var(--text-muted);
+}
+
+/* --- dialogs and toast ------------------------------------------------------ */
+
+dialog {
+  width: min(34rem, calc(100vw - var(--space-5)));
+  background: var(--bg-elevated); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--radius-lg);
+  padding: var(--space-5); box-shadow: var(--shadow-2);
+}
+dialog.wide { width: min(44rem, calc(100vw - var(--space-5))); }
+dialog::backdrop { background: rgba(10, 11, 13, 0.6); }
+dialog h2 { margin-bottom: var(--space-4); }
+.dialog-head { display: flex; align-items: center; gap: var(--space-3); }
+.dialog-head h2 { flex: 1; margin-bottom: 0; }
+dialog .actions { display: flex; justify-content: flex-end; gap: var(--space-2); margin-top: var(--space-4); }
+
+.toast {
+  position: fixed; left: 50%; transform: translateX(-50%);
+  bottom: calc(84px + env(safe-area-inset-bottom)); z-index: 3;
+  max-width: calc(100vw - var(--space-5));
+  background: var(--ink-800); color: var(--ink-50);
+  border: 1px solid var(--border); border-radius: var(--radius);
+  padding: var(--space-3) var(--space-4); box-shadow: var(--shadow-2);
+  font-size: var(--step--1);
+}
+.toast.is-error { color: var(--danger); }
+
+/* --- wider screens ---------------------------------------------------------- */
+
+@media (min-width: 40rem) {
+  main { padding: var(--space-6) var(--space-5) var(--space-7); }
+  /* The tab bar leaves the thumb zone and becomes an ordinary row under the
+     header once there is room for one. */
+  .tabs {
+    position: static; grid-template-columns: repeat(4, max-content);
+    border-top: 0; border-bottom: 1px solid var(--border);
+    padding: 0 var(--space-5);
+  }
+  .tab { border-top: 0; border-bottom: 2px solid transparent; padding: var(--space-3) var(--space-4); }
+  .tab.is-current { border-bottom-color: var(--accent); }
+  .toast { bottom: var(--space-5); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+}
