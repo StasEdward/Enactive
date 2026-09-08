@@ -41,12 +41,23 @@ Directory.CreateDirectory(dataDirectory);
 // does not encrypt them separately, and disk encryption is a deployment concern.
 builder.Services.AddDataProtection().PersistKeysToFileSystem(new DirectoryInfo(Path.Combine(dataDirectory, "keys")));
 
+// How long the panel's history is kept. Configurable because a month is a guess, and validated
+// here because a zero or a typo would otherwise delete everything the first time the job ran.
+var retentionDays = builder.Configuration.GetValue<int?>("ENACTIVE_RETENTION_DAYS") ?? 30;
+if (retentionDays < 1)
+{
+    throw new InvalidOperationException(
+        $"ENACTIVE_RETENTION_DAYS is {retentionDays}; it must be at least 1 day.");
+}
+
 builder.Services.AddSingleton(new Database(connectionString));
 builder.Services.AddSingleton(new OwnerKey(ownerKey));
+builder.Services.AddSingleton(services => new Retention(services.GetRequiredService<Database>(), retentionDays));
 builder.Services.AddSingleton<HostService>();
 builder.Services.AddSingleton<OwnerService>();
 builder.Services.AddSingleton<Projection>();
 builder.Services.AddSingleton<HostConnections>();
+builder.Services.AddHostedService<RetentionLoop>();
 
 builder.WebHost.ConfigureKestrel(o => o.Limits.MaxRequestBodySize = 65536);
 builder.Services.AddSignalR(o => o.MaximumReceiveMessageSize = 65536)
@@ -222,7 +233,11 @@ api.MapPost("/logout", async (HttpContext context) =>
     return Results.Ok();
 });
 
-api.MapGet("/state", (Projection projection, CancellationToken ct) => projection.ReadAsync(ct));
+// `since` is the cursor from the previous reply and nothing else. It is not validated against
+// anything: a cursor from the future returns an empty delta, a cursor from before the history was
+// trimmed returns what survived, and neither is an error the panel could do anything about.
+api.MapGet("/state", (long? since, Projection projection, CancellationToken ct) =>
+    projection.ReadAsync(since, ct));
 
 api.MapPost("/hosts", async (RegisterHostRequest request, OwnerService owner, CancellationToken ct) =>
 {

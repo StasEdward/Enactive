@@ -22,7 +22,7 @@ public sealed class OwnerServiceTests(TestDatabase database) : IClassFixture<Tes
 
     private HostService Host => new(Db);
 
-    private Projection Panel => new(Db);
+    private Projection Panel => new(Db, new Retention(Db, days: 30));
 
     private static string Uuid() => Guid.NewGuid().ToString();
 

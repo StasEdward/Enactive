@@ -31,10 +31,18 @@ public sealed class SchemaTests(TestDatabase database) : IClassFixture<TestDatab
             """);
     }
 
+    /// <summary>
+    /// Ordinals for events written straight to the table, bypassing the gateway that would normally
+    /// allocate them. Distinct per insert because the column is UNIQUE, and that is the point: these
+    /// tests are about the OTHER keys, so the ordinal must never be what refuses one of them.
+    /// </summary>
+    private static int _ordinal;
+
     private static string Event(string id, string hostId, string runId, long sequence)
         => $"""
-            INSERT INTO events (id, host_id, run_id, sequence, kind, detail, at)
-            VALUES ('{id}', '{hostId}', '{runId}', {sequence}, 'Progress', 'x', UTC_TIMESTAMP(3))
+            INSERT INTO events (id, host_id, run_id, sequence, kind, detail, at, ordinal)
+            VALUES ('{id}', '{hostId}', '{runId}', {sequence}, 'Progress', 'x', UTC_TIMESTAMP(3),
+                    {Interlocked.Increment(ref _ordinal)})
             """;
 
     // ── migrations ──────────────────────────────────────────────────────────
@@ -46,7 +54,10 @@ public sealed class SchemaTests(TestDatabase database) : IClassFixture<TestDatab
             $"SELECT table_name FROM information_schema.tables WHERE table_schema = '{database.Name}'");
 
         Assert.Equal(
-            ["approvals", "commands", "events", "host_workspaces", "hosts", "notices", "runs", "schema_version", "tasks"],
+            [
+                "approvals", "commands", "counters", "events", "host_workspaces", "hosts",
+                "notices", "retention_state", "runs", "schema_version", "tasks"
+            ],
             tables.Order().ToArray());
     }
 

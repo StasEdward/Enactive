@@ -2,6 +2,7 @@ namespace Enactive.Remote.Gateway.Services;
 
 using Enactive.Remote.Contracts;
 using Enactive.Remote.Gateway.Storage;
+using MySqlConnector;
 
 /// <summary>What the panel is shown. Read-only, capped, and free of anything secret.</summary>
 public sealed record GatewaySnapshot(
@@ -11,7 +12,20 @@ public sealed record GatewaySnapshot(
     IReadOnlyList<ApprovalView> Approvals,
     IReadOnlyList<NoticeView> Notices,
     IReadOnlyList<EventView> Events,
-    long Cursor);
+    long Cursor,
+    bool Delta,
+    int UnreadNotices,
+    RetentionView Retention);
+
+/// <summary>
+/// How long history is kept, and what has already gone.
+///
+/// <para><see cref="TrimmedBefore"/> is null until something has actually been deleted, and is the
+/// cutoff of the run that deleted it after that. A window on its own would let the panel announce
+/// that history had been trimmed on a gateway three days old - true of nothing, and read as a
+/// warning about data that never existed.</para>
+/// </summary>
+public sealed record RetentionView(int Days, DateTimeOffset? TrimmedBefore);
 
 public sealed record HostView(
     string Id, string Name, bool Revoked, bool Online, DateTimeOffset? LastSeenAt,
@@ -34,10 +48,12 @@ public sealed record ApprovalView(
     string Reason, string ActionHash, bool RemoteDecidable, ApprovalStatus Status,
     DateTimeOffset CreatedAt, DateTimeOffset ExpiresAt);
 
-public sealed record NoticeView(string Id, string RunId, string Title, string Detail, DateTimeOffset At, bool Read);
+public sealed record NoticeView(
+    string Id, string RunId, string Title, string Detail, DateTimeOffset At, bool Read, long Ordinal);
 
 public sealed record EventView(
-    string Id, string RunId, long Sequence, RemoteEventKind Kind, string? Detail, DateTimeOffset At);
+    string Id, string RunId, long Sequence, RemoteEventKind Kind, string? Detail,
+    DateTimeOffset At, long Ordinal);
 
 /// <summary>
 /// Builds the panel's view of the world.
@@ -47,11 +63,22 @@ public sealed record EventView(
 /// the two are separate types rather than one shared record with a couple of fields left out at
 /// serialisation time.</para>
 ///
-/// <para>Everything is capped. The preview returned every task, every run and every approval - with
-/// each approval's full arguments, up to 24 000 characters - on a poll that ran every three
-/// seconds, so the cost of showing the panel grew with the history for ever.</para>
+/// <para><b>Two kinds of data, read two different ways.</b> Events and notices are append-only and
+/// unbounded, so a poll asks only for what is newer than the cursor it holds. Hosts, tasks, runs
+/// and approvals are mutable but BOUNDED - the newest 200, and only the approvals still being
+/// asked - so every poll gets all of them.</para>
+///
+/// <para>A delta on the mutable sets was considered and refused. It needs a stamp on every row that
+/// every update path remembers to bump, and a path that forgets does not fail: it leaves a run
+/// showing Running on the panel for ever while the database says it finished hours ago. There are
+/// several such paths already and there will be more. A bounded full read cannot go stale, and
+/// bounded is all the claim needs - the cost stops growing with history, which is what actually
+/// went wrong in the preview.</para>
+///
+/// <para>The preview returned every task, every run and every approval - with each approval's full
+/// arguments, up to 24 000 characters - on a poll that ran every three seconds.</para>
 /// </summary>
-public sealed class Projection(Database database)
+public sealed class Projection(Database database, Retention retention)
 {
     private const int MaxEvents = 200;
     private const int MaxNotices = 100;
@@ -61,18 +88,33 @@ public sealed class Projection(Database database)
     /// <summary>A Host is offline after 45 seconds without a Sync, which it makes every 15.</summary>
     public static readonly TimeSpan OfflineAfter = TimeSpan.FromSeconds(45);
 
-    public async Task<GatewaySnapshot> ReadAsync(CancellationToken ct = default)
+    /// <summary>
+    /// The whole world, or only what has happened since <paramref name="since"/>.
+    ///
+    /// <para><b>Everything is read in one transaction, cursor included.</b> Without that, a row
+    /// written between the last SELECT and the read of the cursor is passed over: the panel stores
+    /// a cursor above it and never asks for anything that low again. One transaction makes the rows
+    /// and the number that describes them the same instant.</para>
+    ///
+    /// <para>A delta that would exceed the cap is not truncated - truncating it would hand back a
+    /// cursor covering rows the panel was never sent. It is answered with a full snapshot instead,
+    /// and <see cref="GatewaySnapshot.Delta"/> says which of the two this is, so the panel appends
+    /// or replaces on being told rather than on guessing from what it asked for.</para>
+    /// </summary>
+    public async Task<GatewaySnapshot> ReadAsync(long? since = null, CancellationToken ct = default)
     {
         await using var connection = await database.OpenAsync(ct);
-        var offlineBefore = DateTimeOffset.UtcNow - OfflineAfter;
+        await using var transaction = await connection.BeginAsync(ct);
 
-        var workspaces = await connection.ReadAllAsync(null,
+        var offlineBefore = DateTimeOffset.UtcNow - Projection.OfflineAfter;
+
+        var workspaces = await connection.ReadAllAsync(transaction,
             "SELECT host_id, workspace_id, name FROM host_workspaces ORDER BY name",
             reader => (
                 HostId: reader.GetString("host_id"),
                 Workspace: new WorkspaceRef(reader.GetString("workspace_id"), reader.GetString("name"))));
 
-        var hosts = await connection.ReadAllAsync(null,
+        var hosts = await connection.ReadAllAsync(transaction,
             "SELECT id, name, revoked, last_seen_at FROM hosts ORDER BY created_at",
             reader =>
             {
@@ -91,13 +133,13 @@ public sealed class Projection(Database database)
             })
             .ToArray();
 
-        var tasks = await connection.ReadAllAsync(null,
+        var tasks = await connection.ReadAllAsync(transaction,
             $"SELECT id, host_id, workspace_id, title, prompt, created_at FROM tasks ORDER BY created_at DESC LIMIT {MaxTasks}",
             reader => new TaskView(
                 reader.GetString("id"), reader.GetString("host_id"), reader.GetString("workspace_id"),
                 reader.GetString("title"), reader.GetString("prompt"), reader.Utc("created_at")));
 
-        var runs = await connection.ReadAllAsync(null,
+        var runs = await connection.ReadAllAsync(transaction,
             $"SELECT id, task_id, host_id, status, created_at, ended_at, summary FROM runs ORDER BY created_at DESC LIMIT {MaxRuns}",
             reader => new RunView(
                 reader.GetString("id"), reader.GetString("task_id"), reader.GetString("host_id"),
@@ -106,7 +148,7 @@ public sealed class Projection(Database database)
 
         // Only what is still being asked. A resolved approval's arguments are history, and history
         // that big does not belong in a poll.
-        var approvals = await connection.ReadAllAsync(null,
+        var approvals = await connection.ReadAllAsync(transaction,
             """
             SELECT id, run_id, tool, arguments, working_directory, reason, action_hash,
                    remote_decidable, status, created_at, expires_at
@@ -121,22 +163,77 @@ public sealed class Projection(Database database)
                 reader.GetBoolean("remote_decidable"), reader.Enum<ApprovalStatus>("status"),
                 reader.Utc("created_at"), reader.Utc("expires_at")));
 
-        var notices = await connection.ReadAllAsync(null,
-            $"SELECT id, run_id, title, detail, at, is_read FROM notices ORDER BY at DESC LIMIT {MaxNotices}",
-            reader => new NoticeView(
-                reader.GetString("id"), reader.GetString("run_id"), reader.GetString("title"),
-                reader.GetString("detail"), reader.Utc("at"), reader.GetBoolean("is_read")));
+        // Read state is not part of the delta. Marking notices read updates rows the panel has
+        // already been sent, and an update is exactly what an append-only stream cannot carry - so
+        // the count comes back whole on every poll instead, which is one indexed lookup and is
+        // correct even when a second browser is the one that read them.
+        var unread = await connection.ReadOneAsync(transaction,
+            "SELECT COUNT(*) AS n FROM notices WHERE is_read = 0",
+            reader => reader.GetInt32("n"));
 
-        var events = await connection.ReadAllAsync(null,
-            $"SELECT id, run_id, sequence, kind, detail, at FROM events ORDER BY at DESC LIMIT {MaxEvents}",
-            reader => new EventView(
-                reader.GetString("id"), reader.GetString("run_id"), reader.GetInt64("sequence"),
-                reader.Enum<RemoteEventKind>("kind"), reader.StringOrNull("detail"), reader.Utc("at")));
+        // Ask for one more than the cap. Getting it back is how we learn the delta is too big to
+        // answer honestly, without a second COUNT and without ever returning the extra row.
+        List<EventView> newEvents =
+            since is null ? [] : await ReadEventsAsync(connection, transaction, since.Value, MaxEvents + 1);
+        List<NoticeView> newNotices =
+            since is null ? [] : await ReadNoticesAsync(connection, transaction, since.Value, MaxNotices + 1);
+        var delta = since is not null && newEvents.Count <= MaxEvents && newNotices.Count <= MaxNotices;
 
-        events.Reverse();
+        if (!delta)
+        {
+            // Read newest-first so the LIMIT keeps the END of the history, then turned round: both
+            // streams reach the panel oldest-first whichever way they were fetched, so appending a
+            // delta to a full load is appending and not merging.
+            newEvents = await ReadEventsAsync(connection, transaction, since: null, MaxEvents);
+            newEvents.Reverse();
+            newNotices = await ReadNoticesAsync(connection, transaction, since: null, MaxNotices);
+            newNotices.Reverse();
+        }
+
+        // The counter, not MAX(ordinal): a number that has been allocated but not committed is not
+        // visible here, so the cursor cannot run ahead of a row that is about to appear. It is also
+        // the one value trimming cannot move backwards.
+        var cursor = await connection.ReadOneAsync(transaction,
+            "SELECT value FROM counters WHERE name = 'stream'", reader => reader.GetInt64("value"));
+
+        var trimmedBefore = await connection.ReadOneAsync(transaction,
+            "SELECT trimmed_before FROM retention_state WHERE id = 1",
+            reader => reader.UtcOrNull("trimmed_before"));
+
+        await transaction.CommitAsync(ct);
 
         return new GatewaySnapshot(
-            withWorkspaces, tasks, runs, approvals, notices, events,
-            Cursor: DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            withWorkspaces, tasks, runs, approvals, newNotices, newEvents,
+            cursor, delta, unread, new RetentionView(retention.Days, trimmedBefore));
     }
+
+    /// <summary>
+    /// Newest <paramref name="limit"/> when <paramref name="since"/> is null, oldest-first above the
+    /// cursor when it is not. The two orderings are deliberate: a first load wants the END of the
+    /// history and a poll wants the BEGINNING of what it missed, and taking the newest rows of a
+    /// delta would silently skip the middle of it.
+    /// </summary>
+    private static Task<List<EventView>> ReadEventsAsync(
+        MySqlConnection connection, MySqlTransaction transaction, long? since, int limit)
+        => connection.ReadAllAsync(transaction,
+            since is null
+                ? $"SELECT id, run_id, sequence, kind, detail, at, ordinal FROM events ORDER BY ordinal DESC LIMIT {limit}"
+                : $"SELECT id, run_id, sequence, kind, detail, at, ordinal FROM events WHERE ordinal > @since ORDER BY ordinal LIMIT {limit}",
+            reader => new EventView(
+                reader.GetString("id"), reader.GetString("run_id"), reader.GetInt64("sequence"),
+                reader.Enum<RemoteEventKind>("kind"), reader.StringOrNull("detail"),
+                reader.Utc("at"), reader.GetInt64("ordinal")),
+            ("@since", since));
+
+    private static Task<List<NoticeView>> ReadNoticesAsync(
+        MySqlConnection connection, MySqlTransaction transaction, long? since, int limit)
+        => connection.ReadAllAsync(transaction,
+            since is null
+                ? $"SELECT id, run_id, title, detail, at, is_read, ordinal FROM notices ORDER BY ordinal DESC LIMIT {limit}"
+                : $"SELECT id, run_id, title, detail, at, is_read, ordinal FROM notices WHERE ordinal > @since ORDER BY ordinal LIMIT {limit}",
+            reader => new NoticeView(
+                reader.GetString("id"), reader.GetString("run_id"), reader.GetString("title"),
+                reader.GetString("detail"), reader.Utc("at"), reader.GetBoolean("is_read"),
+                reader.GetInt64("ordinal")),
+            ("@since", since));
 }

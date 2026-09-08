@@ -196,12 +196,16 @@ public sealed class HostService(Database database)
 
         await connection.ExecuteAsync(transaction,
             """
-            INSERT INTO events (id, host_id, run_id, sequence, kind, detail, at)
-            VALUES (@id, @host, @run, @sequence, @kind, @detail, @at)
+            INSERT INTO events (id, host_id, run_id, sequence, kind, detail, at, ordinal)
+            VALUES (@id, @host, @run, @sequence, @kind, @detail, @at, @ordinal)
             """,
             ("@id", published.EventId), ("@host", hostId), ("@run", run.Id),
             ("@sequence", published.Sequence), ("@kind", published.Kind),
-            ("@detail", published.Detail), ("@at", now));
+            ("@detail", published.Detail), ("@at", now),
+            // Allocated inside this transaction, which is what makes a refused publish give the
+            // number back: the counter's increment rolls back with everything else. Allocating
+            // outside it would leave a hole in the panel's number line for every rejection.
+            ("@ordinal", await StreamCursor.NextAsync(connection, transaction)));
 
         await connection.ExecuteAsync(transaction,
             """
@@ -459,16 +463,17 @@ public sealed class HostService(Database database)
         }
     }
 
-    private static Task NoticeAsync(
+    private static async Task NoticeAsync(
         MySqlConnection connection, MySqlTransaction transaction,
         string runId, string title, string detail, DateTimeOffset at)
-        => connection.ExecuteAsync(transaction,
+        => await connection.ExecuteAsync(transaction,
             """
-            INSERT INTO notices (id, run_id, title, detail, at, is_read)
-            VALUES (@id, @run, @title, @detail, @at, 0)
+            INSERT INTO notices (id, run_id, title, detail, at, is_read, ordinal)
+            VALUES (@id, @run, @title, @detail, @at, 0, @ordinal)
             """,
             ("@id", Guid.NewGuid().ToString("N")), ("@run", runId),
-            ("@title", title), ("@detail", detail), ("@at", at));
+            ("@title", title), ("@detail", detail), ("@at", at),
+            ("@ordinal", await StreamCursor.NextAsync(connection, transaction)));
 
     private static RunRow ReadRun(MySqlDataReader reader) => new(
         reader.GetString("id"),

@@ -33,7 +33,7 @@ public static class Migrator
     public static async Task<IReadOnlyList<int>> ApplyAsync(
         string connectionString, CancellationToken ct = default)
     {
-        await using var connection = new MySqlConnection(connectionString);
+        await using var connection = new MySqlConnection(ForMigrating(connectionString));
         await connection.OpenAsync(ct);
 
         if (await ScalarAsync(connection, $"SELECT GET_LOCK('{LockName}', {LockSeconds})", ct) is not 1L)
@@ -79,6 +79,23 @@ public static class Migrator
 
     /// <summary>The versions this build carries, whether or not any database has them.</summary>
     public static IReadOnlyList<int> KnownVersions() => Migrations().Select(m => m.Version).ToArray();
+
+    /// <summary>
+    /// User variables, for this connection and nowhere else.
+    ///
+    /// <para>MySQL 8 has no <c>ADD COLUMN IF NOT EXISTS</c>, so a migration that must be safe to
+    /// re-run has to ask <c>information_schema</c> first and prepare a statement from the answer -
+    /// and that needs <c>SET @x :=</c>, which MySqlConnector rejects unless user variables are
+    /// enabled.</para>
+    ///
+    /// <para>It is enabled HERE only, and deliberately not in <see cref="Database"/>. With the
+    /// setting on, an <c>@name</c> that matches no bound parameter stops being an error and becomes
+    /// an empty user variable instead - so a mistyped <c>@host</c> would quietly match no rows
+    /// rather than throwing. The migrator binds no parameters at all, so it cannot make that
+    /// mistake; every other query in the gateway can, and keeps the check.</para>
+    /// </summary>
+    private static string ForMigrating(string connectionString)
+        => new MySqlConnectionStringBuilder(connectionString) { AllowUserVariables = true }.ConnectionString;
 
     /// <summary>
     /// The embedded <c>NNN_name.sql</c> files, in numeric order.

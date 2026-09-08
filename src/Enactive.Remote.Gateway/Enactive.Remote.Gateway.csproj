@@ -24,4 +24,14 @@
     <EmbeddedResource Include="Storage\Migrations\*.sql" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!--
+      So the cursor tests can hold the real allocator's transaction open and poll around it. The
+      alternative is a test that reimplements StreamCursor to stand in for it, which would pass
+      while the real one was wrong - and the whole property under test is one about locking, which
+      a copy cannot have.
+    -->
+    <InternalsVisibleTo Include="Enactive.Remote.Gateway.Tests" />
+  </ItemGroup>
+
 </Project>
