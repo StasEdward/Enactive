@@ -9,6 +9,7 @@ using Enactive.Core.Context;
 /// afterwards none of it is knowable: the file exists either way, and its previous bytes are gone.
 /// </summary>
 public sealed record FileWriteRecord(
+    // As the caller spelled it, for anything a person reads.
     string RelativePath,
     bool ExistedBefore,
     string? BeforeHash,
@@ -27,7 +28,13 @@ public sealed record FileWriteRecord(
     // entries the moment an earlier revert removes any. Two steps rejected in one run was enough:
     // the first revert shortened the list, the second one skipped past its own write and silently
     // did nothing. Positions in a mutable list are not identity.
-    long Sequence = 0);
+    long Sequence = 0,
+    // The one name this FILE has - WorkspaceGuard.KeyFor, computed from the resolved full path.
+    // Every lookup matches on this. RelativePath is what the caller typed, and one file arrives
+    // spelled several ways in one run ("doc.txt", "./doc.txt", "a/b.txt", "a\b.txt"): keyed by the
+    // string, one file became two records, and a revert asked about one spelling could not see the
+    // other step's write under the other. Empty only for a record made before this field existed.
+    string Key = "");
 
 /// <summary>Why an undo could not be performed, or that it was.</summary>
 public sealed record UndoResult(bool Undone, string? Conflict = null, bool Restored = false)
@@ -86,6 +93,20 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
 
     public string Root => _root;
 
+    /// <summary>
+    /// The journal key for a path as the caller spelled it. A path that cannot be resolved has no
+    /// key and matches nothing - which is the safe answer: an unresolvable path is not a file this
+    /// store ever wrote.
+    /// </summary>
+    private string? KeyOrNull(string relativePath)
+    {
+        try { return WorkspaceGuard.KeyFor(_root, ResolveInsideRoot(relativePath)); }
+        catch { return null; }
+    }
+
+    /// <summary>Do these two journal keys name the same file?</summary>
+    private static bool SameFile(string a, string b) => string.Equals(a, b, WorkspaceGuard.Comparison);
+
     /// <summary>Every write this store made, oldest first.</summary>
     public IReadOnlyList<FileWriteRecord> Writes
     {
@@ -113,17 +134,21 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
     /// <summary>The state this path was in before the run first touched it.</summary>
     public FileWriteRecord? FirstWrite(string relativePath)
     {
+        if (KeyOrNull(relativePath) is not { } key)
+            return null;
+
         lock (_journalGate)
-            return _journal.FirstOrDefault(
-                w => string.Equals(w.RelativePath, relativePath, WorkspaceGuard.Comparison));
+            return _journal.FirstOrDefault(w => SameFile(w.Key, key));
     }
 
     /// <summary>What the last write to this path left behind.</summary>
     public FileWriteRecord? LastWrite(string relativePath)
     {
+        if (KeyOrNull(relativePath) is not { } key)
+            return null;
+
         lock (_journalGate)
-            return _journal.LastOrDefault(
-                w => string.Equals(w.RelativePath, relativePath, WorkspaceGuard.Comparison));
+            return _journal.LastOrDefault(w => SameFile(w.Key, key));
     }
 
     /// <summary>
@@ -150,10 +175,12 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
     /// </summary>
     public IReadOnlyCollection<string> TouchedBy(int owner)
     {
+        // Keys, not spellings: a scope that wrote "doc.txt" and then "./doc.txt" touched ONE file,
+        // and handing the caller both would have it revert the same path twice.
         lock (_journalGate)
             return _journal
                 .Where(w => w.Owner == owner)
-                .Select(w => w.RelativePath)
+                .Select(w => w.Key)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray();
     }
@@ -191,9 +218,10 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
         await AtomicWrite.Replace(fullPath, write);
 
         var afterHash = FileHash.OfFile(fullPath)!;
+        var key = WorkspaceGuard.KeyFor(_root, fullPath);
         lock (_journalGate)
             _journal.Add(new FileWriteRecord(
-                relativePath, existed, beforeHash, backupPath, afterHash, owner, ++_sequence));
+                relativePath, existed, beforeHash, backupPath, afterHash, owner, ++_sequence, key));
 
         var id = Guid.NewGuid();
         _paths[id] = fullPath;
@@ -224,10 +252,11 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
                 $"Could not keep a copy of '{relativePath}', so removing it could not be undone. "
                 + "Nothing was deleted.");
 
+        var key = WorkspaceGuard.KeyFor(_root, fullPath);
         lock (_journalGate)
             _journal.Add(new FileWriteRecord(
                 relativePath, ExistedBefore: true, beforeHash, backupPath, AfterHash: null, owner,
-                ++_sequence));
+                ++_sequence, key));
 
         File.Delete(fullPath);
         await Task.CompletedTask;
@@ -249,8 +278,9 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
         if (!outcome.Undone)
             return outcome;
 
-        lock (_journalGate)
-            _journal.RemoveAll(w => string.Equals(w.RelativePath, relativePath, WorkspaceGuard.Comparison));
+        if (KeyOrNull(relativePath) is { } key)
+            lock (_journalGate)
+                _journal.RemoveAll(w => SameFile(w.Key, key));
 
         return outcome;
     }
@@ -283,13 +313,21 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
 
         foreach (var path in paths.Distinct(StringComparer.OrdinalIgnoreCase))
         {
+            // One file, whatever spelling arrived. TouchedPaths already hands back keys, but a
+            // caller is free to pass its own list and a model's two spellings must not become two
+            // paths here either.
+            if (KeyOrNull(path) is not { } key)
+            {
+                Keep(path, "that path cannot be resolved inside this workspace");
+                continue;
+            }
+
             // The state to go back to is the one the FIRST write after the checkpoint displaced; the
             // file on disk has to still hold what the LAST one left there.
             FileWriteRecord[] after;
             lock (_journalGate)
                 after = _journal
-                    .Where(w => w.Sequence > checkpoint
-                                && string.Equals(w.RelativePath, path, WorkspaceGuard.Comparison))
+                    .Where(w => w.Sequence > checkpoint && SameFile(w.Key, key))
                     .ToArray();
 
             // Nothing on record for a path we were ASKED about. Said out loud rather than skipped:
@@ -335,9 +373,7 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
             // other path's writes, stay exactly where they were. Other scopes' checkpoints are
             // counter values and are unaffected by this.
             lock (_journalGate)
-                _journal.RemoveAll(w =>
-                    w.Owner == owner
-                    && string.Equals(w.RelativePath, path, WorkspaceGuard.Comparison));
+                _journal.RemoveAll(w => w.Owner == owner && SameFile(w.Key, key));
         }
 
         return Task.FromResult(new RevertReport(reverted, kept, reasons));

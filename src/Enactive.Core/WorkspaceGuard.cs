@@ -40,6 +40,28 @@ public static class WorkspaceGuard
     /// <param name="allowReserved">
     /// Lets the app itself write the workspace's own state folder. Never true for a tool call.
     /// </param>
+    /// <summary>
+    /// The one name a file has, for anything that keys records BY file: the path relative to the
+    /// workspace root, with '/' separators, taken from the resolved full path rather than from what
+    /// the caller typed.
+    ///
+    /// <para>Callers spell one file many ways — <c>doc.txt</c>, <c>./doc.txt</c>, <c>a/b.txt</c> and
+    /// <c>a\b.txt</c> — and a model spells it differently in two consecutive tool calls as a matter
+    /// of course. The write journal keyed its entries by the string it was handed, so one file
+    /// became two records: a revert asked about one spelling never saw the other step's write under
+    /// the other, and deleted a file that was no longer its own. Guarding a path and IDENTIFYING one
+    /// are different jobs; this is the second.</para>
+    ///
+    /// <para>Compare with <see cref="Comparison"/>, which folds case exactly where the filesystem
+    /// does.</para>
+    /// </summary>
+    public static string KeyFor(string root, string fullPath)
+    {
+        var fullRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
+        var relative = Path.GetRelativePath(fullRoot, fullPath);
+        return relative.Replace('\\', '/');
+    }
+
     public static string ResolveInside(string root, string? relativePath, bool allowReserved = false)
     {
         if (string.IsNullOrWhiteSpace(root))

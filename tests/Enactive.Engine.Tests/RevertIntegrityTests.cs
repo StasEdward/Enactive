@@ -90,4 +90,48 @@ public sealed class RevertIntegrityTests
             "b.txt",
             second.Reverted.Concat(second.Kept));
     }
+
+    // ── N3 — one file, two keys ─────────────────────────────────────────────
+
+    /// <summary>
+    /// The journal keyed entries by the string the caller passed, so <c>doc.txt</c> and
+    /// <c>./doc.txt</c> were two files as far as the owner check was concerned: A's revert never saw
+    /// B's write and deleted the file B had created. Identical content is the point — the hash check
+    /// cannot tell the two apart, so the owner check was the only thing that could have stopped it.
+    /// </summary>
+    [Fact]
+    public async Task EquivalentPathMustNotBypassOwnerConflict()
+    {
+        using var fixture = new EngineFixture();
+
+        var a = fixture.Artifacts.BeginStep();
+        var b = fixture.Artifacts.BeginStep();
+
+        await Write(a, "doc.txt", "same content");
+        await Write(b, "./doc.txt", "same content");
+
+        await a.RevertAsync(a.TouchedPaths, default);
+
+        Assert.True(fixture.Exists("doc.txt"), "B's accepted file was deleted through an equivalent path");
+    }
+
+    /// <summary>
+    /// The everyday form of N3 on Windows, and the reason it is not an exotic case: the model writes
+    /// <c>a/b.txt</c> to a file tool and <c>a\b.txt</c> to the next one, and both are one file.
+    /// </summary>
+    [Fact]
+    public async Task A_separator_is_not_a_different_file()
+    {
+        using var fixture = new EngineFixture();
+
+        var a = fixture.Artifacts.BeginStep();
+        var b = fixture.Artifacts.BeginStep();
+
+        await Write(a, "nested/doc.txt", "same content");
+        await Write(b, "nested\\doc.txt", "same content");
+
+        await a.RevertAsync(a.TouchedPaths, default);
+
+        Assert.True(fixture.Exists("nested/doc.txt"), "B's accepted file was deleted through the other separator");
+    }
 }
