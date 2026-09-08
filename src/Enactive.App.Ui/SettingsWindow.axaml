@@ -295,6 +295,16 @@
                                        Text="How many characters of tool output the reviewer sees, shared between every call the step made. It is divided, not per call: three reads get a usable slice each, thirteen get about 320 characters each — too little to check anything quoted from a source file. Raise it for work that reads a lot; it is paid on every review call." />
                             <TextBox Text="{Binding EvidenceBudgetText}" PlaceholderText="6000 = the default" />
 
+                            <TextBlock Classes="label" Text="Keep logs for (days)" />
+                            <TextBlock Classes="hint"
+                                       Text="One log file per day, in %APPDATA%\Enactive\logs. Older files are deleted when the log rolls over or when you lower this, and the new day's file records what it removed. 0 keeps everything — which is what the app did before this setting existed." />
+                            <TextBox Text="{Binding LogRetentionDaysText}" PlaceholderText="14 = the default, 0 = keep everything" />
+
+                            <CheckBox IsChecked="{Binding LogPromptBodies}"
+                                      Content="Write the full text of every prompt to the log" />
+                            <TextBlock Classes="hint"
+                                       Text="On by default: the prompt bodies are what make a log worth reading when a run goes wrong, and they are also most of its size — a single documentation run has exported at three megabytes. Turning this off keeps the record that every call happened, and the model's answers, and leaves out what was sent." />
+
                         </StackPanel>
                     </ScrollViewer>
                 </Panel>

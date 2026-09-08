@@ -153,10 +153,45 @@ public sealed class FileLogSink : ILogSink, IDisposable
     private StreamWriter? _writer;
     private DateOnly _currentDay;
 
-    public FileLogSink(string? directory = null, bool includeDetail = true)
+    private int _retentionDays = DefaultRetentionDays;
+
+    /// <summary>
+    /// How many days of log files to keep. 0 keeps everything.
+    ///
+    /// <para>Fourteen because a defect reported from a log is usually reported the same week, and
+    /// because the alternative was what shipped: a file per day, appended forever, deleted by
+    /// nobody. A single run of a documentation task exported at three megabytes on 2026-09-08 —
+    /// most of it prompt bodies, which is what makes these files worth reading and also what makes
+    /// them large. A day of ordinary use is tens of megabytes and nothing has ever removed one.</para>
+    ///
+    /// <para>Settable rather than a constructor argument because the UI builds its sink before it
+    /// has read any settings. Changing it prunes immediately, so a person who lowers it does not
+    /// have to wait until midnight to see the effect.</para>
+    /// </summary>
+    public int RetentionDays
+    {
+        get { lock (_gate) return _retentionDays; }
+        set
+        {
+            lock (_gate)
+            {
+                if (_retentionDays == value)
+                    return;
+                _retentionDays = Math.Max(0, value);
+            }
+            Prune();
+        }
+    }
+
+    /// <summary>The default kept when nothing says otherwise.</summary>
+    public const int DefaultRetentionDays = 14;
+
+    public FileLogSink(string? directory = null, bool includeDetail = true,
+                       int retentionDays = DefaultRetentionDays)
     {
         _directory = directory ?? DefaultDirectory();
         _includeDetail = includeDetail;
+        _retentionDays = Math.Max(0, retentionDays);
         try { Directory.CreateDirectory(_directory); } catch { /* ignore */ }
     }
 
@@ -209,6 +244,73 @@ public sealed class FileLogSink : ILogSink, IDisposable
         _currentDay = day;
         _currentPath = Path.Combine(_directory, $"enactive-{day:yyyyMMdd}.log");
         _writer = new StreamWriter(new FileStream(_currentPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite));
+
+        // Pruning happens HERE, on the roll, so the file that opens is the one that says what went.
+        // A gap in the history with nothing explaining it is the same defect as a record that
+        // reports no events while it holds thousands - and the person who finds the gap is looking
+        // for a run that is missing, which is the worst moment to have to guess why.
+        var removed = PruneLocked();
+        if (removed.Count > 0)
+            _writer.WriteLine(
+                $"{at.ToLocalTime():HH:mm:ss.fff} INFO  System       run=--------  "
+                + $"log retention: deleted {removed.Count} file(s) older than {_retentionDays} day(s) "
+                + $"({string.Join(", ", removed)})");
+    }
+
+    /// <summary>
+    /// Deletes log files older than <see cref="RetentionDays"/>, and says which ones it deleted.
+    ///
+    /// <para>Only files this sink could have written: <c>enactive-yyyyMMdd.log</c> in its own
+    /// directory, with a date that parses. Anything else in that folder belongs to somebody else -
+    /// a person's saved copy, an export, another tool - and a retention policy that tidies away
+    /// what it did not create is a data-loss bug wearing a feature's name.</para>
+    ///
+    /// <para>The file being written is safe by ARITHMETIC, not by a guard: the cutoff is the current
+    /// day minus the window, so the current day is never below it. An explicit check for it was
+    /// written first and deleted - reverting it failed no test, because nothing could reach it, and
+    /// a guard that cannot fire is one a reader will mistake for the thing doing the work.
+    /// <c>The_file_being_written_survives_a_window_of_one_day</c> pins the behaviour instead, which
+    /// is what would catch a change to the arithmetic.</para>
+    /// </summary>
+    public IReadOnlyList<string> Prune()
+    {
+        lock (_gate) return PruneLocked();
+    }
+
+    private IReadOnlyList<string> PruneLocked()
+    {
+        if (_retentionDays <= 0)
+            return Array.Empty<string>();
+
+        var deleted = new List<string>();
+        try
+        {
+            var cutoff = _currentDay.AddDays(-_retentionDays);
+            foreach (var file in Directory.EnumerateFiles(_directory, "enactive-*.log"))
+            {
+                var name = Path.GetFileNameWithoutExtension(file);
+                var stamp = name["enactive-".Length..];
+                if (!DateOnly.TryParseExact(stamp, "yyyyMMdd", out var day) || day >= cutoff)
+                    continue;
+
+                try
+                {
+                    File.Delete(file);
+                    deleted.Add(Path.GetFileName(file));
+                }
+                catch
+                {
+                    // Locked by a reader, or gone already. Not deleting a log is not worth an error.
+                }
+            }
+        }
+        catch
+        {
+            // The directory could not be read. Same rule as everything else here.
+        }
+
+        deleted.Sort(StringComparer.Ordinal);
+        return deleted;
     }
 
     public string? CurrentPath { get { lock (_gate) return _currentPath; } }

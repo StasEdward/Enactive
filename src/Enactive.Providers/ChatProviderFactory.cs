@@ -17,7 +17,14 @@ public sealed class ChatProviderFactory : IChatProviderFactory
         _log = log;
     }
 
-    public IChatProvider Create(string providerId) => Create(providerId, promptBodies: true);
+    /// <summary>
+    /// Whether prompts logged through this factory carry their bodies. A setting, because the
+    /// bodies are what make a log diagnosable and also most of what makes it large; a caller that
+    /// asks for a specific answer overrides it.
+    /// </summary>
+    public bool PromptBodies { get; set; } = true;
+
+    public IChatProvider Create(string providerId) => Create(providerId, PromptBodies);
 
     /// <param name="promptBodies">
     /// False for a caller whose prompts carry the log itself — the log window's "AI Analyze". The

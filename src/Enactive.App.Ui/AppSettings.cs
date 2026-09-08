@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 using Enactive.Agents;
 using Enactive.Core.Permissions;
 using Enactive.Core.Execution;
+using Enactive.Workspace;
 using Enactive.Core.Providers;
 using Enactive.Secrets;
 
@@ -179,6 +180,15 @@ internal sealed partial class AppSettings
     // made. Raise it for work that reads many files: the budget is divided, so thirteen reads under
     // the default leave about 320 characters of each - too little to check anything quoted from one.
     public int EvidenceBudget { get; set; } = ExecutionJournal.DefaultBudget;
+
+    // How many days of log files to keep. 0 keeps everything, which is what shipped: a file per day,
+    // appended forever, deleted by nobody.
+    public int LogRetentionDays { get; set; } = FileLogSink.DefaultRetentionDays;
+
+    // Whether the log records the full text of every prompt. On by default - it is what makes these
+    // files worth reading when something goes wrong - and it is also most of their size, so turning
+    // it off keeps the record of every call and drops the bodies.
+    public bool LogPromptBodies { get; set; } = true;
 
     // What the main window's close button does. True - the default - hides it to the tray, where a
     // run it started keeps going; false makes closing the window quit the program, asking first if
@@ -429,6 +439,8 @@ internal sealed partial class AppSettings
         VerifyWrites = VerifyWrites,
         MaxParallelSteps = MaxParallelSteps,
         EvidenceBudget = EvidenceBudget,
+        LogRetentionDays = LogRetentionDays,
+        LogPromptBodies = LogPromptBodies,
         CloseToTray = CloseToTray,
         BaseUrl = BaseUrl,
         Model = Model,

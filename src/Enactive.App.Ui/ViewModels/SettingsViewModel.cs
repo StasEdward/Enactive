@@ -4,6 +4,7 @@ using System.Collections.ObjectModel;
 using Avalonia.Media;
 using Enactive.App.Ui.Mvvm;
 using Enactive.Core.Execution;
+using Enactive.Workspace;
 using Enactive.Core.Providers;
 
 /// <summary>One row of the Providers list. Wraps the config so the row can be told to re-read it
@@ -109,6 +110,8 @@ internal sealed partial class SettingsViewModel : ObservableObject
     private bool _revertRejectedSteps;
     private string _maxParallelStepsText;
     private string _evidenceBudgetText;
+    private string _logRetentionDaysText;
+    private bool _logPromptBodies;
     private bool _closeToTray;
     private bool _runAtStartup;
     private string _startupNote = string.Empty;
@@ -203,6 +206,8 @@ internal sealed partial class SettingsViewModel : ObservableObject
         _revertRejectedSteps = _working.RevertRejectedSteps;
         _maxParallelStepsText = _working.MaxParallelSteps.ToString();
         _evidenceBudgetText = _working.EvidenceBudget.ToString();
+        _logRetentionDaysText = _working.LogRetentionDays.ToString();
+        _logPromptBodies = _working.LogPromptBodies;
         _closeToTray = _working.CloseToTray;
 
         // Read from the system, not from settings.json: the Run key is the truth, and a copy would
@@ -265,6 +270,8 @@ internal sealed partial class SettingsViewModel : ObservableObject
     public bool RevertRejectedSteps { get => _revertRejectedSteps; set => Set(ref _revertRejectedSteps, value); }
     public string MaxParallelStepsText { get => _maxParallelStepsText; set => Set(ref _maxParallelStepsText, value); }
     public string EvidenceBudgetText { get => _evidenceBudgetText; set => Set(ref _evidenceBudgetText, value); }
+    public string LogRetentionDaysText { get => _logRetentionDaysText; set => Set(ref _logRetentionDaysText, value); }
+    public bool LogPromptBodies { get => _logPromptBodies; set => Set(ref _logPromptBodies, value); }
 
     /// <summary>
     /// What the main window's close button does. Two mutually exclusive options, so the pair moves
@@ -445,6 +452,12 @@ internal sealed partial class SettingsViewModel : ObservableObject
                                   && e >= ExecutionJournal.MinimumBudget
             ? e
             : ExecutionJournal.DefaultBudget;
+        // A number that does not parse means the default, not zero: zero here is "keep everything",
+        // a deliberate choice, and reaching it by typing nonsense would be the opposite of one.
+        _working.LogRetentionDays = int.TryParse(LogRetentionDaysText.Trim(), out var d) && d >= 0
+            ? d
+            : FileLogSink.DefaultRetentionDays;
+        _working.LogPromptBodies = LogPromptBodies;
         _working.CloseToTray = CloseToTray;
 
         var startupRefused =

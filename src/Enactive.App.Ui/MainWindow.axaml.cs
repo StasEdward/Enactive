@@ -49,7 +49,10 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     private ChatProviderFactory _providerFactory = null!;
     private readonly IToolRegistry _toolRegistry;
     // Global, app-wide log hub. Default Debug (readable); the log window can drop it to Trace for raw wire.
-    private readonly LogHub _log = new(minLevel: LogLevel.Debug, downstream: new ILogSink[] { new FileLogSink() });
+    // Held separately from the hub so settings can reach it: this is built before any settings are
+    // read, and retention is a setting.
+    private readonly FileLogSink _logFile = new();
+    private readonly LogHub _log;
     private LogWindow? _logWindow;
     private InboxWindow? _inboxWindow;
     private readonly EnvironmentProbe _envProbe = new();
@@ -89,6 +92,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
 
     public MainWindow()
     {
+        _log = new LogHub(minLevel: LogLevel.Debug, downstream: new ILogSink[] { _logFile });
         _settings = AppSettings.Load();
         _toolRegistry = new ToolRegistry(new ITool[]
         {
@@ -1916,7 +1920,14 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             p.Models,
             p.Headers.Count > 0 ? p.Headers : null,
             p.MaxTokens)).ToList();
-        _providerFactory = new ChatProviderFactory(descriptors, _http, _log);
+        _providerFactory = new ChatProviderFactory(descriptors, _http, _log)
+        {
+            PromptBodies = _settings.LogPromptBodies
+        };
+
+        // Applied here rather than at construction because the sink predates the settings. The
+        // setter prunes, so lowering it takes effect on Save instead of at the next midnight.
+        _logFile.RetentionDays = _settings.LogRetentionDays;
 
         // Workers: the editable team, each with its own model; honesty + global instructions applied at build.
         var fallbackModel = _settings.Providers.Count > 0 && _settings.Providers[0].Models.Count > 0
