@@ -67,6 +67,20 @@ public interface IArtifactStore
         => throw new NotSupportedException("This artifact store cannot remove files.");
 
     /// <summary>
+    /// Whether <see cref="RemoveAsync(string, CancellationToken)"/> will do something rather than
+    /// throw — asked BEFORE an operation that needs it, not discovered halfway through one.
+    ///
+    /// <para>A move is a write and then a removal. Against staging the write was accepted and the
+    /// removal threw, so the tool correctly reported failure — and left the destination proposal it
+    /// had already made sitting in the staged changes, waiting for someone to Apply it. The failure
+    /// of the second half must undo nothing and leave nothing; the way to have that is not to start.</para>
+    ///
+    /// <para>Defaults to false, matching the default <see cref="RemoveAsync(string, CancellationToken)"/>
+    /// above: a store that has not said it can remove files is taken at its word.</para>
+    /// </summary>
+    bool CanRemove => false;
+
+    /// <summary>
     /// Opens a view of this store for one unit of work — a plan step, or a quick action — whose
     /// writes are all attributed to it and which can undo exactly those.
     ///
@@ -163,6 +177,8 @@ public sealed class ArtifactScope : IArtifactScope
     public Task RemoveAsync(string relativePath, CancellationToken ct)
         => _store.RemoveAsync(relativePath, _owner, ct);
 
+    public bool CanRemove => _store.CanRemove;
+
     public Task<RevertReport> RevertAsync(IReadOnlyCollection<string> paths, CancellationToken ct)
         => _store.RevertOwnedAsync(_owner, paths, ct);
 
@@ -201,6 +217,7 @@ internal sealed class UnownedScope : IArtifactScope
     public Task<Stream> OpenAsync(Guid artifactId, CancellationToken ct) => _store.OpenAsync(artifactId, ct);
     public Task DeleteAsync(Guid artifactId, CancellationToken ct) => _store.DeleteAsync(artifactId, ct);
     public Task RemoveAsync(string relativePath, CancellationToken ct) => _store.RemoveAsync(relativePath, ct);
+    public bool CanRemove => _store.CanRemove;
     public Task<string?> TryReadPendingAsync(string relativePath, CancellationToken ct)
         => _store.TryReadPendingAsync(relativePath, ct);
     public IReadOnlyCollection<string> PendingPaths => _store.PendingPaths;

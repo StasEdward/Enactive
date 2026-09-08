@@ -233,6 +233,9 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
     /// backup is taken first and the entry is written before the delete, because after the delete
     /// neither is knowable — the same reason a write records what it displaced.
     /// </summary>
+    /// <summary>This store deletes files, and journals the deletion so it can be undone.</summary>
+    public bool CanRemove => true;
+
     public Task RemoveAsync(string relativePath, CancellationToken ct)
         => RemoveAsync(relativePath, Unowned, ct);
 

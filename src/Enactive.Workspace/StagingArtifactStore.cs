@@ -338,6 +338,13 @@ public sealed class StagingArtifactStore : IOwnedArtifactStore
     public Task RemoveAsync(string relativePath, int owner, CancellationToken ct)
         => throw new NotSupportedException("Staged changes cannot express a deletion.");
 
+    /// <summary>
+    /// No. A proposal is a file's next content; there is no way to propose its absence. Said here so
+    /// an operation that needs a removal can decline BEFORE doing the half of itself that works —
+    /// move_file used to write the destination proposal and only then discover this.
+    /// </summary>
+    public bool CanRemove => false;
+
     /// <summary>Every path this owner proposed a change to — the canonical key, not the spelling.</summary>
     public IReadOnlyCollection<string> TouchedBy(int owner)
     {

@@ -64,6 +64,19 @@ public sealed class MoveFileTool : ITool
                     $"'{to}' already exists. Moving onto it would destroy it — choose another name, "
                     + "or delete that file deliberately first.");
 
+            // Asked BEFORE anything is written. A move is a write and then a removal, and a store
+            // that cannot express a removal — staging, whose proposals are a file's next content and
+            // have no way to say "gone" — used to accept the first half and throw on the second: the
+            // tool reported failure, correctly, and left the destination proposal behind for someone
+            // to Apply. The failure of the second half must leave nothing, and the way to have that
+            // is not to start. The catch below stays as a belt for a store that answers wrongly.
+            if (!ctx.Artifacts.CanRemove)
+                return ToolResults.Fail(
+                    $"'{from}' is still there and nothing was written: this run stages changes for "
+                    + "review, and staging cannot express a deletion, so the move could only half "
+                    + "happen. Write the new file and delete the old one yourself once the staged "
+                    + "changes are applied, or re-run without staging.");
+
             // BYTES, not text. This read the file with ReadAllTextAsync and wrote UTF-8 back, which
             // is not a move: a PNG or a zip came out with every invalid UTF-8 byte replaced by U+FFFD,
             // a UTF-16 file was transcoded, a BOM could vanish — and then the original was deleted and

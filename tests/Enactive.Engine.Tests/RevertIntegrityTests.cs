@@ -264,4 +264,57 @@ public sealed class RevertIntegrityTests
         Assert.True(undo.Undone, undo.Conflict);
         Assert.False(fixture.Exists("asset.bin"));
     }
+
+    // ── N5 — half a move into a store that cannot finish it ─────────────────
+
+    /// <summary>
+    /// <c>move_file</c> writes the destination first (so a failure leaves both copies rather than
+    /// none), then removes the source. Staging cannot express a deletion, so the removal throws, the
+    /// tool correctly reports failure — and the destination proposal it created on the way is still
+    /// in the staged changes, waiting for someone to Apply it.
+    ///
+    /// <para>A store that cannot finish the operation should be asked BEFORE the first half of it.</para>
+    /// </summary>
+    [Fact]
+    public async Task FailedStagedBinaryMoveMustNotLeaveCorruptedProposal()
+    {
+        using var fixture = new EngineFixture();
+
+        byte[] input = { 0, 255, 254, 128, 65, 0 };
+        await File.WriteAllBytesAsync(fixture.PathOf("input.bin"), input);
+
+        var staging = new StagingArtifactStore(fixture.Root);
+        var context = new ToolContext(
+            Guid.NewGuid(), Guid.NewGuid(), fixture.Workspace.Id, null!,
+            PermissionPolicy.PermissiveDefault, fixture.Root, staging.BeginStep(), null!);
+
+        var result = await new MoveFileTool().InvokeAsync(
+            """{"from":"input.bin","to":"output.bin"}""", context, default);
+
+        Assert.False(result.Success);
+        Assert.Empty(staging.Changes);
+    }
+
+    /// <summary>
+    /// Nothing about it is specific to binary content: a staged move of a text file leaves the same
+    /// proposal behind, and the source untouched either way.
+    /// </summary>
+    [Fact]
+    public async Task A_failed_staged_move_of_text_leaves_nothing_behind_either()
+    {
+        using var fixture = new EngineFixture();
+        fixture.Write("input.txt", "the contents");
+
+        var staging = new StagingArtifactStore(fixture.Root);
+        var context = new ToolContext(
+            Guid.NewGuid(), Guid.NewGuid(), fixture.Workspace.Id, null!,
+            PermissionPolicy.PermissiveDefault, fixture.Root, staging.BeginStep(), null!);
+
+        var result = await new MoveFileTool().InvokeAsync(
+            """{"from":"input.txt","to":"output.txt"}""", context, default);
+
+        Assert.False(result.Success);
+        Assert.Empty(staging.Changes);
+        Assert.Equal("the contents", fixture.Read("input.txt"));
+    }
 }
