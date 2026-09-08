@@ -6,6 +6,10 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Channels;
+// The pure parsing/formatting members moved to ToolCallParsing (FIX_PLAN §9d, cut 1). Imported
+// statically so every call site here reads exactly as it did before the move: a refactor cannot be
+// verified differentially, so the less of it is visible at the call sites, the better.
+using static Enactive.Agents.ToolCallParsing;
 using Enactive.Core.Artifacts;
 using Enactive.Core.Chat;
 using Enactive.Core.Context;
@@ -1514,7 +1518,7 @@ public sealed class Orchestrator : IOrchestrator
             // nothing: the model is asked to re-emit a real tool call instead. The old behaviour stays
             // available for a weak local model that cannot emit structured calls at all, but it is
             // opt-in (AllowImplicitToolCalls) precisely because it is a way to talk the agent into acting.
-            var described = toolCalls is null && replyText is not null ? TryRecoverImplicitToolCall(replyText) : null;
+            var described = toolCalls is null && replyText is not null ? TryRecoverImplicitToolCall(replyText, _tools.Definitions) : null;
             if (described is not null && _allowImplicitToolCalls)
             {
                 toolCalls = new List<ToolCall> { described };
@@ -1827,127 +1831,6 @@ public sealed class Orchestrator : IOrchestrator
             + "Stopping it.");
     }
 
-    /// <summary>
-    /// Best-effort recovery for the "narrated instead of called" failure mode: some local
-    /// models, especially quantized ones, sometimes print what a tool call WOULD look like
-    /// (a fenced ```json block, or a bare {...} block) instead of emitting a real structured
-    /// tool call. If that JSON's keys satisfy exactly one registered tool's required
-    /// parameters, treat it as if that tool had actually been called. Deliberately
-    /// conservative: any ambiguity (no tool matches, or more than one matches equally well)
-    /// returns null rather than guessing.
-    /// </summary>
-    private ToolCall? TryRecoverImplicitToolCall(string text)
-    {
-        var candidates = new List<string>();
-        foreach (Match m in JsonFenceRegex.Matches(text))
-            candidates.Add(m.Groups[1].Value);
-
-        // The old "outermost {...} span" fallback is gone on purpose: it turned any prose containing a
-        // brace into a candidate action, which is how a reply reading "Example, do not execute:" wrote a
-        // file. Only a fenced ```json block is even considered, and even that is a signal to ASK for a
-        // real tool call — never, by itself, permission to run one (see the caller).
-
-        foreach (var candidate in candidates)
-        {
-            JsonDocument doc;
-            try { doc = JsonDocument.Parse(candidate); }
-            catch { continue; }
-
-            using (doc)
-            {
-                if (doc.RootElement.ValueKind != JsonValueKind.Object)
-                    continue;
-
-                var docKeys = doc.RootElement.EnumerateObject()
-                    .Select(p => p.Name).ToHashSet(StringComparer.Ordinal);
-
-                ToolDefinition? best = null;
-                var bestScore = 0;
-                var ambiguous = false;
-
-                foreach (var tool in _tools.Definitions)
-                {
-                    if (!TryReadSchemaKeys(tool.JsonSchema, out var required, out var properties))
-                        continue;
-                    if (required.Count == 0 || !required.All(docKeys.Contains))
-                        continue; // must at least cover everything this tool requires
-
-                    var score = docKeys.Count(properties.Contains);
-                    if (score > bestScore) { best = tool; bestScore = score; ambiguous = false; }
-                    else if (score == bestScore && best is not null) { ambiguous = true; }
-                }
-
-                if (best is not null && !ambiguous)
-                    return new ToolCall(Guid.NewGuid().ToString("N"), best.Name, doc.RootElement.GetRawText());
-            }
-        }
-
-        return null;
-    }
-
-    private static readonly Regex JsonFenceRegex =
-        new("```(?:json)?\\s*(\\{[\\s\\S]*?\\})\\s*```", RegexOptions.Compiled);
-
-    private static bool TryReadSchemaKeys(string jsonSchema, out HashSet<string> required, out HashSet<string> properties)
-    {
-        required = new HashSet<string>(StringComparer.Ordinal);
-        properties = new HashSet<string>(StringComparer.Ordinal);
-        try
-        {
-            using var doc = JsonDocument.Parse(jsonSchema);
-            var root = doc.RootElement;
-            if (root.TryGetProperty("properties", out var props) && props.ValueKind == JsonValueKind.Object)
-                foreach (var p in props.EnumerateObject())
-                    properties.Add(p.Name);
-            if (root.TryGetProperty("required", out var req) && req.ValueKind == JsonValueKind.Array)
-                foreach (var r in req.EnumerateArray())
-                    if (r.ValueKind == JsonValueKind.String) required.Add(r.GetString()!);
-            return true;
-        }
-        catch { return false; }
-    }
-
-    private static List<ToolCall>? BuildToolCalls(Dictionary<int, ToolCallBuilder> builders)
-    {
-        if (builders.Count == 0)
-            return null;
-
-        return builders
-            .OrderBy(kv => kv.Key)
-            .Select(kv =>
-            {
-                var b = kv.Value;
-                var arguments = NormalizeToolArgs(b.Arguments.Length > 0 ? b.Arguments.ToString() : "{}");
-                return new ToolCall(b.Id ?? Guid.NewGuid().ToString("N"), b.Name ?? "", arguments);
-            })
-            .ToList();
-    }
-
-    /// <summary>
-    /// Small models sometimes concatenate two JSON objects into one tool call's arguments
-    /// (e.g. {"a":1}{"b":2}), which is not valid JSON. Keep only the FIRST value so the call still
-    /// runs instead of failing the whole step; trailing junk is dropped.
-    /// </summary>
-    private static string NormalizeToolArgs(string raw)
-    {
-        if (string.IsNullOrWhiteSpace(raw))
-            return "{}";
-        try
-        {
-            var reader = new Utf8JsonReader(Encoding.UTF8.GetBytes(raw));
-            if (JsonDocument.TryParseValue(ref reader, out var doc))
-            {
-                using (doc)
-                    return doc.RootElement.GetRawText();
-            }
-        }
-        catch
-        {
-            // fall through — let the tool report the parse error itself
-        }
-        return raw;
-    }
-
     private static string SummarizeArtifacts(List<ArtifactRef> artifacts)
         => artifacts.Count == 0
             ? "(completed, no files changed)"
@@ -1991,50 +1874,6 @@ public sealed class Orchestrator : IOrchestrator
         sb.AppendLine("## Request (the user's intent)");
         sb.AppendLine(intent.RawText);
         return sb.ToString();
-    }
-
-    /// <summary>
-    /// A one-line form for an EVENT LINE. Never for a decision card: shortening what a person is
-    /// asked to approve, while running the whole thing, is how a long script gets approved by its
-    /// first sentence. See <see cref="DescribeCall"/>.
-    /// </summary>
-    private static string Compact(string json)
-    {
-        var flattened = json.Replace('\n', ' ').Replace('\r', ' ');
-        return flattened.Length <= 120 ? flattened : flattened[..120] + "…";
-    }
-
-    /// <summary>
-    /// The complete action a decision authorises, laid out for a person: each argument in full, on
-    /// its own, with newlines intact — a shell script has to be readable as a script. Falls back to
-    /// the raw JSON when it does not parse, because showing something odd beats showing nothing.
-    /// </summary>
-    private static string DescribeCall(ToolCall call)
-    {
-        try
-        {
-            using var doc = JsonDocument.Parse(call.ArgumentsJson);
-            if (doc.RootElement.ValueKind != JsonValueKind.Object)
-                return call.ArgumentsJson;
-
-            var sb = new StringBuilder();
-            foreach (var property in doc.RootElement.EnumerateObject())
-            {
-                var value = property.Value.ValueKind == JsonValueKind.String
-                    ? property.Value.GetString() ?? string.Empty
-                    : property.Value.ToString();
-
-                sb.Append(property.Name).AppendLine(":");
-                sb.AppendLine(value);
-                sb.AppendLine();
-            }
-
-            return sb.ToString().TrimEnd();
-        }
-        catch
-        {
-            return call.ArgumentsJson;
-        }
     }
 
     /// <summary>
@@ -2161,11 +2000,4 @@ public sealed class Orchestrator : IOrchestrator
 
 
 
-    /// <summary>Accumulates a streamed tool call across deltas.</summary>
-    private sealed class ToolCallBuilder
-    {
-        public string? Id { get; set; }
-        public string? Name { get; set; }
-        public StringBuilder Arguments { get; } = new();
-    }
 }
