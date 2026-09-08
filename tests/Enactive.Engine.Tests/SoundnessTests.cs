@@ -292,12 +292,18 @@ public sealed class SoundnessTests
     }
 
     /// <summary>
-    /// A step whose work no call could settle is passed, and the pass is not even asked when the
-    /// step ran nothing at all — there is nothing to cite, and a Review-model call to be told so is
-    /// a call spent on a foregone conclusion.
+    /// A step that ran NOTHING is asked exactly like any other, and passes when its work is work no
+    /// call could settle.
+    ///
+    /// <para>This used to be skipped, on the reasoning that "there is nothing to cite, so the answer
+    /// is known before it is asked". It is not: with no calls the answer is "not-by-any-call" for an
+    /// analysis and NOT SOUND for anything else, and which one it is cannot be known without asking.
+    /// Closed 2026-09-08, §9af — the run that showed it did the same work twice, ten minutes apart,
+    /// and the copy that made one call was failed while the copy that made none was never asked.
+    /// </para>
     /// </summary>
     [Fact]
-    public async Task A_step_that_ran_nothing_is_not_asked_to_prove_anything()
+    public async Task A_step_that_ran_nothing_is_asked_like_any_other_and_may_pass()
     {
         using var fx = new EngineFixture();
 
@@ -306,10 +312,9 @@ public sealed class SoundnessTests
         {
             WhenExhausted = Turn.Says("having read it, here is the analysis")
         };
-        // Only ONE turn is scripted. If the proof pass were asked, it would consume a second, and
-        // the exhausted provider would answer with the verdict again — so a test that passes here
-        // is a test in which it was never asked.
-        var reviewer = new FakeChatProvider(Verdicts.Pass("nothing to check"));
+        var reviewer = new FakeChatProvider(
+            Verdicts.Pass("nothing to check"),
+            Verdicts.NotByAnyCall("this step's work was reading and reasoning"));
 
         var events = await fx.RunAsync(
             fx.Build(worker, router: Routers.WithReviewer(), reviewProvider: reviewer,
@@ -317,7 +322,40 @@ public sealed class SoundnessTests
             "analyse the code");
 
         Assert.Equal(RunOutcomeKind.Completed, events.Last().Outcome());
-        Assert.Single(reviewer.Requests);
+        Assert.Equal(2, reviewer.Requests.Count);
+        Assert.Contains(events, e => e.Kind == EventKind.ReviewPassed
+                                     && e.Summary.Contains("no tool call could settle", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// And the reported run. A step that ran nothing, reported that nothing needed changing, and had
+    /// passed its execution review is now asked — and "nothing needed doing" with no call behind it
+    /// is not believed, because it is a finding and a finding rests on having looked.
+    ///
+    /// <para>The evidence the pass is shown here reads "(no tools were run in this step)". That is a
+    /// real answer to the question, which is the whole point: the gate used to be silent in exactly
+    /// this case and loud for the step beside it that had done the same work with one call.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_step_that_ran_nothing_cannot_report_that_nothing_needed_doing()
+    {
+        using var fx = new EngineFixture();
+
+        var worker = new FakeChatProvider(Turn.Says(OneStepPlan))
+        {
+            WhenExhausted = Turn.Says("It was already correct, so I changed nothing.")
+        };
+        var reviewer = new FakeChatProvider(
+            Verdicts.Pass("it did not claim to have run anything"),
+            Verdicts.NothingToDo("it was already correct"));
+
+        var events = await fx.RunAsync(
+            fx.Build(worker, router: Routers.WithReviewer(), reviewProvider: reviewer,
+                     reviewRetries: 0, checkSoundness: true),
+            "fix it if it is broken");
+
+        Assert.NotEqual(RunOutcomeKind.Completed, events.Last().Outcome());
+        Assert.Contains(Failures(events), s => s.Contains("named no call that looked", StringComparison.Ordinal));
     }
 
     /// <summary>

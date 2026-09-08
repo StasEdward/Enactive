@@ -1597,13 +1597,13 @@ public sealed class Orchestrator : IOrchestrator
     /// The second question, asked only of a step the reviewer has already passed: does its reported
     /// success FOLLOW from what it did?
     ///
-    /// <para>Skipped when the step made no calls. A step that only read, reasoned or wrote has
-    /// nothing to cite, so the answer is known before it is asked - and asking it would be paying a
-    /// Review-model call to be told what the engine can see for itself.</para>
+    /// <para>Asked of every step the reviewer passed, INCLUDING one that made no calls. It used to
+    /// be skipped there - see the note in the body for the run that showed why that was the wrong
+    /// half to be quiet in.</para>
     ///
-    /// <para>Returns null when the check is off or does not apply. A null is "not asked", which is
-    /// not "passed" - the caller treats it as nothing to act on, and nothing here pretends the step
-    /// was proven.</para>
+    /// <para>Returns null only when the check is switched off. A null is "not asked", which is not
+    /// "passed" - the caller treats it as nothing to act on, and nothing here pretends the step was
+    /// proven.</para>
     /// </summary>
     private async Task<(ProofVerdict Verdict, int Prompt, int Completion)?> ProveAsync(
         string title, List<ChatMessage> convo, ExecutionJournal journal, int evidenceStart,
@@ -1612,9 +1612,26 @@ public sealed class Orchestrator : IOrchestrator
         if (!_checkSoundness)
             return null;
 
+        // A step that made NO calls is asked exactly like any other. This used to return here, on
+        // the reasoning that "there is nothing to cite, and a Review-model call to be told so is a
+        // call spent on a foregone conclusion". The conclusion is not foregone — it is the question.
+        // With no calls the answer is "not-by-any-call" for work no call could settle, and not sound
+        // for anything else, and which of those it is cannot be known without asking.
+        //
+        // Reported 2026-09-08 15:14, ten minutes after §9ad's run and from the identical plan. That
+        // step made no call, reported that the README needed no change, and was never asked; its
+        // execution reviewer had waved the missing calls through on reasoning it invented for itself
+        // ("it relied on analysis from a previous step"). The run passed. The 15:04 run did the same
+        // work with one call, WAS asked, and failed. A gate silent for the step that did nothing and
+        // loud for the step that did something is the shape this codebase calls a gate that enforces
+        // nothing while looking configured.
+        //
+        // What it costs is one call on the review model for a step that ran nothing — and after §9ae
+        // the window is the conversation's, so at one step at a time this is only reached when the
+        // WHOLE run made no call. A step that wrote files gets a content review and never arrives
+        // here at all. What is left is a unit of work that produced nothing and says it is done,
+        // which is the case worth a call.
         var actions = journal.Actions.Skip(evidenceStart).ToArray();
-        if (actions.Length == 0)
-            return null;
 
         try
         {
