@@ -1,0 +1,134 @@
+# Architecture and Execution
+
+[Wiki home](README.md)
+
+## System structure
+
+Enactive is a .NET application with shared domain and execution libraries, a desktop host, and a console host. The remote gateway is a separate ASP.NET Core application outside the main solution.
+
+```mermaid
+flowchart TD
+    UI[Desktop host] --> Engine[Agents: orchestration]
+    CLI[Console host] --> Engine
+    UI --> Templates[Template store and resolution]
+    CLI --> Templates
+    Templates --> Spec[Resolved task specification]
+    Spec --> Engine
+    Context[Workspace context and environment] --> Engine
+    Engine --> Models[Provider adapters]
+    Engine --> Gate[Role and permission checks]
+    Gate --> Tools[Built-in tools / desktop MCP]
+    Tools --> Files[Workspace and external effects]
+    Engine --> Events[Typed run events]
+    Events --> Stores[History / memory / logs]
+    Events --> Views[Desktop views / console report]
+```
+
+### Projects
+
+| Project | Responsibility |
+| --- | --- |
+| `Enactive.Core` | Domain records and interfaces: intents, context, plans, workers, model references, permissions, templates, evidence, events, reports, and budgets |
+| `Enactive.Agents` | Planner, scheduler, orchestrator, reviewer, model routing, success evaluation, recording, and background decision handling |
+| `Enactive.Providers` | OpenAI-compatible Chat Completions, native Ollama, and Anthropic adapters; provider factory; model discovery; logging |
+| `Enactive.Tools` | File, shell, Git, Docker, and MCP tooling with a registry |
+| `Enactive.Workspace` | Template files, run/memory/Inbox persistence, artifact stores, workspace registry, context, environment discovery, and logging |
+| `Enactive.Secrets` | Protection of persisted secrets with Windows DPAPI |
+| `Enactive.App.Ui` | Avalonia views, view models, settings editors, and desktop service composition |
+| `Enactive.App.Console` | Command-line composition and interactive/unattended execution |
+| `tests/Enactive.Engine.Tests` | xUnit coverage of execution behavior and regressions |
+| `tests/Enactive.Mcp.TestServer` | Local fixture used to exercise MCP integration |
+| `server` | Independent remote gateway preview and web panel |
+
+The desktop follows MVVM with a small in-repository observable-object/command layer. XAML uses compiled bindings. Code-behind handles operations that require windows or controls and composes execution services.
+
+## From a request to an outcome
+
+### 1. Capture the request
+
+The desktop uses command text or a resolved template goal. The console uses positional command text or resolves `--template`. The host selects the workspace, worker, permissions, artifact store, and model configuration.
+
+For template launches, the recorder also receives the frozen specification. Providers and phase bindings are not embedded in that specification.
+
+### 2. Assemble context
+
+The context provider supplies workspace identity, project name, available focus/selection, Git branch, and best-effort environment information. The environment probe discovers host/OS and available Git, Docker, WSL, and service information.
+
+This is not full repository indexing. `RelatedFiles` and `RecentChanges` are currently empty in `ContextProvider`; the worker must use file tools to inspect the source relevant to a task. Persistent project memory should not be mistaken for automatic retrieval of every past run into the next prompt.
+
+### 3. Plan
+
+The Plan model classifies the request as a quick action or builds a task plan. A task plan contains steps with dependencies and complexity ratings.
+
+- A blank Plan binding uses the selected worker's base model.
+- A blank binding does not remove planning.
+- An unreadable planner response is handled explicitly; fallback to a single action is reported rather than silently presented as a valid parsed plan.
+
+The planner receives assembled context. It is not a separate browsing worker that first explores the entire repository through tools.
+
+### 4. Schedule
+
+`DagScheduler` dispatches steps whose dependencies are satisfied. Failed dependencies cause dependent steps to be skipped. Cycles/unresolvable dependencies are reported.
+
+`MaxParallelSteps = 1` runs sequentially. Higher values allow independent branches to overlap. Concurrent steps receive separate conversations seeded with context and a digest of completed steps. This isolates conversation state, but it does not create separate filesystem checkouts. Plan independent file ownership when enabling concurrency.
+
+### 5. Resolve the execution model
+
+Normal steps use the worker's model. A configured Execute light model serves trivial steps; Execute heavy serves complex steps. A quick action uses the base execution path rather than DAG complexity routing.
+
+Routing changes the model, not the worker's tools or role instructions. Worker fallback is used on supported execution-provider failures; it is not a general failover mechanism for all phases or a response to a failed reviewer verdict.
+
+### 6. Execute tools
+
+The model receives the tools allowed for its worker and performs a streaming conversation/tool loop. The engine checks role access, policy, and any required user decision before invoking a tool.
+
+| Tool group | Tool names | Purpose |
+| --- | --- | --- |
+| Inspect files | `read_file`, `search_files`, `list_dir` | Read windows of a file, find content, and inspect directory entries |
+| Modify files | `write_file`, `edit_file`, `create_directory`, `move_file` | Create/replace content, make focused edits, and organize files |
+| Shell | `run_command`, `run_powershell` | Execute commands; PowerShell has its own script transport |
+| Development operations | `git`, `docker` | Invoke version-control and container operations |
+| External tools | `mcp__...` | Tools discovered from configured MCP servers in the desktop host |
+
+Use `edit_file` for a small change to an existing file. Asking a small model to rewrite the whole file increases the chance of losing unrelated content.
+
+`run_command` uses `cmd.exe` on Windows and a shell on Unix. `run_powershell` avoids embedding PowerShell syntax into a cmd command string. Starting a shell in the workspace is not OS-level containment of everything that shell can do.
+
+### 7. Keep evidence and apply execution guards
+
+Each step has an execution journal recording tool calls, arguments, results, and outcomes as they occur. The review evidence is separate from the conversational transcript, so trimming the prompt does not remove the underlying journal.
+
+The engine distinguishes real tool failure from an informative absence, such as a lookup that finds no matching file. Unrecovered failures prevent a step from claiming completion. Repeating already performed calls without progress triggers a stall guard; successful writes advance the progress generation so a legitimate edit/build repair loop can proceed.
+
+Commands may declare `expectedExitCodes` before execution when a nonzero exit is a meaningful result. This is evidence about expected behavior, not permission to relabel any failed operation after the fact.
+
+Truncated model output stops the step rather than executing a partially formed tool call. Ordinary prose or a JSON example in an assistant response does not execute by default.
+
+### 8. Review and retry
+
+When a Review model is bound, the reviewer checks a step's report against its evidence. With Review content enabled, a writing-only step can be reviewed on its written text. Quick actions also participate in configured review.
+
+A rejection may trigger another execution attempt with feedback. `ReviewRetries = 1` allows one retry, or two attempts in total. Increasing retries increases worker and reviewer calls; it does not improve an inherently unsuitable reviewer.
+
+Revert rejected steps attempts to undo tracked writes from a finally rejected step. Revert refuses to overwrite later writes or subsequent user edits and reports files it cannot safely restore. Shell and MCP side effects are outside this journal.
+
+### 9. Run success criteria
+
+Template criteria are shell commands executed through `run_command` and the permission gate at the end of execution. An exit code matching `ExpectedExitCode` passes. A required failed criterion prevents Completed; an unavailable or denied required check makes verification incomplete. Optional results are reported without controlling completion.
+
+Success criteria are an engine-level check, not another worker conversation. They use the run's tool registry and policy; do not assume the selected worker's tool allowlist by itself disables checks. Use the template's permission policy when a command must be forbidden.
+
+### 10. Persist and present
+
+`RunRecorder` saves events and results, plus run settings and the template snapshot when provided. The UI renders execution cards, history, routing, and artifacts from those records. Console output ends with a report and outcome-based exit code.
+
+## Limits are scheduling boundaries
+
+Template limits cover steps, cumulative reported tokens, and elapsed duration. Token accounting includes planning, execution, and review. These limits are checked at engine boundaries; they are not hard provider billing limits or guaranteed mid-request cancellation timers. In-flight work and parallel branches can overshoot. Providers that omit token usage reduce the precision of token accounting.
+
+## Implementation references
+
+- [Orchestrator](../src/Enactive.Agents/Orchestrator.cs), [Planner](../src/Enactive.Agents/Planner.cs), [DAG scheduler](../src/Enactive.Agents/DagScheduler.cs)
+- [Reviewer](../src/Enactive.Agents/Reviewer.cs), [Execution journal](../src/Enactive.Core/ExecutionJournal.cs)
+- [Success evaluator](../src/Enactive.Agents/SuccessEvaluator.cs), [Run budget](../src/Enactive.Core/RunBudget.cs)
+- [Context provider](../src/Enactive.Workspace/ContextProvider.cs), [Workspace guard](../src/Enactive.Core/WorkspaceGuard.cs)
