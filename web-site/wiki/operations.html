@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Operations and Troubleshooting · Enactive Wiki</title><meta name="description" content="Enactive Wiki: Operations and Troubleshooting. Practical workflows, configuration details, and implementation references.">
+<link rel="canonical" href="https://enactive.dev/wiki/operations.html">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/brand.css"><link rel="stylesheet" href="assets/fonts.css"><link rel="stylesheet" href="wiki.css">
+<script src="theme.js"></script><script src="search-index.js" defer></script><script src="wiki.js" defer></script>
+</head><body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="wiki-header"><a class="brand" href="../index.html" aria-label="Enactive home"><img class="brand-mark" src="assets/mark-loop.svg" alt="" width="32" height="32"><img class="wordmark dark-mark" src="assets/wordmark.svg" alt="Enactive" width="144" height="18"><img class="wordmark light-mark" src="assets/wordmark-light.svg" alt="Enactive" width="144" height="18"></a><a class="wiki-label" href="index.html">Wiki</a><div class="header-actions"><button type="button" class="search-trigger" aria-haspopup="dialog">Search wiki <kbd>Ctrl K</kbd></button><button type="button" id="theme-toggle" aria-label="Switch to light theme">Light theme</button><button type="button" id="menu-toggle" aria-expanded="false" aria-controls="sidebar">Menu</button></div></header>
+<div class="wiki-layout"><aside id="sidebar" class="sidebar"><nav aria-label="Wiki chapters"><p class="nav-group">Start here</p><a href="index.html">Wiki home</a><a href="overview.html">Application overview</a><a href="getting-started.html">Getting started</a><p class="nav-group">Workflows</p><a href="running-tasks.html">Running tasks</a><a href="console.html">Console & automation</a><a href="templates.html">Templates</a><p class="nav-group">Configuration</p><a href="settings.html">Settings</a><a href="models-and-phases.html">Models & Phases</a><p class="nav-group">Reference</p><a href="architecture.html">Architecture</a><a href="operations.html" aria-current="page">Operations & troubleshooting</a></nav><div class="sidebar-footer"><a href="../index.html">← Back to Enactive</a><span>Product & engineering handbook</span></div></aside>
+<main id="main" class="" tabindex="-1"><div class="page-heading"><div class="breadcrumb"><a href="index.html">Documentation</a><span aria-hidden="true">/</span><span>Operations &amp; troubleshooting</span></div><p class="eyebrow">Reference · Enactive</p><h1>Operations and Troubleshooting</h1><div class="page-meta"><span>10 min read</span><span>English</span><a href="https://github.com/StasEdward/Enactive/blob/master/Docs/wiki/Operations.md">Markdown source ↗</a></div></div><details class="mobile-toc"><summary>On this page</summary><nav aria-label="On this page"><a href="#run-history-and-project-memory">Run history and project memory</a><a href="#storage-layout">Storage layout</a><a href="#logs-and-diagnosis">Logs and diagnosis</a><a href="#mcp-external-tools">MCP external tools</a><a href="#filesystem-and-recovery-boundaries">Filesystem and recovery boundaries</a><a href="#backup-and-moving-installations">Backup and moving installations</a><a href="#troubleshooting-reference">Troubleshooting reference</a><a href="#remote-server-preview">Remote server preview</a><a href="#maintaining-this-wiki">Maintaining this wiki</a><a href="#implementation-references">Implementation references</a></nav></details><article><h2 id="run-history-and-project-memory">Run history and project memory<a class="heading-anchor" href="#run-history-and-project-memory" aria-label="Link to Run history and project memory">#</a></h2>
+<p>The desktop records run requests, events, decisions, artifacts, outcomes, usage, and available settings/specification snapshots. Open a historical run to inspect its execution cards and timeline. Retry and Run again create additional attempts; see <a href="running-tasks.html#retry-versus-run-again">Running tasks</a>.</p>
+<p>Project memory stores durable entries such as decisions and contributes to the project timeline. It is not a full source index or a guarantee that every entry is inserted into every future model prompt.</p>
+<p>Historical artifact actions operate on current files. Opening a path shows what is there now; a Delete action on an old artifact is not equivalent to reverting the exact historical write. Inspect the current content and action label.</p>
+<h2 id="storage-layout">Storage layout<a class="heading-anchor" href="#storage-layout" aria-label="Link to Storage layout">#</a></h2>
+<h3 id="user-level-data">User-level data<a class="heading-anchor" href="#user-level-data" aria-label="Link to User-level data">#</a></h3>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Path under %APPDATA%\Enactive / Contents"><table>
+<thead>
+<tr>
+<th>Path under <code>%APPDATA%\Enactive</code></th>
+<th>Contents</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>settings.json</code></td>
+<td>Desktop provider/team/phase configuration and other settings</td>
+</tr>
+<tr>
+<td><code>workspaces.json</code></td>
+<td>Workspace registry and remembered run preferences</td>
+</tr>
+<tr>
+<td><code>permissions.json</code></td>
+<td>Desktop workspace approvals keyed by workspace ID</td>
+</tr>
+<tr>
+<td><code>templates\</code></td>
+<td>Global template files</td>
+</tr>
+<tr>
+<td><code>logs\</code></td>
+<td>Daily application logs</td>
+</tr>
+</tbody></table>
+</div><h3 id="workspace-level-data">Workspace-level data<a class="heading-anchor" href="#workspace-level-data" aria-label="Link to Workspace-level data">#</a></h3>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Path under \.enactive / Contents"><table>
+<thead>
+<tr>
+<th>Path under <code>&lt;workspace&gt;\.enactive</code></th>
+<th>Contents</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>templates\</code></td>
+<td>Workspace template files</td>
+</tr>
+<tr>
+<td><code>enactive.db</code></td>
+<td>Default SQLite run, memory, and Inbox storage</td>
+</tr>
+<tr>
+<td><code>runs\</code></td>
+<td>Run files when using the JSON backend</td>
+</tr>
+<tr>
+<td><code>memory.json</code></td>
+<td>JSON project-memory backend / possible legacy source</td>
+</tr>
+<tr>
+<td><code>inbox.json</code></td>
+<td>JSON Inbox backend / possible legacy source</td>
+</tr>
+</tbody></table>
+</div><p>Additional artifact-store state supports tracked write recovery. Treat <code>.enactive</code> as application state rather than a folder the worker should edit. Built-in path handling reserves it.</p>
+<p>Version workspace templates intentionally. Do not assume the whole <code>.enactive</code> directory should be committed: it can contain local history, tool outputs, and machine-specific state.</p>
+<h3 id="storage-backend-selection">Storage backend selection<a class="heading-anchor" href="#storage-backend-selection" aria-label="Link to Storage backend selection">#</a></h3>
+<p><code>ENACTIVE_STORE</code> chooses SQLite (default), JSON, or MySQL for runs, memory, and Inbox together. MySQL requires <code>ENACTIVE_MYSQL</code> with a connection string.</p>
+<p>SQLite imports existing legacy memory/Inbox JSON once and leaves those source files in place. This is not continuous synchronization between backends. MySQL does not automatically import local history; plan a migration explicitly.</p>
+<p>Workspace identity is derived from its normalized path. In MySQL, records are scoped by that identity. Moving the folder can make it appear as a different workspace even when its visible name is unchanged.</p>
+<h2 id="logs-and-diagnosis">Logs and diagnosis<a class="heading-anchor" href="#logs-and-diagnosis" aria-label="Link to Logs and diagnosis">#</a></h2>
+<p>The application has a global log with provider activity, tool calls, and execution events, mirrored to daily files. The desktop&#39;s Log window lets you inspect and export information; the per-run Log view focuses on the selected run.</p>
+<p><code>ENACTIVE_LOG_LEVEL</code> supports Trace, Debug, Info, Warn, and Error. Trace can capture raw model HTTP request/response bodies. Log exports can contain source code, command output, and task content; review an export before sharing it.</p>
+<p>Log analysis can send an exported run to a model for diagnosis. The analyst treats the exported log as data rather than instructions. The analysis still consumes model work and may transmit log content to the configured provider.</p>
+<p>For a useful issue report, include:</p>
+<ul>
+<li>Application/build version from About.</li>
+<li>Host OS and relevant provider kind/model ID.</li>
+<li>Workspace task/template ID and supplied parameters, with secrets removed.</li>
+<li>Expected outcome and actual terminal outcome.</li>
+<li>Relevant route, tool, error, and criterion events.</li>
+<li>Whether staging, background mode, or console mode was used.</li>
+</ul>
+<p>Avoid using an old fixed test-count claim as a release check. Run the current test project and record its actual result.</p>
+<h2 id="mcp-external-tools">MCP external tools<a class="heading-anchor" href="#mcp-external-tools" aria-label="Link to MCP external tools">#</a></h2>
+<h3 id="configure-a-server">Configure a server<a class="heading-anchor" href="#configure-a-server" aria-label="Link to Configure a server">#</a></h3>
+<p>Open <strong>Settings → AI → MCP → Add</strong>. Configure the server and use <strong>Test connection</strong>, then accept the editor and Save the main Settings window.</p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Field / Meaning"><table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>ID</td>
+<td>Unique lowercase identifier, 1–24 characters, starting with a letter; digits/hyphens supported</td>
+</tr>
+<tr>
+<td>Enabled</td>
+<td>Connect this server for a new desktop run</td>
+</tr>
+<tr>
+<td>Transport</td>
+<td>Stdio local process or Http endpoint</td>
+</tr>
+<tr>
+<td>Command / Arguments</td>
+<td>Executable plus a JSON array of arguments for Stdio</td>
+</tr>
+<tr>
+<td>Working directory</td>
+<td>Process directory; blank uses the run workspace, while editor Test uses the app&#39;s current directory</td>
+</tr>
+<tr>
+<td>Environment</td>
+<td>JSON dictionary for the child process</td>
+</tr>
+<tr>
+<td>URL / Headers</td>
+<td>Endpoint and JSON header dictionary for Http</td>
+</tr>
+<tr>
+<td>Timeout</td>
+<td>1–600 seconds for connection/discovery and individual calls</td>
+</tr>
+<tr>
+<td>Ask before every tool call</td>
+<td>Enabled by default; forces individual approval</td>
+</tr>
+</tbody></table>
+</div><p>Test connection initializes the server and discovers tools; it does not invoke the discovered tools. Starting the configured program can itself have effects, for example a package launcher downloading and running a package.</p>
+<h3 id="grant-worker-access">Grant worker access<a class="heading-anchor" href="#grant-worker-access" aria-label="Link to Grant worker access">#</a></h3>
+<p>In <strong>AI → Team</strong>, grant an appropriate pattern:</p>
+<div class="code-block"><div class="code-toolbar"><span>text</span><button class="copy-button" type="button" aria-label="Copy text example">Copy</button></div><pre tabindex="0"><code class="language-text">mcp__*
+mcp__example__*</code></pre></div>
+<p>Or use an exact tool name from discovery. Discovered names include the server ID and a stable suffix to distinguish tools. The worker must also satisfy normal role/policy checks; enabling a server does not automatically grant every worker access.</p>
+<h3 id="runtime-behavior">Runtime behavior<a class="heading-anchor" href="#runtime-behavior" aria-label="Link to Runtime behavior">#</a></h3>
+<p>Each desktop run gets its own server connections. Any enabled server that fails to connect/discover can stop launch. Disable unused broken configurations rather than waiting for a run to discover the same failure again.</p>
+<p>Connections and child processes are released when the run ends or is cancelled. A transport error does not trigger automatic replay of a remote tool call: the external action may already have happened.</p>
+<p>MCP environment values and headers are saved through encrypted secret storage. Arguments and URLs are not secret fields. If decryption is unavailable, the configuration requires attention rather than silently discarding the original protected data.</p>
+<p>External tools operate with their process/account permissions. Enactive&#39;s workspace guard, staging, and rejected-step revert do not constrain or undo their external effects. Configure boundaries in the server itself when needed. The console does not connect these desktop MCP configurations.</p>
+<h2 id="filesystem-and-recovery-boundaries">Filesystem and recovery boundaries<a class="heading-anchor" href="#filesystem-and-recovery-boundaries" aria-label="Link to Filesystem and recovery boundaries">#</a></h2>
+<p>Built-in path-based file tools reject absolute/escaping paths, inspect links that can lead outside the workspace, and protect reserved application-state paths. These checks are not a general sandbox for shell or external servers.</p>
+<p>Tracked writes use canonical file identity and scoped sequence information. Revert can refuse when a later scope wrote the same file, the user edited it, or the operation cannot be represented safely. Read the refusal instead of assuming that Failed means all files were restored.</p>
+<p>Use version control or an independent backup for recovery beyond the artifact journal. A tool-driven command can have effects that cannot be expressed as a text-file undo.</p>
+<h2 id="backup-and-moving-installations">Backup and moving installations<a class="heading-anchor" href="#backup-and-moving-installations" aria-label="Link to Backup and moving installations">#</a></h2>
+<p>For a restorable desktop setup, preserve both user-level settings/templates and workspace state. Stop active work and use a consistent database backup approach; copying a live SQLite database without considering its journal/WAL is not a reliable backup procedure.</p>
+<p>After restoring to another account or machine, verify provider and MCP credentials. DPAPI-protected material may need to be entered again. Recheck workspace paths, local model installation, and project dependencies.</p>
+<p>The historical AIClient → Enactive rename changed names, environment-variable prefixes, state folders, and secret-protection entropy. There is no complete automatic migration from that product name. Preserve original data before making a manual migration, and re-enter keys rather than assuming copied encrypted values will decrypt. See the historical <a href="https://github.com/StasEdward/Enactive/blob/master/Docs/README.md#naming--migration-aiclient---enactive">migration notes</a>.</p>
+<h2 id="troubleshooting-reference">Troubleshooting reference<a class="heading-anchor" href="#troubleshooting-reference" aria-label="Link to Troubleshooting reference">#</a></h2>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Symptom / Likely cause / What to check"><table>
+<thead>
+<tr>
+<th>Symptom</th>
+<th>Likely cause</th>
+<th>What to check</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Desktop says “No such folder”</td>
+<td>Workspace path is absent or wrong</td>
+<td>Select/create the intended folder before running</td>
+</tr>
+<tr>
+<td>Console worked in an unexpected empty folder</td>
+<td>Console created a misspelled workspace</td>
+<td>Inspect the printed absolute workspace path</td>
+</tr>
+<tr>
+<td>Provider cannot be reached</td>
+<td>Service down, wrong URL, authentication, or network issue</td>
+<td>Provider kind, API prefix, service availability, returned error</td>
+</tr>
+<tr>
+<td>Model appears in a dropdown but calls fail</td>
+<td>Catalog entry is not a compatibility test</td>
+<td>Exact installed/available ID; endpoint/field/tool support</td>
+</tr>
+<tr>
+<td>OpenAI-compatible request returns 400</td>
+<td>Unsupported request field or wrong API surface</td>
+<td>Actual Chat Completions payload, especially temperature/token fields</td>
+</tr>
+<tr>
+<td>Model describes JSON instead of doing work</td>
+<td>Missing/unreliable structured tool calls</td>
+<td>Use a tool-capable model; leave implicit calls off by default</td>
+</tr>
+<tr>
+<td>Local model is very slow</td>
+<td>Memory pressure, context size, queued requests</td>
+<td>Reduce context/concurrency and inspect local provider utilization</td>
+</tr>
+<tr>
+<td>Review does not run</td>
+<td>Review binding is blank</td>
+<td>AI → Phases; <code>ReviewRequired</code> alone does not enable it</td>
+</tr>
+<tr>
+<td>Review rejects apparently correct work repeatedly</td>
+<td>Reviewer misreads evidence or task/check mismatch</td>
+<td>Read journal and feedback; qualify a stronger reviewer</td>
+</tr>
+<tr>
+<td>Content review toggle has no effect</td>
+<td>No reviewer, or the step uses execution-evidence review</td>
+<td>Review binding and the actual step&#39;s operations</td>
+</tr>
+<tr>
+<td>Template vanished</td>
+<td>Malformed/unreadable JSON or unsafe ID</td>
+<td>File syntax, ID, scope folder, and reload</td>
+</tr>
+<tr>
+<td>Global edit has no effect</td>
+<td>Workspace definition shadows it</td>
+<td>Origin metadata and matching IDs</td>
+</tr>
+<tr>
+<td>Workspace edit seems unchanged</td>
+<td>Editor saved to Global</td>
+<td>Explicit Scope selection; remaining local override</td>
+</tr>
+<tr>
+<td>Different commands run during final checks</td>
+<td>Built-in criteria are literal .NET commands</td>
+<td>Edit criterion Command fields as well as goal parameters</td>
+</tr>
+<tr>
+<td>Template cannot run in console</td>
+<td>Missing required inputs</td>
+<td>Supply repeated <code>--param &quot;id=value&quot;</code> arguments</td>
+</tr>
+<tr>
+<td>Scheduled build/test task is Incomplete</td>
+<td>Console AskBefore plus unattended denial</td>
+<td>Current console limitation; use interactive desktop or extend the host</td>
+</tr>
+<tr>
+<td>Background task refuses an action</td>
+<td>No approver in background handler</td>
+<td>Open Inbox and re-run interactively</td>
+</tr>
+<tr>
+<td>Background launch says Not started</td>
+<td>Stage changes is enabled</td>
+<td>Use foreground staging or turn staging off deliberately</td>
+</tr>
+<tr>
+<td>Build passes while a proposed edit is wrong</td>
+<td>Build saw disk, not unapplied staged content</td>
+<td>Understand staging before trusting the check</td>
+</tr>
+<tr>
+<td>Undo/revert leaves a file</td>
+<td>Later write/user edit or unsupported effect</td>
+<td>Read the conflict/revert event; inspect current content</td>
+</tr>
+<tr>
+<td>Changing desktop settings does not change CLI</td>
+<td>Separate composition roots</td>
+<td>Console environment configuration</td>
+</tr>
+<tr>
+<td>A custom WorkerId uses another role</td>
+<td>Unknown ID falls back to default</td>
+<td>Team IDs and console&#39;s built-in-only team</td>
+</tr>
+<tr>
+<td>MCP failure prevents all work</td>
+<td>An enabled server cannot initialize</td>
+<td>Test, fix, or disable that server</td>
+</tr>
+<tr>
+<td>App closes and background work stops</td>
+<td>Process exited rather than hiding</td>
+<td>Close-to-tray and explicit Quit behavior</td>
+</tr>
+</tbody></table>
+</div><h2 id="remote-server-preview">Remote server preview<a class="heading-anchor" href="#remote-server-preview" aria-label="Link to Remote server preview">#</a></h2>
+<p><code>server/</code> is an independent ASP.NET Core/.NET 10 gateway with a plain HTML/CSS/JavaScript panel. It is not in <code>Enactive.sln</code> and is not required to run desktop or console tasks.</p>
+<h3 id="implemented-preview-features">Implemented preview features<a class="heading-anchor" href="#implemented-preview-features" aria-label="Link to Implemented preview features">#</a></h3>
+<ul>
+<li>Single-owner login using a configured private key, cookie sessions, and CSRF protection.</li>
+<li>Computer registration with a separate device token and revocation.</li>
+<li>SignalR host connections and host-published workspaces.</li>
+<li>Task drafts, queued run commands, retry/cancel requests, and command acknowledgements.</li>
+<li>Approval requests/responses, stored events, outcomes, and an internal Inbox.</li>
+<li>Task search/filtering, computer/history views, and responsive light/dark UI.</li>
+</ul>
+<p>The browser polls state approximately every three seconds; host command delivery uses periodic Sync. This is a trusted gateway that can see task text and results, not an end-to-end encrypted execution channel.</p>
+<h3 id="local-start">Local start<a class="heading-anchor" href="#local-start" aria-label="Link to Local start">#</a></h3>
+<p>From <code>server/</code>:</p>
+<div class="code-block"><div class="code-toolbar"><span>powershell</span><button class="copy-button" type="button" aria-label="Copy powershell example">Copy</button></div><pre tabindex="0"><code class="language-powershell">./scripts/dev.ps1</code></pre></div>
+<p>The script starts the local preview at <code>http://127.0.0.1:5187</code> and creates a local owner key in <code>data/dev-owner-key.txt</code>. Use the generated key to log in. The data directory is excluded from Git.</p>
+<p>Manual configuration uses <code>ENACTIVE_OWNER_KEY</code> (at least 24 characters), <code>ENACTIVE_DATA</code> for the data directory, standard ASP.NET environment settings, and Kestrel listen configuration. Development HTTP is for local use; production exposure requires its own verified deployment setup.</p>
+<h3 id="validation-commands">Validation commands<a class="heading-anchor" href="#validation-commands" aria-label="Link to Validation commands">#</a></h3>
+<p>From <code>server/</code>, with .NET 10 and Node.js 22+:</p>
+<div class="code-block"><div class="code-toolbar"><span>powershell</span><button class="copy-button" type="button" aria-label="Copy powershell example">Copy</button></div><pre tabindex="0"><code class="language-powershell">dotnet build Enactive.Server.csproj
+node --test tests/gateway.test.mjs</code></pre></div>
+<p>The test host client is a protocol fixture. It does not execute shell commands or inspect real workspace files. A production bridge to Enactive&#39;s local engine, durable host-side queues/recovery, pairing, external notifications, retention, and production deployment remain separate work. Do not interpret the browser&#39;s task UI as proof that those integrations exist.</p>
+<p>See <a href="https://github.com/StasEdward/Enactive/blob/master/server/README.md">server README</a> and <a href="https://github.com/StasEdward/Enactive/blob/master/server/PROTOCOL.md">protocol</a> for the maintained preview contract.</p>
+<h2 id="maintaining-this-wiki">Maintaining this wiki<a class="heading-anchor" href="#maintaining-this-wiki" aria-label="Link to Maintaining this wiki">#</a></h2>
+<p>Update the relevant page whenever a behavior changes in host composition, template resolution, permission matching, settings persistence, or model adapters. In particular, recheck the documented limitations before removing them: many of these behaviors cannot be inferred from UI labels or schema fields alone.</p>
+<p>For documentation-only changes, validate relative links, headings/anchors, and executable example syntax. Use the engine&#39;s template validator/resolver for changed template examples. A full model-backed run is unnecessary unless the documentation claims live provider compatibility.</p>
+<h2 id="implementation-references">Implementation references<a class="heading-anchor" href="#implementation-references" aria-label="Link to Implementation references">#</a></h2>
+<ul>
+<li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.Workspace/RunStoreFactory.cs">Run store selection</a></li>
+<li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.Workspace/MemoryStoreFactory.cs">Memory store selection</a></li>
+<li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.Workspace/InboxStoreFactory.cs">Inbox store selection</a></li>
+<li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.Workspace/LogHub.cs">Logging</a></li>
+<li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.Tools/Mcp/McpRunTools.cs">MCP run connections</a></li>
+<li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.Workspace/DiskArtifactStore.cs">Artifact recovery</a></li>
+<li><a href="https://github.com/StasEdward/Enactive/blob/master/server/Program.cs">Remote server</a></li>
+</ul>
+</article><nav class="pagination" aria-label="Adjacent chapters"><a href="architecture.html"><small>← Previous</small><strong>Architecture</strong></a><a href="index.html"><small>Back to</small><strong>Wiki home →</strong></a></nav><footer class="page-footer"><span>Enactive · Real, reviewable, recorded action.</span><a href="#main">Back to top ↑</a></footer></main>
+<aside class="page-toc"><p class="nav-group">On this page</p><nav aria-label="Page sections"><a href="#run-history-and-project-memory">Run history and project memory</a><a href="#storage-layout">Storage layout</a><a href="#logs-and-diagnosis">Logs and diagnosis</a><a href="#mcp-external-tools">MCP external tools</a><a href="#filesystem-and-recovery-boundaries">Filesystem and recovery boundaries</a><a href="#backup-and-moving-installations">Backup and moving installations</a><a href="#troubleshooting-reference">Troubleshooting reference</a><a href="#remote-server-preview">Remote server preview</a><a href="#maintaining-this-wiki">Maintaining this wiki</a><a href="#implementation-references">Implementation references</a></nav><a class="source-link" href="https://github.com/StasEdward/Enactive/blob/master/Docs/wiki/Operations.md">View Markdown source ↗</a></aside></div>
+<dialog id="search-dialog" aria-labelledby="search-title"><div class="search-heading"><h2 id="search-title">Search the wiki</h2><button id="close-search" type="button" aria-label="Close search">Close <kbd>Esc</kbd></button></div><label for="search-input">Find a topic, setting, or command</label><input id="search-input" type="search" placeholder="Try templates, Review, or --workspace" autocomplete="off"><p id="search-status" role="status" aria-live="polite">Search across all chapters.</p><div id="search-results"></div></dialog><div id="copy-status" class="sr-only" role="status" aria-live="polite"></div>
+</body></html>

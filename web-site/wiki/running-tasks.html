@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Running Tasks in the Desktop App · Enactive Wiki</title><meta name="description" content="Enactive Wiki: Running Tasks in the Desktop App. Practical workflows, configuration details, and implementation references.">
+<link rel="canonical" href="https://enactive.dev/wiki/running-tasks.html">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/brand.css"><link rel="stylesheet" href="assets/fonts.css"><link rel="stylesheet" href="wiki.css">
+<script src="theme.js"></script><script src="search-index.js" defer></script><script src="wiki.js" defer></script>
+</head><body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="wiki-header"><a class="brand" href="../index.html" aria-label="Enactive home"><img class="brand-mark" src="assets/mark-loop.svg" alt="" width="32" height="32"><img class="wordmark dark-mark" src="assets/wordmark.svg" alt="Enactive" width="144" height="18"><img class="wordmark light-mark" src="assets/wordmark-light.svg" alt="Enactive" width="144" height="18"></a><a class="wiki-label" href="index.html">Wiki</a><div class="header-actions"><button type="button" class="search-trigger" aria-haspopup="dialog">Search wiki <kbd>Ctrl K</kbd></button><button type="button" id="theme-toggle" aria-label="Switch to light theme">Light theme</button><button type="button" id="menu-toggle" aria-expanded="false" aria-controls="sidebar">Menu</button></div></header>
+<div class="wiki-layout"><aside id="sidebar" class="sidebar"><nav aria-label="Wiki chapters"><p class="nav-group">Start here</p><a href="index.html">Wiki home</a><a href="overview.html">Application overview</a><a href="getting-started.html">Getting started</a><p class="nav-group">Workflows</p><a href="running-tasks.html" aria-current="page">Running tasks</a><a href="console.html">Console & automation</a><a href="templates.html">Templates</a><p class="nav-group">Configuration</p><a href="settings.html">Settings</a><a href="models-and-phases.html">Models & Phases</a><p class="nav-group">Reference</p><a href="architecture.html">Architecture</a><a href="operations.html">Operations & troubleshooting</a></nav><div class="sidebar-footer"><a href="../index.html">← Back to Enactive</a><span>Product & engineering handbook</span></div></aside>
+<main id="main" class="" tabindex="-1"><div class="page-heading"><div class="breadcrumb"><a href="index.html">Documentation</a><span aria-hidden="true">/</span><span>Running tasks</span></div><p class="eyebrow">Workflows · Enactive</p><h1>Running Tasks in the Desktop App</h1><div class="page-meta"><span>7 min read</span><span>English</span><a href="https://github.com/StasEdward/Enactive/blob/master/Docs/wiki/Running-Tasks.md">Markdown source ↗</a></div></div><details class="mobile-toc"><summary>On this page</summary><nav aria-label="On this page"><a href="#manual-mode-write-a-task-directly">Manual mode: write a task directly</a><a href="#autonomy-and-approval">Autonomy and approval</a><a href="#launch-a-task-from-templates">Launch a task from Templates</a><a href="#staging-applying-and-rejecting-files">Staging, applying, and rejecting files</a><a href="#read-the-execution-screen">Read the execution screen</a><a href="#background-mode">Background mode</a><a href="#stop-and-inspect-partial-work">Stop and inspect partial work</a><a href="#retry-versus-run-again">Retry versus Run again</a><a href="#implementation-references">Implementation references</a></nav></details><article><h2 id="manual-mode-write-a-task-directly">Manual mode: write a task directly<a class="heading-anchor" href="#manual-mode-write-a-task-directly" aria-label="Link to Manual mode: write a task directly">#</a></h2>
+<p>Manual mode means entering an individual request in the command bar. Enactive still plans and executes the request; “manual” describes how you define and supervise the task.</p>
+<h3 id="launch-procedure">Launch procedure<a class="heading-anchor" href="#launch-procedure" aria-label="Link to Launch procedure">#</a></h3>
+<ol>
+<li><strong>Select the workspace.</strong> Verify the actual folder, especially when switching projects. Autonomy, worker selection, and staging preferences follow the workspace.</li>
+<li><strong>Choose a worker.</strong> Use Developer for implementation and tests, Reviewer for read-only investigation, Writer for documentation, and Ops for command-oriented diagnostics.</li>
+<li><strong>Set autonomy.</strong> Choose the level appropriate to the tools you expect to allow automatically.</li>
+<li><strong>Choose whether to stage changes.</strong> This applies to supported built-in file operations, independently of the autonomy slider.</li>
+<li><strong>Describe the outcome.</strong> Include the problem, scope, restrictions, and a way to check completion.</li>
+<li><strong>Press Run or Enter.</strong> Watch Execution and respond to decision cards when needed.</li>
+<li><strong>Inspect the result.</strong> Read the terminal outcome, review/check results, changed files, and any failures or denied operations.</li>
+</ol>
+<h3 id="command-bar-shortcuts">Command-bar shortcuts<a class="heading-anchor" href="#command-bar-shortcuts" aria-label="Link to Command-bar shortcuts">#</a></h3>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Shortcut / Action"><table>
+<thead>
+<tr>
+<th>Shortcut</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>Ctrl+K</code></td>
+<td>Focus the command bar and select its text</td>
+</tr>
+<tr>
+<td><code>Enter</code></td>
+<td>Start the request</td>
+</tr>
+<tr>
+<td><code>Ctrl+Enter</code></td>
+<td>Insert a newline</td>
+</tr>
+</tbody></table>
+</div><h3 id="example-a-focused-implementation-request">Example: a focused implementation request<a class="heading-anchor" href="#example-a-focused-implementation-request" aria-label="Link to Example: a focused implementation request">#</a></h3>
+<div class="code-block"><div class="code-toolbar"><span>text</span><button class="copy-button" type="button" aria-label="Copy text example">Copy</button></div><pre tabindex="0"><code class="language-text">Fix the failure when an empty search query is submitted.
+
+Scope: the search service and its existing tests.
+First inspect the current behavior, then make the smallest useful change.
+Preserve the public API. Do not commit or push.
+Run the relevant tests and report the command and result.</code></pre></div>
+<p>A test command written in a manual prompt instructs the worker. It does not create a separate deterministic success criterion in the host. Use a template with SuccessCriteria when you want the engine to run that check independently at the end.</p>
+<h2 id="autonomy-and-approval">Autonomy and approval<a class="heading-anchor" href="#autonomy-and-approval" aria-label="Link to Autonomy and approval">#</a></h2>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Level / Automatic behavior in the current policy"><table>
+<thead>
+<tr>
+<th>Level</th>
+<th>Automatic behavior in the current policy</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Observe</td>
+<td>Tools requiring Observe can run; higher-level actions ask if the role permits them</td>
+</tr>
+<tr>
+<td>Suggest</td>
+<td>Tools up to Suggest can run; higher-level actions ask</td>
+</tr>
+<tr>
+<td>Execute</td>
+<td>File operations within the level can run; <code>run_command</code>, <code>run_powershell</code>, <code>git</code>, and <code>docker</code> explicitly ask</td>
+</tr>
+<tr>
+<td>Autonomous</td>
+<td>No default AskBefore list; eligible tools within the effective level run automatically</td>
+</tr>
+</tbody></table>
+</div><p>The effective level is narrowed by the worker&#39;s level and any template ceiling. A worker&#39;s tool allowlist is a separate gate. Increasing autonomy cannot make an unlisted tool available to that worker.</p>
+<p>An above-level action generally asks for one-off approval; the level is not the same as an absolute deny. A template&#39;s explicit Deny entry is absolute in the permission engine. The Suggest label also does not turn on staging: use <strong>Stage changes</strong> explicitly when you want a diff/apply workflow.</p>
+<h3 id="decision-cards">Decision cards<a class="heading-anchor" href="#decision-cards" aria-label="Link to Decision cards">#</a></h3>
+<p>Read the full action details. The card can offer a one-time approval, a session approval, or a remembered workspace approval for eligible tools. Remembered approvals are scoped to tool names, not a promise that only one particular command string will ever run.</p>
+<p>Workspace approvals are stored in <code>%APPDATA%\Enactive\permissions.json</code>, keyed by workspace identity. The legacy <code>&lt;workspace&gt;\.enactive\permissions.json</code> is ignored. These desktop approvals are not imported by the current console or background decision handlers.</p>
+<p>An MCP server can require approval for every call; those calls cannot be silently authorized through a remembered decision.</p>
+<h2 id="launch-a-task-from-templates">Launch a task from Templates<a class="heading-anchor" href="#launch-a-task-from-templates" aria-label="Link to Launch a task from Templates">#</a></h2>
+<ol>
+<li>Select the intended workspace and autonomy level.</li>
+<li>Open <strong>Templates</strong> from the main window.</li>
+<li>Select an entry and inspect its origin: built-in, global, or this workspace.</li>
+<li>Fill the generated parameter form. Required/type errors appear before Run becomes available.</li>
+<li>Read the goal and summary of restrictions, checks, and limits.</li>
+<li>Press <strong>Run</strong>. The library resolves the template and starts a foreground task.</li>
+</ol>
+<p>A template&#39;s <code>WorkerId</code>, when provided and recognized, overrides the role picker. If the template does not specify a worker, the desktop uses the selected worker. An unknown worker ID currently falls back to the host&#39;s default worker; it is not a launch validation error. Keep IDs synchronized with Team settings.</p>
+<p>The resolved specification is recorded with the run. Editing the template later does not rewrite that historical specification.</p>
+<p><strong>Current limitation:</strong> the template&#39;s displayed “reviewed”/“not reviewed” metadata comes from <code>ReviewRequired</code>, but runtime Review is controlled by the phase binding. Configure the Review model explicitly; the template flag neither enforces nor disables it.</p>
+<p>See <a href="templates.html">Templates</a> for authoring and scope behavior.</p>
+<h2 id="staging-applying-and-rejecting-files">Staging, applying, and rejecting files<a class="heading-anchor" href="#staging-applying-and-rejecting-files" aria-label="Link to Staging, applying, and rejecting files">#</a></h2>
+<p>With <strong>Stage changes</strong> enabled, supported built-in file writes become text proposals. In Artifacts, choose <strong>Diff</strong> to inspect a proposal, then <strong>Apply</strong> or <strong>Reject</strong>.</p>
+<p>Staging is not an isolated checkout or an all-effects transaction:</p>
+<ul>
+<li>It represents text changes; operations requiring deletion or binary content may be refused.</li>
+<li>Shell commands and MCP tools can change real files outside staging.</li>
+<li>A shell build/check reads the actual filesystem and may not see unapplied proposed edits.</li>
+<li>Background launches with staging enabled are refused.</li>
+</ul>
+<p>Use staging for document or file-edit review. For an implementation task requiring builds against changed files, account for the fact that shell verification needs those changes on disk.</p>
+<p>With staging off, built-in writes go directly to the workspace. The artifact journal supports scoped revert/undo for tracked writes. If another step or the user changed the file afterward, revert reports the conflict instead of overwriting the newer content.</p>
+<h2 id="read-the-execution-screen">Read the execution screen<a class="heading-anchor" href="#read-the-execution-screen" aria-label="Link to Read the execution screen">#</a></h2>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Area / How to use it"><table>
+<thead>
+<tr>
+<th>Area</th>
+<th>How to use it</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Execution</td>
+<td>Inspect step progress, tool calls, returned evidence, review feedback, and skipped dependencies</td>
+</tr>
+<tr>
+<td>Artifacts</td>
+<td>Open output files, inspect staged differences, and use the available apply/reject/undo actions</td>
+</tr>
+<tr>
+<td>Log</td>
+<td>Read the run&#39;s detailed event flow</td>
+</tr>
+<tr>
+<td>Routing</td>
+<td>See which model actually served the worker, phases, and routed steps</td>
+</tr>
+<tr>
+<td>AI status</td>
+<td>Monitor usage, tool calls, elapsed time, and current activity</td>
+</tr>
+<tr>
+<td>History</td>
+<td>Open prior runs and inspect their recorded attempts</td>
+</tr>
+</tbody></table>
+</div><p>The Routing panel is especially useful when a local worker seems unexpectedly expensive: complex steps may have been sent to Execute heavy.</p>
+<h2 id="background-mode">Background mode<a class="heading-anchor" href="#background-mode" aria-label="Link to Background mode">#</a></h2>
+<p><strong>Run in background</strong> starts command-bar work inside the desktop process and frees the foreground interface. Results and declined decisions are recorded in the workspace Inbox.</p>
+<p>If a tool requires a decision, the background handler declines it and records the need for approval. Re-run interactively to approve; this is not a suspended conversation waiting for an Inbox answer.</p>
+<p>Background work depends on the desktop process remaining alive. Closing to the tray keeps it alive; exiting the application ends that process. Background mode is not a durable scheduler.</p>
+<p>The template library currently launches foreground runs. Copying a resolved goal into the command bar and using background mode does not preserve the template&#39;s checks, limits, or frozen specification.</p>
+<h2 id="stop-and-inspect-partial-work">Stop and inspect partial work<a class="heading-anchor" href="#stop-and-inspect-partial-work" aria-label="Link to Stop and inspect partial work">#</a></h2>
+<p>Use <strong>Stop</strong> to request cancellation of a foreground run. Cancellation does not imply automatic rollback of every previous effect. Inspect artifacts and the final recorded events before restarting.</p>
+<h2 id="retry-versus-run-again">Retry versus Run again<a class="heading-anchor" href="#retry-versus-run-again" aria-label="Link to Retry versus Run again">#</a></h2>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Action / Inputs reused / What can differ"><table>
+<thead>
+<tr>
+<th>Action</th>
+<th>Inputs reused</th>
+<th>What can differ</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Retry</td>
+<td>The previous resolved specification, or original request for a manual task</td>
+<td>Current files, provider configuration, model behavior, and runtime composition</td>
+</tr>
+<tr>
+<td>Run again</td>
+<td>Today&#39;s template resolved with the old parameter answers and current workspace policy</td>
+<td>Updated goal, restrictions, checks, limits, and template version</td>
+</tr>
+</tbody></table>
+</div><p>Both actions create a new attempt under the same task identity. Neither resumes execution at the last successful step.</p>
+<p>Retry is not a bit-for-bit replay: the frozen template specification does not freeze provider settings or workspace contents. It reuses the stored permission policy, so inspect the old specification when your policy expectations have changed.</p>
+<p>If Run again encounters a new required parameter or a now-invalid value, it reports the problem and directs you to fill the template form again. Deleting a template does not erase previous run snapshots.</p>
+<h2 id="implementation-references">Implementation references<a class="heading-anchor" href="#implementation-references" aria-label="Link to Implementation references">#</a></h2>
+<ul>
+<li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.App.Ui/MainWindow.axaml.cs">Launch, approvals, staging, and replay actions</a></li>
+<li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.App.Ui/ViewModels/TemplatesViewModel.cs">Template launch form</a></li>
+<li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.App.Ui/ApprovalStore.cs">Approval persistence</a></li>
+<li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.Agents/PermissionEngine.cs">Permission engine</a></li>
+<li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.Agents/BackgroundDecisionHandler.cs">Background decision handler</a></li>
+</ul>
+</article><nav class="pagination" aria-label="Adjacent chapters"><a href="getting-started.html"><small>← Previous</small><strong>Getting started</strong></a><a href="console.html"><small>Next →</small><strong>Console & automation</strong></a></nav><footer class="page-footer"><span>Enactive · Real, reviewable, recorded action.</span><a href="#main">Back to top ↑</a></footer></main>
+<aside class="page-toc"><p class="nav-group">On this page</p><nav aria-label="Page sections"><a href="#manual-mode-write-a-task-directly">Manual mode: write a task directly</a><a href="#autonomy-and-approval">Autonomy and approval</a><a href="#launch-a-task-from-templates">Launch a task from Templates</a><a href="#staging-applying-and-rejecting-files">Staging, applying, and rejecting files</a><a href="#read-the-execution-screen">Read the execution screen</a><a href="#background-mode">Background mode</a><a href="#stop-and-inspect-partial-work">Stop and inspect partial work</a><a href="#retry-versus-run-again">Retry versus Run again</a><a href="#implementation-references">Implementation references</a></nav><a class="source-link" href="https://github.com/StasEdward/Enactive/blob/master/Docs/wiki/Running-Tasks.md">View Markdown source ↗</a></aside></div>
+<dialog id="search-dialog" aria-labelledby="search-title"><div class="search-heading"><h2 id="search-title">Search the wiki</h2><button id="close-search" type="button" aria-label="Close search">Close <kbd>Esc</kbd></button></div><label for="search-input">Find a topic, setting, or command</label><input id="search-input" type="search" placeholder="Try templates, Review, or --workspace" autocomplete="off"><p id="search-status" role="status" aria-live="polite">Search across all chapters.</p><div id="search-results"></div></dialog><div id="copy-status" class="sr-only" role="status" aria-live="polite"></div>
+</body></html>

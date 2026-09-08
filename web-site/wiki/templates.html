@@ -1,0 +1,376 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Templates · Enactive Wiki</title><meta name="description" content="Enactive Wiki: Templates. Practical workflows, configuration details, and implementation references.">
+<link rel="canonical" href="https://enactive.dev/wiki/templates.html">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/brand.css"><link rel="stylesheet" href="assets/fonts.css"><link rel="stylesheet" href="wiki.css">
+<script src="theme.js"></script><script src="search-index.js" defer></script><script src="wiki.js" defer></script>
+</head><body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="wiki-header"><a class="brand" href="../index.html" aria-label="Enactive home"><img class="brand-mark" src="assets/mark-loop.svg" alt="" width="32" height="32"><img class="wordmark dark-mark" src="assets/wordmark.svg" alt="Enactive" width="144" height="18"><img class="wordmark light-mark" src="assets/wordmark-light.svg" alt="Enactive" width="144" height="18"></a><a class="wiki-label" href="index.html">Wiki</a><div class="header-actions"><button type="button" class="search-trigger" aria-haspopup="dialog">Search wiki <kbd>Ctrl K</kbd></button><button type="button" id="theme-toggle" aria-label="Switch to light theme">Light theme</button><button type="button" id="menu-toggle" aria-expanded="false" aria-controls="sidebar">Menu</button></div></header>
+<div class="wiki-layout"><aside id="sidebar" class="sidebar"><nav aria-label="Wiki chapters"><p class="nav-group">Start here</p><a href="index.html">Wiki home</a><a href="overview.html">Application overview</a><a href="getting-started.html">Getting started</a><p class="nav-group">Workflows</p><a href="running-tasks.html">Running tasks</a><a href="console.html">Console & automation</a><a href="templates.html" aria-current="page">Templates</a><p class="nav-group">Configuration</p><a href="settings.html">Settings</a><a href="models-and-phases.html">Models & Phases</a><p class="nav-group">Reference</p><a href="architecture.html">Architecture</a><a href="operations.html">Operations & troubleshooting</a></nav><div class="sidebar-footer"><a href="../index.html">← Back to Enactive</a><span>Product & engineering handbook</span></div></aside>
+<main id="main" class="" tabindex="-1"><div class="page-heading"><div class="breadcrumb"><a href="index.html">Documentation</a><span aria-hidden="true">/</span><span>Templates</span></div><p class="eyebrow">Workflows · Enactive</p><h1>Templates</h1><div class="page-meta"><span>11 min read</span><span>English</span><a href="https://github.com/StasEdward/Enactive/blob/master/Docs/wiki/Templates.md">Markdown source ↗</a></div></div><details class="mobile-toc"><summary>On this page</summary><nav aria-label="On this page"><a href="#what-a-template-contains">What a template contains</a><a href="#library-versus-editor">Library versus editor</a><a href="#global-versus-workspace">Global versus Workspace</a><a href="#create-a-template">Create a template</a><a href="#customize-duplicate-and-reset">Customize, duplicate, and reset</a><a href="#field-reference">Field reference</a><a href="#parameters">Parameters</a><a href="#permission-ceiling">Permission ceiling</a><a href="#success-criteria">Success criteria</a><a href="#limits">Limits</a><a href="#complete-example-a-portable-build-and-test-check">Complete example: a portable build and test check</a><a href="#built-in-library">Built-in library</a><a href="#editing-json-directly">Editing JSON directly</a><a href="#implementation-references">Implementation references</a></nav></details><article><h2 id="what-a-template-contains">What a template contains<a class="heading-anchor" href="#what-a-template-contains" aria-label="Link to What a template contains">#</a></h2>
+<p>A template is a reusable definition of a task: what to accomplish, which values the user must supply, what restrictions apply, and what checks decide whether it finished. It is stored as JSON or shipped as a built-in definition.</p>
+<p>It does not execute by itself, contain a fixed plan, select phase models, or create a schedule. The host resolves it against a workspace, then starts the ordinary planning/execution pipeline.</p>
+<h2 id="library-versus-editor">Library versus editor<a class="heading-anchor" href="#library-versus-editor" aria-label="Link to Library versus editor">#</a></h2>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Location / Purpose"><table>
+<thead>
+<tr>
+<th>Location</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Main window → Templates</td>
+<td>Choose a template, fill inputs, inspect constraints, and launch a foreground run</td>
+</tr>
+<tr>
+<td>Settings → AI → Templates</td>
+<td>Create, customize, duplicate, edit, or delete template files</td>
+</tr>
+</tbody></table>
+</div><p>The library follows the active workspace. The list shows origin, version, and whether the entry replaces another copy. Reopen/reload the library after editing files externally.</p>
+<h2 id="global-versus-workspace">Global versus Workspace<a class="heading-anchor" href="#global-versus-workspace" aria-label="Link to Global versus Workspace">#</a></h2>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Origin / Location / Availability / Best use"><table>
+<thead>
+<tr>
+<th>Origin</th>
+<th>Location</th>
+<th>Availability</th>
+<th>Best use</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Built-in</td>
+<td>Compiled into <code>BuiltinTemplates</code></td>
+<td>Every workspace</td>
+<td>Shipped starting points</td>
+</tr>
+<tr>
+<td>Global</td>
+<td><code>%APPDATA%\Enactive\templates\&lt;id&gt;.json</code></td>
+<td>All workspaces for this user/profile</td>
+<td>Personal reusable workflows with project-specific inputs</td>
+</tr>
+<tr>
+<td>Workspace</td>
+<td><code>&lt;workspace&gt;\.enactive\templates\&lt;id&gt;.json</code></td>
+<td>That workspace</td>
+<td>Repository-specific commands, conventions, and checks</td>
+</tr>
+</tbody></table>
+</div><p>Global means available across the user&#39;s workspaces. It does not mean synchronized across machines, shared with all OS users, or published to a team. Workspace files can be committed to version control and shared with a repository, but they are not committed automatically.</p>
+<h3 id="resolution-priority">Resolution priority<a class="heading-anchor" href="#resolution-priority" aria-label="Link to Resolution priority">#</a></h3>
+<div class="code-block"><div class="code-toolbar"><span>text</span><button class="copy-button" type="button" aria-label="Copy text example">Copy</button></div><pre tabindex="0"><code class="language-text">Workspace copy &gt; Global copy &gt; Built-in definition</code></pre></div>
+<p>Matching uses the template ID, case-insensitively, rather than the display name. The highest-priority copy replaces the entire lower-priority definition; fields are not merged.</p>
+<p>For example, suppose the Global library contains <code>release-check</code>, while one repository contains its own <code>release-check</code>. That repository runs its local definition. Other repositories continue using the Global definition. Editing the Global file will not affect the repository with the override.</p>
+<p>Deleting a Workspace override reveals the Global copy if present, otherwise the built-in. Deleting a Global override reveals a built-in of the same ID if one exists. Removing an override does not delete lower-priority definitions.</p>
+<h3 id="which-scope-should-you-choose">Which scope should you choose?<a class="heading-anchor" href="#which-scope-should-you-choose" aria-label="Link to Which scope should you choose?">#</a></h3>
+<p>Choose <strong>Global</strong> when the workflow is yours and reusable: “Synchronize documentation” with a <code>docs_path</code> parameter, for example. Keep project-specific commands as parameters.</p>
+<p>Choose <strong>Workspace</strong> when correctness depends on this repository: a particular solution path, integration-test command, report location, or team convention. A local file can evolve in the same pull request as the code it checks.</p>
+<p>Scope controls storage and precedence, not permissions. A Workspace template has no greater authority than a Global template.</p>
+<h2 id="create-a-template">Create a template<a class="heading-anchor" href="#create-a-template" aria-label="Link to Create a template">#</a></h2>
+<ol>
+<li>Open <strong>Settings → AI → Templates → New template</strong>.</li>
+<li>Enter a stable lowercase ID, a readable name, and a goal.</li>
+<li>Add parameters for values that vary between runs.</li>
+<li>Optionally select a worker ID.</li>
+<li>Add permission restrictions and useful execution limits.</li>
+<li>Add deterministic success criteria when the outcome can be checked by a command.</li>
+<li>Choose the destination scope explicitly.</li>
+<li>Save in the template editor, then launch it through the main Templates library.</li>
+</ol>
+<p><strong>Save behavior:</strong> template Save writes a file immediately. Cancel in the outer Settings window does not undo saved templates or deletions.</p>
+<p><strong>Scope-selection caveat:</strong> the current editor initializes scope to the first offered option, Global. It does not reliably infer the original file&#39;s scope when opening an existing template. Always check the Scope control before saving a Workspace edit.</p>
+<p>Saving to another scope writes a copy there; it does not move or delete the original. If the original Workspace copy remains, it continues to shadow the new Global copy.</p>
+<h2 id="customize-duplicate-and-reset">Customize, duplicate, and reset<a class="heading-anchor" href="#customize-duplicate-and-reset" aria-label="Link to Customize, duplicate, and reset">#</a></h2>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Operation / Result"><table>
+<thead>
+<tr>
+<th>Operation</th>
+<th>Result</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Edit a built-in</td>
+<td>Opens an editable draft; saving the same ID creates an override file</td>
+</tr>
+<tr>
+<td>Duplicate</td>
+<td>Creates a new ID, drops the built-in flag, and starts at version 1</td>
+</tr>
+<tr>
+<td>Edit a user template</td>
+<td>Saves the definition to the selected scope</td>
+</tr>
+<tr>
+<td>Reset an override of a built-in</td>
+<td>Deletes the override so the lower-priority definition becomes visible</td>
+</tr>
+<tr>
+<td>Delete</td>
+<td>Removes that file from its origin scope; historical runs remain</td>
+</tr>
+</tbody></table>
+</div><p>The built-in source is never overwritten by the editor. Use a new ID for an independent workflow and the same ID for an intentional override.</p>
+<p>Version is stored metadata, not an automatically incremented revision. The current form preserves the original version, and the JSON-to-form synchronization does not provide a dependable version-editing workflow. To intentionally increment <code>Version</code>, edit the stored JSON file directly and reload the library. Frozen run snapshots still preserve the exact definition used even if authors leave Version unchanged.</p>
+<h2 id="field-reference">Field reference<a class="heading-anchor" href="#field-reference" aria-label="Link to Field reference">#</a></h2>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Field / Meaning"><table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>Id</code></td>
+<td>Stable identifier; lowercase letter followed by lowercase letters, digits, <code>_</code>, or <code>-</code></td>
+</tr>
+<tr>
+<td><code>Name</code></td>
+<td>Display title</td>
+</tr>
+<tr>
+<td><code>Goal</code></td>
+<td>Task instructions with optional <code>{parameter_id}</code> placeholders</td>
+</tr>
+<tr>
+<td><code>Version</code></td>
+<td>Positive integer, default 1</td>
+</tr>
+<tr>
+<td><code>Description</code></td>
+<td>Short explanation for the library</td>
+</tr>
+<tr>
+<td><code>Category</code></td>
+<td>Organizational label</td>
+</tr>
+<tr>
+<td><code>Parameters</code></td>
+<td>Typed input definitions</td>
+</tr>
+<tr>
+<td><code>Permissions</code></td>
+<td>A ceiling: <code>MaxLevel</code>, <code>AskBefore</code>, and <code>Deny</code></td>
+</tr>
+<tr>
+<td><code>SuccessCriteria</code></td>
+<td>Named commands and expected exit codes</td>
+</tr>
+<tr>
+<td><code>Limits</code></td>
+<td>Optional <code>MaxSteps</code>, <code>MaxTokens</code>, and <code>MaxDurationSeconds</code></td>
+</tr>
+<tr>
+<td><code>WorkerId</code></td>
+<td>Preferred worker ID; omit to use host selection/default</td>
+</tr>
+<tr>
+<td><code>ReviewRequired</code></td>
+<td>Stored intent; currently not enforced by host composition</td>
+</tr>
+<tr>
+<td><code>Builtin</code></td>
+<td>Shipped-definition marker; user files should use false or omit it</td>
+</tr>
+</tbody></table>
+</div><p>The filename convention is <code>&lt;Id&gt;.json</code>. The loader uses the ID inside the JSON, so keep filename and ID aligned and avoid two files with the same ID in one folder.</p>
+<h2 id="parameters">Parameters<a class="heading-anchor" href="#parameters" aria-label="Link to Parameters">#</a></h2>
+<p>Every parameter value is ultimately represented as a string. The type controls input presentation and validation.</p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Type / Input and validation"><table>
+<thead>
+<tr>
+<th>Type</th>
+<th>Input and validation</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>Text</code></td>
+<td>Single-line text</td>
+</tr>
+<tr>
+<td><code>MultilineText</code></td>
+<td>Multi-line text for problems, requirements, or excerpts</td>
+</tr>
+<tr>
+<td><code>Boolean</code></td>
+<td>Checkbox in the UI; string <code>true</code> or <code>false</code> in the specification</td>
+</tr>
+<tr>
+<td><code>Integer</code></td>
+<td>Integer string validated by parsing</td>
+</tr>
+<tr>
+<td><code>Choice</code></td>
+<td>Dropdown; at least two choices; values must match a choice exactly</td>
+</tr>
+<tr>
+<td><code>Path</code></td>
+<td>Text input describing a path; no existence or workspace-containment validation at parameter resolution</td>
+</tr>
+</tbody></table>
+</div><p>Each parameter has <code>Id</code>, <code>Name</code>, <code>Type</code>, optional <code>Default</code>, optional <code>Description</code>, and <code>Required</code> (true by default). Choice adds a <code>Choices</code> array.</p>
+<h3 id="defaults-and-omitted-values">Defaults and omitted values<a class="heading-anchor" href="#defaults-and-omitted-values" aria-label="Link to Defaults and omitted values">#</a></h3>
+<ul>
+<li>An empty supplied string falls back to the default.</li>
+<li>A missing required value without a default blocks resolution.</li>
+<li>An omitted optional value without a default resolves to an empty string.</li>
+<li>The desktop trims textual inputs. Console values are taken from the argument text.</li>
+<li>In the desktop, an unset Choice initially selects its first option; a Boolean yields true or false. A console invocation must supply missing required values or rely on actual template defaults.</li>
+</ul>
+<h3 id="placeholder-substitution">Placeholder substitution<a class="heading-anchor" href="#placeholder-substitution" aria-label="Link to Placeholder substitution">#</a></h3>
+<p>Declared placeholders are substituted in <strong>Goal</strong> and <strong>each criterion&#39;s Command</strong>. Criterion names and descriptions are not substituted. Replacement is one pass; inserted text is not recursively evaluated as another template.</p>
+<p>For example:</p>
+<div class="code-block"><div class="code-toolbar"><span>text</span><button class="copy-button" type="button" aria-label="Copy text example">Copy</button></div><pre tabindex="0"><code class="language-text">Goal: Review {scope} and write findings to {report_path}.
+Criterion command: {test_command}</code></pre></div>
+<p>Brace text such as <code>{0}</code> or JSON syntax is not a general expression language. A template that declares parameters rejects unknown placeholder-shaped names in its goal. The validator does not provide the same unknown-placeholder check for criterion commands, so check their spelling carefully.</p>
+<p>Substitution does not shell-escape parameter values. If a parameter is inserted into a command, it is part of the command text that will be executed. Quote path arguments for the intended shell, and inspect resolved commands before approval.</p>
+<h2 id="permission-ceiling">Permission ceiling<a class="heading-anchor" href="#permission-ceiling" aria-label="Link to Permission ceiling">#</a></h2>
+<div class="code-block"><div class="code-toolbar"><span>json</span><button class="copy-button" type="button" aria-label="Copy json example">Copy</button></div><pre tabindex="0"><code class="language-json">{
+  &quot;MaxLevel&quot;: &quot;Execute&quot;,
+  &quot;AskBefore&quot;: [&quot;write_file&quot;],
+  &quot;Deny&quot;: [&quot;git&quot;, &quot;docker&quot;]
+}</code></pre></div>
+<p><code>MaxLevel</code> can lower the workspace&#39;s automatic execution tier. <code>AskBefore</code> adds approval requirements. <code>Deny</code> adds absolute tool-name restrictions. There is no Allow list in the ceiling.</p>
+<p>The resolver retains the workspace Allow list and unions AskBefore/Deny entries. Deny takes precedence. Tool policy matching is exact and case-insensitive; a template entry such as <code>mcp__*</code> is not a general wildcard deny. MCP prefix patterns belong to worker allowlist handling, which is a different mechanism.</p>
+<p>Tool restrictions apply by name. Denying <code>write_file</code> while allowing shell execution does not stop the shell from writing files. A goal saying “only change the report” is also not a path-specific permission rule.</p>
+<h2 id="success-criteria">Success criteria<a class="heading-anchor" href="#success-criteria" aria-label="Link to Success criteria">#</a></h2>
+<div class="code-block"><div class="code-toolbar"><span>json</span><button class="copy-button" type="button" aria-label="Copy json example">Copy</button></div><pre tabindex="0"><code class="language-json">{
+  &quot;Name&quot;: &quot;Tests pass&quot;,
+  &quot;Command&quot;: &quot;{test_command}&quot;,
+  &quot;ExpectedExitCode&quot;: 0,
+  &quot;Required&quot;: true
+}</code></pre></div>
+<p>The command runs through <code>run_command</code> after execution and is judged by its actual exit code. The default expected code is 0. Required defaults to true.</p>
+<p>Use required criteria for completion conditions and optional criteria for advisory checks. A denied/unavailable required check is unknown, not passed. A checker that exits 0 without running meaningful tests can still pass the criterion: Enactive cannot infer that a command name selected the correct test harness.</p>
+<p>On Windows, criteria run through cmd rather than the PowerShell tool. Use shell-compatible commands or explicitly invoke the required interpreter. Avoid attaching shell criteria to a template that denies <code>run_command</code>.</p>
+<h2 id="limits">Limits<a class="heading-anchor" href="#limits" aria-label="Link to Limits">#</a></h2>
+<p>Set positive integers or leave a limit absent/null. Zero is not “unlimited” in the template validator.</p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Limit / What it bounds"><table>
+<thead>
+<tr>
+<th>Limit</th>
+<th>What it bounds</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>MaxSteps</code></td>
+<td>Dispatch of plan steps; a quick action is not counted as a DAG step</td>
+</tr>
+<tr>
+<td><code>MaxTokens</code></td>
+<td>Cumulative usage reported across model phases</td>
+</tr>
+<tr>
+<td><code>MaxDurationSeconds</code></td>
+<td>Elapsed run time checked at execution boundaries</td>
+</tr>
+</tbody></table>
+</div><p>The current form parses invalid/nonpositive limit text as an omitted limit. Verify the resulting JSON if a limit matters. These are not hard in-flight cancellation or billing caps; see <a href="architecture.html#limits-are-scheduling-boundaries">Architecture</a>.</p>
+<h2 id="complete-example-a-portable-build-and-test-check">Complete example: a portable build and test check<a class="heading-anchor" href="#complete-example-a-portable-build-and-test-check" aria-label="Link to Complete example: a portable build and test check">#</a></h2>
+<p>Save this as <code>portable-release-check.json</code> in the scope you choose. It demonstrates parameterized goal text <strong>and</strong> criteria:</p>
+<div class="code-block"><div class="code-toolbar"><span>json</span><button class="copy-button" type="button" aria-label="Copy json example">Copy</button></div><pre tabindex="0"><code class="language-json">{
+  &quot;Id&quot;: &quot;portable-release-check&quot;,
+  &quot;Name&quot;: &quot;Portable Release Check&quot;,
+  &quot;Version&quot;: 1,
+  &quot;Description&quot;: &quot;Build and test this workspace using explicitly supplied commands.&quot;,
+  &quot;Category&quot;: &quot;DevOps&quot;,
+  &quot;Goal&quot;: &quot;Check this workspace for release readiness. Run {build_command} and {test_command}. Report actual outputs and failures. Do not edit source files or commit changes.&quot;,
+  &quot;Parameters&quot;: [
+    {
+      &quot;Id&quot;: &quot;build_command&quot;,
+      &quot;Name&quot;: &quot;Build command&quot;,
+      &quot;Type&quot;: &quot;Text&quot;,
+      &quot;Required&quot;: true,
+      &quot;Default&quot;: &quot;dotnet build&quot;
+    },
+    {
+      &quot;Id&quot;: &quot;test_command&quot;,
+      &quot;Name&quot;: &quot;Test command&quot;,
+      &quot;Type&quot;: &quot;Text&quot;,
+      &quot;Required&quot;: true
+    }
+  ],
+  &quot;Permissions&quot;: {
+    &quot;MaxLevel&quot;: &quot;Execute&quot;,
+    &quot;Deny&quot;: [&quot;write_file&quot;, &quot;edit_file&quot;, &quot;move_file&quot;, &quot;create_directory&quot;, &quot;git&quot;, &quot;docker&quot;]
+  },
+  &quot;SuccessCriteria&quot;: [
+    { &quot;Name&quot;: &quot;Builds&quot;, &quot;Command&quot;: &quot;{build_command}&quot;, &quot;ExpectedExitCode&quot;: 0, &quot;Required&quot;: true },
+    { &quot;Name&quot;: &quot;Tests pass&quot;, &quot;Command&quot;: &quot;{test_command}&quot;, &quot;ExpectedExitCode&quot;: 0, &quot;Required&quot;: true }
+  ],
+  &quot;Limits&quot;: { &quot;MaxSteps&quot;: 6, &quot;MaxTokens&quot;: 60000, &quot;MaxDurationSeconds&quot;: 900 },
+  &quot;WorkerId&quot;: &quot;developer&quot;,
+  &quot;ReviewRequired&quot;: true,
+  &quot;Builtin&quot;: false
+}</code></pre></div>
+<p>Run this interactively in the desktop so you can approve commands. For this repository, a useful test value is <code>dotnet test tests/Enactive.Engine.Tests/Enactive.Engine.Tests.csproj</code>. A different repository should supply its own real test command.</p>
+<p>The 60,000-token and 900-second limits are example starting values, not measured sizing recommendations. Bind a Review model separately. The current console cannot approve this template&#39;s required shell checks unattended.</p>
+<h2 id="built-in-library">Built-in library<a class="heading-anchor" href="#built-in-library" aria-label="Link to Built-in library">#</a></h2>
+<div class="table-wrap" tabindex="0" role="region" aria-label="ID / Purpose and parameters / Current deterministic checks"><table>
+<thead>
+<tr>
+<th>ID</th>
+<th>Purpose and parameters</th>
+<th>Current deterministic checks</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>release-check</code></td>
+<td>Build/test report; <code>build_command</code>, <code>test_command</code></td>
+<td>Fixed <code>dotnet build</code>, <code>dotnet test</code></td>
+</tr>
+<tr>
+<td><code>investigate-build-failure</code></td>
+<td>Diagnosis; required <code>what_failed</code></td>
+<td>None</td>
+</tr>
+<tr>
+<td><code>documentation-sync</code></td>
+<td>Correct drift; <code>docs_path</code>, default <code>README.md</code></td>
+<td>None</td>
+</tr>
+<tr>
+<td><code>fix-bug</code></td>
+<td>Fix a described problem; required <code>problem</code>, build/test commands</td>
+<td>Fixed <code>dotnet build</code>, <code>dotnet test</code></td>
+</tr>
+<tr>
+<td><code>code-review</code></td>
+<td>Findings report; <code>scope</code>, <code>report_path</code></td>
+<td>None</td>
+</tr>
+<tr>
+<td><code>improve-tests</code></td>
+<td>Add uncovered behavior tests; <code>area</code>, required <code>test_command</code></td>
+<td>Fixed <code>dotnet build</code></td>
+</tr>
+<tr>
+<td><code>update-dependencies</code></td>
+<td>Incremental dependency updates; <code>check_command</code>, build/test commands</td>
+<td>Fixed <code>dotnet build</code>, <code>dotnet test</code></td>
+</tr>
+</tbody></table>
+</div><p>Several built-ins parameterize commands in the goal while retaining literal .NET commands in their criteria. Changing a build/test input therefore does <strong>not</strong> change those literal checks. Customize their criteria to <code>{build_command}</code> / <code>{test_command}</code> when adapting them to another stack, as shown above.</p>
+<p>Improve Test Coverage deliberately checks compilation rather than requiring all tests to pass: its task may uncover existing broken behavior and forbids changing source just to make tests green. Its fixed build criterion also needs adaptation for a non-.NET project.</p>
+<p>Code Review writes a report. The default Reviewer worker cannot write files or run Git, so use Developer or a deliberately configured report-writing worker for that template. A template&#39;s category/name does not automatically select a matching worker.</p>
+<h2 id="editing-json-directly">Editing JSON directly<a class="heading-anchor" href="#editing-json-directly" aria-label="Link to Editing JSON directly">#</a></h2>
+<p>Use valid JSON with enum names as strings. The editor synchronizes Form and JSON on tab changes; invalid JSON keeps you in the JSON view with an error. For fields not reliably preserved by form round-tripping, edit the file externally and reload.</p>
+<p>Malformed/unreadable files are skipped when listing the library. Loading primarily checks that the ID is usable; full template validation happens on save or resolution. A file appearing in the list is therefore not proof that it can launch.</p>
+<p>Template files are app configuration under the reserved <code>.enactive</code> directory. Built-in workspace tools refuse access to that reserved state path; use the template editor or an external text editor to maintain them.</p>
+<h2 id="implementation-references">Implementation references<a class="heading-anchor" href="#implementation-references" aria-label="Link to Implementation references">#</a></h2>
+<ul>
+<li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.Core/Templates.cs">Schema and validation</a></li>
+<li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.Core/TemplateResolution.cs">Parameter resolution and snapshots</a></li>
+<li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.Workspace/TemplateStore.cs">Storage and priority</a></li>
+<li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.Core/BuiltinTemplates.cs">Built-in definitions</a></li>
+<li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.App.Ui/ViewModels/TemplateEditViewModel.cs">Editor behavior</a></li>
+<li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.App.Ui/ViewModels/TemplateSettingsViewModel.cs">Settings template actions</a></li>
+</ul>
+</article><nav class="pagination" aria-label="Adjacent chapters"><a href="console.html"><small>← Previous</small><strong>Console & automation</strong></a><a href="settings.html"><small>Next →</small><strong>Settings</strong></a></nav><footer class="page-footer"><span>Enactive · Real, reviewable, recorded action.</span><a href="#main">Back to top ↑</a></footer></main>
+<aside class="page-toc"><p class="nav-group">On this page</p><nav aria-label="Page sections"><a href="#what-a-template-contains">What a template contains</a><a href="#library-versus-editor">Library versus editor</a><a href="#global-versus-workspace">Global versus Workspace</a><a href="#create-a-template">Create a template</a><a href="#customize-duplicate-and-reset">Customize, duplicate, and reset</a><a href="#field-reference">Field reference</a><a href="#parameters">Parameters</a><a href="#permission-ceiling">Permission ceiling</a><a href="#success-criteria">Success criteria</a><a href="#limits">Limits</a><a href="#complete-example-a-portable-build-and-test-check">Complete example: a portable build and test check</a><a href="#built-in-library">Built-in library</a><a href="#editing-json-directly">Editing JSON directly</a><a href="#implementation-references">Implementation references</a></nav><a class="source-link" href="https://github.com/StasEdward/Enactive/blob/master/Docs/wiki/Templates.md">View Markdown source ↗</a></aside></div>
+<dialog id="search-dialog" aria-labelledby="search-title"><div class="search-heading"><h2 id="search-title">Search the wiki</h2><button id="close-search" type="button" aria-label="Close search">Close <kbd>Esc</kbd></button></div><label for="search-input">Find a topic, setting, or command</label><input id="search-input" type="search" placeholder="Try templates, Review, or --workspace" autocomplete="off"><p id="search-status" role="status" aria-live="polite">Search across all chapters.</p><div id="search-results"></div></dialog><div id="copy-status" class="sr-only" role="status" aria-live="polite"></div>
+</body></html>

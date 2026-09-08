@@ -128,6 +128,8 @@ section { padding: 84px 0; border-top: 1px solid var(--ink-800); }
 .btn--ghost { background: transparent; color: var(--ink-100); border-color: var(--ink-600); }
 .btn--ghost:hover { background: var(--ink-800); border-color: var(--ink-500); }
 .btn--sm { padding: 0.5rem 0.95rem; font-size: 0.85rem; }
+.btn--wiki { color: var(--ink-950); }
+.btn--wiki:hover { background: var(--ember-400); }
 
 /* ---------- nav ----------------------------------------------------------- */
 .nav {
@@ -321,7 +323,12 @@ section { padding: 84px 0; border-top: 1px solid var(--ink-800); }
 @media (max-width: 940px) {
   .hero__grid, .decision__grid, .arch__grid { grid-template-columns: minmax(0, 1fr); gap: 40px; }
   .nav__links { display: none; }
+  .nav .btn--wiki { margin-left: auto; }
   section { padding: 64px 0; }
+}
+
+@media (max-width: 480px) {
+  .nav__inner { gap: 12px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

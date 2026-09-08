@@ -1,0 +1,10 @@
+{
+  "name": "enactive-website",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:wiki": "node scripts/build-wiki.mjs",
+    "check:wiki": "node scripts/check-wiki.mjs"
+  },
+  "devDependencies": { "marked": "17.0.5" }
+}

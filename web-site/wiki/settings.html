@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Settings · Enactive Wiki</title><meta name="description" content="Enactive Wiki: Settings. Practical workflows, configuration details, and implementation references.">
+<link rel="canonical" href="https://enactive.dev/wiki/settings.html">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/brand.css"><link rel="stylesheet" href="assets/fonts.css"><link rel="stylesheet" href="wiki.css">
+<script src="theme.js"></script><script src="search-index.js" defer></script><script src="wiki.js" defer></script>
+</head><body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="wiki-header"><a class="brand" href="../index.html" aria-label="Enactive home"><img class="brand-mark" src="assets/mark-loop.svg" alt="" width="32" height="32"><img class="wordmark dark-mark" src="assets/wordmark.svg" alt="Enactive" width="144" height="18"><img class="wordmark light-mark" src="assets/wordmark-light.svg" alt="Enactive" width="144" height="18"></a><a class="wiki-label" href="index.html">Wiki</a><div class="header-actions"><button type="button" class="search-trigger" aria-haspopup="dialog">Search wiki <kbd>Ctrl K</kbd></button><button type="button" id="theme-toggle" aria-label="Switch to light theme">Light theme</button><button type="button" id="menu-toggle" aria-expanded="false" aria-controls="sidebar">Menu</button></div></header>
+<div class="wiki-layout"><aside id="sidebar" class="sidebar"><nav aria-label="Wiki chapters"><p class="nav-group">Start here</p><a href="index.html">Wiki home</a><a href="overview.html">Application overview</a><a href="getting-started.html">Getting started</a><p class="nav-group">Workflows</p><a href="running-tasks.html">Running tasks</a><a href="console.html">Console & automation</a><a href="templates.html">Templates</a><p class="nav-group">Configuration</p><a href="settings.html" aria-current="page">Settings</a><a href="models-and-phases.html">Models & Phases</a><p class="nav-group">Reference</p><a href="architecture.html">Architecture</a><a href="operations.html">Operations & troubleshooting</a></nav><div class="sidebar-footer"><a href="../index.html">← Back to Enactive</a><span>Product & engineering handbook</span></div></aside>
+<main id="main" class="" tabindex="-1"><div class="page-heading"><div class="breadcrumb"><a href="index.html">Documentation</a><span aria-hidden="true">/</span><span>Settings</span></div><p class="eyebrow">Configuration · Enactive</p><h1>Settings</h1><div class="page-meta"><span>8 min read</span><span>English</span><a href="https://github.com/StasEdward/Enactive/blob/master/Docs/wiki/Settings.md">Markdown source ↗</a></div></div><details class="mobile-toc"><summary>On this page</summary><nav aria-label="On this page"><a href="#configuration-layers">Configuration layers</a><a href="#saving-and-cancelling">Saving and cancelling</a><a href="#general-account-and-about">General, Account, and About</a><a href="#ai--providers">AI → Providers</a><a href="#ai--team">AI → Team</a><a href="#ai--phases">AI → Phases</a><a href="#ai--general">AI → General</a><a href="#ai--mcp">AI → MCP</a><a href="#environment-defaults-and-migration">Environment defaults and migration</a><a href="#implementation-references">Implementation references</a></nav></details><article><h2 id="configuration-layers">Configuration layers<a class="heading-anchor" href="#configuration-layers" aria-label="Link to Configuration layers">#</a></h2>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Layer / Controls / Persistence"><table>
+<thead>
+<tr>
+<th>Layer</th>
+<th>Controls</th>
+<th>Persistence</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Application settings</td>
+<td>Providers, workers, phase bindings, global instructions, AI toggles, MCP, window behavior</td>
+<td><code>%APPDATA%\Enactive\settings.json</code></td>
+</tr>
+<tr>
+<td>Workspace preferences</td>
+<td>Selected role, autonomy, staging, recent workspace information</td>
+<td><code>%APPDATA%\Enactive\workspaces.json</code></td>
+</tr>
+<tr>
+<td>Workspace approvals</td>
+<td>Standing desktop tool approvals keyed by workspace identity</td>
+<td><code>%APPDATA%\Enactive\permissions.json</code></td>
+</tr>
+<tr>
+<td>Templates</td>
+<td>Reusable goals, parameters, ceilings, checks, limits</td>
+<td>Global or Workspace template files</td>
+</tr>
+<tr>
+<td>Resolved run specification</td>
+<td>One template resolved with concrete answers and permissions</td>
+<td>Stored with a run</td>
+</tr>
+<tr>
+<td>Environment</td>
+<td>Storage backend, logging, console model/endpoint, initial desktop defaults</td>
+<td>Process environment</td>
+</tr>
+</tbody></table>
+</div><p>There is no independent Workspace Providers/Phases file in the current desktop implementation. Global instructions and phase bindings are application-wide. “Workspace versus Global” in the template editor selects a template&#39;s storage scope, not a separate full application-settings profile.</p>
+<h2 id="saving-and-cancelling">Saving and cancelling<a class="heading-anchor" href="#saving-and-cancelling" aria-label="Link to Saving and cancelling">#</a></h2>
+<p>Most settings are edited on a copy and take effect through the outer <strong>Save</strong> action. Cancel discards those unsaved edits. Provider/worker/MCP sub-editors update that draft; finish by saving the main Settings window.</p>
+<p>Template files are the exception: their editor saves immediately, and deletion is immediate after its confirmation. Outer Cancel cannot undo those file operations.</p>
+<p>If saving fails, inspect the reported error before closing the editor. Secret-protection failures must not be treated as successful saves.</p>
+<h2 id="general-account-and-about">General, Account, and About<a class="heading-anchor" href="#general-account-and-about" aria-label="Link to General, Account, and About">#</a></h2>
+<p><strong>General</strong> includes startup behavior and what happens when the main window closes. Close to tray is enabled by default. With no system tray available, closing exits because the window has nowhere to hide. Quitting with work in flight requires attention because background work lives in the same process.</p>
+<p><strong>Account</strong> is currently a placeholder. Enactive has no desktop account system of its own; provider credentials live under AI → Providers.</p>
+<p><strong>About</strong> shows application/build/runtime information and component versions, useful when diagnosing mixed or stale application files.</p>
+<h2 id="ai--providers">AI → Providers<a class="heading-anchor" href="#ai--providers" aria-label="Link to AI → Providers">#</a></h2>
+<p>A provider is a named endpoint with a transport adapter, authentication, and a catalog of model IDs.</p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Field / Guidance"><table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Guidance</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>ID</td>
+<td>Stable unique key used in model references; changing it affects references</td>
+</tr>
+<tr>
+<td>Display name</td>
+<td>Human-readable provider label</td>
+</tr>
+<tr>
+<td>Kind</td>
+<td><code>OllamaNative</code>, <code>Anthropic</code>, or <code>OpenAiCompatible</code></td>
+</tr>
+<tr>
+<td>Base URL</td>
+<td>API base for the selected adapter</td>
+</tr>
+<tr>
+<td>API key</td>
+<td>Credential entered in the editor and protected when saved</td>
+</tr>
+<tr>
+<td>Headers</td>
+<td>Provider-specific HTTP headers; use only where needed</td>
+</tr>
+<tr>
+<td>Models</td>
+<td>Exact endpoint model names, discovered or entered manually</td>
+</tr>
+<tr>
+<td>Max output tokens</td>
+<td>Optional per-provider response cap where the adapter supports it</td>
+</tr>
+</tbody></table>
+</div><h3 id="adapter-behavior">Adapter behavior<a class="heading-anchor" href="#adapter-behavior" aria-label="Link to Adapter behavior">#</a></h3>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Kind / Request interface / Practical configuration"><table>
+<thead>
+<tr>
+<th>Kind</th>
+<th>Request interface</th>
+<th>Practical configuration</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>OllamaNative</td>
+<td>Native <code>/api/chat</code></td>
+<td>Local URL such as <code>http://localhost:11434</code>; native context/thinking controls</td>
+</tr>
+<tr>
+<td>Anthropic</td>
+<td>Messages API</td>
+<td>Base such as <code>https://api.anthropic.com</code>; API credentials and exact model ID</td>
+</tr>
+<tr>
+<td>OpenAiCompatible</td>
+<td><code>&lt;BaseUrl&gt;/chat/completions</code></td>
+<td>API prefix such as <code>https://api.openai.com/v1</code>, or a compatible local/remote service</td>
+</tr>
+</tbody></table>
+</div><p>Model discovery populates a catalog. It does not install local models or prove compatibility with streaming, tool calls, or every request field Enactive sends. Validate a candidate with a small real run before using it across phases.</p>
+<p>OpenAI-compatible does not mean support for the Responses API. The current adapter sends Chat Completions fields, including <code>temperature</code> when requested and <code>max_tokens</code> when configured. An endpoint/model that rejects those fields needs compatibility work; a model ID alone cannot solve it.</p>
+<h3 id="output-caps">Output caps<a class="heading-anchor" href="#output-caps" aria-label="Link to Output caps">#</a></h3>
+<ul>
+<li>OpenAI-compatible: request-level <code>MaxTokens</code>, otherwise the provider setting, is sent as <code>max_tokens</code>.</li>
+<li>Anthropic: uses a default output budget of 32,000 when no override applies, and can retry after learning a lower supported cap from an API error. It also retries a rejected temperature parameter without that field.</li>
+<li>Native Ollama: the current adapter does not map the provider Max output tokens field to <code>num_predict</code>.</li>
+</ul>
+<p>Do not confuse response output caps with <code>NumCtx</code> (context capacity) or template <code>MaxTokens</code> (cumulative run budget).</p>
+<h3 id="secret-storage">Secret storage<a class="heading-anchor" href="#secret-storage" aria-label="Link to Secret storage">#</a></h3>
+<p>Provider API keys are saved as DPAPI-protected values; the plaintext API key property is excluded from serialization. General provider Headers are ordinary settings data, unlike the encrypted MCP header/environment dictionaries. Do not place secrets in general custom headers expecting the API-key protection to cover them.</p>
+<p>Windows DPAPI protection is tied to the user context. Copying settings to another machine/account may require re-entering credentials. Keep keys out of templates and Global instructions.</p>
+<h2 id="ai--team">AI → Team<a class="heading-anchor" href="#ai--team" aria-label="Link to AI → Team">#</a></h2>
+<p>Workers combine instructions, tools, permission level, a preferred model, and an optional fallback. Models are referenced as:</p>
+<div class="code-block"><div class="code-toolbar"><span>text</span><button class="copy-button" type="button" aria-label="Copy text example">Copy</button></div><pre tabindex="0"><code class="language-text">providerId/model-name</code></pre></div>
+<p>For example, <code>ollama/qwen3-coder:30b</code> identifies a model under the configured provider with ID <code>ollama</code>. The provider ID is an Enactive setting, not part of the upstream model name.</p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Built-in worker / Default tools / Default level"><table>
+<thead>
+<tr>
+<th>Built-in worker</th>
+<th>Default tools</th>
+<th>Default level</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Developer</td>
+<td>File inspection/editing, directories/moves, shell, Git, Docker</td>
+<td>Execute</td>
+</tr>
+<tr>
+<td>Reviewer</td>
+<td>Read, search, list</td>
+<td>Observe</td>
+</tr>
+<tr>
+<td>Ops</td>
+<td>Read/search/list, shell, Git, Docker</td>
+<td>Execute</td>
+</tr>
+<tr>
+<td>Writer</td>
+<td>Read/search/list, write/edit, directories/moves</td>
+<td>Execute</td>
+</tr>
+</tbody></table>
+</div><p>The worker&#39;s tool allowlist is authoritative: an empty list permits no tools; <code>*</code> permits all registered tools. MCP additionally supports <code>mcp__*</code>, a server prefix such as <code>mcp__example__*</code>, or an exact discovered tool name.</p>
+<p>Worker instructions are augmented at runtime with shared honesty rules, optional read-back guidance, and Global instructions. Put role-specific behavior in the worker and project/task-specific requirements in a template or request.</p>
+<p>Fallback addresses supported execution-provider failures. It does not automatically replace a weak model because a review failed and does not configure Plan/Review failover.</p>
+<h2 id="ai--phases">AI → Phases<a class="heading-anchor" href="#ai--phases" aria-label="Link to AI → Phases">#</a></h2>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Setting / When selected / When blank"><table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>When selected</th>
+<th>When blank</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Plan model</td>
+<td>Uses that model for request classification/planning</td>
+<td>Uses the worker&#39;s base model</td>
+</tr>
+<tr>
+<td>Review model</td>
+<td>Enables model review of execution/content</td>
+<td>Skips model review</td>
+</tr>
+<tr>
+<td>Execute light</td>
+<td>Uses that model for trivial DAG steps</td>
+<td>Uses the worker model for those steps</td>
+</tr>
+<tr>
+<td>Execute heavy</td>
+<td>Uses that model for complex DAG steps</td>
+<td>Uses the worker model for those steps</td>
+</tr>
+</tbody></table>
+</div><p>Normal execution is configured in <strong>Team → worker model</strong>, not in a separate normal-phase dropdown. Light/heavy routing does not alter role permissions. See <a href="models-and-phases.html">Models and Phases</a> for selection guidance.</p>
+<p><code>ReviewRequired</code> in a template is currently metadata only. The Review binding is the actual on/off switch in both quick-action and planned desktop execution.</p>
+<h2 id="ai--general">AI → General<a class="heading-anchor" href="#ai--general" aria-label="Link to AI → General">#</a></h2>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Setting / Default / Effect and recommended use"><table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Default</th>
+<th>Effect and recommended use</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Context length (<code>NumCtx</code>)</td>
+<td>Blank/null</td>
+<td>Requests native Ollama execution context size. Increase only when necessary and supported by available memory</td>
+</tr>
+<tr>
+<td>Global instructions</td>
+<td>Empty</td>
+<td>Added to every worker&#39;s instructions; use for stable cross-project conventions</td>
+</tr>
+<tr>
+<td>Disable local reasoning</td>
+<td>On</td>
+<td>Native Ollama execution requests use <code>think:false</code>; useful when thinking consumes turns without useful output</td>
+</tr>
+<tr>
+<td>Verify writes</td>
+<td>On</td>
+<td>Adds instructions to read written real data back; useful for unreliable writers, costs extra work</td>
+</tr>
+<tr>
+<td>Review content</td>
+<td>On</td>
+<td>Reviews written text for writing-only steps when Review is bound</td>
+</tr>
+<tr>
+<td>Revert rejected steps</td>
+<td>On</td>
+<td>Attempts to restore tracked writes after final rejection, preserving newer conflicting edits</td>
+</tr>
+<tr>
+<td>Review retries</td>
+<td>1</td>
+<td>One extra attempt after rejection; allowed range 0–5</td>
+</tr>
+<tr>
+<td>Allow implicit tool calls</td>
+<td>Off</td>
+<td>Can execute tool calls inferred from assistant text; leave off for normal structured-tool models</td>
+</tr>
+<tr>
+<td>Parallel steps</td>
+<td>1</td>
+<td>Number of independent plan steps that may overlap</td>
+</tr>
+</tbody></table>
+</div><p>Verify writes is an instruction to the worker, not an unconditional host read-back after every write. Review content requires a bound Review model; enabling the toggle alone does not create an evaluator.</p>
+<p><code>NumCtx</code> and Disable local reasoning are passed through the execution loop. Separate Plan/Review requests do not expose equivalent per-phase context/thinking configuration in the current UI. These settings do not configure OpenAI reasoning effort or Anthropic extended/adaptive thinking.</p>
+<p>Parallelism helps when branches are independent and provider capacity permits overlap. Multiple steps on one constrained local endpoint may queue or compete for memory. Keep 1 until you have a representative task that benefits.</p>
+<h2 id="ai--mcp">AI → MCP<a class="heading-anchor" href="#ai--mcp" aria-label="Link to AI → MCP">#</a></h2>
+<p>Configure external tool servers here, then grant the intended worker MCP access under Team. Enabled servers connect for each new desktop run. An unavailable enabled server can prevent the run from starting.</p>
+<p>MCP tools require Execute-level access and normally ask on every call. Their external effects are not covered by built-in staging/revert. See <a href="operations.html#mcp-external-tools">MCP operations</a> for the full workflow.</p>
+<h2 id="environment-defaults-and-migration">Environment defaults and migration<a class="heading-anchor" href="#environment-defaults-and-migration" aria-label="Link to Environment defaults and migration">#</a></h2>
+<p>The desktop seeds its initial model/endpoint from <code>ENACTIVE_MODEL</code> and <code>ENACTIVE_OLLAMA_URL</code> when a usable saved settings file is absent. Existing Providers/Workers/Bindings are authoritative after migration; editing environment variables is not a reliable way to override saved desktop bindings.</p>
+<p><code>ENACTIVE_WORKSPACE</code> supplies a desktop workspace startup value. Storage/logging variables apply to the components that read them; the console-specific interpretation is documented in <a href="console.html#environment-configuration">Console</a>.</p>
+<p>Current settings schema version is 3. Migrations preserve older tool-access behavior explicitly and add <code>edit_file</code> to workers that already had <code>write_file</code>. Startup repair can retain a <code>settings.before-repair-*.json</code> copy when repairing problematic settings.</p>
+<p>Old legacy fields such as <code>MultiAgent</code>, <code>ReasonerModel</code>, and the single <code>BaseUrl</code>/<code>Model</code> are migration inputs. Configure the current Providers/Workers/Bindings schema rather than trying to control a migrated installation through those fields.</p>
+<h2 id="implementation-references">Implementation references<a class="heading-anchor" href="#implementation-references" aria-label="Link to Implementation references">#</a></h2>
+<ul>
+<li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.App.Ui/AppSettings.cs">Settings schema, defaults, migration, and persistence</a></li>
+<li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.App.Ui/SettingsWindow.axaml">Settings UI</a></li>
+<li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.Workspace/WorkspaceRegistry.cs">Workspace preferences</a></li>
+<li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.Agents/ModelRouter.cs">Model router</a></li>
+<li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.Providers/OpenAiCompatibleProvider.cs">OpenAI-compatible adapter</a>, <a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.Providers/OllamaNativeProvider.cs">Ollama adapter</a>, <a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.Providers/AnthropicProvider.cs">Anthropic adapter</a></li>
+</ul>
+</article><nav class="pagination" aria-label="Adjacent chapters"><a href="templates.html"><small>← Previous</small><strong>Templates</strong></a><a href="models-and-phases.html"><small>Next →</small><strong>Models & Phases</strong></a></nav><footer class="page-footer"><span>Enactive · Real, reviewable, recorded action.</span><a href="#main">Back to top ↑</a></footer></main>
+<aside class="page-toc"><p class="nav-group">On this page</p><nav aria-label="Page sections"><a href="#configuration-layers">Configuration layers</a><a href="#saving-and-cancelling">Saving and cancelling</a><a href="#general-account-and-about">General, Account, and About</a><a href="#ai--providers">AI → Providers</a><a href="#ai--team">AI → Team</a><a href="#ai--phases">AI → Phases</a><a href="#ai--general">AI → General</a><a href="#ai--mcp">AI → MCP</a><a href="#environment-defaults-and-migration">Environment defaults and migration</a><a href="#implementation-references">Implementation references</a></nav><a class="source-link" href="https://github.com/StasEdward/Enactive/blob/master/Docs/wiki/Settings.md">View Markdown source ↗</a></aside></div>
+<dialog id="search-dialog" aria-labelledby="search-title"><div class="search-heading"><h2 id="search-title">Search the wiki</h2><button id="close-search" type="button" aria-label="Close search">Close <kbd>Esc</kbd></button></div><label for="search-input">Find a topic, setting, or command</label><input id="search-input" type="search" placeholder="Try templates, Review, or --workspace" autocomplete="off"><p id="search-status" role="status" aria-live="polite">Search across all chapters.</p><div id="search-results"></div></dialog><div id="copy-status" class="sr-only" role="status" aria-live="polite"></div>
+</body></html>

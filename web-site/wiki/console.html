@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Console and Unattended Execution · Enactive Wiki</title><meta name="description" content="Enactive Wiki: Console and Unattended Execution. Practical workflows, configuration details, and implementation references.">
+<link rel="canonical" href="https://enactive.dev/wiki/console.html">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/brand.css"><link rel="stylesheet" href="assets/fonts.css"><link rel="stylesheet" href="wiki.css">
+<script src="theme.js"></script><script src="search-index.js" defer></script><script src="wiki.js" defer></script>
+</head><body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="wiki-header"><a class="brand" href="../index.html" aria-label="Enactive home"><img class="brand-mark" src="assets/mark-loop.svg" alt="" width="32" height="32"><img class="wordmark dark-mark" src="assets/wordmark.svg" alt="Enactive" width="144" height="18"><img class="wordmark light-mark" src="assets/wordmark-light.svg" alt="Enactive" width="144" height="18"></a><a class="wiki-label" href="index.html">Wiki</a><div class="header-actions"><button type="button" class="search-trigger" aria-haspopup="dialog">Search wiki <kbd>Ctrl K</kbd></button><button type="button" id="theme-toggle" aria-label="Switch to light theme">Light theme</button><button type="button" id="menu-toggle" aria-expanded="false" aria-controls="sidebar">Menu</button></div></header>
+<div class="wiki-layout"><aside id="sidebar" class="sidebar"><nav aria-label="Wiki chapters"><p class="nav-group">Start here</p><a href="index.html">Wiki home</a><a href="overview.html">Application overview</a><a href="getting-started.html">Getting started</a><p class="nav-group">Workflows</p><a href="running-tasks.html">Running tasks</a><a href="console.html" aria-current="page">Console & automation</a><a href="templates.html">Templates</a><p class="nav-group">Configuration</p><a href="settings.html">Settings</a><a href="models-and-phases.html">Models & Phases</a><p class="nav-group">Reference</p><a href="architecture.html">Architecture</a><a href="operations.html">Operations & troubleshooting</a></nav><div class="sidebar-footer"><a href="../index.html">← Back to Enactive</a><span>Product & engineering handbook</span></div></aside>
+<main id="main" class="" tabindex="-1"><div class="page-heading"><div class="breadcrumb"><a href="index.html">Documentation</a><span aria-hidden="true">/</span><span>Console &amp; automation</span></div><p class="eyebrow">Workflows · Enactive</p><h1>Console and Unattended Execution</h1><div class="page-meta"><span>6 min read</span><span>English</span><a href="https://github.com/StasEdward/Enactive/blob/master/Docs/wiki/Console.md">Markdown source ↗</a></div></div><details class="mobile-toc"><summary>On this page</summary><nav aria-label="On this page"><a href="#scope-of-the-console-host">Scope of the console host</a><a href="#supported-commands">Supported commands</a><a href="#unattended-permission-behavior">Unattended permission behavior</a><a href="#environment-configuration">Environment configuration</a><a href="#reports-and-exit-codes">Reports and exit codes</a><a href="#scheduling-a-suitable-task">Scheduling a suitable task</a><a href="#implementation-references">Implementation references</a></nav></details><article><h2 id="scope-of-the-console-host">Scope of the console host<a class="heading-anchor" href="#scope-of-the-console-host" aria-label="Link to Scope of the console host">#</a></h2>
+<p>The current console host is a separate composition of the shared engine. It supports a free-text task, template execution, a timeline view, and an Inbox view. It is not a command-line front end to every desktop setting.</p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Capability / Desktop / Current console"><table>
+<thead>
+<tr>
+<th>Capability</th>
+<th>Desktop</th>
+<th>Current console</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Provider selection</td>
+<td>Saved Providers list</td>
+<td>One OpenAI-compatible endpoint from environment</td>
+</tr>
+<tr>
+<td>Model selection</td>
+<td>Worker policy and phase bindings</td>
+<td><code>ENACTIVE_MODEL</code></td>
+</tr>
+<tr>
+<td>Team</td>
+<td>Editable workers</td>
+<td>Built-in workers</td>
+</tr>
+<tr>
+<td>Plan</td>
+<td>Bound model or worker model</td>
+<td>Worker model</td>
+</tr>
+<tr>
+<td>Review phase</td>
+<td>Enabled by Review binding</td>
+<td>No Review binding composed</td>
+</tr>
+<tr>
+<td>Execute light/heavy</td>
+<td>Optional routing</td>
+<td>Not configured</td>
+</tr>
+<tr>
+<td>MCP</td>
+<td>Configured per-run connections</td>
+<td>Not connected</td>
+</tr>
+<tr>
+<td>Staging</td>
+<td>Optional</td>
+<td>Direct disk artifact store</td>
+</tr>
+<tr>
+<td>Template library</td>
+<td>Built-in + Global + Workspace</td>
+<td>Same library resolution</td>
+</tr>
+<tr>
+<td>Template criteria and limits</td>
+<td>Yes</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td>Remembered desktop approvals</td>
+<td>Foreground UI handler</td>
+<td>Not loaded</td>
+</tr>
+</tbody></table>
+</div><h2 id="supported-commands">Supported commands<a class="heading-anchor" href="#supported-commands" aria-label="Link to Supported commands">#</a></h2>
+<p>Run from the repository root. The <code>--</code> separates <code>dotnet run</code> arguments from arguments passed to Enactive.</p>
+<h3 id="interactive-free-text-task">Interactive free-text task<a class="heading-anchor" href="#interactive-free-text-task" aria-label="Link to Interactive free-text task">#</a></h3>
+<div class="code-block"><div class="code-toolbar"><span>powershell</span><button class="copy-button" type="button" aria-label="Copy powershell example">Copy</button></div><pre tabindex="0"><code class="language-powershell">dotnet run --project src/Enactive.App.Console -- &quot;Create a Python script named list_files.py that lists files in the workspace.&quot; &quot;C:\work\sample&quot;</code></pre></div>
+<p>The first positional argument is the request and the second is the workspace. The workspace may also be passed through <code>--workspace</code>:</p>
+<div class="code-block"><div class="code-toolbar"><span>powershell</span><button class="copy-button" type="button" aria-label="Copy powershell example">Copy</button></div><pre tabindex="0"><code class="language-powershell">dotnet run --project src/Enactive.App.Console -- &quot;Explain this repository&#39;s entry points.&quot; --workspace &quot;C:\work\sample&quot;</code></pre></div>
+<p>The console creates the workspace directory if it does not exist. Unlike the desktop, a misspelled path can therefore create an empty folder.</p>
+<p>With no request, the program uses its built-in example task to create a Python file-listing script. With no workspace argument, it uses the current working directory. Avoid relying on those defaults in automation.</p>
+<p>When approval is needed, the console prints the complete decision and options. Pressing Enter accepts the displayed recommended/default option. End-of-input is treated as absence of an approver and refused. Enter a valid option ID explicitly; the parser falls back to the default for an unrecognized choice.</p>
+<h3 id="timeline">Timeline<a class="heading-anchor" href="#timeline" aria-label="Link to Timeline">#</a></h3>
+<div class="code-block"><div class="code-toolbar"><span>powershell</span><button class="copy-button" type="button" aria-label="Copy powershell example">Copy</button></div><pre tabindex="0"><code class="language-powershell">dotnet run --project src/Enactive.App.Console -- timeline &quot;C:\work\sample&quot;</code></pre></div>
+<p>Prints recorded project history and memory without starting an AI task.</p>
+<h3 id="inbox">Inbox<a class="heading-anchor" href="#inbox" aria-label="Link to Inbox">#</a></h3>
+<div class="code-block"><div class="code-toolbar"><span>powershell</span><button class="copy-button" type="button" aria-label="Copy powershell example">Copy</button></div><pre tabindex="0"><code class="language-powershell">dotnet run --project src/Enactive.App.Console -- inbox &quot;C:\work\sample&quot;</code></pre></div>
+<p>Prints workspace Inbox entries. Console task execution itself does not wire the desktop BackgroundRunner and does not automatically publish its outcome into that Inbox.</p>
+<h3 id="unattended-template">Unattended template<a class="heading-anchor" href="#unattended-template" aria-label="Link to Unattended template">#</a></h3>
+<div class="code-block"><div class="code-toolbar"><span>powershell</span><button class="copy-button" type="button" aria-label="Copy powershell example">Copy</button></div><pre tabindex="0"><code class="language-powershell">dotnet run --project src/Enactive.App.Console -- --template documentation-sync --workspace &quot;C:\work\sample&quot; --param &quot;docs_path=Docs&quot; --report &quot;C:\work\reports\documentation-sync.txt&quot;</code></pre></div>
+<p>Every template invocation is unattended, even when launched from an interactive terminal. There is no <code>--interactive</code> template option.</p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Option / Meaning"><table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>--template &lt;id&gt;</code></td>
+<td>Select a template by ID, not display name</td>
+</tr>
+<tr>
+<td><code>--workspace &lt;path&gt;</code></td>
+<td>Set the execution root</td>
+</tr>
+<tr>
+<td><code>--param id=value</code></td>
+<td>Supply one parameter; repeat the option for additional parameters</td>
+</tr>
+<tr>
+<td><code>--report &lt;path&gt;</code></td>
+<td>Also write the final textual report to a file</td>
+</tr>
+</tbody></table>
+</div><p>Quote the entire <code>id=value</code> argument when it contains spaces. Relative report paths resolve against the process working directory, not automatically against the workspace. Parent directories are created for report output.</p>
+<p>An unknown template or invalid/missing required parameter prevents execution and returns <code>64</code>. The program prints the resolution problems. Unknown parameter names are currently ignored by resolution; use the declared IDs carefully. Repeated IDs use the last supplied value.</p>
+<h3 id="a-multi-parameter-invocation">A multi-parameter invocation<a class="heading-anchor" href="#a-multi-parameter-invocation" aria-label="Link to A multi-parameter invocation">#</a></h3>
+<div class="code-block"><div class="code-toolbar"><span>powershell</span><button class="copy-button" type="button" aria-label="Copy powershell example">Copy</button></div><pre tabindex="0"><code class="language-powershell">dotnet run --project src/Enactive.App.Console -- --template fix-bug --workspace &quot;C:\work\sample&quot; --param &quot;problem=An empty search query throws an exception&quot; --param &quot;build_command=dotnet build&quot; --param &quot;test_command=dotnet test&quot; --report &quot;C:\work\reports\fix-bug.txt&quot;</code></pre></div>
+<p>This demonstrates valid syntax. It is <strong>not</strong> a promise that Fix Bug can complete unattended with the current console policy: shell execution and required checks need approval and will be refused.</p>
+<h2 id="unattended-permission-behavior">Unattended permission behavior<a class="heading-anchor" href="#unattended-permission-behavior" aria-label="Link to Unattended permission behavior">#</a></h2>
+<p>The console composes an Execute policy with <code>run_command</code>, <code>run_powershell</code>, <code>git</code>, and <code>docker</code> in AskBefore. Its unattended decision handler implements:</p>
+<div class="code-block"><div class="code-toolbar"><span>text</span><button class="copy-button" type="button" aria-label="Copy text example">Copy</button></div><pre tabindex="0"><code class="language-text">Unattended + Ask = Deny</code></pre></div>
+<p>Templates can add restrictions but cannot remove this AskBefore list or grant more autonomy. The console does not read the desktop autonomy slider, workspace registry, or remembered approvals, and exposes no CLI switch to relax this policy.</p>
+<p>Consequences:</p>
+<ul>
+<li>File-only work may complete if its worker and template allow the necessary tools.</li>
+<li>Build/test workflows cannot run their required shell checks unattended in this composition.</li>
+<li>A required check that cannot execute is not counted as passed; inspect Incomplete and the report details.</li>
+<li>There is no benefit to adding an <code>Allow</code> field to template JSON: the template schema has no grant mechanism.</li>
+</ul>
+<p>If unattended build/test execution is required, that requires a deliberate change to the console host&#39;s policy/configuration integration. It is not achievable solely by editing a template. Use the desktop foreground workflow for the currently supported approval path.</p>
+<h2 id="environment-configuration">Environment configuration<a class="heading-anchor" href="#environment-configuration" aria-label="Link to Environment configuration">#</a></h2>
+<div class="code-block"><div class="code-toolbar"><span>powershell</span><button class="copy-button" type="button" aria-label="Copy powershell example">Copy</button></div><pre tabindex="0"><code class="language-powershell">$env:ENACTIVE_MODEL = &#39;qwen2.5-coder&#39;
+$env:ENACTIVE_OLLAMA_URL = &#39;http://localhost:11434/v1&#39;
+$env:ENACTIVE_STORE = &#39;sqlite&#39;
+$env:ENACTIVE_LOG_LEVEL = &#39;Debug&#39;</code></pre></div>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Variable / Default / Behavior"><table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Default</th>
+<th>Behavior</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>ENACTIVE_MODEL</code></td>
+<td><code>qwen2.5-coder</code></td>
+<td>Model name for all built-in workers in this host</td>
+</tr>
+<tr>
+<td><code>ENACTIVE_OLLAMA_URL</code></td>
+<td><code>http://localhost:11434/v1</code></td>
+<td>API base URL; the adapter appends <code>/chat/completions</code></td>
+</tr>
+<tr>
+<td><code>ENACTIVE_STORE</code></td>
+<td><code>sqlite</code></td>
+<td>Run, memory, and Inbox backend: <code>sqlite</code>, <code>json</code>, or <code>mysql</code></td>
+</tr>
+<tr>
+<td><code>ENACTIVE_MYSQL</code></td>
+<td>Unset</td>
+<td>ADO.NET connection string required for MySQL</td>
+</tr>
+<tr>
+<td><code>ENACTIVE_LOG_LEVEL</code></td>
+<td><code>Debug</code></td>
+<td><code>Trace</code>, <code>Debug</code>, <code>Info</code>, <code>Warn</code>, or <code>Error</code></td>
+</tr>
+</tbody></table>
+</div><p>Despite its environment variable name, the console endpoint uses the OpenAI-compatible adapter, not native Ollama. Native <code>num_ctx</code> and <code>think:false</code> behavior do not transfer from the desktop. The descriptor supplies no API key, and there is no current CLI API-key option.</p>
+<p>The console creates an HTTP client with a five-minute timeout. This is separate from a template&#39;s run duration budget.</p>
+<h2 id="reports-and-exit-codes">Reports and exit codes<a class="heading-anchor" href="#reports-and-exit-codes" aria-label="Link to Reports and exit codes">#</a></h2>
+<p>The report includes workspace, run/task identifiers, outcome and reason, recorded model, duration, checks, steps, artifacts, usage, decisions, and errors when available.</p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Exit code / Meaning"><table>
+<thead>
+<tr>
+<th>Exit code</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>0</code></td>
+<td>Completed</td>
+</tr>
+<tr>
+<td><code>1</code></td>
+<td>Failed, or handled provider connection failure</td>
+</tr>
+<tr>
+<td><code>2</code></td>
+<td>Incomplete</td>
+</tr>
+<tr>
+<td><code>64</code></td>
+<td>Invalid template invocation/resolution</td>
+</tr>
+<tr>
+<td><code>130</code></td>
+<td>Cancelled, including handled Ctrl+C</td>
+</tr>
+</tbody></table>
+</div><p>Configuration/startup exceptions outside the handled run path may terminate before a structured report is produced. The table is the host&#39;s explicit outcome mapping, not a guarantee for every process-level failure.</p>
+<p>A failure to write <code>--report</code> is printed to stderr but does not change the task outcome exit code. A scheduler that requires the report file should verify its presence separately.</p>
+<h2 id="scheduling-a-suitable-task">Scheduling a suitable task<a class="heading-anchor" href="#scheduling-a-suitable-task" aria-label="Link to Scheduling a suitable task">#</a></h2>
+<p>Use Windows Task Scheduler, cron, or a CI runner to invoke the console. There is no built-in durable scheduling service in the desktop app.</p>
+<p>For a file-only documentation workflow, a PowerShell wrapper can preserve the process outcome:</p>
+<div class="code-block"><div class="code-toolbar"><span>powershell</span><button class="copy-button" type="button" aria-label="Copy powershell example">Copy</button></div><pre tabindex="0"><code class="language-powershell">$env:ENACTIVE_MODEL = &#39;qwen2.5-coder&#39;
+$env:ENACTIVE_OLLAMA_URL = &#39;http://localhost:11434/v1&#39;
+Set-Location &#39;C:\source\Enactive&#39;
+dotnet run --project src/Enactive.App.Console -- --template documentation-sync --workspace &#39;C:\work\sample&#39; --param &#39;docs_path=Docs&#39; --report &#39;C:\work\reports\documentation-sync.txt&#39;
+$taskExitCode = $LASTEXITCODE
+exit $taskExitCode</code></pre></div>
+<p>Use an explicit working directory and run under the intended account: Global templates live in that account&#39;s application-data folder. Ensure the endpoint and project dependencies are available without an interactive login. For a stable installation, publish the console and point the scheduler at that executable rather than building source for every invocation.</p>
+<h2 id="implementation-references">Implementation references<a class="heading-anchor" href="#implementation-references" aria-label="Link to Implementation references">#</a></h2>
+<ul>
+<li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.App.Console/Program.cs">Complete CLI and composition</a></li>
+<li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.Agents/UnattendedDecisionHandler.cs">Unattended decisions</a></li>
+<li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.Core/RunReport.cs">Report and exit-code mapping</a></li>
+<li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.Core/TemplateResolution.cs">Template resolution</a></li>
+</ul>
+</article><nav class="pagination" aria-label="Adjacent chapters"><a href="running-tasks.html"><small>← Previous</small><strong>Running tasks</strong></a><a href="templates.html"><small>Next →</small><strong>Templates</strong></a></nav><footer class="page-footer"><span>Enactive · Real, reviewable, recorded action.</span><a href="#main">Back to top ↑</a></footer></main>
+<aside class="page-toc"><p class="nav-group">On this page</p><nav aria-label="Page sections"><a href="#scope-of-the-console-host">Scope of the console host</a><a href="#supported-commands">Supported commands</a><a href="#unattended-permission-behavior">Unattended permission behavior</a><a href="#environment-configuration">Environment configuration</a><a href="#reports-and-exit-codes">Reports and exit codes</a><a href="#scheduling-a-suitable-task">Scheduling a suitable task</a><a href="#implementation-references">Implementation references</a></nav><a class="source-link" href="https://github.com/StasEdward/Enactive/blob/master/Docs/wiki/Console.md">View Markdown source ↗</a></aside></div>
+<dialog id="search-dialog" aria-labelledby="search-title"><div class="search-heading"><h2 id="search-title">Search the wiki</h2><button id="close-search" type="button" aria-label="Close search">Close <kbd>Esc</kbd></button></div><label for="search-input">Find a topic, setting, or command</label><input id="search-input" type="search" placeholder="Try templates, Review, or --workspace" autocomplete="off"><p id="search-status" role="status" aria-live="polite">Search across all chapters.</p><div id="search-results"></div></dialog><div id="copy-status" class="sr-only" role="status" aria-live="polite"></div>
+</body></html>

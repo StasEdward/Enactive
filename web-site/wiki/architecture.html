@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Architecture and Execution · Enactive Wiki</title><meta name="description" content="Enactive Wiki: Architecture and Execution. Practical workflows, configuration details, and implementation references.">
+<link rel="canonical" href="https://enactive.dev/wiki/architecture.html">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/brand.css"><link rel="stylesheet" href="assets/fonts.css"><link rel="stylesheet" href="wiki.css">
+<script src="theme.js"></script><script src="search-index.js" defer></script><script src="wiki.js" defer></script>
+</head><body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="wiki-header"><a class="brand" href="../index.html" aria-label="Enactive home"><img class="brand-mark" src="assets/mark-loop.svg" alt="" width="32" height="32"><img class="wordmark dark-mark" src="assets/wordmark.svg" alt="Enactive" width="144" height="18"><img class="wordmark light-mark" src="assets/wordmark-light.svg" alt="Enactive" width="144" height="18"></a><a class="wiki-label" href="index.html">Wiki</a><div class="header-actions"><button type="button" class="search-trigger" aria-haspopup="dialog">Search wiki <kbd>Ctrl K</kbd></button><button type="button" id="theme-toggle" aria-label="Switch to light theme">Light theme</button><button type="button" id="menu-toggle" aria-expanded="false" aria-controls="sidebar">Menu</button></div></header>
+<div class="wiki-layout"><aside id="sidebar" class="sidebar"><nav aria-label="Wiki chapters"><p class="nav-group">Start here</p><a href="index.html">Wiki home</a><a href="overview.html">Application overview</a><a href="getting-started.html">Getting started</a><p class="nav-group">Workflows</p><a href="running-tasks.html">Running tasks</a><a href="console.html">Console & automation</a><a href="templates.html">Templates</a><p class="nav-group">Configuration</p><a href="settings.html">Settings</a><a href="models-and-phases.html">Models & Phases</a><p class="nav-group">Reference</p><a href="architecture.html" aria-current="page">Architecture</a><a href="operations.html">Operations & troubleshooting</a></nav><div class="sidebar-footer"><a href="../index.html">← Back to Enactive</a><span>Product & engineering handbook</span></div></aside>
+<main id="main" class="" tabindex="-1"><div class="page-heading"><div class="breadcrumb"><a href="index.html">Documentation</a><span aria-hidden="true">/</span><span>Architecture</span></div><p class="eyebrow">Reference · Enactive</p><h1>Architecture and Execution</h1><div class="page-meta"><span>7 min read</span><span>English</span><a href="https://github.com/StasEdward/Enactive/blob/master/Docs/wiki/Architecture.md">Markdown source ↗</a></div></div><details class="mobile-toc"><summary>On this page</summary><nav aria-label="On this page"><a href="#system-structure">System structure</a><a href="#from-a-request-to-an-outcome">From a request to an outcome</a><a href="#limits-are-scheduling-boundaries">Limits are scheduling boundaries</a><a href="#implementation-references">Implementation references</a></nav></details><article><h2 id="system-structure">System structure<a class="heading-anchor" href="#system-structure" aria-label="Link to System structure">#</a></h2>
+<p>Enactive is a .NET application with shared domain and execution libraries, a desktop host, and a console host. The remote gateway is a separate ASP.NET Core application outside the main solution.</p>
+<figure class="diagram" aria-labelledby="diagram-1"><figcaption id="diagram-1">Flow from input to outcome</figcaption><ol class="diagram-levels"><li><div class="diagram-row"><div class="diagram-node"><strong>Desktop host</strong><small>Input</small></div><div class="diagram-node"><strong>Console host</strong><small>Input</small></div><div class="diagram-node"><strong>Workspace context and environment</strong><small>Input</small></div></div></li><li><div class="diagram-row"><div class="diagram-node"><strong>Template store and resolution</strong><ul><li>From Desktop host</li><li>From Console host</li></ul></div></div></li><li><div class="diagram-row"><div class="diagram-node"><strong>Resolved task specification</strong><ul><li>From Template store and resolution</li></ul></div></div></li><li><div class="diagram-row"><div class="diagram-node"><strong>Agents: orchestration</strong><ul><li>From Desktop host</li><li>From Console host</li><li>From Resolved task specification</li><li>From Workspace context and environment</li></ul></div></div></li><li><div class="diagram-row"><div class="diagram-node"><strong>Provider adapters</strong><ul><li>From Agents: orchestration</li></ul></div><div class="diagram-node"><strong>Role and permission checks</strong><ul><li>From Agents: orchestration</li></ul></div><div class="diagram-node"><strong>Typed run events</strong><ul><li>From Agents: orchestration</li></ul></div></div></li><li><div class="diagram-row"><div class="diagram-node"><strong>Built-in tools / desktop MCP</strong><ul><li>From Role and permission checks</li></ul></div><div class="diagram-node"><strong>History / memory / logs</strong><ul><li>From Typed run events</li></ul></div><div class="diagram-node"><strong>Desktop views / console report</strong><ul><li>From Typed run events</li></ul></div></div></li><li><div class="diagram-row"><div class="diagram-node"><strong>Workspace and external effects</strong><ul><li>From Built-in tools / desktop MCP</li></ul></div></div></li></ol><details><summary>View diagram source</summary><pre><code>flowchart TD
+    UI[Desktop host] --&gt; Engine[Agents: orchestration]
+    CLI[Console host] --&gt; Engine
+    UI --&gt; Templates[Template store and resolution]
+    CLI --&gt; Templates
+    Templates --&gt; Spec[Resolved task specification]
+    Spec --&gt; Engine
+    Context[Workspace context and environment] --&gt; Engine
+    Engine --&gt; Models[Provider adapters]
+    Engine --&gt; Gate[Role and permission checks]
+    Gate --&gt; Tools[Built-in tools / desktop MCP]
+    Tools --&gt; Files[Workspace and external effects]
+    Engine --&gt; Events[Typed run events]
+    Events --&gt; Stores[History / memory / logs]
+    Events --&gt; Views[Desktop views / console report]</code></pre></details></figure><h3 id="projects">Projects<a class="heading-anchor" href="#projects" aria-label="Link to Projects">#</a></h3>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Project / Responsibility"><table>
+<thead>
+<tr>
+<th>Project</th>
+<th>Responsibility</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>Enactive.Core</code></td>
+<td>Domain records and interfaces: intents, context, plans, workers, model references, permissions, templates, evidence, events, reports, and budgets</td>
+</tr>
+<tr>
+<td><code>Enactive.Agents</code></td>
+<td>Planner, scheduler, orchestrator, reviewer, model routing, success evaluation, recording, and background decision handling</td>
+</tr>
+<tr>
+<td><code>Enactive.Providers</code></td>
+<td>OpenAI-compatible Chat Completions, native Ollama, and Anthropic adapters; provider factory; model discovery; logging</td>
+</tr>
+<tr>
+<td><code>Enactive.Tools</code></td>
+<td>File, shell, Git, Docker, and MCP tooling with a registry</td>
+</tr>
+<tr>
+<td><code>Enactive.Workspace</code></td>
+<td>Template files, run/memory/Inbox persistence, artifact stores, workspace registry, context, environment discovery, and logging</td>
+</tr>
+<tr>
+<td><code>Enactive.Secrets</code></td>
+<td>Protection of persisted secrets with Windows DPAPI</td>
+</tr>
+<tr>
+<td><code>Enactive.App.Ui</code></td>
+<td>Avalonia views, view models, settings editors, and desktop service composition</td>
+</tr>
+<tr>
+<td><code>Enactive.App.Console</code></td>
+<td>Command-line composition and interactive/unattended execution</td>
+</tr>
+<tr>
+<td><code>tests/Enactive.Engine.Tests</code></td>
+<td>xUnit coverage of execution behavior and regressions</td>
+</tr>
+<tr>
+<td><code>tests/Enactive.Mcp.TestServer</code></td>
+<td>Local fixture used to exercise MCP integration</td>
+</tr>
+<tr>
+<td><code>server</code></td>
+<td>Independent remote gateway preview and web panel</td>
+</tr>
+</tbody></table>
+</div><p>The desktop follows MVVM with a small in-repository observable-object/command layer. XAML uses compiled bindings. Code-behind handles operations that require windows or controls and composes execution services.</p>
+<h2 id="from-a-request-to-an-outcome">From a request to an outcome<a class="heading-anchor" href="#from-a-request-to-an-outcome" aria-label="Link to From a request to an outcome">#</a></h2>
+<h3 id="1-capture-the-request">1. Capture the request<a class="heading-anchor" href="#1-capture-the-request" aria-label="Link to 1. Capture the request">#</a></h3>
+<p>The desktop uses command text or a resolved template goal. The console uses positional command text or resolves <code>--template</code>. The host selects the workspace, worker, permissions, artifact store, and model configuration.</p>
+<p>For template launches, the recorder also receives the frozen specification. Providers and phase bindings are not embedded in that specification.</p>
+<h3 id="2-assemble-context">2. Assemble context<a class="heading-anchor" href="#2-assemble-context" aria-label="Link to 2. Assemble context">#</a></h3>
+<p>The context provider supplies workspace identity, project name, available focus/selection, Git branch, and best-effort environment information. The environment probe discovers host/OS and available Git, Docker, WSL, and service information.</p>
+<p>This is not full repository indexing. <code>RelatedFiles</code> and <code>RecentChanges</code> are currently empty in <code>ContextProvider</code>; the worker must use file tools to inspect the source relevant to a task. Persistent project memory should not be mistaken for automatic retrieval of every past run into the next prompt.</p>
+<h3 id="3-plan">3. Plan<a class="heading-anchor" href="#3-plan" aria-label="Link to 3. Plan">#</a></h3>
+<p>The Plan model classifies the request as a quick action or builds a task plan. A task plan contains steps with dependencies and complexity ratings.</p>
+<ul>
+<li>A blank Plan binding uses the selected worker&#39;s base model.</li>
+<li>A blank binding does not remove planning.</li>
+<li>An unreadable planner response is handled explicitly; fallback to a single action is reported rather than silently presented as a valid parsed plan.</li>
+</ul>
+<p>The planner receives assembled context. It is not a separate browsing worker that first explores the entire repository through tools.</p>
+<h3 id="4-schedule">4. Schedule<a class="heading-anchor" href="#4-schedule" aria-label="Link to 4. Schedule">#</a></h3>
+<p><code>DagScheduler</code> dispatches steps whose dependencies are satisfied. Failed dependencies cause dependent steps to be skipped. Cycles/unresolvable dependencies are reported.</p>
+<p><code>MaxParallelSteps = 1</code> runs sequentially. Higher values allow independent branches to overlap. Concurrent steps receive separate conversations seeded with context and a digest of completed steps. This isolates conversation state, but it does not create separate filesystem checkouts. Plan independent file ownership when enabling concurrency.</p>
+<h3 id="5-resolve-the-execution-model">5. Resolve the execution model<a class="heading-anchor" href="#5-resolve-the-execution-model" aria-label="Link to 5. Resolve the execution model">#</a></h3>
+<p>Normal steps use the worker&#39;s model. A configured Execute light model serves trivial steps; Execute heavy serves complex steps. A quick action uses the base execution path rather than DAG complexity routing.</p>
+<p>Routing changes the model, not the worker&#39;s tools or role instructions. Worker fallback is used on supported execution-provider failures; it is not a general failover mechanism for all phases or a response to a failed reviewer verdict.</p>
+<h3 id="6-execute-tools">6. Execute tools<a class="heading-anchor" href="#6-execute-tools" aria-label="Link to 6. Execute tools">#</a></h3>
+<p>The model receives the tools allowed for its worker and performs a streaming conversation/tool loop. The engine checks role access, policy, and any required user decision before invoking a tool.</p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Tool group / Tool names / Purpose"><table>
+<thead>
+<tr>
+<th>Tool group</th>
+<th>Tool names</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Inspect files</td>
+<td><code>read_file</code>, <code>search_files</code>, <code>list_dir</code></td>
+<td>Read windows of a file, find content, and inspect directory entries</td>
+</tr>
+<tr>
+<td>Modify files</td>
+<td><code>write_file</code>, <code>edit_file</code>, <code>create_directory</code>, <code>move_file</code></td>
+<td>Create/replace content, make focused edits, and organize files</td>
+</tr>
+<tr>
+<td>Shell</td>
+<td><code>run_command</code>, <code>run_powershell</code></td>
+<td>Execute commands; PowerShell has its own script transport</td>
+</tr>
+<tr>
+<td>Development operations</td>
+<td><code>git</code>, <code>docker</code></td>
+<td>Invoke version-control and container operations</td>
+</tr>
+<tr>
+<td>External tools</td>
+<td><code>mcp__...</code></td>
+<td>Tools discovered from configured MCP servers in the desktop host</td>
+</tr>
+</tbody></table>
+</div><p>Use <code>edit_file</code> for a small change to an existing file. Asking a small model to rewrite the whole file increases the chance of losing unrelated content.</p>
+<p><code>run_command</code> uses <code>cmd.exe</code> on Windows and a shell on Unix. <code>run_powershell</code> avoids embedding PowerShell syntax into a cmd command string. Starting a shell in the workspace is not OS-level containment of everything that shell can do.</p>
+<h3 id="7-keep-evidence-and-apply-execution-guards">7. Keep evidence and apply execution guards<a class="heading-anchor" href="#7-keep-evidence-and-apply-execution-guards" aria-label="Link to 7. Keep evidence and apply execution guards">#</a></h3>
+<p>Each step has an execution journal recording tool calls, arguments, results, and outcomes as they occur. The review evidence is separate from the conversational transcript, so trimming the prompt does not remove the underlying journal.</p>
+<p>The engine distinguishes real tool failure from an informative absence, such as a lookup that finds no matching file. Unrecovered failures prevent a step from claiming completion. Repeating already performed calls without progress triggers a stall guard; successful writes advance the progress generation so a legitimate edit/build repair loop can proceed.</p>
+<p>Commands may declare <code>expectedExitCodes</code> before execution when a nonzero exit is a meaningful result. This is evidence about expected behavior, not permission to relabel any failed operation after the fact.</p>
+<p>Truncated model output stops the step rather than executing a partially formed tool call. Ordinary prose or a JSON example in an assistant response does not execute by default.</p>
+<h3 id="8-review-and-retry">8. Review and retry<a class="heading-anchor" href="#8-review-and-retry" aria-label="Link to 8. Review and retry">#</a></h3>
+<p>When a Review model is bound, the reviewer checks a step&#39;s report against its evidence. With Review content enabled, a writing-only step can be reviewed on its written text. Quick actions also participate in configured review.</p>
+<p>A rejection may trigger another execution attempt with feedback. <code>ReviewRetries = 1</code> allows one retry, or two attempts in total. Increasing retries increases worker and reviewer calls; it does not improve an inherently unsuitable reviewer.</p>
+<p>Revert rejected steps attempts to undo tracked writes from a finally rejected step. Revert refuses to overwrite later writes or subsequent user edits and reports files it cannot safely restore. Shell and MCP side effects are outside this journal.</p>
+<h3 id="9-run-success-criteria">9. Run success criteria<a class="heading-anchor" href="#9-run-success-criteria" aria-label="Link to 9. Run success criteria">#</a></h3>
+<p>Template criteria are shell commands executed through <code>run_command</code> and the permission gate at the end of execution. An exit code matching <code>ExpectedExitCode</code> passes. A required failed criterion prevents Completed; an unavailable or denied required check makes verification incomplete. Optional results are reported without controlling completion.</p>
+<p>Success criteria are an engine-level check, not another worker conversation. They use the run&#39;s tool registry and policy; do not assume the selected worker&#39;s tool allowlist by itself disables checks. Use the template&#39;s permission policy when a command must be forbidden.</p>
+<h3 id="10-persist-and-present">10. Persist and present<a class="heading-anchor" href="#10-persist-and-present" aria-label="Link to 10. Persist and present">#</a></h3>
+<p><code>RunRecorder</code> saves events and results, plus run settings and the template snapshot when provided. The UI renders execution cards, history, routing, and artifacts from those records. Console output ends with a report and outcome-based exit code.</p>
+<h2 id="limits-are-scheduling-boundaries">Limits are scheduling boundaries<a class="heading-anchor" href="#limits-are-scheduling-boundaries" aria-label="Link to Limits are scheduling boundaries">#</a></h2>
+<p>Template limits cover steps, cumulative reported tokens, and elapsed duration. Token accounting includes planning, execution, and review. These limits are checked at engine boundaries; they are not hard provider billing limits or guaranteed mid-request cancellation timers. In-flight work and parallel branches can overshoot. Providers that omit token usage reduce the precision of token accounting.</p>
+<h2 id="implementation-references">Implementation references<a class="heading-anchor" href="#implementation-references" aria-label="Link to Implementation references">#</a></h2>
+<ul>
+<li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.Agents/Orchestrator.cs">Orchestrator</a>, <a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.Agents/Planner.cs">Planner</a>, <a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.Agents/DagScheduler.cs">DAG scheduler</a></li>
+<li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.Agents/Reviewer.cs">Reviewer</a>, <a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.Core/ExecutionJournal.cs">Execution journal</a></li>
+<li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.Agents/SuccessEvaluator.cs">Success evaluator</a>, <a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.Core/RunBudget.cs">Run budget</a></li>
+<li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.Workspace/ContextProvider.cs">Context provider</a>, <a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.Core/WorkspaceGuard.cs">Workspace guard</a></li>
+</ul>
+</article><nav class="pagination" aria-label="Adjacent chapters"><a href="models-and-phases.html"><small>← Previous</small><strong>Models & Phases</strong></a><a href="operations.html"><small>Next →</small><strong>Operations & troubleshooting</strong></a></nav><footer class="page-footer"><span>Enactive · Real, reviewable, recorded action.</span><a href="#main">Back to top ↑</a></footer></main>
+<aside class="page-toc"><p class="nav-group">On this page</p><nav aria-label="Page sections"><a href="#system-structure">System structure</a><a href="#from-a-request-to-an-outcome">From a request to an outcome</a><a href="#limits-are-scheduling-boundaries">Limits are scheduling boundaries</a><a href="#implementation-references">Implementation references</a></nav><a class="source-link" href="https://github.com/StasEdward/Enactive/blob/master/Docs/wiki/Architecture.md">View Markdown source ↗</a></aside></div>
+<dialog id="search-dialog" aria-labelledby="search-title"><div class="search-heading"><h2 id="search-title">Search the wiki</h2><button id="close-search" type="button" aria-label="Close search">Close <kbd>Esc</kbd></button></div><label for="search-input">Find a topic, setting, or command</label><input id="search-input" type="search" placeholder="Try templates, Review, or --workspace" autocomplete="off"><p id="search-status" role="status" aria-live="polite">Search across all chapters.</p><div id="search-results"></div></dialog><div id="copy-status" class="sr-only" role="status" aria-live="polite"></div>
+</body></html>

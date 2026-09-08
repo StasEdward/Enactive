@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Application Overview · Enactive Wiki</title><meta name="description" content="Enactive Wiki: Application Overview. Practical workflows, configuration details, and implementation references.">
+<link rel="canonical" href="https://enactive.dev/wiki/overview.html">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/brand.css"><link rel="stylesheet" href="assets/fonts.css"><link rel="stylesheet" href="wiki.css">
+<script src="theme.js"></script><script src="search-index.js" defer></script><script src="wiki.js" defer></script>
+</head><body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="wiki-header"><a class="brand" href="../index.html" aria-label="Enactive home"><img class="brand-mark" src="assets/mark-loop.svg" alt="" width="32" height="32"><img class="wordmark dark-mark" src="assets/wordmark.svg" alt="Enactive" width="144" height="18"><img class="wordmark light-mark" src="assets/wordmark-light.svg" alt="Enactive" width="144" height="18"></a><a class="wiki-label" href="index.html">Wiki</a><div class="header-actions"><button type="button" class="search-trigger" aria-haspopup="dialog">Search wiki <kbd>Ctrl K</kbd></button><button type="button" id="theme-toggle" aria-label="Switch to light theme">Light theme</button><button type="button" id="menu-toggle" aria-expanded="false" aria-controls="sidebar">Menu</button></div></header>
+<div class="wiki-layout"><aside id="sidebar" class="sidebar"><nav aria-label="Wiki chapters"><p class="nav-group">Start here</p><a href="index.html">Wiki home</a><a href="overview.html" aria-current="page">Application overview</a><a href="getting-started.html">Getting started</a><p class="nav-group">Workflows</p><a href="running-tasks.html">Running tasks</a><a href="console.html">Console & automation</a><a href="templates.html">Templates</a><p class="nav-group">Configuration</p><a href="settings.html">Settings</a><a href="models-and-phases.html">Models & Phases</a><p class="nav-group">Reference</p><a href="architecture.html">Architecture</a><a href="operations.html">Operations & troubleshooting</a></nav><div class="sidebar-footer"><a href="../index.html">← Back to Enactive</a><span>Product & engineering handbook</span></div></aside>
+<main id="main" class="" tabindex="-1"><div class="page-heading"><div class="breadcrumb"><a href="index.html">Documentation</a><span aria-hidden="true">/</span><span>Application overview</span></div><p class="eyebrow">Start here · Enactive</p><h1>Application Overview</h1><div class="page-meta"><span>5 min read</span><span>English</span><a href="https://github.com/StasEdward/Enactive/blob/master/Docs/wiki/Overview.md">Markdown source ↗</a></div></div><details class="mobile-toc"><summary>On this page</summary><nav aria-label="On this page"><a href="#purpose">Purpose</a><a href="#main-use-cases">Main use cases</a><a href="#product-surfaces">Product surfaces</a><a href="#core-concepts">Core concepts</a><a href="#what-completed-means">What “completed” means</a><a href="#implementation-references">Implementation references</a></nav></details><article><h2 id="purpose">Purpose<a class="heading-anchor" href="#purpose" aria-label="Link to Purpose">#</a></h2>
+<p>Enactive makes AI-assisted work actionable and reviewable inside a project folder. It combines a natural-language command interface with explicit workers, model routing, tool permissions, execution records, and optional checks of the result.</p>
+<p>A typical request is “Find the cause of this build failure,” “Update this document to match the code,” or “Fix this bug and run the tests.” The application translates that request into either a quick action or a dependency-aware plan, executes tools, and records the outcome.</p>
+<p>The main product value is control over execution: which model performs each responsibility, what tools a worker can use, which actions require a decision, and what evidence supports the final report.</p>
+<h2 id="main-use-cases">Main use cases<a class="heading-anchor" href="#main-use-cases" aria-label="Link to Main use cases">#</a></h2>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Use case / Suitable entry point / Typical worker"><table>
+<thead>
+<tr>
+<th>Use case</th>
+<th>Suitable entry point</th>
+<th>Typical worker</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Investigate unfamiliar code</td>
+<td>Manual request</td>
+<td>Reviewer or Developer</td>
+</tr>
+<tr>
+<td>Implement a focused change</td>
+<td>Manual request or Fix Bug template</td>
+<td>Developer</td>
+</tr>
+<tr>
+<td>Diagnose a build failure</td>
+<td>Investigate Build Failure template</td>
+<td>Developer or Ops</td>
+</tr>
+<tr>
+<td>Maintain technical documentation</td>
+<td>Documentation Sync template</td>
+<td>Writer</td>
+</tr>
+<tr>
+<td>Build and test a project</td>
+<td>Release Check template</td>
+<td>Developer or Ops</td>
+</tr>
+<tr>
+<td>Add meaningful tests</td>
+<td>Improve Test Coverage template</td>
+<td>Developer</td>
+</tr>
+<tr>
+<td>Repeat a standard workflow</td>
+<td>A custom template</td>
+<td>A worker whose tools match the task</td>
+</tr>
+<tr>
+<td>Run without an open desktop window</td>
+<td>Console template invocation</td>
+<td>Built-in worker selected by the template</td>
+</tr>
+</tbody></table>
+</div><p>Template names express intent, not a complete security boundary. For example, a “changes nothing” task that runs a build may still create build outputs through the shell.</p>
+<h2 id="product-surfaces">Product surfaces<a class="heading-anchor" href="#product-surfaces" aria-label="Link to Product surfaces">#</a></h2>
+<h3 id="desktop-application">Desktop application<a class="heading-anchor" href="#desktop-application" aria-label="Link to Desktop application">#</a></h3>
+<p>The Avalonia desktop UI is the richest host. It provides:</p>
+<ul>
+<li>Workspace selection and remembered per-workspace run preferences.</li>
+<li>A command bar, role picker, autonomy slider, and Stage changes option.</li>
+<li>A template library and a separate template editor under Settings.</li>
+<li>Execution cards, tool results, artifacts, approval cards, and status metrics.</li>
+<li>Routing information showing the models used by phases and individual steps.</li>
+<li>Run history, attempts, timeline, Inbox, environment information, and logging.</li>
+<li>Provider, worker, phase, and MCP configuration.</li>
+</ul>
+<h3 id="console-host">Console host<a class="heading-anchor" href="#console-host" aria-label="Link to Console host">#</a></h3>
+<p>The console host executes one task and exits, or prints timeline/Inbox data. It supports interactive free-text tasks and unattended template tasks. It uses its own environment-based model configuration and built-in workers. See <a href="console.html">Console</a> before transferring a desktop workflow into a scheduled job.</p>
+<h3 id="remote-server-preview">Remote server preview<a class="heading-anchor" href="#remote-server-preview" aria-label="Link to Remote server preview">#</a></h3>
+<p>The separate <code>server/</code> application implements a gateway and a browser interface for remote tasks, host registration, queues, decisions, and results. A production host bridge connecting it to the local Enactive engine is still missing. See <a href="operations.html#remote-server-preview">Remote preview</a>.</p>
+<h2 id="core-concepts">Core concepts<a class="heading-anchor" href="#core-concepts" aria-label="Link to Core concepts">#</a></h2>
+<h3 id="workspace">Workspace<a class="heading-anchor" href="#workspace" aria-label="Link to Workspace">#</a></h3>
+<p>A workspace is an existing folder selected in the desktop app. It supplies the execution root and identifies stored project history. It may be a Git repository, but Git is not a requirement for every task.</p>
+<p>The app remembers the workspace&#39;s autonomy selection, worker selection, and staging preference. These are distinct from the globally configured provider and worker definitions.</p>
+<p>Workspace identity is derived from the normalized folder path. Moving a folder changes that identity; this matters especially for centrally stored data and remembered approvals.</p>
+<h3 id="task-and-run">Task and run<a class="heading-anchor" href="#task-and-run" aria-label="Link to Task and run">#</a></h3>
+<p>A task expresses an outcome. A run is one attempt. A new command-bar submission creates a new task; Retry and Run again preserve the previous task identity and record another attempt.</p>
+<p>Each run can carry its request, events, decisions, artifacts, token usage, settings summary, and a frozen template specification. Historical records explain what happened without consulting today&#39;s template contents.</p>
+<h3 id="worker-and-model">Worker and model<a class="heading-anchor" href="#worker-and-model" aria-label="Link to Worker and model">#</a></h3>
+<p>A worker is a role. Its instructions and tool allowlist define the work it can perform; its model policy selects the model it normally uses. Several workers may use the same model. Different phases may use different models while still serving one selected worker.</p>
+<p>The built-in <strong>Reviewer worker</strong> is a read-only investigator. The <strong>Review phase</strong> is a separate evaluator of another worker&#39;s output. Selecting the Reviewer worker does not enable the Review phase.</p>
+<h3 id="template-and-resolved-specification">Template and resolved specification<a class="heading-anchor" href="#template-and-resolved-specification" aria-label="Link to Template and resolved specification">#</a></h3>
+<p>A template stores a goal, parameter definitions, optional worker ID, permission restrictions, checks, and execution limits. At launch, its parameters are filled and its restrictions are combined with workspace policy into a resolved specification.</p>
+<p>A template does not store a fixed execution graph. Planning still happens on every run.</p>
+<h2 id="what-completed-means">What “completed” means<a class="heading-anchor" href="#what-completed-means" aria-label="Link to What “completed” means">#</a></h2>
+<p>The model&#39;s final sentence is only one input to completion. The engine also considers tool failures, stalled execution, reviewer verdicts when Review is configured, and required success criteria when present.</p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Outcome / Interpretation"><table>
+<thead>
+<tr>
+<th>Outcome</th>
+<th>Interpretation</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Completed</td>
+<td>The run met the completion conditions available to it</td>
+</tr>
+<tr>
+<td>Failed</td>
+<td>Execution/review or a required check established failure</td>
+</tr>
+<tr>
+<td>Incomplete</td>
+<td>Work or required verification could not finish, for example because approval was denied or a limit was reached</td>
+</tr>
+<tr>
+<td>Cancelled</td>
+<td>Execution was cancelled</td>
+</tr>
+</tbody></table>
+</div><p>A Completed run with no deterministic checks is not proof that a build or test suite passed. Inspect both the outcome and the checks. Likewise, a recorded file path is not a promise that the file remains unchanged after the run.</p>
+<h2 id="implementation-references">Implementation references<a class="heading-anchor" href="#implementation-references" aria-label="Link to Implementation references">#</a></h2>
+<ul>
+<li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.App.Ui/MainWindow.axaml">Desktop layout</a></li>
+<li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.App.Ui/MainWindow.axaml.cs">Desktop composition and run lifecycle</a></li>
+<li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.Agents/DefaultWorkers.cs">Workers</a></li>
+<li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.Core/Templates.cs">Task templates</a></li>
+<li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.Core/RunReport.cs">Run report</a></li>
+</ul>
+</article><nav class="pagination" aria-label="Adjacent chapters"><a href="index.html"><small>← Previous</small><strong>Wiki home</strong></a><a href="getting-started.html"><small>Next →</small><strong>Getting started</strong></a></nav><footer class="page-footer"><span>Enactive · Real, reviewable, recorded action.</span><a href="#main">Back to top ↑</a></footer></main>
+<aside class="page-toc"><p class="nav-group">On this page</p><nav aria-label="Page sections"><a href="#purpose">Purpose</a><a href="#main-use-cases">Main use cases</a><a href="#product-surfaces">Product surfaces</a><a href="#core-concepts">Core concepts</a><a href="#what-completed-means">What “completed” means</a><a href="#implementation-references">Implementation references</a></nav><a class="source-link" href="https://github.com/StasEdward/Enactive/blob/master/Docs/wiki/Overview.md">View Markdown source ↗</a></aside></div>
+<dialog id="search-dialog" aria-labelledby="search-title"><div class="search-heading"><h2 id="search-title">Search the wiki</h2><button id="close-search" type="button" aria-label="Close search">Close <kbd>Esc</kbd></button></div><label for="search-input">Find a topic, setting, or command</label><input id="search-input" type="search" placeholder="Try templates, Review, or --workspace" autocomplete="off"><p id="search-status" role="status" aria-live="polite">Search across all chapters.</p><div id="search-results"></div></dialog><div id="copy-status" class="sr-only" role="status" aria-live="polite"></div>
+</body></html>
