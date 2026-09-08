@@ -275,6 +275,22 @@ catch (OperationCanceledException)
     Console.WriteLine("Cancelled.");
     return 130;
 }
+catch (Exception ex)
+{
+    // The backstop. A scheduled run's whole point is an exit code somebody can read, and an
+    // unhandled exception gives a stack trace and whatever exit code the runtime picks - which to a
+    // scheduler is indistinguishable from the machine losing power mid-job.
+    //
+    // Found on 2026-09-08 while verifying --param: a provider URL with a bad port threw
+    // UriFormatException out of the provider during PLANNING, straight past the HttpRequestException
+    // catch above, and the process died with a stack trace and no report. The two catches above stay
+    // because each says something useful and specific; this one exists so that nothing gets out.
+    Console.WriteLine();
+    Console.Error.WriteLine("x The run stopped on an error nothing handled.");
+    Console.Error.WriteLine($"  {ex.GetType().Name}: {ex.Message}");
+    Console.Error.WriteLine("  Check the provider settings and the log; nothing further was run.");
+    return RunReport.ExitCodeFor(RunOutcomeKind.Failed);
+}
 
 Console.WriteLine(new string('-', 72));
 
