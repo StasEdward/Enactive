@@ -49,6 +49,28 @@ public static class FaultCode
 /// </summary>
 public sealed record RemoteFault(string Code, FaultDisposition Disposition, string Message);
 
+/// <summary>
+/// What a hub method answers with: a value, or a refusal.
+///
+/// <para><b>A refusal is a RETURN VALUE and not an exception,</b> and that is the whole point of
+/// this type. The first version put the fault code at the front of a <c>HubException</c>'s message,
+/// which is the only channel an exception has - and it does not survive the trip. SignalR prefixes
+/// the text with "An unexpected error occurred invoking 'X' on the server", so the code is no
+/// longer at the front; and outside Development the server does not send the exception's text at
+/// all, so the code is not there in any position. Every refusal would have reached the Host as an
+/// unrecognised failure, which its own rules correctly treat as a transport problem - and retry,
+/// for ever.</para>
+///
+/// <para>Nothing before the end-to-end test could have found that: both sides were tested against a
+/// stand-in for the other, and a stand-in raises the exception the code expects.</para>
+/// </summary>
+public sealed record HostReply<T>(T? Value = default, RemoteFault? Fault = null)
+{
+    public static HostReply<T> Ok(T value) => new(value);
+
+    public static HostReply<T> Refused(RemoteFault fault) => new(Fault: fault);
+}
+
 /// <summary>The classification table, and the rule for a code that is not in it.</summary>
 public static class RemoteFaults
 {

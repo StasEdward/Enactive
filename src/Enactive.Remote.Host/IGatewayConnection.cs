@@ -31,27 +31,6 @@ public sealed class GatewayRefusedException(string code, string message) : Excep
 
     public FaultDisposition Disposition => RemoteFaults.DispositionOf(Code);
 
-    /// <summary>
-    /// Reads a refusal back out of a hub error.
-    ///
-    /// <para>SignalR delivers only the message text, so the gateway puts the code at the front of
-    /// it. A message with nothing recognisable in front is NOT treated as a coded refusal: an
-    /// unrecognised failure is a transport failure until something says otherwise, and that keeps
-    /// the safe answer - retry - as the default.</para>
-    /// </summary>
-    public static GatewayRefusedException? TryRead(string? message)
-    {
-        var separator = message?.IndexOf(':') ?? -1;
-
-        if (message is null || separator <= 0)
-        {
-            return null;
-        }
-
-        var code = message[..separator].Trim();
-
-        return RemoteFaults.KnownCodes.Contains(code)
-            ? new GatewayRefusedException(code, message[(separator + 1)..].Trim())
-            : null;
-    }
+    /// <summary>The gateway's own refusal, as it arrived.</summary>
+    public static GatewayRefusedException From(RemoteFault fault) => new(fault.Code, fault.Message);
 }

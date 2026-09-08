@@ -47,17 +47,17 @@ public sealed class HostHub(HostService hosts, HostConnections connections) : Hu
         return base.OnDisconnectedAsync(exception);
     }
 
-    public Task<IReadOnlyList<HostCommand>> Sync(List<WorkspaceRef> workspaces)
+    public Task<HostReply<IReadOnlyList<HostCommand>>> Sync(List<WorkspaceRef> workspaces)
         => Guard(() => hosts.SyncAsync(HostId, workspaces, Context.ConnectionAborted));
 
-    public Task<bool> Acknowledge(string commandId)
+    public Task<HostReply<bool>> Acknowledge(string commandId)
         => Guard(async () =>
         {
             await hosts.AcknowledgeAsync(HostId, commandId, Context.ConnectionAborted);
             return true;
         });
 
-    public Task<bool> Publish(HostEvent published)
+    public Task<HostReply<bool>> Publish(HostEvent published)
         => Guard(async () =>
         {
             await hosts.PublishAsync(HostId, published, Context.ConnectionAborted);
@@ -68,22 +68,27 @@ public sealed class HostHub(HostService hosts, HostConnections connections) : Hu
         ?? throw new HubException("This connection has no identity.");
 
     /// <summary>
-    /// Turns a refusal into something a Host can act on.
+    /// Turns a refusal into an ANSWER rather than an exception.
     ///
-    /// <para>The message a <see cref="HubException"/> carries is the only thing that survives to
-    /// the other end, so the fault CODE goes in it, first and machine-readable. Without that a Host
-    /// holding a durable outbox cannot tell "retry this" from "never send this again" - which is
-    /// the whole reason <see cref="FaultCode"/> exists.</para>
+    /// <para>An exception carries only its message to the other end, and that message does not
+    /// survive: SignalR prefixes it, and outside Development it replaces it entirely. A code put
+    /// inside it therefore reaches the Host mangled or not at all - and a Host that cannot read the
+    /// code treats the refusal as a transport failure and retries it for ever, which is exactly the
+    /// right rule applied to the wrong information. Found by the end-to-end test, which is the
+    /// first thing that ever ran both halves against each other.</para>
+    ///
+    /// <para>An unexpected exception still escapes as one. It is not a refusal, nothing about it is
+    /// classifiable, and dressing it up as a coded answer would tell the Host something false.</para>
     /// </summary>
-    private static async Task<T> Guard<T>(Func<Task<T>> action)
+    private static async Task<HostReply<T>> Guard<T>(Func<Task<T>> action)
     {
         try
         {
-            return await action();
+            return HostReply<T>.Ok(await action());
         }
         catch (GatewayFault fault)
         {
-            throw new HubException($"{fault.Code}: {fault.Message}");
+            return HostReply<T>.Refused(fault.ToContract());
         }
     }
 }
