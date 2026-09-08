@@ -1688,9 +1688,18 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     public Task<DecisionOutcome> RequestAsync(DecisionRequest request, CancellationToken ct)
     {
         // Already approved for this session or this workspace? Allow silently — no click needed.
-        if (!string.IsNullOrEmpty(request.Subject)
-            && (_sessionApprovals.Contains(request.Subject) || WorkspaceApproves(request.Subject)))
-            return Task.FromResult(new DecisionOutcome(AllowOptionId(request)));
+        if (!string.IsNullOrEmpty(request.Subject))
+        {
+            // Which one answered is carried back, so the timeline can say so. The two used to be
+            // one line and one millisecond apart.
+            if (_sessionApprovals.Contains(request.Subject))
+                return Task.FromResult(new DecisionOutcome(
+                    AllowOptionId(request), "remembered for this session"));
+
+            if (WorkspaceApproves(request.Subject))
+                return Task.FromResult(new DecisionOutcome(
+                    AllowOptionId(request), "remembered for this workspace"));
+        }
 
         var tcs = new TaskCompletionSource<DecisionOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -1737,8 +1746,12 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                 var allowId = AllowOptionId(request);
                 _vm.DecisionOptions.Add(new DecisionOptionViewModel(
                     "Allow (session)", () => { _sessionApprovals.Add(subject); ResolveDecision(allowId); }));
-                _vm.DecisionOptions.Add(new DecisionOptionViewModel(
-                    "Allow (workspace)", () => { SaveWorkspaceApproval(subject); ResolveDecision(allowId); }));
+
+                // Not offered for a shell: that approval would outlive the process, and what it
+                // grants is arbitrary command execution rather than one named action.
+                if (request.MayBeRemembered)
+                    _vm.DecisionOptions.Add(new DecisionOptionViewModel(
+                        "Allow (workspace)", () => { SaveWorkspaceApproval(subject); ResolveDecision(allowId); }));
             }
 
             _vm.IsDecisionVisible = true;
@@ -1966,13 +1979,37 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         _vm.ModelLabel = $"model: {_model}";
     }
 
-    private static PermissionPolicy PolicyFor(int level) => level switch
+    private PermissionPolicy PolicyFor(int level) => WithShellPolicy(level switch
     {
         0 => new PermissionPolicy(PermissionLevel.Observe, new[] { "*" }, Array.Empty<string>()),
         1 => new PermissionPolicy(PermissionLevel.Suggest, new[] { "*" }, Array.Empty<string>()),
         2 => new PermissionPolicy(PermissionLevel.Execute, new[] { "*" }, new[] { "run_command", "run_powershell", "git", "docker" }),
         _ => new PermissionPolicy(PermissionLevel.Autonomous, new[] { "*" }, Array.Empty<string>())
-    };
+    });
+
+    /// <summary>
+    /// The shells, decided separately from the autonomy tier.
+    ///
+    /// <para>Separately because they are a different KIND of permission. Every other tool is asked
+    /// for one named action against a path this engine resolves and checks; a shell is handed a
+    /// command line and the operating system does the rest, so the workspace is where it starts and
+    /// nothing more. At the Autonomous tier that is what "act without asking" already meant, which
+    /// is why <see cref="ShellCommandPolicy.Follow"/> is the default and changes nothing — the
+    /// control exists so that choosing a high tier for the file tools does not silently choose it
+    /// for command execution too.</para>
+    /// </summary>
+    private PermissionPolicy WithShellPolicy(PermissionPolicy policy)
+    {
+        var shells = new[] { "run_command", "run_powershell" };
+        return _settings.ShellCommands switch
+        {
+            ShellCommandPolicy.Off =>
+                policy with { Deny = policy.Deny.Concat(shells).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() },
+            ShellCommandPolicy.Ask =>
+                policy with { AskBefore = policy.AskBefore.Concat(shells).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() },
+            _ => policy
+        };
+    }
 
     private sealed class EmptyProvider : IServiceProvider
     {

@@ -2338,7 +2338,9 @@ public sealed class Orchestrator : IOrchestrator
                             new[] { new DecisionOption("allow", "Allow"), new DecisionOption("deny", "Deny") },
                             RecommendedOptionId: "allow",
                             Subject: _tools.RequiresApprovalOf(call.Name) ? null : call.Name,
-                            FullDetail: DescribeCall(call));
+                            FullDetail: DescribeCall(call),
+                            // A shell may be approved for this session and no longer than that.
+                            SessionOnly: ShellTools.IsShell(call.Name));
 
                         // Parallel steps must not race to put two cards on screen at once.
                         DecisionOutcome outcome;
@@ -2346,7 +2348,11 @@ public sealed class Orchestrator : IOrchestrator
                         try { outcome = await _decisions.RequestAsync(decisionRequest, ct); }
                         finally { _decisionGate.Release(); }
                         approved = string.Equals(outcome.OptionId, "allow", StringComparison.OrdinalIgnoreCase);
-                        yield return Ev(EventKind.DecisionResolved, $"{call.Name}: {(approved ? "allowed" : "denied")}");
+                        // Says WHO answered. A standing approval and a person clicking Allow used to
+                        // produce the same line, separated only by how long it took.
+                        var by = string.IsNullOrEmpty(outcome.Because) ? "" : $" ({outcome.Because})";
+                        yield return Ev(EventKind.DecisionResolved,
+                                        $"{call.Name}: {(approved ? "allowed" : "denied")}{by}");
                     }
                     else
                     {

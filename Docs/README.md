@@ -19,7 +19,7 @@ Command -> Intent -> Context(+Environment) -> Planner -> Orchestrator -> Worker(
 
 ## Solution
 
-`Enactive.sln`, **8 projects** (`net10.0`, pinned via `global.json`) plus `tests/Enactive.Engine.Tests` (965 tests)
+`Enactive.sln`, **8 projects** (`net10.0`, pinned via `global.json`) plus `tests/Enactive.Engine.Tests` (976 tests)
 and `tests/Enactive.Mcp.TestServer`. The engine is dependency-light: `Core`/`Providers`/`Tools`/`Agents`/`App.Console`
 use **zero external NuGet packages**; only `Workspace` (Microsoft.Data.Sqlite, SQLitePCLRaw, MySqlConnector), `Secrets`
 (ProtectedData) and `App.Ui` (Avalonia ×3) pull anything in. `Enactive.Agents` references **only** `Core` — a constant

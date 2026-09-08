@@ -2,6 +2,7 @@ namespace Enactive.App.Ui;
 
 using System.Text.Json;
 using Enactive.Core.Context;
+using Enactive.Core.Tools;
 
 /// <summary>
 /// Remembered "Allow (workspace)" approvals — which tools may run in which workspace without asking
@@ -20,6 +21,12 @@ using Enactive.Core.Context;
 ///
 /// A legacy file left in a workspace is IGNORED, never imported: importing it would import exactly
 /// the content an agent may have planted. Those approvals are one click each to grant again.
+///
+/// <para>A SHELL is never stored and never reported as approved, whatever is in the file — see
+/// <see cref="ShellTools"/>. The button that granted it was the same button as for read_file and
+/// meant unlimited command execution on the machine for as long as the workspace exists. Refused
+/// here rather than only at the card, so no caller can forget; entries already written by earlier
+/// builds stay in the file and stop being honoured, which is the reversible way round.</para>
 /// </summary>
 internal static class ApprovalStore
 {
@@ -34,7 +41,7 @@ internal static class ApprovalStore
     /// <summary>Whether this workspace has a standing approval for the tool.</summary>
     public static bool Approves(Guid workspaceId, string tool)
     {
-        if (string.IsNullOrEmpty(tool))
+        if (string.IsNullOrEmpty(tool) || ShellTools.IsShell(tool))
             return false;
 
         return Load().TryGetValue(Key(workspaceId), out var tools)
@@ -44,7 +51,7 @@ internal static class ApprovalStore
     /// <summary>Records an approval. Only ever called from a click on the decision card.</summary>
     public static void Approve(Guid workspaceId, string tool)
     {
-        if (string.IsNullOrEmpty(tool))
+        if (string.IsNullOrEmpty(tool) || ShellTools.IsShell(tool))
             return;
 
         lock (Gate)

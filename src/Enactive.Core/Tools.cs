@@ -49,6 +49,34 @@ public static class MutatingTools
     public static bool Changes(string tool) => Names.Contains(tool);
 }
 
+/// <summary>
+/// The tools whose argument is a COMMAND LINE the operating system interprets.
+///
+/// <para>The workspace is where they start, and that is all it is. Every file tool and both
+/// artifact stores resolve through <see cref="Context.WorkspaceGuard"/>, which refuses a path that
+/// leaves the root and follows links to find out; a shell is handed a string and the OS does the
+/// rest. <c>cd</c> elsewhere, an absolute path, a pipe to a network tool - none of it is reachable
+/// from here, and pretending otherwise by inspecting the command text would be the guard that is
+/// stepped around by writing <c>./x</c> instead of <c>x</c>.</para>
+///
+/// <para>So what this list is for is not containment. It marks the calls whose approval must not
+/// outlive the session: <c>run_command</c> approved once for a workspace is unlimited command
+/// execution on the machine, forever, from one click - and it was offered by the same button as
+/// <c>read_file</c>. See <c>ApprovalStore</c>.</para>
+///
+/// <para>Not <c>git</c> or <c>docker</c>: those take an argument array for one named program, which
+/// is a smaller thing to approve. <c>docker run</c> can mount anything and is a real hole in that
+/// reasoning; it is written down rather than half-closed.</para>
+/// </summary>
+public static class ShellTools
+{
+    private static readonly HashSet<string> Names =
+        new(StringComparer.OrdinalIgnoreCase) { "run_command", "run_powershell" };
+
+    /// <summary>Whether a call by this name hands a command line to the operating system.</summary>
+    public static bool IsShell(string tool) => Names.Contains(tool);
+}
+
 /// <summary>Structured tool result (PLAN_v2 §2A.2) — never a bare string.</summary>
 /// <param name="IsAnswer">
 /// Set on a FAILED result that is nevertheless the answer to what was asked: the file the model

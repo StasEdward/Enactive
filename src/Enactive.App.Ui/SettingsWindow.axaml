@@ -295,6 +295,15 @@
                                        Text="How many characters of tool output the reviewer sees, shared between every call the step made. It is divided, not per call: three reads get a usable slice each, thirteen get about 320 characters each — too little to check anything quoted from a source file. Raise it for work that reads a lot; it is paid on every review call." />
                             <TextBox Text="{Binding EvidenceBudgetText}" PlaceholderText="6000 = the default" />
 
+                            <TextBlock Classes="label" Text="Shell commands" />
+                            <TextBlock Classes="hint"
+                                       Text="run_command and run_powershell hand a command line to the operating system. The workspace is where it starts and nothing more: every other tool asks for one named action against a path this app resolves and checks, a shell can cd anywhere the account can reach. Decided here rather than by the autonomy slider, so raising that for the file tools does not raise it for command execution. An approval for a shell is never remembered beyond the session." />
+                            <ComboBox SelectedIndex="{Binding ShellCommandsIndex}" HorizontalAlignment="Stretch">
+                                <ComboBoxItem Content="Follow the autonomy level (default)" />
+                                <ComboBoxItem Content="Always ask, even when autonomous" />
+                                <ComboBoxItem Content="Off — refuse shell commands" />
+                            </ComboBox>
+
                             <TextBlock Classes="label" Text="Keep logs for (days)" />
                             <TextBlock Classes="hint"
                                        Text="One log file per day, in %APPDATA%\Enactive\logs. Older files are deleted when the log rolls over or when you lower this, and the new day's file records what it removed. 0 keeps everything — which is what the app did before this setting existed." />

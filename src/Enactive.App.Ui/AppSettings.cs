@@ -95,6 +95,21 @@ internal sealed class PhaseBindings
 /// Persisted app settings. The team-of-models schema (Providers / Workers / Bindings) is authoritative;
 /// the legacy single-endpoint + Anthropic-reasoner fields are read once to migrate an old file, then inert.
 /// </summary>
+/// <summary>
+/// What may hand a command line to the operating system.
+/// </summary>
+internal enum ShellCommandPolicy
+{
+    /// <summary>As the autonomy tier says. The behaviour that shipped, and the default.</summary>
+    Follow,
+
+    /// <summary>Always ask, at every tier — including Autonomous.</summary>
+    Ask,
+
+    /// <summary>Never. run_command and run_powershell are refused rather than asked about.</summary>
+    Off
+}
+
 internal sealed partial class AppSettings
 {
     /// <summary>The newest settings.json schema this build writes. See <see cref="SchemaVersion"/>.</summary>
@@ -189,6 +204,11 @@ internal sealed partial class AppSettings
     // files worth reading when something goes wrong - and it is also most of their size, so turning
     // it off keeps the record of every call and drops the bodies.
     public bool LogPromptBodies { get; set; } = true;
+
+    // What may run a command line. Separate from the autonomy tier because it is a different kind of
+    // permission: every other tool asks for one named action against a checked path, a shell is
+    // handed a string and the OS does the rest. Follow is the default and changes nothing.
+    public ShellCommandPolicy ShellCommands { get; set; } = ShellCommandPolicy.Follow;
 
     // What the main window's close button does. True - the default - hides it to the tray, where a
     // run it started keeps going; false makes closing the window quit the program, asking first if
@@ -441,6 +461,7 @@ internal sealed partial class AppSettings
         EvidenceBudget = EvidenceBudget,
         LogRetentionDays = LogRetentionDays,
         LogPromptBodies = LogPromptBodies,
+        ShellCommands = ShellCommands,
         CloseToTray = CloseToTray,
         BaseUrl = BaseUrl,
         Model = Model,

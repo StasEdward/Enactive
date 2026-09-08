@@ -273,10 +273,17 @@ public sealed class ScriptedDecisionHandler : IDecisionHandler
 
     public List<DecisionRequest> Requests { get; } = new();
 
+    /// <summary>
+    /// How the answer was reached, when it was not reached by a person just now - what a real UI
+    /// puts here when a standing approval answered instead of a click.
+    /// </summary>
+    public string? Because { get; set; }
+
     public Task<DecisionOutcome> RequestAsync(DecisionRequest request, CancellationToken ct)
     {
         Requests.Add(request);
-        return Task.FromResult(new DecisionOutcome(Script.Count > 0 ? Script.Dequeue() : Answer));
+        return Task.FromResult(
+            new DecisionOutcome(Script.Count > 0 ? Script.Dequeue() : Answer, Because));
     }
 }
 

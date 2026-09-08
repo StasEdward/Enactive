@@ -112,6 +112,7 @@ internal sealed partial class SettingsViewModel : ObservableObject
     private string _evidenceBudgetText;
     private string _logRetentionDaysText;
     private bool _logPromptBodies;
+    private int _shellCommandsIndex;
     private bool _closeToTray;
     private bool _runAtStartup;
     private string _startupNote = string.Empty;
@@ -208,6 +209,7 @@ internal sealed partial class SettingsViewModel : ObservableObject
         _evidenceBudgetText = _working.EvidenceBudget.ToString();
         _logRetentionDaysText = _working.LogRetentionDays.ToString();
         _logPromptBodies = _working.LogPromptBodies;
+        _shellCommandsIndex = (int)_working.ShellCommands;
         _closeToTray = _working.CloseToTray;
 
         // Read from the system, not from settings.json: the Run key is the truth, and a copy would
@@ -272,6 +274,7 @@ internal sealed partial class SettingsViewModel : ObservableObject
     public string EvidenceBudgetText { get => _evidenceBudgetText; set => Set(ref _evidenceBudgetText, value); }
     public string LogRetentionDaysText { get => _logRetentionDaysText; set => Set(ref _logRetentionDaysText, value); }
     public bool LogPromptBodies { get => _logPromptBodies; set => Set(ref _logPromptBodies, value); }
+    public int ShellCommandsIndex { get => _shellCommandsIndex; set => Set(ref _shellCommandsIndex, value); }
 
     /// <summary>
     /// What the main window's close button does. Two mutually exclusive options, so the pair moves
@@ -458,6 +461,9 @@ internal sealed partial class SettingsViewModel : ObservableObject
             ? d
             : FileLogSink.DefaultRetentionDays;
         _working.LogPromptBodies = LogPromptBodies;
+        _working.ShellCommands = Enum.IsDefined((ShellCommandPolicy)ShellCommandsIndex)
+            ? (ShellCommandPolicy)ShellCommandsIndex
+            : ShellCommandPolicy.Follow;
         _working.CloseToTray = CloseToTray;
 
         var startupRefused =
