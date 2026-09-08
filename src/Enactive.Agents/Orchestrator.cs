@@ -224,21 +224,6 @@ public sealed class Orchestrator : IOrchestrator
         // The work itself is therefore scoped where it runs - see InScopeAsync and the two pumps.
         using var _logScope = LogScope.Begin(runId, taskId);
 
-        // The step number rides along in PayloadJson so a UI can attribute an event to the right
-        // step card even when several steps are running at once. No schema change needed.
-        WorkEvent Ev(EventKind kind, string summary, int? stepNo = null)
-            => new(Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow, kind, summary,
-                   stepNo is { } n ? $"{{\"step\":{n}}}" : null);
-
-        // A routing decision carries its choice as VALUES, not only as a sentence. The panel that
-        // answers "which model actually ran this" reads the payload, so rewording a summary cannot
-        // change what it shows - the same reason step outcomes stopped being parsed out of prose.
-        WorkEvent Route(string purpose, ModelRef reference, string summary,
-                        int? stepNo = null, StepComplexity? complexity = null)
-            => new(Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow, EventKind.Routed, summary,
-                   WorkEventPayload.RoutePayload(purpose, reference.ProviderId, reference.Model,
-                                                 stepNo, complexity?.ToString().ToLowerInvariant()));
-
         // Tokens spent OUTSIDE the tool loop. The loop emits its own usage; planning and review call
         // the provider directly, so their cost was spent on every run and counted on none - which
         // made the run total execute-only while the reviewer, on the most expensive model bound, read
@@ -254,30 +239,32 @@ public sealed class Orchestrator : IOrchestrator
             stepsAlreadyRun: resume?.StepsRun ?? 0,
             tokensAlreadySpent: resume?.TokensSpent ?? 0);
 
-        WorkEvent UsageOutsideLoop(
-            string purpose, ModelRef reference, int prompt, int completion, int? stepNo = null)
-        {
-            budget.TokensUsed(prompt, completion);
-            return new(Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow, EventKind.UsageReported,
-                       $"tokens: {prompt} in, {completion} out ({reference.ProviderId}/{reference.Model}, {purpose})",
-                       WorkEventPayload.UsagePayload(prompt, completion, stepNo,
-                                                     reference.ProviderId, reference.Model, purpose));
-        }
+        // Files the interrupted run produced come back too. They are on disk, they are what this
+        // task has made, and a resumed run whose closing summary named only the second half of them
+        // would be the same defect as a record that says it has no events.
+        var artifacts = resume is null
+            ? new List<ArtifactRef>()
+            : new List<ArtifactRef>(resume.Artifacts.Select(RestoredArtifact));
 
-        yield return new WorkEvent(
-            Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow, EventKind.IntentReceived,
+        // Who this run is, what it has spent and what it has produced - and, from those, every event
+        // it emits. See RunScope: the five factories that used to live here as local functions were
+        // all closures over exactly these four things.
+        var scope = new RunScope(runId, taskId, budget, artifacts);
+
+        yield return scope.Event(
+            EventKind.IntentReceived,
             $"Intent: {intent.RawText}",
             // The request as a value, so a retry can ask for the same thing rather than reconstruct
             // it from the wording of a log line.
             WorkEventPayload.RequestPayload(intent.RawText));
-        yield return Ev(EventKind.ContextAssembled,
+        yield return scope.Ev(EventKind.ContextAssembled,
             $"Workspace '{_workspace.Name}' at {_workspace.RootPath}"
             + (intent.Context.GitBranch is { } branch ? $" (git: {branch})" : "")
             + (intent.Context.Environment is { } envInfo ? $" · {envInfo.OneLine()}" : ""));
 
         var worker = _workers.Get(intent.WorkerId);
         var model = _router.Resolve(ModelPurpose.Execute, worker) ?? worker.ModelPolicy.Preferred;
-        yield return Route("worker", model, $"Worker '{worker.Role}' -> model {model.ProviderId}/{model.Model}");
+        yield return scope.Route("worker", model, $"Worker '{worker.Role}' -> model {model.ProviderId}/{model.Model}");
 
         var provider = _providers.Create(model.ProviderId);
 
@@ -286,7 +273,7 @@ public sealed class Orchestrator : IOrchestrator
         var planProvider = _providers.Create(planRef.ProviderId);
         var planModel = planRef.Model;
         if (planRef.ProviderId != model.ProviderId || planRef.Model != model.Model)
-            yield return Route("plan", planRef, $"Planner -> {planRef.ProviderId}/{planRef.Model}");
+            yield return scope.Route("plan", planRef, $"Planner -> {planRef.ProviderId}/{planRef.Model}");
 
         // Review phase: on iff a Review model is bound.
         var reviewRef = _router.Resolve(ModelPurpose.Review, worker);
@@ -294,7 +281,7 @@ public sealed class Orchestrator : IOrchestrator
         var reviewProvider = reviewOn ? _providers.Create(reviewRef!.ProviderId) : null;
         var reviewModel = reviewRef?.Model ?? "";
         if (reviewOn)
-            yield return Route("review", reviewRef!, $"Reviewer -> {reviewRef!.ProviderId}/{reviewRef.Model}");
+            yield return scope.Route("review", reviewRef!, $"Reviewer -> {reviewRef!.ProviderId}/{reviewRef.Model}");
 
         // ── Understand / Plan (reasoner when multi-agent) ─────────────────────
         //
@@ -308,7 +295,7 @@ public sealed class Orchestrator : IOrchestrator
                 () => _planner.PlanAsync(intent.RawText, intent.Context, planProvider, planModel, ct));
 
         if (plan.PromptTokens + plan.CompletionTokens > 0)
-            yield return UsageOutsideLoop(
+            yield return scope.Usage(
                 WorkEventPayload.WorkPurpose.Plan, planRef, plan.PromptTokens, plan.CompletionTokens);
 
         // A plan nobody could read is not a decision to do one thing. The two were the same value
@@ -316,7 +303,7 @@ public sealed class Orchestrator : IOrchestrator
         // became one unplanned action under a heading cut from the request - and the run showed
         // nothing at all. The work still happens; what changes is that the run says on what basis.
         if (plan.Readout == PlanReadout.Unreadable)
-            yield return Ev(EventKind.ErrorObserved,
+            yield return scope.Ev(EventKind.ErrorObserved,
                 "The planner's answer could not be read, twice. Running this as a single action — "
                 + "that is a fallback, not a decision that the request has one step.");
 
@@ -332,35 +319,9 @@ public sealed class Orchestrator : IOrchestrator
                 ChatMessage.User(BuildUserPrompt(intent))
             };
 
-        // Files the interrupted run produced come back too. They are on disk, they are what this
-        // task has made, and a resumed run whose closing summary named only the second half of them
-        // would be the same defect as a record that says it has no events.
-        var artifacts = resume is null
-            ? new List<ArtifactRef>()
-            : new List<ArtifactRef>(resume.Artifacts.Select(RestoredArtifact));
-
-        // The one place a run ends. TaskCompleted is emitted for Completed and NOTHING else — the
-        // whole point of the outcome type is that a failure cannot arrive dressed as a success — and
-        // the kind travels in the payload so the UI, the history and the Inbox read a value instead
-        // of parsing the wording.
-        WorkEvent Terminal(RunOutcomeKind kind, string? reason)
-            => new(Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow,
-                   kind == RunOutcomeKind.Completed ? EventKind.TaskCompleted : EventKind.TaskFailed,
-                   kind == RunOutcomeKind.Completed
-                       ? SummarizeArtifacts(artifacts)
-                       : $"{kind}{(string.IsNullOrWhiteSpace(reason) ? "" : ": " + reason)}",
-                   WorkEventPayload.OutcomePayload(kind, reason));
-
-        // A criterion's result as VALUES as well as a sentence - the same reason every other event
-        // carries a payload: rewording a summary must not change what a reader of the run sees.
-        WorkEvent Criterion(CriterionResult r)
-            => new(Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow, EventKind.CriterionEvaluated,
-                   r.Describe(),
-                   WorkEventPayload.CriterionPayload(r.Name, r.Outcome.ToString(), r.Required, r.ExitCode));
-
         if (plan.Disposition == IntentDisposition.QuickAction)
         {
-            yield return Ev(EventKind.Routed, $"Quick action: {plan.Title}");
+            yield return scope.Ev(EventKind.Routed, $"Quick action: {plan.Title}");
 
             // Drained through a channel for the same reason as the DAG path below: the work runs in a
             // task that owns the log scope, while this method only yields what the channel hands it.
@@ -410,7 +371,7 @@ public sealed class Orchestrator : IOrchestrator
                         if (budget.Exhausted is { } spent)
                         {
                             quickResult.Set(StepOutcomeKind.Incomplete, spent);
-                            quick.Writer.TryWrite(Ev(EventKind.ErrorObserved, spent));
+                            quick.Writer.TryWrite(scope.Ev(EventKind.ErrorObserved, spent));
                             break;
                         }
 
@@ -431,7 +392,7 @@ public sealed class Orchestrator : IOrchestrator
                             // Routed as the worker's model, because from here on it IS the model
                             // doing the work: a panel that still named the unreachable one would be
                             // reporting a binding rather than what ran.
-                            quick.Writer.TryWrite(Route("worker", fallback,
+                            quick.Writer.TryWrite(scope.Route("worker", fallback,
                                 $"{activeRef.ProviderId}/{activeRef.Model} failed ({ex.Message}) — "
                                 + $"retrying on the fallback {fallback.ProviderId}/{fallback.Model}"));
 
@@ -445,19 +406,19 @@ public sealed class Orchestrator : IOrchestrator
                         if (!reviewOn || !quickResult.Succeeded)
                             break;
 
-                        quick.Writer.TryWrite(Ev(EventKind.ReviewRequested, "reviewing…"));
+                        quick.Writer.TryWrite(scope.Ev(EventKind.ReviewRequested, "reviewing…"));
                         var (review, mode) = await ReviewAsync(
                             plan.Title, messages, journal, evidenceStart, artifacts, store,
                             reviewProvider!, reviewModel, ct);
 
                         if (review.PromptTokens + review.CompletionTokens > 0)
-                            quick.Writer.TryWrite(UsageOutsideLoop(
+                            quick.Writer.TryWrite(scope.Usage(
                                 WorkEventPayload.WorkPurpose.Review, reviewRef!,
                                 review.PromptTokens, review.CompletionTokens));
 
                         if (review.Pass)
                         {
-                            quick.Writer.TryWrite(Ev(EventKind.ReviewPassed,
+                            quick.Writer.TryWrite(scope.Ev(EventKind.ReviewPassed,
                                 $"PASS ({mode} review){(string.IsNullOrEmpty(review.Notes) ? "" : ": " + review.Notes)}"));
 
                             // The same second question the DAG path asks, on the same grounds it is
@@ -474,24 +435,24 @@ public sealed class Orchestrator : IOrchestrator
                                 break;
 
                             if (quickProven.Prompt + quickProven.Completion > 0)
-                                quick.Writer.TryWrite(UsageOutsideLoop(
+                                quick.Writer.TryWrite(scope.Usage(
                                     WorkEventPayload.WorkPurpose.Review, reviewRef!,
                                     quickProven.Prompt, quickProven.Completion));
 
                             if (quickProven.Verdict.Sound)
                             {
-                                quick.Writer.TryWrite(Ev(EventKind.ReviewPassed,
+                                quick.Writer.TryWrite(scope.Ev(EventKind.ReviewPassed,
                                     "PASS (soundness): " + quickProven.Verdict.Reason));
                                 break;
                             }
 
                             review = new ReviewResult(false, quickProven.Verdict.Reason);
-                            quick.Writer.TryWrite(Ev(EventKind.ReviewFailed,
+                            quick.Writer.TryWrite(scope.Ev(EventKind.ReviewFailed,
                                 "FAIL (soundness): " + quickProven.Verdict.Reason));
                         }
                         else
                         {
-                            quick.Writer.TryWrite(Ev(EventKind.ReviewFailed, $"FAIL ({mode} review): {review.Notes}"));
+                            quick.Writer.TryWrite(scope.Ev(EventKind.ReviewFailed, $"FAIL ({mode} review): {review.Notes}"));
                         }
 
                         if (attempt < maxQuickAttempts)
@@ -510,14 +471,14 @@ public sealed class Orchestrator : IOrchestrator
                         {
                             var report = await RevertAsync(store, artifacts, ct);
                             foreach (var line in DescribeRevert(report))
-                                quick.Writer.TryWrite(Ev(EventKind.ArtifactReverted, line));
+                                quick.Writer.TryWrite(scope.Ev(EventKind.ArtifactReverted, line));
                         }
                     }
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
                     quickResult.Set(StepOutcomeKind.Failed, ex.Message);
-                    quick.Writer.TryWrite(Ev(EventKind.ErrorObserved, ex.Message));
+                    quick.Writer.TryWrite(scope.Ev(EventKind.ErrorObserved, ex.Message));
                 }
                 finally
                 {
@@ -538,8 +499,8 @@ public sealed class Orchestrator : IOrchestrator
                 var verified = new VerifyResult();
                 await foreach (var checkEvent in VerifyAsync(
                     intent, taskId, runId, worker, provider, model.Model, model.ProviderId,
-                    artifacts, budget, verified, Criterion,
-                    (kind, summary) => Ev(kind, summary), ct))
+                    artifacts, budget, verified, scope.Criterion,
+                    (kind, summary) => scope.Ev(kind, summary), ct))
                     yield return checkEvent;
 
                 var adjusted = verified.Report.Apply(quickOutcome);
@@ -550,7 +511,7 @@ public sealed class Orchestrator : IOrchestrator
                 }
             }
 
-            yield return Terminal(quickOutcome, quickReason);
+            yield return scope.Terminal(quickOutcome, quickReason, SummarizeArtifacts);
             yield break;
         }
 
@@ -558,8 +519,8 @@ public sealed class Orchestrator : IOrchestrator
         var builtPlan = plan.Plan ?? LinearPlan.FromTitles(new[] { plan.Title });
         var total = builtPlan.Steps.Count;
         var stepTitles = builtPlan.Steps.Select(x => x.Title).ToArray();
-        yield return new WorkEvent(
-            Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow, EventKind.PlanCreated,
+        yield return scope.Event(
+            EventKind.PlanCreated,
             $"{plan.Title} — {total} steps: {string.Join(" | ", stepTitles)}",
             // The titles as VALUES. Read out of the sentence, a step title containing " | " became
             // two cards and a plan title containing " — " lost its tail.
@@ -708,7 +669,7 @@ public sealed class Orchestrator : IOrchestrator
             // Every prompt, response and tool call this step makes is stamped with its number, so a
             // parallel run stays readable in one log file.
             using var _stepScope = LogScope.Begin(runId, taskId, stepNumber);
-            void Emit(EventKind kind, string summary) => events.Writer.TryWrite(Ev(kind, summary, stepNumber));
+            void Emit(EventKind kind, string summary) => events.Writer.TryWrite(scope.Ev(kind, summary, stepNumber));
 
             var depNote = step.DependsOn.Count > 0 ? $" (after {step.DependsOn.Count} dep)" : "";
             Emit(EventKind.StepStarted, $"[{stepNumber}/{total}] {step.Title}{depNote}");
@@ -751,7 +712,7 @@ public sealed class Orchestrator : IOrchestrator
             // ran this step" is the question the panel exists to answer, and answering it only
             // sometimes is exactly how a run could show a local worker binding while all of its steps
             // in fact went to the cloud, because the planner had rated them complex.
-            events.Writer.TryWrite(Route("step", stepRef,
+            events.Writer.TryWrite(scope.Route("step", stepRef,
                 $"[{stepNumber}] {step.Complexity} step -> {stepRef.ProviderId}/{stepRef.Model}",
                 stepNumber, step.Complexity));
 
@@ -807,7 +768,7 @@ public sealed class Orchestrator : IOrchestrator
                         triedFallback = true;
                         // Same reason as the quick-action path: after the switch the fallback is
                         // what runs this step, so that is what the step's routing row must name.
-                        events.Writer.TryWrite(Route("step", fallback,
+                        events.Writer.TryWrite(scope.Route("step", fallback,
                             $"[{stepNumber}] {stepRef.ProviderId}/{stepRef.Model} failed ({ex.Message}) — "
                             + $"retrying on the fallback {fallback.ProviderId}/{fallback.Model}",
                             stepNumber, step.Complexity));
@@ -836,7 +797,7 @@ public sealed class Orchestrator : IOrchestrator
                     step.Title, convo, journal, evidenceStart, artifacts, store, reviewProvider!, reviewModel, ct);
 
                 if (review.PromptTokens + review.CompletionTokens > 0)
-                    events.Writer.TryWrite(UsageOutsideLoop(
+                    events.Writer.TryWrite(scope.Usage(
                         WorkEventPayload.WorkPurpose.Review, reviewRef!,
                         review.PromptTokens, review.CompletionTokens, stepNumber));
 
@@ -857,7 +818,7 @@ public sealed class Orchestrator : IOrchestrator
                     if (proof is { } proven)
                     {
                         if (proven.Prompt + proven.Completion > 0)
-                            events.Writer.TryWrite(UsageOutsideLoop(
+                            events.Writer.TryWrite(scope.Usage(
                                 WorkEventPayload.WorkPurpose.Review, reviewRef!,
                                 proven.Prompt, proven.Completion, stepNumber));
 
@@ -926,8 +887,7 @@ public sealed class Orchestrator : IOrchestrator
 
             // The card's colour comes from this payload, not from the wording of the summary.
             void EmitStepDone(string summary, int? no, StepOutcomeKind kind)
-                => events.Writer.TryWrite(new WorkEvent(
-                    Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow,
+                => events.Writer.TryWrite(scope.Event(
                     EventKind.StepCompleted, summary, WorkEventPayload.StepPayload(no, kind)));
 
             // Succeeded is the ONLY outcome that unblocks what comes after it - and MarkDone is what
@@ -999,7 +959,7 @@ public sealed class Orchestrator : IOrchestrator
         // list is whole from the first frame.
         if (resume is not null)
         {
-            yield return Ev(EventKind.ContextAssembled,
+            yield return scope.Ev(EventKind.ContextAssembled,
                 // Counted off the RESTORED state, not off the checkpoint: the failure cascade may
                 // have settled more steps than the checkpoint had, and the number a person reads
                 // should be the number of steps this run is not going to do.
@@ -1018,8 +978,8 @@ public sealed class Orchestrator : IOrchestrator
                     continue;
 
                 var no = stepNumbers.TryGetValue(step.Id, out var rn) ? rn : 0;
-                yield return new WorkEvent(
-                    Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow, EventKind.StepCompleted,
+                yield return scope.Event(
+                    EventKind.StepCompleted,
                     $"[{(no > 0 ? no : 0)}/{total}] {step.Title} — {Word(kind)} before this run",
                     WorkEventPayload.StepPayload(no > 0 ? no : null, kind));
             }
@@ -1049,7 +1009,7 @@ public sealed class Orchestrator : IOrchestrator
                     if (limitReason is null && budget.Exhausted is { } spent)
                     {
                         limitReason = spent;
-                        events.Writer.TryWrite(Ev(EventKind.ErrorObserved, spent));
+                        events.Writer.TryWrite(scope.Ev(EventKind.ErrorObserved, spent));
 
                         // Pending steps become Skipped rather than staying Pending: the run's outcome
                         // is built from its steps', so a step with no recorded outcome would quietly
@@ -1059,8 +1019,7 @@ public sealed class Orchestrator : IOrchestrator
                             var abNo = stepNumbers.TryGetValue(abandoned.Id, out var an) ? an : 0;
                             lock (stepOutcomes)
                                 stepOutcomes[abandoned.Id] = StepOutcomeKind.Skipped;
-                            events.Writer.TryWrite(new WorkEvent(
-                                Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow,
+                            events.Writer.TryWrite(scope.Event(
                                 EventKind.StepCompleted,
                                 $"[{(abNo > 0 ? abNo : 0)}/{total}] {abandoned.Title} — skipped ({spent})",
                                 WorkEventPayload.StepPayload(abNo > 0 ? abNo : null, StepOutcomeKind.Skipped)));
@@ -1101,7 +1060,7 @@ public sealed class Orchestrator : IOrchestrator
         var cycle = scheduler.HasPending;
         if (cycle)
         {
-            yield return Ev(EventKind.ErrorObserved,
+            yield return scope.Ev(EventKind.ErrorObserved,
                 "Plan has unresolvable dependencies (a cycle) — remaining steps could not run.");
 
             // The same accounting the LIMIT path does, and for the same reason it does it: a step
@@ -1118,8 +1077,8 @@ public sealed class Orchestrator : IOrchestrator
                 lock (stepOutcomes)
                     stepOutcomes[stranded.Id] = StepOutcomeKind.Skipped;
 
-                yield return new WorkEvent(
-                    Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow, EventKind.StepCompleted,
+                yield return scope.Event(
+                    EventKind.StepCompleted,
                     $"[{(no > 0 ? no : 0)}/{total}] {stranded.Title} — skipped (its dependencies "
                     + "could never be satisfied)",
                     WorkEventPayload.StepPayload(no > 0 ? no : null, StepOutcomeKind.Skipped));
@@ -1145,8 +1104,8 @@ public sealed class Orchestrator : IOrchestrator
             var verified = new VerifyResult();
             await foreach (var checkEvent in VerifyAsync(
                 intent, taskId, runId, worker, provider, model.Model, model.ProviderId,
-                artifacts, budget, verified, Criterion,
-                (kind, summary) => Ev(kind, summary), ct))
+                artifacts, budget, verified, scope.Criterion,
+                (kind, summary) => scope.Ev(kind, summary), ct))
                 yield return checkEvent;
 
             var adjusted = verified.Report.Apply(runOutcome);
@@ -1161,7 +1120,7 @@ public sealed class Orchestrator : IOrchestrator
         // checkpoint left behind would offer to redo work that is finished.
         await ForgetCheckpointAsync();
 
-        yield return Terminal(runOutcome, runReason);
+        yield return scope.Terminal(runOutcome, runReason, SummarizeArtifacts);
     }
 
     /// <summary>The plan a checkpoint is carrying, rebuilt with the step ids it was written with.</summary>
