@@ -19,7 +19,7 @@ Command -> Intent -> Context(+Environment) -> Planner -> Orchestrator -> Worker(
 
 ## Solution
 
-`Enactive.sln`, **8 projects** (`net10.0`, pinned via `global.json`) plus `tests/Enactive.Engine.Tests` (742 tests)
+`Enactive.sln`, **8 projects** (`net10.0`, pinned via `global.json`) plus `tests/Enactive.Engine.Tests` (762 tests)
 and `tests/Enactive.Mcp.TestServer`. The engine is dependency-light: `Core`/`Providers`/`Tools`/`Agents`/`App.Console`
 use **zero external NuGet packages**; only `Workspace` (Microsoft.Data.Sqlite, SQLitePCLRaw, MySqlConnector), `Secrets`
 (ProtectedData) and `App.Ui` (Avalonia ×3) pull anything in. `Enactive.Agents` references **only** `Core` — a constant
@@ -99,7 +99,14 @@ applied **after** `InitializeComponent`, or the XAML's own `Width`/`Height` over
   **Log analysis**: the log window sends an exported run to a model for a diagnosis; the log is fenced as DATA,
   an instruction found inside it is never followed, and the analysis's own prompts are logged without their bodies
   so it cannot recurse on itself. See `LOGGING.md`.
-- **Change staging** — optional stage → diff → Apply/Reject before writing.
+- **Change staging** — optional stage → diff → Apply/Reject before writing. Staging is a TEXT diff:
+  it cannot express a deletion or carry binary content, and an operation needing either is refused
+  before it does the half of itself that works (`IArtifactStore.CanRemove`).
+- **Undo and revert that refuse rather than guess** — every write is journalled with the bytes it
+  displaced, a sequence number, the scope that made it and one canonical key per file. A revert
+  undoes its own scope's writes; a file another scope has written since, or a file the user has
+  edited since, is REPORTED with the reason and left alone. `Docs/FIX_PLAN.md` §9u is what each of
+  those clauses cost to learn.
 - **Secrets** — the Anthropic API key is DPAPI-encrypted in `settings.json`.
 
 ## Build & run
