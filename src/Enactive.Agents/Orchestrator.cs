@@ -266,7 +266,7 @@ public sealed class Orchestrator : IOrchestrator
         var worker = models.Worker;
 
         yield return scope.Route("worker", models.Model,
-            $"Worker '{worker.Role}' -> models.Model {models.Model.ProviderId}/{models.Model.Model}");
+            $"Worker '{worker.Role}' -> model {models.Model.ProviderId}/{models.Model.Model}");
 
         if (models.PlanIsElsewhere)
             yield return scope.Route("plan", models.Plan,
@@ -313,199 +313,233 @@ public sealed class Orchestrator : IOrchestrator
 
         if (plan.Disposition == IntentDisposition.QuickAction)
         {
-            yield return scope.Ev(EventKind.Routed, $"Quick action: {plan.Title}");
-
-            // Drained through a channel for the same reason as the DAG path below: the work runs in a
-            // task that owns the log scope, while this method only yields what the channel hands it.
-            var quick = Channel.CreateUnbounded<WorkEvent>(
-                new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
-            var quickResult = new ToolLoopResult();
-            var quickPump = Task.Run(async () =>
-            {
-                using var _quickScope = LogScope.Begin(runId, taskId);
-                try
-                {
-                    // A configured reviewer now applies here too. It used to run for plan steps only,
-                    // while the planner was explicitly told to prefer QuickAction — so the reviewer
-                    // setting did nothing for most ordinary requests, file writes and commands included.
-                    var maxQuickAttempts = models.ReviewOn ? _reviewRetries + 1 : 1;
-
-                    // This run's own view of the store. Everything it writes belongs to it, and it
-                    // is the only thing that can undo those writes - see IArtifactScope.
-                    var store = _artifacts.BeginStep();
-
-                    // What this run has READ, so a whole-file write of a file it saw only part of
-                    // can be refused - see ReadLedger.
-                    var reads = new ReadLedger();
-
-                    // What this run actually DID, written down as it happens. The reviewer's
-                    // evidence used to be read back out of the conversation, which is the model's
-                    // working memory and gets shortened when the window fills.
-                    var journal = new ExecutionJournal();
-                    var conversationStart = messages.Count;
-
-                    // The same one-shot fallback the DAG path has: an unreachable model is not the
-                    // model doing bad work, so it costs no review attempt.
-                    var activeRef = models.Model;
-                    var activeProvider = models.Provider;
-                    var triedFallback = false;
-
-                    // See the same line on the DAG path: the evidence window moves only when a
-                    // retry discards the attempt before it.
-                    var evidenceStart = journal.Mark();
-
-                    for (var attempt = 1; attempt <= maxQuickAttempts; attempt++)
-                    {
-                        // A quick action runs no plan steps, so a STEP limit never bites here - but
-                        // a token or time limit can, and a retry is the natural place to notice: it
-                        // is the only point in this path where more spending is about to be chosen
-                        // rather than already under way.
-                        if (budget.Exhausted is { } spent)
-                        {
-                            quickResult.Set(StepOutcomeKind.Incomplete, spent);
-                            quick.Writer.TryWrite(scope.Ev(EventKind.ErrorObserved, spent));
-                            break;
-                        }
-
-                        try
-                        {
-                            await foreach (var ev in RunToolLoopAsync(
-                                taskId, runId, activeProvider, activeRef.Model, worker, messages, artifacts,
-                                intent.Context, store, journal, reads, null, quickResult, budget, ct, activeRef.ProviderId))
-                                quick.Writer.TryWrite(ev);
-                        }
-                        catch (Exception ex) when (ex is not OperationCanceledException
-                                                   && !triedFallback
-                                                   && _modelResolver.NextOnFailure(worker.ModelPolicy, activeRef) is not null)
-                        {
-                            var fallback = _modelResolver.NextOnFailure(worker.ModelPolicy, activeRef)!;
-                            triedFallback = true;
-
-                            // Routed as the worker's model, because from here on it IS the model
-                            // doing the work: a panel that still named the unreachable one would be
-                            // reporting a binding rather than what ran.
-                            quick.Writer.TryWrite(scope.Route("worker", fallback,
-                                $"{activeRef.ProviderId}/{activeRef.Model} failed ({ex.Message}) — "
-                                + $"retrying on the fallback {fallback.ProviderId}/{fallback.Model}"));
-
-                            activeRef = fallback;
-                            activeProvider = _providers.Create(fallback.ProviderId);
-
-                            attempt--;   // the retry is the SAME attempt
-                            continue;
-                        }
-
-                        if (!models.ReviewOn || !quickResult.Succeeded)
-                            break;
-
-                        quick.Writer.TryWrite(scope.Ev(EventKind.ReviewRequested, "reviewing…"));
-                        var (review, mode) = await ReviewAsync(
-                            plan.Title, messages, journal, evidenceStart, artifacts, store,
-                            models.ReviewProvider!, models.ReviewModel, ct);
-
-                        if (review.PromptTokens + review.CompletionTokens > 0)
-                            quick.Writer.TryWrite(scope.Usage(
-                                WorkEventPayload.WorkPurpose.Review, models.Review!,
-                                review.PromptTokens, review.CompletionTokens));
-
-                        if (review.Pass)
-                        {
-                            quick.Writer.TryWrite(scope.Ev(EventKind.ReviewPassed,
-                                $"PASS ({mode} review){(string.IsNullOrEmpty(review.Notes) ? "" : ": " + review.Notes)}"));
-
-                            // The same second question the DAG path asks, on the same grounds it is
-                            // asked there: a reviewer that only checks truth passes a true report of
-                            // an unsupported conclusion. Here for the same reason the reviewer
-                            // itself is - the planner is told to prefer QuickAction, so a gate that
-                            // skipped this path would skip most ordinary requests.
-                            var quickProof = mode == ReviewMode.Execution
-                                ? await ProveAsync(plan.Title, messages, journal, evidenceStart,
-                                                   models.ReviewProvider!, models.ReviewModel, ct)
-                                : null;
-
-                            if (quickProof is not { } quickProven)
-                                break;
-
-                            if (quickProven.Prompt + quickProven.Completion > 0)
-                                quick.Writer.TryWrite(scope.Usage(
-                                    WorkEventPayload.WorkPurpose.Review, models.Review!,
-                                    quickProven.Prompt, quickProven.Completion));
-
-                            if (quickProven.Verdict.Sound)
-                            {
-                                quick.Writer.TryWrite(scope.Ev(EventKind.ReviewPassed,
-                                    "PASS (soundness): " + quickProven.Verdict.Reason));
-                                break;
-                            }
-
-                            review = new ReviewResult(false, quickProven.Verdict.Reason);
-                            quick.Writer.TryWrite(scope.Ev(EventKind.ReviewFailed,
-                                "FAIL (soundness): " + quickProven.Verdict.Reason));
-                        }
-                        else
-                        {
-                            quick.Writer.TryWrite(scope.Ev(EventKind.ReviewFailed, $"FAIL ({mode} review): {review.Notes}"));
-                        }
-
-                        if (attempt < maxQuickAttempts)
-                        {
-                            // See the DAG path: the evidence window follows the transcript window.
-                            if (RetryAfterReview(messages, conversationStart, mode, review.Notes, "the work"))
-                                evidenceStart = journal.Mark();
-                            continue;
-                        }
-
-                        // Out of attempts and still rejected: the work is NOT done, and saying so is
-                        // the entire point of having a reviewer.
-                        quickResult.Set(StepOutcomeKind.ReviewRejected, "review not passed: " + review.Notes);
-
-                        if (_revertRejectedSteps)
-                        {
-                            var report = await RevertAsync(store, artifacts, ct);
-                            foreach (var line in DescribeRevert(report))
-                                quick.Writer.TryWrite(scope.Ev(EventKind.ArtifactReverted, line));
-                        }
-                    }
-                }
-                catch (Exception ex) when (ex is not OperationCanceledException)
-                {
-                    quickResult.Set(StepOutcomeKind.Failed, ex.Message);
-                    quick.Writer.TryWrite(scope.Ev(EventKind.ErrorObserved, ex.Message));
-                }
-                finally
-                {
-                    quick.Writer.TryComplete();
-                }
-            }, ct);
-
-            await foreach (var ev in quick.Reader.ReadAllAsync(ct))
+            await foreach (var ev in RunQuickActionAsync(intent, scope, models, plan, messages, ct))
                 yield return ev;
-
-            await quickPump;
-
-            var quickOutcome = RunOutcomeOf(new[] { quickResult.Kind });
-            var quickReason = quickResult.Reason;
-
-            if (quickOutcome == RunOutcomeKind.Completed)
-            {
-                var verified = new VerifyResult();
-                await foreach (var checkEvent in VerifyAsync(
-                    intent, taskId, runId, worker, models.Provider, models.Model.Model, models.Model.ProviderId,
-                    artifacts, budget, verified, scope.Criterion,
-                    (kind, summary) => scope.Ev(kind, summary), ct))
-                    yield return checkEvent;
-
-                var adjusted = verified.Report.Apply(quickOutcome);
-                if (adjusted != quickOutcome)
-                {
-                    quickOutcome = adjusted;
-                    quickReason = verified.Report.Explain();
-                }
-            }
-
-            yield return scope.Terminal(quickOutcome, quickReason, SummarizeArtifacts);
             yield break;
         }
+
+        await foreach (var ev in RunPlanAsync(intent, resume, scope, models, plan, messages, ct))
+            yield return ev;
+    }
+    /// <summary>
+    /// A request the planner judged to be ONE action: no plan, no steps, one tool loop against the
+    /// root conversation, then the same review, verification and terminal event a plan gets.
+    ///
+    /// <para>Its own method as of FIX_PLAN §9d cut 2. It and <see cref="RunPlanAsync"/> were two
+    /// nearly disjoint bodies inside one 950-line iterator, sharing only the setup above them — and
+    /// "sharing the setup" is what a parameter list is for.</para>
+    /// </summary>
+    private async IAsyncEnumerable<WorkEvent> RunQuickActionAsync(
+        Intent intent, RunScope scope, RunModels models, PlanResult plan,
+        List<ChatMessage> messages, [EnumeratorCancellation] CancellationToken ct)
+    {
+
+        yield return scope.Ev(EventKind.Routed, $"Quick action: {plan.Title}");
+
+        // Drained through a channel for the same reason as the DAG path below: the work runs in a
+        // task that owns the log scope, while this method only yields what the channel hands it.
+        var quick = Channel.CreateUnbounded<WorkEvent>(
+            new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
+        var quickResult = new ToolLoopResult();
+        var quickPump = Task.Run(async () =>
+        {
+            using var _quickScope = LogScope.Begin(scope.RunId, scope.TaskId);
+            try
+            {
+                // A configured reviewer now applies here too. It used to run for plan steps only,
+                // while the planner was explicitly told to prefer QuickAction — so the reviewer
+                // setting did nothing for most ordinary requests, file writes and commands included.
+                var maxQuickAttempts = models.ReviewOn ? _reviewRetries + 1 : 1;
+
+                // This run's own view of the store. Everything it writes belongs to it, and it
+                // is the only thing that can undo those writes - see IArtifactScope.
+                var store = _artifacts.BeginStep();
+
+                // What this run has READ, so a whole-file write of a file it saw only part of
+                // can be refused - see ReadLedger.
+                var reads = new ReadLedger();
+
+                // What this run actually DID, written down as it happens. The reviewer's
+                // evidence used to be read back out of the conversation, which is the model's
+                // working memory and gets shortened when the window fills.
+                var journal = new ExecutionJournal();
+                var conversationStart = messages.Count;
+
+                // The same one-shot fallback the DAG path has: an unreachable model is not the
+                // model doing bad work, so it costs no review attempt.
+                var activeRef = models.Model;
+                var activeProvider = models.Provider;
+                var triedFallback = false;
+
+                // See the same line on the DAG path: the evidence window moves only when a
+                // retry discards the attempt before it.
+                var evidenceStart = journal.Mark();
+
+                for (var attempt = 1; attempt <= maxQuickAttempts; attempt++)
+                {
+                    // A quick action runs no plan steps, so a STEP limit never bites here - but
+                    // a token or time limit can, and a retry is the natural place to notice: it
+                    // is the only point in this path where more spending is about to be chosen
+                    // rather than already under way.
+                    if (scope.Budget.Exhausted is { } spent)
+                    {
+                        quickResult.Set(StepOutcomeKind.Incomplete, spent);
+                        quick.Writer.TryWrite(scope.Ev(EventKind.ErrorObserved, spent));
+                        break;
+                    }
+
+                    try
+                    {
+                        await foreach (var ev in RunToolLoopAsync(
+                            scope.TaskId, scope.RunId, activeProvider, activeRef.Model, models.Worker, messages, scope.Artifacts,
+                            intent.Context, store, journal, reads, null, quickResult, scope.Budget, ct, activeRef.ProviderId))
+                            quick.Writer.TryWrite(ev);
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException
+                                               && !triedFallback
+                                               && _modelResolver.NextOnFailure(models.Worker.ModelPolicy, activeRef) is not null)
+                    {
+                        var fallback = _modelResolver.NextOnFailure(models.Worker.ModelPolicy, activeRef)!;
+                        triedFallback = true;
+
+                        // Routed as the worker's model, because from here on it IS the model
+                        // doing the work: a panel that still named the unreachable one would be
+                        // reporting a binding rather than what ran.
+                        quick.Writer.TryWrite(scope.Route("worker", fallback,
+                            $"{activeRef.ProviderId}/{activeRef.Model} failed ({ex.Message}) — "
+                            + $"retrying on the fallback {fallback.ProviderId}/{fallback.Model}"));
+
+                        activeRef = fallback;
+                        activeProvider = _providers.Create(fallback.ProviderId);
+
+                        attempt--;   // the retry is the SAME attempt
+                        continue;
+                    }
+
+                    if (!models.ReviewOn || !quickResult.Succeeded)
+                        break;
+
+                    quick.Writer.TryWrite(scope.Ev(EventKind.ReviewRequested, "reviewing…"));
+                    var (review, mode) = await ReviewAsync(
+                        plan.Title, messages, journal, evidenceStart, scope.Artifacts, store,
+                        models.ReviewProvider!, models.ReviewModel, ct);
+
+                    if (review.PromptTokens + review.CompletionTokens > 0)
+                        quick.Writer.TryWrite(scope.Usage(
+                            WorkEventPayload.WorkPurpose.Review, models.Review!,
+                            review.PromptTokens, review.CompletionTokens));
+
+                    if (review.Pass)
+                    {
+                        quick.Writer.TryWrite(scope.Ev(EventKind.ReviewPassed,
+                            $"PASS ({mode} review){(string.IsNullOrEmpty(review.Notes) ? "" : ": " + review.Notes)}"));
+
+                        // The same second question the DAG path asks, on the same grounds it is
+                        // asked there: a reviewer that only checks truth passes a true report of
+                        // an unsupported conclusion. Here for the same reason the reviewer
+                        // itself is - the planner is told to prefer QuickAction, so a gate that
+                        // skipped this path would skip most ordinary requests.
+                        var quickProof = mode == ReviewMode.Execution
+                            ? await ProveAsync(plan.Title, messages, journal, evidenceStart,
+                                               models.ReviewProvider!, models.ReviewModel, ct)
+                            : null;
+
+                        if (quickProof is not { } quickProven)
+                            break;
+
+                        if (quickProven.Prompt + quickProven.Completion > 0)
+                            quick.Writer.TryWrite(scope.Usage(
+                                WorkEventPayload.WorkPurpose.Review, models.Review!,
+                                quickProven.Prompt, quickProven.Completion));
+
+                        if (quickProven.Verdict.Sound)
+                        {
+                            quick.Writer.TryWrite(scope.Ev(EventKind.ReviewPassed,
+                                "PASS (soundness): " + quickProven.Verdict.Reason));
+                            break;
+                        }
+
+                        review = new ReviewResult(false, quickProven.Verdict.Reason);
+                        quick.Writer.TryWrite(scope.Ev(EventKind.ReviewFailed,
+                            "FAIL (soundness): " + quickProven.Verdict.Reason));
+                    }
+                    else
+                    {
+                        quick.Writer.TryWrite(scope.Ev(EventKind.ReviewFailed, $"FAIL ({mode} review): {review.Notes}"));
+                    }
+
+                    if (attempt < maxQuickAttempts)
+                    {
+                        // See the DAG path: the evidence window follows the transcript window.
+                        if (RetryAfterReview(messages, conversationStart, mode, review.Notes, "the work"))
+                            evidenceStart = journal.Mark();
+                        continue;
+                    }
+
+                    // Out of attempts and still rejected: the work is NOT done, and saying so is
+                    // the entire point of having a reviewer.
+                    quickResult.Set(StepOutcomeKind.ReviewRejected, "review not passed: " + review.Notes);
+
+                    if (_revertRejectedSteps)
+                    {
+                        var report = await RevertAsync(store, scope.Artifacts, ct);
+                        foreach (var line in DescribeRevert(report))
+                            quick.Writer.TryWrite(scope.Ev(EventKind.ArtifactReverted, line));
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                quickResult.Set(StepOutcomeKind.Failed, ex.Message);
+                quick.Writer.TryWrite(scope.Ev(EventKind.ErrorObserved, ex.Message));
+            }
+            finally
+            {
+                quick.Writer.TryComplete();
+            }
+        }, ct);
+
+        await foreach (var ev in quick.Reader.ReadAllAsync(ct))
+            yield return ev;
+
+        await quickPump;
+
+        var quickOutcome = RunOutcomeOf(new[] { quickResult.Kind });
+        var quickReason = quickResult.Reason;
+
+        if (quickOutcome == RunOutcomeKind.Completed)
+        {
+            var verified = new VerifyResult();
+            await foreach (var checkEvent in VerifyAsync(
+                intent, scope.TaskId, scope.RunId, models.Worker, models.Provider, models.Model.Model, models.Model.ProviderId,
+                scope.Artifacts, scope.Budget, verified, scope.Criterion,
+                (kind, summary) => scope.Ev(kind, summary), ct))
+                yield return checkEvent;
+
+            var adjusted = verified.Report.Apply(quickOutcome);
+            if (adjusted != quickOutcome)
+            {
+                quickOutcome = adjusted;
+                quickReason = verified.Report.Explain();
+            }
+        }
+
+        yield return scope.Terminal(quickOutcome, quickReason, SummarizeArtifacts);
+    }
+
+    /// <summary>
+    /// A request with a PLAN: a DAG of steps, dispatched by readiness, up to
+    /// <c>MaxParallelSteps</c> at a time, each reviewed and checkpointed, then the run's own
+    /// outcome from its steps'.
+    /// </summary>
+    /// <param name="resume">
+    /// The interrupted run this one carries on from, or null. Only this half takes it: a quick
+    /// action has no step boundary to resume at.
+    /// </param>
+    private async IAsyncEnumerable<WorkEvent> RunPlanAsync(
+        Intent intent, RunCheckpoint? resume, RunScope scope, RunModels models, PlanResult plan,
+        List<ChatMessage> messages, [EnumeratorCancellation] CancellationToken ct)
+    {
 
         // ── Task with a DAG plan ──────────────────────────────────────────
         var builtPlan = plan.Plan ?? LinearPlan.FromTitles(new[] { plan.Title });
@@ -611,8 +645,8 @@ public sealed class Orchestrator : IOrchestrator
                 // with it; above that it is never appended to at all.
                 lock (digest)
                     doneLines = digest.ToArray();
-                lock (artifacts)
-                    produced = artifacts.ToArray();
+                lock (scope.Artifacts)
+                    produced = scope.Artifacts.ToArray();
                 lock (stepOutcomes)
                     outcomesNow = new Dictionary<Guid, StepOutcomeKind>(stepOutcomes);
                 var transcript = messages.ToArray();
@@ -627,11 +661,11 @@ public sealed class Orchestrator : IOrchestrator
 
                 await store.SaveAsync(
                     new RunCheckpoint(
-                        runId, taskId, intent.At, DateTimeOffset.UtcNow,
+                        scope.RunId, scope.TaskId, intent.At, DateTimeOffset.UtcNow,
                         intent.RawText, plan.Title, intent.WorkerId, resume?.Spec,
                         steps, doneLines, transcript,
                         produced.Select(a => a.RelativePath).ToArray(),
-                        budget.StepsRun, budget.TokensSpent, _settings),
+                        scope.Budget.StepsRun, scope.Budget.TokensSpent, _settings),
                     CancellationToken.None);
             }
             catch (IOException) { /* a run that cannot be resumed is still a run */ }
@@ -650,7 +684,7 @@ public sealed class Orchestrator : IOrchestrator
             if (_checkpoints is not { } store)
                 return;
 
-            try { await store.DeleteAsync(runId, CancellationToken.None); }
+            try { await store.DeleteAsync(scope.RunId, CancellationToken.None); }
             catch (IOException) { }
             catch (UnauthorizedAccessException) { }
         }
@@ -660,7 +694,7 @@ public sealed class Orchestrator : IOrchestrator
             var stepNumber = stepNumbers.TryGetValue(step.Id, out var planNo) ? planNo : 0;
             // Every prompt, response and tool call this step makes is stamped with its number, so a
             // parallel run stays readable in one log file.
-            using var _stepScope = LogScope.Begin(runId, taskId, stepNumber);
+            using var _stepScope = LogScope.Begin(scope.RunId, scope.TaskId, stepNumber);
             void Emit(EventKind kind, string summary) => events.Writer.TryWrite(scope.Ev(kind, summary, stepNumber));
 
             var depNote = step.DependsOn.Count > 0 ? $" (after {step.DependsOn.Count} dep)" : "";
@@ -679,7 +713,7 @@ public sealed class Orchestrator : IOrchestrator
             {
                 convo = new List<ChatMessage>
                 {
-                    ChatMessage.System(worker.Instructions),
+                    ChatMessage.System(models.Worker.Instructions),
                     ChatMessage.User(BuildUserPrompt(intent))
                 };
                 string[] doneSoFar;
@@ -697,7 +731,7 @@ public sealed class Orchestrator : IOrchestrator
 
             // Per-step model auto-routing: pick the Execute model for this step's complexity (light for
             // trivial, heavy for complex, the worker's own for normal). Falls back to the base model.
-            var stepRef = _router.ResolveExecute(worker, step.Complexity) ?? models.Model;
+            var stepRef = _router.ResolveExecute(models.Worker, step.Complexity) ?? models.Model;
             var stepProvider = _providers.Create(stepRef.ProviderId);
             var stepModel = stepRef.Model;
             // Emitted for EVERY step, not only when it differs from the worker's model. "Which model
@@ -736,8 +770,8 @@ public sealed class Orchestrator : IOrchestrator
                 try
                 {
                     await foreach (var ev in RunToolLoopAsync(
-                        taskId, runId, stepProvider, stepModel, worker, convo, artifacts,
-                        intent.Context, store, journal, reads, stepNumber, stepResult, budget, ct, stepRef.ProviderId))
+                        scope.TaskId, scope.RunId, stepProvider, stepModel, models.Worker, convo, scope.Artifacts,
+                        intent.Context, store, journal, reads, stepNumber, stepResult, scope.Budget, ct, stepRef.ProviderId))
                         events.Writer.TryWrite(ev);
 
                     outcome = stepResult.Kind;
@@ -755,7 +789,7 @@ public sealed class Orchestrator : IOrchestrator
                     // all. One switch per step, and it does not spend a review attempt: failing to
                     // reach a model is not the model producing bad work.
                     if (!triedFallback
-                        && _modelResolver.NextOnFailure(worker.ModelPolicy, stepRef) is { } fallback)
+                        && _modelResolver.NextOnFailure(models.Worker.ModelPolicy, stepRef) is { } fallback)
                     {
                         triedFallback = true;
                         // Same reason as the quick-action path: after the switch the fallback is
@@ -786,7 +820,7 @@ public sealed class Orchestrator : IOrchestrator
                 Emit(EventKind.ReviewRequested, $"[{stepNumber}] reviewing with reasoner…");
 
                 var (review, mode) = await ReviewAsync(
-                    step.Title, convo, journal, evidenceStart, artifacts, store, models.ReviewProvider!, models.ReviewModel, ct);
+                    step.Title, convo, journal, evidenceStart, scope.Artifacts, store, models.ReviewProvider!, models.ReviewModel, ct);
 
                 if (review.PromptTokens + review.CompletionTokens > 0)
                     events.Writer.TryWrite(scope.Usage(
@@ -872,7 +906,7 @@ public sealed class Orchestrator : IOrchestrator
             // workspace, which is the state a person is most likely to pick up and use.
             if (outcome == StepOutcomeKind.ReviewRejected && _revertRejectedSteps)
             {
-                var report = await RevertAsync(store, artifacts, ct);
+                var report = await RevertAsync(store, scope.Artifacts, ct);
                 foreach (var line in DescribeRevert(report))
                     Emit(EventKind.ArtifactReverted, $"[{stepNumber}] {line}");
             }
@@ -989,7 +1023,7 @@ public sealed class Orchestrator : IOrchestrator
         // Dispatcher: keep up to maxParallel steps in flight, topping up as each one finishes.
         var pump = Task.Run(async () =>
         {
-            using var _pumpScope = LogScope.Begin(runId, taskId);
+            using var _pumpScope = LogScope.Begin(scope.RunId, scope.TaskId);
             var inFlight = new List<Task>();
             try
             {
@@ -998,7 +1032,7 @@ public sealed class Orchestrator : IOrchestrator
                     // BEFORE dispatching, never during: a limit stops the next step, it does not kill
                     // the one running. Cancelling work in flight throws away what that step had
                     // already done and leaves the workspace in a state nobody chose.
-                    if (limitReason is null && budget.Exhausted is { } spent)
+                    if (limitReason is null && scope.Budget.Exhausted is { } spent)
                     {
                         limitReason = spent;
                         events.Writer.TryWrite(scope.Ev(EventKind.ErrorObserved, spent));
@@ -1025,7 +1059,7 @@ public sealed class Orchestrator : IOrchestrator
 
                     foreach (var ready in scheduler.NextReadyBatch(maxParallel - inFlight.Count))
                     {
-                        budget.StepStarted();
+                        scope.Budget.StepStarted();
                         inFlight.Add(RunStepAsync(ready));
                     }
 
@@ -1095,8 +1129,8 @@ public sealed class Orchestrator : IOrchestrator
         {
             var verified = new VerifyResult();
             await foreach (var checkEvent in VerifyAsync(
-                intent, taskId, runId, worker, models.Provider, models.Model.Model, models.Model.ProviderId,
-                artifacts, budget, verified, scope.Criterion,
+                intent, scope.TaskId, scope.RunId, models.Worker, models.Provider, models.Model.Model, models.Model.ProviderId,
+                scope.Artifacts, scope.Budget, verified, scope.Criterion,
                 (kind, summary) => scope.Ev(kind, summary), ct))
                 yield return checkEvent;
 
@@ -1114,6 +1148,7 @@ public sealed class Orchestrator : IOrchestrator
 
         yield return scope.Terminal(runOutcome, runReason, SummarizeArtifacts);
     }
+
 
     /// <summary>
     /// Which models serve this run, resolved once. The Execute binding falls back to the worker's
