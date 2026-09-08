@@ -53,14 +53,6 @@ public sealed class Orchestrator : IOrchestrator
     /// </summary>
     private const int RunawayCeiling = 250;
 
-    /// <summary>
-    /// The tools that CHANGE the workspace. Shared by <see cref="OpenFailures"/> (a later file of
-    /// theirs can close an earlier failure) and by <see cref="StepProgress"/> (after one of these
-    /// lands, everything read afterwards is being read off a different tree).
-    /// </summary>
-    private static readonly HashSet<string> MutatingTools =
-        new(StringComparer.Ordinal) { "write_file", "edit_file", "move_file", "create_directory" };
-
     private readonly IChatProviderFactory _providers;
     private readonly IWorkerProvider _workers;
     private readonly IToolRegistry _tools;
@@ -1336,15 +1328,9 @@ public sealed class Orchestrator : IOrchestrator
 
             if (FileNamedBy(call) is { } file)
                 _fileOf[key] = file;
-            else if (ProducesFiles.Contains(call.Name))
+            else if (MutatingTools.Changes(call.Name))
                 _namedNothing[key] = call.Name;
         }
-
-        /// <summary>
-        /// The tools whose work IS a file, so a later file of theirs can show the work happened.
-        /// A command is not one of them: nothing it produces says the earlier one succeeded.
-        /// </summary>
-        private static HashSet<string> ProducesFiles => MutatingTools;
 
         /// <summary>A lookup whose target is not there. An answer — unless the step has nothing else.</summary>
         public void FoundNothing(ToolCall call, string? error)
@@ -1563,7 +1549,7 @@ public sealed class Orchestrator : IOrchestrator
         /// state of the workspace it is about to look at.
         /// </summary>
         private string Identity(ToolCall call)
-            => MutatingTools.Contains(call.Name)
+            => MutatingTools.Changes(call.Name)
                 ? CallIdentity.Of(call)
                 : CallIdentity.Of(call) + "\0#" + _generation.ToString(CultureInfo.InvariantCulture);
 
@@ -2336,7 +2322,7 @@ public sealed class Orchestrator : IOrchestrator
 
                     // The tree just moved. A read or a build that comes after this is not the one
                     // that came before it, whatever its arguments say.
-                    if (MutatingTools.Contains(call.Name))
+                    if (MutatingTools.Changes(call.Name))
                         progress.WorkspaceChanged();
                 }
                 else if (result.IsAnswer)

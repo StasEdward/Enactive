@@ -197,6 +197,17 @@ public static class Verdicts
     /// <summary>"No tool call settles this." An analysis, a document, a judgement.</summary>
     public static Turn NotByAnyCall(string what = "this step's work was reading and reasoning")
         => Turn.Says($$"""{"shown":"not-by-any-call","calls":[],"what":"{{what}}"}""");
+
+    /// <summary>
+    /// "The objective was conditional and the calls show it did not need doing." Takes call numbers
+    /// like <see cref="Shown"/> and for the same reason: unlike NotByAnyCall this answer is audited,
+    /// because nothing needing doing is a finding.
+    /// </summary>
+    public static Turn NothingToDo(string what = "the file already says what the code does",
+                                   params int[] calls)
+        => Turn.Says($$"""
+            {"shown":"nothing-to-do","calls":[{{string.Join(",", calls)}}],"what":"{{what}}"}
+            """);
 }
 
 /// <summary>Model routing for a test: by default nothing is bound, so there is no reviewer.</summary>

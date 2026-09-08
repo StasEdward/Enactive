@@ -273,7 +273,8 @@ public sealed class Reviewer
             + "no code fences, in exactly this shape:\n"
             + "{\"shown\":\"yes\",\"calls\":[3],\"what\":\"...\"}\n"
             + "or {\"shown\":\"no\",\"calls\":[],\"what\":\"...\"}\n"
-            + "or {\"shown\":\"not-by-any-call\",\"calls\":[],\"what\":\"...\"}"));
+            + "or {\"shown\":\"not-by-any-call\",\"calls\":[],\"what\":\"...\"}\n"
+            + "or {\"shown\":\"nothing-to-do\",\"calls\":[2],\"what\":\"...\"}"));
 
         var retry = await provider.CompleteAsync(
             new ChatRequest(model, messages, Temperature: 0.0, ResponseSchema: ProofSchema), ct);
@@ -297,7 +298,7 @@ public sealed class Reviewer
         {
           "type": "object",
           "properties": {
-            "shown": { "type": "string", "enum": ["yes", "no", "not-by-any-call"] },
+            "shown": { "type": "string", "enum": ["yes", "no", "not-by-any-call", "nothing-to-do"] },
             "calls": { "type": "array", "items": { "type": "integer" } },
             "what": { "type": "string" }
           },
@@ -311,7 +312,8 @@ public sealed class Reviewer
         => $"The step's objective:\n{stepTitle}\n\n"
          + $"What the agent reported:\n{coderOutput}\n\n"
          + $"Every call the step made, numbered:\n{executionEvidence}\n\n"
-         + "Which of these calls SHOWS that the objective above was met? Answer with their numbers.";
+         + "Which of these calls SHOWS that the objective above was met — or, if the objective was "
+         + "conditional, that it did not need doing? Answer with their numbers.";
 
     /// <summary>
     /// Deliberately short. This pass has one question and a long prompt would invite it to answer a
@@ -323,7 +325,8 @@ public sealed class Reviewer
         + "Another reviewer has already confirmed that the report is truthful about the evidence; "
         + "that is not your question. Yours is narrower: does the evidence SHOW the objective was met?\n\n"
         + "Respond with ONLY a JSON object, no prose and no code fences:\n"
-        + "{\"shown\":\"yes\"|\"no\"|\"not-by-any-call\",\"calls\":[numbers],\"what\":\"one sentence\"}\n\n"
+        + "{\"shown\":\"yes\"|\"no\"|\"not-by-any-call\"|\"nothing-to-do\",\"calls\":[numbers],"
+        + "\"what\":\"one sentence\"}\n\n"
         + "\"yes\" — the evidence shows it. Put in \"calls\" the number of EVERY call that shows it, "
         + "as numbered in the evidence, and nothing else. Only cite a call you can actually see. A "
         + "citation is checked against what really happened, so a number you are unsure of is worse "
@@ -337,6 +340,13 @@ public sealed class Reviewer
         + "agent's to choose, and many correct steps run no command at all. Use this answer freely; "
         + "it is never held against the step. Never answer \"no\" merely because you would have "
         + "expected some command to be run — that is this answer, not that one.\n\n"
+        + "\"nothing-to-do\" — the objective was CONDITIONAL (correct what has drifted, fix it if it "
+        + "is broken, update the file if it is out of date) and the calls show the condition does "
+        + "not hold, so there was nothing to do. The step is finished and correct. Put in \"calls\" "
+        + "the number of every call that SHOWS there was nothing to do, exactly as for \"yes\" — an "
+        + "answer that names none is not believed, because \"nothing needed doing\" is a finding and "
+        + "a finding rests on having looked. This is not the answer for a step that simply did not "
+        + "do its work: use it only when the calls themselves say the work was not needed.\n\n"
         + "A call marked ERROR or REFUSED did not do its job and cannot be what shows an objective "
         + "was met. A call marked NOTHING THERE ran and answered — a file that is absent, an offset "
         + "past the end — and can be exactly what shows one.";
@@ -365,6 +375,7 @@ public sealed class Reviewer
                 "yes" => ProofClaimKind.Shown,
                 "no" => ProofClaimKind.NotShown,
                 "not-by-any-call" or "not_by_any_call" or "notbyanycall" => ProofClaimKind.NotByAnyCall,
+                "nothing-to-do" or "nothing_to_do" or "nothingtodo" => ProofClaimKind.NothingToDo,
                 _ => (ProofClaimKind?)null
             };
             if (kind is not { } claimKind)

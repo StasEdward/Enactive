@@ -1,5 +1,7 @@
 namespace Enactive.Core.Execution;
 
+using Enactive.Core.Tools;
+
 /// <summary>
 /// What a proof pass says about a step: whether the evidence SHOWS the step's objective was met,
 /// and which calls show it.
@@ -25,7 +27,29 @@ public enum ProofClaimKind
     /// ran commands to satisfy the reviewer rather than to learn anything. Which tools reach an
     /// answer are the agent's to choose.</para>
     /// </summary>
-    NotByAnyCall
+    NotByAnyCall,
+
+    /// <summary>
+    /// The objective was CONDITIONAL - change something if it has drifted, fix something if it is
+    /// broken - and the calls show the condition does not hold. The step is finished and correct:
+    /// there was nothing to do.
+    ///
+    /// <para>Reported 2026-09-08 15:04. A "Documentation Sync" run planned two steps, "Analyze
+    /// codebase functionality" and "Update or create README.md". The analysis found no drift, so the
+    /// second step read the same files, said so, and changed nothing - which was the right answer.
+    /// The pass had three words for it and all three were wrong: <see cref="Shown"/> would be a lie
+    /// about what the reads show, <see cref="NotByAnyCall"/> would be false because a call could
+    /// settle it, and <see cref="NotShown"/> - the one it chose - failed the run for doing the work
+    /// correctly. Ten minutes later the same request passed, because that time the step made no call
+    /// at all and the pass was skipped. Identical work, opposite verdicts, decided by an artefact.
+    /// </para>
+    ///
+    /// <para>Unlike <see cref="NotByAnyCall"/> this one is NOT free: "there was nothing to do" is a
+    /// FINDING, and a finding rests on having looked. It is audited exactly like <see cref="Shown"/>
+    /// - named calls, resolved by number - plus one thing only the engine can see: a step that
+    /// changed the workspace did not find nothing to do.</para>
+    /// </summary>
+    NothingToDo
 }
 
 /// <summary>
@@ -54,14 +78,17 @@ public sealed record ProofVerdict(bool Sound, string Reason);
 /// during 2026-09-07 and a fifth was declined, on the grounds that no wording fixes a model that
 /// misreads what it is shown. So the pass is asked for something that does not need to be trusted:
 /// a POINTER. It names calls by number, and the engine resolves those numbers against the journal it
-/// already holds. Three of the four ways a claim fails here are decided by the engine looking things
+/// already holds. Every way a claim fails here EXCEPT one is decided by the engine looking things
 /// up, not by a model being persuasive.</para>
 ///
-/// <para>The fourth — <see cref="ProofClaimKind.NotShown"/> — IS the model's own answer, and that is
+/// <para>That one — <see cref="ProofClaimKind.NotShown"/> — IS the model's own answer, and that is
 /// stated rather than dressed up. It is acted on because the question is closed, narrow, and carries
-/// an explicit escape (<see cref="ProofClaimKind.NotByAnyCall"/>) for the case that made the
-/// execution reviewer overreach before: a model choosing NotShown over that has said the objective
-/// was the kind of thing a call could settle, and that no call settles it.</para>
+/// two explicit escapes for the cases where a "no" would be wrong:
+/// <see cref="ProofClaimKind.NotByAnyCall"/> for the objective no call can settle, which is what
+/// made the execution reviewer overreach before, and <see cref="ProofClaimKind.NothingToDo"/> for
+/// the conditional objective whose condition does not hold. A model choosing NotShown over both has
+/// said the objective was the kind of thing a call could settle, that it did need settling, and that
+/// no call settles it.</para>
 /// </summary>
 public static class ProofAudit
 {
@@ -87,14 +114,41 @@ public static class ProofAudit
                     + (string.IsNullOrWhiteSpace(claim.What) ? "" : ": " + claim.What));
         }
 
-        // ── Shown. Now the pointers get looked up. ──────────────────────────
+        // ── Shown and NothingToDo. Now the pointers get looked up. ───────────
+        //
+        // Both are citations and both are resolved by the same code on purpose. The difference
+        // between them is what the cited calls are said to establish - that the objective was met,
+        // or that it did not need meeting - and that is the model's half. Whether the numbers are
+        // real is the engine's, and it must not come out differently for the two answers.
+
+        var nothingToDo = claim.Kind == ProofClaimKind.NothingToDo;
 
         // Claims to point at something and points at nothing. An absence is not an answer, and this
         // is the shape a model reaches for when it wants to agree without having found anything.
         if (claim.Calls.Count == 0)
             return new ProofVerdict(false,
-                "the step's success was said to be shown by the evidence, but no call was named as "
-                + "showing it");
+                nothingToDo
+                    ? "the step reported that nothing needed doing, and named no call that looked. "
+                      + "Nothing needing doing is a finding, and a finding rests on having looked"
+                    : "the step's success was said to be shown by the evidence, but no call was "
+                      + "named as showing it");
+
+        // Only the engine can see this one, and only the engine should: a step that changed the
+        // workspace did not find nothing to do. Checked before the citations because it settles the
+        // answer whatever they say - a write that happened is not undone by pointing at a read.
+        if (nothingToDo)
+        {
+            var changed = shown
+                .Where(a => a.Outcome == ActionOutcome.Succeeded && MutatingTools.Changes(a.Tool))
+                .Select(a => a.Tool)
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+
+            if (changed.Length > 0)
+                return new ProofVerdict(false,
+                    "the step reported that nothing needed doing, but it changed the workspace ("
+                    + string.Join(", ", changed) + "). Whatever it did, it was not nothing");
+        }
 
         var missing = claim.Calls.Where(n => n < 1 || n > shown.Count).ToArray();
         if (missing.Length > 0)
@@ -111,10 +165,12 @@ public static class ProofAudit
         if (cited.All(a => a.Outcome is ActionOutcome.Failed or ActionOutcome.Refused))
             return new ProofVerdict(false,
                 "the only call(s) named as proof are " + Describe(cited)
-                + " — the step's success does not follow from them");
+                + (nothingToDo
+                    ? " — they do not show that there was nothing to do"
+                    : " — the step's success does not follow from them"));
 
         return new ProofVerdict(true,
-            "shown by " + Numbers(claim.Calls)
+            (nothingToDo ? "nothing needed doing, shown by " : "shown by ") + Numbers(claim.Calls)
             + (string.IsNullOrWhiteSpace(claim.What) ? "" : ": " + claim.What));
     }
 

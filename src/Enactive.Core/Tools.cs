@@ -26,6 +26,29 @@ public static class ToolArguments
     public const string ExpectedExitCodes = "expectedExitCodes";
 }
 
+/// <summary>
+/// The tools that CHANGE the workspace, as opposed to looking at it.
+///
+/// <para>Here rather than beside any one of its users, for the same reason as
+/// <see cref="ToolArguments"/> above: three parts of the engine need this one list and they sit in
+/// different layers. The open-failure tracker uses it (a later file of theirs can close an earlier
+/// failure), the step-progress guard uses it (after one of these lands, everything read afterwards
+/// is being read off a different tree), and <c>ProofAudit</c> uses it to refuse a step that reports
+/// nothing needed doing while one of these succeeded inside it. A name spelled twice is a name that
+/// drifts.</para>
+///
+/// <para>A command is NOT one of these, however much it changes on disk: what a tool did is judged
+/// by what the engine can see it did, and nothing a shell prints says which file it touched.</para>
+/// </summary>
+public static class MutatingTools
+{
+    private static readonly HashSet<string> Names =
+        new(StringComparer.Ordinal) { "write_file", "edit_file", "move_file", "create_directory" };
+
+    /// <summary>Whether a call by this name changes the workspace.</summary>
+    public static bool Changes(string tool) => Names.Contains(tool);
+}
+
 /// <summary>Structured tool result (PLAN_v2 §2A.2) — never a bare string.</summary>
 /// <param name="IsAnswer">
 /// Set on a FAILED result that is nevertheless the answer to what was asked: the file the model
