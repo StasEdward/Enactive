@@ -262,26 +262,18 @@ public sealed class Orchestrator : IOrchestrator
             + (intent.Context.GitBranch is { } branch ? $" (git: {branch})" : "")
             + (intent.Context.Environment is { } envInfo ? $" · {envInfo.OneLine()}" : ""));
 
-        var worker = _workers.Get(intent.WorkerId);
-        var model = _router.Resolve(ModelPurpose.Execute, worker) ?? worker.ModelPolicy.Preferred;
-        yield return scope.Route("worker", model, $"Worker '{worker.Role}' -> model {model.ProviderId}/{model.Model}");
+        var models = ResolveModels(intent);
+        var worker = models.Worker;
 
-        var provider = _providers.Create(model.ProviderId);
+        yield return scope.Route("worker", models.Model,
+            $"Worker '{worker.Role}' -> models.Model {models.Model.ProviderId}/{models.Model.Model}");
 
-        // Plan phase: the bound Plan model, else the executing model.
-        var planRef = _router.Resolve(ModelPurpose.Plan, worker) ?? model;
-        var planProvider = _providers.Create(planRef.ProviderId);
-        var planModel = planRef.Model;
-        if (planRef.ProviderId != model.ProviderId || planRef.Model != model.Model)
-            yield return scope.Route("plan", planRef, $"Planner -> {planRef.ProviderId}/{planRef.Model}");
+        if (models.PlanIsElsewhere)
+            yield return scope.Route("plan", models.Plan,
+                $"Planner -> {models.Plan.ProviderId}/{models.Plan.Model}");
 
-        // Review phase: on iff a Review model is bound.
-        var reviewRef = _router.Resolve(ModelPurpose.Review, worker);
-        var reviewOn = reviewRef is not null;
-        var reviewProvider = reviewOn ? _providers.Create(reviewRef!.ProviderId) : null;
-        var reviewModel = reviewRef?.Model ?? "";
-        if (reviewOn)
-            yield return scope.Route("review", reviewRef!, $"Reviewer -> {reviewRef!.ProviderId}/{reviewRef.Model}");
+        if (models.Review is { } bound)
+            yield return scope.Route("review", bound, $"Reviewer -> {bound.ProviderId}/{bound.Model}");
 
         // ── Understand / Plan (reasoner when multi-agent) ─────────────────────
         //
@@ -292,11 +284,11 @@ public sealed class Orchestrator : IOrchestrator
         var plan = resume is not null
             ? PlanOf(resume)
             : await InScopeAsync(runId, taskId, null,
-                () => _planner.PlanAsync(intent.RawText, intent.Context, planProvider, planModel, ct));
+                () => _planner.PlanAsync(intent.RawText, intent.Context, models.PlanProvider, models.Plan.Model, ct));
 
         if (plan.PromptTokens + plan.CompletionTokens > 0)
             yield return scope.Usage(
-                WorkEventPayload.WorkPurpose.Plan, planRef, plan.PromptTokens, plan.CompletionTokens);
+                WorkEventPayload.WorkPurpose.Plan, models.Plan, plan.PromptTokens, plan.CompletionTokens);
 
         // A plan nobody could read is not a decision to do one thing. The two were the same value
         // and the same title until now, so a genuine multi-step request that arrived back as prose
@@ -336,7 +328,7 @@ public sealed class Orchestrator : IOrchestrator
                     // A configured reviewer now applies here too. It used to run for plan steps only,
                     // while the planner was explicitly told to prefer QuickAction — so the reviewer
                     // setting did nothing for most ordinary requests, file writes and commands included.
-                    var maxQuickAttempts = reviewOn ? _reviewRetries + 1 : 1;
+                    var maxQuickAttempts = models.ReviewOn ? _reviewRetries + 1 : 1;
 
                     // This run's own view of the store. Everything it writes belongs to it, and it
                     // is the only thing that can undo those writes - see IArtifactScope.
@@ -354,8 +346,8 @@ public sealed class Orchestrator : IOrchestrator
 
                     // The same one-shot fallback the DAG path has: an unreachable model is not the
                     // model doing bad work, so it costs no review attempt.
-                    var activeRef = model;
-                    var activeProvider = provider;
+                    var activeRef = models.Model;
+                    var activeProvider = models.Provider;
                     var triedFallback = false;
 
                     // See the same line on the DAG path: the evidence window moves only when a
@@ -403,17 +395,17 @@ public sealed class Orchestrator : IOrchestrator
                             continue;
                         }
 
-                        if (!reviewOn || !quickResult.Succeeded)
+                        if (!models.ReviewOn || !quickResult.Succeeded)
                             break;
 
                         quick.Writer.TryWrite(scope.Ev(EventKind.ReviewRequested, "reviewing…"));
                         var (review, mode) = await ReviewAsync(
                             plan.Title, messages, journal, evidenceStart, artifacts, store,
-                            reviewProvider!, reviewModel, ct);
+                            models.ReviewProvider!, models.ReviewModel, ct);
 
                         if (review.PromptTokens + review.CompletionTokens > 0)
                             quick.Writer.TryWrite(scope.Usage(
-                                WorkEventPayload.WorkPurpose.Review, reviewRef!,
+                                WorkEventPayload.WorkPurpose.Review, models.Review!,
                                 review.PromptTokens, review.CompletionTokens));
 
                         if (review.Pass)
@@ -428,7 +420,7 @@ public sealed class Orchestrator : IOrchestrator
                             // skipped this path would skip most ordinary requests.
                             var quickProof = mode == ReviewMode.Execution
                                 ? await ProveAsync(plan.Title, messages, journal, evidenceStart,
-                                                   reviewProvider!, reviewModel, ct)
+                                                   models.ReviewProvider!, models.ReviewModel, ct)
                                 : null;
 
                             if (quickProof is not { } quickProven)
@@ -436,7 +428,7 @@ public sealed class Orchestrator : IOrchestrator
 
                             if (quickProven.Prompt + quickProven.Completion > 0)
                                 quick.Writer.TryWrite(scope.Usage(
-                                    WorkEventPayload.WorkPurpose.Review, reviewRef!,
+                                    WorkEventPayload.WorkPurpose.Review, models.Review!,
                                     quickProven.Prompt, quickProven.Completion));
 
                             if (quickProven.Verdict.Sound)
@@ -498,7 +490,7 @@ public sealed class Orchestrator : IOrchestrator
             {
                 var verified = new VerifyResult();
                 await foreach (var checkEvent in VerifyAsync(
-                    intent, taskId, runId, worker, provider, model.Model, model.ProviderId,
+                    intent, taskId, runId, worker, models.Provider, models.Model.Model, models.Model.ProviderId,
                     artifacts, budget, verified, scope.Criterion,
                     (kind, summary) => scope.Ev(kind, summary), ct))
                     yield return checkEvent;
@@ -705,7 +697,7 @@ public sealed class Orchestrator : IOrchestrator
 
             // Per-step model auto-routing: pick the Execute model for this step's complexity (light for
             // trivial, heavy for complex, the worker's own for normal). Falls back to the base model.
-            var stepRef = _router.ResolveExecute(worker, step.Complexity) ?? model;
+            var stepRef = _router.ResolveExecute(worker, step.Complexity) ?? models.Model;
             var stepProvider = _providers.Create(stepRef.ProviderId);
             var stepModel = stepRef.Model;
             // Emitted for EVERY step, not only when it differs from the worker's model. "Which model
@@ -716,7 +708,7 @@ public sealed class Orchestrator : IOrchestrator
                 $"[{stepNumber}] {step.Complexity} step -> {stepRef.ProviderId}/{stepRef.Model}",
                 stepNumber, step.Complexity));
 
-            var maxAttempts = reviewOn ? _reviewRetries + 1 : 1;
+            var maxAttempts = models.ReviewOn ? _reviewRetries + 1 : 1;
             var stepResult = new ToolLoopResult();
             var outcome = StepOutcomeKind.Succeeded;
             string? outcomeReason = null;
@@ -788,17 +780,17 @@ public sealed class Orchestrator : IOrchestrator
                     break;
                 }
 
-                if (!reviewOn || outcome != StepOutcomeKind.Succeeded)
+                if (!models.ReviewOn || outcome != StepOutcomeKind.Succeeded)
                     break;
 
                 Emit(EventKind.ReviewRequested, $"[{stepNumber}] reviewing with reasoner…");
 
                 var (review, mode) = await ReviewAsync(
-                    step.Title, convo, journal, evidenceStart, artifacts, store, reviewProvider!, reviewModel, ct);
+                    step.Title, convo, journal, evidenceStart, artifacts, store, models.ReviewProvider!, models.ReviewModel, ct);
 
                 if (review.PromptTokens + review.CompletionTokens > 0)
                     events.Writer.TryWrite(scope.Usage(
-                        WorkEventPayload.WorkPurpose.Review, reviewRef!,
+                        WorkEventPayload.WorkPurpose.Review, models.Review!,
                         review.PromptTokens, review.CompletionTokens, stepNumber));
 
                 if (review.Pass)
@@ -812,14 +804,14 @@ public sealed class Orchestrator : IOrchestrator
                     // the thing itself.
                     var proof = mode == ReviewMode.Execution
                         ? await ProveAsync(step.Title, convo, journal, evidenceStart,
-                                           reviewProvider!, reviewModel, ct)
+                                           models.ReviewProvider!, models.ReviewModel, ct)
                         : null;
 
                     if (proof is { } proven)
                     {
                         if (proven.Prompt + proven.Completion > 0)
                             events.Writer.TryWrite(scope.Usage(
-                                WorkEventPayload.WorkPurpose.Review, reviewRef!,
+                                WorkEventPayload.WorkPurpose.Review, models.Review!,
                                 proven.Prompt, proven.Completion, stepNumber));
 
                         if (!proven.Verdict.Sound)
@@ -1103,7 +1095,7 @@ public sealed class Orchestrator : IOrchestrator
         {
             var verified = new VerifyResult();
             await foreach (var checkEvent in VerifyAsync(
-                intent, taskId, runId, worker, provider, model.Model, model.ProviderId,
+                intent, taskId, runId, worker, models.Provider, models.Model.Model, models.Model.ProviderId,
                 artifacts, budget, verified, scope.Criterion,
                 (kind, summary) => scope.Ev(kind, summary), ct))
                 yield return checkEvent;
@@ -1121,6 +1113,29 @@ public sealed class Orchestrator : IOrchestrator
         await ForgetCheckpointAsync();
 
         yield return scope.Terminal(runOutcome, runReason, SummarizeArtifacts);
+    }
+
+    /// <summary>
+    /// Which models serve this run, resolved once. The Execute binding falls back to the worker's
+    /// own preference and Plan falls back to Execute; Review is bound or it is not, which is the one
+    /// place in the engine where a missing binding means "do not do this" rather than "use the
+    /// default".
+    /// </summary>
+    private RunModels ResolveModels(Intent intent)
+    {
+        var worker = _workers.Get(intent.WorkerId);
+        var model = _router.Resolve(ModelPurpose.Execute, worker) ?? worker.ModelPolicy.Preferred;
+        var plan = _router.Resolve(ModelPurpose.Plan, worker) ?? model;
+        var review = _router.Resolve(ModelPurpose.Review, worker);
+
+        return new RunModels(
+            worker,
+            model,
+            _providers.Create(model.ProviderId),
+            plan,
+            _providers.Create(plan.ProviderId),
+            review,
+            review is null ? null : _providers.Create(review.ProviderId));
     }
 
     /// <summary>The plan a checkpoint is carrying, rebuilt with the step ids it was written with.</summary>
