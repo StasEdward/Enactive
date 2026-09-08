@@ -422,11 +422,11 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         NoteLegacyApprovalsIfAny(fullPath);
         _registry.Touch(fullPath);
         RefreshWorkspaces();
-        var name = Path.GetFileName(Path.TrimEndingDirectorySeparator(fullPath));
-        if (string.IsNullOrEmpty(name))
-            name = "workspace";
 
-        var workspace = new WorkspaceInfo(WorkspaceInfo.IdFor(fullPath), name, fullPath);
+        // Adopt, not For: a run is where a folder is genuinely taken up as a workspace, so this is
+        // where its id gets written down beside it. The id written is the one it already had, so a
+        // workspace with history keeps it and can be renamed from here on without losing it.
+        var workspace = WorkspaceInfo.Adopt(fullPath);
 
         // A template's permissions are already the INTERSECTION of its own ceiling and the
         // workspace's tier - TemplateResolution.Narrow did that when the specification was resolved,
@@ -1172,10 +1172,8 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         }
         try
         {
-            var full = Path.GetFullPath(root);
-            var name = Path.GetFileName(Path.TrimEndingDirectorySeparator(full));
-            if (string.IsNullOrEmpty(name)) name = "workspace";
-            var ws = new WorkspaceInfo(WorkspaceInfo.IdFor(full), name, full);
+            // Looking at the environment is a read, so this only READS the workspace's id.
+            var ws = WorkspaceInfo.For(root);
             var (info, snapshot) = await _envProbe.ProbeFullAsync(ws, CancellationToken.None);
             _vm.EnvironmentSummary = info.OneLine();
             ShowViewer("Environment", info.Summary() + "\n\n" + snapshot.Describe());
@@ -1215,12 +1213,12 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             ? _vm.WorkerRoles[_vm.SelectedWorkerIndex]
             : null;
 
-    private static WorkspaceInfo WorkspaceFrom(string path)
-    {
-        var full = Path.GetFullPath(path);
-        var name = Path.GetFileName(Path.TrimEndingDirectorySeparator(full));
-        return new WorkspaceInfo(WorkspaceInfo.IdFor(full), string.IsNullOrEmpty(name) ? "workspace" : name, full);
-    }
+    /// <summary>
+    /// The workspace at a path, for READING what has been recorded about it — the run list, the
+    /// timeline, the inbox. It resolves the id the folder carries and writes nothing: opening a
+    /// history should not put a file in somebody's project.
+    /// </summary>
+    private static WorkspaceInfo WorkspaceFrom(string path) => WorkspaceInfo.For(path);
 
     private void StartBackground(string text, string fullPath)
     {
@@ -1238,7 +1236,9 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         }
 
         var mcpConfigs = _settings.McpServers.Select(c => c.Clone()).ToArray();
-        var workspace = WorkspaceFrom(fullPath);
+        // Adopt: a background run is a run, and the folder is being taken up as a workspace here
+        // exactly as it is in the foreground.
+        var workspace = WorkspaceInfo.Adopt(fullPath);
         var policy = PolicyFor(_vm.AutonomyTier);
         var runSettings = CurrentRunSettings();
         var workerId = _workerProvider.All.Count > 0
@@ -1773,6 +1773,15 @@ public sealed partial class MainWindow : Window, IDecisionHandler
 
     // Workspace-scoped approvals live OUTSIDE the workspace now — see ApprovalStore for why. The
     // old <workspace>/.enactive/permissions.json is ignored, not imported.
+    //
+    // Keyed by WorkspaceInfo.IdFor — the PATH — and deliberately NOT by the workspace's stable id.
+    // The stable id is read from a file inside the folder, and a repository can arrive from anywhere
+    // with that file already in it; a clone must not be able to bring somebody else's standing
+    // "yes, run_command is fine here" with it. Attribution may follow a folder that was renamed.
+    // Authority may not: it is granted to a place, and the place is the path.
+    //
+    // The cost is that renaming a folder asks again, once per tool. That is the right way round —
+    // being asked again is an inconvenience, and inheriting an approval nobody granted here is not.
     private bool WorkspaceApproves(string tool)
     {
         if (string.IsNullOrEmpty(_currentWorkspaceRoot))

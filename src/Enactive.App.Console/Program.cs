@@ -83,11 +83,10 @@ var workspaceRoot = Path.GetFullPath(
 Directory.CreateDirectory(workspaceRoot);
 
 // ── Composition root (manual wiring — zero external NuGet packages) ──────────
-var workspaceName = Path.GetFileName(workspaceRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
-if (string.IsNullOrEmpty(workspaceName))
-    workspaceName = "workspace";
-
-var workspace = new WorkspaceInfo(WorkspaceInfo.IdFor(workspaceRoot), workspaceName, workspaceRoot);
+// Adopt, not For: this host exists to RUN in the folder, so it is where the workspace's id gets
+// written down beside it. The id written is the one the folder already had, so a workspace with a
+// history keeps it - and from here on the folder can be renamed or moved without detaching it.
+var workspace = WorkspaceInfo.Adopt(workspaceRoot);
 var runStore = RunStoreFactory.Create(workspace);
 var memoryStore = MemoryStoreFactory.Create(workspace);
 

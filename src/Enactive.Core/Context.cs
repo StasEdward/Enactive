@@ -6,23 +6,69 @@ using Enactive.Core.Memory;
 public sealed record WorkspaceInfo(Guid Id, string Name, string RootPath)
 {
     /// <summary>
-    /// A workspace identified by its folder, with an id DERIVED from that folder rather than freshly
-    /// generated. That id is written into every run, memory entry and inbox item, so it has to be the
-    /// same id the next time the same folder is opened: a random one makes the field meaningless, and
-    /// a shared database then cannot tell one project's rows from another's - per-workspace filtering
-    /// matches nothing at all, silently.
+    /// A workspace identified by its folder, with an id that does not change when the folder does.
+    ///
+    /// <para>The id is written into every run, memory entry and inbox item, so it has to be the same
+    /// id the next time this project is opened. It used to be a hash of the PATH, which meant
+    /// renaming or moving the folder silently detached everything that had ever been recorded about
+    /// it: the rows are still in the database, and per-workspace filtering matches none of them.
+    /// Nothing reports this, because from the engine's side a workspace with no history and a
+    /// workspace whose history is filed under another id look exactly alike.</para>
+    ///
+    /// <para>So the id is READ from <c>.enactive/workspace.json</c> when it is there, and derived
+    /// from the path when it is not. This method never writes: pointing at a folder should not put a
+    /// file in it. <see cref="Adopt"/> is the one that writes, and hosts call it where a workspace is
+    /// actually taken up rather than merely named.</para>
     /// </summary>
     public static WorkspaceInfo For(string rootPath)
     {
         var full = Path.GetFullPath(rootPath);
-        var name = Path.GetFileName(Path.TrimEndingDirectorySeparator(full));
-        return new WorkspaceInfo(IdFor(full), string.IsNullOrEmpty(name) ? "workspace" : name, full);
+        return new WorkspaceInfo(WorkspaceIdentity.Read(full) ?? IdFor(full), NameOf(full), full);
     }
 
     /// <summary>
-    /// The stable id of a folder: the first 16 bytes of SHA-256 over its normalised path. Case is
-    /// folded where the filesystem folds it, so C:\Work\Proj and c:\work\proj are one workspace on
-    /// Windows and two on Linux, which is what those filesystems actually mean.
+    /// The same workspace, with its id written down beside it if it was not already.
+    ///
+    /// <para><b>The id written is the one the workspace ALREADY HAD</b> — the path hash, for a
+    /// workspace that has been used before this existed. That is the whole reason this is safe to
+    /// ship: recording the existing id detaches nothing, and from that moment the folder can be
+    /// renamed or moved without losing what it has done. Minting a fresh id here would inflict, on
+    /// every existing workspace at once, exactly the defect being fixed.</para>
+    ///
+    /// <para>Best-effort. A folder that cannot be written to still opens, on the id it has always
+    /// had; a workspace on a read-only share is a workspace, and refusing to show its history
+    /// because a marker file could not be created would be a worse answer than the one it replaces.
+    /// </para>
+    /// </summary>
+    public static WorkspaceInfo Adopt(string rootPath)
+    {
+        var full = Path.GetFullPath(rootPath);
+        var id = WorkspaceIdentity.Read(full);
+        if (id is null)
+        {
+            id = IdFor(full);
+            WorkspaceIdentity.Write(full, id.Value);
+        }
+
+        return new WorkspaceInfo(id.Value, NameOf(full), full);
+    }
+
+    private static string NameOf(string fullPath)
+    {
+        var name = Path.GetFileName(Path.TrimEndingDirectorySeparator(fullPath));
+        return string.IsNullOrEmpty(name) ? "workspace" : name;
+    }
+
+    /// <summary>
+    /// The id a folder has until one is written down for it: the first 16 bytes of SHA-256 over its
+    /// normalised path. Case is folded where the filesystem folds it, so C:\Work\Proj and
+    /// c:\work\proj are one workspace on Windows and two on Linux, which is what those filesystems
+    /// actually mean.
+    ///
+    /// <para>Still here, and still used for two things. It is the seed <see cref="Adopt"/> writes,
+    /// so nothing that already has a history loses it. And it is what AUTHORITY is keyed by — see
+    /// the note on <see cref="WorkspaceIdentity"/>: a permission granted to a folder stays granted
+    /// to that folder, and is not carried by a file the folder's own contents could supply.</para>
     /// </summary>
     public static Guid IdFor(string rootPath)
     {

@@ -42,7 +42,16 @@ Version workspace templates intentionally. Do not assume the whole `.enactive` d
 
 SQLite imports existing legacy memory/Inbox JSON once and leaves those source files in place. This is not continuous synchronization between backends. MySQL does not automatically import local history; plan a migration explicitly.
 
-Workspace identity is derived from its normalized path. In MySQL, records are scoped by that identity. Moving the folder can make it appear as a different workspace even when its visible name is unchanged.
+Workspace identity is written into `<workspace>/.enactive/workspace.json` the first time a run takes the folder up, seeded with the id the workspace already had. In MySQL, records are scoped by that identity. Because the marker travels with the folder, **renaming or moving a workspace keeps its history**; before this it appeared as a different workspace and its records silently stopped matching.
+
+Notes on that marker:
+
+- It is created by a **run**, not by browsing. Opening a folder's history does not write anything into it.
+- If it is missing or damaged, the workspace falls back to the path-derived id — the old behaviour — rather than becoming a new workspace with no history.
+- A folder that cannot be written to still opens; the marker is best-effort.
+- **Copying** a workspace copies its identity, so the copy and the original share a history. Renaming and copying are indistinguishable from inside one folder.
+- `.enactive/` is not tracked by git, so two clones of one repository remain two workspaces.
+- Remembered **"Allow (workspace)" approvals are deliberately not keyed by this id** — they stay keyed to the path. The marker sits in the folder the agent works in and can arrive inside a cloned repository, so it must never be able to carry permissions. Renaming a folder therefore asks for those approvals again, once per tool.
 
 ## Logs and diagnosis
 
