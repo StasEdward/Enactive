@@ -413,7 +413,7 @@ public sealed class Orchestrator : IOrchestrator
 
                     quick.Writer.TryWrite(scope.Ev(EventKind.ReviewRequested, "reviewing…"));
                     var (review, mode) = await ReviewAsync(
-                        plan.Title, messages, journal, evidenceStart, scope.Artifacts, store,
+                        plan.Title, messages, journal, evidenceStart, evidenceStart, scope.Artifacts, store,
                         models.ReviewProvider!, models.ReviewModel, ct);
 
                     if (review.PromptTokens + review.CompletionTokens > 0)
@@ -571,6 +571,20 @@ public sealed class Orchestrator : IOrchestrator
         // this is the ONLY thing that crosses between steps, so an empty digest would make every
         // remaining step believe it was the first.
         var digest = resume is null ? new List<string>() : new List<string>(resume.Digest);
+
+        // The journal follows the CONVERSATION, because the reviewer's window has to be the window
+        // the answer was drawn from — §9f's rule, which was applied between a step's attempts and
+        // not between a plan's steps. At one step at a time there is one conversation for the whole
+        // run, so there is one journal for the whole run; above that every step gets its own fork
+        // and its own, which is also what makes Discard safe (one writer, never two).
+        //
+        // Reported 2026-09-08 15:04. Step 2 of a two-step plan could see the five files step 1 had
+        // read, said so, and was rejected for it: "the evidence shows it only read the .csproj
+        // file". True of the evidence and false of the run. The retry re-read all five inside step 2
+        // and passed — having spent the step's only retry on an artefact of this gap.
+        var runJournal = maxParallel == 1 ? new ExecutionJournal(spansSteps: true) : null;
+        if (runJournal is not null && resume is { Transcript.Count: > 0 })
+            runJournal.NotePriorTranscript();
 
         // How each step ended. The run's own outcome is the aggregate of these, computed once at the
         // end — not assumed to be success because the loop finished.
@@ -745,20 +759,35 @@ public sealed class Orchestrator : IOrchestrator
             // out of the transcript instead of being carried into the retry.
             var store = _artifacts.BeginStep();
 
-            // This step's own record of what it did - see the note on the quick-action path.
-            var journal = new ExecutionJournal();
+            // The record of what has been done, over the same ground as `convo` above: shared with
+            // the rest of the run when the conversation is, this step's own when it is not.
+            var journal = runJournal ?? new ExecutionJournal();
             var reads = new ReadLedger();
             var conversationStart = convo.Count;
+
+            // Where this STEP's own calls begin. Two different questions are asked of the journal
+            // and they need different marks. What kind of work was this step - which decides whether
+            // it gets a content or an execution review, and which files it wrote - is about the step
+            // alone. What the answer may be drawn from is about the conversation, and that is
+            // `evidenceStart` below.
+            var stepStart = journal.Mark();
 
             // One switch to the fallback model per step — see the catch below.
             var triedFallback = false;
 
-            // Where the reviewer's evidence starts. It moves only when a retry DISCARDS the attempt
-            // before it — see the note at RetryAfterReview below.
-            var evidenceStart = journal.Mark();
+            // Where the reviewer's evidence starts: the beginning of the conversation the answer is
+            // drawn from. With one shared conversation that is the run's first call, not this
+            // step's — the whole point of the fix above. With a fork of its own it is this step's.
+            // It never moves afterwards; a discarded attempt is taken out of BOTH by Discard, so
+            // the two windows cannot drift apart by being maintained separately.
+            var evidenceStart = runJournal is null ? stepStart : 0;
 
             for (var attempt = 1; attempt <= maxAttempts; attempt++)
             {
+                // Where this attempt's calls begin, so a rejection that discards it can take them
+                // out of the evidence exactly as it takes the draft out of the transcript.
+                var attemptStart = journal.Mark();
+
                 try
                 {
                     await foreach (var ev in RunToolLoopAsync(
@@ -812,7 +841,8 @@ public sealed class Orchestrator : IOrchestrator
                 Emit(EventKind.ReviewRequested, $"[{stepNumber}] reviewing with reasoner…");
 
                 var (review, mode) = await ReviewAsync(
-                    step.Title, convo, journal, evidenceStart, scope.Artifacts, store, models.ReviewProvider!, models.ReviewModel, ct);
+                    step.Title, convo, journal, evidenceStart, stepStart, scope.Artifacts, store,
+                    models.ReviewProvider!, models.ReviewModel, ct);
 
                 if (review.PromptTokens + review.CompletionTokens > 0)
                     events.Writer.TryWrite(scope.Usage(
@@ -852,7 +882,7 @@ public sealed class Orchestrator : IOrchestrator
                             if (attempt < maxAttempts)
                             {
                                 if (RetryAfterReview(convo, conversationStart, mode, review.Notes, "this step"))
-                                    evidenceStart = journal.Mark();
+                                    journal.Discard(attemptStart);
                                 continue;
                             }
 
@@ -873,13 +903,18 @@ public sealed class Orchestrator : IOrchestrator
                 if (attempt < maxAttempts)
                 {
                     // The evidence window has to be the same window the ANSWER is drawn from.
-                    // A discarded attempt is gone from the model's memory too, so the retry starts
-                    // clean and the evidence starts with it. A KEPT transcript is the opposite: the
-                    // model can still cite what it did on the first attempt — correctly — and
-                    // evidence beginning after those calls makes an honest answer look invented.
-                    // That is what happened on 2026-09-07 19:36; see FIX_PLAN §9f.
+                    // A discarded attempt is gone from the model's memory, so it goes out of the
+                    // evidence with it. A KEPT transcript is the opposite: the model can still cite
+                    // what it did on the first attempt — correctly — and evidence beginning after
+                    // those calls makes an honest answer look invented. That is what happened on
+                    // 2026-09-07 19:36; see FIX_PLAN §9f.
+                    //
+                    // Both halves are now one operation. The window used to be re-marked here and
+                    // the transcript truncated in RetryAfterReview, which is two places keeping one
+                    // invariant — and the same invariant was quietly broken between STEPS until
+                    // 2026-09-08. Discarding from the journal is what the transcript just did.
                     if (RetryAfterReview(convo, conversationStart, mode, review.Notes, "this step"))
-                        evidenceStart = journal.Mark();
+                        journal.Discard(attemptStart);
                     continue;
                 }
 
@@ -1612,7 +1647,7 @@ public sealed class Orchestrator : IOrchestrator
     /// </summary>
     private async Task<(ReviewResult Result, ReviewMode Mode)> ReviewAsync(
         string title, List<ChatMessage> convo, ExecutionJournal journal, int evidenceStart,
-        List<ArtifactRef> artifacts, IArtifactScope store,
+        int stepStart, List<ArtifactRef> artifacts, IArtifactScope store,
         IChatProvider reviewProvider, string reviewModel, CancellationToken ct)
     {
         try
@@ -1639,7 +1674,10 @@ public sealed class Orchestrator : IOrchestrator
             // file also means the reviewer judges what is actually on disk rather than what the
             // model said it would put there.
             var written = await ReadWrittenAsync(store, ct);
-            var mode = _reviewContent && !journal.UsedAny(CommandTools, evidenceStart) && written.Count > 0
+            // From the STEP's own mark, not the evidence window: what kind of work THIS step did is
+            // not changed by a build an earlier step ran. The window says what the answer may rest
+            // on; this says what the step itself was.
+            var mode = _reviewContent && !journal.UsedAny(CommandTools, stepStart) && written.Count > 0
                 ? ReviewMode.Content
                 : ReviewMode.Execution;
 

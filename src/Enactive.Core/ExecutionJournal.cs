@@ -59,6 +59,23 @@ public sealed class ExecutionJournal
 {
     private readonly List<ExecutedAction> _actions = new();
     private readonly object _gate = new();
+    private readonly bool _spansSteps;
+
+    /// <summary>
+    /// One journal for one CONVERSATION.
+    /// </summary>
+    /// <param name="spansSteps">
+    /// True when this journal covers a whole run's plan, because the plan shares one conversation
+    /// (one step at a time). The evidence then says so and every call names its step, since a step
+    /// may legitimately answer from what an earlier one did. False - the default - is a journal that
+    /// covers a single unit of work: a quick action, or one step of a run whose steps were forked.
+    ///
+    /// <para>Passed in rather than inferred from the actions present. A step that made no calls of
+    /// its own is exactly the case that matters, and there is nothing in the data to infer it from:
+    /// the caller knows whether the window is the run's, and guessing produced a header that said
+    /// "in this step" over another step's calls.</para>
+    /// </param>
+    public ExecutionJournal(bool spansSteps = false) => _spansSteps = spansSteps;
 
     /// <summary>Everything recorded so far, oldest first.</summary>
     public IReadOnlyList<ExecutedAction> Actions
@@ -80,6 +97,41 @@ public sealed class ExecutionJournal
         lock (_gate)
             _actions.Add(new ExecutedAction(DateTimeOffset.UtcNow, step, tool, arguments, outcome, output));
     }
+
+    /// <summary>
+    /// Forget everything from <paramref name="from"/> on, because the conversation just did.
+    ///
+    /// <para>A CONTENT review that rejects an attempt DISCARDS it: the draft comes out of the
+    /// transcript and the retry starts from where the attempt began. The evidence has to lose the
+    /// same calls, or the reviewer is judging an answer against work the model can no longer see.
+    /// That is §9f's rule - the evidence window is the transcript window - made structural instead
+    /// of maintained by hand: the two are truncated by the same event.</para>
+    ///
+    /// <para>Only safe where there is ONE conversation writing to this journal. A run above degree
+    /// one gives every step its own fork and its own journal for exactly that reason.</para>
+    /// </summary>
+    public void Discard(int from)
+    {
+        lock (_gate)
+        {
+            var at = Math.Max(0, from);
+            if (at < _actions.Count)
+                _actions.RemoveRange(at, _actions.Count - at);
+        }
+    }
+
+    /// <summary>
+    /// Says, once and for the rest of the run, that the conversation this journal describes began
+    /// before the journal did.
+    ///
+    /// <para>A resumed run restores the interrupted run's transcript and starts a fresh journal, so
+    /// the agent can see work whose calls are not here. Everything else in this engine that shows
+    /// less than the whole says so - a shortened result, an excerpted memory - and this is the same
+    /// obligation: a reviewer that is not told will read the gap as a fabrication.</para>
+    /// </summary>
+    public void NotePriorTranscript() => _resumed = true;
+
+    private volatile bool _resumed;
 
     /// <summary>Whether anything recorded from <paramref name="from"/> on used one of these tools.</summary>
     public bool UsedAny(IReadOnlyCollection<string> tools, int from = 0)
@@ -129,9 +181,28 @@ public sealed class ExecutionJournal
         // shortened one.
         // Said ONCE. Per result it cost eighty-five characters times the number of calls, which is
         // the budget the calls were rescued from - a notice that crowds out what it is annotating.
-        var header = $"{slice.Length} tool call(s) in this step, oldest first{Tally(slice)}, "
-                   + "each numbered [n] so it can be referred to. "
-                   + "A result too long to show keeps its START and its END, with the cut marked "
+        // "This step" or "this run so far", decided by the slice rather than by a flag. At one step
+        // at a time the whole plan shares ONE conversation, so a step's answer may draw on what an
+        // earlier step read - and the evidence then has to span the same ground, or an honest report
+        // reads as a fabrication. That is §9f between steps instead of between attempts. Above
+        // degree one each step gets its own fork and its own journal, and the slice is one step's
+        // again.
+        var spans = _spansSteps && slice.Any(a => a.Step is not null);
+
+        var header = $"{slice.Length} tool call(s) in "
+                   + (spans ? "this run so far" : "this step")
+                   + $", oldest first{Tally(slice)}, each numbered [n] so it can be referred to."
+                   + (spans
+                       ? " They span more than one step of the plan and each says which, because the "
+                         + "agent can see all of them: a report that draws on an earlier step's work "
+                         + "is not inventing it."
+                       : "")
+                   + (_resumed
+                       ? " This run RESUMED an interrupted one, whose transcript the agent can also "
+                         + "see; the calls it made are not in this list. A claim about work done "
+                         + "before the interruption is not evidence of fabrication."
+                       : "")
+                   + " A result too long to show keeps its START and its END, with the cut marked "
                    + "between them — so a command's closing summary is always here; the call it "
                    + "belongs to still happened.";
 
@@ -139,7 +210,7 @@ public sealed class ExecutionJournal
         // reviewer that is asked to point at a call - see ProofAudit - and it can only point at what
         // it was shown. A number that meant a position in the whole journal would refer to calls
         // this evidence does not contain, and an audit checking it would be checking the wrong list.
-        var calls = slice.Select((a, i) => Call(a, i + 1)).ToArray();
+        var calls = slice.Select((a, i) => Call(a, i + 1, spans)).ToArray();
 
         // How many can be shown AT ALL. Each costs its call line plus the floor under its output -
         // budgeting the call lines alone was the first version of this and it overran by a factor of
@@ -225,15 +296,22 @@ public sealed class ExecutionJournal
     /// <summary>Room reserved for the "… (N of M)" that marks a shortened result.</summary>
     private const int ShortenedNoticeChars = 24;
 
-    /// <summary>The call itself. Arguments are clipped because write_file carries a whole file.</summary>
-    private static string Call(ExecutedAction action, int number)
+    /// <summary>
+    /// The call itself. Arguments are clipped because write_file carries a whole file.
+    /// </summary>
+    /// <param name="withStep">
+    /// Whether to say which step made it. Only when the slice spans several - one step's evidence
+    /// would be repeating the same number on every line, and the reviewer was told the step already.
+    /// </param>
+    private static string Call(ExecutedAction action, int number, bool withStep = false)
     {
         const int maxArguments = 300;
         var arguments = action.Arguments ?? "";
         if (arguments.Length > maxArguments)
             arguments = arguments[..maxArguments] + $"… ({arguments.Length:N0} characters of arguments)";
 
-        return $"[{number}] -> {action.Tool} {arguments}";
+        var whose = withStep && action.Step is { } step ? $" (step {step})" : "";
+        return $"[{number}]{whose} -> {action.Tool} {arguments}";
     }
 
     /// <summary>
