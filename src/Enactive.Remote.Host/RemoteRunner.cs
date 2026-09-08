@@ -1,9 +1,9 @@
 namespace Enactive.Remote.Host;
 
 using System.Collections.Concurrent;
-using Enactive.Core.Events;
 using Enactive.Core.Intents;
 using Enactive.Core.Orchestration;
+using Enactive.Core.Permissions;
 using Enactive.Remote.Contracts;
 
 /// <summary>
@@ -16,15 +16,21 @@ using Enactive.Remote.Contracts;
 /// <see cref="HostStore"/> and <see cref="DeliveryLoop"/>, not here.</para>
 /// </summary>
 /// <param name="prepare">
-/// Builds the Intent for a task. Supplied by the application, because assembling a
-/// <c>WorkContext</c> means knowing which workspace an id refers to and what is on this machine -
-/// facts this library deliberately does not have. It is also the one place that can refuse a
-/// workspace id it does not recognise.
+/// Builds the engine and the Intent for one task. Supplied by the application, because assembling a
+/// <c>WorkContext</c> and choosing providers means knowing which workspace an id refers to and what
+/// is on this machine - facts this library deliberately does not have. It is also the one place
+/// that can refuse a workspace id it does not recognise.
+///
+/// <para>It is handed a <c>wrap</c> function and must install what that returns as the run's
+/// decision handler. That is how a permission becomes answerable from the phone without the
+/// desktop losing it: the wrapper races the two. Ignoring <c>wrap</c> produces a run that works and
+/// can only be answered at the machine - a defensible choice, and a deliberate one.</para>
 /// </param>
 public sealed class RemoteRunner(
     HostStore store,
-    IOrchestrator orchestrator,
-    Func<StartTaskPayload, CancellationToken, Task<Intent>> prepare)
+    RemoteApprovals approvals,
+    Func<StartTaskPayload, Func<IDecisionHandler, IDecisionHandler>, CancellationToken,
+        Task<(IOrchestrator Engine, Intent Intent)>> prepare)
 {
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _running = new();
 
@@ -50,10 +56,8 @@ public sealed class RemoteRunner(
                 return;
 
             case CommandKind.ResolveApproval:
-                // Stage 5. Deliberately not silently ignored: a command this build cannot carry out
-                // is a fact somebody needs, not a no-op to be discovered by its absence.
-                throw new NotSupportedException(
-                    "Answering a permission from the gateway is not implemented in this build.");
+                Answer(RemoteJson.Deserialize<ResolveApprovalPayload>(command.Payload));
+                return;
 
             default:
                 throw new NotSupportedException($"Command kind {command.Kind} is not one this build knows.");
@@ -73,6 +77,19 @@ public sealed class RemoteRunner(
         }
     }
 
+    /// <summary>
+    /// Hands a queued remote answer to whoever is waiting for it, if anyone still is.
+    ///
+    /// <para>Being handed this command is not authorisation. The desktop may have answered first,
+    /// the request may have expired, the run may be gone - none of which the gateway can know,
+    /// because all three are facts about this machine. <see cref="RemoteApprovals"/> checks them and
+    /// simply does nothing when the answer no longer applies: the outcome that actually happened is
+    /// already on its way as an ApprovalResolved event, so there is nothing to report and nothing
+    /// to correct.</para>
+    /// </summary>
+    private void Answer(ResolveApprovalPayload answer)
+        => approvals.TryAnswer(answer.ApprovalId, answer.ActionHash, answer.Decision);
+
     private async Task StartAsync(StartTaskPayload task, string commandId, CancellationToken ct)
     {
         // The claim and the run record, in one transaction, BEFORE anything executes. False means a
@@ -88,12 +105,16 @@ public sealed class RemoteRunner(
 
         try
         {
-            var intent = await prepare(task, cancellation.Token);
+            var (engine, intent) = await prepare(
+                task,
+                desktop => new RemoteDecisionHandler(
+                    desktop, store, approvals, task.RunId, RemoteDecisionHandler.DefaultTimeout),
+                cancellation.Token);
 
             store.Enqueue(task.RunId, RemoteEventKind.Running, $"Started: {task.Title}");
             store.MarkRunState(task.RunId, LocalRunState.Running);
 
-            await ConsumeAsync(task.RunId, intent, cancellation.Token);
+            await ConsumeAsync(task.RunId, engine, intent, cancellation.Token);
         }
         catch (OperationCanceledException)
         {
@@ -120,11 +141,11 @@ public sealed class RemoteRunner(
     /// <see cref="DeliveryLoop"/> delivers it - so a run is never slowed by the network, and a
     /// connection that drops mid-run costs nothing but time.</para>
     /// </summary>
-    private async Task ConsumeAsync(string runId, Intent intent, CancellationToken ct)
+    private async Task ConsumeAsync(string runId, IOrchestrator engine, Intent intent, CancellationToken ct)
     {
         var ended = false;
 
-        await foreach (var published in orchestrator.SubmitIntentAsync(intent, ct))
+        await foreach (var published in engine.SubmitIntentAsync(intent, ct))
         {
             if (EventMapping.Ending(published) is var (kind, detail))
             {

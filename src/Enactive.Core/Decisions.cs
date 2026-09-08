@@ -6,6 +6,25 @@ public enum PermissionDecision { Allow, Ask, Deny }
 /// <summary>One option offered at a decision fork.</summary>
 public sealed record DecisionOption(string Id, string Label);
 
+/// <summary>
+/// The exact action a decision authorises, as values.
+///
+/// <para>Carried with the request rather than reassembled by whoever answers it. A handler that had
+/// to work out which call it was being asked about, from whatever happened to be in scope, would be
+/// answering a question it inferred - and the whole point of asking is that the answer is about one
+/// specific thing. It is also what a remote answer is bound to: the identity is computed from these
+/// five values and compared when the answer comes back, so an answer given to one action cannot
+/// authorise another.</para>
+/// </summary>
+/// <param name="ArgumentsJson">Exactly what the tool will be handed. Not reformatted: a tidied copy
+/// is a different string, and therefore a different action.</param>
+public sealed record BoundAction(
+    Guid RunId,
+    string ToolCallId,
+    string Tool,
+    string ArgumentsJson,
+    string WorkingDirectory);
+
 /// <summary>A USER DECISION REQUIRED request (PLAN_v2 §7).</summary>
 public sealed record DecisionRequest(
     Guid TaskId,
@@ -15,8 +34,23 @@ public sealed record DecisionRequest(
     string? RecommendedOptionId,
     string? Subject = null,    // the tool name, so a UI can remember approvals per tool
     string? FullDetail = null, // the COMPLETE action, unabridged — see below
-    bool SessionOnly = false)  // an approval that must not outlive the process — see below
+    bool SessionOnly = false,  // an approval that must not outlive the process — see below
+    BoundAction? Action = null) // the exact call this authorises, when there is one
 {
+    /// <summary>
+    /// This request, distinctly from every other.
+    ///
+    /// <para>Generated here rather than required from callers, so nothing has to be passed at
+    /// existing call sites and no request can be created without one. It exists because every way
+    /// of answering a request from somewhere other than the same thread needs to say WHICH request
+    /// is being answered - and until now the only handle on one was the object itself, which does
+    /// not survive leaving the process.</para>
+    ///
+    /// <para><c>init</c> rather than computed, so <c>with</c> keeps the identity: a request that is
+    /// copied with one field changed is still the same question.</para>
+    /// </summary>
+    public Guid Id { get; init; } = Guid.NewGuid();
+
     /// <summary>
     /// Everything the decision authorises, in full. <see cref="Detail"/> is a one-line summary and
     /// may be elided; this never is.

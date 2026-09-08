@@ -46,11 +46,13 @@ public sealed class RemoteRunnerTests : IDisposable
             CommandStatus.PendingDelivery, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddHours(24));
 
     private static RemoteRunner Runner(HostStore store, IOrchestrator orchestrator)
-        => new(store, orchestrator, (task, _) => System.Threading.Tasks.Task.FromResult(
+        => new(store, new RemoteApprovals(), (task, _, _) => System.Threading.Tasks.Task.FromResult<
+            (IOrchestrator, Intent)>((
+            orchestrator,
             new Intent(
                 Guid.NewGuid(), task.Prompt, IntentSource.Remote,
                 new WorkContext(Guid.NewGuid(), task.WorkspaceId, null, null, null, [], []),
-                DateTimeOffset.UtcNow)));
+                DateTimeOffset.UtcNow))));
 
     private static WorkEvent Event(EventKind kind, string summary, string? payload = null)
         => new(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.UtcNow, kind, summary, payload);
@@ -229,11 +231,12 @@ public sealed class RemoteRunnerTests : IDisposable
     }
 
     /// <summary>
-    /// A command this build cannot carry out is a fact somebody needs, not a no-op to be discovered
-    /// later by its absence. Answering a permission remotely is stage 5.
+    /// An answer for a request nobody is waiting on any more - the desktop got there first, or it
+    /// expired. Doing nothing is correct and is not silence: the outcome that actually happened is
+    /// already on its way as an ApprovalResolved event, so there is nothing to report or correct.
     /// </summary>
     [Fact]
-    public async Task A_command_this_build_cannot_carry_out_is_refused_rather_than_ignored()
+    public async Task An_answer_for_a_request_nobody_is_waiting_on_is_harmless()
     {
         using var store = Open();
         var resolve = new HostCommand(
@@ -241,8 +244,7 @@ public sealed class RemoteRunnerTests : IDisposable
             RemoteJson.Serialize(new ResolveApprovalPayload("a1", "run-1", "call-1", "hash", RemoteDecision.Allow)),
             CommandStatus.PendingDelivery, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddHours(24));
 
-        await Assert.ThrowsAsync<NotSupportedException>(
-            () => Runner(store, new FakeOrchestrator()).ApplyAsync(resolve));
+        await Runner(store, new FakeOrchestrator()).ApplyAsync(resolve);
     }
 
     /// <summary>An orchestrator that emits what the test says and nothing else.</summary>
