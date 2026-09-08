@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <RootNamespace>Enactive.Remote.Gateway</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      Contracts and a MySQL driver. That is the whole list, and the absence of the rest is the
+      point: no reference to Core, Agents, Tools or Workspace, so the gateway CANNOT reach the
+      engine, run a tool or resolve a path even by mistake. A missing project reference enforces
+      that; a note asking people not to do it would not.
+
+      MySqlConnector rather than Oracle's MySql.Data: genuinely async rather than sync-over-async,
+      and MIT rather than GPL with a linking exception.
+    -->
+    <PackageReference Include="MySqlConnector" Version="2.4.0" />
+    <ProjectReference Include="..\Enactive.Remote.Contracts\Enactive.Remote.Contracts.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Migrations ship inside the assembly, so a deployed gateway cannot be running one schema
+         while a stray .sql file beside it describes another. -->
+    <EmbeddedResource Include="Storage\Migrations\*.sql" />
+  </ItemGroup>
+
+</Project>
