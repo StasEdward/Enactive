@@ -444,7 +444,10 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             await using var mcp = await McpRunTools.ConnectAsync(_toolRegistry, _settings.McpServers, fullPath, _cts.Token);
             IToolRegistry runTools = new LoggingToolRegistry(mcp, _log);
             var runStore = RunStoreFactory.Create(workspace);
-            var contextProvider = new ContextProvider(workspace, new EnvironmentProbe());
+            // The same store the recorder folds into, so a run reads back what earlier ones
+            // concluded (PLAN_v2 §11).
+            var memoryStore = MemoryStoreFactory.Create(workspace);
+            var contextProvider = new ContextProvider(workspace, new EnvironmentProbe(), memoryStore);
             var orchestrator = new Orchestrator(
                 _providerFactory, _modelResolver, _workerProvider, runTools, artifactStore,
                 workspace, _planner, _permissionEngine, this, policy, new EmptyProvider(),
@@ -462,7 +465,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             // The specification is recorded WITH the run, so reading it back later shows the template
             // as it was rather than as it has since been edited.
             var recorder = new RunRecorder(
-                runStore, MemoryStoreFactory.Create(workspace), workspace.Id, runSettings, spec?.Snapshot());
+                runStore, memoryStore, workspace.Id, runSettings, spec?.Snapshot());
 
             var context = await contextProvider.BuildAsync(new IntentFocus(workspace.Id), _cts.Token);
             // The template names the role it needs; the picker decides only when it does not.
@@ -1235,7 +1238,8 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             try
             {
                 var runStore = RunStoreFactory.Create(workspace);
-                var contextProvider = new ContextProvider(workspace, new EnvironmentProbe());
+                var backgroundMemory = MemoryStoreFactory.Create(workspace);
+                var contextProvider = new ContextProvider(workspace, new EnvironmentProbe(), backgroundMemory);
                 var decisions = new BackgroundDecisionHandler(inbox, workspace);
                 await using var mcp = await McpRunTools.ConnectAsync(_toolRegistry, mcpConfigs, fullPath, CancellationToken.None);
                 IToolRegistry runTools = new LoggingToolRegistry(mcp, _log);
@@ -1251,7 +1255,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                     allowImplicitToolCalls: _settings.AllowImplicitToolCalls,
                     reviewContent: _settings.ReviewContent,
                     revertRejectedSteps: _settings.RevertRejectedSteps);
-                var recorder = new RunRecorder(runStore, MemoryStoreFactory.Create(workspace), workspace.Id, runSettings);
+                var recorder = new RunRecorder(runStore, backgroundMemory, workspace.Id, runSettings);
                 var context = await contextProvider.BuildAsync(new IntentFocus(workspace.Id), CancellationToken.None);
                 var intent = new Intent(Guid.NewGuid(), text, IntentSource.Inbox, context, DateTimeOffset.UtcNow, workerId);
                 var recorded = recorder.RecordAsync(

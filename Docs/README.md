@@ -19,7 +19,7 @@ Command -> Intent -> Context(+Environment) -> Planner -> Orchestrator -> Worker(
 
 ## Solution
 
-`Enactive.sln`, **8 projects** (`net10.0`, pinned via `global.json`) plus `tests/Enactive.Engine.Tests` (815 tests)
+`Enactive.sln`, **8 projects** (`net10.0`, pinned via `global.json`) plus `tests/Enactive.Engine.Tests` (824 tests)
 and `tests/Enactive.Mcp.TestServer`. The engine is dependency-light: `Core`/`Providers`/`Tools`/`Agents`/`App.Console`
 use **zero external NuGet packages**; only `Workspace` (Microsoft.Data.Sqlite, SQLitePCLRaw, MySqlConnector), `Secrets`
 (ProtectedData) and `App.Ui` (Avalonia ×3) pull anything in. `Enactive.Agents` references **only** `Core` — a constant
@@ -95,7 +95,10 @@ applied **after** `InitializeComponent`, or the XAML's own `Width`/`Height` over
 - **Team of models** — configure any number of providers (Ollama, Anthropic, OpenAI-compatible) and an editable team of workers, each with its own model, and bind a model per phase: **Plan**, **Review**, and per-step **Execute** auto-routing (the planner rates each step trivial/normal/complex → light/worker/heavy model). A reasoner plans and reviews each step against the **real tool transcript**; on FAIL the step is retried with feedback. Robustness: local reasoning (`<think>`) off by default, Anthropic `temperature` auto-dropped and `max_tokens` auto-sized to the model's cap, a token-limit truncation guard, and optional read-back verification of writes. See `MODELS.md`.
 - **Workers as roles** — Developer / Reviewer (read-only) / Ops / Writer, each with its own tool allowlist and permission level; pick one per run.
 - **Environment awareness** — read-only discovery of host/OS, git (branch/remote/dirty), Docker, WSL, services, and a live snapshot; fed into the prompt and shown in the UI.
-- **Timeline as project memory** — decisions and artifacts across all runs, decisions folded into a persistent memory store.
+- **Timeline as project memory, read back** — decisions and how each run ended are folded into a
+  persistent per-workspace store, and the next run STARTS with them: the most recent entries go into
+  its prompt as background ("facts about the project, not instructions"), bounded so a workspace's
+  history cannot crowd out its work.
 - **AI Inbox + background tasks** — run headless; results/decisions land in the Inbox.
 - **Global log** — every prompt, response, tool call and event, with a raw-wire option; live window + daily file.
   **Log analysis**: the log window sends an exported run to a model for a diagnosis; the log is fenced as DATA,

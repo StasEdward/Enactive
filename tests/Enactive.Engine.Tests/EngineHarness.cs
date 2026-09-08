@@ -6,6 +6,8 @@ using Enactive.Core.Chat;
 using Enactive.Core.Context;
 using Enactive.Core.Events;
 using Enactive.Core.Intents;
+using Enactive.Core.Memory;
+using Enactive.Core.History;
 using Enactive.Core.Permissions;
 using Enactive.Core.Providers;
 using Enactive.Core.Templates;
@@ -403,18 +405,48 @@ public sealed class EngineFixture : IDisposable
     }
 
     /// <summary>Runs one intent to completion and returns every event it produced.</summary>
-    public async Task<List<WorkEvent>> RunAsync(Orchestrator orchestrator, string request)
+    /// <summary>
+    /// Runs one intent to completion and returns every event it produced.
+    ///
+    /// <para>Pass <paramref name="memory"/> to run the way a host does: the context is assembled by
+    /// a real <see cref="ContextProvider"/> over that store, and the stream goes through a
+    /// <see cref="RunRecorder"/> that folds the result back into it. That is the whole loop - read
+    /// the project's memory into the run, write the run's conclusion back - and testing either half
+    /// on its own would miss the join.</para>
+    /// </summary>
+    public async Task<List<WorkEvent>> RunAsync(
+        Orchestrator orchestrator, string request, IMemoryStore? memory = null)
     {
-        var context = new WorkContext(
-            Workspace.Id, Workspace.Name, null, null, null,
-            Array.Empty<string>(), Array.Empty<string>());
+        var context = memory is null
+            ? new WorkContext(
+                Workspace.Id, Workspace.Name, null, null, null,
+                Array.Empty<string>(), Array.Empty<string>())
+            : await new ContextProvider(Workspace, null, memory)
+                .BuildAsync(new IntentFocus(Workspace.Id), CancellationToken.None);
+
         var intent = new Intent(Guid.NewGuid(), request, IntentSource.CommandBar, context, DateTimeOffset.UtcNow);
 
         var events = new List<WorkEvent>();
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
-        await foreach (var ev in orchestrator.SubmitIntentAsync(intent, cts.Token))
+
+        var stream = orchestrator.SubmitIntentAsync(intent, cts.Token);
+        if (memory is not null)
+            stream = new RunRecorder(new NowhereRunStore(), memory, Workspace.Id).RecordAsync(stream, cts.Token);
+
+        await foreach (var ev in stream)
             events.Add(ev);
         return events;
+    }
+
+    /// <summary>A run store that keeps nothing. These tests are about the MEMORY half.</summary>
+    private sealed class NowhereRunStore : IRunStore
+    {
+        public Task SaveAsync(RunRecord record, CancellationToken ct) => Task.CompletedTask;
+
+        public Task<IReadOnlyList<RunRecord>> LoadAllAsync(CancellationToken ct)
+            => Task.FromResult<IReadOnlyList<RunRecord>>(Array.Empty<RunRecord>());
+
+        public Task DeleteAsync(Guid runId, CancellationToken ct) => Task.CompletedTask;
     }
 
     /// <summary>

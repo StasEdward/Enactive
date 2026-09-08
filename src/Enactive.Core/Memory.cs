@@ -13,6 +13,19 @@ public sealed record MemoryEntry(
     Guid? SourceDecisionId,
     DateTimeOffset At);
 
+/// <summary>
+/// The kinds of entry this engine writes. Strings on the wire (the stores keep a column, and a
+/// record written by an older build must still load), named here so the two ends agree.
+/// </summary>
+public static class MemoryKind
+{
+    /// <summary>Something the user decided - an approval, a refusal. Durable by nature.</summary>
+    public const string Decision = "decision";
+
+    /// <summary>How a run ended, in one line. What the NEXT run wants to know first.</summary>
+    public const string Outcome = "outcome";
+}
+
 /// <summary>Persists and loads the project's memory entries for a workspace.</summary>
 public interface IMemoryStore
 {

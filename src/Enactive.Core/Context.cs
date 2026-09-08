@@ -1,5 +1,7 @@
 namespace Enactive.Core.Context;
 
+using Enactive.Core.Memory;
+
 /// <summary>A workspace: a context of work with a real root on disk.</summary>
 public sealed record WorkspaceInfo(Guid Id, string Name, string RootPath)
 {
@@ -49,7 +51,20 @@ public sealed record WorkContext(
     string? GitBranch,
     IReadOnlyList<string> RelatedFiles,
     IReadOnlyList<string> RecentChanges,
-    EnvironmentInfo? Environment = null);
+    EnvironmentInfo? Environment = null)
+{
+    /// <summary>
+    /// What this project already knows: decisions the user made, and how earlier runs ended. Newest
+    /// LAST, already bounded by whoever assembled the context.
+    ///
+    /// <para>PLAN_v2 §11 carried "project memory is written, never read back" as the gap that made
+    /// the store a write-only log: the recorder folded decisions into it, the window rendered it,
+    /// and the next run began knowing nothing about the last one. This is the field that was
+    /// missing. An init property rather than a positional parameter so every existing construction
+    /// of a context still compiles and still means what it meant.</para>
+    /// </summary>
+    public IReadOnlyList<MemoryEntry> Memory { get; init; } = Array.Empty<MemoryEntry>();
+}
 
 /// <summary>Builds <see cref="WorkContext"/> from the current focus.</summary>
 public interface IContextProvider

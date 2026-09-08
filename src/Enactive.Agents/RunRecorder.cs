@@ -61,12 +61,61 @@ public sealed class RunRecorder
 
                 // Fold each resolved decision into the project's durable memory (PLAN_v2 §2.6).
                 if (_memory is not null)
+                {
                     foreach (var decision in record.Decisions)
                         await _memory.AppendAsync(
-                            new MemoryEntry(Guid.NewGuid(), _workspaceId, "decision", decision, null, record.FinishedAt),
+                            new MemoryEntry(Guid.NewGuid(), _workspaceId, MemoryKind.Decision, decision,
+                                            null, record.FinishedAt),
                             CancellationToken.None);
+
+                    // And how the run ENDED. Until 2026-09-08 memory held decisions only, which meant
+                    // that in a workspace where nothing ever needed approving it held nothing at all -
+                    // and the thing a later run most wants to know, what the last one concluded, was
+                    // the one thing never written down. PLAN_v2 §11 carried this as "written, never
+                    // read back"; it was also barely written.
+                    if (Conclusion(record) is { Length: > 0 } conclusion)
+                        await _memory.AppendAsync(
+                            new MemoryEntry(Guid.NewGuid(), _workspaceId, MemoryKind.Outcome, conclusion,
+                                            null, record.FinishedAt),
+                            CancellationToken.None);
+                }
             }
         }
+    }
+
+    /// <summary>
+    /// One line about how a run ended, for the project's memory: what was asked, how it finished,
+    /// and what it left behind.
+    ///
+    /// <para>Deliberately one line and deliberately factual. It is read back into the NEXT run's
+    /// prompt, so it competes for the same context window as the work itself - and a paragraph per
+    /// past run would crowd out the decisions, which are the entries that age best. What a later run
+    /// needs is "this was tried, it ended like this"; if it wants more there is a whole run record
+    /// under the same title.</para>
+    /// </summary>
+    private static string? Conclusion(RunRecord record)
+    {
+        if (string.IsNullOrWhiteSpace(record.Title))
+            return null;
+
+        var terminal = record.Events.LastOrDefault(
+            e => string.Equals(e.Kind, nameof(EventKind.TaskCompleted), StringComparison.Ordinal)
+              || string.Equals(e.Kind, nameof(EventKind.TaskFailed), StringComparison.Ordinal));
+
+        // A run with no terminal event never finished - it was killed, or the process went away.
+        // Saying nothing is better than recording a conclusion it never reached.
+        if (terminal is null)
+            return null;
+
+        var reason = WorkEventPayload.OutcomeReasonIn(terminal.Payload);
+        var files = record.Artifacts.Count > 0
+            ? " Changed: " + string.Join(", ", record.Artifacts.Distinct(StringComparer.OrdinalIgnoreCase).Take(6))
+              + (record.Artifacts.Distinct(StringComparer.OrdinalIgnoreCase).Count() > 6 ? ", …" : "")
+            : "";
+
+        return $"\"{record.Title.Trim()}\" — {record.Status}"
+             + (string.IsNullOrWhiteSpace(reason) ? "" : ": " + reason.Trim())
+             + files;
     }
 
     private static RunRecord Build(List<WorkEvent> events, RunSettings? settings, string? spec)

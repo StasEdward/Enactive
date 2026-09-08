@@ -156,7 +156,7 @@ IToolRegistry toolRegistry = new LoggingToolRegistry(new ToolRegistry(new ITool[
     new GitTool(),
     new DockerTool()
 }), logHub);
-var contextProvider = new ContextProvider(workspace, new EnvironmentProbe());
+var contextProvider = new ContextProvider(workspace, new EnvironmentProbe(), memoryStore);
 var modelResolver = new ModelResolver();
 
 var workerProvider = new StaticWorkerProvider(
