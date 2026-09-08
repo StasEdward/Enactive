@@ -178,8 +178,11 @@ public sealed class Reviewer
              + "FAIL if: the report above leans on a command that is not in the evidence (it claims a build "
              + "succeeded, a test passed, a value was printed); a command that DID run failed (non-zero exit "
              + "or an error in its output) and the report does not account for it; or the reported/saved result "
-             + "is fabricated or a placeholder value not present in the real tool output. A step that only read "
-             + "and listed has not failed for that — for an analysis step, reading IS the work. Otherwise PASS.";
+             + "is a placeholder, or a value that CONTRADICTS what a result you can see actually says. A value "
+             + "you simply cannot find is not one of these: the outputs above are excerpts and each says where "
+             + "it was cut, so a quote from a part that was cut is unverified, not fabricated, and is not a "
+             + "reason to fail. A step that only read and listed has not failed for that — for an analysis "
+             + "step, reading IS the work. Otherwise PASS.";
     }
 
     internal static string BuildContentUserPrompt(
@@ -463,6 +466,15 @@ public sealed class Reviewer
         + "HAPPENED, and is never grounds to say the work was not done. Judge by the calls listed. If "
         + "a call you would expect is genuinely absent from the list, that is a real finding; if you "
         + "can see the call and only part of its output, it is not.\n\n"
+        // Added 2026-09-08 17:31. An analysis step read eleven files and quoted a target framework
+        // out of Directory.Build.props; 1,645 characters had been cut from the middle of that
+        // result and the value was in them. The reviewer failed the step - twice - because "the
+        // provided output for that file is truncated and does not contain this value". Correct
+        // about the excerpt, wrong about the file, and it is the ENGINE that cut it.
+        + "What is cut from a result is CUT, not absent: you are reading an excerpt, and a value the "
+        + "report quotes that you cannot find in it may be sitting in the part you were not shown. "
+        + "Unverified is not fabricated. Fail a quote only when a result you CAN see says something "
+        + "different — never for a quote you merely cannot locate.\n\n"
         // Added 2026-09-07 20:16. A step titled "Analyze test coverage and identify gaps" read the
         // test project and two source files and produced a specific, correct analysis. It was failed
         // for "no actual analysis or test coverage commands were executed" — a requirement nobody

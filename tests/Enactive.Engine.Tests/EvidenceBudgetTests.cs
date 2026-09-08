@@ -99,11 +99,58 @@ public sealed class EvidenceBudgetTests
         var evidence = Journal(("read_file", """{"path":"big.cs"}""", new string('x', 50_000))).Describe();
 
         // The mark moved into the middle when shortening started keeping the END too — see
-        // ResultTailTests. What it has to do is unchanged: say a cut happened, and how big it was.
-        Assert.Contains("cut from the middle", evidence, StringComparison.Ordinal);
+        // ResultTailTests. What it has to do is unchanged: say a gap happened, and how big it was.
+        Assert.Contains("characters not shown here", evidence, StringComparison.Ordinal);
         // ...and what that mark MEANS is said once, at the top, rather than eighty-five characters
         // at a time next to every result it annotates.
         Assert.Contains("the call it belongs to still happened", evidence, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The block obeys a budget the CALLER set, because how much evidence is enough is a property of
+    /// the work and not of the engine.
+    ///
+    /// <para>Reported 2026-09-08 17:31. An analysis step made thirteen calls; the default 6,000
+    /// shared between them left about 320 characters of each output, and the step was failed twice
+    /// for quoting a value that had been cut out of one of them. 320 characters of a source file
+    /// cannot support or refute anything quoted from it, and no fixed number is right for both that
+    /// step and one that runs a single command.</para>
+    /// </summary>
+    [Theory]
+    [InlineData(2_000)]
+    [InlineData(6_000)]
+    [InlineData(20_000)]
+    public void The_budget_the_caller_asks_for_is_the_budget_it_gets(int budget)
+    {
+        var journal = Journal(
+            ("read_file", """{"path":"a.cs"}""", new string('a', 40_000)),
+            ("read_file", """{"path":"b.cs"}""", new string('b', 40_000)),
+            ("read_file", """{"path":"c.cs"}""", new string('c', 40_000)));
+
+        Assert.True(journal.Describe(maxChars: budget).Length <= budget,
+                    $"{journal.Describe(maxChars: budget).Length} characters against a budget of {budget}");
+    }
+
+    /// <summary>
+    /// A bigger budget buys MORE of each result, not more results. The list is never what gets
+    /// traded away — that is §8i, and it is why the budget is shared rather than spent first-come.
+    /// </summary>
+    [Fact]
+    public void A_bigger_budget_shows_more_of_each_result()
+    {
+        var journal = Journal(
+            ("read_file", """{"path":"a.cs"}""", new string('a', 40_000)),
+            ("read_file", """{"path":"b.cs"}""", new string('b', 40_000)));
+
+        var small = journal.Describe(maxChars: 3_000);
+        var large = journal.Describe(maxChars: 20_000);
+
+        Assert.True(large.Length > small.Length * 3);
+        foreach (var evidence in new[] { small, large })
+        {
+            Assert.Contains("a.cs", evidence, StringComparison.Ordinal);
+            Assert.Contains("b.cs", evidence, StringComparison.Ordinal);
+        }
     }
 
     /// <summary>

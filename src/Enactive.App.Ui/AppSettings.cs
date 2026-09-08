@@ -2,6 +2,7 @@
 using System.Text.Json.Serialization;
 using Enactive.Agents;
 using Enactive.Core.Permissions;
+using Enactive.Core.Execution;
 using Enactive.Core.Providers;
 using Enactive.Secrets;
 
@@ -173,6 +174,11 @@ internal sealed partial class AppSettings
     // a digest of what earlier steps concluded. Only pays off when steps route to different providers —
     // two steps on one Ollama still queue on the GPU.
     public int MaxParallelSteps { get; set; } = 1;
+
+    // How many characters of tool evidence the reviewer is shown, shared between every call the step
+    // made. Raise it for work that reads many files: the budget is divided, so thirteen reads under
+    // the default leave about 320 characters of each - too little to check anything quoted from one.
+    public int EvidenceBudget { get; set; } = ExecutionJournal.DefaultBudget;
 
     // What the main window's close button does. True - the default - hides it to the tray, where a
     // run it started keeps going; false makes closing the window quit the program, asking first if
@@ -422,6 +428,7 @@ internal sealed partial class AppSettings
         RevertRejectedSteps = RevertRejectedSteps,
         VerifyWrites = VerifyWrites,
         MaxParallelSteps = MaxParallelSteps,
+        EvidenceBudget = EvidenceBudget,
         CloseToTray = CloseToTray,
         BaseUrl = BaseUrl,
         Model = Model,

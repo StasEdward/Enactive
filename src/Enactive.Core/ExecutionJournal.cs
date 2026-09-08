@@ -146,6 +146,23 @@ public sealed class ExecutionJournal
     }
 
     /// <summary>
+    /// The default size of the whole evidence block, shared between every call's output.
+    ///
+    /// <para>A DEFAULT and not a rule: it is divided among the calls, so what it buys per call
+    /// depends entirely on how many the step made. Three reads get a usable slice each; thirteen get
+    /// about 320 characters each, which is less than a source file needs to settle anything quoted
+    /// from it. The setting that overrides it exists because that number is a property of the work,
+    /// not of the engine.</para>
+    /// </summary>
+    public const int DefaultBudget = 6000;
+
+    /// <summary>
+    /// Below this the block cannot hold its own header, so a smaller setting is raised to it rather
+    /// than producing an evidence list with nothing in it.
+    /// </summary>
+    public const int MinimumBudget = 1500;
+
+    /// <summary>
     /// The evidence, in the shape the reviewer prompt has always been written for: what was asked,
     /// then what came back.
     ///
@@ -167,7 +184,7 @@ public sealed class ExecutionJournal
     /// of it is shown. If even the call lines do not fit, the newest are kept and the number of
     /// older ones is stated — an evidence list that quietly stops is the whole defect.</para>
     /// </summary>
-    public string Describe(int from = 0, int maxChars = 6000)
+    public string Describe(int from = 0, int maxChars = DefaultBudget)
     {
         ExecutedAction[] slice;
         lock (_gate)
@@ -181,22 +198,31 @@ public sealed class ExecutionJournal
         // shortened one.
         // Said ONCE. Per result it cost eighty-five characters times the number of calls, which is
         // the budget the calls were rescued from - a notice that crowds out what it is annotating.
-        // "This step" or "this run so far", decided by the slice rather than by a flag. At one step
-        // at a time the whole plan shares ONE conversation, so a step's answer may draw on what an
-        // earlier step read - and the evidence then has to span the same ground, or an honest report
-        // reads as a fabrication. That is §9f between steps instead of between attempts. Above
-        // degree one each step gets its own fork and its own journal, and the slice is one step's
-        // again.
-        var spans = _spansSteps && slice.Any(a => a.Step is not null);
+        // At one step at a time the whole plan shares ONE conversation, so a step's answer may draw
+        // on what an earlier step read - and the evidence has to span the same ground, or an honest
+        // report reads as a fabrication. That is §9f between steps instead of between attempts.
+        // Above degree one each step gets its own fork and its own journal, and the slice is one
+        // step's again.
+        //
+        // Two different facts, and the first version of this conflated them into one flag.
+        //
+        // WHOSE window this is comes from the caller: a run-wide journal means the window is the
+        // run's whether or not more than one step has run yet. HOW MANY steps are actually in it is
+        // a property of the slice. Deriving the second from the first printed "They span more than
+        // one step" over thirteen calls that were all step 1's - an overclaim in the one place built
+        // to stop the engine overclaiming. Reported 2026-09-08 17:31.
+        var runWide = _spansSteps && slice.Any(a => a.Step is not null);
+        var manySteps = runWide && slice.Select(a => a.Step).Distinct().Count() > 1;
 
         var header = $"{slice.Length} tool call(s) in "
-                   + (spans ? "this run so far" : "this step")
+                   + (runWide ? "this run so far" : "this step")
                    + $", oldest first{Tally(slice)}, each numbered [n] so it can be referred to."
-                   + (spans
-                       ? " They span more than one step of the plan and each says which, because the "
-                         + "agent can see all of them: a report that draws on an earlier step's work "
-                         + "is not inventing it."
+                   + (runWide
+                       ? " These are the calls made so far in this RUN, not only in the step under "
+                         + "review: at one step at a time the whole plan shares a conversation, so a "
+                         + "report that draws on an earlier step's work is not inventing it."
                        : "")
+                   + (manySteps ? " Each call says which step made it." : "")
                    + (_resumed
                        ? " This run RESUMED an interrupted one, whose transcript the agent can also "
                          + "see; the calls it made are not in this list. A claim about work done "
@@ -210,7 +236,7 @@ public sealed class ExecutionJournal
         // reviewer that is asked to point at a call - see ProofAudit - and it can only point at what
         // it was shown. A number that meant a position in the whole journal would refer to calls
         // this evidence does not contain, and an audit checking it would be checking the wrong list.
-        var calls = slice.Select((a, i) => Call(a, i + 1, spans)).ToArray();
+        var calls = slice.Select((a, i) => Call(a, i + 1, manySteps)).ToArray();
 
         // How many can be shown AT ALL. Each costs its call line plus the floor under its output -
         // budgeting the call lines alone was the first version of this and it overran by a factor of
@@ -293,8 +319,16 @@ public sealed class ExecutionJournal
     /// </summary>
     private const int MinOutputChars = 120;
 
-    /// <summary>Room reserved for the "… (N of M)" that marks a shortened result.</summary>
-    private const int ShortenedNoticeChars = 24;
+    /// <summary>
+    /// Room reserved for the notice that marks a shortened result.
+    ///
+    /// <para>Reserved because it has to be PAID for: it is printed inside the space the output was
+    /// given, so a reserve smaller than the notice makes the budget a number the block does not
+    /// obey. It was 24 against a notice of about 65, and three tests measuring the block against its
+    /// budget only passed on the slack left over — until a longer notice used the slack up and they
+    /// failed, which is what they are for.</para>
+    /// </summary>
+    private const int ShortenedNoticeChars = 72;
 
     /// <summary>
     /// The call itself. Arguments are clipped because write_file carries a whole file.
@@ -379,8 +413,14 @@ public sealed class ExecutionJournal
         if (tail < 40)
             return text[..budget] + $"… ({budget:N0} of {text.Length:N0})";
 
+        // "NOT SHOWN", not "cut". On 2026-09-08 17:31 a reviewer read "1,645 characters cut from the
+        // middle" as evidence that the file did not contain what the agent had quoted from it - and
+        // failed the step twice for a value that was in those 1,645 characters. The rule that
+        // follows from it belongs in the reviewer's instructions, where it is said ONCE; per result
+        // it would cost its own length times the number of calls, which is the budget the calls were
+        // rescued from. What the notice itself can do is stop reading as an absence.
         return text[..head]
-             + $"\n… ({text.Length - budget:N0} characters cut from the middle; the end follows) …\n"
+             + $"\n… ({text.Length - budget:N0} characters not shown here; the end follows) …\n"
              + text[^tail..];
     }
 }

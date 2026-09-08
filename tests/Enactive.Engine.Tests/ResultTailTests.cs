@@ -65,14 +65,21 @@ public sealed class ResultTailTests
     /// <summary>
     /// The cut says it is a cut, and where. A gap with nothing marking it is a result that reads as
     /// complete and is not — the failure this whole file is about, one level up.
+    ///
+    /// <para>It says "not shown here" rather than "cut", since 2026-09-08 17:31: a reviewer read
+    /// <i>"1,645 characters cut from the middle"</i> as evidence that the file did not contain what
+    /// the agent had quoted from it, and failed the step twice for a value that was in those 1,645
+    /// characters. The mark has to announce a gap without reading as an absence.</para>
     /// </summary>
     [Fact]
     public void The_cut_is_marked_and_says_how_much_is_missing()
     {
         var evidence = Journal("run_command", TestOutput()).Describe();
 
-        Assert.Contains("cut from the middle", evidence, StringComparison.Ordinal);
+        Assert.Contains("characters not shown here", evidence, StringComparison.Ordinal);
         Assert.Contains("the end follows", evidence, StringComparison.Ordinal);
+        // The word that invited the misreading is gone, not merely joined by a better one.
+        Assert.DoesNotContain("cut from the middle", evidence, StringComparison.Ordinal);
     }
 
     /// <summary>And the header tells the reader that is what to expect.</summary>

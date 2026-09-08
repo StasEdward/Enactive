@@ -5,6 +5,7 @@ using Enactive.Core.Artifacts;
 using Enactive.Core.Chat;
 using Enactive.Core.Context;
 using Enactive.Core.Events;
+using Enactive.Core.Execution;
 using Enactive.Core.Intents;
 using Enactive.Core.Memory;
 using Enactive.Core.History;
@@ -373,6 +374,7 @@ public sealed class EngineFixture : IDisposable
         IReadOnlyList<SuccessCriterionDefinition>? successCriteria = null,
         ExecutionLimits? limits = null,
         int maxParallelSteps = 1,
+        int evidenceBudget = ExecutionJournal.DefaultBudget,
         IDecisionHandler? decisions = null,
         int successRetries = 0,
         IRunCheckpointStore? checkpoints = null,
@@ -383,8 +385,8 @@ public sealed class EngineFixture : IDisposable
                 ? new SingleProviderFactory(provider)
                 : new MapProviderFactory(provider, (Verdicts.ProviderId, reviewProvider)),
             worker, policy, artifacts, allowImplicitToolCalls, router, reviewRetries, reviewContent,
-            revertRejectedSteps, successCriteria, limits, maxParallelSteps, successRetries, decisions,
-            checkpoints, settings, checkSoundness);
+            revertRejectedSteps, successCriteria, limits, maxParallelSteps, evidenceBudget, successRetries,
+            decisions, checkpoints, settings, checkSoundness);
 
     public Orchestrator Build(
         IChatProviderFactory providers,
@@ -402,6 +404,7 @@ public sealed class EngineFixture : IDisposable
         // shipped covered by nothing: every test in the suite ran the maxParallel == 1 branch
         // because that was the only branch this harness could reach.
         int maxParallelSteps = 1,
+        int evidenceBudget = ExecutionJournal.DefaultBudget,
         // 0 by default here, not the shipping 1: a test that says nothing about repair should get
         // the shape it was written for - check the criteria once and stop. The repair loop has its
         // own tests, which ask for it.
@@ -444,6 +447,7 @@ public sealed class EngineFixture : IDisposable
             successCriteria: successCriteria,
             limits: limits,
             maxParallelSteps: maxParallelSteps,
+            evidenceBudget: evidenceBudget,
             successRetries: successRetries,
             checkpoints: checkpoints,
             settings: settings,

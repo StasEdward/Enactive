@@ -68,6 +68,22 @@ public sealed class Orchestrator : IOrchestrator
     private readonly int _reviewRetries;
     private readonly int _successRetries;
     private readonly int _maxParallelSteps;
+
+    /// <summary>
+    /// How many characters of evidence the reviewer is shown, shared between every call's output.
+    ///
+    /// <para>A setting because the right number depends on the work. It is divided among the calls,
+    /// so a step that reads three files can be shown a usable slice of each and one that reads
+    /// thirteen cannot: at 6,000 across thirteen calls each output gets about 320 characters, and a
+    /// source file cut to 320 characters cannot support or refute anything quoted from it.</para>
+    ///
+    /// <para>Reported 2026-09-08 17:31. An analysis step read eleven files, quoted a value out of
+    /// Directory.Build.props, and was failed - twice - because "the provided output for that file is
+    /// truncated and does not contain this value". It did contain it: 1,645 characters had been cut
+    /// from the middle, and the value was in them. The retry read more files, which made every share
+    /// smaller and the second verdict more certain than the first.</para>
+    /// </summary>
+    private readonly int _evidenceBudget;
     /// <summary>One approval card at a time, however many steps are running.</summary>
     private readonly SemaphoreSlim _decisionGate = new(1, 1);
     private readonly int? _numCtx;
@@ -129,6 +145,7 @@ public sealed class Orchestrator : IOrchestrator
         int? numCtx = null,
         bool disableThinking = false,
         int maxParallelSteps = 1,
+        int evidenceBudget = ExecutionJournal.DefaultBudget,
         bool allowImplicitToolCalls = false,
         bool reviewContent = true,
         bool checkSoundness = true,
@@ -164,6 +181,7 @@ public sealed class Orchestrator : IOrchestrator
         _successRetries = Math.Clamp(successRetries, 0, 5);
         // 1 = the original behaviour: one step at a time on one shared conversation.
         _maxParallelSteps = Math.Max(1, maxParallelSteps);
+        _evidenceBudget = Math.Max(ExecutionJournal.MinimumBudget, evidenceBudget);
         _numCtx = numCtx;
         // Disable the local model's <think> phase by sending think:false; null leaves it to the model.
         _think = disableThinking ? false : null;
@@ -1636,7 +1654,7 @@ public sealed class Orchestrator : IOrchestrator
         try
         {
             var outcome = await _reviewer.ProveAsync(
-                title, LastAssistant(convo), journal.Describe(evidenceStart),
+                title, LastAssistant(convo), journal.Describe(evidenceStart, _evidenceBudget),
                 reviewProvider, reviewModel, ct);
 
             // The claim is CHECKED, not believed: the numbers it names are resolved against the
@@ -1676,7 +1694,7 @@ public sealed class Orchestrator : IOrchestrator
             // From the journal, not from the transcript. The transcript is the model's working
             // memory: once it has to be shortened to fit the window, the tool results become a stub,
             // and the reviewer was handed less evidence with nothing saying so.
-            var evidence = journal.Describe(evidenceStart);
+            var evidence = journal.Describe(evidenceStart, _evidenceBudget);
 
             // Which question can even be asked about this step? A step that RAN something is judged
             // on whether it ran and succeeded. A step that only WROTE something has no exit code to

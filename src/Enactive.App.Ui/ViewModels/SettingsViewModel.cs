@@ -3,6 +3,7 @@ namespace Enactive.App.Ui.ViewModels;
 using System.Collections.ObjectModel;
 using Avalonia.Media;
 using Enactive.App.Ui.Mvvm;
+using Enactive.Core.Execution;
 using Enactive.Core.Providers;
 
 /// <summary>One row of the Providers list. Wraps the config so the row can be told to re-read it
@@ -107,6 +108,7 @@ internal sealed partial class SettingsViewModel : ObservableObject
     private string _reviewRetriesText = "1";
     private bool _revertRejectedSteps;
     private string _maxParallelStepsText;
+    private string _evidenceBudgetText;
     private bool _closeToTray;
     private bool _runAtStartup;
     private string _startupNote = string.Empty;
@@ -200,6 +202,7 @@ internal sealed partial class SettingsViewModel : ObservableObject
         _reviewRetriesText = _working.ReviewRetries.ToString();
         _revertRejectedSteps = _working.RevertRejectedSteps;
         _maxParallelStepsText = _working.MaxParallelSteps.ToString();
+        _evidenceBudgetText = _working.EvidenceBudget.ToString();
         _closeToTray = _working.CloseToTray;
 
         // Read from the system, not from settings.json: the Run key is the truth, and a copy would
@@ -261,6 +264,7 @@ internal sealed partial class SettingsViewModel : ObservableObject
     public string ReviewRetriesText { get => _reviewRetriesText; set => Set(ref _reviewRetriesText, value); }
     public bool RevertRejectedSteps { get => _revertRejectedSteps; set => Set(ref _revertRejectedSteps, value); }
     public string MaxParallelStepsText { get => _maxParallelStepsText; set => Set(ref _maxParallelStepsText, value); }
+    public string EvidenceBudgetText { get => _evidenceBudgetText; set => Set(ref _evidenceBudgetText, value); }
 
     /// <summary>
     /// What the main window's close button does. Two mutually exclusive options, so the pair moves
@@ -434,6 +438,13 @@ internal sealed partial class SettingsViewModel : ObservableObject
         _working.ReviewRetries = int.TryParse(ReviewRetriesText.Trim(), out var r) ? Math.Clamp(r, 0, 5) : 1;
         _working.RevertRejectedSteps = RevertRejectedSteps;
         _working.MaxParallelSteps = int.TryParse(MaxParallelStepsText.Trim(), out var p) && p > 0 ? p : 1;
+        // Anything unparseable or below the floor falls back to the default rather than to the
+        // number typed: an evidence block too small to hold its header is not a smaller setting,
+        // it is a reviewer shown nothing.
+        _working.EvidenceBudget = int.TryParse(EvidenceBudgetText.Trim(), out var e)
+                                  && e >= ExecutionJournal.MinimumBudget
+            ? e
+            : ExecutionJournal.DefaultBudget;
         _working.CloseToTray = CloseToTray;
 
         var startupRefused =

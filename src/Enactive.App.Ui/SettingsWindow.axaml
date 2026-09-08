@@ -290,6 +290,11 @@
                                        Text="How many independent steps of a plan may run at once. 1 keeps one step at a time on a single conversation. Above 1 each concurrent step gets its own forked conversation and sees only what its siblings concluded — faster on wide plans, and worth it mainly when steps route to different providers, since two steps on one Ollama queue on the GPU." />
                             <TextBox Text="{Binding MaxParallelStepsText}" PlaceholderText="1 = one step at a time" />
 
+                            <TextBlock Classes="label" Text="Evidence shown to the reviewer" />
+                            <TextBlock Classes="hint"
+                                       Text="How many characters of tool output the reviewer sees, shared between every call the step made. It is divided, not per call: three reads get a usable slice each, thirteen get about 320 characters each — too little to check anything quoted from a source file. Raise it for work that reads a lot; it is paid on every review call." />
+                            <TextBox Text="{Binding EvidenceBudgetText}" PlaceholderText="6000 = the default" />
+
                         </StackPanel>
                     </ScrollViewer>
                 </Panel>

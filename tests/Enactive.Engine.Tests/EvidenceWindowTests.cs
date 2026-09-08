@@ -74,6 +74,30 @@ public sealed class EvidenceWindowTests
     }
 
     /// <summary>
+    /// A run-wide window that happens to hold ONE step's calls says whose window it is and does not
+    /// claim to span steps it does not.
+    ///
+    /// <para>Reported 2026-09-08 17:31, from the first version of this header. Thirteen calls, every
+    /// one of them step 1's, under the sentence <i>"They span more than one step of the plan and each
+    /// says which"</i>. Whose window this is comes from the caller; how many steps are in it is a
+    /// property of the slice, and deriving the second from the first was an overclaim in the one
+    /// place built to stop the engine overclaiming.</para>
+    ///
+    /// <para>The per-call labels go with the second fact, not the first: one step's evidence would
+    /// carry the same number on every line, and the budget those characters come out of is the one
+    /// the calls were rescued from.</para>
+    /// </summary>
+    [Fact]
+    public void A_run_wide_window_holding_one_step_does_not_claim_to_span_several()
+    {
+        var evidence = Journal(spansSteps: true, (1, "read_file"), (1, "list_dir")).Describe();
+
+        Assert.Contains("in this run so far", evidence, StringComparison.Ordinal);
+        Assert.DoesNotContain("span", evidence, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("(step 1)", evidence, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// And one step's evidence reads exactly as it did before. The step number would be the same on
     /// every line, and the reviewer was told which step it is judging in the sentence above.
     /// </summary>
@@ -196,5 +220,49 @@ public sealed class EvidenceWindowTests
         Assert.NotEmpty(Prompts(reviewer));
         Assert.DoesNotContain(Prompts(reviewer),
             p => p.Contains("in this run so far", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// The configured budget reaches the reviewer. The journal has always obeyed a budget it was
+    /// handed; what was missing was anything handing it one — the orchestrator called Describe with
+    /// its default, so the setting could have been wired to nothing and every test would still pass.
+    ///
+    /// <para>Asserted on the size of the review PROMPT, because that is the thing the setting exists
+    /// to control: the reviewer is shown more of what the step read, and pays for it in tokens.</para>
+    /// </summary>
+    [Fact]
+    public async Task The_evidence_budget_setting_reaches_the_reviewer()
+    {
+        static async Task<int> PromptSizeWith(int budget)
+        {
+            using var fx = new EngineFixture();
+            fx.Write("big.cs", new string('x', 40_000));
+
+            var worker = new FakeChatProvider(
+                Turn.Says(TwoStepPlan),
+                Turn.Calls1("read_file", """{"path":"big.cs"}""", "r1"),
+                Turn.Says("read it"))
+            {
+                WhenExhausted = Turn.Says("done")
+            };
+            var reviewer = new FakeChatProvider(Verdicts.Pass(), Verdicts.Pass());
+
+            await fx.RunAsync(
+                fx.Build(worker, router: Routers.WithReviewer(), reviewProvider: reviewer,
+                         reviewRetries: 0, evidenceBudget: budget),
+                "look at big.cs");
+
+            return Prompts(reviewer).Max(p => p.Length);
+        }
+
+        var small = await PromptSizeWith(ExecutionJournal.MinimumBudget);
+        var large = await PromptSizeWith(30_000);
+
+        // The DIFFERENCE, not a ratio. Most of a review prompt is its instructions — about 3,800
+        // characters that no budget changes — so even a budget twenty times larger cannot make the
+        // prompt three times longer, and an assertion that says it can fails on arithmetic rather
+        // than on the thing it is testing. What can only come from the setting is the gap.
+        Assert.True(large - small > 3 * ExecutionJournal.MinimumBudget,
+                    $"{large} against {small}: the budget did not reach the reviewer");
     }
 }
