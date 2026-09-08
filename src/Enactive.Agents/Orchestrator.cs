@@ -1374,14 +1374,25 @@ public sealed class Orchestrator : IOrchestrator
         public bool NothingButMisses
             => !_anythingWorked && _byCall.Count == 0 && _foundNothing.Count > 0;
 
-        public void Failed(ToolCall call, string? error)
+        /// <param name="didNotRun">
+        /// The tool could not READ the call and returned before attempting anything — see
+        /// <see cref="ToolResults.Unreadable"/>. Such a call is closed by the same tool succeeding
+        /// afterwards, because there is no residue from it to make good.
+        ///
+        /// <para>That rule already existed and was written to depend on the tool being one that
+        /// writes files, which was never its justification. Reported 2026-08 as
+        /// <c>git ["diff HEAD"]</c>: refused before git ran, followed by <c>git ["diff"]</c> and
+        /// <c>git ["status"]</c> that worked, a truthful report, a file written — and a run failed
+        /// for two calls that never happened.</para>
+        /// </param>
+        public void Failed(ToolCall call, string? error, bool didNotRun = false)
         {
             var key = Key(call);
             _byCall[key] = Line(call, error);
 
             if (FileNamedBy(call) is { } file)
                 _fileOf[key] = file;
-            else if (MutatingTools.Changes(call.Name))
+            else if (didNotRun || MutatingTools.Changes(call.Name))
                 _namedNothing[key] = call.Name;
         }
 
@@ -2401,7 +2412,7 @@ public sealed class Orchestrator : IOrchestrator
                 else if (result.IsAnswer)
                     openFailures.FoundNothing(call, result.Error);
                 else
-                    openFailures.Failed(call, result.Error);
+                    openFailures.Failed(call, result.Error, result.DidNotRun);
 
                 // What a failure SAYS: the error, and the output under it when there is one. Built
                 // once, here, because the model and the reviewer each get a copy and on 2026-09-07

@@ -34,17 +34,17 @@ public sealed class DockerTool : ITool
         }
         catch (JsonException ex)
         {
-            return ToolResults.Fail($"Invalid arguments JSON: {ex.Message}");
+            return ToolResults.Unreadable($"Invalid arguments JSON: {ex.Message}");
         }
 
         if (args.Count == 0)
-            return ToolResults.Fail("'args' is required (e.g. [\"ps\",\"-a\"]).");
+            return ToolResults.Unreadable("'args' is required (e.g. [\"ps\",\"-a\"]).");
 
         // One whole command line in one array element is the mistake these tools attract.
         // Refused with the fix spelled out, because exit code 1 and "is not a docker command" is
         // not something a model can act on - and on 2026-09-07 it did not, eighteen times.
         if (ProcessExec.WrongShapeOfArgs("docker", args) is { } wrongShape)
-            return ToolResults.Fail(wrongShape);
+            return ToolResults.Unreadable(wrongShape);
 
         return await ProcessExec.RunAsync("docker", args, ctx.WorkspaceRoot, TimeoutSeconds, ct);
     }

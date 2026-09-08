@@ -42,11 +42,11 @@ public sealed class MoveFileTool : ITool
         }
         catch (JsonException ex)
         {
-            return ToolResults.Fail($"Invalid arguments JSON: {ex.Message}");
+            return ToolResults.Unreadable($"Invalid arguments JSON: {ex.Message}");
         }
 
-        if (string.IsNullOrWhiteSpace(from)) return ToolResults.Fail("'from' is required.");
-        if (string.IsNullOrWhiteSpace(to)) return ToolResults.Fail("'to' is required.");
+        if (string.IsNullOrWhiteSpace(from)) return ToolResults.Unreadable("'from' is required.");
+        if (string.IsNullOrWhiteSpace(to)) return ToolResults.Unreadable("'to' is required.");
 
         try
         {
@@ -54,7 +54,7 @@ public sealed class MoveFileTool : ITool
             var destination = WorkspacePaths.ResolveInside(ctx.WorkspaceRoot, to);
 
             if (string.Equals(source, destination, Enactive.Core.Context.WorkspaceGuard.Comparison))
-                return ToolResults.Fail("'from' and 'to' are the same file.");
+                return ToolResults.Unreadable("'from' and 'to' are the same file.");
 
             if (!File.Exists(source))
                 return ToolResults.Fail($"File not found: {from}");

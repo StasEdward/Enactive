@@ -38,11 +38,11 @@ public sealed class CreateDirectoryTool : ITool
         }
         catch (JsonException ex)
         {
-            return Task.FromResult(ToolResults.Fail($"Invalid arguments JSON: {ex.Message}"));
+            return Task.FromResult(ToolResults.Unreadable($"Invalid arguments JSON: {ex.Message}"));
         }
 
         if (string.IsNullOrWhiteSpace(path))
-            return Task.FromResult(ToolResults.Fail("'path' is required."));
+            return Task.FromResult(ToolResults.Unreadable("'path' is required."));
 
         try
         {

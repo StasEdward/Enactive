@@ -65,7 +65,8 @@ public sealed record ToolResult(
     string? Error,
     IReadOnlyList<ArtifactRef> Artifacts,
     IReadOnlyDictionary<string, object?> Metadata,
-    bool IsAnswer = false);
+    bool IsAnswer = false,
+    bool DidNotRun = false);
 
 /// <summary>Factory helpers for <see cref="ToolResult"/>.</summary>
 public static class ToolResults
@@ -112,6 +113,33 @@ public static class ToolResults
         string? output = null,
         IReadOnlyDictionary<string, object?>? metadata = null)
         => new(false, output, error, Array.Empty<ArtifactRef>(), metadata ?? EmptyMeta, IsAnswer: true);
+
+    /// <summary>
+    /// The call could not be READ, so nothing was attempted: a required argument missing, arguments
+    /// that are not JSON, a whole command line packed into one array element.
+    ///
+    /// <para>A sentence that did not parse, not an action that did not happen — and the difference
+    /// decides whether the step is left holding something unfinished. Nothing is: the tool returned
+    /// before it touched anything, and when the model says it properly the next moment, there is no
+    /// residue from the first attempt to make good.</para>
+    ///
+    /// <para>The engine already believed this for the tools that write files: a <c>write_file</c>
+    /// refused for a missing <c>path</c> is closed by the same tool succeeding afterwards, on the
+    /// grounds that it "is not work that did not happen, it is a sentence that did not parse". That
+    /// reasoning has nothing to do with writing, but the rule was written to depend on it. Reported
+    /// 2026-09-08 17:25: <c>git ["diff HEAD"]</c> was refused before git ran, the model then ran
+    /// <c>git ["diff"]</c> and <c>git ["status"]</c>, reported truthfully what they showed, wrote its
+    /// file — and the run was failed for two calls that never happened.</para>
+    ///
+    /// <para>Set by the TOOL, like <see cref="ToolResult.IsAnswer"/> and for the same reason: only
+    /// the tool knows whether it got as far as doing anything, and no error text can be parsed for
+    /// it afterwards.</para>
+    /// </summary>
+    public static ToolResult Unreadable(
+        string error,
+        string? output = null,
+        IReadOnlyDictionary<string, object?>? metadata = null)
+        => new(false, output, error, Array.Empty<ArtifactRef>(), metadata ?? EmptyMeta, DidNotRun: true);
 }
 
 /// <summary>The only surface a tool sees (PLAN_v2 §2A.1). No UI / Orchestrator back-channel.</summary>

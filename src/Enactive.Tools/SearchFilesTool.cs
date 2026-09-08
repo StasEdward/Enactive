@@ -51,11 +51,11 @@ public sealed class SearchFilesTool : ITool
         }
         catch (JsonException ex)
         {
-            return ToolResults.Fail($"Invalid arguments JSON: {ex.Message}");
+            return ToolResults.Unreadable($"Invalid arguments JSON: {ex.Message}");
         }
 
         if (string.IsNullOrWhiteSpace(pattern))
-            return ToolResults.Fail("'pattern' is required.");
+            return ToolResults.Unreadable("'pattern' is required.");
 
         Regex regex;
         try
@@ -69,7 +69,7 @@ public sealed class SearchFilesTool : ITool
         }
         catch (ArgumentException ex)
         {
-            return ToolResults.Fail($"'pattern' is not a valid regular expression: {ex.Message}");
+            return ToolResults.Unreadable($"'pattern' is not a valid regular expression: {ex.Message}");
         }
 
         string searchRoot;

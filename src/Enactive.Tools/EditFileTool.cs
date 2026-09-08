@@ -49,13 +49,13 @@ public sealed class EditFileTool : ITool
         }
         catch (JsonException ex)
         {
-            return ToolResults.Fail($"Invalid arguments JSON: {ex.Message}");
+            return ToolResults.Unreadable($"Invalid arguments JSON: {ex.Message}");
         }
 
         if (string.IsNullOrWhiteSpace(path))
-            return ToolResults.Fail("'path' is required.");
+            return ToolResults.Unreadable("'path' is required.");
         if (string.IsNullOrEmpty(oldString))
-            return ToolResults.Fail("'old_string' is required and cannot be empty.");
+            return ToolResults.Unreadable("'old_string' is required and cannot be empty.");
 
         // Absent is not the same as "". An empty new_string deletes the passage, which is a real
         // and useful edit; a MISSING one means the arguments are not what the model meant to send.
@@ -64,7 +64,7 @@ public sealed class EditFileTool : ITool
                 "'new_string' is required. To delete the passage, pass an empty string explicitly.");
 
         if (string.Equals(oldString, newString, StringComparison.Ordinal))
-            return ToolResults.Fail("'old_string' and 'new_string' are identical — nothing to change.");
+            return ToolResults.Unreadable("'old_string' and 'new_string' are identical — nothing to change.");
 
         try
         {

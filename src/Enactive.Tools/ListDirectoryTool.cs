@@ -27,7 +27,7 @@ public sealed class ListDirectoryTool : ITool
         }
         catch (JsonException ex)
         {
-            return Task.FromResult(ToolResults.Fail($"Invalid arguments JSON: {ex.Message}"));
+            return Task.FromResult(ToolResults.Unreadable($"Invalid arguments JSON: {ex.Message}"));
         }
 
         try

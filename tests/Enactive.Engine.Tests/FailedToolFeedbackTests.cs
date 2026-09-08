@@ -121,6 +121,11 @@ public sealed class FailedToolFeedbackTests
     /// <summary>
     /// The exact call from the log. It is refused with the shape it should have had, rather than run
     /// and returned as "exit code 1".
+    ///
+    /// <para>The message names the PIECES and how many there should be. It used to show the array
+    /// literal — «pass ["diff", "HEAD"] instead» — and on 2026-09-08 17:25 a model answered that by
+    /// sending <c>{"args":["diff\",\"HEAD"]}</c>: the syntax copied into the string it was meant to
+    /// replace. A fix that can be pasted wrongly will be.</para>
     /// </summary>
     [Fact]
     public async Task A_whole_command_line_in_one_argument_is_refused_with_the_fix()
@@ -131,8 +136,31 @@ public sealed class FailedToolFeedbackTests
             """{"args":["diff HEAD"]}""", Context(fx), CancellationToken.None);
 
         Assert.False(result.Success);
-        Assert.Contains("\"diff\", \"HEAD\"", result.Error);
+        Assert.Contains("2 elements", result.Error, StringComparison.Ordinal);
+        Assert.Contains("diff", result.Error, StringComparison.Ordinal);
+        Assert.Contains("HEAD", result.Error, StringComparison.Ordinal);
         Assert.Contains("ONE argument", result.Error, StringComparison.OrdinalIgnoreCase);
+        // The literal the model copied is gone, not merely accompanied by better advice.
+        Assert.DoesNotContain("\"diff\", \"HEAD\"", result.Error);
+    }
+
+    /// <summary>
+    /// And the shape it copied is refused too. <c>diff","HEAD</c> is one argument containing the
+    /// JSON that should have been around it; no real argument holds a quote-comma-quote. Without
+    /// this the call reaches git, which answers "exit code 1" — the unactionable message this whole
+    /// check exists to replace.
+    /// </summary>
+    [Fact]
+    public async Task The_array_syntax_written_inside_one_argument_is_refused_too()
+    {
+        using var fx = new EngineFixture();
+
+        var result = await new GitTool().InvokeAsync(
+            """{"args":["diff\",\"HEAD"]}""", Context(fx), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.True(result.DidNotRun);
+        Assert.Contains("2 elements", result.Error, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -164,6 +192,54 @@ public sealed class FailedToolFeedbackTests
         Assert.DoesNotContain("is not a git subcommand", result.Error ?? "", StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A call the tool could not READ leaves nothing unfinished, so the same tool working afterwards
+    /// closes it — and the run is not failed for a sentence that did not parse.
+    ///
+    /// <para>The reported run, 2026-09-08 17:25. A quick action ran <c>git status</c> and
+    /// <c>git diff</c>, both fine; asked for <c>git ["diff HEAD"]</c>, which was refused before git
+    /// ran; asked again in the mangled shape, refused too; ran <c>git diff</c> and <c>git status</c>
+    /// again; wrote review.md and reported truthfully what it had found. The run was Incomplete:
+    /// <i>"Finished without resolving 2 tool call(s) that did not go through."</i></para>
+    ///
+    /// <para>The engine already believed the principle — a <c>write_file</c> refused for a missing
+    /// path is closed by the next <c>write_file</c> that works, because it "is not work that did not
+    /// happen, it is a sentence that did not parse". The rule was written to apply only to tools
+    /// that write files, which was never what made it true.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_call_the_tool_could_not_read_is_closed_by_the_same_tool_working()
+    {
+        using var fx = new EngineFixture();
+        fx.Write("review.md", "old");
+
+        var worker = new FakeChatProvider(
+            Turn.Says("""{"disposition":"quick_action","title":"review","steps":[]}"""),
+            // The fixture workspace is a bare temp folder, so the run makes it a repository first -
+            // in band, through the same tool, rather than by reaching around the engine.
+            Turn.Calls1("git", """{"args":["init"]}""", "g0"),
+            Turn.Calls1("git", """{"args":["diff HEAD"]}""", "g1"),
+            Turn.Calls1("git", """{"args":["status"]}""", "g2"),
+            Turn.Calls1("write_file", """{"path":"review.md","content":"no changes"}""", "w1"))
+        {
+            WhenExhausted = Turn.Says("git status showed no changes; I wrote review.md.")
+        };
+
+        var events = await fx.RunAsync(
+            fx.Build(worker,
+                     worker: EngineFixture.WorkerWith("git", "write_file"),
+                     policy: new PermissionPolicy(PermissionLevel.Autonomous, ["*"], [])),
+            "review the changes");
+
+        // The reason is carried into the failure message on purpose: this test was written twice
+        // against the wrong cause — once with a worker whose role did not offer git at all, once in
+        // a workspace that was not a repository — and both times it failed for a reason that had
+        // nothing to do with the rule under test.
+        Assert.True(events.Last().Outcome() == RunOutcomeKind.Completed,
+                    string.Join(" | ", events.TakeLast(3).Select(e => e.Kind + ": " + e.Summary)));
+        Assert.DoesNotContain(events, e => e.Summary.Contains("did not go through", StringComparison.Ordinal));
+    }
+
     /// <summary>docker attracts the same mistake and gets the same answer.</summary>
     [Fact]
     public async Task Docker_gets_the_same_treatment()
@@ -174,7 +250,7 @@ public sealed class FailedToolFeedbackTests
             """{"args":["ps -a"]}""", Context(fx), CancellationToken.None);
 
         Assert.False(result.Success);
-        Assert.Contains("\"ps\", \"-a\"", result.Error);
+        Assert.Contains("2 elements", result.Error, StringComparison.Ordinal);
         Assert.Contains("docker subcommand", result.Error, StringComparison.Ordinal);
     }
 

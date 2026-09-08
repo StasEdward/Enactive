@@ -43,14 +43,14 @@ public sealed class ReadFileTool : ITool
         }
         catch (JsonException ex)
         {
-            return ToolResults.Fail($"Invalid arguments JSON: {ex.Message}");
+            return ToolResults.Unreadable($"Invalid arguments JSON: {ex.Message}");
         }
 
-        if (offset < 1) return ToolResults.Fail("'offset' is a 1-based line number, so it starts at 1.");
-        if (limit < 1) return ToolResults.Fail("'limit' must be at least 1 line.");
+        if (offset < 1) return ToolResults.Unreadable("'offset' is a 1-based line number, so it starts at 1.");
+        if (limit < 1) return ToolResults.Unreadable("'limit' must be at least 1 line.");
 
         if (string.IsNullOrWhiteSpace(path))
-            return ToolResults.Fail("'path' is required.");
+            return ToolResults.Unreadable("'path' is required.");
 
         try
         {

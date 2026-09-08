@@ -32,11 +32,11 @@ public sealed class WriteFileTool : ITool
         }
         catch (JsonException ex)
         {
-            return ToolResults.Fail($"Invalid arguments JSON: {ex.Message}");
+            return ToolResults.Unreadable($"Invalid arguments JSON: {ex.Message}");
         }
 
         if (string.IsNullOrWhiteSpace(path))
-            return ToolResults.Fail("'path' is required.");
+            return ToolResults.Unreadable("'path' is required.");
 
         // A MISSING content is an error, not an empty file. The schema requires it, so its absence
         // means the arguments are not what the model meant to send - and the old default silently

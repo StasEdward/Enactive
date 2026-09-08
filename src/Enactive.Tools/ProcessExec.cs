@@ -52,7 +52,10 @@ internal static class ProcessExec
     ///
     /// <para>Checking only the FIRST element is what makes this exact rather than clever: no git or
     /// docker subcommand contains whitespace, while later arguments legitimately do
-    /// (<c>["commit", "-m", "message with spaces"]</c>) and must be left alone.</para>
+    /// (<c>["commit", "-m", "message with spaces"]</c>) and must be left alone. Two shapes are
+    /// refused there: whitespace, which is a command line packed into one string, and a
+    /// quote-comma-quote, which is the JSON array written INSIDE one - see the note in the body for
+    /// where the second one came from.</para>
     ///
     /// <para>It refuses instead of quietly splitting. The model is now shown why a call failed, so a
     /// refusal that names the fix costs one turn - and silently rewriting the arguments somebody
@@ -60,18 +63,35 @@ internal static class ProcessExec
     /// </summary>
     public static string? WrongShapeOfArgs(string program, IReadOnlyList<string> args)
     {
-        if (args.Count == 0 || args[0].AsSpan().IndexOfAny(' ', '\t', '\n') < 0)
+        // A quote-comma-quote INSIDE one element is the array syntax written as data — the mistake
+        // this message itself provokes. Reported 2026-08: told to «pass ["diff", "HEAD"] instead»,
+        // the model sent {"args":["diff\",\"HEAD"]}, one argument reading `diff","HEAD`, which git
+        // then rejected as an unknown subcommand. No real argument contains that sequence.
+        var pasted = args.Count > 0 && args[0].Contains("\",\"", StringComparison.Ordinal);
+
+        if (args.Count == 0 || (!pasted && args[0].AsSpan().IndexOfAny(' ', '\t', '\n') < 0))
             return null;
 
         var pieces = args[0].Split(
-            new[] { ' ', '\t', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+            new[] { ' ', '\t', '\n', '"', ',' }, StringSplitOptions.RemoveEmptyEntries);
 
+        // An element made of nothing but punctuation leaves no pieces to name, and a message that
+        // throws while explaining a mistake is worse than the mistake.
+        if (pieces.Length == 0)
+            return $"'{args[0]}' is not a {program} subcommand and has no argument in it. Send each "
+                 + "argument as its own element of 'args', with no brackets, quotes or commas inside "
+                 + "an element.";
+
+        // Says the SHAPE rather than showing the syntax. Showing it is what got pasted into a string
+        // the first time; naming the pieces and how many there should be cannot be copied wrongly.
         return $"'{args[0]}' is not a {program} subcommand - it is a whole command line in one "
-             + "argument. Each element of 'args' is passed through as ONE argument, so pass "
-             + $"[{string.Join(", ", pieces.Select(p => $"\"{p}\""))}"
-             + (args.Count > 1 ? ", ..." : "")
-             + "] instead. An argument may contain spaces (a commit message, a path); the "
-             + "subcommand never does.";
+             + "argument. Send each argument as its OWN element of 'args': "
+             + $"{pieces.Length} elements here, the first being {pieces[0]}"
+             + (pieces.Length > 1 ? $" and the second {pieces[1]}" : "")
+             + (args.Count > 1 ? ", then the arguments you already sent after it" : "")
+             + ". Do not put brackets, quotes or commas inside an element - they are the JSON around "
+             + "the strings, not part of them. An argument may contain spaces (a commit message, a "
+             + "path); the subcommand never does.";
     }
 
     /// <summary>

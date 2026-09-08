@@ -37,15 +37,15 @@ public sealed class RunCommandTool : ITool
             // Read here, used at the very end - so a malformed declaration is refused BEFORE the
             // command runs rather than after it has had its effect.
             if (!ProcessExec.TryReadExpectedExitCodes(doc.RootElement, out expected, out var badCodes))
-                return ToolResults.Fail(badCodes!);
+                return ToolResults.Unreadable(badCodes!);
         }
         catch (JsonException ex)
         {
-            return ToolResults.Fail($"Invalid arguments JSON: {ex.Message}");
+            return ToolResults.Unreadable($"Invalid arguments JSON: {ex.Message}");
         }
 
         if (string.IsNullOrWhiteSpace(command))
-            return ToolResults.Fail("'command' is required.");
+            return ToolResults.Unreadable("'command' is required.");
 
         var startInfo = new ProcessStartInfo
         {
