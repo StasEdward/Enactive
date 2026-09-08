@@ -1100,8 +1100,31 @@ public sealed class Orchestrator : IOrchestrator
 
         var cycle = scheduler.HasPending;
         if (cycle)
+        {
             yield return Ev(EventKind.ErrorObserved,
                 "Plan has unresolvable dependencies (a cycle) — remaining steps could not run.");
+
+            // The same accounting the LIMIT path does, and for the same reason it does it: a step
+            // left Pending at the end of a run has no recorded outcome, the run's outcome is built
+            // from its steps' outcomes, and so a step nobody could run quietly did not count. It
+            // also had no card, so a plan of four showed two — which reads as a plan that lost half
+            // of itself rather than one that could not be carried out.
+            //
+            // §9v gave the limit path exactly this and left the cycle path without it. The hole was
+            // the same hole; only one of the two ways of reaching it had been walked.
+            foreach (var stranded in scheduler.AbandonPending())
+            {
+                var no = stepNumbers.TryGetValue(stranded.Id, out var sn) ? sn : 0;
+                lock (stepOutcomes)
+                    stepOutcomes[stranded.Id] = StepOutcomeKind.Skipped;
+
+                yield return new WorkEvent(
+                    Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow, EventKind.StepCompleted,
+                    $"[{(no > 0 ? no : 0)}/{total}] {stranded.Title} — skipped (its dependencies "
+                    + "could never be satisfied)",
+                    WorkEventPayload.StepPayload(no > 0 ? no : null, StepOutcomeKind.Skipped));
+            }
+        }
 
         StepOutcomeKind[] outcomes;
         lock (stepOutcomes)

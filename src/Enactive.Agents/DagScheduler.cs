@@ -190,11 +190,25 @@ public sealed class DagScheduler
         }
     }
 
-    /// <summary>Caller must hold the gate.</summary>
+    /// <summary>
+    /// Whether every step this one waits on has finished successfully. Caller must hold the gate.
+    ///
+    /// <para>A dependency this plan does not CONTAIN is not satisfied either, and that used to be
+    /// the other way round: the lookup and the status test were one <c>&amp;&amp;</c>, so a
+    /// dependency the scheduler had never heard of short-circuited to "fine" and the step ran
+    /// immediately. An absence is not an answer, and the absent thing here is the entire reason to
+    /// wait.</para>
+    ///
+    /// <para>Not reachable from a planner's output - <c>DagPlan.FromSpecs</c> drops any index that
+    /// is not a real step - but very reachable from a plan rebuilt out of STORED data:
+    /// <c>Orchestrator.PlanOf</c> takes a checkpoint's dependency ids as given, and a checkpoint
+    /// written by an older build, hand-edited or truncated can name a step that is not in the list
+    /// beside it. A step running before its prerequisite is the worst failure this class has.</para>
+    /// </summary>
     private bool DependenciesSatisfied(PlanStep step)
     {
         foreach (var dep in step.DependsOn)
-            if (_status.TryGetValue(dep, out var st) && st != StepStatus.Done)
+            if (!_status.TryGetValue(dep, out var st) || st != StepStatus.Done)
                 return false;
         return true;
     }
