@@ -339,16 +339,6 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
                 continue;
             }
 
-            // Somebody else wrote this file AFTER we did. Their step may already have been accepted,
-            // so putting the file back would destroy approved work - the file is no longer ours to
-            // speak for. The hash check below cannot catch this: what is on disk matches their write
-            // exactly, so it looks untouched. Report it instead.
-            if (after[^1].Owner != owner)
-            {
-                Keep(path, "another step wrote it after this one did");
-                continue;
-            }
-
             // Only OUR entries, and the state to go back to is the one OUR FIRST write displaced -
             // which may well be a sibling step's accepted content rather than the original file.
             // Taking the oldest entry after the checkpoint instead would restore the state before
@@ -357,6 +347,25 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
             if (mine.Length == 0)
             {
                 Keep(path, "this step made no write to it that is still on record");
+                continue;
+            }
+
+            // Somebody else wrote this file after we first touched it. Their step may already have
+            // been accepted, so putting the file back would destroy approved work - it is no longer
+            // ours to speak for. The hash check below cannot catch this: what is on disk matches
+            // whoever wrote last, so it looks untouched.
+            //
+            // The question is whether ANYONE else wrote it after our first write, not whether the
+            // LAST write is ours. A → B → A passed the old check, because the last entry was ours -
+            // and then restoring "the state our first write displaced" threw away B's accepted
+            // content sitting in the middle. A foreign write BEFORE our first one is the documented
+            // case above and is fine: our first write displaced their content, and that is exactly
+            // what goes back.
+            var foreign = after.FirstOrDefault(
+                w => w.Owner != owner && w.Sequence > mine[0].Sequence);
+            if (foreign is not null)
+            {
+                Keep(path, "another step wrote it after this one did");
                 continue;
             }
 

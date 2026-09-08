@@ -35,6 +35,80 @@ public sealed class RevertIntegrityTests
             async output => await output.WriteAsync(bytes),
             default);
 
+    // ── N1 — a foreign write between two of mine ────────────────────────────
+
+    /// <summary>
+    /// A → B → A on one path. The conflict check looked only at the LAST entry, which is mine, so
+    /// the revert went ahead and restored what my FIRST write displaced — throwing away B's accepted
+    /// content in the middle. Either outcome is safe: report the conflict, or leave B's content
+    /// standing. Silently restoring the original is not.
+    /// </summary>
+    [Fact]
+    public async Task InterleavedOwnerMustNotEraseAcceptedMiddleWrite()
+    {
+        using var fixture = new EngineFixture();
+        fixture.Write("doc.txt", "original");
+
+        var a = fixture.Artifacts.BeginStep();
+        var b = fixture.Artifacts.BeginStep();
+
+        await Write(a, "doc.txt", "A first attempt");
+        await Write(b, "doc.txt", "B accepted");
+        await Write(a, "doc.txt", "A rejected retry");
+
+        var report = await a.RevertAsync(a.TouchedPaths, default);
+
+        Assert.True(
+            report.Kept.Contains("doc.txt") || fixture.Read("doc.txt") == "B accepted",
+            "Revert erased B's accepted write and restored: " + fixture.Read("doc.txt"));
+    }
+
+    /// <summary>The same thing one round longer, in case "last entry" was traded for "second to last".</summary>
+    [Fact]
+    public async Task Alternating_owners_are_a_conflict_however_many_rounds()
+    {
+        using var fixture = new EngineFixture();
+        fixture.Write("doc.txt", "original");
+
+        var a = fixture.Artifacts.BeginStep();
+        var b = fixture.Artifacts.BeginStep();
+
+        await Write(a, "doc.txt", "A one");
+        await Write(b, "doc.txt", "B one");
+        await Write(a, "doc.txt", "A two");
+        await Write(b, "doc.txt", "B two");
+
+        var report = await a.RevertAsync(a.TouchedPaths, default);
+
+        Assert.Contains("doc.txt", report.Kept);
+        Assert.Equal("B two", fixture.Read("doc.txt"));
+    }
+
+    /// <summary>
+    /// The case the rule must NOT catch, and the reason it is "after MY FIRST write" rather than
+    /// "anywhere after the checkpoint". A sibling wrote this file before I touched it: what my first
+    /// write displaced IS their accepted content, and putting that back is exactly right. Widening
+    /// the conflict rule to any foreign write would make every second step on a shared file
+    /// unrevertable.
+    /// </summary>
+    [Fact]
+    public async Task A_sibling_write_BEFORE_mine_is_what_my_revert_restores()
+    {
+        using var fixture = new EngineFixture();
+        fixture.Write("doc.txt", "original");
+
+        var a = fixture.Artifacts.BeginStep();
+        var b = fixture.Artifacts.BeginStep();
+
+        await Write(a, "doc.txt", "A accepted");
+        await Write(b, "doc.txt", "B rejected");
+
+        var report = await b.RevertAsync(b.TouchedPaths, default);
+
+        Assert.Contains("doc.txt", report.Reverted);
+        Assert.Equal("A accepted", fixture.Read("doc.txt"));
+    }
+
     // ── N2 — a checkpoint that moves ────────────────────────────────────────
 
     /// <summary>
