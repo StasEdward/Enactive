@@ -5,11 +5,10 @@
       Contracts and the two things delivery needs: a SignalR client to reach the gateway, and
       SQLite for the queues that have to survive a crash.
 
-      There is NO reference to Enactive.Core here, and that is the shape of stage 3 in
-      Docs/REMOTE_DESIGN.md rather than an oversight: at this stage the Host can accept a command,
-      remember it and report about it, and it CANNOT run anything, because the engine is not on the
-      other end of a reference it does not have. The binding is stage 4, and adding this reference
-      is what that stage begins with.
+      Core arrives in stage 4, and its arrival is the stage: until this reference existed, this
+      library could accept a command, remember it and report about it, and could not run anything.
+      That is why delivery was built and proven first - none of it depends on the engine, and it is
+      the part that has to be right when the network is not.
     -->
     <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="10.0.0" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.12" />
@@ -23,6 +22,7 @@
     -->
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.5" />
     <ProjectReference Include="..\Enactive.Remote.Contracts\Enactive.Remote.Contracts.csproj" />
+    <ProjectReference Include="..\Enactive.Core\Enactive.Core.csproj" />
   </ItemGroup>
 
 </Project>

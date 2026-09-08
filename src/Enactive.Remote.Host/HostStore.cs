@@ -160,6 +160,18 @@ public sealed class HostStore : IDisposable
         return true;
     }
 
+    /// <summary>
+    /// Whether an ending has already been queued for this run.
+    ///
+    /// <para>A run has exactly one ending, and more than one place can reach the decision to write
+    /// it - the stream finishing, a cancellation, an unhandled failure. A second would be refused
+    /// by the gateway as an event about a run that has ended, which is the Host arguing with the
+    /// far end about something it could have known here.</para>
+    /// </summary>
+    public bool HasEnded(string runId)
+        => Scalar("SELECT 1 FROM runs WHERE run_id = $run AND state = $ended",
+            ("$run", runId), ("$ended", LocalRunState.Ended.ToString())) is not null;
+
     public void MarkRunState(string runId, LocalRunState state)
         => Execute(
             "UPDATE runs SET state = $state, ended_at = CASE WHEN $ended = 1 THEN $now ELSE ended_at END "
