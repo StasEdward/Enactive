@@ -110,6 +110,39 @@ internal sealed class RunListItemViewModel
 }
 
 /// <summary>
+/// A run that never reached an end: the process it was in is gone, and what it had done is on disk
+/// with a checkpoint beside it.
+///
+/// <para>Its own row above the history rather than a row IN it, because it is not a past run. A past
+/// run is a record of something that happened; this is an offer to carry on. It also usually has no
+/// record at all - a process that was killed never wrote one - so there is nothing in the history
+/// for it to be a row of.</para>
+/// </summary>
+internal sealed class ResumableRunViewModel
+{
+    public ResumableRunViewModel(RunCheckpoint checkpoint, Action<RunCheckpoint> resume)
+    {
+        Checkpoint = checkpoint;
+        Title = RunTitle.OneLine(checkpoint.Title);
+        Meta = $"stopped {checkpoint.At.ToLocalTime():MMM d, HH:mm} · "
+               + $"{checkpoint.Finished} of {checkpoint.Steps.Count} steps done";
+        Tooltip = $"{checkpoint.Request}\n\nResume runs the {checkpoint.Remaining} step(s) that are left, "
+                  + "under the permissions this run started with. A step that was in progress when it "
+                  + "stopped is done again from its beginning.";
+        ResumeCommand = new RelayCommand(() => resume(checkpoint));
+    }
+
+    public RunCheckpoint Checkpoint { get; }
+    public string Title { get; }
+    public string Meta { get; }
+    public string Tooltip { get; }
+    public RelayCommand ResumeCommand { get; }
+
+    /// <summary>Amber, like everywhere else here: nobody knows how this ended.</summary>
+    public IBrush StatusBrush => Brand.Amber;
+}
+
+/// <summary>
 /// A finished run, opened read-only - in the SAME frame as a live one: a header with what it was
 /// called and how it ended, tabs over the run, and the status column beside them. What changes is
 /// the content, not the shape, because it is the same thing at a different time.
@@ -393,7 +426,30 @@ internal sealed class RunsViewModel : ObservableObject
     /// </summary>
     public event Action<RunSummary>? DeleteRequested;
 
+    /// <summary>Somebody asked to carry an interrupted run on. The window owns the running.</summary>
+    public event Action<RunCheckpoint>? ResumeRequested;
+
     public ObservableCollection<RunListItemViewModel> Items { get; } = new();
+
+    /// <summary>Runs nobody knows the end of. Empty is the normal state and shows nothing at all.</summary>
+    public ObservableCollection<ResumableRunViewModel> Resumable { get; } = new();
+
+    public bool HasResumable => Resumable.Count > 0;
+
+    /// <summary>
+    /// Offers the interrupted runs found in this workspace.
+    ///
+    /// <para>A checkpoint with nothing left to do is not offered: it belongs to a run that finished
+    /// its steps and died somewhere after them, and a Resume that runs nothing is a button that
+    /// lies about what pressing it does.</para>
+    /// </summary>
+    public void ShowResumable(IReadOnlyList<RunCheckpoint> checkpoints)
+    {
+        Resumable.Clear();
+        foreach (var checkpoint in checkpoints.Where(c => c.IsResumable))
+            Resumable.Add(new ResumableRunViewModel(checkpoint, c => ResumeRequested?.Invoke(c)));
+        OnPropertyChanged(nameof(HasResumable));
+    }
 
     public string Status { get => _status; set => Set(ref _status, value); }
 
@@ -442,6 +498,8 @@ internal sealed class RunsViewModel : ObservableObject
     /// <summary>The workspace changed: what is listed belongs to the old one.</summary>
     public void Reset()
     {
+        Resumable.Clear();
+        OnPropertyChanged(nameof(HasResumable));
         Items.Clear();
         _selected = null;
         OnPropertyChanged(nameof(Selected));

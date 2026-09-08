@@ -16,6 +16,7 @@ using Enactive.Core.Context;
 using Enactive.Core.Diagnostics;
 using Enactive.Core.Events;
 using Enactive.Core.Execution;
+using Enactive.Core.History;
 using Enactive.Core.Intents;
 using Enactive.Core.Orchestration;
 using Enactive.Core.Permissions;
@@ -98,6 +99,20 @@ public sealed class Orchestrator : IOrchestrator
     /// </summary>
     private readonly ExecutionLimits _limits;
 
+    /// <summary>
+    /// Where an interrupted run is left so it can be picked up. Null means this orchestrator does
+    /// not checkpoint, which is the behaviour that existed before resume did - the tests that do not
+    /// care about it pass nothing and nothing is written.
+    /// </summary>
+    private readonly IRunCheckpointStore? _checkpoints;
+
+    /// <summary>
+    /// What this run was allowed to do, as the host set it up. Carried in a checkpoint so a resumed
+    /// run continues under the same permissions rather than under whatever the window says later -
+    /// and so a STAGED run can be recognised as one that must not be checkpointed at all.
+    /// </summary>
+    private readonly RunSettings? _settings;
+
     public Orchestrator(
         IChatProviderFactory providers,
         IModelResolver modelResolver,
@@ -120,8 +135,12 @@ public sealed class Orchestrator : IOrchestrator
         bool reviewContent = true,
         bool revertRejectedSteps = true,
         IReadOnlyList<SuccessCriterionDefinition>? successCriteria = null,
-        ExecutionLimits? limits = null)
+        ExecutionLimits? limits = null,
+        IRunCheckpointStore? checkpoints = null,
+        RunSettings? settings = null)
     {
+        _checkpoints = checkpoints;
+        _settings = settings;
         _successCriteria = successCriteria ?? Array.Empty<SuccessCriterionDefinition>();
         _limits = limits ?? ExecutionLimits.None;
         _providers = providers;
@@ -159,8 +178,31 @@ public sealed class Orchestrator : IOrchestrator
         _revertRejectedSteps = revertRejectedSteps;
     }
 
-    public async IAsyncEnumerable<WorkEvent> SubmitIntentAsync(
-        Intent intent, [EnumeratorCancellation] CancellationToken ct)
+    public IAsyncEnumerable<WorkEvent> SubmitIntentAsync(Intent intent, CancellationToken ct)
+        => RunAsync(intent, null, ct);
+
+    /// <summary>
+    /// Picks an interrupted run up at its last step boundary. A NEW run under the SAME task - see
+    /// <see cref="IOrchestrator.ResumeRunAsync"/> for why that is the truthful shape.
+    /// </summary>
+    public IAsyncEnumerable<WorkEvent> ResumeRunAsync(
+        RunCheckpoint checkpoint, WorkContext context, CancellationToken ct)
+        => RunAsync(
+            // The task id comes from the checkpoint, never from a caller: a resumed run that landed
+            // under a different task would show in the history as unrelated work, and everything
+            // built on "attempts at one task" would quietly stop being true.
+            new Intent(checkpoint.TaskId, checkpoint.Request, IntentSource.CommandBar, context,
+                       DateTimeOffset.UtcNow, checkpoint.WorkerId),
+            checkpoint,
+            ct);
+
+    /// <param name="resume">
+    /// The interrupted run this one is carrying on from, or null for a run starting fresh. Both go
+    /// through one body on purpose: a resumed run that took a shorter path through the engine would
+    /// be a second implementation of running, and the two would drift.
+    /// </param>
+    private async IAsyncEnumerable<WorkEvent> RunAsync(
+        Intent intent, RunCheckpoint? resume, [EnumeratorCancellation] CancellationToken ct)
     {
         var runId = Guid.NewGuid();
         var taskId = intent.Id;
@@ -192,7 +234,13 @@ public sealed class Orchestrator : IOrchestrator
         // What this run may spend, and what is gone. Every phase counts against it - planning,
         // execution and review - because the budget is what the RUN costs, and a reviewer on a large
         // cloud model can be the larger half of that.
-        var budget = new RunBudget(_limits, DateTimeOffset.UtcNow);
+        // A resumed run inherits what the interrupted one had already spent - steps and tokens, not
+        // elapsed time. See RunBudget's constructor for why the clock restarts and the counters
+        // do not.
+        var budget = new RunBudget(
+            _limits, DateTimeOffset.UtcNow,
+            stepsAlreadyRun: resume?.StepsRun ?? 0,
+            tokensAlreadySpent: resume?.TokensSpent ?? 0);
 
         WorkEvent UsageOutsideLoop(
             string purpose, ModelRef reference, int prompt, int completion, int? stepNo = null)
@@ -237,8 +285,15 @@ public sealed class Orchestrator : IOrchestrator
             yield return Route("review", reviewRef!, $"Reviewer -> {reviewRef!.ProviderId}/{reviewRef.Model}");
 
         // ── Understand / Plan (reasoner when multi-agent) ─────────────────────
-        var plan = await InScopeAsync(runId, taskId, null,
-            () => _planner.PlanAsync(intent.RawText, intent.Context, planProvider, planModel, ct));
+        //
+        // A resumed run does NOT plan again. The plan is the thing being resumed: re-planning would
+        // produce different steps with different ids, and every finished step in the checkpoint
+        // would refer to nothing. It would also charge a second planning call to say what is already
+        // written down.
+        var plan = resume is not null
+            ? PlanOf(resume)
+            : await InScopeAsync(runId, taskId, null,
+                () => _planner.PlanAsync(intent.RawText, intent.Context, planProvider, planModel, ct));
 
         if (plan.PromptTokens + plan.CompletionTokens > 0)
             yield return UsageOutsideLoop(
@@ -253,12 +308,24 @@ public sealed class Orchestrator : IOrchestrator
                 "The planner's answer could not be read, twice. Running this as a single action — "
                 + "that is a fallback, not a decision that the request has one step.");
 
-        var messages = new List<ChatMessage>
-        {
-            ChatMessage.System(worker.Instructions),
-            ChatMessage.User(BuildUserPrompt(intent))
-        };
-        var artifacts = new List<ArtifactRef>();
+        // The root conversation. A resumed run picks up the one the interrupted run had, because at
+        // one step at a time that list IS the run's memory - every step appends to it, and starting
+        // it empty would make the second half of a run forget the first half while looking exactly
+        // like a run that had never been interrupted.
+        var messages = resume is { Transcript.Count: > 0 }
+            ? new List<ChatMessage>(resume.Transcript)
+            : new List<ChatMessage>
+            {
+                ChatMessage.System(worker.Instructions),
+                ChatMessage.User(BuildUserPrompt(intent))
+            };
+
+        // Files the interrupted run produced come back too. They are on disk, they are what this
+        // task has made, and a resumed run whose closing summary named only the second half of them
+        // would be the same defect as a record that says it has no events.
+        var artifacts = resume is null
+            ? new List<ArtifactRef>()
+            : new List<ArtifactRef>(resume.Artifacts.Select(RestoredArtifact));
 
         // The one place a run ends. TaskCompleted is emitted for Completed and NOTHING else — the
         // whole point of the outcome type is that a failure cannot arrive dressed as a success — and
@@ -456,7 +523,12 @@ public sealed class Orchestrator : IOrchestrator
             // two cards and a plan title containing " — " lost its tail.
             WorkEventPayload.PlanPayload(plan.Title, stepTitles));
 
-        var scheduler = new DagScheduler(builtPlan);
+        // A resumed run's scheduler starts from what the checkpoint recorded, so finished steps are
+        // never handed out again. A step that was RUNNING comes back Pending and IS run again - see
+        // the restoring constructor for why that is the only true answer.
+        var scheduler = resume is null
+            ? new DagScheduler(builtPlan)
+            : new DagScheduler(builtPlan, StatusesOf(resume));
         // Step numbers are PLAN positions, not a dispatch counter. The UI resolves an event to its
         // step card by this number, and its cards come from the plan in plan order; as soon as
         // readiness order differs from plan order (any real DAG, and every parallel run) a dispatch
@@ -473,12 +545,120 @@ public sealed class Orchestrator : IOrchestrator
         var events = Channel.CreateUnbounded<WorkEvent>(
             new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
 
-        // One line per finished step, so a parallel branch knows what its siblings concluded.
-        var digest = new List<string>();
+        // One line per finished step, so a parallel branch knows what its siblings concluded. A
+        // resumed run starts with what the interrupted one had concluded: above one step at a time
+        // this is the ONLY thing that crosses between steps, so an empty digest would make every
+        // remaining step believe it was the first.
+        var digest = resume is null ? new List<string>() : new List<string>(resume.Digest);
 
         // How each step ended. The run's own outcome is the aggregate of these, computed once at the
         // end — not assumed to be success because the loop finished.
         var stepOutcomes = new Dictionary<Guid, StepOutcomeKind>();
+
+        // Seeded on a resume, so the run's outcome accounts for the steps it INHERITED and not only
+        // the ones it ran itself: a resume of a plan whose first step failed must not be able to
+        // report Completed on the strength of the steps after it.
+        //
+        // Read from the restored SCHEDULER rather than straight from the checkpoint, because the
+        // scheduler is where the failure cascade was replayed - a step the checkpoint recorded as
+        // Pending may be Skipped by the time it has been restored, and taking the checkpoint's word
+        // would leave those steps with no outcome at all.
+        var restored = resume is null
+            ? new Dictionary<Guid, StepStatus>()
+            : (IReadOnlyDictionary<Guid, StepStatus>)scheduler.Snapshot();
+        var recordedOutcomes = resume is null
+            ? new Dictionary<Guid, StepOutcomeKind>()
+            : resume.Steps
+                .Where(s => CheckpointNames.OutcomeOf(s.Outcome) is not null)
+                .ToDictionary(s => s.Id, s => CheckpointNames.OutcomeOf(s.Outcome)!.Value);
+
+        foreach (var (id, status) in restored)
+        {
+            if (status is not (StepStatus.Done or StepStatus.Failed or StepStatus.Skipped))
+                continue;
+
+            stepOutcomes[id] = recordedOutcomes.TryGetValue(id, out var known)
+                ? known
+                : status switch
+                {
+                    StepStatus.Done => StepOutcomeKind.Succeeded,
+                    StepStatus.Failed => StepOutcomeKind.Failed,
+                    _ => StepOutcomeKind.Skipped
+                };
+        }
+
+        // ── Checkpointing ─────────────────────────────────────────────────
+        //
+        // Written at STEP BOUNDARIES and nowhere else, because that is the only place a run can be
+        // picked up from: everything finer lives in an async iterator and in locals, and cannot be
+        // written down. Best-effort by design - a workspace whose disk refuses the write still runs;
+        // losing the ability to resume is a disappointment, and stopping the work over it is damage.
+        // Snapshot and write are one operation. Two steps finishing at once would otherwise be free
+        // to interleave "read the statuses" and "write the file", and the LAST write could carry the
+        // OLDER picture - leaving a checkpoint that calls a finished step Running, which on resume
+        // means doing it again for nothing.
+        using var checkpointGate = new SemaphoreSlim(1, 1);
+
+        async Task CheckpointAsync()
+        {
+            if (_checkpoints is not { } store)
+                return;
+
+            await checkpointGate.WaitAsync(CancellationToken.None);
+            try
+            {
+                string[] doneLines;
+                ArtifactRef[] produced;
+                Dictionary<Guid, StepOutcomeKind> outcomesNow;
+
+                // Taken under the same locks the run uses. At one step at a time `messages` is the
+                // running step's own conversation, and this is called after that step has finished
+                // with it; above that it is never appended to at all.
+                lock (digest)
+                    doneLines = digest.ToArray();
+                lock (artifacts)
+                    produced = artifacts.ToArray();
+                lock (stepOutcomes)
+                    outcomesNow = new Dictionary<Guid, StepOutcomeKind>(stepOutcomes);
+                var transcript = messages.ToArray();
+
+                var statuses = scheduler.Snapshot();
+                var steps = builtPlan.Steps
+                    .Select(s => new CheckpointStep(
+                        s.Id, s.Title, s.DependsOn, s.Complexity.ToString(),
+                        (statuses.TryGetValue(s.Id, out var st) ? st : StepStatus.Pending).ToString(),
+                        outcomesNow.TryGetValue(s.Id, out var oc) ? oc.ToString() : null))
+                    .ToArray();
+
+                await store.SaveAsync(
+                    new RunCheckpoint(
+                        runId, taskId, intent.At, DateTimeOffset.UtcNow,
+                        intent.RawText, plan.Title, intent.WorkerId, resume?.Spec,
+                        steps, doneLines, transcript,
+                        produced.Select(a => a.RelativePath).ToArray(),
+                        budget.StepsRun, budget.TokensSpent, _settings),
+                    CancellationToken.None);
+            }
+            catch (IOException) { /* a run that cannot be resumed is still a run */ }
+            catch (UnauthorizedAccessException) { }
+            finally
+            {
+                checkpointGate.Release();
+            }
+        }
+
+        // Forgets the checkpoint: this run reached an end, and an ending is not resumable. Called
+        // for every ending, not only a good one - a run that FAILED ran to a conclusion, and the
+        // conclusion was failure. What makes a run resumable is that nobody knows how it ended.
+        async Task ForgetCheckpointAsync()
+        {
+            if (_checkpoints is not { } store)
+                return;
+
+            try { await store.DeleteAsync(runId, CancellationToken.None); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
 
         async Task RunStepAsync(PlanStep step)
         {
@@ -686,6 +866,12 @@ public sealed class Orchestrator : IOrchestrator
                     digest.Add($"{step.Title}: {Gist(LastAssistant(convo))}");
                 EmitStepDone($"[{stepNumber}/{total}] {step.Title} — done", stepNumber, outcome);
                 scheduler.MarkDone(step.Id);
+                // AFTER the unblocking, for the same reason the digest goes before it: a checkpoint
+                // taken first would record this step as still Running, and a resume would redo a
+                // step that had finished. Taken here it records the truth, and a dependent released
+                // a moment ago shows as Running - which is also the truth, and which the restoring
+                // scheduler knows to turn back into Pending.
+                await CheckpointAsync();
                 return;
             }
 
@@ -712,7 +898,54 @@ public sealed class Orchestrator : IOrchestrator
                     $"[{skNo}/{total}] {sk.Title} — skipped (a dependency did not succeed)",
                     skNo > 0 ? skNo : (int?)null, StepOutcomeKind.Skipped);
             }
+
+            // A failure is a boundary too, and it is recorded AS a failure. A resume does not retry
+            // it: this step ran and did not work, and doing it again on the strength of the process
+            // having died afterwards would be inventing a retry nobody asked for. Retrying is a
+            // separate thing the history already offers, and it starts a fresh attempt on purpose.
+            //
+            // Reaching this at all means the process died before the run could finish - a run that
+            // fails normally goes on to its terminal event, which deletes its checkpoint.
+            await CheckpointAsync();
         }
+
+        // ── What a resumed run inherited ───────────────────────────────────
+        //
+        // Said out loud, and said as CARDS, because a plan whose first three steps simply never
+        // appear reads as a plan that lost them. Emitted before anything is dispatched, so the step
+        // list is whole from the first frame.
+        if (resume is not null)
+        {
+            yield return Ev(EventKind.ContextAssembled,
+                // Counted off the RESTORED state, not off the checkpoint: the failure cascade may
+                // have settled more steps than the checkpoint had, and the number a person reads
+                // should be the number of steps this run is not going to do.
+                $"Resumed: {stepOutcomes.Count} of {builtPlan.Steps.Count} step(s) were already settled when "
+                + $"the previous run stopped on {resume.At.ToLocalTime():yyyy-MM-dd HH:mm}."
+                + (resume.Steps.Any(s => s.Status == nameof(StepStatus.Running))
+                    ? " One step was in progress and is being done again from its beginning — the "
+                      + "files it had already written are still in the workspace."
+                    : ""));
+
+            // In PLAN order, and off the seeded outcomes rather than the checkpoint's own list, so a
+            // step the failure cascade skipped during restore gets its card too.
+            foreach (var step in builtPlan.Steps)
+            {
+                if (!stepOutcomes.TryGetValue(step.Id, out var kind))
+                    continue;
+
+                var no = stepNumbers.TryGetValue(step.Id, out var rn) ? rn : 0;
+                yield return new WorkEvent(
+                    Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow, EventKind.StepCompleted,
+                    $"[{(no > 0 ? no : 0)}/{total}] {step.Title} — {Word(kind)} before this run",
+                    WorkEventPayload.StepPayload(no > 0 ? no : null, kind));
+            }
+        }
+
+        // The first checkpoint, before any step runs. Without it a process killed during step one
+        // leaves nothing at all, and the plan - which cost a model call to produce - would have to be
+        // asked for again, coming back with different steps under different ids.
+        await CheckpointAsync();
 
         // Set when a limit stops the run, so the terminal event can say which one rather than
         // reporting a pile of skipped steps with no explanation for them.
@@ -749,6 +982,11 @@ public sealed class Orchestrator : IOrchestrator
                                 $"[{(abNo > 0 ? abNo : 0)}/{total}] {abandoned.Title} — skipped ({spent})",
                                 WorkEventPayload.StepPayload(abNo > 0 ? abNo : null, StepOutcomeKind.Skipped)));
                         }
+
+                        // The limit is the run's own decision, not an interruption, so the
+                        // checkpoint records those steps as Skipped. If the process then dies, a
+                        // resume does not quietly do work a limit had already refused.
+                        await CheckpointAsync();
                     }
 
                     foreach (var ready in scheduler.NextReadyBatch(maxParallel - inFlight.Count))
@@ -813,8 +1051,59 @@ public sealed class Orchestrator : IOrchestrator
             }
         }
 
+        // This run reached an end, whatever kind of end. Nothing here is resumable any more, and a
+        // checkpoint left behind would offer to redo work that is finished.
+        await ForgetCheckpointAsync();
+
         yield return Terminal(runOutcome, runReason);
     }
+
+    /// <summary>The plan a checkpoint is carrying, rebuilt with the step ids it was written with.</summary>
+    private static PlanResult PlanOf(RunCheckpoint checkpoint)
+    {
+        var steps = checkpoint.Steps
+            .Select(s => new PlanStep(
+                s.Id, s.Title, CheckpointNames.StatusOf(s.Status), s.DependsOn,
+                Enum.TryParse<StepComplexity>(s.Complexity, ignoreCase: true, out var c)
+                    ? c
+                    : StepComplexity.Normal))
+            .ToArray();
+
+        // Understood rather than Unreadable: this plan was read successfully once, by the run that
+        // is being resumed. Zero tokens because no model was asked anything - the run inherits what
+        // the interrupted one already paid for, and charging it twice for one plan would be wrong in
+        // the direction that costs money.
+        return new PlanResult(
+            IntentDisposition.Task, checkpoint.Title, new Plan(Guid.NewGuid(), steps),
+            PromptTokens: 0, CompletionTokens: 0, Readout: PlanReadout.Understood);
+    }
+
+    /// <summary>What each step's status was when the checkpoint was written.</summary>
+    private static IReadOnlyDictionary<Guid, StepStatus> StatusesOf(RunCheckpoint checkpoint)
+    {
+        var statuses = new Dictionary<Guid, StepStatus>();
+        foreach (var step in checkpoint.Steps)
+            statuses[step.Id] = CheckpointNames.StatusOf(step.Status);
+        return statuses;
+    }
+
+    /// <summary>
+    /// A file an earlier attempt produced, as this run will report it. A FRESH id and a plain kind:
+    /// the checkpoint kept the path, which is the part that is true about the workspace, and minting
+    /// a handle here is honest precisely because it is not pretending to be the old one.
+    /// </summary>
+    private static ArtifactRef RestoredArtifact(string relativePath)
+        => new(Guid.NewGuid(), ArtifactKind.FileSet, relativePath, relativePath);
+
+    /// <summary>How a finished step is named on its card.</summary>
+    private static string Word(StepOutcomeKind kind) => kind switch
+    {
+        StepOutcomeKind.Succeeded => "done",
+        StepOutcomeKind.ReviewRejected => "review rejected",
+        StepOutcomeKind.Incomplete => "incomplete",
+        StepOutcomeKind.Skipped => "skipped",
+        _ => "failed"
+    };
 
     /// <summary>
     /// The run's outcome from its steps'. Anything that went wrong outranks anything that went

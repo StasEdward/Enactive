@@ -262,6 +262,35 @@
                             Command="{Binding Runs.RefreshCommand}" />
                 </Grid>
 
+                <!-- Runs nobody knows the end of: the process they were in went away before they
+                     finished. Above the history rather than in it, because this is not a record of
+                     something that happened - it is an offer to carry on - and a killed run usually
+                     wrote no record at all. Nothing shows when there are none, which is normally. -->
+                <StackPanel DockPanel.Dock="Top" Margin="12,0,12,8"
+                            IsVisible="{Binding Runs.HasResumable}">
+                    <TextBlock Classes="panelHeader" Text="UNFINISHED" Margin="0,0,0,6" />
+                    <ItemsControl ItemsSource="{Binding Runs.Resumable}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:ResumableRunViewModel">
+                                <Border Classes="card" BorderBrush="{Binding StatusBrush}"
+                                        ToolTip.Tip="{Binding Tooltip}">
+                                    <Grid ColumnDefinitions="*,Auto">
+                                        <StackPanel>
+                                            <TextBlock Classes="cardTitle" Text="{Binding Title}"
+                                                       TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Classes="cardMeta" Text="{Binding Meta}"
+                                                       TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
+                                        </StackPanel>
+                                        <Button Grid.Column="1" Content="Resume" FontSize="11" Padding="8,1"
+                                                VerticalAlignment="Center" Margin="6,0,0,0"
+                                                Command="{Binding ResumeCommand}" />
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+
                 <TextBlock DockPanel.Dock="Bottom" Classes="hint" Margin="12,6,12,0"
                            Text="{Binding Runs.Status}" />
 

@@ -124,15 +124,36 @@ Use **Stop** to request cancellation of a foreground run. Cancellation does not 
 | Retry | The previous resolved specification, or original request for a manual task | Current files, provider configuration, model behavior, and runtime composition |
 | Run again | Today's template resolved with the old parameter answers and current workspace policy | Updated goal, restrictions, checks, limits, and template version |
 
-Both actions create a new attempt under the same task identity. Neither resumes execution at the last successful step.
+Both actions create a new attempt under the same task identity. Neither resumes execution at the last successful step — for that, see Resume below.
 
 Retry is not a bit-for-bit replay: the frozen template specification does not freeze provider settings or workspace contents. It reuses the stored permission policy, so inspect the old specification when your policy expectations have changed.
 
 If Run again encounters a new required parameter or a now-invalid value, it reports the problem and directs you to fill the template form again. Deleting a template does not erase previous run snapshots.
 
+## Resume an interrupted run
+
+A run whose process went away before it finished — the app was closed, the machine restarted, a build agent was reclaimed — appears under **UNFINISHED** above the run history, with the request, when it stopped, and how many of its steps were done. Pressing **Resume** runs the steps that are left. The console equivalent is `--resume [<run id>]`, which picks up the most recently interrupted run in the workspace when no id is given.
+
+What Resume is, precisely:
+
+- It carries on **from the last completed step**, not from where the run was in the middle of one. A step that was in progress when the process went away is **done again from its beginning**. The files that step had already written are still in the workspace, so it starts again in a folder it has already changed.
+- It does **not** re-plan. The plan, the steps that finished, what they concluded and the files they produced all come back.
+- It runs under the **permissions and role the interrupted run started with**, not whatever the sliders are set to now.
+- It is recorded as a **new attempt under the same task**, so the history shows two rows for one piece of work.
+- A run stopped at an approval will **ask again** when it is resumed. Approvals are not queued while the app is closed.
+
+What is never offered:
+
+- A run that reached an end — completed, failed or cancelled — is not resumable. It ran to a conclusion. Use Retry or Run again instead.
+- A run with **Stage changes** on is never checkpointed, so it cannot be resumed. Staged proposals are held in memory, and resuming would apply later steps on top of earlier ones that were never written.
+- A quick action has no step boundary inside it and leaves nothing to resume.
+
+Checkpoints live in `<workspace>/.enactive/checkpoints`, one file per run, and are deleted when a run reaches its end. They stay on the machine the run was interrupted on even when the run history is in MySQL — a half-changed folder is not portable.
+
 ## Implementation references
 
 - [Launch, approvals, staging, and replay actions](../src/Enactive.App.Ui/MainWindow.axaml.cs)
+- [Checkpoint and resume](../src/Enactive.Core/Checkpoints.cs)
 - [Template launch form](../src/Enactive.App.Ui/ViewModels/TemplatesViewModel.cs)
 - [Approval persistence](../src/Enactive.App.Ui/ApprovalStore.cs)
 - [Permission engine](../src/Enactive.Agents/PermissionEngine.cs)

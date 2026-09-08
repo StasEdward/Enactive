@@ -204,11 +204,50 @@ IDecisionHandler decisionHandler = spec is null
     ? new ConsoleDecisionHandler()
     : new UnattendedDecisionHandler();
 
+var checkpointStore = new JsonCheckpointStore(workspace);
+
+// ── Resume ───────────────────────────────────────────────────────────────────
+//   Enactive.App.Console --resume [<run id>] --workspace c:\repos\Enactive
+//
+// A scheduled job that was killed - a machine restart, a build agent reclaimed mid-run - leaves a
+// checkpoint. Without a way to pick it up from a command line the feature would exist only for
+// somebody sitting in front of the window, which is the opposite of who needs it.
+RunCheckpoint? resumeFrom = null;
+if (args.Contains("--resume", StringComparer.OrdinalIgnoreCase))
+{
+    var wanted = Option("--resume");
+    var open = (await checkpointStore.LoadAllAsync(CancellationToken.None))
+        .Where(c => c.IsResumable)
+        .ToArray();
+
+    resumeFrom = Guid.TryParse(wanted, out var wantedId)
+        ? open.FirstOrDefault(c => c.RunId == wantedId)
+        // Newest first out of the store, so this is the one that stopped most recently.
+        : open.FirstOrDefault();
+
+    if (resumeFrom is null)
+    {
+        // Not an error: "there is nothing unfinished here" is the answer, and a scheduler that runs
+        // this after every reboot should see 0 rather than a failure most of the time.
+        Console.WriteLine(open.Length == 0
+            ? $"Nothing unfinished in {workspace.RootPath}."
+            : $"No unfinished run with id '{wanted}' in {workspace.RootPath}.");
+        return 0;
+    }
+
+    command = resumeFrom.Request;
+    Console.WriteLine(
+        $"Resuming a run stopped on {resumeFrom.At.ToLocalTime():yyyy-MM-dd HH:mm}: "
+        + $"{resumeFrom.Finished} of {resumeFrom.Steps.Count} step(s) were done.");
+}
+
 var orchestrator = new Orchestrator(
     providerFactory, modelResolver, workerProvider, toolRegistry,
     artifactStore, workspace, planner, permissionEngine, decisionHandler,
     spec?.Permissions ?? permissionPolicy, new EmptyServiceProvider(),
-    successCriteria: spec?.SuccessCriteria, limits: spec?.Limits);
+    successCriteria: spec?.SuccessCriteria, limits: spec?.Limits,
+    checkpoints: checkpointStore,
+    settings: resumeFrom?.Settings);
 var runRecorder = new RunRecorder(runStore, memoryStore, workspace.Id, spec: spec?.Snapshot());
 
 // ── Run ──────────────────────────────────────────────────────────────────────
@@ -235,7 +274,13 @@ var streaming = false;
 RunOutcomeKind? outcome = null;
 try
 {
-    await foreach (var ev in runRecorder.RecordAsync(orchestrator.SubmitIntentAsync(intent, cts.Token).TeeToLog(logHub, cts.Token), cts.Token))
+    var runStream = resumeFrom is null
+        ? orchestrator.SubmitIntentAsync(intent, cts.Token)
+        // A fresh context on purpose: what is on this machine is a fact about now, not about the
+        // run that stopped.
+        : orchestrator.ResumeRunAsync(resumeFrom, workContext, cts.Token);
+
+    await foreach (var ev in runRecorder.RecordAsync(runStream.TeeToLog(logHub, cts.Token), cts.Token))
     {
         // Assistant text arrives token by token — print it inline as a live stream.
         if (ev.Kind == EventKind.AssistantDelta)
@@ -302,8 +347,9 @@ Console.WriteLine(new string('-', 72));
 // Found by header and then read whole: the report needs every event of THIS run, and none of any
 // other. Reading them all to pick one was how a workspace with a long history paid for its history
 // on every headless invocation.
+var reportTaskId = resumeFrom?.TaskId ?? intent.Id;
 var latest = (await runStore.LoadSummariesAsync(CancellationToken.None))
-    .Where(r => r.TaskId == intent.Id)
+    .Where(r => r.TaskId == reportTaskId)
     .OrderByDescending(r => r.StartedAt)
     .FirstOrDefault();
 

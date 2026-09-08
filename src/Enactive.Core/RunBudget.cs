@@ -26,15 +26,31 @@ public sealed class RunBudget
     private int _steps;
     private long _tokens;
 
+    /// <param name="stepsAlreadyRun">
+    /// Steps a previous, interrupted attempt at this work already dispatched. Carried across a
+    /// resume so a run cannot escape its step limit by being interrupted and picked up again.
+    /// </param>
+    /// <param name="tokensAlreadySpent">
+    /// Tokens that attempt already spent. Carried for the same reason - and because they were
+    /// genuinely paid for.
+    /// </param>
     public RunBudget(
         ExecutionLimits? limits,
         DateTimeOffset startedAt,
-        Func<DateTimeOffset>? now = null)
+        Func<DateTimeOffset>? now = null,
+        int stepsAlreadyRun = 0,
+        long tokensAlreadySpent = 0)
     {
         _limits = limits ?? ExecutionLimits.None;
+        // For a RESUMED run this is when the resume started, not when the original attempt did.
+        // Steps and tokens carry across; elapsed TIME does not, because nothing was running while
+        // the app was closed. Counting a night's sleep against a duration limit would mean a run
+        // interrupted in the evening can never be resumed, which is not a limit anybody set.
         _startedAt = startedAt;
         // Injectable so the duration limit can be tested without waiting for it.
         _now = now ?? (() => DateTimeOffset.UtcNow);
+        _steps = stepsAlreadyRun;
+        _tokens = tokensAlreadySpent;
     }
 
     /// <summary>A run with nothing to spend against - the behaviour before limits existed.</summary>

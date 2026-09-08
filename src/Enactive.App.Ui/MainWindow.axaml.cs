@@ -137,6 +137,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         _vm.Runs.RefreshRequested += () => _ = LoadRunsAsync();
         _vm.Runs.OpenRequested += summary => _ = OpenPastRunAsync(summary);
         _vm.Runs.DeleteRequested += summary => _ = DeleteRunAsync(summary);
+        _vm.Runs.ResumeRequested += checkpoint => _ = RunAsync(background: false, resume: checkpoint);
         _vm.WorkspacePathChanged += RefreshWorkspaces;
         _vm.WorkspaceSwitchRequested += SwitchWorkspace;
         _vm.WorkspaceRenameRequested += path => _ = RenameWorkspaceAsync(path);
@@ -336,12 +337,20 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     /// the command bar. Retry and Run again pass the original, which is what makes them ATTEMPTS
     /// rather than unrelated runs that happen to ask the same thing.
     /// </param>
-    private async Task RunAsync(bool background, ResolvedTaskSpec? spec = null, Guid? taskId = null)
+    /// <param name="resume">
+    /// An interrupted run to carry on from, or null to start fresh. When it is set the run uses the
+    /// PERMISSIONS AND ROLE the checkpoint recorded rather than the ones the sliders are on now:
+    /// continuing a run under permissions it did not have is not continuing it.
+    /// </param>
+    private async Task RunAsync(
+        bool background, ResolvedTaskSpec? spec = null, Guid? taskId = null, RunCheckpoint? resume = null)
     {
         if (_pendingDecision is not null)
             return;
 
-        var text = spec?.Goal.Trim() ?? _vm.InputText.Trim();
+        // A resumed run's request comes from the checkpoint. The command bar is empty by then - the
+        // interrupted run cleared it when it started, possibly days ago in another process.
+        var text = spec?.Goal.Trim() ?? resume?.Request.Trim() ?? _vm.InputText.Trim();
         if (string.IsNullOrEmpty(text))
             return;
 
@@ -404,7 +413,9 @@ public sealed partial class MainWindow : Window, IDecisionHandler
 
         _cts = new CancellationTokenSource();
 
-        var runSettings = CurrentRunSettings();
+        // What this run is allowed to do. A resumed run keeps what the interrupted one recorded, so
+        // the history of the second half says what actually governed it.
+        var runSettings = resume?.Settings ?? CurrentRunSettings();
 
         var fullPath = Path.GetFullPath(workspacePath);
         _currentWorkspaceRoot = fullPath;
@@ -420,10 +431,17 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         // A template's permissions are already the INTERSECTION of its own ceiling and the
         // workspace's tier - TemplateResolution.Narrow did that when the specification was resolved,
         // and a ceiling has no way to widen anything. So this is never more than the slider allows.
-        var policy = spec?.Permissions ?? PolicyFor(_vm.AutonomyTier);
+        // A resumed run continues under the autonomy it was started with. The slider will have moved
+        // by now - it is a control, not a record - and a run that finishes its remaining steps under
+        // permissions nobody granted it is not the run somebody asked to resume.
+        var policy = spec?.Permissions
+            ?? (resume?.Settings is { } was ? PolicyFor(was.Autonomy) : PolicyFor(_vm.AutonomyTier));
 
         IArtifactStore artifactStore;
-        if (_vm.StageChanges)
+        // A resumed run never stages, whatever the toggle says. Its earlier steps wrote straight to
+        // disk - that is the only kind of run that is ever checkpointed - so staging the rest would
+        // put half of one piece of work behind a review gate and leave the other half applied.
+        if (_vm.StageChanges && resume is null)
         {
             var staging = new StagingArtifactStore(fullPath);
             _staging = staging;
@@ -461,7 +479,11 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                 reviewContent: _settings.ReviewContent,
                 revertRejectedSteps: _settings.RevertRejectedSteps,
                 successCriteria: spec?.SuccessCriteria,
-                limits: spec?.Limits);
+                limits: spec?.Limits,
+                // Where this run leaves itself if the app closes before it finishes. The store
+                // itself refuses to record a staged run, so nothing here has to remember to.
+                checkpoints: new JsonCheckpointStore(workspace),
+                settings: runSettings);
             // The specification is recorded WITH the run, so reading it back later shows the template
             // as it was rather than as it has since been edited.
             var recorder = new RunRecorder(
@@ -480,9 +502,13 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             var envLine = context.Environment?.OneLine();
             Dispatcher.UIThread.Post(() => _vm.EnvironmentSummary = envLine ?? "(no environment data)");
 
+            var stream = resume is null
+                ? orchestrator.SubmitIntentAsync(intent, _cts.Token)
+                : orchestrator.ResumeRunAsync(resume, context, _cts.Token);
+
             await Task.Run(async () =>
             {
-                await foreach (var ev in recorder.RecordAsync(orchestrator.SubmitIntentAsync(intent, _cts.Token).TeeToLog(_log, _cts.Token), _cts.Token))
+                await foreach (var ev in recorder.RecordAsync(stream.TeeToLog(_log, _cts.Token), _cts.Token))
                     RenderEvent(ev);
             });
         }
@@ -1599,12 +1625,27 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         if (string.IsNullOrEmpty(path))
         {
             _vm.Runs.Show(Array.Empty<RunSummary>());
+            _vm.Runs.ShowResumable(Array.Empty<RunCheckpoint>());
             return;
+        }
+
+        var workspace = WorkspaceFrom(path);
+
+        // Interrupted runs first, and in their own try: a checkpoint folder that cannot be read must
+        // not cost the history list, which is the thing somebody opened this column for.
+        try
+        {
+            _vm.Runs.ShowResumable(
+                await new JsonCheckpointStore(workspace).LoadAllAsync(CancellationToken.None));
+        }
+        catch (Exception)
+        {
+            _vm.Runs.ShowResumable(Array.Empty<RunCheckpoint>());
         }
 
         try
         {
-            var store = RunStoreFactory.Create(WorkspaceFrom(path));
+            var store = RunStoreFactory.Create(workspace);
             var records = await store.LoadSummariesAsync(CancellationToken.None);
             _vm.Runs.Show(records);
         }

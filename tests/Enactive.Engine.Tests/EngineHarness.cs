@@ -344,13 +344,16 @@ public sealed class EngineFixture : IDisposable
         ExecutionLimits? limits = null,
         int maxParallelSteps = 1,
         IDecisionHandler? decisions = null,
-        int successRetries = 0)
+        int successRetries = 0,
+        IRunCheckpointStore? checkpoints = null,
+        RunSettings? settings = null)
         => Build(
             reviewProvider is null
                 ? new SingleProviderFactory(provider)
                 : new MapProviderFactory(provider, (Verdicts.ProviderId, reviewProvider)),
             worker, policy, artifacts, allowImplicitToolCalls, router, reviewRetries, reviewContent,
-            revertRejectedSteps, successCriteria, limits, maxParallelSteps, successRetries, decisions);
+            revertRejectedSteps, successCriteria, limits, maxParallelSteps, successRetries, decisions,
+            checkpoints, settings);
 
     public Orchestrator Build(
         IChatProviderFactory providers,
@@ -374,7 +377,11 @@ public sealed class EngineFixture : IDisposable
         int successRetries = 0,
         // Supplied only when a test needs to watch the handler itself — the approval gate can only
         // be checked from inside the thing the gate protects.
-        IDecisionHandler? decisions = null)
+        IDecisionHandler? decisions = null,
+        // Null by default: an orchestrator with no checkpoint store writes none, which is what every
+        // test written before resume existed expects.
+        IRunCheckpointStore? checkpoints = null,
+        RunSettings? settings = null)
     {
         // The set a host registers, not a convenient subset: a role's allowlist can only be
         // exercised against the tools that actually exist, and git/docker were missing here while
@@ -401,7 +408,9 @@ public sealed class EngineFixture : IDisposable
             successCriteria: successCriteria,
             limits: limits,
             maxParallelSteps: maxParallelSteps,
-            successRetries: successRetries);
+            successRetries: successRetries,
+            checkpoints: checkpoints,
+            settings: settings);
     }
 
     /// <summary>Runs one intent to completion and returns every event it produced.</summary>
@@ -434,6 +443,23 @@ public sealed class EngineFixture : IDisposable
             stream = new RunRecorder(new NowhereRunStore(), memory, Workspace.Id).RecordAsync(stream, cts.Token);
 
         await foreach (var ev in stream)
+            events.Add(ev);
+        return events;
+    }
+
+    /// <summary>
+    /// Picks a checkpoint up, the way a host does: a FRESH context, because what is on the machine
+    /// and what the project has decided are facts about now rather than about the run that stopped.
+    /// </summary>
+    public async Task<List<WorkEvent>> ResumeAsync(Orchestrator orchestrator, RunCheckpoint checkpoint)
+    {
+        var context = new WorkContext(
+            Workspace.Id, Workspace.Name, null, null, null,
+            Array.Empty<string>(), Array.Empty<string>());
+
+        var events = new List<WorkEvent>();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        await foreach (var ev in orchestrator.ResumeRunAsync(checkpoint, context, cts.Token))
             events.Add(ev);
         return events;
     }
