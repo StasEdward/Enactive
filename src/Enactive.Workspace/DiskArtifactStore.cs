@@ -77,6 +77,30 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
     private long _sequence;
 
     /// <summary>
+    /// One lock per FILE, held across the whole of a write: back up what is there, replace it, and
+    /// journal what happened. Two parallel steps writing one path used to race, and the race had two
+    /// outcomes, both bad.
+    ///
+    /// <para>The visible one: <see cref="AtomicWrite"/> builds the new content beside the target and
+    /// moves it into place, and on Windows two moves onto one path collide - the loser got "Access
+    /// to the path is denied", a Win32 message no model can act on, and its step was marked
+    /// Incomplete for a collision the engine itself had caused.</para>
+    ///
+    /// <para>The one that would have been worse: the sequence number was taken AFTER the write,
+    /// under a different lock than the write. Two writers could therefore land on disk in one order
+    /// and be journalled in the other - and every revert decision, including whose write came after
+    /// whose, is read off that order. A journal that disagrees with the disk is not a journal.</para>
+    ///
+    /// <para>Keyed by <see cref="WorkspaceGuard.KeyFor"/>, so the two spellings of one path take the
+    /// same lock - the same reason the journal is keyed that way.</para>
+    /// </summary>
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _fileGates =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    private SemaphoreSlim GateFor(string key)
+        => _fileGates.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
+
+    /// <summary>
     /// A write nobody claimed — made straight through the store rather than through a step's scope.
     /// It belongs to no owner, so no revert will ever roll it back, and it makes every owner's
     /// revert treat it as somebody else's work. That is the safe reading of "we do not know".
@@ -201,27 +225,37 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
         int owner, CancellationToken ct)
     {
         var fullPath = ResolveInsideRoot(relativePath);
-
-        var existed = File.Exists(fullPath);
-        var beforeHash = existed ? FileHash.OfFile(fullPath) : null;
-        var backupPath = existed ? BackUp(fullPath) : null;
-
-        var directory = Path.GetDirectoryName(fullPath);
-        if (!string.IsNullOrEmpty(directory))
-            Directory.CreateDirectory(directory);
-
-        // Built somewhere else and moved into place. Opening the target itself with FileMode.Create
-        // emptied it before the first byte arrived, so a provider that threw halfway — or a
-        // cancellation, or a full disk — replaced the user's file with a fragment, and nothing was
-        // journalled because the entry was only added on success. An exception now propagates with
-        // the file exactly as it was.
-        await AtomicWrite.Replace(fullPath, write);
-
-        var afterHash = FileHash.OfFile(fullPath)!;
         var key = WorkspaceGuard.KeyFor(_root, fullPath);
-        lock (_journalGate)
-            _journal.Add(new FileWriteRecord(
-                relativePath, existed, beforeHash, backupPath, afterHash, owner, ++_sequence, key));
+
+        // Everything below is one operation as far as this file is concerned - see _fileGates.
+        var gate = GateFor(key);
+        await gate.WaitAsync(ct);
+        try
+        {
+            var existed = File.Exists(fullPath);
+            var beforeHash = existed ? FileHash.OfFile(fullPath) : null;
+            var backupPath = existed ? BackUp(fullPath) : null;
+
+            var directory = Path.GetDirectoryName(fullPath);
+            if (!string.IsNullOrEmpty(directory))
+                Directory.CreateDirectory(directory);
+
+            // Built somewhere else and moved into place. Opening the target itself with
+            // FileMode.Create emptied it before the first byte arrived, so a provider that threw
+            // halfway — or a cancellation, or a full disk — replaced the user's file with a
+            // fragment, and nothing was journalled because the entry was only added on success. An
+            // exception now propagates with the file exactly as it was.
+            await AtomicWrite.Replace(fullPath, write);
+
+            var afterHash = FileHash.OfFile(fullPath)!;
+            lock (_journalGate)
+                _journal.Add(new FileWriteRecord(
+                    relativePath, existed, beforeHash, backupPath, afterHash, owner, ++_sequence, key));
+        }
+        finally
+        {
+            gate.Release();
+        }
 
         var id = Guid.NewGuid();
         _paths[id] = fullPath;
@@ -243,26 +277,35 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
     public async Task RemoveAsync(string relativePath, int owner, CancellationToken ct)
     {
         var fullPath = ResolveInsideRoot(relativePath);
-
-        if (!File.Exists(fullPath))
-            throw new FileNotFoundException($"No such file in this workspace: {relativePath}", relativePath);
-
-        var beforeHash = FileHash.OfFile(fullPath);
-        var backupPath = BackUp(fullPath);
-
-        if (backupPath is null)
-            throw new IOException(
-                $"Could not keep a copy of '{relativePath}', so removing it could not be undone. "
-                + "Nothing was deleted.");
-
         var key = WorkspaceGuard.KeyFor(_root, fullPath);
-        lock (_journalGate)
-            _journal.Add(new FileWriteRecord(
-                relativePath, ExistedBefore: true, beforeHash, backupPath, AfterHash: null, owner,
-                ++_sequence, key));
 
-        File.Delete(fullPath);
-        await Task.CompletedTask;
+        var gate = GateFor(key);
+        await gate.WaitAsync(ct);
+        try
+        {
+            if (!File.Exists(fullPath))
+                throw new FileNotFoundException(
+                    $"No such file in this workspace: {relativePath}", relativePath);
+
+            var beforeHash = FileHash.OfFile(fullPath);
+            var backupPath = BackUp(fullPath);
+
+            if (backupPath is null)
+                throw new IOException(
+                    $"Could not keep a copy of '{relativePath}', so removing it could not be undone. "
+                    + "Nothing was deleted.");
+
+            lock (_journalGate)
+                _journal.Add(new FileWriteRecord(
+                    relativePath, ExistedBefore: true, beforeHash, backupPath, AfterHash: null, owner,
+                    ++_sequence, key));
+
+            File.Delete(fullPath);
+        }
+        finally
+        {
+            gate.Release();
+        }
     }
 
     /// <summary>

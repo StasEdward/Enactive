@@ -339,13 +339,15 @@ public sealed class EngineFixture : IDisposable
         bool reviewContent = true,
         bool revertRejectedSteps = true,
         IReadOnlyList<SuccessCriterionDefinition>? successCriteria = null,
-        ExecutionLimits? limits = null)
+        ExecutionLimits? limits = null,
+        int maxParallelSteps = 1,
+        IDecisionHandler? decisions = null)
         => Build(
             reviewProvider is null
                 ? new SingleProviderFactory(provider)
                 : new MapProviderFactory(provider, (Verdicts.ProviderId, reviewProvider)),
             worker, policy, artifacts, allowImplicitToolCalls, router, reviewRetries, reviewContent,
-            revertRejectedSteps, successCriteria, limits);
+            revertRejectedSteps, successCriteria, limits, maxParallelSteps, decisions);
 
     public Orchestrator Build(
         IChatProviderFactory providers,
@@ -358,7 +360,14 @@ public sealed class EngineFixture : IDisposable
         bool reviewContent = true,
         bool revertRejectedSteps = true,
         IReadOnlyList<SuccessCriterionDefinition>? successCriteria = null,
-        ExecutionLimits? limits = null)
+        ExecutionLimits? limits = null,
+        // The parallel dispatcher had no way to be built here at all, which is the whole reason it
+        // shipped covered by nothing: every test in the suite ran the maxParallel == 1 branch
+        // because that was the only branch this harness could reach.
+        int maxParallelSteps = 1,
+        // Supplied only when a test needs to watch the handler itself — the approval gate can only
+        // be checked from inside the thing the gate protects.
+        IDecisionHandler? decisions = null)
     {
         // The set a host registers, not a convenient subset: a role's allowlist can only be
         // exercised against the tools that actually exist, and git/docker were missing here while
@@ -374,7 +383,7 @@ public sealed class EngineFixture : IDisposable
             Workspace,
             new Planner(),
             new PermissionEngine(),
-            Decisions,
+            decisions ?? Decisions,
             policy ?? PermissionPolicy.PermissiveDefault,
             new EmptyServices(),
             router: router,
@@ -383,7 +392,8 @@ public sealed class EngineFixture : IDisposable
             reviewContent: reviewContent,
             revertRejectedSteps: revertRejectedSteps,
             successCriteria: successCriteria,
-            limits: limits);
+            limits: limits,
+            maxParallelSteps: maxParallelSteps);
     }
 
     /// <summary>Runs one intent to completion and returns every event it produced.</summary>
