@@ -651,13 +651,25 @@ public sealed class Orchestrator : IOrchestrator
                     Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow,
                     EventKind.StepCompleted, summary, WorkEventPayload.StepPayload(no, kind)));
 
-            // Succeeded is the ONLY outcome that unblocks what comes after it.
+            // Succeeded is the ONLY outcome that unblocks what comes after it - and MarkDone is what
+            // does the unblocking, so it goes LAST. It used to go first, which opened two races on
+            // everything a dependent is entitled to see the moment it starts:
+            //
+            //   - the DIGEST. A dependent seeds its conversation from it, and could be dispatched
+            //     and read it before this step's line was in - losing the conclusion of the very
+            //     step it was waiting for, silently and only sometimes.
+            //   - the COMPLETION EVENT. The join's StepStarted could reach the channel ahead of this
+            //     step's StepCompleted, so a reader - the UI's step cards, a log, a test - saw a
+            //     step begin before the thing it depends on had finished.
+            //
+            // Nothing here needs to happen before the unblocking. Everything here needs to be
+            // visible to whoever the unblocking releases.
             if (outcome == StepOutcomeKind.Succeeded)
             {
-                scheduler.MarkDone(step.Id);
                 lock (digest)
                     digest.Add($"{step.Title}: {Gist(LastAssistant(convo))}");
                 EmitStepDone($"[{stepNumber}/{total}] {step.Title} — done", stepNumber, outcome);
+                scheduler.MarkDone(step.Id);
                 return;
             }
 

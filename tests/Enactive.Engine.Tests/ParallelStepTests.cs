@@ -330,6 +330,169 @@ public sealed class ParallelStepTests
         Assert.Equal(10, events.Count(e => e.Kind == EventKind.ArtifactProduced));
     }
 
+    // ── the scheduler, under something wider than a diamond ─────────────────
+
+    /// <summary>
+    /// Eight independent steps and a join, four at a time. What the two-branch tests above cannot
+    /// show: <see cref="Enactive.Agents.DagScheduler.NextReadyBatch"/> handing out work to a loop
+    /// that is topping itself up while step tasks are finishing and marking themselves Done from
+    /// other threads. Its locking was READ and never exercised.
+    /// </summary>
+    [Fact]
+    public async Task A_wide_graph_runs_four_at_a_time_and_finishes_every_step()
+    {
+        using var fixture = new EngineFixture();
+
+        var titles = Enumerable.Range(1, 8).Select(i => $"Branch {i}").ToArray();
+        var plan =
+            "{\"disposition\":\"task\",\"title\":\"Wide\",\"steps\":["
+            + string.Join(",", titles.Select(t => $"{{\"title\":\"{t}\",\"dependsOn\":[]}}"))
+            + ",{\"title\":\"Join\",\"dependsOn\":[0,1,2,3,4,5,6,7]}]}";
+
+        var provider = new ByStepChatProvider(plan);
+        foreach (var title in titles)
+        {
+            var file = title.Replace(' ', '-').ToLowerInvariant() + ".txt";
+            provider.Step(title, Writes(file, title), Turn.Says($"{title} done."));
+        }
+
+        provider.Step("Join", Writes("join.txt", "all of them"), Turn.Says("Joined."));
+
+        var events = await fixture.RunAsync(
+            fixture.Build(provider, maxParallelSteps: 4), "eight branches and a join");
+
+        Assert.Equal(RunOutcomeKind.Completed, events.Last().Outcome());
+
+        // Every step ran once, and exactly once: a scheduler handing one step to two callers is the
+        // failure this shape is for, and it would show up as a duplicate here.
+        Assert.Equal(9, StepsDone(events).Count());
+        Assert.All(StepsDone(events), e => Assert.Equal(StepOutcomeKind.Succeeded, e.StepOutcome()));
+        foreach (var title in titles)
+            Assert.Single(StepsDone(events), e => e.Summary.Contains(title));
+
+        // The cap is a cap, and it is also a floor worth having: at four it must genuinely go wide.
+        Assert.True(provider.PeakConcurrency <= 4,
+            $"{provider.PeakConcurrency} steps were in flight with MaxParallelSteps = 4");
+        Assert.True(provider.PeakConcurrency > 2,
+            $"only {provider.PeakConcurrency} overlapped; eight independent steps should fill four slots");
+    }
+
+    /// <summary>
+    /// A dependency is a dependency however wide the graph gets: the join must not START until every
+    /// branch it waits on has FINISHED. Asserted on the order of the event stream, which is the only
+    /// place that ordering is observable from outside.
+    /// </summary>
+    [Fact]
+    public async Task A_join_does_not_start_before_every_branch_it_waits_on_has_finished()
+    {
+        using var fixture = new EngineFixture();
+
+        var titles = Enumerable.Range(1, 6).Select(i => $"Branch {i}").ToArray();
+        var plan =
+            "{\"disposition\":\"task\",\"title\":\"Wide\",\"steps\":["
+            + string.Join(",", titles.Select(t => $"{{\"title\":\"{t}\",\"dependsOn\":[]}}"))
+            + ",{\"title\":\"Join\",\"dependsOn\":[0,1,2,3,4,5]}]}";
+
+        var provider = new ByStepChatProvider(plan);
+        foreach (var title in titles)
+            provider.Step(title, Turn.Says($"{title} done."));
+        provider.Step("Join", Turn.Says("Joined."));
+
+        var events = await fixture.RunAsync(
+            fixture.Build(provider, maxParallelSteps: 3), "six branches and a join");
+
+        var joinStarted = events.FindIndex(
+            e => e.Kind == EventKind.StepStarted && e.Summary.Contains("Join"));
+        Assert.True(joinStarted >= 0, "the join never started");
+
+        foreach (var title in titles)
+        {
+            var finished = events.FindIndex(
+                e => e.Kind == EventKind.StepCompleted && e.Summary.Contains(title));
+
+            Assert.True(finished >= 0, $"{title} never finished");
+            Assert.True(
+                finished < joinStarted,
+                $"the join started before {title} had finished");
+        }
+    }
+
+    /// <summary>
+    /// The join is seeded from the digest, so by the time it starts, EVERY branch it waited on must
+    /// already be in there. Six branches at three at a time: the step that unblocks the join used to
+    /// mark itself Done BEFORE adding its own line, so the join could be dispatched and read the
+    /// digest in the window between — losing the conclusion of the very step it was waiting for,
+    /// silently and only sometimes.
+    /// </summary>
+    [Fact]
+    public async Task A_join_sees_every_branchs_conclusion_and_not_a_window_short_of_one()
+    {
+        using var fixture = new EngineFixture();
+
+        var titles = Enumerable.Range(1, 6).Select(i => $"Branch {i}").ToArray();
+        var plan =
+            "{\"disposition\":\"task\",\"title\":\"Wide\",\"steps\":["
+            + string.Join(",", titles.Select(t => $"{{\"title\":\"{t}\",\"dependsOn\":[]}}"))
+            + ",{\"title\":\"Join\",\"dependsOn\":[0,1,2,3,4,5]}]}";
+
+        var provider = new ByStepChatProvider(plan);
+        foreach (var title in titles)
+            provider.Step(title, Turn.Says($"CONCLUSION OF {title}."));
+        provider.Step("Join", Turn.Says("Joined."));
+
+        await fixture.RunAsync(
+            fixture.Build(provider, maxParallelSteps: 3), "six branches and a join");
+
+        var join = provider.RequestsFor("Join").First();
+        var whole = string.Join("\n", join.Messages.Select(m => m.Content ?? ""));
+
+        foreach (var title in titles)
+            Assert.Contains($"CONCLUSION OF {title}", whole);
+    }
+
+    /// <summary>
+    /// One branch of eight fails, and the join waits on all of them. The cascade has to reach the
+    /// join while five other branches are still in flight — the case where MarkFailed walks the
+    /// graph from one thread while NextReadyBatch is handing out steps on another.
+    /// </summary>
+    [Fact]
+    public async Task One_failure_among_many_still_skips_the_join_and_spares_the_rest()
+    {
+        using var fixture = new EngineFixture();
+
+        var titles = Enumerable.Range(1, 8).Select(i => $"Branch {i}").ToArray();
+        var plan =
+            "{\"disposition\":\"task\",\"title\":\"Wide\",\"steps\":["
+            + string.Join(",", titles.Select(t => $"{{\"title\":\"{t}\",\"dependsOn\":[]}}"))
+            + ",{\"title\":\"Join\",\"dependsOn\":[0,1,2,3,4,5,6,7]}]}";
+
+        var provider = new ByStepChatProvider(plan);
+        foreach (var title in titles)
+            provider.Step(title,
+                title == "Branch 5"
+                    ? Turn.Calls1("read_file", """{"path":"nowhere.txt"}""", "miss")
+                    : Writes(title.Replace(' ', '-').ToLowerInvariant() + ".txt", title),
+                Turn.Says($"{title} done."));
+
+        provider.Step("Join", Turn.Says("Joined."));
+
+        var events = await fixture.RunAsync(
+            fixture.Build(provider, maxParallelSteps: 4), "eight branches, one of them broken");
+
+        var join = Assert.Single(StepsDone(events), e => e.Summary.Contains("Join"));
+        Assert.Equal(StepOutcomeKind.Skipped, join.StepOutcome());
+
+        // The seven that were fine are still fine — a cascade must not take siblings with it.
+        foreach (var title in titles.Where(t => t != "Branch 5"))
+        {
+            var branch = Assert.Single(StepsDone(events), e => e.Summary.Contains(title));
+            Assert.Equal(StepOutcomeKind.Succeeded, branch.StepOutcome());
+            Assert.True(fixture.Exists(title.Replace(' ', '-').ToLowerInvariant() + ".txt"));
+        }
+
+        Assert.Equal(RunOutcomeKind.Incomplete, events.Last().Outcome());
+    }
+
     // ── N1, in the configuration it exists for ──────────────────────────────
 
     /// <summary>
