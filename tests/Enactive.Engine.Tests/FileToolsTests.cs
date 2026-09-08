@@ -716,7 +716,7 @@ public sealed class FileToolsTests
     [InlineData("a\r\nb\r\n", "", null)]            // a deletion has nothing to retype
     [InlineData("no newlines here", "a\nb", null)]  // a file with no CRLF is treated as LF
     public void The_rule_itself(string file, string passage, string? expected)
-        => Assert.Equal(expected, EditFileTool.RetypedForFile(file, passage));
+        => Assert.Equal(expected, LineEndings.RetypedFor(file, passage));
 
     private static int CountCrLf(string text)
     {

@@ -302,6 +302,10 @@ public sealed class Orchestrator : IOrchestrator
                     // is the only thing that can undo those writes - see IArtifactScope.
                     var store = _artifacts.BeginStep();
 
+                    // What this run has READ, so a whole-file write of a file it saw only part of
+                    // can be refused - see ReadLedger.
+                    var reads = new ReadLedger();
+
                     // What this run actually DID, written down as it happens. The reviewer's
                     // evidence used to be read back out of the conversation, which is the model's
                     // working memory and gets shortened when the window fills.
@@ -335,7 +339,7 @@ public sealed class Orchestrator : IOrchestrator
                         {
                             await foreach (var ev in RunToolLoopAsync(
                                 taskId, runId, activeProvider, activeRef.Model, worker, messages, artifacts,
-                                intent.Context, store, journal, null, quickResult, budget, ct, activeRef.ProviderId))
+                                intent.Context, store, journal, reads, null, quickResult, budget, ct, activeRef.ProviderId))
                                 quick.Writer.TryWrite(ev);
                         }
                         catch (Exception ex) when (ex is not OperationCanceledException
@@ -542,6 +546,7 @@ public sealed class Orchestrator : IOrchestrator
 
             // This step's own record of what it did - see the note on the quick-action path.
             var journal = new ExecutionJournal();
+            var reads = new ReadLedger();
             var conversationStart = convo.Count;
 
             // One switch to the fallback model per step — see the catch below.
@@ -557,7 +562,7 @@ public sealed class Orchestrator : IOrchestrator
                 {
                     await foreach (var ev in RunToolLoopAsync(
                         taskId, runId, stepProvider, stepModel, worker, convo, artifacts,
-                        intent.Context, store, journal, stepNumber, stepResult, budget, ct, stepRef.ProviderId))
+                        intent.Context, store, journal, reads, stepNumber, stepResult, budget, ct, stepRef.ProviderId))
                         events.Writer.TryWrite(ev);
 
                     outcome = stepResult.Kind;
@@ -1304,7 +1309,7 @@ public sealed class Orchestrator : IOrchestrator
 
             await foreach (var repairEvent in RunToolLoopAsync(
                 taskId, runId, provider, model, worker, messages, artifacts,
-                intent.Context, store, journal, null, loop, budget, ct, providerId))
+                intent.Context, store, journal, new ReadLedger(), null, loop, budget, ct, providerId))
                 yield return repairEvent;
 
             report = await InScopeAsync(runId, taskId, null,
@@ -1431,6 +1436,9 @@ public sealed class Orchestrator : IOrchestrator
         // What this step actually did, recorded as it happens rather than read back out of the
         // conversation afterwards.
         ExecutionJournal journal,
+        // What this step has READ, so a whole-file write of a file it saw only part of can be
+        // refused. Per step, like the journal above and for the same reason.
+        ReadLedger reads,
         int? stepNo, ToolLoopResult loopResult,
         // The run's budget. The loop reports its own tokens, so this is where execution spending is
         // counted; it is never CHECKED in here - see RunBudget on why limits bite between steps.
@@ -1770,6 +1778,21 @@ public sealed class Orchestrator : IOrchestrator
                     continue;
                 }
 
+                // ── Read gate: has this step actually SEEN what it is replacing? ──
+                //
+                // Before permission, because it is not about what the agent may do - it is about
+                // what this write would silently destroy. See ReadLedger.
+                if (reads.Refuse(call, ReadLedger.FileNamedBy(call)) is { } unread)
+                {
+                    openFailures.Failed(call, unread);
+                    journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson),
+                                   ActionOutcome.Refused, unread);
+                    yield return Ev(EventKind.DecisionResolved,
+                        $"{call.Name}: refused — the file has only been read in part");
+                    messages.Add(ChatMessage.Tool(call.Id, "ERROR: " + unread));
+                    continue;
+                }
+
                 // ── Permission gate: allow / ask / deny ──────────────────────
                 var gate = _permissions.Evaluate(
                     EffectivePolicyFor(worker), call.Name, _tools.RequiredLevelOf(call.Name));
@@ -1887,6 +1910,8 @@ public sealed class Orchestrator : IOrchestrator
 
                 // The evidence, written down at the moment it exists. Nothing that shortens the
                 // prompt afterwards can take it away.
+                reads.Saw(call, result);
+
                 journal.Record(
                     stepNo, call.Name, Compact(call.ArgumentsJson),
                     result.Success ? ActionOutcome.Succeeded

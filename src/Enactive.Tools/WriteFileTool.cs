@@ -57,6 +57,10 @@ public sealed class WriteFileTool : ITool
             // existing content — that is what the next read would return.
             bool replacing;
             long previousBytes = 0;
+
+            // The text that is there now, when there is any. Needed for two things: how big it is,
+            // and which line endings it uses.
+            string? previousText = null;
             try
             {
                 // A staged proposal counts as the existing content - that is what the next read
@@ -65,6 +69,7 @@ public sealed class WriteFileTool : ITool
                 if (pending is not null)
                 {
                     replacing = true;
+                    previousText = pending;
                     previousBytes = Encoding.UTF8.GetByteCount(pending);
                 }
                 else
@@ -72,7 +77,10 @@ public sealed class WriteFileTool : ITool
                     var existing = WorkspacePaths.ResolveInside(ctx.WorkspaceRoot, path);
                     replacing = File.Exists(existing);
                     if (replacing)
+                    {
                         previousBytes = new FileInfo(existing).Length;
+                        previousText = await File.ReadAllTextAsync(existing, ct);
+                    }
                 }
             }
             catch
@@ -80,6 +88,30 @@ public sealed class WriteFileTool : ITool
                 // A path the guard refuses fails properly in CreateAsync below, with its own message.
                 replacing = false;
                 previousBytes = 0;
+                previousText = null;
+            }
+
+            // A REPLACEMENT is written in the endings the file already uses - the same rule
+            // edit_file has followed since a user found it unusable on Windows, and for the same
+            // reason: a carriage return is invisible in what read_file returns, so a model cannot
+            // send one and every whole-file rewrite of a CRLF document silently converted it. Every
+            // line then shows as changed and a repository with autocrlf churns, for an edit meant to
+            // touch one line.
+            //
+            // A NEW file keeps exactly what it was given: there are no endings to be consistent
+            // with, and the caller's choice is the only one there is.
+            //
+            // This was carried as open in FIX_PLAN §9b, pinned by a test, on the argument that
+            // write_file is also how endings get changed deliberately. That argument does not
+            // survive contact with the caller: a model cannot see a carriage return, so it cannot
+            // ask for one either - which makes every conversion here accidental, and the deliberate
+            // case indistinguishable from the accident. A shell command converts a file on purpose.
+            var endingsAdjusted = false;
+            if (replacing && previousText is not null
+                && LineEndings.RetypedFor(previousText, text) is { } retyped)
+            {
+                text = retyped;
+                endingsAdjusted = true;
             }
 
             var newBytes = Encoding.UTF8.GetByteCount(text);
@@ -113,9 +145,13 @@ public sealed class WriteFileTool : ITool
 
             return ToolResults.Ok(
                 output: replacing
-                    ? restorable
+                    ? (restorable
                         ? $"REPLACED the existing file '{path}' ({bytes} bytes). Its previous version was kept and can be restored."
-                        : $"REPLACED the existing file '{path}' ({bytes} bytes). Its previous version could NOT be backed up and is gone."
+                        : $"REPLACED the existing file '{path}' ({bytes} bytes). Its previous version could NOT be backed up and is gone.")
+                      + (endingsAdjusted
+                          ? " Written with the line endings the file already used, so only the lines "
+                          + "you actually changed show as changed."
+                          : "")
                     : $"Created new file '{path}' ({bytes} bytes).",
                 artifacts: new[] { reference },
                 metadata: new Dictionary<string, object?>

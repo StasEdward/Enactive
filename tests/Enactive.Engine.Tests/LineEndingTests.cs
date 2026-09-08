@@ -194,18 +194,23 @@ public sealed class LineEndingTests
     }
 
     /// <summary>
-    /// What write_file does NOT do, pinned so it is a decision rather than a surprise: it writes the
-    /// content it is given, exactly. Handing it LF content for a CRLF file therefore converts the
-    /// whole document — every line shows as changed in a diff, and a repository with autocrlf churns
-    /// on it, for an edit meant to touch one line.
+    /// A whole-file REWRITE is written in the endings the file already has.
     ///
-    /// <para>This is a real hazard and the reason edit_file is the tool a role is told to prefer; it
-    /// is NOT a bug in write_file, which is also how a file's endings get deliberately changed. It is
-    /// recorded here so that a change to it is a change somebody made on purpose. Docs/FIX_PLAN.md
-    /// §9b carries it as open.</para>
+    /// <para>This test used to pin the opposite, on the argument that <c>write_file</c> writes what
+    /// it is given and is also how a file's endings get changed deliberately. Its own comment said
+    /// it was recorded "so that a change to it is a change somebody made on purpose" — and on
+    /// 2026-09-08 that is what happened, because the argument does not survive contact with the
+    /// caller. A model cannot SEE a carriage return in what <c>read_file</c> returns, so it cannot
+    /// send one either: every conversion here was accidental, and the deliberate case was
+    /// indistinguishable from the accident. A shell command converts a file on purpose.</para>
+    ///
+    /// <para>The cost of the old behaviour was not theoretical: every line of the document shows as
+    /// changed in a diff and a repository with autocrlf churns on it, for an edit meant to touch one
+    /// line. <c>edit_file</c> has followed this rule since a user found it unusable on Windows; this
+    /// is the same defect one level up.</para>
     /// </summary>
     [Fact]
-    public async Task A_whole_file_rewrite_writes_exactly_what_it_was_given()
+    public async Task A_whole_file_rewrite_keeps_the_endings_the_file_already_had()
     {
         using var fx = new EngineFixture();
         fx.Write("notes.md", "alpha\nbeta\ngamma\n", Newline.Crlf);
@@ -218,6 +223,68 @@ public sealed class LineEndingTests
             }));
 
         Assert.True(result.Success, result.Error);
+        Assert.Equal("alpha\r\nbeta\r\ngamma\r\ndelta\r\n", fx.Read("notes.md"));
+
+        // And it says so, because a tool that quietly changes what it was handed is the thing this
+        // whole area is about.
+        Assert.Contains("line endings the file already used", result.Output);
+    }
+
+    /// <summary>The other direction: CRLF content into an LF file does not leave it mixed.</summary>
+    [Fact]
+    public async Task A_rewrite_of_an_LF_file_does_not_leave_it_with_carriage_returns()
+    {
+        using var fx = new EngineFixture();
+        fx.Write("notes.md", "alpha\nbeta\ngamma\n", Newline.Lf);
+
+        var result = await Call(new WriteFileTool(), fx,
+            System.Text.Json.JsonSerializer.Serialize(new
+            {
+                path = "notes.md",
+                content = "alpha\r\nbeta\r\ngamma\r\ndelta\r\n"
+            }));
+
+        Assert.True(result.Success, result.Error);
         Assert.DoesNotContain('\r', fx.Read("notes.md"));
+    }
+
+    /// <summary>
+    /// A NEW file keeps exactly what it was given. There are no endings to be consistent with, and
+    /// the caller's choice is the only one there is — the rule is about not changing a document
+    /// under somebody, not about having an opinion on line endings.
+    /// </summary>
+    [Fact]
+    public async Task A_new_file_is_written_exactly_as_it_was_given()
+    {
+        using var fx = new EngineFixture();
+
+        var result = await Call(new WriteFileTool(), fx,
+            System.Text.Json.JsonSerializer.Serialize(new
+            {
+                path = "fresh.md",
+                content = "alpha\r\nbeta\r\n"
+            }));
+
+        Assert.True(result.Success, result.Error);
+        Assert.Equal("alpha\r\nbeta\r\n", fx.Read("fresh.md"));
+        Assert.DoesNotContain("line endings", result.Output);
+    }
+
+    /// <summary>A file whose endings already match is left alone, and says nothing about it.</summary>
+    [Fact]
+    public async Task A_rewrite_that_already_matches_says_nothing_about_endings()
+    {
+        using var fx = new EngineFixture();
+        fx.Write("notes.md", "alpha\nbeta\n", Newline.Lf);
+
+        var result = await Call(new WriteFileTool(), fx,
+            System.Text.Json.JsonSerializer.Serialize(new
+            {
+                path = "notes.md",
+                content = "alpha\nbeta\ngamma\n"
+            }));
+
+        Assert.True(result.Success, result.Error);
+        Assert.DoesNotContain("line endings", result.Output);
     }
 }
