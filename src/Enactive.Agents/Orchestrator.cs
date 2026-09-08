@@ -1698,9 +1698,12 @@ public sealed class Orchestrator : IOrchestrator
     {
         try
         {
+            // Each file once. The reviewer is told which files the run changed so it can judge the
+            // report against them, and "README.md, README.md, README.md, README.md" says four
+            // things happened where one did.
             string[] changed;
             lock (artifacts)
-                changed = artifacts.Select(a => a.RelativePath).ToArray();
+                changed = FilesTouched(artifacts);
 
             // From the journal, not from the transcript. The transcript is the model's working
             // memory: once it has to be shortened to fit the window, the tool results become a stub,
@@ -2495,10 +2498,33 @@ public sealed class Orchestrator : IOrchestrator
             + "Stopping it.");
     }
 
+    /// <summary>
+    /// The FILES a run changed, each named once, in the order they were first produced.
+    ///
+    /// <para>The list holds one entry per successful write, and a step that rewrites a file until it
+    /// is right produces several. Reported 2026-09-08 19:04:
+    /// <c>(completed; 4 artifact(s): README.md, README.md, README.md, README.md)</c> — one file,
+    /// counted four times, in the line that tells a person what the run did. The timeline, the
+    /// history and the revert all work from the writes and must keep every one of them; what is
+    /// SAID about them is a different question, and saying four when there is one is the same class
+    /// of overstatement as a record that reports no events when it holds thousands.</para>
+    ///
+    /// <para>Compared as written, not resolved on disk: these paths all come from the same artifact
+    /// store, so a file that is one file is spelled one way. Case-insensitively because the
+    /// workspace this runs on usually is.</para>
+    /// </summary>
+    private static string[] FilesTouched(IEnumerable<ArtifactRef> artifacts)
+        => artifacts.Select(a => a.RelativePath)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
+
     private static string SummarizeArtifacts(List<ArtifactRef> artifacts)
-        => artifacts.Count == 0
+    {
+        var files = FilesTouched(artifacts);
+        return files.Length == 0
             ? "(completed, no files changed)"
-            : $"(completed; {artifacts.Count} artifact(s): {string.Join(", ", artifacts.Select(a => a.RelativePath))})";
+            : $"(completed; {files.Length} artifact(s): {string.Join(", ", files)})";
+    }
 
     private static string LastAssistant(List<ChatMessage> messages)
     {

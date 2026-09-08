@@ -88,4 +88,37 @@ public sealed class WriteReportingTests
 
         return events.OfKind(EventKind.ToolResult).Last().Summary;
     }
+
+    /// <summary>
+    /// A file rewritten several times is ONE file in what the run says it did.
+    ///
+    /// <para>Reported 2026-09-08 19:04. A step wrote README.md three times before its review, was
+    /// rejected for a real inconsistency, wrote it once more and passed — and the run ended
+    /// <c>(completed; 4 artifact(s): README.md, README.md, README.md, README.md)</c>. Every write is
+    /// kept, because the timeline, the history and the revert are built from them; the SENTENCE
+    /// about them is a different question, and four is not the number of files that changed.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_file_written_more_than_once_is_reported_as_one_file()
+    {
+        using var fx = new EngineFixture();
+
+        var worker = new FakeChatProvider(
+            Turn.Says("""{"disposition":"quick_action","title":"write it","steps":[]}"""),
+            Turn.Calls1("write_file", """{"path":"notes.md","content":"first"}""", "w1"),
+            Turn.Calls1("write_file", """{"path":"notes.md","content":"second"}""", "w2"),
+            Turn.Calls1("write_file", """{"path":"notes.md","content":"third"}""", "w3"))
+        {
+            WhenExhausted = Turn.Says("wrote it")
+        };
+
+        var events = await fx.RunAsync(fx.Build(worker), "write the notes");
+
+        // Every write is still an event of its own - nothing here throws work away.
+        Assert.Equal(3, events.Count(e => e.Kind == EventKind.ArtifactProduced));
+
+        var summary = events.Last().Summary;
+        Assert.Contains("1 artifact(s): notes.md", summary, StringComparison.Ordinal);
+        Assert.DoesNotContain("notes.md, notes.md", summary, StringComparison.Ordinal);
+    }
 }
