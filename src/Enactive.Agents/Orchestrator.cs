@@ -2129,9 +2129,14 @@ public sealed class Orchestrator : IOrchestrator
         if (report.Reverted.Count > 0)
             yield return "Rejected work put back: " + string.Join(", ", report.Reverted);
 
+        // The reason per path, not one sentence over all of them. "It changed after the step wrote
+        // it" was the only reason there used to be; a path can also be kept because another step
+        // wrote it afterwards, or because nothing this step did to it is on record - and telling
+        // someone the wrong reason for work left in place is worse than telling them none.
         if (report.Kept.Count > 0)
-            yield return "Left as it is because it changed after the step wrote it: "
-                       + string.Join(", ", report.Kept);
+            yield return "Left as it is: "
+                       + string.Join(", ", report.Kept.Select(
+                           path => report.WhyKept(path) is { } why ? $"{path} ({why})" : path));
     }
 
     /// <summary>

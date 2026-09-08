@@ -20,7 +20,14 @@ public sealed record FileWriteRecord(
     // never work to throw away. Recorded from the scope that performed the write, never read off a
     // shared "newest" field, because that field gave two interleaved steps the same number and let
     // one step's revert destroy the other's accepted work.
-    int Owner = -1);
+    int Owner = -1,
+    // WHEN, on a counter that only ever goes up. A scope's checkpoint is a value of this counter,
+    // so removing entries cannot move it. It used to be the journal's LENGTH when the scope opened,
+    // and "everything after the checkpoint" was Skip(that many) - which is a different set of
+    // entries the moment an earlier revert removes any. Two steps rejected in one run was enough:
+    // the first revert shortened the list, the second one skipped past its own write and silently
+    // did nothing. Positions in a mutable list are not identity.
+    long Sequence = 0);
 
 /// <summary>Why an undo could not be performed, or that it was.</summary>
 public sealed record UndoResult(bool Undone, string? Conflict = null, bool Restored = false)
@@ -55,6 +62,12 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
     private readonly List<FileWriteRecord> _journal = new();
     private readonly object _journalGate = new();
     private int _backupSequence;
+
+    /// <summary>
+    /// Stamps every journal entry, under <see cref="_journalGate"/>. Monotonic and never reused, so
+    /// a checkpoint taken from it stays meaningful however much of the journal is later removed.
+    /// </summary>
+    private long _sequence;
 
     /// <summary>
     /// A write nobody claimed — made straight through the store rather than through a step's scope.
@@ -124,8 +137,8 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
     {
         lock (_journalGate)
         {
-            _ownerPositions.Add(_journal.Count);
-            return _ownerPositions.Count - 1;
+            _ownerCheckpoints.Add(_sequence);
+            return _ownerCheckpoints.Count - 1;
         }
     }
 
@@ -145,8 +158,11 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
                 .ToArray();
     }
 
-    /// <summary>Journal position each owner was created at, indexed by owner id.</summary>
-    private readonly List<int> _ownerPositions = new();
+    /// <summary>
+    /// The value of <see cref="_sequence"/> each owner was created at, indexed by owner id. Not a
+    /// position in <see cref="_journal"/>: that moves.
+    /// </summary>
+    private readonly List<long> _ownerCheckpoints = new();
 
     /// <summary>A write made outside any step's scope. It is nobody's, and nobody can undo it.</summary>
     public Task<ArtifactRef> CreateAsync(
@@ -174,9 +190,10 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
         // the file exactly as it was.
         await AtomicWrite.Replace(fullPath, write);
 
+        var afterHash = FileHash.OfFile(fullPath)!;
         lock (_journalGate)
             _journal.Add(new FileWriteRecord(
-                relativePath, existed, beforeHash, backupPath, FileHash.OfFile(fullPath)!, owner));
+                relativePath, existed, beforeHash, backupPath, afterHash, owner, ++_sequence));
 
         var id = Guid.NewGuid();
         _paths[id] = fullPath;
@@ -209,7 +226,8 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
 
         lock (_journalGate)
             _journal.Add(new FileWriteRecord(
-                relativePath, ExistedBefore: true, beforeHash, backupPath, AfterHash: null, owner));
+                relativePath, ExistedBefore: true, beforeHash, backupPath, AfterHash: null, owner,
+                ++_sequence));
 
         File.Delete(fullPath);
         await Task.CompletedTask;
@@ -246,11 +264,21 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
     {
         var reverted = new List<string>();
         var kept = new List<string>();
+        var reasons = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
-        int position;
+        void Keep(string path, string reason)
+        {
+            kept.Add(path);
+            reasons[path] = reason;
+        }
+
+        // A value of the write counter, not a position in the journal. See FileWriteRecord.Sequence:
+        // reverting one scope removes its entries, and every position after them meant something
+        // else afterwards.
+        long checkpoint;
         lock (_journalGate)
-            position = owner >= 0 && owner < _ownerPositions.Count
-                ? _ownerPositions[owner]
+            checkpoint = owner >= 0 && owner < _ownerCheckpoints.Count
+                ? _ownerCheckpoints[owner]
                 : 0;
 
         foreach (var path in paths.Distinct(StringComparer.OrdinalIgnoreCase))
@@ -260,49 +288,59 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
             FileWriteRecord[] after;
             lock (_journalGate)
                 after = _journal
-                    .Skip(position)
-                    .Where(w => string.Equals(w.RelativePath, path, WorkspaceGuard.Comparison))
+                    .Where(w => w.Sequence > checkpoint
+                                && string.Equals(w.RelativePath, path, WorkspaceGuard.Comparison))
                     .ToArray();
 
+            // Nothing on record for a path we were ASKED about. Said out loud rather than skipped:
+            // the caller cannot see the journal, and a silent pass reads as "reverted". Reaching
+            // here means the journal disagrees with whoever supplied the path list.
             if (after.Length == 0)
+            {
+                Keep(path, "nothing this step wrote to it is on record");
                 continue;
+            }
 
             // Somebody else wrote this file AFTER we did. Their step may already have been accepted,
-            // so putting the file back would destroy approved work — the file is no longer ours to
+            // so putting the file back would destroy approved work - the file is no longer ours to
             // speak for. The hash check below cannot catch this: what is on disk matches their write
             // exactly, so it looks untouched. Report it instead.
             if (after[^1].Owner != owner)
             {
-                kept.Add(path);
+                Keep(path, "another step wrote it after this one did");
                 continue;
             }
 
-            // Only OUR entries, and the state to go back to is the one OUR FIRST write displaced —
+            // Only OUR entries, and the state to go back to is the one OUR FIRST write displaced -
             // which may well be a sibling step's accepted content rather than the original file.
             // Taking the oldest entry after the checkpoint instead would restore the state before
             // THEIR work too, undoing a step that was never rejected.
             var mine = after.Where(w => w.Owner == owner).ToArray();
             if (mine.Length == 0)
+            {
+                Keep(path, "this step made no write to it that is still on record");
                 continue;
+            }
 
             var outcome = Restore(path, mine[0], mine[^1]);
             if (!outcome.Undone)
             {
-                kept.Add(path);
+                Keep(path, outcome.Conflict ?? "it could not be put back");
                 continue;
             }
 
             reverted.Add(path);
 
             // Drop only the entries this scope made for this path; everything from before, and every
-            // other path's writes, stay exactly where they were.
+            // other path's writes, stay exactly where they were. Other scopes' checkpoints are
+            // counter values and are unaffected by this.
             lock (_journalGate)
                 _journal.RemoveAll(w =>
                     w.Owner == owner
                     && string.Equals(w.RelativePath, path, WorkspaceGuard.Comparison));
         }
 
-        return Task.FromResult(new RevertReport(reverted, kept));
+        return Task.FromResult(new RevertReport(reverted, kept, reasons));
     }
 
     /// <summary>

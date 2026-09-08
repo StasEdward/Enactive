@@ -208,13 +208,27 @@ internal sealed class UnownedScope : IArtifactScope
     public IArtifactScope BeginStep() => this;
 }
 
-/// <summary>What a revert actually managed to undo.</summary>
+/// <summary>
+/// What a revert actually managed to undo.
+///
+/// <para>Every path the revert was ASKED about is in one list or the other. It used to be possible
+/// for a path to be in neither: a lookup that found nothing to undo fell out of the loop silently,
+/// and the caller — who cannot see the journal — was told the revert had done its job. An absence is
+/// not an answer, so a path nothing was done about is <see cref="Kept"/>, with a reason.</para>
+/// </summary>
 public sealed record RevertReport(
     IReadOnlyList<string> Reverted,
-    IReadOnlyList<string> Kept)
+    IReadOnlyList<string> Kept,
+    // Why each kept path was kept, by path. Present for every entry in Kept; a caller that only
+    // wants to name the paths can keep ignoring it.
+    IReadOnlyDictionary<string, string>? Reasons = null)
 {
     public static readonly RevertReport Empty =
         new(Array.Empty<string>(), Array.Empty<string>());
 
     public bool DidSomething => Reverted.Count > 0 || Kept.Count > 0;
+
+    /// <summary>Why this path was left alone, or null when it was not kept.</summary>
+    public string? WhyKept(string path)
+        => Reasons is not null && Reasons.TryGetValue(path, out var reason) ? reason : null;
 }
