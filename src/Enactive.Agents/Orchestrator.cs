@@ -82,6 +82,12 @@ public sealed class Orchestrator : IOrchestrator
     private readonly bool? _think;
     private readonly bool _allowImplicitToolCalls;
     private readonly bool _reviewContent;
+
+    /// <summary>
+    /// Whether a step that passed review is also asked what PROVED it. Costs one more Review-model
+    /// call per step that ran anything, and only for those - see <c>ProveAsync</c>.
+    /// </summary>
+    private readonly bool _checkSoundness;
     private readonly bool _revertRejectedSteps;
     private readonly Reviewer _reviewer = new();
 
@@ -133,6 +139,7 @@ public sealed class Orchestrator : IOrchestrator
         int maxParallelSteps = 1,
         bool allowImplicitToolCalls = false,
         bool reviewContent = true,
+        bool checkSoundness = true,
         bool revertRejectedSteps = true,
         IReadOnlyList<SuccessCriterionDefinition>? successCriteria = null,
         ExecutionLimits? limits = null,
@@ -173,6 +180,11 @@ public sealed class Orchestrator : IOrchestrator
         // On by default: for a step that only writes text, execution review has nothing to check, so
         // without this a configured reviewer passes anything such a step produces.
         _reviewContent = reviewContent;
+        // On by default. The reviewer it sits behind checks whether a report is TRUE, and a report
+        // can be true in every particular while its conclusion follows from none of it; a gate that
+        // only ever asked the first question is how a step "targeting" a test that was still failing
+        // finished green.
+        _checkSoundness = checkSoundness;
         // On by default: a gate that stops the report but leaves the rejected work on disk is the
         // state a person is most likely to pick up and use.
         _revertRejectedSteps = revertRejectedSteps;
@@ -447,10 +459,40 @@ public sealed class Orchestrator : IOrchestrator
                         {
                             quick.Writer.TryWrite(Ev(EventKind.ReviewPassed,
                                 $"PASS ({mode} review){(string.IsNullOrEmpty(review.Notes) ? "" : ": " + review.Notes)}"));
-                            break;
-                        }
 
-                        quick.Writer.TryWrite(Ev(EventKind.ReviewFailed, $"FAIL ({mode} review): {review.Notes}"));
+                            // The same second question the DAG path asks, on the same grounds it is
+                            // asked there: a reviewer that only checks truth passes a true report of
+                            // an unsupported conclusion. Here for the same reason the reviewer
+                            // itself is - the planner is told to prefer QuickAction, so a gate that
+                            // skipped this path would skip most ordinary requests.
+                            var quickProof = mode == ReviewMode.Execution
+                                ? await ProveAsync(plan.Title, messages, journal, evidenceStart,
+                                                   reviewProvider!, reviewModel, ct)
+                                : null;
+
+                            if (quickProof is not { } quickProven)
+                                break;
+
+                            if (quickProven.Prompt + quickProven.Completion > 0)
+                                quick.Writer.TryWrite(UsageOutsideLoop(
+                                    WorkEventPayload.WorkPurpose.Review, reviewRef!,
+                                    quickProven.Prompt, quickProven.Completion));
+
+                            if (quickProven.Verdict.Sound)
+                            {
+                                quick.Writer.TryWrite(Ev(EventKind.ReviewPassed,
+                                    "PASS (soundness): " + quickProven.Verdict.Reason));
+                                break;
+                            }
+
+                            review = new ReviewResult(false, quickProven.Verdict.Reason);
+                            quick.Writer.TryWrite(Ev(EventKind.ReviewFailed,
+                                "FAIL (soundness): " + quickProven.Verdict.Reason));
+                        }
+                        else
+                        {
+                            quick.Writer.TryWrite(Ev(EventKind.ReviewFailed, $"FAIL ({mode} review): {review.Notes}"));
+                        }
 
                         if (attempt < maxQuickAttempts)
                         {
@@ -802,6 +844,47 @@ public sealed class Orchestrator : IOrchestrator
                 {
                     Emit(EventKind.ReviewPassed,
                         $"[{stepNumber}] PASS ({mode} review){(string.IsNullOrEmpty(review.Notes) ? "" : ": " + review.Notes)}");
+
+                    // The report is true. Whether the step's success FOLLOWS from it is a second
+                    // question, and until this it was asked by nobody. Only for an execution review:
+                    // a content step has no calls to point at, and its own reviewer already judges
+                    // the thing itself.
+                    var proof = mode == ReviewMode.Execution
+                        ? await ProveAsync(step.Title, convo, journal, evidenceStart,
+                                           reviewProvider!, reviewModel, ct)
+                        : null;
+
+                    if (proof is { } proven)
+                    {
+                        if (proven.Prompt + proven.Completion > 0)
+                            events.Writer.TryWrite(UsageOutsideLoop(
+                                WorkEventPayload.WorkPurpose.Review, reviewRef!,
+                                proven.Prompt, proven.Completion, stepNumber));
+
+                        if (!proven.Verdict.Sound)
+                        {
+                            // Treated exactly like a rejected review, including the retry: the agent
+                            // is told what its report rests on that does not hold it up, which is a
+                            // more useful thing to be told than that it was wrong about a fact.
+                            review = new ReviewResult(false, proven.Verdict.Reason);
+                            Emit(EventKind.ReviewFailed,
+                                 $"[{stepNumber}] FAIL (soundness): {proven.Verdict.Reason}");
+
+                            if (attempt < maxAttempts)
+                            {
+                                if (RetryAfterReview(convo, conversationStart, mode, review.Notes, "this step"))
+                                    evidenceStart = journal.Mark();
+                                continue;
+                            }
+
+                            outcome = StepOutcomeKind.ReviewRejected;
+                            outcomeReason = "not shown to be done: " + proven.Verdict.Reason;
+                            break;
+                        }
+
+                        Emit(EventKind.ReviewPassed, $"[{stepNumber}] PASS (soundness): {proven.Verdict.Reason}");
+                    }
+
                     outcome = StepOutcomeKind.Succeeded;
                     break;
                 }
@@ -1455,6 +1538,51 @@ public sealed class Orchestrator : IOrchestrator
         /// <summary>What it kept asking for, for the message that stops it.</summary>
         public string Describe()
             => _repeats.Count == 0 ? "no new tool calls" : string.Join("; ", _repeats);
+    }
+
+    /// <summary>
+    /// The second question, asked only of a step the reviewer has already passed: does its reported
+    /// success FOLLOW from what it did?
+    ///
+    /// <para>Skipped when the step made no calls. A step that only read, reasoned or wrote has
+    /// nothing to cite, so the answer is known before it is asked - and asking it would be paying a
+    /// Review-model call to be told what the engine can see for itself.</para>
+    ///
+    /// <para>Returns null when the check is off or does not apply. A null is "not asked", which is
+    /// not "passed" - the caller treats it as nothing to act on, and nothing here pretends the step
+    /// was proven.</para>
+    /// </summary>
+    private async Task<(ProofVerdict Verdict, int Prompt, int Completion)?> ProveAsync(
+        string title, List<ChatMessage> convo, ExecutionJournal journal, int evidenceStart,
+        IChatProvider reviewProvider, string reviewModel, CancellationToken ct)
+    {
+        if (!_checkSoundness)
+            return null;
+
+        var actions = journal.Actions.Skip(evidenceStart).ToArray();
+        if (actions.Length == 0)
+            return null;
+
+        try
+        {
+            var outcome = await _reviewer.ProveAsync(
+                title, LastAssistant(convo), journal.Describe(evidenceStart),
+                reviewProvider, reviewModel, ct);
+
+            // The claim is CHECKED, not believed: the numbers it names are resolved against the
+            // calls that were actually made, in the same order and numbering the evidence used.
+            return (ProofAudit.Check(outcome.Claim, actions), outcome.PromptTokens, outcome.CompletionTokens);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // Same rule as the reviewer beside it: a check that could not run has not approved
+            // anything. It cost a step a retry before it costs a run a false green.
+            return (new ProofVerdict(false, "soundness check error: " + ex.Message), 0, 0);
+        }
     }
 
     /// <summary>

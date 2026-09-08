@@ -3,7 +3,15 @@ namespace Enactive.Agents;
 using System.Text;
 using System.Text.Json;
 using Enactive.Core.Chat;
+using Enactive.Core.Execution;
 using Enactive.Core.Providers;
+
+/// <summary>
+/// What a proof pass answered, and what asking cost. The tokens are carried for the same reason the
+/// verdict's are: this is a second call on the Review model, and a cost that is not counted is a
+/// cost that gets attributed to nothing.
+/// </summary>
+public sealed record ProofOutcome(ProofClaim Claim, int PromptTokens = 0, int CompletionTokens = 0);
 
 /// <summary>
 /// Reviewer verdict for a step, plus what asking cost.
@@ -220,6 +228,170 @@ public sealed class Reviewer
         }
 
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// The second question, asked of a step whose report the reviewer has already found TRUE:
+    /// what in the evidence SHOWS the step's objective was met?
+    ///
+    /// <para>A different question from the first, and the one nobody was asking. Every fact in a
+    /// report can be in the evidence while the conclusion follows from none of it — a test
+    /// "targeted" that was already failing and stayed failing, reported honestly, passed. Truth is
+    /// not soundness.</para>
+    ///
+    /// <para>It asks for a POINTER rather than an opinion: the numbers of the calls that show it.
+    /// A number can be looked up, and <see cref="ProofAudit"/> looks it up against the journal
+    /// rather than believing it. That is what makes this different from adding a fifth clause to a
+    /// prompt whose fourth was already one too many.</para>
+    ///
+    /// <para>Fails CLOSED, like the verdict above and for the same reason: two unreadable answers
+    /// are "the pass could not tell us", which is not "the step is proven".</para>
+    /// </summary>
+    public async Task<ProofOutcome> ProveAsync(
+        string stepTitle, string coderOutput, string executionEvidence,
+        IChatProvider provider, string model, CancellationToken ct)
+    {
+        var messages = new List<ChatMessage>
+        {
+            ChatMessage.System(ProofSystemPrompt),
+            ChatMessage.User(BuildProofUserPrompt(stepTitle, coderOutput, executionEvidence))
+        };
+
+        var completion = await provider.CompleteAsync(
+            new ChatRequest(model, messages, Temperature: 0.0, ResponseSchema: ProofSchema), ct);
+        var answer = completion.Message.Content ?? "";
+
+        var prompt = completion.PromptTokens ?? 0;
+        var output = completion.CompletionTokens ?? 0;
+
+        if (ParseProof(answer) is { } claim)
+            return new ProofOutcome(claim, prompt, output);
+
+        messages.Add(new ChatMessage(ChatRole.Assistant, answer, null));
+        messages.Add(ChatMessage.User(
+            "That reply did not contain an answer. Reply with NOTHING but a single JSON object, no prose, "
+            + "no code fences, in exactly this shape:\n"
+            + "{\"shown\":\"yes\",\"calls\":[3],\"what\":\"...\"}\n"
+            + "or {\"shown\":\"no\",\"calls\":[],\"what\":\"...\"}\n"
+            + "or {\"shown\":\"not-by-any-call\",\"calls\":[],\"what\":\"...\"}"));
+
+        var retry = await provider.CompleteAsync(
+            new ChatRequest(model, messages, Temperature: 0.0, ResponseSchema: ProofSchema), ct);
+
+        prompt += retry.PromptTokens ?? 0;
+        output += retry.CompletionTokens ?? 0;
+
+        if (ParseProof(retry.Message.Content ?? "") is { } retried)
+            return new ProofOutcome(retried, prompt, output);
+
+        // Twice with nothing usable. Not proven — the same rule as the verdict, because "we could
+        // not find out" and "it is fine" are different facts.
+        return new ProofOutcome(
+            new ProofClaim(ProofClaimKind.NotShown, Array.Empty<int>(),
+                           "the proof pass did not answer, twice"),
+            prompt, output);
+    }
+
+    /// <summary>The shape of a proof answer, for a provider that can hold a model to one.</summary>
+    internal const string ProofSchema = """
+        {
+          "type": "object",
+          "properties": {
+            "shown": { "type": "string", "enum": ["yes", "no", "not-by-any-call"] },
+            "calls": { "type": "array", "items": { "type": "integer" } },
+            "what": { "type": "string" }
+          },
+          "required": ["shown", "calls", "what"],
+          "additionalProperties": false
+        }
+        """;
+
+    internal static string BuildProofUserPrompt(
+        string stepTitle, string coderOutput, string executionEvidence)
+        => $"The step's objective:\n{stepTitle}\n\n"
+         + $"What the agent reported:\n{coderOutput}\n\n"
+         + $"Every call the step made, numbered:\n{executionEvidence}\n\n"
+         + "Which of these calls SHOWS that the objective above was met? Answer with their numbers.";
+
+    /// <summary>
+    /// Deliberately short. This pass has one question and a long prompt would invite it to answer a
+    /// different one — which is how the execution reviewer came to fail steps for not running
+    /// commands nobody asked for.
+    /// </summary>
+    internal const string ProofSystemPrompt =
+        "You are checking whether a step's reported success FOLLOWS from what the step actually did. "
+        + "Another reviewer has already confirmed that the report is truthful about the evidence; "
+        + "that is not your question. Yours is narrower: does the evidence SHOW the objective was met?\n\n"
+        + "Respond with ONLY a JSON object, no prose and no code fences:\n"
+        + "{\"shown\":\"yes\"|\"no\"|\"not-by-any-call\",\"calls\":[numbers],\"what\":\"one sentence\"}\n\n"
+        + "\"yes\" — the evidence shows it. Put in \"calls\" the number of EVERY call that shows it, "
+        + "as numbered in the evidence, and nothing else. Only cite a call you can actually see. A "
+        + "citation is checked against what really happened, so a number you are unsure of is worse "
+        + "than one fewer number.\n\n"
+        + "\"no\" — a call could have shown it, and none of these does. Use this when the report draws "
+        + "a conclusion the calls do not support: a fix reported over a test that still fails, a "
+        + "problem called solved by calls that only looked at it, a claim that the calls are merely "
+        + "consistent with rather than evidence for. Say which conclusion is unsupported in \"what\".\n\n"
+        + "\"not-by-any-call\" — the objective is not the kind of thing a tool call settles: reading, "
+        + "analysing, deciding, explaining, or writing a document. WHICH TOOLS a step uses are the "
+        + "agent's to choose, and many correct steps run no command at all. Use this answer freely; "
+        + "it is never held against the step. Never answer \"no\" merely because you would have "
+        + "expected some command to be run — that is this answer, not that one.\n\n"
+        + "A call marked ERROR or REFUSED did not do its job and cannot be what shows an objective "
+        + "was met. A call marked NOTHING THERE ran and answered — a file that is absent, an offset "
+        + "past the end — and can be exactly what shows one.";
+
+    /// <summary>The claim, or null when the answer carried none.</summary>
+    internal static ProofClaim? ParseProof(string text)
+    {
+        var json = ModelText.ExtractJsonObject(ModelText.StripThink(text));
+        if (json is null)
+            return null;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+
+            if (root.ValueKind != JsonValueKind.Object
+                || !root.TryGetProperty("shown", out var s)
+                || s.ValueKind != JsonValueKind.String)
+                return null;
+
+            // The word has to be one of the three. Anything else is not an answer, and picking a
+            // default here is how a gate comes to enforce nothing.
+            var kind = s.GetString()?.Trim().ToLowerInvariant() switch
+            {
+                "yes" => ProofClaimKind.Shown,
+                "no" => ProofClaimKind.NotShown,
+                "not-by-any-call" or "not_by_any_call" or "notbyanycall" => ProofClaimKind.NotByAnyCall,
+                _ => (ProofClaimKind?)null
+            };
+            if (kind is not { } claimKind)
+                return null;
+
+            var calls = new List<int>();
+            if (root.TryGetProperty("calls", out var c) && c.ValueKind == JsonValueKind.Array)
+                foreach (var item in c.EnumerateArray())
+                    if (item.ValueKind == JsonValueKind.Number && item.TryGetInt32(out var n))
+                        calls.Add(n);
+                    // A model that answers with the number as it appears in the text - "3", "[3]",
+                    // "#3" - has still pointed at a call, and refusing to read it would fail a proof
+                    // over its punctuation.
+                    else if (item.ValueKind == JsonValueKind.String
+                             && int.TryParse(item.GetString()?.Trim().Trim('[', ']', '#'), out var parsed))
+                        calls.Add(parsed);
+
+            var what = root.TryGetProperty("what", out var w) && w.ValueKind == JsonValueKind.String
+                ? w.GetString() ?? ""
+                : "";
+
+            return new ProofClaim(claimKind, calls.Distinct().ToArray(), what);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     /// <summary>Returns the verdict, or null when the answer carried none.</summary>

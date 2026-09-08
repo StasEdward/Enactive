@@ -129,11 +129,17 @@ public sealed class ExecutionJournal
         // shortened one.
         // Said ONCE. Per result it cost eighty-five characters times the number of calls, which is
         // the budget the calls were rescued from - a notice that crowds out what it is annotating.
-        var header = $"{slice.Length} tool call(s) in this step, oldest first{Tally(slice)}. "
+        var header = $"{slice.Length} tool call(s) in this step, oldest first{Tally(slice)}, "
+                   + "each numbered [n] so it can be referred to. "
                    + "A result too long to show keeps its START and its END, with the cut marked "
                    + "between them — so a command's closing summary is always here; the call it "
                    + "belongs to still happened.";
-        var calls = slice.Select(Call).ToArray();
+
+        // Numbered from 1 WITHIN THIS SLICE, not within the run. The number is a handle for a
+        // reviewer that is asked to point at a call - see ProofAudit - and it can only point at what
+        // it was shown. A number that meant a position in the whole journal would refer to calls
+        // this evidence does not contain, and an audit checking it would be checking the wrong list.
+        var calls = slice.Select((a, i) => Call(a, i + 1)).ToArray();
 
         // How many can be shown AT ALL. Each costs its call line plus the floor under its output -
         // budgeting the call lines alone was the first version of this and it overran by a factor of
@@ -220,14 +226,38 @@ public sealed class ExecutionJournal
     private const int ShortenedNoticeChars = 24;
 
     /// <summary>The call itself. Arguments are clipped because write_file carries a whole file.</summary>
-    private static string Call(ExecutedAction action)
+    private static string Call(ExecutedAction action, int number)
     {
         const int maxArguments = 300;
         var arguments = action.Arguments ?? "";
         if (arguments.Length > maxArguments)
             arguments = arguments[..maxArguments] + $"… ({arguments.Length:N0} characters of arguments)";
 
-        return $"-> {action.Tool} {arguments}";
+        return $"[{number}] -> {action.Tool} {arguments}";
+    }
+
+    /// <summary>
+    /// The action a call number in this slice refers to, or null when the number is not one of them.
+    ///
+    /// <para>The counterpart of the numbering above, and the reason it exists: a reviewer asked to
+    /// point at the call that proves something answers with a number, and the ENGINE resolves it
+    /// against what actually happened. A number nothing answers to is a citation of a call that was
+    /// never made - which is worth knowing about a proof.</para>
+    /// </summary>
+    public ExecutedAction? Cited(int number, int from = 0)
+    {
+        lock (_gate)
+        {
+            var index = Math.Max(0, from) + number - 1;
+            return number >= 1 && index < _actions.Count ? _actions[index] : null;
+        }
+    }
+
+    /// <summary>How many calls a slice has - the range a citation may name.</summary>
+    public int CountFrom(int from = 0)
+    {
+        lock (_gate)
+            return Math.Max(0, _actions.Count - Math.Max(0, from));
     }
 
     private static string Answer(ExecutedAction action, int budget)

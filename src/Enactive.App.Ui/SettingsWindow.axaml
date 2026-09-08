@@ -266,6 +266,10 @@
                                       Content="Review what a step WROTE when it ran no commands" />
                             <TextBlock Classes="hint"
                                        Text="A step that only writes a document has no exit code to check, so the ordinary review has nothing to look at and passes anything. With this on, the reviewer reads the text instead and fails invented package names, made-up command syntax, wrong ports and corrupted identifiers. Needs a Review model bound under AI · Phases; costs one reviewer call on the written text." />
+                            <CheckBox IsChecked="{Binding CheckSoundness}"
+                                      Content="Ask a passed step what actually proved it" />
+                            <TextBlock Classes="hint"
+                                       Text="The reviewer checks whether a step's report is TRUE. A report can be true in every particular while its conclusion follows from none of it — a fix reported over a test that was already failing, and stayed failing, passes honestly and the run finishes green. This asks a second question: which calls SHOW the objective was met? The answer is a list of call numbers, and the engine looks them up rather than believing them — a call that was never made, or one that failed, does not prove anything. A step whose work was reading, analysing or writing has nothing to cite and is never held to it. Needs a Review model; costs one more reviewer call per step that ran something." />
                             <CheckBox IsChecked="{Binding RevertRejectedSteps}"
                                       Content="Put a rejected step's files back to how they were" />
                             <TextBlock Classes="hint"

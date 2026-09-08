@@ -114,6 +114,20 @@ An independent stronger reviewer is particularly useful when execution uses a sm
 
 **Preferred model class:** strong reasoning/evidence-reading model, normally flagship-class for consequential work. Model review remains judgment, so build/test checks are still needed where the outcome is mechanically verifiable.
 
+### The second question: what exactly was proven
+
+The verdict above asks whether the worker's report is **true** against the evidence. A report can be true in every particular while its conclusion follows from none of it — a fix reported over a test that was already failing, and stayed failing, is truthful and unsupported at the same time. With **Ask a passed step what actually proved it** on (Settings · General, on by default), a step the verdict passed is asked a second, narrower question: which calls SHOW the objective was met?
+
+The answer is a list of call numbers, and the engine resolves them against what the step actually did rather than taking the model's word for it:
+
+- a number no call answers to — a citation of work that never happened;
+- a citation of only calls that failed or were refused — a conclusion resting on work that did not work;
+- a "yes" that names no call at all.
+
+Each of those fails the step, and none of them needs the model to be right about anything beyond which number it wrote down. A step whose work no tool call could settle — reading, analysing, deciding, writing — answers "not by any call" and is never held to it; which tools reach an answer stay the worker's choice.
+
+This binds the Review model to a second gate, so a weak model there now costs twice. It runs only for a step that actually ran something, and it can be switched off.
+
 ## Concrete model candidates
 
 The official catalogs below were checked on **8 September 2026**. Availability, aliases, and endpoint compatibility change. These are candidates to evaluate, not a claim that this checkout was tested live against every listed model.

@@ -247,7 +247,10 @@ var orchestrator = new Orchestrator(
     spec?.Permissions ?? permissionPolicy, new EmptyServiceProvider(),
     successCriteria: spec?.SuccessCriteria, limits: spec?.Limits,
     checkpoints: checkpointStore,
-    settings: resumeFrom?.Settings);
+    settings: resumeFrom?.Settings,
+    // On, like the window. A scheduled run is exactly where a step that passed review on a report
+    // nobody checked the reasoning of goes unnoticed - there is no one reading the transcript.
+    checkSoundness: true);
 var runRecorder = new RunRecorder(runStore, memoryStore, workspace.Id, spec: spec?.Snapshot());
 
 // ── Run ──────────────────────────────────────────────────────────────────────

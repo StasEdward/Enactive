@@ -477,6 +477,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                 maxParallelSteps: _settings.MaxParallelSteps,
                 allowImplicitToolCalls: _settings.AllowImplicitToolCalls,
                 reviewContent: _settings.ReviewContent,
+                checkSoundness: _settings.CheckSoundness,
                 revertRejectedSteps: _settings.RevertRejectedSteps,
                 successCriteria: spec?.SuccessCriteria,
                 limits: spec?.Limits,
@@ -1280,7 +1281,13 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                     maxParallelSteps: _settings.MaxParallelSteps,
                     allowImplicitToolCalls: _settings.AllowImplicitToolCalls,
                     reviewContent: _settings.ReviewContent,
-                    revertRejectedSteps: _settings.RevertRejectedSteps);
+                    checkSoundness: _settings.CheckSoundness,
+                    revertRejectedSteps: _settings.RevertRejectedSteps,
+                    // A background run is the one that most needs this: it lives in a Task owned by
+                    // this process, so closing the app kills it wherever it happens to be, and
+                    // without a checkpoint there is nothing for Resume to offer afterwards.
+                    checkpoints: new JsonCheckpointStore(workspace),
+                    settings: runSettings);
                 var recorder = new RunRecorder(runStore, backgroundMemory, workspace.Id, runSettings);
                 var context = await contextProvider.BuildAsync(new IntentFocus(workspace.Id), CancellationToken.None);
                 var intent = new Intent(Guid.NewGuid(), text, IntentSource.Inbox, context, DateTimeOffset.UtcNow, workerId);

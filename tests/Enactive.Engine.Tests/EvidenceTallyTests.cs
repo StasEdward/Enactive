@@ -83,7 +83,10 @@ public sealed class EvidenceTallyTests
             ("read_file", outcome, "x"), ("read_file", outcome, "y"), ("read_file", outcome, "z"))
             .Describe();
 
-        Assert.Contains("3 tool call(s) in this step, oldest first.", evidence, StringComparison.Ordinal);
+        // The count, then straight on to the numbering — no tally between them. The comma is what
+        // the header carries where a tally would have gone.
+        Assert.Contains("3 tool call(s) in this step, oldest first, each numbered",
+                        evidence, StringComparison.Ordinal);
         Assert.DoesNotContain("worked", evidence, StringComparison.Ordinal);
     }
 

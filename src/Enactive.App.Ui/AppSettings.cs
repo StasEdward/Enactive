@@ -134,6 +134,14 @@ internal sealed partial class AppSettings
     // because the alternative is a gate that silently checks nothing for every writing task.
     public bool ReviewContent { get; set; } = true;
 
+    // Ask a step that PASSED review what actually proved it. The reviewer checks whether a report is
+    // TRUE against the evidence; a report can be true in every particular while its conclusion
+    // follows from none of it — a fix reported over a test that was already failing and stayed
+    // failing passes, honestly, and the run finishes green. This pass asks which calls SHOW the
+    // objective was met, and the engine looks those calls up rather than believing the answer.
+    // Costs one more Review-model call, and only for a step that actually ran something.
+    public bool CheckSoundness { get; set; } = true;
+
     // How many times a rejected step may be redone before the run gives up. 1 means two tries in
     // total, which is what the engine did when this number was hard-coded. It was worth exposing
     // because it is the dial between "the reviewer's feedback gets used" and "a weak model burns the
@@ -408,6 +416,7 @@ internal sealed partial class AppSettings
         DisableThinking = DisableThinking,
         AllowImplicitToolCalls = AllowImplicitToolCalls,
         ReviewContent = ReviewContent,
+        CheckSoundness = CheckSoundness,
         ReviewRetries = ReviewRetries,
         SuccessRetries = SuccessRetries,
         RevertRejectedSteps = RevertRejectedSteps,

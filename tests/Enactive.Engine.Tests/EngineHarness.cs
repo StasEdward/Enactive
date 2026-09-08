@@ -178,6 +178,25 @@ public static class Verdicts
 
     public static Turn Pass(string notes = "looks right")
         => Turn.Says($$"""{"verdict":"pass","notes":"{{notes}}"}""");
+
+    // ── the proof pass ──────────────────────────────────────────────────────
+    //
+    // A second turn on the SAME provider, asked only of a step the verdict above already passed.
+    // A test that switches soundness on scripts a Pass and then one of these.
+
+    /// <summary>"The evidence shows it, and here is which call shows it."</summary>
+    public static Turn Shown(string what = "the command ran and succeeded", params int[] calls)
+        => Turn.Says($$"""
+            {"shown":"yes","calls":[{{string.Join(",", calls)}}],"what":"{{what}}"}
+            """);
+
+    /// <summary>"A call could have shown it, and none of these does." The defect this pass exists for.</summary>
+    public static Turn NotShown(string what = "the test named in the report is still failing")
+        => Turn.Says($$"""{"shown":"no","calls":[],"what":"{{what}}"}""");
+
+    /// <summary>"No tool call settles this." An analysis, a document, a judgement.</summary>
+    public static Turn NotByAnyCall(string what = "this step's work was reading and reasoning")
+        => Turn.Says($$"""{"shown":"not-by-any-call","calls":[],"what":"{{what}}"}""");
 }
 
 /// <summary>Model routing for a test: by default nothing is bound, so there is no reviewer.</summary>
@@ -346,14 +365,15 @@ public sealed class EngineFixture : IDisposable
         IDecisionHandler? decisions = null,
         int successRetries = 0,
         IRunCheckpointStore? checkpoints = null,
-        RunSettings? settings = null)
+        RunSettings? settings = null,
+        bool checkSoundness = false)
         => Build(
             reviewProvider is null
                 ? new SingleProviderFactory(provider)
                 : new MapProviderFactory(provider, (Verdicts.ProviderId, reviewProvider)),
             worker, policy, artifacts, allowImplicitToolCalls, router, reviewRetries, reviewContent,
             revertRejectedSteps, successCriteria, limits, maxParallelSteps, successRetries, decisions,
-            checkpoints, settings);
+            checkpoints, settings, checkSoundness);
 
     public Orchestrator Build(
         IChatProviderFactory providers,
@@ -381,7 +401,12 @@ public sealed class EngineFixture : IDisposable
         // Null by default: an orchestrator with no checkpoint store writes none, which is what every
         // test written before resume existed expects.
         IRunCheckpointStore? checkpoints = null,
-        RunSettings? settings = null)
+        RunSettings? settings = null,
+        // OFF by default here, unlike the shipping default. The proof pass is a SECOND call on the
+        // review provider, so leaving it on would silently add a turn to every review script in the
+        // suite - and a test that says nothing about soundness should get the shape it was written
+        // for. Same reasoning as successRetries above.
+        bool checkSoundness = false)
     {
         // The set a host registers, not a convenient subset: a role's allowlist can only be
         // exercised against the tools that actually exist, and git/docker were missing here while
@@ -410,7 +435,8 @@ public sealed class EngineFixture : IDisposable
             maxParallelSteps: maxParallelSteps,
             successRetries: successRetries,
             checkpoints: checkpoints,
-            settings: settings);
+            settings: settings,
+            checkSoundness: checkSoundness);
     }
 
     /// <summary>Runs one intent to completion and returns every event it produced.</summary>
