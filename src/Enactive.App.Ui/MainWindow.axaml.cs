@@ -448,9 +448,17 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             var orchestrator = new Orchestrator(
                 _providerFactory, _modelResolver, _workerProvider, runTools, artifactStore,
                 workspace, _planner, _permissionEngine, this, policy, new EmptyProvider(),
-                BuildRouter(), _settings.ReviewRetries, _settings.NumCtx, _settings.DisableThinking, _settings.MaxParallelSteps,
-                _settings.AllowImplicitToolCalls, _settings.ReviewContent, _settings.RevertRejectedSteps,
-                spec?.SuccessCriteria, spec?.Limits);
+                router: BuildRouter(),
+                reviewRetries: _settings.ReviewRetries,
+                successRetries: _settings.SuccessRetries,
+                numCtx: _settings.NumCtx,
+                disableThinking: _settings.DisableThinking,
+                maxParallelSteps: _settings.MaxParallelSteps,
+                allowImplicitToolCalls: _settings.AllowImplicitToolCalls,
+                reviewContent: _settings.ReviewContent,
+                revertRejectedSteps: _settings.RevertRejectedSteps,
+                successCriteria: spec?.SuccessCriteria,
+                limits: spec?.Limits);
             // The specification is recorded WITH the run, so reading it back later shows the template
             // as it was rather than as it has since been edited.
             var recorder = new RunRecorder(
@@ -1234,8 +1242,15 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                 var orchestrator = new Orchestrator(
                     _providerFactory, _modelResolver, _workerProvider, runTools, new DiskArtifactStore(workspace),
                     workspace, _planner, _permissionEngine, decisions, policy, new EmptyProvider(),
-                    BuildRouter(), _settings.ReviewRetries, _settings.NumCtx, _settings.DisableThinking, _settings.MaxParallelSteps,
-                    _settings.AllowImplicitToolCalls, _settings.ReviewContent, _settings.RevertRejectedSteps);
+                    router: BuildRouter(),
+                    reviewRetries: _settings.ReviewRetries,
+                    successRetries: _settings.SuccessRetries,
+                    numCtx: _settings.NumCtx,
+                    disableThinking: _settings.DisableThinking,
+                    maxParallelSteps: _settings.MaxParallelSteps,
+                    allowImplicitToolCalls: _settings.AllowImplicitToolCalls,
+                    reviewContent: _settings.ReviewContent,
+                    revertRejectedSteps: _settings.RevertRejectedSteps);
                 var recorder = new RunRecorder(runStore, MemoryStoreFactory.Create(workspace), workspace.Id, runSettings);
                 var context = await contextProvider.BuildAsync(new IntentFocus(workspace.Id), CancellationToken.None);
                 var intent = new Intent(Guid.NewGuid(), text, IntentSource.Inbox, context, DateTimeOffset.UtcNow, workerId);

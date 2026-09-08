@@ -73,6 +73,7 @@ public sealed class Orchestrator : IOrchestrator
     private readonly IModelRouter _router;
     private readonly IModelResolver _modelResolver;
     private readonly int _reviewRetries;
+    private readonly int _successRetries;
     private readonly int _maxParallelSteps;
     /// <summary>One approval card at a time, however many steps are running.</summary>
     private readonly SemaphoreSlim _decisionGate = new(1, 1);
@@ -111,6 +112,7 @@ public sealed class Orchestrator : IOrchestrator
         IServiceProvider services,
         IModelRouter? router = null,
         int reviewRetries = 1,
+        int successRetries = 1,
         int? numCtx = null,
         bool disableThinking = false,
         int maxParallelSteps = 1,
@@ -138,6 +140,10 @@ public sealed class Orchestrator : IOrchestrator
         // the cost of a run by the reviewer's price, and a stray large number would be paid for in
         // full before anyone noticed.
         _reviewRetries = Math.Clamp(reviewRetries, 0, 5);
+        // How many times a run whose CHECKS failed may try to make them pass. Same clamp and the
+        // same reason: each attempt is a whole tool loop, paid for before anybody notices a stray
+        // number. 0 restores the behaviour this had until 2026-09-08 - check once, and stop.
+        _successRetries = Math.Clamp(successRetries, 0, 5);
         // 1 = the original behaviour: one step at a time on one shared conversation.
         _maxParallelSteps = Math.Max(1, maxParallelSteps);
         _numCtx = numCtx;
@@ -416,17 +422,18 @@ public sealed class Orchestrator : IOrchestrator
 
             if (quickOutcome == RunOutcomeKind.Completed)
             {
-                var report = await InScopeAsync(runId, taskId, null,
-                    () => CheckSuccessAsync(taskId, runId, intent.Context, ct));
+                var verified = new VerifyResult();
+                await foreach (var checkEvent in VerifyAsync(
+                    intent, taskId, runId, worker, provider, model.Model, model.ProviderId,
+                    artifacts, budget, verified, Criterion,
+                    (kind, summary) => Ev(kind, summary), ct))
+                    yield return checkEvent;
 
-                foreach (var checkResult in report.Results)
-                    yield return Criterion(checkResult);
-
-                var adjusted = report.Apply(quickOutcome);
+                var adjusted = verified.Report.Apply(quickOutcome);
                 if (adjusted != quickOutcome)
                 {
                     quickOutcome = adjusted;
-                    quickReason = report.Explain();
+                    quickReason = verified.Report.Explain();
                 }
             }
 
@@ -786,17 +793,18 @@ public sealed class Orchestrator : IOrchestrator
         // bury it - besides costing a build to learn nothing.
         if (runOutcome == RunOutcomeKind.Completed)
         {
-            var report = await InScopeAsync(runId, taskId, null,
-                () => CheckSuccessAsync(taskId, runId, intent.Context, ct));
+            var verified = new VerifyResult();
+            await foreach (var checkEvent in VerifyAsync(
+                intent, taskId, runId, worker, provider, model.Model, model.ProviderId,
+                artifacts, budget, verified, Criterion,
+                (kind, summary) => Ev(kind, summary), ct))
+                yield return checkEvent;
 
-            foreach (var checkResult in report.Results)
-                yield return Criterion(checkResult);
-
-            var adjusted = report.Apply(runOutcome);
+            var adjusted = verified.Report.Apply(runOutcome);
             if (adjusted != runOutcome)
             {
                 runOutcome = adjusted;
-                runReason = report.Explain();
+                runReason = verified.Report.Explain();
             }
         }
 
@@ -1221,6 +1229,118 @@ public sealed class Orchestrator : IOrchestrator
     /// and a reviewer judging free text, which on 2026-09-07 failed a correct run over a defect it
     /// had invented complete with a line number. An exit code does not confabulate.</para>
     /// </summary>
+    /// <summary>Carries the last report out of an iterator, which cannot return one.</summary>
+    private sealed class VerifyResult
+    {
+        public SuccessReport Report { get; set; } = SuccessReport.NothingToCheck;
+    }
+
+    /// <summary>
+    /// Checks the run's success criteria, and — when a required one FAILED — gives the agent a
+    /// chance to make it pass, with the check's own output in front of it. Then checks again.
+    ///
+    /// <para>Until 2026-09-08 the checks ran once and that was the end: a run whose build was broken
+    /// was told so, and nothing tried to fix it. That is not what "done" means to anybody, and the
+    /// case is not hypothetical — on 2026-09-07 at 23:20 a run left a test file un-compilable, and
+    /// the <c>Builds</c> criterion would have caught it with nothing behind it to act on.</para>
+    ///
+    /// <para>Bounded and deliberately narrow. A repair is ONE tool loop in its own artifact scope,
+    /// told what failed and given the output; it is not a re-planned run. Only a criterion that
+    /// FAILED earns one — a criterion that could not be EVALUATED (denied by policy, command not
+    /// found) is not something the agent can fix by working harder, and retrying it would spend a
+    /// whole loop learning the same thing. Optional criteria never hold a run back, so they never
+    /// trigger a repair either.</para>
+    ///
+    /// <para>The repair does not get to declare victory: the criteria are re-run afterwards and they
+    /// alone decide. All this changes is whether the run gets a chance before the verdict.</para>
+    /// </summary>
+    private async IAsyncEnumerable<WorkEvent> VerifyAsync(
+        Intent intent, Guid taskId, Guid runId, Worker worker,
+        IChatProvider provider, string model, string providerId,
+        List<ArtifactRef> artifacts, RunBudget budget, VerifyResult result,
+        Func<CriterionResult, WorkEvent> criterion, Func<EventKind, string, WorkEvent> ev,
+        [EnumeratorCancellation] CancellationToken ct)
+    {
+        var report = await InScopeAsync(runId, taskId, null,
+            () => CheckSuccessAsync(taskId, runId, intent.Context, ct));
+
+        foreach (var checkResult in report.Results)
+            yield return criterion(checkResult);
+
+        result.Report = report;
+
+        for (var attempt = 1; attempt <= _successRetries; attempt++)
+        {
+            // Only what the agent can act on. See the note above on Unknown.
+            var fixable = report.Blocking
+                .Where(r => r.Outcome == CriterionOutcome.Failed)
+                .ToArray();
+
+            if (fixable.Length == 0)
+                yield break;
+
+            if (budget.Exhausted is { } spent)
+            {
+                yield return ev(EventKind.ErrorObserved,
+                    $"{fixable.Length} check(s) failed and there is no budget left to try to fix them: {spent}");
+                yield break;
+            }
+
+            yield return ev(EventKind.ErrorObserved,
+                $"Check(s) failed; attempt {attempt} of {_successRetries} to fix: "
+                + string.Join(", ", fixable.Select(r => r.Name)));
+
+            var messages = new List<ChatMessage>
+            {
+                ChatMessage.System(worker.Instructions),
+                ChatMessage.User(RepairPrompt(intent, fixable))
+            };
+
+            // Its own scope and its own journal, like any other unit of work: what the repair
+            // writes is attributed to the repair.
+            var store = _artifacts.BeginStep();
+            var journal = new ExecutionJournal();
+            var loop = new ToolLoopResult();
+
+            await foreach (var repairEvent in RunToolLoopAsync(
+                taskId, runId, provider, model, worker, messages, artifacts,
+                intent.Context, store, journal, null, loop, budget, ct, providerId))
+                yield return repairEvent;
+
+            report = await InScopeAsync(runId, taskId, null,
+                () => CheckSuccessAsync(taskId, runId, intent.Context, ct));
+
+            foreach (var checkResult in report.Results)
+                yield return criterion(checkResult);
+
+            result.Report = report;
+        }
+    }
+
+    /// <summary>
+    /// What a repair attempt is told. The failing check verbatim - its command, its exit code and
+    /// its output - because the whole reason a criterion beats the model's own opinion is that it
+    /// ran something real, and a repair that is told only "the build failed" is back to guessing.
+    /// </summary>
+    private static string RepairPrompt(Intent intent, IReadOnlyList<CriterionResult> failed)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("The work for this request is finished, but a check on it did NOT pass:");
+        sb.AppendLine();
+
+        foreach (var check in failed)
+            sb.AppendLine(check.Describe());
+
+        sb.AppendLine();
+        sb.AppendLine("Find the cause and fix it, then stop. Do not change the check itself, and do "
+                    + "not work around it - it is there to describe what finished work looks like. "
+                    + "If you cannot fix it, say what is wrong and why, and stop.");
+        sb.AppendLine();
+        sb.AppendLine("The original request, for context:");
+        sb.AppendLine(intent.RawText);
+        return sb.ToString();
+    }
+
     private async Task<SuccessReport> CheckSuccessAsync(
         Guid taskId, Guid runId, WorkContext context, CancellationToken ct)
     {

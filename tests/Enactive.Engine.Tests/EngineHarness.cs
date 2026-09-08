@@ -341,13 +341,14 @@ public sealed class EngineFixture : IDisposable
         IReadOnlyList<SuccessCriterionDefinition>? successCriteria = null,
         ExecutionLimits? limits = null,
         int maxParallelSteps = 1,
-        IDecisionHandler? decisions = null)
+        IDecisionHandler? decisions = null,
+        int successRetries = 0)
         => Build(
             reviewProvider is null
                 ? new SingleProviderFactory(provider)
                 : new MapProviderFactory(provider, (Verdicts.ProviderId, reviewProvider)),
             worker, policy, artifacts, allowImplicitToolCalls, router, reviewRetries, reviewContent,
-            revertRejectedSteps, successCriteria, limits, maxParallelSteps, decisions);
+            revertRejectedSteps, successCriteria, limits, maxParallelSteps, successRetries, decisions);
 
     public Orchestrator Build(
         IChatProviderFactory providers,
@@ -365,6 +366,10 @@ public sealed class EngineFixture : IDisposable
         // shipped covered by nothing: every test in the suite ran the maxParallel == 1 branch
         // because that was the only branch this harness could reach.
         int maxParallelSteps = 1,
+        // 0 by default here, not the shipping 1: a test that says nothing about repair should get
+        // the shape it was written for - check the criteria once and stop. The repair loop has its
+        // own tests, which ask for it.
+        int successRetries = 0,
         // Supplied only when a test needs to watch the handler itself — the approval gate can only
         // be checked from inside the thing the gate protects.
         IDecisionHandler? decisions = null)
@@ -393,7 +398,8 @@ public sealed class EngineFixture : IDisposable
             revertRejectedSteps: revertRejectedSteps,
             successCriteria: successCriteria,
             limits: limits,
-            maxParallelSteps: maxParallelSteps);
+            maxParallelSteps: maxParallelSteps,
+            successRetries: successRetries);
     }
 
     /// <summary>Runs one intent to completion and returns every event it produced.</summary>

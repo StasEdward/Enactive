@@ -19,7 +19,7 @@ Command -> Intent -> Context(+Environment) -> Planner -> Orchestrator -> Worker(
 
 ## Solution
 
-`Enactive.sln`, **8 projects** (`net10.0`, pinned via `global.json`) plus `tests/Enactive.Engine.Tests` (776 tests)
+`Enactive.sln`, **8 projects** (`net10.0`, pinned via `global.json`) plus `tests/Enactive.Engine.Tests` (805 tests)
 and `tests/Enactive.Mcp.TestServer`. The engine is dependency-light: `Core`/`Providers`/`Tools`/`Agents`/`App.Console`
 use **zero external NuGet packages**; only `Workspace` (Microsoft.Data.Sqlite, SQLitePCLRaw, MySqlConnector), `Secrets`
 (ProtectedData) and `App.Ui` (Avalonia ×3) pull anything in. `Enactive.Agents` references **only** `Core` — a constant
@@ -88,7 +88,9 @@ applied **after** `InitializeComponent`, or the XAML's own `Width`/`Height` over
   a repair loop is never stopped for repairing; and a reviewer, when bound, judges the step's **evidence journal**
   (every call, its arguments, its outcome, its output — recorded as it happens, so shortening the prompt cannot
   shorten the evidence), told which parts it must not hold against the agent. Success criteria then run once at the
-  end. A failing check beats the model saying it is done.
+  end, and a required one that FAILED buys the agent one attempt to fix it, with the check's own
+  output in front of it, before the criteria are re-run and decide. A failing check beats the model
+  saying it is done.
 - **Permissions + decisions** — autonomy slider (Observe/Suggest/Execute/Autonomous); run_command/run_powershell ask before running. The approval card can **remember** an allow for the session or the workspace (`.enactive/permissions.json`).
 - **Team of models** — configure any number of providers (Ollama, Anthropic, OpenAI-compatible) and an editable team of workers, each with its own model, and bind a model per phase: **Plan**, **Review**, and per-step **Execute** auto-routing (the planner rates each step trivial/normal/complex → light/worker/heavy model). A reasoner plans and reviews each step against the **real tool transcript**; on FAIL the step is retried with feedback. Robustness: local reasoning (`<think>`) off by default, Anthropic `temperature` auto-dropped and `max_tokens` auto-sized to the model's cap, a token-limit truncation guard, and optional read-back verification of writes. See `MODELS.md`.
 - **Workers as roles** — Developer / Reviewer (read-only) / Ops / Writer, each with its own tool allowlist and permission level; pick one per run.

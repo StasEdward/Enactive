@@ -141,6 +141,14 @@ internal sealed partial class AppSettings
     // passed, while another used both and was still wrong. Clamped to 0..5 by the orchestrator.
     public int ReviewRetries { get; set; } = 1;
 
+    // How many times a run whose success CRITERIA failed may try to make them pass. A criterion is
+    // the one thing in a run that is not somebody's opinion, and until 2026-09-08 a failed one just
+    // ended the run: a build left broken was reported as broken and nothing tried to fix it, which
+    // is not what "done" means to anyone. 1 gives the agent one attempt with the check's own output
+    // in front of it; the criteria are then re-run and they alone decide. 0 restores the old
+    // behaviour - check once, and stop. Clamped to 0..5 by the orchestrator.
+    public int SuccessRetries { get; set; } = 1;
+
     // Put a rejected step's files back to how they were before it ran. Without this the gate stops
     // only the REPORT: the run says Failed while the rejected document stays in the workspace, which
     // is the version someone is most likely to open next. A file changed since the step wrote it is
@@ -401,6 +409,7 @@ internal sealed partial class AppSettings
         AllowImplicitToolCalls = AllowImplicitToolCalls,
         ReviewContent = ReviewContent,
         ReviewRetries = ReviewRetries,
+        SuccessRetries = SuccessRetries,
         RevertRejectedSteps = RevertRejectedSteps,
         VerifyWrites = VerifyWrites,
         MaxParallelSteps = MaxParallelSteps,
