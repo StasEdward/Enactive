@@ -38,6 +38,27 @@ public sealed record RunUsage(int PromptTokens, int CompletionTokens)
 }
 
 /// <summary>
+/// The fields that identify a run and place it in a list: what a row, a grouping or a title needs.
+///
+/// <para>Here so that the helpers which only ever wanted these — <see cref="RunTitle"/>,
+/// <see cref="RunHistory"/> — do not have to be written twice, once for a whole
+/// <see cref="RunRecord"/> and once for a <see cref="RunSummary"/>. It deliberately exposes no
+/// events: a caller that has only a header must not be able to ask for a transcript and be told
+/// "none".</para>
+/// </summary>
+public interface IRunHeader
+{
+    Guid RunId { get; }
+    Guid TaskId { get; }
+    string Title { get; }
+    DateTimeOffset StartedAt { get; }
+    string Status { get; }
+
+    /// <summary>Null for a run that was typed rather than started from a template.</summary>
+    string? Spec { get; }
+}
+
+/// <summary>
 /// A persisted agent run (PLAN_v2 §2A.6) plus its events, artifacts and decisions. The Timeline —
 /// "the memory of the project" — is built from these records.
 /// </summary>
@@ -67,13 +88,65 @@ public sealed record RunRecord(
     /// TODAY answers the wrong question. Parse it with <c>ResolvedTaskSpec.Parse</c>, which gives
     /// values back rather than leaving anyone to pick at the text.</para>
     /// </summary>
-    string? Spec = null);
+    string? Spec = null) : IRunHeader;
+
+/// <summary>
+/// A run without its EVENTS: everything a list, a timeline or a grouping needs, and nothing that
+/// grows with how long the run was.
+///
+/// <para>The history window used to read every run whole to fill six fields per row. A run's events
+/// are its whole transcript - every prompt, response, tool call and payload - so a workspace with a
+/// few hundred runs behind it read tens of megabytes to draw a list. <c>PLAN_v2.md</c> §11 carried
+/// it as "it will bite at a few hundred runs".</para>
+///
+/// <para>A distinct TYPE rather than a <see cref="RunRecord"/> with an empty <c>Events</c> list. A
+/// record that says it has no events when it has thousands is the same lie as a result that says
+/// "done" for work that was refused: the caller cannot tell "none" from "not loaded", and would
+/// eventually read one as the other. This type cannot be asked what it does not know.</para>
+/// </summary>
+public sealed record RunSummary(
+    Guid RunId,
+    Guid TaskId,
+    string Title,
+    string? Model,
+    DateTimeOffset StartedAt,
+    DateTimeOffset FinishedAt,
+    string Status,
+    IReadOnlyList<string> Artifacts,
+    IReadOnlyList<string> Decisions,
+    RunSettings? Settings = null,
+    RunUsage? Usage = null,
+    string? Spec = null) : IRunHeader
+{
+    /// <summary>The header of a record already in hand.</summary>
+    public static RunSummary Of(RunRecord record)
+        => new(record.RunId, record.TaskId, record.Title, record.Model, record.StartedAt,
+               record.FinishedAt, record.Status, record.Artifacts, record.Decisions,
+               record.Settings, record.Usage, record.Spec);
+}
 
 /// <summary>Persists and loads run records for a workspace.</summary>
 public interface IRunStore
 {
     Task SaveAsync(RunRecord record, CancellationToken ct);
     Task<IReadOnlyList<RunRecord>> LoadAllAsync(CancellationToken ct);
+
+    /// <summary>
+    /// Every run's HEADER, newest first - what a list needs, without the transcripts.
+    ///
+    /// <para>Defaulted so a store written before this existed still compiles and still works; the
+    /// default reads everything and throws the events away, which is honest about being no faster.
+    /// Every store that ships overrides it with a query that never fetches them.</para>
+    /// </summary>
+    async Task<IReadOnlyList<RunSummary>> LoadSummariesAsync(CancellationToken ct)
+        => (await LoadAllAsync(ct)).Select(RunSummary.Of).ToArray();
+
+    /// <summary>
+    /// One run, whole. What opening a row costs, paid when a row is opened rather than for every
+    /// row in the list. Null when there is no such run.
+    /// </summary>
+    async Task<RunRecord?> LoadAsync(Guid runId, CancellationToken ct)
+        => (await LoadAllAsync(ct)).FirstOrDefault(r => r.RunId == runId);
 
     /// <summary>
     /// Forgets one run. A run that is not there is not an error - it is the goal.

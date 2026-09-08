@@ -12,10 +12,14 @@ using Enactive.Core.Templates;
 /// One finished run, as a CARD in the context column: a coloured edge for how it ended, the title
 /// the planner gave it, and one line saying when and what came of it. The edge is part of the card,
 /// not part of being selected - you have to be able to spot the failed run without clicking it.
+///
+/// <para>Built from a <see cref="RunSummary"/>, not a record. Everything on a card - the title, the
+/// status, when it started, how long it took, what it produced - is in the header; the transcript
+/// is not, and a list of two hundred rows used to read two hundred transcripts to draw them.</para>
 /// </summary>
 internal sealed class RunListItemViewModel
 {
-    public RunListItemViewModel(RunRecord record, Action<RunListItemViewModel>? remove = null)
+    public RunListItemViewModel(RunSummary record, Action<RunListItemViewModel>? remove = null)
     {
         Record = record;
         RemoveCommand = new RelayCommand(() => remove?.Invoke(this), () => remove is not null);
@@ -31,7 +35,7 @@ internal sealed class RunListItemViewModel
         Tooltip = $"{Title}\n{record.StartedAt.ToLocalTime():yyyy-MM-dd HH:mm} · {record.Status} · {Duration(elapsed)}";
     }
 
-    public RunRecord Record { get; }
+    public RunSummary Record { get; }
     public string Title { get; }
 
     /// <summary>Forgets this run. The window asks first; the row only reports the click.</summary>
@@ -78,7 +82,7 @@ internal sealed class RunListItemViewModel
     /// What came of it, in two or three words. A failure says so; otherwise what it produced is
     /// more use than how long it took, and the duration is in the run's own header anyway.
     /// </summary>
-    private static string Outcome(RunRecord record)
+    private static string Outcome(RunSummary record)
     {
         switch (record.Status.ToLowerInvariant())
         {
@@ -161,14 +165,15 @@ internal sealed class PastRunViewModel : ObservableObject
         // run must be classified by the same rule as a live one.
         Func<string?, ModelWorkSplit.Reach>? reachOf = null,
         // Every attempt at the same task, newest first. Passed in because only the window has the
-        // whole history; a run cannot know its siblings from inside itself.
-        IReadOnlyList<RunRecord>? attempts = null,
+        // whole history; a run cannot know its siblings from inside itself. Headers, because all
+        // this needs of a sibling is that it exists and when it started.
+        IReadOnlyList<IRunHeader>? attempts = null,
         Func<TaskTemplate?>? currentTemplate = null)
     {
         Record = record;
         Title = RunTitle.For(record);
 
-        var siblings = attempts is { Count: > 0 } ? attempts : new[] { record };
+        var siblings = attempts is { Count: > 0 } ? attempts : new IRunHeader[] { record };
         var attemptNo = RunHistory.AttemptNumber(siblings, record.RunId);
         AttemptLabel = siblings.Count > 1
             ? $"attempt {attemptNo} of {siblings.Count}"
@@ -373,14 +378,20 @@ internal sealed class RunsViewModel : ObservableObject
     /// <summary>Asks whoever owns the stores to load this workspace's runs.</summary>
     public event Action? RefreshRequested;
 
-    /// <summary>A row was picked. The window decides what "open" means; the list only reports it.</summary>
-    public event Action<RunRecord>? OpenRequested;
+    /// <summary>
+    /// A row was picked. The window decides what "open" means; the list only reports it.
+    ///
+    /// <para>It reports the HEADER, which is all the list ever held. Opening a run is where the
+    /// transcript gets read, and the window does that by id - so the cost of a whole record is paid
+    /// once, by the row somebody actually clicked.</para>
+    /// </summary>
+    public event Action<RunSummary>? OpenRequested;
 
     /// <summary>
     /// A row's bin was pressed. The window owns the store and the confirmation dialog, so it does
     /// the asking and the deleting; the list only reports the click.
     /// </summary>
-    public event Action<RunRecord>? DeleteRequested;
+    public event Action<RunSummary>? DeleteRequested;
 
     public ObservableCollection<RunListItemViewModel> Items { get; } = new();
 
@@ -401,12 +412,12 @@ internal sealed class RunsViewModel : ObservableObject
     public RelayCommand RefreshCommand { get; }
 
     /// <summary>
-    /// Every record behind the list. Kept because a run's SIBLINGS - the other attempts at the same
+    /// Every header behind the list. Kept because a run's SIBLINGS - the other attempts at the same
     /// task - are not visible from the run itself, and the window is the only thing that has them.
     /// </summary>
-    public IReadOnlyList<RunRecord> All { get; private set; } = Array.Empty<RunRecord>();
+    public IReadOnlyList<RunSummary> All { get; private set; } = Array.Empty<RunSummary>();
 
-    public void Show(IReadOnlyList<RunRecord> records)
+    public void Show(IReadOnlyList<RunSummary> records)
     {
         All = records;
         // Rebuilding drops the selection, so the row the user is reading is re-selected by run id

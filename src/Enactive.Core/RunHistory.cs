@@ -10,10 +10,10 @@ using Enactive.Core.Events;
 /// grouped nothing - a column that looked like a key and was a serial number. Until an attempt could
 /// be told from a task there was nothing for "retry" to mean, which is why it did not exist.</para>
 /// </summary>
-public sealed record TaskAttempts(Guid TaskId, IReadOnlyList<RunRecord> Runs)
+public sealed record TaskAttempts(Guid TaskId, IReadOnlyList<IRunHeader> Runs)
 {
     /// <summary>The most recent attempt - the one a list shows and a person means by "this task".</summary>
-    public RunRecord Latest => Runs[0];
+    public IRunHeader Latest => Runs[0];
 
     public int Count => Runs.Count;
 
@@ -24,7 +24,14 @@ public sealed record TaskAttempts(Guid TaskId, IReadOnlyList<RunRecord> Runs)
         => Runs.Any(r => string.Equals(r.Status, nameof(RunOutcomeKind.Completed), StringComparison.OrdinalIgnoreCase));
 }
 
-/// <summary>Reads a workspace's runs as tasks and attempts.</summary>
+/// <summary>
+/// Reads a workspace's runs as tasks and attempts.
+///
+/// <para>Everything here takes an <see cref="IRunHeader"/>, because grouping and counting attempts
+/// needs the task id and the start time and nothing else. That is what lets the history list do its
+/// grouping off summaries and never load a transcript. <see cref="RequestOf"/> is the exception and
+/// takes a whole record, because what was asked for is recorded in an EVENT.</para>
+/// </summary>
 public static class RunHistory
 {
     /// <summary>
@@ -34,10 +41,10 @@ public static class RunHistory
     /// Guid is the absence of an answer, and treating every one of them as the same task would put
     /// unrelated work under one heading, which is a worse lie than showing them apart.</para>
     /// </summary>
-    public static IReadOnlyList<TaskAttempts> ByTask(IEnumerable<RunRecord> runs)
+    public static IReadOnlyList<TaskAttempts> ByTask(IEnumerable<IRunHeader> runs)
     {
         var groups = new List<TaskAttempts>();
-        var byTask = new Dictionary<Guid, List<RunRecord>>();
+        var byTask = new Dictionary<Guid, List<IRunHeader>>();
 
         foreach (var run in runs)
         {
@@ -48,7 +55,7 @@ public static class RunHistory
             }
 
             if (!byTask.TryGetValue(run.TaskId, out var list))
-                byTask[run.TaskId] = list = new List<RunRecord>();
+                byTask[run.TaskId] = list = new List<IRunHeader>();
             list.Add(run);
         }
 
@@ -65,7 +72,7 @@ public static class RunHistory
     /// A run whose task id is empty is alone, which is the honest answer for a record written before
     /// tasks meant anything.
     /// </summary>
-    public static IReadOnlyList<RunRecord> AttemptsOf(IEnumerable<RunRecord> all, RunRecord run)
+    public static IReadOnlyList<IRunHeader> AttemptsOf(IEnumerable<IRunHeader> all, IRunHeader run)
     {
         if (run.TaskId == Guid.Empty)
             return new[] { run };
@@ -79,7 +86,7 @@ public static class RunHistory
     /// Which attempt this run is, counting from the first: 1-based, and 0 when the run is not in the
     /// list at all.
     /// </summary>
-    public static int AttemptNumber(IReadOnlyList<RunRecord> attempts, Guid runId)
+    public static int AttemptNumber(IReadOnlyList<IRunHeader> attempts, Guid runId)
     {
         // Attempts arrive newest first, so the oldest is number one.
         for (var i = 0; i < attempts.Count; i++)

@@ -57,7 +57,7 @@ public static class RunTitle
     /// this still reads properly. A stored title is data from an older build; repairing it on the way
     /// out is cheaper and more honest than rewriting somebody's run history in place.</para>
     /// </summary>
-    public static string For(RunRecord record)
+    public static string For(IRunHeader record)
     {
         // A template names the run. "Code Review" is what somebody scanning a list is looking for,
         // and it is the truth about where the run came from.

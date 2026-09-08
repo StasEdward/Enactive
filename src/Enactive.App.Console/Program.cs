@@ -94,7 +94,7 @@ var memoryStore = MemoryStoreFactory.Create(workspace);
 // ── Timeline view: print the project's run history and exit ───────────────────
 if (isTimeline)
 {
-    var runs = await runStore.LoadAllAsync(CancellationToken.None);
+    var runs = await runStore.LoadSummariesAsync(CancellationToken.None);
     var entries = await memoryStore.LoadAllAsync(CancellationToken.None);
     Console.WriteLine(ProjectMemory.Render(runs, entries, workspace.RootPath));
     return 0;
@@ -298,10 +298,18 @@ Console.WriteLine(new string('-', 72));
 // A run nobody watched has to be able to say what happened, and the scheduler's own log is usually
 // gone by the time anyone looks. So: the report to stdout always, to a file when asked.
 // The intent id IS the task id, and this invocation made exactly one run under it.
-var finished = (await runStore.LoadAllAsync(CancellationToken.None))
+//
+// Found by header and then read whole: the report needs every event of THIS run, and none of any
+// other. Reading them all to pick one was how a workspace with a long history paid for its history
+// on every headless invocation.
+var latest = (await runStore.LoadSummariesAsync(CancellationToken.None))
     .Where(r => r.TaskId == intent.Id)
     .OrderByDescending(r => r.StartedAt)
     .FirstOrDefault();
+
+var finished = latest is null
+    ? null
+    : await runStore.LoadAsync(latest.RunId, CancellationToken.None);
 
 if (finished is not null)
 {

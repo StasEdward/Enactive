@@ -11,7 +11,12 @@ using Enactive.Core.Memory;
 /// </summary>
 public static class ProjectMemory
 {
-    public static string Render(IReadOnlyList<RunRecord> runs, IReadOnlyList<MemoryEntry> memory, string root)
+    /// <summary>
+    /// Renders from SUMMARIES: this view names each run, its status, its decisions and its
+    /// artifacts, and never opens a transcript. Taking whole records here was how the timeline came
+    /// to read every event in the workspace to print a few lines per run.
+    /// </summary>
+    public static string Render(IReadOnlyList<RunSummary> runs, IReadOnlyList<MemoryEntry> memory, string root)
     {
         var sb = new StringBuilder();
         sb.AppendLine($"PROJECT MEMORY — {root}");

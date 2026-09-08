@@ -82,7 +82,9 @@ internal sealed class InboxViewModel : ObservableObject
     private readonly IInboxStore _inbox;
     private readonly IRunStore _runs;
     private readonly List<InboxItemViewModel> _all = new();
-    private IReadOnlyList<RunRecord> _runRecords = Array.Empty<RunRecord>();
+    /// <summary>The headers of every run in the workspace: enough to know whether the run behind an
+    /// item is still there, and to name it. The transcript is read when an item is opened.</summary>
+    private IReadOnlyList<RunSummary> _runSummaries = Array.Empty<RunSummary>();
 
     private InboxItemViewModel? _selected;
     private bool _unreadOnly;
@@ -156,8 +158,8 @@ internal sealed class InboxViewModel : ObservableObject
         var keepId = Selected?.Item.Id;
 
         var items = await _inbox.LoadAllAsync(CancellationToken.None);
-        try { _runRecords = await _runs.LoadAllAsync(CancellationToken.None); }
-        catch { _runRecords = Array.Empty<RunRecord>(); }
+        try { _runSummaries = await _runs.LoadSummariesAsync(CancellationToken.None); }
+        catch { _runSummaries = Array.Empty<RunSummary>(); }
 
         _all.Clear();
         foreach (var item in items.OrderByDescending(i => i.At))
@@ -228,21 +230,44 @@ internal sealed class InboxViewModel : ObservableObject
         DetailMeta = $"{item.Kind} · {item.When}";
         DetailSummary = item.Summary;
 
-        var run = _runRecords.FirstOrDefault(r => r.RunId == item.Item.RunId);
-        HasRun = run is not null;
-        if (run is null)
+        var summary = _runSummaries.FirstOrDefault(r => r.RunId == item.Item.RunId);
+        HasRun = summary is not null;
+        if (summary is null)
         {
             RunHeader = "The run behind this item is no longer in the store.";
             return;
         }
 
-        var elapsed = run.FinishedAt - run.StartedAt;
-        RunHeader = $"{run.Title} — {run.Status} · {run.Model} · {elapsed.TotalSeconds:0}s";
-        AddTimeline(run);
-        foreach (var a in run.Artifacts)
+        // The header comes off the summary, so it appears at once; the timeline needs the events and
+        // those are fetched for THIS run alone. The list used to hold every run whole so that this
+        // line could be drawn without waiting.
+        var elapsed = summary.FinishedAt - summary.StartedAt;
+        RunHeader = $"{summary.Title} — {summary.Status} · {summary.Model} · {elapsed.TotalSeconds:0}s";
+        foreach (var a in summary.Artifacts)
             RunArtifacts.Add(a);
-        foreach (var d in run.Decisions)
+        foreach (var d in summary.Decisions)
             RunDecisions.Add(d);
+
+        _ = LoadTimelineAsync(item);
+    }
+
+    /// <summary>
+    /// Reads one run's events and fills the timeline.
+    ///
+    /// <para>Guarded by the selection: an earlier item's load can land after a later one's, and
+    /// filling the panel with the run somebody has already clicked away from is worse than filling
+    /// it late. If the selection has moved on, the answer is dropped.</para>
+    /// </summary>
+    private async Task LoadTimelineAsync(InboxItemViewModel item)
+    {
+        RunRecord? run;
+        try { run = await _runs.LoadAsync(item.Item.RunId, CancellationToken.None); }
+        catch { return; }
+
+        if (!ReferenceEquals(Selected, item) || run is null)
+            return;
+
+        AddTimeline(run);
     }
 
     /// <summary>Renders the run's events. The folding of the streamed reply lives in

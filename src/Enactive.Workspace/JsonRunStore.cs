@@ -47,6 +47,61 @@ public sealed class JsonRunStore : IRunStore
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// The headers. One file per run, so the events cannot be left unfetched the way they can on
+    /// SQL: the whole file is still read off the disk and its events array is still parsed as JSON
+    /// tokens. What this saves is the BINDING - thousands of <see cref="RunEventRecord"/> objects
+    /// per run, each with its payload string, are never constructed, and the tokens are discarded
+    /// as they are skipped. So the reading cost is unchanged and the memory cost is not; on SQL
+    /// both fall, which is the difference between the stores and not a reason to pretend otherwise.
+    /// </summary>
+    public async Task<IReadOnlyList<RunSummary>> LoadSummariesAsync(CancellationToken ct)
+    {
+        if (!Directory.Exists(_directory))
+            return Array.Empty<RunSummary>();
+
+        var summaries = new List<RunSummary>();
+        foreach (var file in Directory.EnumerateFiles(_directory, "*.json"))
+        {
+            try
+            {
+                await using var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read);
+                var summary = await JsonSerializer.DeserializeAsync<RunSummary>(stream, Options, ct);
+                if (summary is not null)
+                    summaries.Add(summary);
+            }
+            catch
+            {
+                // skip unreadable / corrupt files
+            }
+        }
+
+        summaries.Sort((a, b) => b.StartedAt.CompareTo(a.StartedAt));
+        return summaries;
+    }
+
+    /// <summary>One run, found by the id in its FILE NAME - nothing else is opened.</summary>
+    public async Task<RunRecord?> LoadAsync(Guid runId, CancellationToken ct)
+    {
+        if (!Directory.Exists(_directory))
+            return null;
+
+        foreach (var file in Directory.EnumerateFiles(_directory, $"*_{runId:N}.json"))
+        {
+            try
+            {
+                await using var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read);
+                return await JsonSerializer.DeserializeAsync<RunRecord>(stream, Options, ct);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        return null;
+    }
+
     public async Task<IReadOnlyList<RunRecord>> LoadAllAsync(CancellationToken ct)
     {
         if (!Directory.Exists(_directory))

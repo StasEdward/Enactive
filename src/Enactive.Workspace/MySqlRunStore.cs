@@ -90,6 +90,73 @@ public sealed class MySqlRunStore : IRunStore
         await command.ExecuteNonQueryAsync(ct);
     }
 
+    /// <summary>
+    /// The headers, without ever fetching <c>events_json</c> - which on MySQL is a row's whole
+    /// weight coming over a network connection.
+    /// </summary>
+    public async Task<IReadOnlyList<RunSummary>> LoadSummariesAsync(CancellationToken ct)
+    {
+        await EnsureSchemaAsync(ct);
+
+        var results = new List<RunSummary>();
+
+        await using var connection = new MySqlConnection(_connectionString);
+        await connection.OpenAsync(ct);
+
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT run_id, task_id, title, model, started_at, finished_at, status,
+                   artifacts_json, decisions_json, settings_json, usage_json, spec_json
+            FROM runs
+            WHERE workspace_id = @workspace_id
+            ORDER BY started_at DESC;
+            """;
+        command.Parameters.AddWithValue("@workspace_id", _workspaceId.ToString());
+
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+            results.Add(new RunSummary(
+                Guid.Parse(reader.GetString(0)),
+                Guid.Parse(reader.GetString(1)),
+                reader.GetString(2),
+                reader.IsDBNull(3) ? null : reader.GetString(3),
+                DateTimeOffset.Parse(reader.GetString(4), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+                DateTimeOffset.Parse(reader.GetString(5), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+                reader.GetString(6),
+                JsonSerializer.Deserialize<List<string>>(reader.GetString(7), Json) ?? new(),
+                JsonSerializer.Deserialize<List<string>>(reader.GetString(8), Json) ?? new(),
+                reader.IsDBNull(9) ? null : JsonSerializer.Deserialize<RunSettings>(reader.GetString(9), Json),
+                reader.IsDBNull(10) ? null : JsonSerializer.Deserialize<RunUsage>(reader.GetString(10), Json),
+                reader.IsDBNull(11) ? null : reader.GetString(11)));
+
+        return results;
+    }
+
+    /// <summary>The columns a whole record is built from, in the order <see cref="ReadRecord"/>
+    /// expects them. One string, so a query and its reader cannot drift apart.</summary>
+    private const string RecordColumns =
+        "run_id, task_id, title, model, started_at, finished_at, status, "
+        + "events_json, artifacts_json, decisions_json, settings_json, usage_json, spec_json";
+
+    /// <summary>One run, whole - what opening a row costs, paid only by the row that was opened.</summary>
+    public async Task<RunRecord?> LoadAsync(Guid runId, CancellationToken ct)
+    {
+        await EnsureSchemaAsync(ct);
+
+        await using var connection = new MySqlConnection(_connectionString);
+        await connection.OpenAsync(ct);
+
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            $"SELECT {RecordColumns} FROM runs WHERE run_id = @run_id AND workspace_id = @workspace_id;";
+        command.Parameters.AddWithValue("@run_id", runId.ToString());
+        command.Parameters.AddWithValue("@workspace_id", _workspaceId.ToString());
+
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        return await reader.ReadAsync(ct) ? ReadRecord(reader) : null;
+    }
+
     public async Task<IReadOnlyList<RunRecord>> LoadAllAsync(CancellationToken ct)
     {
         await EnsureSchemaAsync(ct);
@@ -101,42 +168,31 @@ public sealed class MySqlRunStore : IRunStore
 
         using var command = connection.CreateCommand();
         command.CommandText =
-            """
-            SELECT run_id, task_id, title, model, started_at, finished_at, status,
-                   events_json, artifacts_json, decisions_json, settings_json, usage_json, spec_json
-            FROM runs
-            WHERE workspace_id = @workspace_id
-            ORDER BY started_at DESC;
-            """;
+            $"SELECT {RecordColumns} FROM runs WHERE workspace_id = @workspace_id ORDER BY started_at DESC;";
         command.Parameters.AddWithValue("@workspace_id", _workspaceId.ToString());
 
         await using var reader = await command.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
-        {
-            var events = JsonSerializer.Deserialize<List<RunEventRecord>>(reader.GetString(7), Json) ?? new();
-            var artifacts = JsonSerializer.Deserialize<List<string>>(reader.GetString(8), Json) ?? new();
-            var decisions = JsonSerializer.Deserialize<List<string>>(reader.GetString(9), Json) ?? new();
-            var settings = reader.IsDBNull(10)
-                ? null
-                : JsonSerializer.Deserialize<RunSettings>(reader.GetString(10), Json);
-            var usage = reader.IsDBNull(11)
-                ? null
-                : JsonSerializer.Deserialize<RunUsage>(reader.GetString(11), Json);
-            var spec = reader.IsDBNull(12) ? null : reader.GetString(12);
-
-            results.Add(new RunRecord(
-                Guid.Parse(reader.GetString(0)),
-                Guid.Parse(reader.GetString(1)),
-                reader.GetString(2),
-                reader.IsDBNull(3) ? null : reader.GetString(3),
-                DateTimeOffset.Parse(reader.GetString(4), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
-                DateTimeOffset.Parse(reader.GetString(5), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
-                reader.GetString(6),
-                events, artifacts, decisions, settings, usage, spec));
-        }
+            results.Add(ReadRecord(reader));
 
         return results;
     }
+
+    private static RunRecord ReadRecord(MySqlDataReader reader)
+        => new(
+            Guid.Parse(reader.GetString(0)),
+            Guid.Parse(reader.GetString(1)),
+            reader.GetString(2),
+            reader.IsDBNull(3) ? null : reader.GetString(3),
+            DateTimeOffset.Parse(reader.GetString(4), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+            DateTimeOffset.Parse(reader.GetString(5), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+            reader.GetString(6),
+            JsonSerializer.Deserialize<List<RunEventRecord>>(reader.GetString(7), Json) ?? new(),
+            JsonSerializer.Deserialize<List<string>>(reader.GetString(8), Json) ?? new(),
+            JsonSerializer.Deserialize<List<string>>(reader.GetString(9), Json) ?? new(),
+            reader.IsDBNull(10) ? null : JsonSerializer.Deserialize<RunSettings>(reader.GetString(10), Json),
+            reader.IsDBNull(11) ? null : JsonSerializer.Deserialize<RunUsage>(reader.GetString(11), Json),
+            reader.IsDBNull(12) ? null : reader.GetString(12));
 
     private async Task EnsureSchemaAsync(CancellationToken ct)
     {

@@ -135,8 +135,8 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         _vm.InboxRequested += ShowInbox;
         _vm.TemplatesRequested += ShowTemplates;
         _vm.Runs.RefreshRequested += () => _ = LoadRunsAsync();
-        _vm.Runs.OpenRequested += record => _vm.ShowPastRun(BuildPastRun(record));
-        _vm.Runs.DeleteRequested += record => _ = DeleteRunAsync(record);
+        _vm.Runs.OpenRequested += summary => _ = OpenPastRunAsync(summary);
+        _vm.Runs.DeleteRequested += summary => _ = DeleteRunAsync(summary);
         _vm.WorkspacePathChanged += RefreshWorkspaces;
         _vm.WorkspaceSwitchRequested += SwitchWorkspace;
         _vm.WorkspaceRenameRequested += path => _ = RenameWorkspaceAsync(path);
@@ -1318,6 +1318,42 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     }
 
     /// <summary>
+    /// Opens the run a row stands for. The row holds only the HEADER, so this is where the
+    /// transcript is read - by id, for the one run that was clicked, rather than for every run in
+    /// the list on the way to drawing it.
+    ///
+    /// <para>A run that is gone by the time it is opened says so and leaves the view alone. It is a
+    /// real case: another window, or another copy of the app, can have deleted it since the list was
+    /// drawn.</para>
+    /// </summary>
+    private async Task OpenPastRunAsync(RunSummary summary)
+    {
+        var path = _vm.WorkspacePath.Trim();
+        if (string.IsNullOrEmpty(path))
+            return;
+
+        RunRecord? record;
+        try
+        {
+            record = await RunStoreFactory.Create(WorkspaceFrom(path))
+                .LoadAsync(summary.RunId, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _vm.Runs.Fail(ex.Message);
+            return;
+        }
+
+        if (record is null)
+        {
+            _vm.Runs.Fail($"That run is no longer in the store: {RunTitle.For(summary)}");
+            return;
+        }
+
+        _vm.ShowPastRun(BuildPastRun(record));
+    }
+
+    /// <summary>
     /// Builds the read-only view of a stored run. Its artifacts get the same two actions the live
     /// run's do, because they are the same files - what changes is what the second one MEANS. On a
     /// run that just finished, deleting what it wrote is undoing it; on one from last Tuesday it is
@@ -1508,14 +1544,17 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     /// code back. The dialog says so, because a delete that is vaguer than what it does gets
     /// answered by guessing.</para>
     /// </summary>
-    private async Task DeleteRunAsync(RunRecord record)
+    private async Task DeleteRunAsync(RunSummary record)
     {
         var artifacts = record.Artifacts.Count;
         if (!await ConfirmWindow.AskAsync(
                 this,
                 $"Delete the run “{RunTitle.For(record)}”?",
-                $"Its history goes: what was asked, every step, and the {record.Events.Count} events "
-                + "behind it. This cannot be undone."
+                // It used to name the event count. The list holds headers now, so that number is not
+                // known here - and reading the whole run to put a number in a warning about deleting
+                // it would be an odd thing to spend a transcript on.
+                "Its history goes: what was asked, every step, and every event behind it. "
+                + "This cannot be undone."
                 + (artifacts > 0
                     ? $" The {artifacts} file(s) it wrote stay in your workspace — only the record of "
                       + "them goes."
@@ -1549,20 +1588,24 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     /// <summary>
     /// Loads the workspace's runs for the context column. The store type is the environment's
     /// choice (SQLite, MySQL or files), which is why the list does not create one itself.
+    ///
+    /// <para>Summaries, not records. The column shows six fields per row; it used to fetch every
+    /// event of every run in the workspace to fill them, which is a cost that grows with how much
+    /// work has been done here and is paid on every Refresh.</para>
     /// </summary>
     private async Task LoadRunsAsync()
     {
         var path = _vm.WorkspacePath.Trim();
         if (string.IsNullOrEmpty(path))
         {
-            _vm.Runs.Show(Array.Empty<RunRecord>());
+            _vm.Runs.Show(Array.Empty<RunSummary>());
             return;
         }
 
         try
         {
             var store = RunStoreFactory.Create(WorkspaceFrom(path));
-            var records = await store.LoadAllAsync(CancellationToken.None);
+            var records = await store.LoadSummariesAsync(CancellationToken.None);
             _vm.Runs.Show(records);
         }
         catch (Exception ex)
@@ -1582,7 +1625,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         var workspace = WorkspaceInfo.For(workspacePath);
         var runStore = RunStoreFactory.Create(workspace);
         var memory = MemoryStoreFactory.Create(workspace);
-        var runs = await runStore.LoadAllAsync(CancellationToken.None);
+        var runs = await runStore.LoadSummariesAsync(CancellationToken.None);
         var entries = await memory.LoadAllAsync(CancellationToken.None);
         ShowViewer("Project Memory", ProjectMemory.Render(runs, entries, workspace.RootPath));
     }
