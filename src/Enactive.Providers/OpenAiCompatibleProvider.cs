@@ -71,21 +71,57 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
 
     public async Task<ChatCompletion> CompleteAsync(ChatRequest request, CancellationToken ct)
     {
-        using var httpRequest = BuildHttpRequest(request, stream: false);
-        using var response = await _http.SendAsync(httpRequest, HttpCompletionOption.ResponseContentRead, ct);
-        var body = await response.Content.ReadAsStringAsync(ct);
-        if (!response.IsSuccessStatusCode)
+        // A schema is a REQUEST here more than anywhere else: "OpenAI-compatible" is a family rather
+        // than a specification, and an endpoint that does not know response_format may reject the
+        // whole call for it. So: send it, and if the answer is a 400, send the same request again
+        // without it and remember. The cost of being wrong is one round trip; the cost of not
+        // trying is that the field is useless on every gateway that DOES support it.
+        var wanted = request.ResponseSchema is { Length: > 0 } && !NoStructuredOutput.ContainsKey(SchemaKey(request));
+
+        var (ok, status, body) = await SendAsync(wanted);
+
+        if (!ok && status == 400 && wanted)
         {
-            WireTap.Error(_log, _descriptor.Id, (int)response.StatusCode, body);
-            throw new HttpRequestException(
-                $"Provider '{_descriptor.Id}' returned {(int)response.StatusCode} {response.StatusCode}: {Truncate(body, 500)}");
+            NoStructuredOutput.TryAdd(SchemaKey(request), true);
+            (ok, status, body) = await SendAsync(includeSchema: false);
         }
 
-        WireTap.Response(_log, _descriptor.Id, (int)response.StatusCode, body);
+        if (!ok)
+        {
+            WireTap.Error(_log, _descriptor.Id, status, body);
+            throw new HttpRequestException(
+                $"Provider '{_descriptor.Id}' returned {status}: {Truncate(body, 500)}");
+        }
+
+        WireTap.Response(_log, _descriptor.Id, status, body);
         return ParseCompletion(body);
+
+        async Task<(bool Ok, int Status, string Body)> SendAsync(bool includeSchema)
+        {
+            using var httpRequest = BuildHttpRequest(request, stream: false, includeSchema);
+            using var response = await _http.SendAsync(httpRequest, HttpCompletionOption.ResponseContentRead, ct);
+            var text = await response.Content.ReadAsStringAsync(ct);
+            return (response.IsSuccessStatusCode, (int)response.StatusCode, text);
+        }
     }
 
-    private HttpRequestMessage BuildHttpRequest(ChatRequest request, bool stream)
+    /// <summary>
+    /// Endpoints that answered a schema with a 400, by provider and model. Static and per-process,
+    /// like the Anthropic adapter's cap table: it is a fact about the endpoint, not about one call.
+    /// </summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> NoStructuredOutput =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    private string SchemaKey(ChatRequest request) => _descriptor.Id + "\0" + request.Model;
+
+    /// <summary>The schema as JSON, or null when it is not parseable - a bad schema must not fail a run.</summary>
+    private static JsonElement? TryElement(string json)
+    {
+        try { return JsonDocument.Parse(json).RootElement.Clone(); }
+        catch (JsonException) { return null; }
+    }
+
+    private HttpRequestMessage BuildHttpRequest(ChatRequest request, bool stream, bool includeSchema = true)
     {
         var payload = new Dictionary<string, object?>
         {
@@ -104,6 +140,18 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
         // never on the wire.
         if ((request.MaxTokens ?? _descriptor.MaxTokens) is { } maxTokens and > 0)
             payload["max_tokens"] = maxTokens;
+
+        // Structured outputs (FIX_PLAN §9c). "OpenAI-compatible" is a family, not a specification:
+        // vLLM and LM Studio take this, and an arbitrary gateway may ignore it or reject the whole
+        // request for it. Sent only when the caller asked and this endpoint has not already refused
+        // one, and CompleteAsync retries without it on a 400 - so the worst case is the behaviour
+        // this had yesterday, one wasted round trip.
+        if (includeSchema && request.ResponseSchema is { Length: > 0 } schema && TryElement(schema) is { } element)
+            payload["response_format"] = new
+            {
+                type = "json_schema",
+                json_schema = new { name = "answer", schema = element, strict = false }
+            };
 
         var url = _descriptor.BaseUrl.TrimEnd('/') + "/chat/completions";
         var json = JsonSerializer.Serialize(payload, JsonOpts);

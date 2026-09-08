@@ -95,7 +95,8 @@ public sealed class Reviewer
                 : BuildExecutionUserPrompt(stepTitle, coderOutput, executionEvidence, artifacts))
         };
 
-        var completion = await provider.CompleteAsync(new ChatRequest(model, messages, Temperature: 0.0), ct);
+        var completion = await provider.CompleteAsync(
+            new ChatRequest(model, messages, Temperature: 0.0, ResponseSchema: VerdictSchema), ct);
         var answer = completion.Message.Content ?? "";
 
         var prompt = completion.PromptTokens ?? 0;
@@ -114,7 +115,8 @@ public sealed class Reviewer
             + "or\n"
             + "{\"verdict\":\"fail\",\"notes\":\"...\"}"));
 
-        var retry = await provider.CompleteAsync(new ChatRequest(model, messages, Temperature: 0.0), ct);
+        var retry = await provider.CompleteAsync(
+            new ChatRequest(model, messages, Temperature: 0.0, ResponseSchema: VerdictSchema), ct);
 
         prompt += retry.PromptTokens ?? 0;
         output += retry.CompletionTokens ?? 0;
@@ -127,6 +129,32 @@ public sealed class Reviewer
             "the reviewer did not return a verdict, twice — treating the step as not reviewed",
             prompt, output);
     }
+
+    /// <summary>
+    /// The shape a verdict takes, offered to any provider that can hold a model to it
+    /// (<c>FIX_PLAN.md</c> §9c). Two fields, both required, one of them an enumeration of two words.
+    ///
+    /// <para>The reviewer is where this was worth doing FIRST and the planner is not: there is
+    /// nothing here to reason about, so constrained decoding cannot eat the thinking - which on a
+    /// 12-14B model is exactly what it does to a plan. Measure before the planner, if ever.</para>
+    ///
+    /// <para>It changes NOTHING about how the answer is judged. <see cref="Parse"/> runs on the
+    /// reply exactly as before, the re-ask below still happens when it comes back unreadable, and
+    /// two unreadable answers still fail closed. A schema makes the bad path rarer; it must never
+    /// become the thing correctness rests on, because a provider may ignore it, a gateway may not
+    /// support it, and a well-formed claim is still only a claim.</para>
+    /// </summary>
+    internal const string VerdictSchema = """
+        {
+          "type": "object",
+          "properties": {
+            "verdict": { "type": "string", "enum": ["pass", "fail"] },
+            "notes": { "type": "string" }
+          },
+          "required": ["verdict", "notes"],
+          "additionalProperties": false
+        }
+        """;
 
     internal static string BuildExecutionUserPrompt(
         string stepTitle, string coderOutput, string executionEvidence, IReadOnlyList<string> artifacts)

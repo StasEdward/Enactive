@@ -107,6 +107,15 @@ public sealed class OllamaNativeProvider : IChatProvider
         if (request.Tools is { Count: > 0 } tools)
             payload["tools"] = tools.Select(ToWireTool).ToArray();
 
+        // Structured outputs (FIX_PLAN §9c). Ollama takes the schema itself in `format` - never the
+        // bare string "json", which is a trap: a small model then returns valid JSON with invented
+        // keys, which is worse than prose because it parses. Schema-constrained or not at all.
+        //
+        // Ollama Cloud does not support this and ignores the field; a local Ollama honours it. Both
+        // are fine, because the caller validates the answer either way.
+        if (request.ResponseSchema is { Length: > 0 } schema && TryElement(schema) is { } element)
+            payload["format"] = element;
+
         var url = RootUrl(_descriptor.BaseUrl) + "/api/chat";
         var json = JsonSerializer.Serialize(payload, JsonOpts);
         WireTap.Request(_log, _descriptor.Id, request.Model, json);
@@ -204,6 +213,13 @@ public sealed class OllamaNativeProvider : IChatProvider
             : "{}";
 
         return (name, argsJson);
+    }
+
+    /// <summary>The schema as JSON, or null when it is not parseable - a bad schema must not fail a run.</summary>
+    private static JsonElement? TryElement(string json)
+    {
+        try { return JsonDocument.Parse(json).RootElement.Clone(); }
+        catch (JsonException) { return null; }
     }
 
     private static object ToWireTool(ToolDefinition t) => new

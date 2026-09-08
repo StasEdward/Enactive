@@ -35,7 +35,17 @@ public sealed record ChatRequest(
     // Ollama "think" toggle (top-level on /api/chat). Set false to stop a reasoning model (qwen3, ...)
     // from spending a whole turn in <think> and returning empty content. Null = leave it to the model.
     // Only OllamaNativeProvider honors it; other providers ignore it.
-    bool? Think = null);
+    bool? Think = null,
+    // A JSON Schema the answer should take, as text. A REQUEST, not a contract: there is no single
+    // field for this across providers (Anthropic output_config.format, Ollama format, OpenAI-style
+    // response_format), some gateways reject the field outright, and a model may ignore it anyway.
+    // Every adapter that cannot satisfy it ignores it, and one that is refused for it retries
+    // without it - see FIX_PLAN §9c.
+    //
+    // It never becomes the thing correctness rests on. The caller PARSES AND VALIDATES the answer
+    // exactly as it did before; this only makes the unparseable path rarer. An unreachable reviewer
+    // does not count as PASS, and a schema the model ignored does not count as a verdict.
+    string? ResponseSchema = null);
 
 /// <summary>A completed assistant turn (content and/or tool calls).</summary>
 public sealed record ChatCompletion(

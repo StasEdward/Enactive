@@ -104,7 +104,8 @@ public sealed class AnthropicProvider : IChatProvider
         // Build + send in a local function so we can retry once without `temperature`: newer Anthropic models
         // (e.g. Opus 5.x) reject it with 400 "temperature is deprecated for this model", while older ones still
         // accept it — so we keep it by default and only drop it when the API tells us this model refuses it.
-        async Task<(bool Ok, int Status, string Body)> SendAsync(bool includeTemperature, int maxTokens)
+        async Task<(bool Ok, int Status, string Body)> SendAsync(
+            bool includeTemperature, int maxTokens, bool includeSchema)
         {
             var payload = new Dictionary<string, object?>
             {
@@ -123,6 +124,16 @@ public sealed class AnthropicProvider : IChatProvider
                     description = t.Description,
                     input_schema = ToElement(t.JsonSchema)
                 }).ToArray();
+
+            // Structured outputs (FIX_PLAN §9c). GA and not beta-gated, and compatible with tool
+            // use - but incompatible with prefill and with citations, and the schema subset is
+            // narrower than the tool-use one. So it is sent hopefully and dropped on refusal below,
+            // never depended on.
+            if (includeSchema && request.ResponseSchema is { Length: > 0 } schema)
+                payload["output_config"] = new
+                {
+                    format = new { type = "json_schema", schema = ToElement(schema) }
+                };
 
             var url = _descriptor.BaseUrl.TrimEnd('/') + "/v1/messages";
             var json = JsonSerializer.Serialize(payload, JsonOpts);
@@ -150,12 +161,18 @@ public sealed class AnthropicProvider : IChatProvider
             ?? request.MaxTokens
             ?? (ModelCaps.TryGetValue(request.Model, out var known) ? known : DefaultMaxTokens);
 
-        var (ok, status, body) = await SendAsync(includeTemperature, maxTokens);
+        // A model already known to refuse the schema is not asked again - one 400 per model, not
+        // one per request.
+        var includeSchema = request.ResponseSchema is { Length: > 0 }
+                            && !NoStructuredOutput.ContainsKey(request.Model);
 
-        // Recover from the two 400s Anthropic returns for otherwise-valid requests: `temperature` is
-        // deprecated on newer models, and max_tokens above the model's cap (the error names the cap, which
-        // we parse and remember). Bounded to two retries so we can fix at most both.
-        for (var attempt = 0; attempt < 2 && !ok && status == 400; attempt++)
+        var (ok, status, body) = await SendAsync(includeTemperature, maxTokens, includeSchema);
+
+        // Recover from the 400s Anthropic returns for otherwise-valid requests: `temperature` is
+        // deprecated on newer models, max_tokens above the model's cap (the error names the cap,
+        // which we parse and remember), and a schema this model or this account will not take.
+        // Bounded so we can fix at most all three.
+        for (var attempt = 0; attempt < 3 && !ok && status == 400; attempt++)
         {
             if (includeTemperature && request.Temperature is not null && IsTemperatureDeprecated(body))
             {
@@ -166,11 +183,19 @@ public sealed class AnthropicProvider : IChatProvider
                 ModelCaps[request.Model] = cap;
                 maxTokens = cap;
             }
+            else if (includeSchema)
+            {
+                // Whatever the reason, the answer is the same: this was going to work without the
+                // schema, and the schema was only ever a request. Remembered so the next call does
+                // not pay for the same discovery.
+                NoStructuredOutput.TryAdd(request.Model, true);
+                includeSchema = false;
+            }
             else
             {
                 break;
             }
-            (ok, status, body) = await SendAsync(includeTemperature, maxTokens);
+            (ok, status, body) = await SendAsync(includeTemperature, maxTokens, includeSchema);
         }
 
         if (!ok)
@@ -182,6 +207,13 @@ public sealed class AnthropicProvider : IChatProvider
         WireTap.Response(_log, _descriptor.Id, status, body);
         return ParseCompletion(body);
     }
+
+    /// <summary>
+    /// Models that answered a schema with a 400. Static and per-process, like <c>ModelCaps</c> above
+    /// and for the same reason: it is a fact about the model, not about one request.
+    /// </summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> NoStructuredOutput =
+        new(StringComparer.OrdinalIgnoreCase);
 
     private static bool IsTemperatureDeprecated(string body)
         => body.Contains("temperature", StringComparison.OrdinalIgnoreCase)
