@@ -10,7 +10,7 @@ public sealed class StagedChange
 {
     public StagedChange(
         Guid id, string relativePath, string key, string? oldContent, string newContent,
-        int sequence, int scope = -1)
+        int sequence, int scope = -1, string? baseHash = null)
     {
         Id = id;
         RelativePath = relativePath;
@@ -19,7 +19,7 @@ public sealed class StagedChange
         NewContent = newContent;
         Sequence = sequence;
         Scope = scope;
-        BaseHash = FileHash.Of(oldContent);
+        BaseHash = baseHash;
     }
 
     /// <summary>
@@ -57,6 +57,18 @@ public sealed class StagedChange
     /// Apply compares it against the file on disk, so an edit made in the meantime is a conflict
     /// rather than something to overwrite silently.
     /// </summary>
+    /// <summary>
+    /// A hash of what this change expects to find on disk when it is applied — the guard
+    /// <see cref="StagingArtifactStore.Apply"/> uses to refuse a proposal whose base has moved
+    /// underneath it. Null when the change was proposed as a new file.
+    ///
+    /// <para>Which bytes those are depends on what the change was based on, and the two cases are
+    /// not the same hash. Chained behind an earlier PROPOSAL, it expects that proposal's text, which
+    /// staging itself will have written as UTF-8 — so the text hashes correctly. Based on the FILE,
+    /// it expects the file's own bytes, and those do not survive a decode to text and back: a BOM,
+    /// UTF-16, any invalid byte. Hashing the diff's text in both cases made an unopenable file
+    /// compare equal to a different unopenable file.</para>
+    /// </summary>
     public string? BaseHash { get; }
 
     public bool IsNew => OldContent is null;
@@ -75,14 +87,27 @@ public sealed record ApplyResult(bool Applied, string? Conflict = null)
     public static ApplyResult Blocked(string reason) => new(false, reason);
 }
 
-/// <summary>Content hashing for the concurrency checks. SHA-256 over UTF-8, hex.</summary>
+/// <summary>Content hashing for the concurrency checks. SHA-256, hex.</summary>
 public static class FileHash
 {
+    /// <summary>Of a string, as UTF-8. For content that IS text and never was a file.</summary>
     public static string? Of(string? content)
         => content is null ? null : Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(content)));
 
+    /// <summary>
+    /// Of the file's BYTES. It used to hash <c>File.ReadAllText</c>, which is not a hash of the file:
+    /// every byte the UTF-8 decoder cannot represent became the same replacement character before
+    /// the hash was taken, so 0xFF and 0xFE hashed identically. Undo compares this against what it
+    /// wrote to decide whether a file has been edited since — and judged a user's edit to a binary
+    /// file to be its own work, and deleted it.
+    ///
+    /// <para>Not a SHA-256 collision: the information was gone before the hash function saw it.</para>
+    /// </summary>
     public static string? OfFile(string fullPath)
-        => File.Exists(fullPath) ? Of(File.ReadAllText(fullPath)) : null;
+        => File.Exists(fullPath) ? OfBytes(File.ReadAllBytes(fullPath)) : null;
+
+    /// <summary>Of bytes already in hand — so a caller that must read a file anyway reads it once.</summary>
+    public static string OfBytes(byte[] bytes) => Convert.ToHexString(SHA256.HashData(bytes));
 }
 
 /// <summary>
@@ -153,13 +178,27 @@ public sealed class StagingArtifactStore : IOwnedArtifactStore
         // The base for the diff and for the conflict check is what a reader would see NOW: an earlier
         // pending proposal for the same path, else the file on disk. Diffing against the disk while a
         // proposal is already outstanding shows a change the user never made.
+        // The base for the diff and for the conflict check is what a reader would see NOW: an earlier
+        // pending proposal for the same path, else the file on disk. Diffing against the disk while a
+        // proposal is already outstanding shows a change the user never made.
+        //
+        // The file is read as BYTES, once, and hashed as bytes — a file's content does not survive a
+        // decode to text and back, and Undo/Apply comparing a text hash is how two different binary
+        // files came out equal. Behind an earlier proposal there is no file to hash yet: what this
+        // change expects to find is that proposal's text, which staging writes as UTF-8, so the text
+        // hash is the right one there. See StagedChange.BaseHash.
+        var onDisk = File.Exists(full) ? await File.ReadAllBytesAsync(full, ct) : null;
         var pending = NewestPending(key);
-        var oldContent = pending ?? (File.Exists(full) ? await File.ReadAllTextAsync(full, ct) : null);
+
+        var oldContent = pending ?? (onDisk is null ? null : Encoding.UTF8.GetString(onDisk));
+        var baseHash = pending is not null
+            ? FileHash.Of(pending)
+            : onDisk is null ? null : FileHash.OfBytes(onDisk);
 
         var id = Guid.NewGuid();
         lock (_gate)
             _changes.Add(new StagedChange(
-                id, relativePath, key, oldContent, newContent, _sequence++, owner));
+                id, relativePath, key, oldContent, newContent, _sequence++, owner, baseHash));
 
         return new ArtifactRef(id, kind, title, relativePath);
     }

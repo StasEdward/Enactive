@@ -208,4 +208,60 @@ public sealed class RevertIntegrityTests
 
         Assert.True(fixture.Exists("nested/doc.txt"), "B's accepted file was deleted through the other separator");
     }
+
+    // ── N4 — a hash that is not of the file ─────────────────────────────────
+
+    /// <summary>
+    /// <c>FileHash.OfFile</c> hashed <c>File.ReadAllText</c>, so every byte the UTF-8 decoder cannot
+    /// represent became the same replacement character before the hash was taken: 0xFF and 0xFE hash
+    /// identically. Undo then judged a file the user had edited to be untouched, and deleted it.
+    ///
+    /// <para>Not a SHA-256 collision. The information is gone before the hash function sees it.</para>
+    /// </summary>
+    [Fact]
+    public async Task BinaryChangeMustBlockUndo()
+    {
+        using var fixture = new EngineFixture();
+
+        await Bytes(fixture.Artifacts, "asset.bin", new byte[] { 255 });
+        await File.WriteAllBytesAsync(fixture.PathOf("asset.bin"), new byte[] { 254 });
+
+        var undo = fixture.Artifacts.Undo("asset.bin");
+
+        Assert.False(
+            undo.Undone,
+            "Two different bytes decoded to one hash, so Undo took a user's edit for its own work and deleted it");
+    }
+
+    /// <summary>
+    /// The same hole with no binary content in sight: a line-ending change is invisible to a text
+    /// hash that reads the file back through a decoder which normalises nothing — but it IS a change
+    /// to the file, and on Windows it is the most likely one a user makes by accident.
+    /// </summary>
+    [Fact]
+    public async Task A_file_edited_to_other_line_endings_still_blocks_undo()
+    {
+        using var fixture = new EngineFixture();
+
+        await Bytes(fixture.Artifacts, "notes.txt", Encoding.UTF8.GetBytes("one\ntwo\n"));
+        await File.WriteAllBytesAsync(fixture.PathOf("notes.txt"), Encoding.UTF8.GetBytes("one\r\ntwo\r\n"));
+
+        var undo = fixture.Artifacts.Undo("notes.txt");
+
+        Assert.False(undo.Undone, "The file on disk is not what the run left there, and Undo said it was");
+    }
+
+    /// <summary>An untouched file must still undo — the guard has to be a guard, not a wall.</summary>
+    [Fact]
+    public async Task An_untouched_file_still_undoes()
+    {
+        using var fixture = new EngineFixture();
+
+        await Bytes(fixture.Artifacts, "asset.bin", new byte[] { 255, 0, 254 });
+
+        var undo = fixture.Artifacts.Undo("asset.bin");
+
+        Assert.True(undo.Undone, undo.Conflict);
+        Assert.False(fixture.Exists("asset.bin"));
+    }
 }
