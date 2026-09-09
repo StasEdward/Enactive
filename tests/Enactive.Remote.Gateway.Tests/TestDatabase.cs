@@ -72,10 +72,21 @@ public sealed class TestDatabase : IAsyncLifetime
         return connection;
     }
 
-    public async Task ExecuteAsync(string sql)
+    /// <param name="parameters">
+    /// For values a test supplies as PROSE. Ids a test generated are fine interpolated; a prompt
+    /// with a quote or a backslash in it would fail as a SQL syntax error, which reads like a bug
+    /// in whatever the test was actually about.
+    /// </param>
+    public async Task ExecuteAsync(string sql, params (string Name, object? Value)[] parameters)
     {
         await using var connection = await OpenAsync();
         await using var command = new MySqlCommand(sql, connection);
+
+        foreach (var (name, value) in parameters)
+        {
+            command.Parameters.AddWithValue(name, value);
+        }
+
         await command.ExecuteNonQueryAsync();
     }
 

@@ -150,6 +150,42 @@ public sealed class PanelTests(TestDatabase database) : IClassFixture<TestDataba
         Assert.Contains(FaultCode.ApprovalNotRemotelyDecidable, body);
     }
 
+    /// <summary>
+    /// The request itself reaches the panel, whole, and keeps reaching it.
+    ///
+    /// <para>The prompt is what the computer was actually told to do; the title is a heading its
+    /// owner wrote. For a while the panel carried the prompt in every snapshot and rendered it
+    /// nowhere, so a run could be read back only against its heading - and judging what a run did
+    /// against a heading is judging it against the wrong thing.</para>
+    ///
+    /// <para>The DELTA poll is the half worth pinning. Tasks are a bounded, MUTABLE set and are
+    /// sent whole on every poll; events are append-only and are sent as a delta. Moving tasks into
+    /// the delta would look like an optimisation and would empty the panel's task map on the second
+    /// poll - every run losing its title and its request three seconds after the page loaded.</para>
+    /// </summary>
+    [Fact]
+    public async Task The_request_reaches_the_panel_verbatim_and_survives_a_delta_poll()
+    {
+        // Multi-line and quoted, because a prompt is prose somebody typed and the failure being
+        // guarded against is truncation at the first line or the first quote.
+        const string prompt = "Read README.md\nand save it as \"README.html\".\n\nKeep the headings.";
+
+        var runId = await QueuedRunAsync(prompt);
+
+        var first = await Get<GatewaySnapshot>("/api/state");
+        var task = Assert.Single(first.Tasks, t => t.Id == TaskIdOf(first, runId));
+
+        Assert.Equal(prompt, task.Prompt);
+
+        var second = await Get<GatewaySnapshot>($"/api/state?since={first.Cursor}");
+
+        Assert.True(second.Delta);
+        Assert.Equal(prompt, Assert.Single(second.Tasks, t => t.Id == task.Id).Prompt);
+    }
+
+    private static string TaskIdOf(GatewaySnapshot snapshot, string runId)
+        => Assert.Single(snapshot.Runs, r => r.Id == runId).TaskId;
+
     // ── plumbing ────────────────────────────────────────────────────────────
 
     private async Task<string> RunningRunAsync()
@@ -162,7 +198,7 @@ public sealed class PanelTests(TestDatabase database) : IClassFixture<TestDataba
         return runId;
     }
 
-    private async Task<string> QueuedRunAsync()
+    private async Task<string> QueuedRunAsync(string? prompt = null)
     {
         await database.ExecuteAsync($"""
             INSERT IGNORE INTO hosts (id, name, token_hash, revoked, created_at)
@@ -172,12 +208,17 @@ public sealed class PanelTests(TestDatabase database) : IClassFixture<TestDataba
         var taskId = Guid.NewGuid().ToString("N");
         var runId = Guid.NewGuid().ToString("N");
 
+        // The prompt goes in as a PARAMETER while everything around it is interpolated. The rest of
+        // these values are ids this method just generated; a prompt is prose from a test, and one
+        // containing a quote or a backslash would otherwise fail as a syntax error somebody would
+        // spend an afternoon reading as a projection bug.
         await database.ExecuteAsync($"""
             INSERT INTO tasks (id, host_id, workspace_id, title, prompt, created_at)
-              VALUES ('{taskId}', '{HostId}', 'workspace-1', 'Test', 'Do it.', UTC_TIMESTAMP(3));
+              VALUES ('{taskId}', '{HostId}', 'workspace-1', 'Test', @prompt, UTC_TIMESTAMP(3));
             INSERT INTO runs (id, task_id, host_id, status, created_at)
               VALUES ('{runId}', '{taskId}', '{HostId}', 'Queued', UTC_TIMESTAMP(3));
-            """);
+            """,
+            ("@prompt", prompt ?? "Do it."));
 
         return runId;
     }

@@ -248,12 +248,17 @@ function count(id, value) {
 }
 
 function renderRuns() {
-  const titles = new Map(state.tasks.map((task) => [task.id, task.title]));
+  // The whole task, not just its title. The prompt is what was actually asked
+  // for, and until this map carried it there was nowhere in the panel that
+  // could show it back: you typed what needed doing, it ran, and from then on
+  // the request existed only as a heading you had written for it.
+  const tasks = new Map(state.tasks.map((task) => [task.id, task]));
 
   const cards = state.runs.map((run) => {
+    const task = tasks.get(run.taskId);
     const card = node("div", "card");
     const head = node("div", "card-head");
-    head.append(node("h3", null, titles.get(run.taskId) ?? "Task"));
+    head.append(node("h3", null, task?.title ?? "Task"));
     head.append(node("span", statusClass(run.status), statusText(run.status)));
     card.append(head);
 
@@ -267,7 +272,7 @@ function renderRuns() {
     const actions = node("div", "actions");
     const open = node("button", "secondary", "Timeline");
     open.type = "button";
-    open.addEventListener("click", () => showRun(run, titles.get(run.taskId)));
+    open.addEventListener("click", () => showRun(run, task));
     actions.append(open);
 
     // Only a run that has not ended. A stop offered on a finished run is a
@@ -449,8 +454,8 @@ function renderHosts() {
  * hundred and not the whole history - so it says so when it is showing a tail
  * rather than letting a partial list read as a short run.
  */
-function showRun(run, title) {
-  $("run-title").textContent = title ?? "Task";
+function showRun(run, task) {
+  $("run-title").textContent = task?.title ?? "Task";
 
   const detail = $("run-detail");
   const mine = state.events.filter((event) => event.runId === run.id);
@@ -475,7 +480,19 @@ function showRun(run, title) {
   const head = node("p", "meta",
     `${statusText(run.status)} · started ${new Date(run.createdAt).toLocaleString()}`);
 
-  detail.replaceChildren(head, timeline);
+  detail.replaceChildren(head);
+
+  // What was actually asked for, verbatim and before the steps - the same rule
+  // the approval card follows, for the same reason. The title is a heading the
+  // owner wrote; the prompt is the instruction the computer was given, and
+  // judging what a run did against a heading is judging it against the wrong
+  // thing. It was stored and sent from the first day and shown nowhere.
+  if (task?.prompt) {
+    detail.append(node("p", "meta", "Asked for"));
+    detail.append(node("pre", "action", task.prompt));
+  }
+
+  detail.append(timeline);
 
   if (mine.length >= KEEP_EVENTS) {
     detail.append(node("p", "note", "Only the most recent steps are shown."));
