@@ -3,8 +3,12 @@
 # The production gateway runs against MySQL 8.0.46 on Ubuntu. This is pinned to the same 8.0 series
 # on purpose: what changes between series is the set of available collations and a good deal of SQL
 # behaviour, and a test suite that passes on a newer server than production runs on is a suite that
-# proves nothing about production. Exact patch parity is not possible - Ubuntu's build number has no
-# equivalent among the official images - so the series is the honest pin.
+# proves nothing about production.
+#
+# As of the first time this file was actually run, `mysql:8.0` resolves to 8.0.46 - the same upstream
+# patch level production is on. That is luck rather than a guarantee: the tag moves, and Ubuntu's
+# build number (8.0.46-0ubuntu0.24.04.4) has no equivalent among the official images either way. The
+# series is what is being promised here; anything closer is a bonus that will expire.
 #
 # Nothing here is a production configuration. The credentials are fixed, weak and bound to
 # localhost, and the server runs as root because the tests create and drop a database per class. A

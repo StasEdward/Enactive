@@ -87,6 +87,27 @@ public sealed class SchemaTests(TestDatabase database) : IClassFixture<TestDatab
     }
 
     /// <summary>
+    /// The server is one of the series this schema was written against.
+    ///
+    /// <para>Everything else in this file asks what the database refuses. This asks what database
+    /// it is - because a suite pointed at 8.4, or at MariaDB, would still pass most of these and
+    /// would be proving it about a server production does not run. What changes between series is
+    /// the set of collations and a good deal of SQL behaviour, and <c>utf8mb4_0900_ai_ci</c> is
+    /// written into every table.</para>
+    ///
+    /// <para>Here rather than in the CI workflow on purpose: a check in the pipeline runs only in
+    /// the pipeline, and would need a mysql client on the runner image. This one runs wherever the
+    /// tests do, including on the machine of whoever points them somewhere new.</para>
+    /// </summary>
+    [Fact]
+    public async Task The_server_is_the_series_this_schema_was_written_for()
+    {
+        var version = Assert.Single(await database.StringsAsync("SELECT VERSION()"));
+
+        Assert.StartsWith("8.0.", version, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// And a database that is already current is left alone. This is the cheap half - it only
     /// exercises the version check, never the SQL - which is why it is not the test above.
     /// </summary>

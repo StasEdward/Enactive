@@ -31,3 +31,45 @@ jobs:
 
       - name: Test
         run: dotnet test tests/Enactive.Engine.Tests/Enactive.Engine.Tests.csproj --no-build --configuration Release --verbosity normal
+
+  # The gateway's tests need a real MySQL, and they had never run anywhere but one developer's
+  # machine - 59 tests about a schema, and CI could not say a word about any of them.
+  #
+  # Ubuntu, not the Windows runner above: GitHub's service containers only exist on Linux runners.
+  # That costs nothing here because no project targets net10.0-windows - the Windows-specific
+  # behaviour lives in the ENGINE tests, which stay on the Windows job for exactly that reason.
+  gateway:
+    runs-on: ubuntu-latest
+
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: enactive-dev
+          MYSQL_DATABASE: enactive_remote
+        ports:
+          - "3306:3306"
+        # A step that starts before the server is listening fails as "cannot connect", which reads
+        # like a broken test rather than a slow container.
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -penactive-dev"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      # Whether the server is the one the schema was written for is checked by the suite itself
+      # (SchemaTests.The_server_is_the_series_this_schema_was_written_for) rather than by a step
+      # here: a check in the pipeline only ever runs in the pipeline, and it would depend on a
+      # mysql client being present on the runner image, which is not something this repository
+      # gets to promise.
+      - name: Test the gateway
+        run: dotnet test tests/Enactive.Remote.Gateway.Tests/Enactive.Remote.Gateway.Tests.csproj --configuration Release --verbosity normal
+        env:
+          ENACTIVE_REMOTE_DB: "Server=127.0.0.1;Port=3306;User ID=root;Password=enactive-dev;Database=enactive_remote;"
