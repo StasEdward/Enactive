@@ -1,6 +1,7 @@
 namespace Enactive.App.Ui.ViewModels;
 
 using System.Collections.ObjectModel;
+using Avalonia;
 using Avalonia.Media;
 using Enactive.Core.Artifacts;
 using Enactive.App.Ui.Mvvm;
@@ -19,10 +20,28 @@ using Enactive.Core.Templates;
 /// </summary>
 internal sealed class RunListItemViewModel
 {
-    public RunListItemViewModel(RunSummary record, Action<RunListItemViewModel>? remove = null)
+    public RunListItemViewModel(
+        RunSummary record, Action<RunListItemViewModel>? remove = null,
+        int attempts = 1, bool isLead = true, bool expanded = false,
+        Action<RunListItemViewModel>? toggle = null)
     {
         Record = record;
         RemoveCommand = new RelayCommand(() => remove?.Invoke(this), () => remove is not null);
+
+        Attempts = attempts;
+        IsLead = isLead;
+        IsExpanded = expanded;
+
+        // Only a group of more than one gets an expander. "1 attempt" on every ordinary run is
+        // noise on the common case to serve the rare one.
+        HasAttempts = isLead && attempts > 1;
+        AttemptsLabel = HasAttempts ? attempts.ToString() : string.Empty;
+        Chevron = expanded ? "\u25be" : "\u25b8";
+        ToggleCommand = new RelayCommand(() => toggle?.Invoke(this), () => HasAttempts);
+
+        // Indented, so an older attempt reads as belonging to the row above rather than as its own
+        // piece of work - which is the whole thing being fixed.
+        Indent = isLead ? new Thickness(0) : new Thickness(14, 0, 0, 0);
 
         // Repaired on the way OUT, not only on the way in: history recorded before titles were
         // one line still has to read properly, and rewriting somebody's stored runs in place to fix
@@ -37,6 +56,17 @@ internal sealed class RunListItemViewModel
 
     public RunSummary Record { get; }
     public string Title { get; }
+
+    /// <summary>How many attempts this task has. On the lead row only; see RunHousekeeping.Rows.</summary>
+    public int Attempts { get; }
+
+    public bool IsLead { get; }
+    public bool IsExpanded { get; }
+    public bool HasAttempts { get; }
+    public string AttemptsLabel { get; }
+    public string Chevron { get; }
+    public Thickness Indent { get; }
+    public RelayCommand ToggleCommand { get; }
 
     /// <summary>Forgets this run. The window asks first; the row only reports the click.</summary>
     public RelayCommand RemoveCommand { get; }
@@ -406,6 +436,8 @@ internal sealed class RunsViewModel : ObservableObject
     public RunsViewModel()
     {
         RefreshCommand = new RelayCommand(() => RefreshRequested?.Invoke());
+        DeleteShownCommand = new RelayCommand(
+            () => DeleteShownRequested?.Invoke(Shown), () => Shown.Count > 0);
     }
 
     /// <summary>Asks whoever owns the stores to load this workspace's runs.</summary>
@@ -425,6 +457,9 @@ internal sealed class RunsViewModel : ObservableObject
     /// the asking and the deleting; the list only reports the click.
     /// </summary>
     public event Action<RunSummary>? DeleteRequested;
+
+    /// <summary>Forget every run the current filter is showing. The window asks first.</summary>
+    public event Action<IReadOnlyList<RunSummary>>? DeleteShownRequested;
 
     /// <summary>Somebody asked to carry an interrupted run on. The window owns the running.</summary>
     public event Action<RunCheckpoint>? ResumeRequested;
@@ -473,6 +508,52 @@ internal sealed class RunsViewModel : ObservableObject
     /// </summary>
     public IReadOnlyList<RunSummary> All { get; private set; } = Array.Empty<RunSummary>();
 
+    /// <summary>
+    /// Which runs the list is showing. Changing it re-lists from what is already in hand: the
+    /// filter is a question about records this window already has, not a reason to go back to the
+    /// store.
+    /// </summary>
+    public RunFilter Filter
+    {
+        get => _filter;
+        set
+        {
+            if (!Set(ref _filter, value))
+                return;
+            OnPropertyChanged(nameof(FilterIndex));
+            Show(All);
+        }
+    }
+
+    private RunFilter _filter = RunFilter.All;
+
+    /// <summary>The combo box's own index, because Avalonia binds a selection by position.</summary>
+    public int FilterIndex
+    {
+        get => (int)_filter;
+        set
+        {
+            if (value >= 0 && value <= (int)RunFilter.OlderThanAWeek)
+                Filter = (RunFilter)value;
+        }
+    }
+
+    public IReadOnlyList<string> FilterNames { get; } =
+        ["All runs", "Unfinished", "Completed", "Older than a week"];
+
+    /// <summary>What a "delete these" would act on: exactly the rows on screen.</summary>
+    public IReadOnlyList<RunSummary> Shown { get; private set; } = Array.Empty<RunSummary>();
+
+    /// <summary>
+    /// Named with the COUNT, so the button says how much it destroys before it is pressed rather
+    /// than in a dialog after it.
+    /// </summary>
+    public string DeleteShownLabel => $"Delete these {Shown.Count}";
+
+    public bool CanDeleteShown => Shown.Count > 0;
+
+    public RelayCommand DeleteShownCommand { get; }
+
     public void Show(IReadOnlyList<RunSummary> records)
     {
         All = records;
@@ -480,13 +561,27 @@ internal sealed class RunsViewModel : ObservableObject
         // rather than by position - a finished run pushes everything down by one.
         var keep = _selected?.Record.RunId;
 
-        Items.Clear();
-        foreach (var record in records.OrderByDescending(r => r.StartedAt))
-            Items.Add(new RunListItemViewModel(record, row => DeleteRequested?.Invoke(row.Record)));
+        Shown = RunHousekeeping.Where(records, _filter, DateTimeOffset.UtcNow);
 
-        Status = Items.Count == 0
+        Items.Clear();
+        foreach (var row in RunHousekeeping.Rows(Shown, _expanded))
+            Items.Add(new RunListItemViewModel(
+                row.Run,
+                item => DeleteRequested?.Invoke(item.Record),
+                row.Attempts, row.IsLead, _expanded.Contains(RunHousekeeping.GroupKey(row.Run)), Toggle));
+
+        Status = records.Count == 0
             ? "No runs recorded in this workspace."
-            : $"{Items.Count} run{(Items.Count == 1 ? "" : "s")}";
+            : Items.Count == records.Count
+                ? $"{Items.Count} run{(Items.Count == 1 ? "" : "s")}"
+                // Both numbers when a filter is on. "3 runs" over a list that holds 37 is a true
+                // sentence that reads as the whole truth.
+                : $"{Items.Count} of {records.Count} runs";
+
+        OnPropertyChanged(nameof(Shown));
+        OnPropertyChanged(nameof(DeleteShownLabel));
+        OnPropertyChanged(nameof(CanDeleteShown));
+        DeleteShownCommand.RaiseCanExecuteChanged();
 
         if (keep is { } id)
             _selected = Items.FirstOrDefault(i => i.Record.RunId == id);
@@ -494,6 +589,25 @@ internal sealed class RunsViewModel : ObservableObject
             _selected = null;
         OnPropertyChanged(nameof(Selected));
     }
+
+    /// <summary>
+    /// Opens or closes one task's attempts.
+    ///
+    /// <para>Kept by TASK id rather than by row, because Show rebuilds every row: a finished run
+    /// re-lists the column, and expansion held on the row objects would close itself every few
+    /// seconds while somebody was reading.</para>
+    /// </summary>
+    private void Toggle(RunListItemViewModel row)
+    {
+        var key = RunHousekeeping.GroupKey(row.Record);
+
+        if (!_expanded.Remove(key))
+            _expanded.Add(key);
+
+        Show(All);
+    }
+
+    private readonly HashSet<string> _expanded = new(StringComparer.Ordinal);
 
     /// <summary>The workspace changed: what is listed belongs to the old one.</summary>
     public void Reset()

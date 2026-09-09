@@ -61,7 +61,19 @@
                     <Button Grid.Column="1" Margin="8,0,0,0"
                             Content="Fetch" Command="{Binding FetchCommand}" />
                 </Grid>
-                <TextBlock Classes="hint" Text="{Binding Status}" />
+
+                <!-- Test asks the provider whether it is there AND whether it has the first model
+                     listed above. A status check alone cannot see the commonest failure of a setup
+                     that used to work: the server is up, the key is fine, and the model was never
+                     pulled. The light beside the line is the answer, and it is grey until asked. -->
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <Button Content="Test" Command="{Binding TestCommand}"
+                            ToolTip.Tip="Ask this provider for its model list, and check that the first model above is among them" />
+                    <Ellipse Width="9" Height="9" VerticalAlignment="Center"
+                             Fill="{Binding StatusBrush}" />
+                    <TextBlock Classes="hint" Text="{Binding Status}"
+                               VerticalAlignment="Center" TextWrapping="Wrap" />
+                </StackPanel>
 
                 <StackPanel Classes="actions">
                     <Button Classes="primary" Content="Save" Command="{Binding SaveCommand}" />

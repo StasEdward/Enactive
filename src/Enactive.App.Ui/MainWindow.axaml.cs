@@ -142,6 +142,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         _vm.Runs.RefreshRequested += () => _ = LoadRunsAsync();
         _vm.Runs.OpenRequested += summary => _ = OpenPastRunAsync(summary);
         _vm.Runs.DeleteRequested += summary => _ = DeleteRunAsync(summary);
+        _vm.Runs.DeleteShownRequested += shown => _ = DeleteRunsAsync(shown);
         _vm.Runs.ResumeRequested += checkpoint => _ = RunAsync(background: false, resume: checkpoint);
         _vm.WorkspacePathChanged += RefreshWorkspaces;
         _vm.WorkspaceSwitchRequested += SwitchWorkspace;
@@ -1726,6 +1727,65 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     /// code back. The dialog says so, because a delete that is vaguer than what it does gets
     /// answered by guessing.</para>
     /// </summary>
+    /// <summary>
+    /// Forgets every run the list is currently showing.
+    ///
+    /// <para>The filter above the list is what decides the set, so the button destroys exactly what
+    /// is on screen and nothing that is not. The confirmation names the COUNT and the filter,
+    /// because "delete these" is the one phrasing where the person's idea of "these" and the
+    /// program's have to be the same thing.</para>
+    ///
+    /// <para>One failure does not stop the rest. A store that refuses one row - a file locked, a
+    /// record already gone - would otherwise leave a bulk delete half done with no way to tell how
+    /// far it got, so the ones that failed are counted and reported.</para>
+    /// </summary>
+    private async Task DeleteRunsAsync(IReadOnlyList<RunSummary> runs)
+    {
+        if (runs.Count == 0)
+            return;
+
+        var artifacts = runs.Sum(r => r.Artifacts.Count);
+
+        if (!await ConfirmWindow.AskAsync(
+                this,
+                $"Delete {runs.Count} run{(runs.Count == 1 ? "" : "s")}?",
+                "Their history goes: what was asked, every step, and every event behind it. "
+                + "This cannot be undone."
+                + (artifacts > 0
+                    ? $" The {artifacts} file(s) they wrote stay in your workspace — only the record "
+                      + "of them goes."
+                    : ""),
+                $"Delete {runs.Count}", "Keep"))
+            return;
+
+        var path = _vm.WorkspacePath.Trim();
+        if (string.IsNullOrEmpty(path))
+            return;
+
+        var store = RunStoreFactory.Create(WorkspaceFrom(path));
+        var refused = 0;
+
+        foreach (var run in runs)
+        {
+            try
+            {
+                await store.DeleteAsync(run.RunId, CancellationToken.None);
+            }
+            catch (Exception)
+            {
+                refused++;
+            }
+        }
+
+        if (_vm.PastRun is { } open && runs.Any(r => r.RunId == open.Record.RunId))
+            _vm.ShowLiveRun();
+
+        await LoadRunsAsync();
+
+        if (refused > 0)
+            _vm.Runs.Fail($"{refused} of {runs.Count} could not be deleted; the rest are gone.");
+    }
+
     private async Task DeleteRunAsync(RunSummary record)
     {
         var artifacts = record.Artifacts.Count;
@@ -1768,6 +1828,42 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     }
 
     /// <summary>
+    /// Applies the workspace's run-retention setting, and returns what is left.
+    ///
+    /// <para>Off by default, and a COUNT rather than an age. What makes this list unusable is how
+    /// many rows are in it, and a week of heavy use puts more in it than a month of light use - an
+    /// age-based rule would leave the busy workspace, the one with the problem, untouched.</para>
+    ///
+    /// <para>A failure here is swallowed on purpose. Housekeeping that cannot run is not a reason
+    /// to fail the thing the person actually asked for, which was to see their runs.</para>
+    /// </summary>
+    private static async Task<IReadOnlyList<RunSummary>> TrimAsync(
+        IRunStore store, IReadOnlyList<RunSummary> records)
+    {
+        var keep = AppSettings.Load().KeepRuns;
+        var doomed = RunHousekeeping.BeyondTheNewest(records, keep);
+
+        if (doomed.Count == 0)
+            return records;
+
+        foreach (var run in doomed)
+        {
+            try
+            {
+                await store.DeleteAsync(run.RunId, CancellationToken.None);
+            }
+            catch (Exception)
+            {
+                // Left in the list rather than hidden: a row that is still in the store belongs on
+                // screen, and the next load will try again.
+                return records;
+            }
+        }
+
+        return records.Except(doomed).ToArray();
+    }
+
+    /// <summary>
     /// Loads the workspace's runs for the context column. The store type is the environment's
     /// choice (SQLite, MySQL or files), which is why the list does not create one itself.
     ///
@@ -1803,6 +1899,12 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         {
             var store = RunStoreFactory.Create(workspace);
             var records = await store.LoadSummariesAsync(CancellationToken.None);
+
+            // Retention, applied where the list is read rather than on a timer: this is the moment
+            // the number of runs matters, and a background trimmer would be deleting somebody's
+            // history while they were not looking at it.
+            records = await TrimAsync(store, records);
+
             _vm.Runs.Show(records);
         }
         catch (Exception ex)

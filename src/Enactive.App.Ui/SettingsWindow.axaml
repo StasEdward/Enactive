@@ -365,9 +365,19 @@
                                 <DataTemplate x:DataType="vm:ProviderRow">
                                     <Border Classes="card" BorderBrush="{Binding EdgeBrush}">
                                         <Grid ColumnDefinitions="*,Auto,Auto">
-                                            <StackPanel Grid.Column="0" Margin="0,0,10,0">
-                                                <TextBlock Classes="cardTitle" Text="{Binding Name}" />
-                                                <TextBlock Classes="cardMeta" Text="{Binding Meta}" />
+                                            <StackPanel Grid.Column="0" Orientation="Horizontal"
+                                                        Margin="0,0,10,0" Spacing="9">
+                                                <!-- What the last check learned, and grey until one
+                                                     was made. The tooltip carries the sentence and
+                                                     the TIME: a dot on its own says how things were
+                                                     at a moment it does not name. -->
+                                                <Ellipse Width="9" Height="9" VerticalAlignment="Center"
+                                                         Fill="{Binding HealthBrush}"
+                                                         ToolTip.Tip="{Binding HealthTip}" />
+                                                <StackPanel>
+                                                    <TextBlock Classes="cardTitle" Text="{Binding Name}" />
+                                                    <TextBlock Classes="cardMeta" Text="{Binding Meta}" />
+                                                </StackPanel>
                                             </StackPanel>
                                             <TextBlock Grid.Column="1" Text="{Binding Reach}"
                                                        Classes="cardMeta" VerticalAlignment="Center"

@@ -180,6 +180,44 @@
         <Setter Property="Foreground" Value="White" />
     </Style>
 
+    <!-- A button that destroys something, and is not the action you came for.
+         
+         Outlined in Danger and filled only on hover: it has to be findable and must not compete
+         with the ember one for the eye, because the ember one is what somebody is here to press.
+         The rowIcon variant below does the same thing for the little icons in a list row. -->
+    <Style Selector="Button.destructive /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Brand.Danger}" />
+        <Setter Property="Foreground" Value="{DynamicResource Brand.Danger}" />
+    </Style>
+    <Style Selector="Button.destructive:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource Brand.Danger}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Brand.Danger}" />
+        <Setter Property="Foreground" Value="White" />
+    </Style>
+    <Style Selector="Button.destructive:disabled /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource Brand.Scrim}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Brand.Line}" />
+        <Setter Property="Foreground" Value="{DynamicResource Brand.TextFaint}" />
+    </Style>
+
+    <!-- The attempt count on a run row: a quiet pill, not a button competing with the row it sits
+         on. The row itself opens the run; this opens the other tries at the same task. -->
+    <Style Selector="Button.attempts">
+        <Setter Property="Padding" Value="6,1" />
+        <Setter Property="MinWidth" Value="0" />
+        <Setter Property="MinHeight" Value="0" />
+        <Setter Property="Foreground" Value="{DynamicResource Brand.TextMuted}" />
+    </Style>
+    <Style Selector="Button.attempts /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource Brand.Scrim}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Brand.Line}" />
+        <Setter Property="CornerRadius" Value="999" />
+    </Style>
+    <Style Selector="Button.attempts:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="BorderBrush" Value="{DynamicResource Brand.Accent}" />
+    </Style>
+
     <!-- A vertical form: a column of label/input pairs with room to breathe. -->
 
     <!-- A source filter in the log, and anything else that is on or off. Fluent

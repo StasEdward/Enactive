@@ -1,4 +1,4 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using Enactive.Agents;
 using Enactive.Core.Permissions;
@@ -164,6 +164,19 @@ internal sealed partial class AppSettings
     /// actually able to do instead of silently disarming them.
     /// </summary>
     public int SchemaVersion { get; set; } = 1;
+
+    /// <summary>
+    /// How many runs a workspace keeps, or 0 to keep every one.
+    ///
+    /// <para>Off by default. Deleting a run deletes the record of what the agent did — the thing
+    /// this product is built to keep — so it is not something to start doing to somebody's history
+    /// because they upgraded.</para>
+    ///
+    /// <para>A COUNT, not an age. What makes the list unusable is the number of rows in it, and a
+    /// week of heavy use puts more there than a month of light use; an age-based rule would leave
+    /// the busy workspace untouched, which is the one with the problem.</para>
+    /// </summary>
+    public int KeepRuns { get; set; }
 
     // ── Team-of-models schema (Docs/MODELS.md) ────────────────────────────────
     public List<ProviderConfig> Providers { get; set; } = new();
