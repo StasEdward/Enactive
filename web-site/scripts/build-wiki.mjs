@@ -87,7 +87,13 @@ for (const name of await fs.readdir(fonts)) {
 }
 const search = [];
 for (const [index, page] of pages.entries()) {
-  const markdown = await fs.readFile(path.join(source, page.file+'.md'),'utf8');
+  // Normalised on read, so the output does not depend on which platform built it. The search
+  // index splits on \n and kept whatever was left, which on a CRLF checkout is a trailing \r in
+  // every extracted line — so a Windows build and a Linux build of the same source produced
+  // different files. That is a small bug on its own and a fatal one for a CI step that rebuilds
+  // and compares: the check would have been red on arrival, for a reason having nothing to do
+  // with anybody's edit.
+  const markdown = (await fs.readFile(path.join(source, page.file+'.md'),'utf8')).replace(/\r\n/g,'\n');
   const title = plain(markdown.match(/^# (.+)$/m)[1]);
   const minutes = Math.max(1,Math.ceil(markdown.split(/\s+/).length/220));
   const toc=[]; const used=new Map(); let diagramCount=0;
