@@ -101,6 +101,19 @@ curl -s https://remote.enactive.com/health
 Check it from outside, not from the box. `curl` against `127.0.0.1:5099` proves the gateway is up
 and says nothing about which service the tunnel is pointed at, which is the thing being changed.
 
+Then stop whatever was serving the site before — and find it **by the port it listens on**, not by
+searching unit names:
+
+```bash
+sudo ss -ltnp | grep -v ':5099 '        # the old service is on some other port
+sudo systemctl status <the pid that printed>
+sudo systemctl disable --now <the unit it names>
+```
+
+This gateway's unit is `enactive-remote`. Whatever it replaces is likely to be called something
+close enough that `systemctl list-units | grep -i enactive` matches both, and the first person to
+follow these instructions disabled this one. A port is unambiguous; a name is not.
+
 ---
 
 ## 4. Deploying a new version

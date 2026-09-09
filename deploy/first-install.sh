@@ -220,7 +220,15 @@ Two steps remain, and they are yours because they take the site down and put it 
 
        curl -s https://remote.enactive.com/health
 
-  2. Stop whatever is serving the site now:  sudo systemctl disable --now <the preview's unit>
+  2. Stop whatever was serving the site before. Find it BY THE PORT IT LISTENS ON, never by
+     searching unit names for "enactive" - this service is called enactive-remote, the old one is
+     probably called something similar, and the first person to follow these instructions disabled
+     the wrong one:
+
+       sudo ss -ltnp | grep -v ':$PORT '     # the old service is on some other port
+       sudo systemctl status <the pid ss printed>
+       sudo systemctl disable --now <the unit that names>
+
      Disable it, do not delete it. It is the rollback.
 
 Then open the site, sign in, and register a computer under Computers. The token it shows you is
