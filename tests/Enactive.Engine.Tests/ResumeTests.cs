@@ -430,6 +430,39 @@ public sealed class ResumeTests
     }
 
     /// <summary>
+    /// A resume forgets the checkpoint it came FROM, not only the one it wrote itself.
+    ///
+    /// <para>A resume mints a NEW run id on purpose - the second attempt is its own run in the
+    /// history, under the same task - and the ending deleted that id. The interrupted run's file is
+    /// keyed by the OLD one, and nothing anywhere removed it. So the offer to resume outlived the
+    /// work it was an offer to finish: the task ran to completion, and the UNFINISHED card stayed on
+    /// screen, still amber, still saying nobody knew how this ended. Pressing it again started the
+    /// same plan a second time.</para>
+    ///
+    /// <para>Both ids are asserted, because the fix must ADD the one it came from rather than
+    /// replace the one it wrote - a run that forgot only its origin would leave its own checkpoint
+    /// behind and move the same defect one attempt along.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_resumed_run_that_ends_forgets_the_checkpoint_it_came_from()
+    {
+        using var fx = new EngineFixture();
+        var store = new RecordingCheckpointStore();
+        var first = new FakeChatProvider(Turn.Says(ThreeStepPlan)) { WhenExhausted = Turn.Says("step done") };
+        await fx.RunAsync(fx.Build(first, checkpoints: store), "do three things");
+
+        var afterOne = store.After(finished: 1);
+
+        var resumed = new RecordingCheckpointStore();
+        var again = new FakeChatProvider() { WhenExhausted = Turn.Says("step done") };
+        var events = await fx.ResumeAsync(fx.Build(again, checkpoints: resumed), afterOne);
+
+        Assert.Equal(RunOutcomeKind.Completed, events.Last().Outcome());
+        Assert.Contains(afterOne.RunId, resumed.Deleted);
+        Assert.Contains(resumed.Saved[0].RunId, resumed.Deleted);
+    }
+
+    /// <summary>
     /// A quick action leaves no checkpoint. It is one action with no boundary inside it, so there is
     /// no place a resume could pick it up from - and a checkpoint that could never be resumed is an
     /// offer the engine cannot keep.
