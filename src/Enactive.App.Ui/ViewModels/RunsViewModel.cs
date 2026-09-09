@@ -41,7 +41,12 @@ internal sealed class RunListItemViewModel
 
         // Indented, so an older attempt reads as belonging to the row above rather than as its own
         // piece of work - which is the whole thing being fixed.
-        Indent = isLead ? new Thickness(0) : new Thickness(14, 0, 0, 0);
+        //
+        // The WHOLE margin, not the indent alone. Binding Margin on the card replaces the value
+        // Border.card sets in the style, gap included - so an indent expressed as a left inset and
+        // nothing else silently took the 6px between every run row away with it, and the list of
+        // cards became one block with lines drawn on it. Anything bound here has to carry the gap.
+        CardMargin = isLead ? new Thickness(0, 0, 0, 6) : new Thickness(14, 0, 0, 6);
 
         // Repaired on the way OUT, not only on the way in: history recorded before titles were
         // one line still has to read properly, and rewriting somebody's stored runs in place to fix
@@ -65,7 +70,8 @@ internal sealed class RunListItemViewModel
     public bool HasAttempts { get; }
     public string AttemptsLabel { get; }
     public string Chevron { get; }
-    public Thickness Indent { get; }
+    /// <summary>The card's margin: the indent of an older attempt, and the gap under every row.</summary>
+    public Thickness CardMargin { get; }
     public RelayCommand ToggleCommand { get; }
 
     /// <summary>Forgets this run. The window asks first; the row only reports the click.</summary>
@@ -137,6 +143,44 @@ internal sealed class RunListItemViewModel
             seconds = 0;
         return seconds >= 60 ? $"{(int)(seconds / 60)}m {(int)(seconds % 60)}s" : $"{seconds:0}s";
     }
+}
+
+/// <summary>
+/// A run that is happening right now, as a row at the TOP of the column.
+///
+/// <para>Above the history because it is not history, and above UNFINISHED because a run in flight
+/// is more current than one that was abandoned. It exists so the column can answer "what is
+/// happening here", which it could not: a run had no row anywhere until it ENDED, so starting one
+/// and then opening an older run to compare left the new run findable nowhere.</para>
+///
+/// <para>Pressing it goes back to the live feed - the same thing the "← Back" in the past-run
+/// header does, in the place people look for it. A headless run has no feed, so it is not
+/// pressable and its row says where its answer will be instead.</para>
+/// </summary>
+internal sealed class LiveRunViewModel
+{
+    public LiveRunViewModel(LiveRun run, Action open)
+    {
+        Run = run;
+        Title = RunTitle.OneLine(run.Title);
+        Meta = RunColumn.Meta(run);
+        CanOpen = !run.Headless;
+        Tooltip = run.Headless
+            ? "Running in the background. It reports to the Inbox when it is done; there is no live "
+              + "view to open."
+            : "Back to this run";
+        OpenCommand = new RelayCommand(open, () => CanOpen);
+    }
+
+    public LiveRun Run { get; }
+    public string Title { get; }
+    public string Meta { get; }
+    public string Tooltip { get; }
+    public bool CanOpen { get; }
+    public RelayCommand OpenCommand { get; }
+
+    /// <summary>Ember: this is the thing that is happening, which is what ember means here.</summary>
+    public IBrush StatusBrush => Brand.Accent;
 }
 
 /// <summary>
@@ -471,6 +515,35 @@ internal sealed class RunsViewModel : ObservableObject
 
     public bool HasResumable => Resumable.Count > 0;
 
+    /// <summary>Runs in flight in this workspace, newest first. See LiveRunViewModel.</summary>
+    public ObservableCollection<LiveRunViewModel> Running { get; } = new();
+
+    public bool HasRunning => Running.Count > 0;
+
+    /// <summary>Back to the live feed: a row was pressed. The window owns what "live" means.</summary>
+    public event Action? OpenLiveRequested;
+
+    /// <summary>
+    /// Replaces the live rows, unless they would come out identical.
+    ///
+    /// <para>The window calls this on every engine event, because an event is what changes what a
+    /// row says - and most events change nothing about it. Rebuilding regardless would restyle two
+    /// rows several times a second under somebody's pointer, so an unchanged list is left exactly
+    /// as it is, objects included.</para>
+    /// </summary>
+    public void ShowRunning(IReadOnlyList<LiveRun> live)
+    {
+        if (Running.Count == live.Count
+            && Running.Select(r => r.Run).SequenceEqual(live))
+            return;
+
+        Running.Clear();
+        foreach (var run in live)
+            Running.Add(new LiveRunViewModel(run, () => OpenLiveRequested?.Invoke()));
+
+        OnPropertyChanged(nameof(HasRunning));
+    }
+
     /// <summary>
     /// Offers the interrupted runs found in this workspace.
     ///
@@ -588,7 +661,32 @@ internal sealed class RunsViewModel : ObservableObject
         else
             _selected = null;
         OnPropertyChanged(nameof(Selected));
+
+        // Coming back to a workspace that was left reading a run. Done through the ordinary
+        // selection, so returning takes exactly the path a click takes - one way to open a run, not
+        // two that can come to disagree about what opening one means.
+        if (Reopen is { } wanted)
+        {
+            Reopen = null;
+
+            if (Items.FirstOrDefault(i => i.Record.RunId == wanted) is { } row)
+                Selected = row;
+            else if (records.FirstOrDefault(r => r.RunId == wanted) is { } summary)
+                // In the workspace but not on screen: an older attempt whose group is collapsed, or
+                // one the filter excludes. Opened anyway and left unselected, because the row
+                // genuinely is not there to highlight.
+                OpenRequested?.Invoke(summary);
+        }
     }
+
+    /// <summary>
+    /// The run to open when this workspace's list arrives, or null for an empty middle column.
+    ///
+    /// <para>Set by the window from <c>OpenRunMemory</c> just before the workspace changes, because
+    /// changing the workspace is what starts the list loading. It is consumed once: a workspace
+    /// comes back to what it was left reading, and then behaves like any other.</para>
+    /// </summary>
+    public Guid? Reopen { get; set; }
 
     /// <summary>
     /// Opens or closes one task's attempts.
@@ -614,6 +712,10 @@ internal sealed class RunsViewModel : ObservableObject
     {
         Resumable.Clear();
         OnPropertyChanged(nameof(HasResumable));
+        // A background run belongs to the workspace it was started in. The window re-offers the
+        // ones that belong here.
+        Running.Clear();
+        OnPropertyChanged(nameof(HasRunning));
         Items.Clear();
         _selected = null;
         OnPropertyChanged(nameof(Selected));

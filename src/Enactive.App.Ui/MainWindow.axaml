@@ -143,6 +143,9 @@
                     <Panel>
                         <Border BorderBrush="{Binding WorkspaceEdgeBrush}"
                                 BorderThickness="2,0,0,0" CornerRadius="0,5,5,0">
+                        <!-- Live during a run. The run keeps going in the workspace it belongs to,
+                             its row stays in that workspace's RUNNING block, and coming back
+                             restores its feed - so leaving it is no longer losing it. -->
                         <Button Classes="wsCard" Command="{Binding ToggleSwitcherCommand}"
                                 ToolTip.Tip="{Binding WorkspacePath}">
                             <Grid ColumnDefinitions="*,Auto">
@@ -259,15 +262,56 @@
                     <TextBlock Grid.Column="0" Classes="panelHeader" Text="RUNS" Margin="0"
                                VerticalAlignment="Center" />
                     <Button Grid.Column="1" Content="Refresh" FontSize="11" Padding="8,1"
+                            IsEnabled="{Binding IsColumnIdle}"
                             Command="{Binding Runs.RefreshCommand}" />
                 </Grid>
+
+                <!-- What is happening RIGHT NOW. Above everything, because the column's first job
+                     is the present tense and it used to have nothing to say about it: a run is
+                     written to the store when it ENDS, so between Run and the end it appeared
+                     nowhere but the middle column. Start a run, open an older one to compare, and
+                     the run you had just started was findable in no list at all.
+
+                     NOT frozen with the rest of the column. Everything else here is disabled while
+                     a run is on - that is the point - but this row exists to be pressed while a run
+                     is on, and a greyed-out way back is no way back. -->
+                <StackPanel DockPanel.Dock="Top" Margin="12,0,12,8"
+                            IsVisible="{Binding Runs.HasRunning}">
+                    <TextBlock Classes="panelHeader" Text="RUNNING" Margin="0,0,0,6" />
+                    <ItemsControl ItemsSource="{Binding Runs.Running}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:LiveRunViewModel">
+                                <!-- The same shape as an UNFINISHED row: a card, and a small button
+                                     for the one thing you can do with it. Open is absent on a
+                                     background run rather than disabled - there is no live view to
+                                     go to, and an offer that cannot be taken is not an offer. -->
+                                <Border Classes="card" BorderBrush="{Binding StatusBrush}"
+                                        ToolTip.Tip="{Binding Tooltip}">
+                                    <Grid ColumnDefinitions="*,Auto">
+                                        <StackPanel>
+                                            <TextBlock Classes="cardTitle" Text="{Binding Title}"
+                                                       TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Classes="cardMeta" Text="{Binding Meta}"
+                                                       TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
+                                        </StackPanel>
+                                        <Button Grid.Column="1" Content="Open" FontSize="11" Padding="8,1"
+                                                VerticalAlignment="Center" Margin="6,0,0,0"
+                                                IsVisible="{Binding CanOpen}"
+                                                Command="{Binding OpenCommand}" />
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
 
                 <!-- The filter decides the set, and the button destroys exactly what is on screen.
                      Removing runs one at a time was the only way to remove any, and a workspace
                      used for a few days had 37 of them - most of them repeat attempts at one task.
                      The button carries the COUNT so it says how much it takes before it is pressed,
                      not in a dialog afterwards. -->
-                <Grid DockPanel.Dock="Top" Margin="12,0,12,6" ColumnDefinitions="*,Auto">
+                <Grid DockPanel.Dock="Top" Margin="12,0,12,6" ColumnDefinitions="*,Auto"
+                      IsEnabled="{Binding IsColumnIdle}">
                     <ComboBox Grid.Column="0" FontSize="11" HorizontalAlignment="Stretch"
                               ItemsSource="{Binding Runs.FilterNames}"
                               SelectedIndex="{Binding Runs.FilterIndex, Mode=TwoWay}"
@@ -285,6 +329,7 @@
                      something that happened - it is an offer to carry on - and a killed run usually
                      wrote no record at all. Nothing shows when there are none, which is normally. -->
                 <StackPanel DockPanel.Dock="Top" Margin="12,0,12,8"
+                            IsEnabled="{Binding IsIdle}"
                             IsVisible="{Binding Runs.HasResumable}">
                     <TextBlock Classes="panelHeader" Text="UNFINISHED" Margin="0,0,0,6" />
                     <ItemsControl ItemsSource="{Binding Runs.Resumable}">
@@ -313,14 +358,17 @@
                            Text="{Binding Runs.Status}" />
 
                 <!-- Picking one opens it read-only over the live run, which keeps running
-                     underneath. -->
+                     underneath, and Back returns to it - as does Open on the RUNNING row above,
+                     which is the affordance that makes reading history during a run safe to offer.
+                     Live while a run is on, unlike the controls around it: reading what an earlier
+                     attempt did is most useful precisely while you are waiting on this one. -->
                 <ListBox Classes="cards" Margin="12,0,12,0"
                          ItemsSource="{Binding Runs.Items}"
                          SelectedItem="{Binding Runs.Selected}">
                     <ListBox.ItemTemplate>
                         <DataTemplate x:DataType="vm:RunListItemViewModel">
                             <Border Classes="card" BorderBrush="{Binding StatusBrush}"
-                                    ToolTip.Tip="{Binding Tooltip}" Margin="{Binding Indent}">
+                                    ToolTip.Tip="{Binding Tooltip}" Margin="{Binding CardMargin}">
                                 <Grid ColumnDefinitions="Auto,*,Auto">
                                     <!-- The attempt count, on a task that took more than one go.
                                          Twelve tries at one task used to be twelve rows and read as
@@ -433,11 +481,16 @@
                     <StackPanel DockPanel.Dock="Right" Spacing="6" VerticalAlignment="Center"
                                 Margin="8,0,0,0">
                         <StackPanel Orientation="Horizontal" Spacing="6">
-                            <Button Classes="primary" Content="Run" Width="86"
+                            <Button Classes="go" Content="Run" Width="86"
+                                    ToolTip.Tip="{Binding RunTip}"
                                     Command="{Binding RunCommand}" />
-                            <Button Content="Stop" Width="64" Command="{Binding StopCommand}" />
+                            <!-- Stop throws away work that is half done, which is the same act as
+                                 Reject, and Danger is the palette's colour for it. Outlined, not
+                                 filled: it must be findable without competing with Run. -->
+                            <Button Classes="destructive" Content="Stop" Width="64"
+                                    Command="{Binding StopCommand}" />
                         </StackPanel>
-                        <Button Content="Run in background"
+                        <Button Classes="goSoft" Content="Run in background"
                                 HorizontalAlignment="Stretch"
                                 Command="{Binding RunBackgroundCommand}"
                                 ToolTip.Tip="Runs it headless: the window stays free and it reports back to the Inbox when it is done." />
@@ -804,11 +857,11 @@
 
                             <!-- Retry repeats THIS run exactly; Run again re-resolves the template
                                  as it stands now. Both are new attempts at the same task. -->
-                            <Button Classes="primary" Content="Retry" Padding="16,5"
+                            <Button Classes="go" Content="Retry" Padding="16,5"
                                     Command="{Binding PastRun.RetryCommand}"
                                     IsVisible="{Binding PastRun.CanRetry}"
                                     ToolTip.Tip="Run this again, exactly as it was" />
-                            <Button Classes="accent" Content="Run again" Padding="16,5"
+                            <Button Classes="goSoft" Content="Run again" Padding="16,5"
                                     Command="{Binding PastRun.RunAgainCommand}"
                                     IsVisible="{Binding PastRun.CanRunAgain}"
                                     ToolTip.Tip="{Binding PastRun.RunAgainTooltip}" />

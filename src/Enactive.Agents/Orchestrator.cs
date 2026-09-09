@@ -703,12 +703,27 @@ public sealed class Orchestrator : IOrchestrator
         // Forgets the checkpoint: this run reached an end, and an ending is not resumable. Called
         // for every ending, not only a good one - a run that FAILED ran to a conclusion, and the
         // conclusion was failure. What makes a run resumable is that nobody knows how it ended.
+        //
+        // BOTH checkpoints, when this is a resume. A resume mints a NEW run id on purpose - the
+        // second attempt is its own run in the history, under the same task - so the file this run
+        // has been writing is not the file it was picked up from, and nothing anywhere else removed
+        // that one. The offer to resume therefore outlived the work it was an offer to finish: the
+        // task ran to completion and the UNFINISHED card stayed on screen, still amber, still saying
+        // nobody knew how it ended, and pressing it again started the same plan a second time.
         async Task ForgetCheckpointAsync()
         {
             if (_checkpoints is not { } store)
                 return;
 
-            try { await store.DeleteAsync(scope.RunId, CancellationToken.None); }
+            await ForgetAsync(store, scope.RunId);
+
+            if (resume is { } from && from.RunId != scope.RunId)
+                await ForgetAsync(store, from.RunId);
+        }
+
+        static async Task ForgetAsync(IRunCheckpointStore store, Guid runId)
+        {
+            try { await store.DeleteAsync(runId, CancellationToken.None); }
             catch (IOException) { }
             catch (UnauthorizedAccessException) { }
         }

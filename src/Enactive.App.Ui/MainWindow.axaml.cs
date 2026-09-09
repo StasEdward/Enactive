@@ -83,6 +83,47 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     private DispatcherTimer? _elapsedTimer;
     private string _currentWorkspaceRoot = string.Empty;
     private readonly WorkspaceRegistry _registry = WorkspaceRegistry.Load();
+
+    /// <summary>What each workspace was left showing in the middle column. See OpenRunMemory.</summary>
+    private readonly OpenRunMemory _openRuns = new();
+
+    /// <summary>
+    /// Runs in flight, and the workspace each belongs to.
+    ///
+    /// <para>Held here because nothing else knows: a run is written to the store when it ENDS, so
+    /// between Run and the end this list is the only record that it is happening at all. The
+    /// workspace is carried alongside because a background run keeps going after the workspace has
+    /// been switched, and it must not appear in another project's column.</para>
+    /// </summary>
+    private readonly Dictionary<Guid, (LiveRun Run, string Workspace)> _live = new();
+
+    /// <summary>The foreground run's row, so events can find it. Null when nothing is running.</summary>
+    private Guid _liveRow;
+
+    /// <summary>
+    /// The workspace whose run the middle column belongs to, normalised. Set when a foreground run
+    /// starts and kept after it ends, because the finished feed still belongs to that workspace and
+    /// coming back to it should show what was left there.
+    /// </summary>
+    private string _liveWorkspace = string.Empty;
+
+    /// <summary>Whether the middle column is currently showing that run.</summary>
+    private bool _liveAttached = true;
+
+    /// <summary>
+    /// Every write the live run makes to the view model, in order, for the length of the run.
+    ///
+    /// <para>The middle column can now be walked away from - a run keeps going while another
+    /// workspace is on screen - and what it looked like has to come back. Keeping a JOURNAL rather
+    /// than a snapshot is what makes that a small change instead of a rewrite: the objects behind
+    /// the column (the step cards) live in fields and go on updating themselves while nobody is
+    /// looking, so re-attaching is "empty the panels, replay the writes" and nothing has to be
+    /// captured field by field or kept in step with the next thing somebody adds.</para>
+    ///
+    /// <para>Cleared when a run starts. Kept after one ends, so a finished feed is still restorable
+    /// until it is replaced.</para>
+    /// </summary>
+    private readonly List<Action> _liveJournal = new();
     private int _backgroundRuns;
     private bool _forceClose;
     private StagingArtifactStore? _staging;
@@ -144,6 +185,9 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         _vm.Runs.DeleteRequested += summary => _ = DeleteRunAsync(summary);
         _vm.Runs.DeleteShownRequested += shown => _ = DeleteRunsAsync(shown);
         _vm.Runs.ResumeRequested += checkpoint => _ = RunAsync(background: false, resume: checkpoint);
+        // Pressing the running row is the way back to the live feed. The "← Back" in the past-run
+        // header does the same thing and is where nobody looks.
+        _vm.Runs.OpenLiveRequested += () => _vm.ShowLiveRun();
         _vm.WorkspacePathChanged += RefreshWorkspaces;
         _vm.WorkspaceSwitchRequested += SwitchWorkspace;
         _vm.WorkspaceRenameRequested += path => _ = RenameWorkspaceAsync(path);
@@ -505,40 +549,42 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             return;
         }
 
+        // Everything the previous run left on screen goes first, through the one method that knows
+        // what "on screen" is made of. Reading history is fine; watching it while a new run of your
+        // own starts is not.
+        ClearRunView();
+
         // The command bar clears, so the request moves into the header - otherwise what you asked
         // for survives only in the log.
-        _vm.TaskIntent = text;
-        _vm.TaskTitle = Summarise(text);
-        _vm.HasTask = true;
-        _vm.ToolCalls = 0;
-        _vm.ResetUsage();
-        _vm.Routing.Clear();
-        _vm.SelectedTab = 0;
-        // Reading history is fine; watching it while a new run of your own starts is not.
-        _vm.ShowLiveRun();
+        // This run's workspace, and the column is showing it: whatever was on screen a moment ago,
+        // pressing Run means watching THIS.
+        _liveWorkspace = WorkspaceRegistry.Normalise(workspacePath);
+        _liveAttached = true;
 
-        // reset run state / panels
         _vm.InputText = string.Empty;
-        _vm.Steps.Clear();
-        _vm.Artifacts.Clear();
-        _shownArtifacts.Clear();
-        _cards.Clear();
-        _currentCard = null;
-        _running.Clear();
-        _stepIndex = 0;
-        _doneSteps = 0;
-        _totalSteps = 0;
-        _vm.IsDecisionVisible = false;
-        _vm.IsAgentVisible = false;
-        _vm.StatusPhase = "Running";
-        _vm.StatusProgress = "—";
+        Live(() => _vm.TaskIntent = text);
+        SetLiveTitle(Summarise(text));
+        Live(() => _vm.HasTask = true);
+        Live(() => _vm.StatusPhase = "Running");
+
+        // A row in the column from the FIRST moment, not from the last one. The store learns about
+        // a run when it ends, so without this the run is on screen nowhere but the middle column -
+        // and opening an older run to compare loses it.
+        _liveRow = BeginLive(_liveTitle, Path.GetFullPath(workspacePath), headless: false);
+        Live(() => _vm.StatusProgress = "—");
+        Live(() => _vm.CurrentAction = string.Empty);
         _vm.StatusElapsed = "0s";
-        _vm.CurrentAction = string.Empty;
         _vm.IsBusy = true;
+        RefreshColumnState();
         _elapsedTimer?.Stop();
         _runStopwatch.Restart();
+        // Not journalled - see AttachLive, which sets the elapsed time from the stopwatch itself.
         _elapsedTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
-        _elapsedTimer.Tick += (_, _) => _vm.StatusElapsed = FormatElapsed(_runStopwatch.Elapsed);
+        _elapsedTimer.Tick += (_, _) =>
+        {
+            if (_liveAttached)
+                _vm.StatusElapsed = FormatElapsed(_runStopwatch.Elapsed);
+        };
         _elapsedTimer.Start();
 
         _cts = new CancellationTokenSource();
@@ -646,11 +692,15 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         }
         catch (OperationCanceledException)
         {
-            Dispatcher.UIThread.Post(() => { _vm.StatusPhase = "Cancelled"; _currentCard?.SetFailed(); });
+            Dispatcher.UIThread.Post(() => { Live(() => _vm.StatusPhase = "Cancelled"); _currentCard?.SetFailed(); });
         }
         catch (Exception ex)
         {
-            Dispatcher.UIThread.Post(() => { _vm.StatusPhase = "Error"; _vm.CurrentAction = ex.Message; _currentCard?.SetFailed(); });
+            Dispatcher.UIThread.Post(() =>
+            {
+                Live(() => { _vm.StatusPhase = "Error"; _vm.CurrentAction = ex.Message; });
+                _currentCard?.SetFailed();
+            });
         }
         finally
         {
@@ -658,11 +708,22 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             _elapsedTimer = null;
             _runStopwatch.Stop();
             var finalElapsed = FormatElapsed(_runStopwatch.Elapsed);
+            var endedRow = _liveRow;
+            _liveRow = Guid.Empty;
             Dispatcher.UIThread.Post(() =>
             {
-                _vm.StatusElapsed = finalElapsed;
+                if (_liveAttached)
+                    _vm.StatusElapsed = finalElapsed;
+                // The row goes BEFORE the history is re-read, so the moment it stops running is the
+                // moment it stops being listed as running. RunColumn.Live is the belt to this
+                // brace: if the two ever cross, the run is not shown twice.
+                EndLive(endedRow);
                 // The run that just ended belongs at the top of the history under the workspace.
-                _ = LoadRunsAsync();
+                // Only when that workspace is the one on screen - LoadRunsAsync reads whichever is
+                // current, and a run ending elsewhere is not a reason to re-read this one.
+                if (IsLiveWorkspace)
+                    _ = LoadRunsAsync();
+                RefreshColumnState();
             });
             _vm.IsBusy = false;
             _cts = null;
@@ -675,40 +736,43 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         Dispatcher.UIThread.Post(() =>
         {
             // The run id is the orchestrator's to mint, so the log tab learns it from the first
-            // event rather than being told in advance.
+            // event rather than being told in advance. So does the live row, which needs it to be
+            // matched against the history when the run ends.
             _vm.RunLog?.SetRun(ev.RunId);
+            if (_liveRow != Guid.Empty)
+                UpdateLive(_liveRow, r => r.RunId == ev.RunId ? r : r with { RunId = ev.RunId });
 
             switch (ev.Kind)
             {
                 case EventKind.IntentReceived:
-                    _vm.StatusPhase = "Understanding";
+                    Live(() => _vm.StatusPhase = "Understanding");
                     break;
                 case EventKind.Routed:
-                    _vm.Routing.Apply(ev.Summary, ev.PayloadJson);
+                    Live(() => _vm.Routing.Apply(ev.Summary, ev.PayloadJson));
                     if (ev.Summary.Contains("-> model"))
-                        _vm.StatusPhase = "Planning";
+                        Live(() => _vm.StatusPhase = "Planning");
                     if (ev.Summary.StartsWith("Quick action: ", StringComparison.Ordinal))
-                        _vm.TaskTitle = ev.Summary["Quick action: ".Length..];
+                        SetLiveTitle(ev.Summary["Quick action: ".Length..]);
                     if (ev.Summary.StartsWith("Reasoner", StringComparison.Ordinal))
-                        _vm.SetAgent("Reasoner · planning", Brand.PillReasoner);
+                        Live(() => _vm.SetAgent("Reasoner · planning", Brand.PillReasoner));
                     break;
                 case EventKind.PlanCreated:
-                    _vm.StatusPhase = "Executing";
+                    Live(() => _vm.StatusPhase = "Executing");
                     // The planner's title is a better header than the raw request, which is often a
                     // paragraph. From the payload; the sentence is read only for a run produced by a
                     // build that predates it, where a title containing " — " lost its tail.
                     if (ev.PlanTitle() is { Length: > 0 } plannedTitle)
-                        _vm.TaskTitle = plannedTitle;
+                        SetLiveTitle(plannedTitle);
                     else
                     {
                         var dash = ev.Summary.IndexOf(" — ", StringComparison.Ordinal);
                         if (dash > 0)
-                            _vm.TaskTitle = ev.Summary[..dash];
+                            SetLiveTitle(ev.Summary[..dash]);
                     }
                     CreateStepCards(ev);
                     break;
                 case EventKind.StepStarted:
-                    _vm.SetAgent("Coder", Brand.PillCoder);
+                    Live(() => _vm.SetAgent("Coder", Brand.PillCoder));
                     BeginStep(ev);
                     (CardFor(ev) ?? EnsureCurrentCard()).SetActivity("Thinking…");
                     break;
@@ -748,7 +812,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                     UpdateProgress();
                     break;
                 case EventKind.AssistantDelta:
-                    _vm.SetAgent("Coder", Brand.PillCoder);
+                    Live(() => _vm.SetAgent("Coder", Brand.PillCoder));
                     var streamCard = CardFor(ev) ?? EnsureCurrentCard();
                     // Buffered, not shown live - the raw streamed reply isn't interesting on its own;
                     // it gets folded into one short note the next time a tool runs or the step ends.
@@ -756,9 +820,12 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                     streamCard.SetActivity("Thinking…");
                     break;
                 case EventKind.ToolInvoked:
-                    _vm.SetAgent("Coder", Brand.PillCoder);
-                    _vm.ToolCalls++;
-                    _vm.CurrentAction = ev.Summary;
+                    Live(() =>
+                    {
+                        _vm.SetAgent("Coder", Brand.PillCoder);
+                        _vm.ToolCalls++;
+                        _vm.CurrentAction = ev.Summary;
+                    });
                     var toolCard = CardFor(ev) ?? EnsureCurrentCard();
                     StepCardWriter.LogInvocation(toolCard, ev.Summary);
                     toolCard.SetActivity(StepCardWriter.DescribeActivity(ev.Summary));
@@ -777,8 +844,11 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                 case EventKind.ReviewRequested:
                 case EventKind.ReviewPassed:
                 case EventKind.ReviewFailed:
-                    _vm.SetAgent("Reasoner · review", Brand.PillReasoner);
-                    _vm.CurrentAction = ev.Summary;
+                    Live(() =>
+                    {
+                        _vm.SetAgent("Reasoner · review", Brand.PillReasoner);
+                        _vm.CurrentAction = ev.Summary;
+                    });
                     var reviewCard = CardFor(ev) ?? EnsureCurrentCard();
                     reviewCard.AddNote(ev.Summary);
                     reviewCard.SetActivity(
@@ -787,7 +857,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                     break;
                 case EventKind.DecisionRequested:
                 case EventKind.DecisionResolved:
-                    _vm.CurrentAction = ev.Summary;
+                    Live(() => _vm.CurrentAction = ev.Summary);
                     var decisionCard = CardFor(ev) ?? EnsureCurrentCard();
                     decisionCard.AddNote(ev.Summary);
                     if (ev.Kind == EventKind.DecisionRequested)
@@ -800,7 +870,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                     if (ev.Usage() is { } used)
                     {
                         var usageProvider = ev.ProviderId();
-                        _vm.AddUsage(used.In, used.Out, usageProvider, ReachOf(usageProvider));
+                        Live(() => _vm.AddUsage(used.In, used.Out, usageProvider, ReachOf(usageProvider)));
                     }
                     break;
                 case EventKind.ArtifactProduced:
@@ -835,19 +905,23 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                             ? RunOutcomeKind.Completed
                             : RunOutcomeKind.Failed);
 
-                    _vm.StatusPhase = outcome.ToString();
-                    _vm.IsAgentVisible = false;
+                    Live(() =>
+                    {
+                        _vm.StatusPhase = outcome.ToString();
+                        _vm.IsAgentVisible = false;
+                        // Why it stopped belongs on screen, not only in the log.
+                        _vm.CurrentAction = outcome == RunOutcomeKind.Completed
+                            ? string.Empty
+                            : ev.OutcomeReason() ?? ev.Summary;
+                    });
 
                     if (outcome == RunOutcomeKind.Completed)
                     {
-                        _vm.CurrentAction = string.Empty;
                         _currentCard?.SetDone();
                         _currentCard?.SetActivity("Done");
                     }
                     else
                     {
-                        // Why it stopped belongs on screen, not only in the log.
-                        _vm.CurrentAction = ev.OutcomeReason() ?? ev.Summary;
                         _currentCard?.SetFailed();
                         _currentCard?.SetActivity(outcome.ToString());
                     }
@@ -870,7 +944,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         {
             var card = new StepCardViewModel(title.Trim());
             _cards.Add(card);
-            _vm.Steps.Add(card);
+            Live(() => _vm.Steps.Add(card));
         }
         UpdateProgress();
 
@@ -898,9 +972,10 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         }
         else
         {
-            card = new StepCardViewModel(ev.Summary);
-            _cards.Add(card);
-            _vm.Steps.Add(card);
+            var fresh = new StepCardViewModel(ev.Summary);
+            card = fresh;
+            _cards.Add(fresh);
+            Live(() => _vm.Steps.Add(fresh));
             _totalSteps = _cards.Count;
         }
         card.SetRunning();
@@ -908,7 +983,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         // With one step in flight this is that step; with several, events without a step number have
         // no single owner, so nothing claims to be "current".
         _currentCard = _running.Count == 1 ? card : null;
-        _vm.CurrentAction = ev.Summary;
+        Live(() => _vm.CurrentAction = ev.Summary);
     }
 
     private void EndStep(StepCardViewModel? card)
@@ -932,10 +1007,10 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             // The quick action's own title when the planner has given one - the same name replay
             // puts on this card, so a run reads identically live and from the history.
             var card = new StepCardViewModel(
-                string.IsNullOrWhiteSpace(_vm.TaskTitle) ? "Working" : _vm.TaskTitle);
+                string.IsNullOrWhiteSpace(_liveTitle) ? "Working" : _liveTitle);
             card.SetRunning();
             _cards.Add(card);
-            _vm.Steps.Add(card);
+            Live(() => _vm.Steps.Add(card));
             _currentCard = card;
             if (_totalSteps == 0)
                 _totalSteps = 1;
@@ -943,8 +1018,36 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         return _currentCard;
     }
 
+    /// <summary>
+    /// The run's title, in the window and on the view model both.
+    ///
+    /// <para>Kept in a field as well, because the view model's copy is EMPTY while the middle column
+    /// is showing another workspace - and the title is read while that is true, to name a quick
+    /// action's card and the run's row in the column.</para>
+    /// </summary>
+    private void SetLiveTitle(string title)
+    {
+        _liveTitle = title;
+        Live(() => _vm.TaskTitle = title);
+    }
+
+    private string _liveTitle = string.Empty;
+
     private void UpdateProgress()
-        => _vm.StatusProgress = _totalSteps > 0 ? $"{_doneSteps} / {_totalSteps} steps" : "—";
+    {
+        var progress = _totalSteps > 0 ? $"{_doneSteps} / {_totalSteps} steps" : "—";
+        Live(() => _vm.StatusProgress = progress);
+
+        // The one place step counts change, so the one place the live row has to be told. The row
+        // also carries the planner's title, which arrives after the row does.
+        if (_liveRow != Guid.Empty)
+            UpdateLive(_liveRow, r => r with
+            {
+                Title = _liveTitle,
+                StepsDone = _doneSteps,
+                StepsTotal = _totalSteps
+            });
+    }
 
     /// <summary>A one-line title from a request that may be a paragraph. Held until the planner
     /// produces a real title, which it almost always does.</summary>
@@ -983,12 +1086,24 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         // what it overwrote, so the button can say which of the two things it will actually do.
         var createdByThisRun = _disk?.CreatedHere(relative) == true;
 
-        _vm.Artifacts.Add(new ArtifactItemViewModel(
+        // Built once and journalled, not rebuilt on replay: the card carries state of its own -
+        // "reverted" is set on it later - and a second object would lose it.
+        var item = new ArtifactItemViewModel(
             relative,
-            item => ShowFile(root, item),
-            item => _ = UndoLiveArtifactAsync(root, item, createdByThisRun),
-            createdByThisRun ? "Delete" : "Undo"));
+            card => ShowFile(root, card),
+            card => _ = UndoLiveArtifactAsync(root, card, createdByThisRun),
+            createdByThisRun ? "Delete" : "Undo");
+
+        _liveArtifacts.Add(item);
+        Live(() => _vm.Artifacts.Add(item));
     }
+
+    /// <summary>
+    /// The artifact cards this run has produced. The view model's copy is empty while the middle
+    /// column is showing another workspace, and these cards are still written to from there - a
+    /// rejected step puts its files back and its cards have to say so.
+    /// </summary>
+    private readonly List<ArtifactItemViewModel> _liveArtifacts = new();
 
     /// <summary>
     /// Marks the cards for files a rejected step wrote and the engine put back. The paths come from
@@ -1006,7 +1121,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         var paths = summary[(index + marker.Length)..]
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
-        foreach (var item in _vm.Artifacts.OfType<ArtifactItemViewModel>())
+        foreach (var item in _liveArtifacts)
         {
             if (!paths.Contains(item.RelativePath, StringComparer.OrdinalIgnoreCase))
                 continue;
@@ -1027,7 +1142,9 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             .Replace("\r\n", "\n")
             .Split('\n');
 
-        _vm.Artifacts.Add(new StagedChangeViewModel(
+        // Built once, then journalled: the card carries its own applied/rejected state, and
+        // rebuilding it on replay would throw that away.
+        var staged = new StagedChangeViewModel(
             change.RelativePath,
             change.IsNew,
             diff,
@@ -1054,7 +1171,9 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                 item.Status = "rejected";
                 item.StatusBrush = Brand.Danger;
                 item.CanAct = false;
-            }));
+            });
+
+        Live(() => _vm.Artifacts.Add(staged));
     }
 
     private void OnPreviewKeyDown(object? sender, KeyEventArgs e)
@@ -1115,24 +1234,229 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                 _vm.RequestForget));
     }
 
+    // ── Runs in flight ───────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Starts a live row and returns its handle. The run id is not known yet - the orchestrator
+    /// mints it and it arrives with the first event - so the row is identified by its own key
+    /// until then. See <see cref="LiveRun"/>.
+    /// </summary>
+    private Guid BeginLive(string title, string workspace, bool headless)
+    {
+        var row = Guid.NewGuid();
+        _live[row] = (new LiveRun(row, Guid.Empty, title, headless, 0, 0, DateTimeOffset.Now), workspace);
+        RefreshLive();
+        return row;
+    }
+
+    /// <summary>Updates a live row, if it is still there. Silent when it is not: a run that has
+    /// ended while an event was in flight is not an error to report.</summary>
+    private void UpdateLive(Guid row, Func<LiveRun, LiveRun> change)
+    {
+        if (!_live.TryGetValue(row, out var held))
+            return;
+
+        _live[row] = (change(held.Run), held.Workspace);
+        RefreshLive();
+    }
+
+    private void EndLive(Guid row)
+    {
+        if (_live.Remove(row))
+            RefreshLive();
+    }
+
+    /// <summary>
+    /// Pushes the live rows for the CURRENT workspace into the column.
+    ///
+    /// <para>Filtered by workspace here rather than in RunColumn: which folder a run belongs to is
+    /// the window's business, and a background run started in one project keeps running after a
+    /// switch. Filtered against the history there, which is the rule that has a test.</para>
+    /// </summary>
+    private void RefreshLive()
+    {
+        var here = WorkspaceRegistry.Normalise(_vm.WorkspacePath);
+
+        _vm.Runs.ShowRunning(
+            RunColumn.Live(
+                _live.Values
+                     .Where(e => string.Equals(e.Workspace, here, StringComparison.OrdinalIgnoreCase))
+                     .Select(e => e.Run),
+                _vm.Runs.All));
+    }
+
+    /// <summary>
+    /// Empties the middle column and the tiles beside it: the step feed, the artifacts, the tabs,
+    /// the counters, and any past run being read.
+    ///
+    /// <para>One method, called by both the things that need it - a run starting, and a workspace
+    /// switch - because the failure being fixed is precisely that one of them cleared less than the
+    /// other. Two lists of what is on screen drift, and what drifts off the list is what stays on
+    /// screen belonging to somewhere else.</para>
+    /// </summary>
+    private void ClearRunView()
+    {
+        ClearRunPanels();
+
+        // The run's own state, which the panels are only a view of. Cleared HERE and not in
+        // ClearRunPanels, because detaching from a run to look at another workspace empties the
+        // panels while the run carries on filling these.
+        _shownArtifacts.Clear();
+        _liveArtifacts.Clear();
+        _cards.Clear();
+        _currentCard = null;
+        _running.Clear();
+        _stepIndex = 0;
+        _doneSteps = 0;
+        _totalSteps = 0;
+        _liveTitle = string.Empty;
+        _liveJournal.Clear();
+    }
+
+    /// <summary>The panels only: what is drawn, not what it is drawn from. See ClearRunView.</summary>
+    private void ClearRunPanels()
+    {
+        _vm.ShowLiveRun();
+        _vm.HasTask = false;
+        _vm.TaskIntent = string.Empty;
+        _vm.TaskTitle = string.Empty;
+
+        _vm.Steps.Clear();
+        _vm.Artifacts.Clear();
+
+        _vm.ToolCalls = 0;
+        _vm.ResetUsage();
+        _vm.Routing.Clear();
+        _vm.SelectedTab = 0;
+        _vm.IsDecisionVisible = false;
+        _vm.IsAgentVisible = false;
+
+        _vm.StatusPhase = "Idle";
+        _vm.StatusProgress = "—";
+        _vm.StatusElapsed = "—";
+        _vm.CurrentAction = string.Empty;
+    }
+
+    /// <summary>
+    /// A write the live run makes to the middle column.
+    ///
+    /// <para>Recorded always and performed only while the column is showing this run. Everything
+    /// the run draws goes through here, which is what makes walking away from it and coming back
+    /// possible at all - see <see cref="_liveJournal"/>.</para>
+    /// </summary>
+    private void Live(Action write)
+    {
+        _liveJournal.Add(write);
+
+        if (_liveAttached)
+            write();
+    }
+
+    /// <summary>
+    /// Stops showing the live run without stopping it. The run keeps going, keeps its row in its
+    /// own workspace's RUNNING block, and keeps journalling.
+    /// </summary>
+    private void DetachLive()
+    {
+        if (!_liveAttached)
+            return;
+
+        _liveAttached = false;
+        ClearRunPanels();
+    }
+
+    /// <summary>
+    /// Shows it again, as it stands now: the panels are emptied and the journal replayed. The step
+    /// cards are the same objects the run has been updating all along, so what comes back is
+    /// current rather than a picture of the moment you left.
+    /// </summary>
+    private void AttachLive()
+    {
+        if (_liveAttached)
+            return;
+
+        _liveAttached = true;
+        ClearRunPanels();
+
+        foreach (var write in _liveJournal)
+            write();
+
+        // Not journalled: it would be one entry per second of a run nobody was watching, all but
+        // the last of them wrong by the time they replayed.
+        if (_runStopwatch.IsRunning)
+            _vm.StatusElapsed = FormatElapsed(_runStopwatch.Elapsed);
+    }
+
+    /// <summary>
+    /// The run list is frozen only where the run actually is. IsBusy holds the whole app - there is
+    /// one foreground run - but the workspace on screen may not be the one it is happening in.
+    /// </summary>
+    private void RefreshColumnState()
+        => _vm.IsColumnIdle = !(_vm.IsBusy && IsLiveWorkspace);
+
+    private bool IsLiveWorkspace
+        => _liveWorkspace.Length > 0
+           && string.Equals(
+               WorkspaceRegistry.Normalise(_vm.WorkspacePath), _liveWorkspace,
+               StringComparison.OrdinalIgnoreCase);
+
     /// <summary>
     /// Switching a workspace re-scopes everything the window shows - runs, memory, the inbox badge,
     /// artifacts - because every store is built from the workspace it is asked about. It does not
     /// touch the folder, and it does not start anything.
+    ///
+    /// <para>The middle column is re-scoped here too, which it was not: it kept the previous
+    /// workspace's execution feed and tiles under the new workspace's name. It is emptied, and then
+    /// filled again only with what THIS workspace was left reading - see OpenRunMemory for why that
+    /// is the rule rather than "show the newest run".</para>
     /// </summary>
     private void SwitchWorkspace(string path)
     {
-        if (_vm.IsBusy)
-        {
-            _vm.CurrentAction = "Finish or stop the run before switching workspace.";
-            return;
-        }
+        var next = WorkspaceRegistry.Normalise(path);
 
-        _vm.WorkspacePath = WorkspaceRegistry.Normalise(path);
+        // Switching to the workspace already open is not a switch. Said before anything is cleared:
+        // otherwise clicking the current workspace would empty the middle column, and the person
+        // would have lost what they were reading by pressing the thing they were already on.
+        if (string.Equals(next, WorkspaceRegistry.Normalise(_vm.WorkspacePath), StringComparison.OrdinalIgnoreCase))
+            return;
+
+        // Asked before anything moves, and asked of the window rather than remembered as it went:
+        // a person who opened a run and then pressed Back has nothing open, and this cannot get
+        // that wrong.
+        _openRuns.Leaving(_vm.WorkspacePath.Trim(), _vm.PastRun?.Record.RunId);
+
+        // Leaving the run's own workspace detaches from it; leaving anywhere else just empties the
+        // panels. Neither touches the run: it keeps going, keeps its row in the RUNNING block of
+        // the workspace it belongs to, and keeps journalling what it draws.
+        //
+        // ClearRunView - which also throws away the step cards and the counters - is for a run
+        // STARTING, and is not used here. Calling it on a switch would destroy the state of a run
+        // that is still running, which is the whole thing this indirection exists to prevent.
+        if (IsLiveWorkspace)
+            DetachLive();
+        else
+            ClearRunPanels();
+
+        // What the workspace being entered was left reading, handed over BEFORE the path changes:
+        // assigning the path is what starts its run list loading, and the list arriving is when
+        // there is a row to select. Null for a workspace nobody has opened a run in, which is a
+        // fresh start and every workspace at launch.
+        _vm.Runs.Reopen = _openRuns.Entering(next);
+
+        _vm.WorkspacePath = next;
         _registry.Touch(_vm.WorkspacePath);
         RefreshWorkspaces();
         ApplyWorkspaceDefaults();
         RefreshInboxButton();
+
+        // Arriving in the run's own workspace puts its feed back, as it stands now. A past run this
+        // workspace was left reading opens OVER it a moment later, when the list arrives - which is
+        // the same order as reading history during a run, and Back returns to the feed underneath.
+        if (IsLiveWorkspace)
+            AttachLive();
+
+        RefreshColumnState();
+        RefreshLive();
         // A library left open across the switch would go on offering the previous project's
         // templates for a project that has never heard of them.
         _templatesWindow?.FollowWorkspace(WorkspaceRootOrNull(), PolicyFor(_vm.AutonomyTier));
@@ -1431,6 +1755,12 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         // in a Task owned by this process - closing kills it wherever it happens to be.
         Interlocked.Increment(ref _backgroundRuns);
 
+        // A row of its own, carrying the workspace it belongs to: the window is free again the
+        // moment this starts, so this row is the only thing on screen that says it is happening.
+        // It never learns a run id - the events go to the Inbox writer, not here - so it is removed
+        // by this method and by nothing else.
+        var row = BeginLive(_vm.TaskTitle, fullPath, headless: true);
+
         _ = Task.Run(async () =>
         {
             try
@@ -1455,7 +1785,21 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             {
                 Interlocked.Decrement(ref _backgroundRuns);
             }
-            Dispatcher.UIThread.Post(RefreshInboxButton);
+
+            Dispatcher.UIThread.Post(() =>
+            {
+                EndLive(row);
+                RefreshInboxButton();
+                // Its record is in the store now, so the workspace it ran in has a card for it.
+                // Only when that workspace is the one on screen: LoadRunsAsync reads whichever is
+                // current, and a run finishing elsewhere is not a reason to re-read this one.
+                if (string.Equals(
+                        WorkspaceRegistry.Normalise(_vm.WorkspacePath), fullPath,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    _ = LoadRunsAsync();
+                }
+            });
         });
     }
 
@@ -1777,6 +2121,10 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             }
         }
 
+        // Not something to come back to, in this workspace or any other.
+        foreach (var run in runs)
+            _openRuns.Forget(run.RunId);
+
         if (_vm.PastRun is { } open && runs.Any(r => r.RunId == open.Record.RunId))
             _vm.ShowLiveRun();
 
@@ -1819,6 +2167,8 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             _vm.Runs.Fail("Could not delete that run: " + ex.Message);
             return;
         }
+
+        _openRuns.Forget(record.RunId);
 
         // Reading a run that no longer exists is worse than being sent back to the live one.
         if (_vm.PastRun?.Record.RunId == record.RunId)
@@ -1906,6 +2256,10 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             records = await TrimAsync(store, records);
 
             _vm.Runs.Show(records);
+            // The history has just changed, and a live row whose run is now IN it must go. See
+            // RunColumn.Live: the window learns a run ended by two paths and they arrive in
+            // whatever order they arrive in.
+            RefreshLive();
         }
         catch (Exception ex)
         {
@@ -1973,15 +2327,15 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                 return;
 
             _pendingDecision = tcs;
-            _vm.DecisionText = request.Topic;
-            // The full action, not the summary: this is what the click authorises.
-            _vm.DecisionDetail = request.FullText;
 
-            _vm.DecisionOptions.Clear();
+            // The options are built here and captured, so the card can be drawn again unchanged
+            // when the middle column comes back to this run - a question asked while somebody was
+            // in another workspace is still the question the run is waiting on.
+            var options = new List<DecisionOptionViewModel>();
             foreach (var option in request.Options)
             {
                 var captured = option;
-                _vm.DecisionOptions.Add(new DecisionOptionViewModel(captured.Label, () => ResolveDecision(captured.Id)));
+                options.Add(new DecisionOptionViewModel(captured.Label, () => ResolveDecision(captured.Id)));
             }
 
             // Remember-this-approval shortcuts, so the user is not clicking Allow for every command.
@@ -1989,17 +2343,32 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             {
                 var subject = request.Subject;
                 var allowId = AllowOptionId(request);
-                _vm.DecisionOptions.Add(new DecisionOptionViewModel(
+                options.Add(new DecisionOptionViewModel(
                     "Allow (session)", () => { _sessionApprovals.Add(subject); ResolveDecision(allowId); }));
 
                 // Not offered for a shell: that approval would outlive the process, and what it
                 // grants is arbitrary command execution rather than one named action.
                 if (request.MayBeRemembered)
-                    _vm.DecisionOptions.Add(new DecisionOptionViewModel(
+                    options.Add(new DecisionOptionViewModel(
                         "Allow (workspace)", () => { SaveWorkspaceApproval(subject); ResolveDecision(allowId); }));
             }
 
-            _vm.IsDecisionVisible = true;
+            Live(() =>
+            {
+                _vm.DecisionText = request.Topic;
+                // The full action, not the summary: this is what the click authorises.
+                _vm.DecisionDetail = request.FullText;
+                _vm.DecisionOptions.Clear();
+                foreach (var option in options)
+                    _vm.DecisionOptions.Add(option);
+                _vm.IsDecisionVisible = true;
+            });
+
+            // On the row as well as on the card, and NOT journalled: the card can be behind another
+            // workspace now, and then the row is the only thing left that can say this run is
+            // stopped waiting for a person rather than working.
+            if (_liveRow != Guid.Empty)
+                UpdateLive(_liveRow, r => r with { Waiting = true });
         });
 
         return tcs.Task;
@@ -2023,10 +2392,17 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             return;
 
         _pendingDecision = null;
-        _vm.IsDecisionVisible = false;
-        _vm.DecisionOptions.Clear();
-        _vm.DecisionText = string.Empty;
-        _vm.DecisionDetail = string.Empty;
+
+        if (_liveRow != Guid.Empty)
+            UpdateLive(_liveRow, r => r with { Waiting = false });
+
+        Live(() =>
+        {
+            _vm.IsDecisionVisible = false;
+            _vm.DecisionOptions.Clear();
+            _vm.DecisionText = string.Empty;
+            _vm.DecisionDetail = string.Empty;
+        });
     }
 
     private static string AllowOptionId(DecisionRequest request)

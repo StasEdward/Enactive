@@ -676,6 +676,7 @@ internal sealed class MainWindowViewModel : ObservableObject
             if (!Set(ref _isBusy, value))
                 return;
             OnPropertyChanged(nameof(IsIdle));
+            OnPropertyChanged(nameof(RunTip));
             RunCommand.RaiseCanExecuteChanged();
             RunBackgroundCommand.RaiseCanExecuteChanged();
             StopCommand.RaiseCanExecuteChanged();
@@ -683,6 +684,33 @@ internal sealed class MainWindowViewModel : ObservableObject
     }
 
     public bool IsIdle => !IsBusy;
+
+    /// <summary>
+    /// Whether the RUN LIST may be touched: filtered, refreshed, emptied.
+    ///
+    /// <para>Separate from <see cref="IsIdle"/> because a run holds the whole app but belongs to
+    /// ONE workspace. Switching away from it is allowed now, and in the workspace you switched TO
+    /// nothing is running - so freezing its list there would be freezing it for a reason that is
+    /// not true in the place you are looking at.</para>
+    /// </summary>
+    public bool IsColumnIdle
+    {
+        get => _isColumnIdle;
+        set => Set(ref _isColumnIdle, value);
+    }
+
+    private bool _isColumnIdle = true;
+
+    /// <summary>
+    /// Why Run is greyed, when it is. A run holds the foreground for the whole app, and once you
+    /// can walk away from it the reason stops being obvious: the thing occupying Run may be
+    /// happening in a workspace that is not on screen.
+    /// </summary>
+    public string RunTip
+        => IsBusy
+            ? "A run is already in progress. Enactive runs one foreground run at a time, and that "
+              + "run may be in another workspace. Run in background is not held by it."
+            : "Run this here, and watch it.";
 
     /// <summary>Shows the agent pill, unless it already says exactly this.</summary>
     public void SetAgent(string label, IBrush fill)
