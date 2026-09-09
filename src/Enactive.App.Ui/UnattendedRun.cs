@@ -11,6 +11,7 @@ using Enactive.Core.Providers;
 using Enactive.Core.Tools;
 using Enactive.Core.Workers;
 using Enactive.Providers;
+using Enactive.Remote.Host;
 using Enactive.Tools;
 using Enactive.Tools.Mcp;
 using Enactive.Workspace;
@@ -106,6 +107,15 @@ internal static class UnattendedRun
         try
         {
             var settings = environment.Settings;
+
+            // A run started from the web never runs a shell, and this is where that is true. The
+            // decision handler refuses one too, but a handler only sees what the policy decided to
+            // ASK about - and at the Autonomous tier the policy asks about nothing, so a remote
+            // task in a workspace saved at that tier ran PowerShell with the rule looking enforced.
+            var policy = source == IntentSource.Remote
+                ? RemotePolicy.ForRemoteRun(environment.Policy)
+                : environment.Policy;
+
             var orchestrator = new Orchestrator(
                 environment.Providers,
                 environment.Models,
@@ -116,7 +126,7 @@ internal static class UnattendedRun
                 environment.Planner,
                 environment.Permissions,
                 decisions,
-                environment.Policy,
+                policy,
                 new NoServices(),
                 router: environment.Router,
                 reviewRetries: settings.ReviewRetries,

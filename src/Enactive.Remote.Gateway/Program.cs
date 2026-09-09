@@ -255,7 +255,26 @@ if (!app.Environment.IsDevelopment())
 }
 
 app.UseDefaultFiles();
-app.UseStaticFiles();
+
+// The panel is told to revalidate, always.
+//
+// Nothing here sent a Cache-Control header before, so Cloudflare filled one in - four hours - and
+// the panel's files are not fingerprinted, so a browser that had them kept them. A release reached
+// the server in ten minutes and the person looking at it saw the old page for the rest of the
+// afternoon, with no way to tell a stale page from a broken one. That cost an afternoon once
+// already, when a blank page was read as a deployment fault and was a cached one.
+//
+// no-cache does not mean "do not store": the browser keeps the file and asks whether it changed,
+// which is answered by the ETag with a 304 and almost no bytes. For a panel of about 30 KB served
+// to one owner, that is the right side of the trade - correctness over a round trip.
+//
+// The fonts are included deliberately rather than exempted. Exempting them would mean deciding
+// which files never change, and that decision is wrong the first time somebody rebrands. When this
+// panel is worth fingerprinting, fingerprint it; until then it revalidates.
+app.UseStaticFiles(new StaticFileOptions
+{
+    OnPrepareResponse = served => served.Context.Response.Headers.CacheControl = "no-cache"
+});
 app.UseAuthentication();
 app.UseAuthorization();
 app.UseRateLimiter();

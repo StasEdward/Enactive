@@ -183,6 +183,35 @@ public sealed class PanelTests(TestDatabase database) : IClassFixture<TestDataba
         Assert.Equal(prompt, Assert.Single(second.Tasks, t => t.Id == task.Id).Prompt);
     }
 
+    /// <summary>
+    /// The panel is told to revalidate.
+    ///
+    /// <para>Nothing sent a Cache-Control header, so Cloudflare filled one in - four hours - and the
+    /// panel's files are not fingerprinted. A release reached the server in ten minutes and the
+    /// owner went on seeing the old page all afternoon, with no way to tell a stale page from a
+    /// broken one. It had already cost an afternoon once, when a blank page was read as a
+    /// deployment fault and was a cached one.</para>
+    ///
+    /// <para>Asserted at the ORIGIN, which is the half this repository controls. Whether the edge
+    /// honours it is a Cloudflare setting, written down in REMOTE_OPERATIONS.md instead: a test
+    /// here cannot see it, and one that pretended to would be worse than none.</para>
+    /// </summary>
+    [Theory]
+    [InlineData("/")]
+    [InlineData("/app.js")]
+    [InlineData("/app.css")]
+    public async Task The_panel_is_never_served_as_fresh_for_hours(string path)
+    {
+        using var response = await _owner.GetAsync(path);
+
+        response.EnsureSuccessStatusCode();
+
+        var cache = response.Headers.CacheControl;
+
+        Assert.NotNull(cache);
+        Assert.True(cache!.NoCache, $"{path} was served as '{cache}', which a browser may reuse without asking.");
+    }
+
     private static string TaskIdOf(GatewaySnapshot snapshot, string runId)
         => Assert.Single(snapshot.Runs, r => r.Id == runId).TaskId;
 

@@ -273,6 +273,25 @@ are missing and stops, because each of them otherwise fails later as something e
 Artifacts expire after 30 days. A server that has been off longer than that has no release to pull
 and says so; build the branch again.
 
+### 4.5 The edge caches the panel
+
+The gateway now serves every panel file with `Cache-Control: no-cache`, so a browser revalidates and
+gets a 304 when nothing changed. That is the half this repository controls.
+
+The other half is **Cloudflare's Browser Cache TTL**. When the origin sent no header, Cloudflare
+supplied four hours of its own — so a release reached the server in ten minutes and the owner went
+on seeing the old page all afternoon, with no way to tell a stale page from a broken one. If a
+change is deployed (`current/.commit` has moved) and a hard refresh still shows the old panel, that
+setting is overriding the origin: set Browser Cache TTL to **Respect Existing Headers** for this
+zone.
+
+Checking what the server actually serves, which settles "stale or broken" in one command:
+
+```bash
+curl -sI https://remote.enactive.dev/app.js | grep -i 'cache-control\|last-modified'
+curl -s  https://remote.enactive.dev/app.js | grep -c 'Asked for'   # or whatever the change added
+```
+
 **The deploy scripts do not update themselves.** `/opt/enactive-remote/deploy/` is copied there by
 hand, and a change to `pull-release.sh` in the repository does nothing until it is copied again.
 That is deliberate: a script that replaces itself and then runs the replacement has no way back if
