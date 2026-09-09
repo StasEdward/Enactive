@@ -382,7 +382,13 @@ catch (HttpRequestException ex)
     Console.WriteLine();
     Console.WriteLine("x Could not reach the model provider.");
     Console.WriteLine($"  {ex.Message}");
-    Console.WriteLine($"  Is Ollama running? Try:  ollama serve   and   ollama pull {model}");
+
+    // The Ollama advice only when nothing better was said. It used to print on every provider
+    // failure, so an Anthropic key rejected by Anthropic was answered with "Is Ollama running?" -
+    // advice about the wrong program entirely, which is worse than none.
+    if (ex is not ProviderUnreachableException)
+        Console.WriteLine($"  Is Ollama running? Try:  ollama serve   and   ollama pull {model}");
+
     return 1;
 }
 catch (OperationCanceledException)
