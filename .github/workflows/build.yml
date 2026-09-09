@@ -32,6 +32,57 @@ jobs:
       - name: Test
         run: dotnet test tests/Enactive.Engine.Tests/Enactive.Engine.Tests.csproj --no-build --configuration Release --verbosity normal
 
+  # The wiki's HTML is generated from Docs/wiki and COMMITTED, because the site is static files
+  # served by GitHub Pages and nothing builds them on the way out. That arrangement has one failure
+  # mode and it is silent: the generator breaks, or somebody edits the Markdown and forgets to
+  # rebuild, and the site goes on serving the last good HTML. Nobody sees a thing.
+  #
+  # It had already happened. build-wiki.mjs read the web fonts from server/wwwroot, that directory
+  # was removed when the real gateway replaced the prototype, and the build failed from then on -
+  # discovered a month later, by running it.
+  #
+  # So: rebuild here and require the result to equal what was committed. This is a check on the
+  # PAIR - the generator still runs, and the output in the repository is what it produces.
+  #
+  # ubuntu because the generated files must be byte-identical, and a checkout on Linux gives the
+  # Markdown LF endings. The generator normalises what it reads for the same reason: it used to
+  # leave a trailing \r in every line of the search index on a CRLF checkout, so a Windows build
+  # and a Linux build of the same source disagreed, and this step would have been red on arrival
+  # for a reason that had nothing to do with anybody's edit.
+  wiki:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # ci, not install: the lockfile is committed so that a different resolution of `marked`
+      # cannot quietly change every generated page.
+      - name: Install
+        working-directory: web-site
+        run: npm ci
+
+      - name: Rebuild the wiki
+        working-directory: web-site
+        run: npm run build:wiki
+
+      # Links, anchors, duplicate IDs, CSP-safe markup, and that every fenced example in the
+      # Markdown survived into the HTML.
+      - name: Check the wiki
+        working-directory: web-site
+        run: npm run check:wiki
+
+      - name: The committed HTML is what the generator produces
+        run: |
+          if ! git diff --quiet -- web-site; then
+            echo "::error::The committed wiki does not match a fresh build. Run 'npm run build:wiki' in web-site/ and commit the result."
+            git --no-pager diff --stat -- web-site
+            exit 1
+          fi
+
   # The gateway's tests need a real MySQL, and they had never run anywhere but one developer's
   # machine - 59 tests about a schema, and CI could not say a word about any of them.
   #
