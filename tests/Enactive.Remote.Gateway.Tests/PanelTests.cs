@@ -151,6 +151,38 @@ public sealed class PanelTests(TestDatabase database) : IClassFixture<TestDataba
     }
 
     /// <summary>
+    /// A permission says which run it belongs to.
+    ///
+    /// <para>Read on its own that is a dull field. It is what lets the question be drawn on the
+    /// card of the task that raised it, instead of only in a list of its own - and that difference
+    /// is the whole reason the panel stopped sending people to another tab to find out what they
+    /// were needed for. Without it the panel can show that SOMETHING is being asked and not which
+    /// task is asking, which is the state this started from.</para>
+    ///
+    /// <para>Shown red by projecting the approval with an empty RunId - it compiles, the page keeps
+    /// rendering, and every question quietly stops belonging to anything.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_permission_names_the_run_that_raised_it()
+    {
+        var runId = await RunningRunAsync();
+        var approvalId = "approval-" + Guid.NewGuid().ToString("N");
+
+        await new HostService(new Database(database.ConnectionString)).PublishAsync(HostId, new HostEvent(
+            Guid.NewGuid().ToString("N"), runId, 2, RemoteEventKind.ApprovalRequested, "Delete a file",
+            new ApprovalRequest(approvalId, "call-1", "delete_file", """{"path":"README8.html"}""",
+                "C:/work", "hash-1", RemoteDecidable: true)));
+
+        var state = await _owner.GetFromJsonAsync<GatewaySnapshot>("/api/state", RemoteJson.Options);
+
+        // By id, not Assert.Single: the tests in this class share one database, so other pending
+        // approvals are legitimately in the snapshot alongside this one.
+        var approval = Assert.Single(state!.Approvals, one => one.Id == approvalId);
+
+        Assert.Equal(runId, approval.RunId);
+    }
+
+    /// <summary>
     /// An answered permission keeps reaching the panel, and says it was answered.
     ///
     /// <para>An answer is not an outcome. The gateway records DecisionQueued because the command

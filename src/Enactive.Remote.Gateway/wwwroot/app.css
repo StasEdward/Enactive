@@ -153,6 +153,20 @@ main {
 .status.is-queued  { color: var(--ember-300); background: var(--grad-ember-soft); }
 .status.is-failed  { color: var(--danger); }
 
+/* The question, drawn inside the card of the task that raised it. Inset and ember-edged so it
+   reads as an interruption of that task rather than another card in the list - a task waiting on
+   an answer should be the loudest thing on the page. */
+.ask {
+  margin-top: var(--space-4);
+  padding: var(--space-4);
+  border: 1px solid var(--ember-500);
+  border-left-width: 3px;
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+}
+
+.ask + .ask { margin-top: var(--space-3); }
+
 /* An action the owner is being asked to allow, shown whole. A truncated command
    is a command nobody actually read, and this is the one place in the product
    where reading it is the entire point. */

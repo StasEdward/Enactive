@@ -31,7 +31,9 @@ const state = {
   events: [],
   unread: 0,
   retention: null,
-  live: false
+  live: false,
+  // The run whose timeline is open, so the poll can redraw it. Null when the dialog is closed.
+  openRun: null
 };
 
 // One command id per logical action, kept across retries.
@@ -232,6 +234,7 @@ function render() {
   renderInbox();
   renderHosts();
   renderCounts();
+  refreshOpenRun();
 }
 
 function renderCounts() {
@@ -286,63 +289,102 @@ function renderRuns() {
     }
 
     card.append(actions);
+
+    // The question, where the answer is. "Needs you" on this card and the question one tab away
+    // meant you knew you were wanted and had to go looking for what for - and what arrived over
+    // there was the action without the request that produced it. The tab is still the queue; this
+    // is where it is read in context.
+    asksOf(run.id).forEach((approval) => {
+      const ask = node("div", "ask");
+      ask.append(...approvalNodes(approval));
+      card.append(ask);
+    });
+
     return card;
   });
 
   fill($("run-list"), cards, $("runs-empty"));
 }
 
+/**
+ * The question itself, as a list of nodes for a caller to wrap.
+ *
+ * Nodes rather than a finished card because this is drawn in three places now: the Permissions
+ * tab, the task's own card, and its timeline. Written three times it would be three renderings of
+ * one thing, and two of them would fall behind the day the shape changed.
+ *
+ * The tab is a QUEUE - what is waiting for you, across every computer and every run, with a count
+ * in the header. The task card is where the question is actually answered, because that is where
+ * its context is: what you asked for, what has happened so far, and what is being asked now, on
+ * one screen. A card in a separate list is the same question with its reason stripped off - the
+ * unabridged-action rule kept to the letter and broken in spirit.
+ */
+function approvalNodes(approval) {
+  const parts = [];
+
+  // An answer is not an outcome. The gateway marks the approval DecisionQueued the moment it
+  // takes the answer, because the command still has to reach the computer and the computer may
+  // refuse it - the desktop may have answered first, or the run may be over. The panel was told
+  // all of that on every poll and drew "Waiting" regardless.
+  const queued = approval.status === "DecisionQueued";
+
+  const head = node("div", "card-head");
+  head.append(node("h3", null, "Permission requested"));
+  head.append(queued
+    ? node("span", "status is-queued", "Sent")
+    : node("span", "status is-waiting", approval.remoteDecidable ? "Waiting" : "At the computer"));
+  parts.push(head);
+
+  if (approval.reason) {
+    parts.push(node("p", null, approval.reason));
+  }
+
+  parts.push(node("p", "meta", `${approval.tool} · in ${approval.workingDirectory}`));
+
+  // The whole action, never a summary. A person cannot approve what they were
+  // not shown, and a truncated command is one nobody read.
+  parts.push(node("pre", "action", approval.arguments));
+
+  if (queued) {
+    // No buttons at all rather than disabled ones. The answer has been given; what is left is
+    // the computer picking it up, and that is not something a second click makes happen sooner.
+    parts.push(node("p", "local-only",
+      "Your answer is on its way to the computer. If it was already answered there, that answer "
+      + "stands - sitting at the machine always wins."));
+  } else if (approval.remoteDecidable) {
+    const actions = node("div", "actions");
+    actions.append(decide(approval, "Allow", "primary"));
+    actions.append(decide(approval, "Deny", "secondary"));
+    parts.push(actions);
+  } else {
+    // Not a disabled button: the server refuses this whatever the page draws,
+    // and the card says why rather than looking broken.
+    //
+    // It says REFUSED and not "answer it on the computer", which is what it said first. A task
+    // started from here does not run shell commands at all - not even for somebody sitting at
+    // the machine - so telling the owner to go and answer it there would have sent them to a
+    // card that was never going to appear.
+    parts.push(node("p", "local-only",
+      "A task started from here does not run shell commands, so this was refused. "
+      + "Run it on the computer if it needs one."));
+  }
+
+  return parts;
+}
+
+/**
+ * Everything this run is still asking. A LIST, not one: parallel steps can leave two questions
+ * open at once - the desktop shows them one at a time behind its own gate, but the gateway holds
+ * both, and a card that drew only the first would hide a question that was blocking the run.
+ */
+function asksOf(runId) {
+  return state.approvals.filter((approval) => approval.runId === runId);
+}
+
 function renderApprovals() {
   const cards = state.approvals.map((approval) => {
     const card = node("div", "card");
-
-    // An answer is not an outcome. The gateway marks the approval DecisionQueued the moment it
-    // takes the answer, because the command still has to reach the computer and the computer may
-    // refuse it - the desktop may have answered first, or the run may be over. The panel was told
-    // all of that on every poll and drew "Waiting" regardless.
-    const queued = approval.status === "DecisionQueued";
-
-    const head = node("div", "card-head");
-    head.append(node("h3", null, "Permission requested"));
-    head.append(queued
-      ? node("span", "status is-queued", "Sent")
-      : node("span", "status is-waiting", approval.remoteDecidable ? "Waiting" : "At the computer"));
-    card.append(head);
-
-    if (approval.reason) {
-      card.append(node("p", null, approval.reason));
-    }
-
-    card.append(node("p", "meta", `${approval.tool} · in ${approval.workingDirectory}`));
-
-    // The whole action, never a summary. A person cannot approve what they were
-    // not shown, and a truncated command is one nobody read.
-    card.append(node("pre", "action", approval.arguments));
-
-    if (queued) {
-      // No buttons at all rather than disabled ones. The answer has been given; what is left is
-      // the computer picking it up, and that is not something a second click makes happen sooner.
-      card.append(node("p", "local-only",
-        "Your answer is on its way to the computer. If it was already answered there, that answer "
-        + "stands - sitting at the machine always wins."));
-    } else if (approval.remoteDecidable) {
-      const actions = node("div", "actions");
-      actions.append(decide(approval, "Allow", "primary"));
-      actions.append(decide(approval, "Deny", "secondary"));
-      card.append(actions);
-    } else {
-      // Not a disabled button: the server refuses this whatever the page draws,
-      // and the card says why rather than looking broken.
-      //
-      // It says REFUSED and not "answer it on the computer", which is what it said first. A task
-      // started from here does not run shell commands at all - not even for somebody sitting at
-      // the machine - so telling the owner to go and answer it there would have sent them to a
-      // card that was never going to appear.
-      card.append(node("p", "local-only",
-        "A task started from here does not run shell commands, so this was refused. "
-        + "Run it on the computer if it needs one."));
-    }
-
+    card.append(...approvalNodes(approval));
     return card;
   });
 
@@ -469,6 +511,11 @@ function renderHosts() {
  * rather than letting a partial list read as a short run.
  */
 function showRun(run, task) {
+  // Remembered so the poll can redraw it. This dialog was built once on click and never touched
+  // again, so a timeline opened on a running task froze at the moment it opened: no new steps, and
+  // - once the question moved in here - buttons answering something that might already be settled.
+  state.openRun = run.id;
+
   $("run-title").textContent = task?.title ?? "Task";
 
   const detail = $("run-detail");
@@ -506,13 +553,43 @@ function showRun(run, task) {
     detail.append(node("pre", "action", task.prompt));
   }
 
+  // Before the steps, not after them. The timeline showed "Permission requested" as history and
+  // offered no way to answer it, which is the same split as the separate tab - only inside one
+  // screen, where it is harder to excuse.
+  asksOf(run.id).forEach((approval) => {
+    const ask = node("div", "ask");
+    ask.append(...approvalNodes(approval));
+    detail.append(ask);
+  });
+
   detail.append(timeline);
 
   if (mine.length >= KEEP_EVENTS) {
     detail.append(node("p", "note", "Only the most recent steps are shown."));
   }
 
-  $("run-dialog").showModal();
+  const dialog = $("run-dialog");
+
+  // Already open means this is a redraw from the poll, and showModal() on an open dialog throws.
+  if (!dialog.open) {
+    dialog.addEventListener("close", () => { state.openRun = null; }, { once: true });
+    dialog.showModal();
+  }
+}
+
+/** Redraws the open timeline, if one is open and its run is still in the snapshot. */
+function refreshOpenRun() {
+  if (!state.openRun) {
+    return;
+  }
+
+  const run = state.runs.find((one) => one.id === state.openRun);
+
+  if (!run) {
+    return;
+  }
+
+  showRun(run, state.tasks.find((task) => task.id === run.taskId));
 }
 
 // ── acting ───────────────────────────────────────────────────────────────
