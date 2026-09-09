@@ -1,4 +1,4 @@
-﻿namespace Enactive.Agents;
+namespace Enactive.Agents;
 
 using System.Globalization;
 using System.Runtime.CompilerServices;
@@ -1726,7 +1726,30 @@ public sealed class Orchestrator : IOrchestrator
             // From the STEP's own mark, not the evidence window: what kind of work THIS step did is
             // not changed by a build an earlier step ran. The window says what the answer may rest
             // on; this says what the step itself was.
-            var mode = _reviewContent && !journal.UsedAny(CommandTools, stepStart) && written.Count > 0
+            //
+            // And content review judges what the step COMPOSED. "Something landed in the store" is
+            // not that: a copy lands, a rename lands, a deletion lands, and none of them writes a
+            // sentence. A step that only copied a file was asked whether its content was true, and
+            // the reviewer answered - about a document somebody else had written. From a real run:
+            // "PASS (Content review): The excerpt contains no factually incorrect assertions." The
+            // copy was perfect and the verdict was about the wrong thing.
+            //
+            // Not a wasted model call: the reviewer returns PASS or FAIL, a FAIL reverts the step,
+            // and this could fail a flawless copy because the reviewer disagreed with the file it
+            // duplicated.
+            //
+            // Stated as ONLY relocation rather than "used a relocation tool": a step that writes a
+            // file and then puts it where it belongs is ordinary work, and it composed something.
+            // And stated as a closed list of tools known to move bytes without composing them, so
+            // anything else - an MCP server's tool, whatever arrives next - keeps content review.
+            // The unknown case is the one where being wrong costs something, and it fails towards
+            // the stricter question.
+            var composedNothing = journal.UsedOnly(RelocationTools, stepStart);
+
+            var mode = _reviewContent
+                       && !journal.UsedAny(CommandTools, stepStart)
+                       && !composedNothing
+                       && written.Count > 0
                 ? ReviewMode.Content
                 : ReviewMode.Execution;
 
@@ -2724,6 +2747,20 @@ public sealed class Orchestrator : IOrchestrator
     /// </summary>
     private static readonly HashSet<string> CommandTools =
         new(StringComparer.OrdinalIgnoreCase) { "run_command", "run_powershell", "git", "docker" };
+
+    /// <summary>
+    /// Tools that move a file's bytes around without composing any of them.
+    ///
+    /// <para>A step built only from these has written nothing of its own to be judged as content -
+    /// what it left behind is somebody else's text at a new address, or a gap where text used to
+    /// be. Which question the reviewer is asked turns on this as much as on <see cref="CommandTools"/>.</para>
+    ///
+    /// <para>A closed list on purpose. Everything not named here - an MCP server's tool, whatever
+    /// is added next - is treated as possibly composing something and keeps content review, which
+    /// is the stricter of the two questions and the right way to be wrong.</para>
+    /// </summary>
+    private static readonly HashSet<string> RelocationTools =
+        new(StringComparer.OrdinalIgnoreCase) { "copy_file", "move_file", "delete_file" };
 
 
 
