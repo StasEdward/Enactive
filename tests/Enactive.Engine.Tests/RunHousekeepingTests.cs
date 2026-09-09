@@ -58,6 +58,108 @@ public sealed class RunHousekeepingTests
         Assert.Equal(4, RunHousekeeping.Where(runs, RunFilter.All, Now).Count);
     }
 
+    // ── attempts at one task are one row ─────────────────────────────────────────
+
+    private static RunSummary Attempt(Guid task, string status, int daysAgo) => new(
+        Guid.NewGuid(), task, "WSFC Workgroup Cluster Setup", "ollama/x",
+        Now.AddDays(-daysAgo), Now.AddDays(-daysAgo), status, [], []);
+
+    /// <summary>
+    /// The observation this exists for: twelve consecutive rows of one task tried twelve times,
+    /// reading as twelve pieces of work. No filter fixes it - every one of those rows is a real run
+    /// and belongs in every filter.
+    /// </summary>
+    [Fact]
+    public void Twelve_attempts_at_one_task_are_one_row()
+    {
+        var task = Guid.NewGuid();
+        var runs = Enumerable.Range(0, 12).Select(i => Attempt(task, "Failed", i)).ToArray();
+
+        var rows = RunHousekeeping.Rows(runs);
+
+        var only = Assert.Single(rows);
+        Assert.Equal(12, only.Attempts);
+        Assert.True(only.IsLead);
+    }
+
+    /// <summary>The lead is the NEWEST attempt: what somebody looks for is how it ended up.</summary>
+    [Fact]
+    public void The_row_shows_the_newest_attempt()
+    {
+        var task = Guid.NewGuid();
+        var newest = Attempt(task, "Completed", daysAgo: 0);
+
+        var rows = RunHousekeeping.Rows([Attempt(task, "Failed", 3), newest, Attempt(task, "Failed", 1)]);
+
+        Assert.Equal(newest.RunId, Assert.Single(rows).Run.RunId);
+    }
+
+    /// <summary>
+    /// And groups are ordered by their newest attempt, so a task worked on today does not sit below
+    /// one abandoned last week for having started earlier.
+    /// </summary>
+    [Fact]
+    public void Groups_are_ordered_by_their_newest_attempt()
+    {
+        var old = Guid.NewGuid();
+        var fresh = Guid.NewGuid();
+
+        var rows = RunHousekeeping.Rows([
+            Attempt(old, "Failed", 9), Attempt(old, "Failed", 8),
+            Attempt(fresh, "Completed", 1)]);
+
+        Assert.Equal(fresh, rows[0].Run.TaskId);
+    }
+
+    [Fact]
+    public void Opening_a_group_lists_its_older_attempts_underneath()
+    {
+        var task = Guid.NewGuid();
+        var runs = Enumerable.Range(0, 4).Select(i => Attempt(task, "Failed", i)).ToArray();
+
+        var rows = RunHousekeeping.Rows(runs, new HashSet<Guid> { task });
+
+        Assert.Equal(4, rows.Count);
+        Assert.True(rows[0].IsLead);
+        Assert.All(rows.Skip(1), r => Assert.False(r.IsLead));
+
+        // The count is on the lead alone: the rows underneath are attempts already counted there.
+        Assert.All(rows.Skip(1), r => Assert.Equal(0, r.Attempts));
+    }
+
+    /// <summary>
+    /// A single attempt is not a group. "1 attempt" on every ordinary run is noise on the common
+    /// case to serve the rare one, so the count that would draw an expander is exactly 1 and the
+    /// list must not treat it as one.
+    /// </summary>
+    [Fact]
+    public void A_task_tried_once_is_just_a_run()
+    {
+        var rows = RunHousekeeping.Rows([Attempt(Guid.NewGuid(), "Completed", 0)]);
+
+        Assert.Equal(1, Assert.Single(rows).Attempts);
+    }
+
+    /// <summary>
+    /// Grouping comes AFTER filtering, and that is the case the filter exists for: a task that
+    /// failed twelve times and succeeded on the thirteenth, filtered to Unfinished, shows the
+    /// twelve failures and not the success. Grouping first would have to decide what a
+    /// half-matching group means, and there is no honest answer to that.
+    /// </summary>
+    [Fact]
+    public void The_filter_chooses_the_attempts_and_grouping_follows()
+    {
+        var task = Guid.NewGuid();
+        var runs = Enumerable.Range(1, 12).Select(i => Attempt(task, "Failed", i))
+            .Append(Attempt(task, "Completed", 0)).ToArray();
+
+        var rows = RunHousekeeping.Rows(RunHousekeeping.Where(runs, RunFilter.Unfinished, Now));
+
+        var only = Assert.Single(rows);
+        Assert.Equal(12, only.Attempts);
+        Assert.Equal("Failed", only.Run.Status);
+    }
+
     // ── retention ────────────────────────────────────────────────────────────────
 
     [Fact]

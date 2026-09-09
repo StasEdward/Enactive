@@ -60,6 +60,60 @@ public static class RunHousekeeping
         => runs.Where(r => Matches(r, filter, now)).ToArray();
 
     /// <summary>
+    /// One line of the runs list: a run, and whether it leads a group of attempts at the same task.
+    /// </summary>
+    /// <param name="Attempts">
+    /// How many attempts this task has, on the LEAD row. Zero on the rows underneath it, which are
+    /// the older attempts of a group already counted.
+    /// </param>
+    public sealed record RunRow(RunSummary Run, int Attempts, bool IsLead);
+
+    /// <summary>
+    /// The list as rows, with repeat attempts at one task folded into the newest of them.
+    ///
+    /// <para><b>Why.</b> A task tried a dozen times took a dozen rows, and they read as a dozen
+    /// pieces of work. A workspace used for a few days showed twelve consecutive lines of "WSFC
+    /// Workgroup Cluster Set…", which is one thing that took twelve goes. No filter fixes that -
+    /// every one of those rows is a real run, and each is legitimately in every filter.</para>
+    ///
+    /// <para>Grouping is applied AFTER filtering, over whatever the filter left. That matters for
+    /// the case the filter is for: a task that failed twelve times and succeeded on the thirteenth,
+    /// filtered to Unfinished, shows the twelve - which are the ones somebody wants to be rid of -
+    /// and not the success. Grouping by task first and then filtering would have to decide what a
+    /// half-matching group means, and there is no honest answer to that.</para>
+    ///
+    /// <para>The lead row is the NEWEST attempt, because what somebody looks for is how it ended
+    /// up, and groups are ordered by their newest attempt so a task worked on today does not sit
+    /// below one abandoned last week for having started earlier.</para>
+    /// </summary>
+    /// <param name="expanded">Task ids the person has opened. Everything else shows its lead only.</param>
+    public static IReadOnlyList<RunRow> Rows(
+        IReadOnlyList<RunSummary> runs, IReadOnlySet<Guid>? expanded = null)
+    {
+        var rows = new List<RunRow>();
+
+        var groups = runs
+            .GroupBy(r => r.TaskId)
+            .Select(g => g.OrderByDescending(r => r.StartedAt).ToArray())
+            .OrderByDescending(g => g[0].StartedAt);
+
+        foreach (var attempts in groups)
+        {
+            rows.Add(new RunRow(attempts[0], attempts.Length, IsLead: true));
+
+            // A single attempt is not a group and gets no expander: "1 attempt" on every ordinary
+            // run is noise on the common case to serve the rare one.
+            if (attempts.Length == 1 || expanded is null || !expanded.Contains(attempts[0].TaskId))
+                continue;
+
+            for (var i = 1; i < attempts.Length; i++)
+                rows.Add(new RunRow(attempts[i], 0, IsLead: false));
+        }
+
+        return rows;
+    }
+
+    /// <summary>
     /// The runs a retention setting would remove: everything past the newest <paramref name="keep"/>.
     ///
     /// <para>A COUNT and not an age, because what makes this list unusable is how many rows are in

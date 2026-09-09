@@ -201,6 +201,23 @@
         <Setter Property="Foreground" Value="{DynamicResource Brand.TextFaint}" />
     </Style>
 
+    <!-- The attempt count on a run row: a quiet pill, not a button competing with the row it sits
+         on. The row itself opens the run; this opens the other tries at the same task. -->
+    <Style Selector="Button.attempts">
+        <Setter Property="Padding" Value="6,1" />
+        <Setter Property="MinWidth" Value="0" />
+        <Setter Property="MinHeight" Value="0" />
+        <Setter Property="Foreground" Value="{DynamicResource Brand.TextMuted}" />
+    </Style>
+    <Style Selector="Button.attempts /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource Brand.Scrim}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Brand.Line}" />
+        <Setter Property="CornerRadius" Value="999" />
+    </Style>
+    <Style Selector="Button.attempts:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="BorderBrush" Value="{DynamicResource Brand.Accent}" />
+    </Style>
+
     <!-- A vertical form: a column of label/input pairs with room to breathe. -->
 
     <!-- A source filter in the log, and anything else that is on or off. Fluent

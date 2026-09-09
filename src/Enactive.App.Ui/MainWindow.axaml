@@ -320,9 +320,24 @@
                     <ListBox.ItemTemplate>
                         <DataTemplate x:DataType="vm:RunListItemViewModel">
                             <Border Classes="card" BorderBrush="{Binding StatusBrush}"
-                                    ToolTip.Tip="{Binding Tooltip}">
-                                <Grid ColumnDefinitions="*,Auto">
-                                    <StackPanel>
+                                    ToolTip.Tip="{Binding Tooltip}" Margin="{Binding Indent}">
+                                <Grid ColumnDefinitions="Auto,*,Auto">
+                                    <!-- The attempt count, on a task that took more than one go.
+                                         Twelve tries at one task used to be twelve rows and read as
+                                         twelve pieces of work; this is one row that says twelve.
+                                         Pressing it lists the older attempts underneath. -->
+                                    <Button Grid.Column="0" Classes="attempts"
+                                            IsVisible="{Binding HasAttempts}"
+                                            Command="{Binding ToggleCommand}"
+                                            VerticalAlignment="Center" Margin="0,0,8,0"
+                                            ToolTip.Tip="Show the other attempts at this task">
+                                        <StackPanel Orientation="Horizontal" Spacing="3">
+                                            <TextBlock Text="{Binding Chevron}" FontSize="9"
+                                                       VerticalAlignment="Center" />
+                                            <TextBlock Text="{Binding AttemptsLabel}" FontSize="11" />
+                                        </StackPanel>
+                                    </Button>
+                                    <StackPanel Grid.Column="1">
                                         <!-- NoWrap as well as trimming: trimming alone cuts a long
                                              line, and a title with a newline in it still became four.
                                              The title is one line now; this is what keeps it one. -->
@@ -336,7 +351,7 @@
                                          still takes the click - a trap on a delete, and the reason
                                          to make it discoverable instead is that the confirmation is
                                          what actually guards it. -->
-                                    <Button Grid.Column="1" Classes="rowIcon destructive"
+                                    <Button Grid.Column="2" Classes="rowIcon destructive"
                                             VerticalAlignment="Top" Margin="6,0,0,0"
                                             Command="{Binding RemoveCommand}"
                                             ToolTip.Tip="Delete this run from the history">

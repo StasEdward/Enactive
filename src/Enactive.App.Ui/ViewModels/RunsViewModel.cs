@@ -1,6 +1,7 @@
 namespace Enactive.App.Ui.ViewModels;
 
 using System.Collections.ObjectModel;
+using Avalonia;
 using Avalonia.Media;
 using Enactive.Core.Artifacts;
 using Enactive.App.Ui.Mvvm;
@@ -19,10 +20,28 @@ using Enactive.Core.Templates;
 /// </summary>
 internal sealed class RunListItemViewModel
 {
-    public RunListItemViewModel(RunSummary record, Action<RunListItemViewModel>? remove = null)
+    public RunListItemViewModel(
+        RunSummary record, Action<RunListItemViewModel>? remove = null,
+        int attempts = 1, bool isLead = true, bool expanded = false,
+        Action<RunListItemViewModel>? toggle = null)
     {
         Record = record;
         RemoveCommand = new RelayCommand(() => remove?.Invoke(this), () => remove is not null);
+
+        Attempts = attempts;
+        IsLead = isLead;
+        IsExpanded = expanded;
+
+        // Only a group of more than one gets an expander. "1 attempt" on every ordinary run is
+        // noise on the common case to serve the rare one.
+        HasAttempts = isLead && attempts > 1;
+        AttemptsLabel = HasAttempts ? attempts.ToString() : string.Empty;
+        Chevron = expanded ? "\u25be" : "\u25b8";
+        ToggleCommand = new RelayCommand(() => toggle?.Invoke(this), () => HasAttempts);
+
+        // Indented, so an older attempt reads as belonging to the row above rather than as its own
+        // piece of work - which is the whole thing being fixed.
+        Indent = isLead ? new Thickness(0) : new Thickness(14, 0, 0, 0);
 
         // Repaired on the way OUT, not only on the way in: history recorded before titles were
         // one line still has to read properly, and rewriting somebody's stored runs in place to fix
@@ -37,6 +56,17 @@ internal sealed class RunListItemViewModel
 
     public RunSummary Record { get; }
     public string Title { get; }
+
+    /// <summary>How many attempts this task has. On the lead row only; see RunHousekeeping.Rows.</summary>
+    public int Attempts { get; }
+
+    public bool IsLead { get; }
+    public bool IsExpanded { get; }
+    public bool HasAttempts { get; }
+    public string AttemptsLabel { get; }
+    public string Chevron { get; }
+    public Thickness Indent { get; }
+    public RelayCommand ToggleCommand { get; }
 
     /// <summary>Forgets this run. The window asks first; the row only reports the click.</summary>
     public RelayCommand RemoveCommand { get; }
@@ -534,8 +564,11 @@ internal sealed class RunsViewModel : ObservableObject
         Shown = RunHousekeeping.Where(records, _filter, DateTimeOffset.UtcNow);
 
         Items.Clear();
-        foreach (var record in Shown.OrderByDescending(r => r.StartedAt))
-            Items.Add(new RunListItemViewModel(record, row => DeleteRequested?.Invoke(row.Record)));
+        foreach (var row in RunHousekeeping.Rows(Shown, _expanded))
+            Items.Add(new RunListItemViewModel(
+                row.Run,
+                item => DeleteRequested?.Invoke(item.Record),
+                row.Attempts, row.IsLead, _expanded.Contains(row.Run.TaskId), Toggle));
 
         Status = records.Count == 0
             ? "No runs recorded in this workspace."
@@ -556,6 +589,23 @@ internal sealed class RunsViewModel : ObservableObject
             _selected = null;
         OnPropertyChanged(nameof(Selected));
     }
+
+    /// <summary>
+    /// Opens or closes one task's attempts.
+    ///
+    /// <para>Kept by TASK id rather than by row, because Show rebuilds every row: a finished run
+    /// re-lists the column, and expansion held on the row objects would close itself every few
+    /// seconds while somebody was reading.</para>
+    /// </summary>
+    private void Toggle(RunListItemViewModel row)
+    {
+        if (!_expanded.Remove(row.Record.TaskId))
+            _expanded.Add(row.Record.TaskId);
+
+        Show(All);
+    }
+
+    private readonly HashSet<Guid> _expanded = new();
 
     /// <summary>The workspace changed: what is listed belongs to the old one.</summary>
     public void Reset()
