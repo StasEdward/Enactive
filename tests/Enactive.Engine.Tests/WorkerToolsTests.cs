@@ -1,6 +1,7 @@
-namespace Enactive.Engine.Tests;
+﻿namespace Enactive.Engine.Tests;
 
 using Enactive.Agents;
+using Enactive.Tools;
 using Xunit;
 
 /// <summary>
@@ -148,4 +149,73 @@ public sealed class WorkerToolsTests
             Assert.Equal(worker.ToolAllowlist, WorkerTools.WithImplied(worker.ToolAllowlist));
         }
     }
+    // ── what the settings editor may offer ────────────────────────────────────────────
+
+    /// <summary>
+    /// The decisive one, and the one that would have caught this class of bug three times now.
+    ///
+    /// <para>Every tool the host registers has to be tickable. The editor used to carry its own
+    /// hand-written array, so a tool could be shipped, registered, documented and impossible to
+    /// grant - which is what happened to create_directory, move_file, search_files, copy_file and
+    /// delete_file. This asserts the list against the ACTUAL registered set rather than against a
+    /// list written next to it, because two lists written by the same hand agree with each other
+    /// and with nothing else.</para>
+    /// </summary>
+    [Fact]
+    public void Every_tool_the_host_registers_can_be_granted()
+    {
+        var registered = new ToolRegistry(EngineFixture.ShippedTools())
+            .Definitions.Select(d => d.Name).ToArray();
+
+        var offerable = WorkerTools.Offerable(registered, []);
+
+        foreach (var tool in registered)
+            Assert.Contains(tool, offerable, StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Including the one no migration hands out. delete_file is deliberately absent from the
+    /// implication table, so the editor is the ONLY way anybody gets it - which made it the one
+    /// tool that was completely unreachable.
+    /// </summary>
+    [Fact]
+    public void Deleting_can_be_granted_even_though_it_is_never_implied()
+    {
+        var registered = new ToolRegistry(EngineFixture.ShippedTools())
+            .Definitions.Select(d => d.Name).ToArray();
+
+        Assert.DoesNotContain("delete_file", WorkerTools.WithImplied(["write_file", "read_file"]),
+                              StringComparer.OrdinalIgnoreCase);
+        Assert.Contains("delete_file", WorkerTools.Offerable(registered, []),
+                        StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <summary>"*" is not a tool and is in no registry, so it has to be added on purpose.</summary>
+    [Fact]
+    public void The_wildcards_are_offered_too()
+    {
+        var offerable = WorkerTools.Offerable(["read_file"], []);
+
+        Assert.Contains("*", offerable);
+        Assert.Contains("mcp__*", offerable);
+    }
+
+    /// <summary>
+    /// A tool this worker carries that the host does not register survives. Dropping it would
+    /// disarm a role because somebody opened the dialog and pressed Save without touching anything.
+    /// </summary>
+    [Fact]
+    public void A_tool_the_host_does_not_know_survives_the_round_trip()
+        => Assert.Contains("mcp__weather__forecast",
+                           WorkerTools.Offerable(["read_file"], ["read_file", "mcp__weather__forecast"]));
+
+    /// <summary>And nothing is offered twice, whichever list it came from.</summary>
+    [Fact]
+    public void Nothing_is_offered_twice()
+    {
+        var offerable = WorkerTools.Offerable(["read_file", "write_file"], ["write_file", "*"]);
+
+        Assert.Equal(offerable.Distinct(StringComparer.OrdinalIgnoreCase).Count(), offerable.Count);
+    }
+
 }

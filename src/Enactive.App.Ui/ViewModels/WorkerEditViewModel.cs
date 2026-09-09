@@ -1,6 +1,7 @@
 ﻿namespace Enactive.App.Ui.ViewModels;
 
 using System.Collections.ObjectModel;
+using Enactive.Agents;
 using Enactive.App.Ui.Mvvm;
 using Enactive.Core.Permissions;
 
@@ -26,14 +27,6 @@ internal sealed class ToolToggle : ObservableObject
 /// </summary>
 internal sealed class WorkerEditViewModel : ObservableObject
 {
-    /// <summary>
-    /// The tools the app ships, plus the "*" wildcard. A worker carrying an unknown tool keeps it - see
-    /// the ctor. "*" is a row of its own so unrestricted access is something the user has to tick on
-    /// purpose: since an empty list means "no tools", there has to be a visible way to say "all".
-    /// </summary>
-    private static readonly string[] KnownTools =
-        { "write_file", "edit_file", "read_file", "list_dir", "run_command", "run_powershell", "git", "docker", "mcp__*", "*" };
-
     private const string NoneItem = "(none)";
 
     private readonly WorkerConfig _config;
@@ -46,7 +39,13 @@ internal sealed class WorkerEditViewModel : ObservableObject
     private string? _model;
     private string? _fallback;
 
-    public WorkerEditViewModel(WorkerConfig config, IReadOnlyList<string> modelCatalog, Action onSaved)
+    /// <param name="toolCatalog">
+    /// The tools the host registered. This used to be a literal in this class, which meant a tool
+    /// could be shipped and registered and still be impossible to tick - see WorkerTools.Offerable.
+    /// </param>
+    public WorkerEditViewModel(
+        WorkerConfig config, IReadOnlyList<string> modelCatalog, IReadOnlyList<string> toolCatalog,
+        Action onSaved)
     {
         _config = config;
         _onSaved = onSaved;
@@ -56,9 +55,10 @@ internal sealed class WorkerEditViewModel : ObservableObject
         _instructions = config.Instructions;
         _level = config.Level;
 
-        // The known tools first, then anything this worker already has that we do not know about, so
-        // an unrecognised tool survives a round trip through this dialog instead of being dropped.
-        foreach (var tool in KnownTools.Concat(config.Tools.Where(t => !KnownTools.Contains(t))).Distinct())
+        // Registered tools first, then the wildcards, then anything this worker already carries that
+        // is in neither - so an unrecognised tool survives a round trip through this dialog instead
+        // of being dropped. The order and the rule live in WorkerTools, where they are tested.
+        foreach (var tool in WorkerTools.Offerable(toolCatalog, config.Tools))
         {
             var toggle = new ToolToggle(tool, config.Tools.Contains(tool));
             // An empty selection now means NO tools, which is invisible in a list of unticked boxes —

@@ -61,6 +61,58 @@ public static class WorkerTools
     ];
 
     /// <summary>
+    /// The wildcards, which are not tools and so are in no registry. <c>*</c> has to be tickable on
+    /// purpose because an empty list means "no tools", and <c>mcp__*</c> covers whatever an MCP
+    /// server turns out to expose.
+    /// </summary>
+    private static readonly string[] Wildcards = ["mcp__*", "*"];
+
+    /// <summary>
+    /// Every tool the settings editor should offer: the ones the host actually registered, the
+    /// wildcards, and anything this worker already carries that is in neither list.
+    ///
+    /// <para><b>Why this is not a literal in the dialog.</b> It was one. The editor held its own
+    /// hand-written array of tool names, and a tool absent from it could not be ticked - so
+    /// <c>create_directory</c>, <c>move_file</c>, <c>copy_file</c>, <c>search_files</c> and
+    /// <c>delete_file</c> were registered by the host, offered to nobody, and grantable only by
+    /// editing settings.json by hand. The ones visible in the dialog today are visible only because
+    /// a MIGRATION put them in the worker's saved list first, and the last clause below then kept
+    /// them through the round trip. <c>delete_file</c>, which no migration hands out on purpose,
+    /// was unreachable entirely: shipped, registered, tested, and impossible to switch on.</para>
+    ///
+    /// <para>Reading the registry means the next tool appears the day it is registered, with nobody
+    /// remembering a second list. That is the same argument as <see cref="WithImplied"/>: the rule
+    /// is written once, where it can be tested, instead of copied to wherever it is needed.</para>
+    /// </summary>
+    /// <param name="registered">Tool names the host registered - <c>IToolRegistry.Definitions</c>.</param>
+    /// <param name="held">What this worker's saved list already names.</param>
+    public static IReadOnlyList<string> Offerable(
+        IEnumerable<string> registered, IEnumerable<string> held)
+    {
+        var result = new List<string>();
+
+        void Add(string name)
+        {
+            if (!result.Contains(name, StringComparer.OrdinalIgnoreCase))
+                result.Add(name);
+        }
+
+        foreach (var tool in registered)
+            Add(tool);
+
+        foreach (var wildcard in Wildcards)
+            Add(wildcard);
+
+        // Last, and never dropped: a tool this worker carries that the host does not register is
+        // still its tool. Silently losing it on the round trip through the dialog would disarm a
+        // role because somebody opened it and pressed Save.
+        foreach (var tool in held)
+            Add(tool);
+
+        return result;
+    }
+
+    /// <summary>
     /// The same list plus anything it implies, in a stable order: implied tools follow the tool
     /// they came from, so a list stays readable in the settings editor.
     ///

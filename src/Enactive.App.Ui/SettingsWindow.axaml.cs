@@ -1,4 +1,4 @@
-using Avalonia;
+﻿using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.VisualTree;
@@ -32,7 +32,7 @@ internal sealed partial class SettingsWindow : Window
         viewModel.ProviderEditRequested += (config, saved) =>
             new ProviderEditWindow(config, saved).Show(this);
         viewModel.WorkerEditRequested += (config, catalog, saved) =>
-            new WorkerEditWindow(config, catalog, saved).Show(this);
+            new WorkerEditWindow(config, catalog, viewModel.ToolNames, saved).Show(this);
         viewModel.ConfirmRequested += (headline, detail) =>
             ConfirmWindow.AskAsync(this, headline, detail, "Remove", "Keep");
 

@@ -1,4 +1,4 @@
-using Avalonia.Controls;
+﻿using Avalonia.Controls;
 using Enactive.App.Ui.ViewModels;
 
 namespace Enactive.App.Ui;
@@ -9,9 +9,11 @@ namespace Enactive.App.Ui;
 /// </summary>
 internal sealed partial class WorkerEditWindow : Window
 {
-    public WorkerEditWindow(WorkerConfig config, IReadOnlyList<string> modelCatalog, Action onSaved)
+    public WorkerEditWindow(
+        WorkerConfig config, IReadOnlyList<string> modelCatalog, IReadOnlyList<string> toolCatalog,
+        Action onSaved)
     {
-        var viewModel = new WorkerEditViewModel(config, modelCatalog, onSaved);
+        var viewModel = new WorkerEditViewModel(config, modelCatalog, toolCatalog, onSaved);
         viewModel.CloseRequested += () => Close();
         DataContext = viewModel;
         InitializeComponent();
