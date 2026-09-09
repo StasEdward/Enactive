@@ -406,6 +406,8 @@ internal sealed class RunsViewModel : ObservableObject
     public RunsViewModel()
     {
         RefreshCommand = new RelayCommand(() => RefreshRequested?.Invoke());
+        DeleteShownCommand = new RelayCommand(
+            () => DeleteShownRequested?.Invoke(Shown), () => Shown.Count > 0);
     }
 
     /// <summary>Asks whoever owns the stores to load this workspace's runs.</summary>
@@ -425,6 +427,9 @@ internal sealed class RunsViewModel : ObservableObject
     /// the asking and the deleting; the list only reports the click.
     /// </summary>
     public event Action<RunSummary>? DeleteRequested;
+
+    /// <summary>Forget every run the current filter is showing. The window asks first.</summary>
+    public event Action<IReadOnlyList<RunSummary>>? DeleteShownRequested;
 
     /// <summary>Somebody asked to carry an interrupted run on. The window owns the running.</summary>
     public event Action<RunCheckpoint>? ResumeRequested;
@@ -473,6 +478,52 @@ internal sealed class RunsViewModel : ObservableObject
     /// </summary>
     public IReadOnlyList<RunSummary> All { get; private set; } = Array.Empty<RunSummary>();
 
+    /// <summary>
+    /// Which runs the list is showing. Changing it re-lists from what is already in hand: the
+    /// filter is a question about records this window already has, not a reason to go back to the
+    /// store.
+    /// </summary>
+    public RunFilter Filter
+    {
+        get => _filter;
+        set
+        {
+            if (!Set(ref _filter, value))
+                return;
+            OnPropertyChanged(nameof(FilterIndex));
+            Show(All);
+        }
+    }
+
+    private RunFilter _filter = RunFilter.All;
+
+    /// <summary>The combo box's own index, because Avalonia binds a selection by position.</summary>
+    public int FilterIndex
+    {
+        get => (int)_filter;
+        set
+        {
+            if (value >= 0 && value <= (int)RunFilter.OlderThanAWeek)
+                Filter = (RunFilter)value;
+        }
+    }
+
+    public IReadOnlyList<string> FilterNames { get; } =
+        ["All runs", "Unfinished", "Completed", "Older than a week"];
+
+    /// <summary>What a "delete these" would act on: exactly the rows on screen.</summary>
+    public IReadOnlyList<RunSummary> Shown { get; private set; } = Array.Empty<RunSummary>();
+
+    /// <summary>
+    /// Named with the COUNT, so the button says how much it destroys before it is pressed rather
+    /// than in a dialog after it.
+    /// </summary>
+    public string DeleteShownLabel => $"Delete these {Shown.Count}";
+
+    public bool CanDeleteShown => Shown.Count > 0;
+
+    public RelayCommand DeleteShownCommand { get; }
+
     public void Show(IReadOnlyList<RunSummary> records)
     {
         All = records;
@@ -480,13 +531,24 @@ internal sealed class RunsViewModel : ObservableObject
         // rather than by position - a finished run pushes everything down by one.
         var keep = _selected?.Record.RunId;
 
+        Shown = RunHousekeeping.Where(records, _filter, DateTimeOffset.UtcNow);
+
         Items.Clear();
-        foreach (var record in records.OrderByDescending(r => r.StartedAt))
+        foreach (var record in Shown.OrderByDescending(r => r.StartedAt))
             Items.Add(new RunListItemViewModel(record, row => DeleteRequested?.Invoke(row.Record)));
 
-        Status = Items.Count == 0
+        Status = records.Count == 0
             ? "No runs recorded in this workspace."
-            : $"{Items.Count} run{(Items.Count == 1 ? "" : "s")}";
+            : Items.Count == records.Count
+                ? $"{Items.Count} run{(Items.Count == 1 ? "" : "s")}"
+                // Both numbers when a filter is on. "3 runs" over a list that holds 37 is a true
+                // sentence that reads as the whole truth.
+                : $"{Items.Count} of {records.Count} runs";
+
+        OnPropertyChanged(nameof(Shown));
+        OnPropertyChanged(nameof(DeleteShownLabel));
+        OnPropertyChanged(nameof(CanDeleteShown));
+        DeleteShownCommand.RaiseCanExecuteChanged();
 
         if (keep is { } id)
             _selected = Items.FirstOrDefault(i => i.Record.RunId == id);

@@ -262,6 +262,24 @@
                             Command="{Binding Runs.RefreshCommand}" />
                 </Grid>
 
+                <!-- The filter decides the set, and the button destroys exactly what is on screen.
+                     Removing runs one at a time was the only way to remove any, and a workspace
+                     used for a few days had 37 of them - most of them repeat attempts at one task.
+                     The button carries the COUNT so it says how much it takes before it is pressed,
+                     not in a dialog afterwards. -->
+                <Grid DockPanel.Dock="Top" Margin="12,0,12,6" ColumnDefinitions="*,Auto">
+                    <ComboBox Grid.Column="0" FontSize="11" HorizontalAlignment="Stretch"
+                              ItemsSource="{Binding Runs.FilterNames}"
+                              SelectedIndex="{Binding Runs.FilterIndex, Mode=TwoWay}"
+                              ToolTip.Tip="Which runs the list shows" />
+                    <Button Grid.Column="1" Margin="6,0,0,0" FontSize="11" Padding="8,1"
+                            Classes="destructive"
+                            Content="{Binding Runs.DeleteShownLabel}"
+                            IsEnabled="{Binding Runs.CanDeleteShown}"
+                            Command="{Binding Runs.DeleteShownCommand}"
+                            ToolTip.Tip="Forget every run listed below. This cannot be undone." />
+                </Grid>
+
                 <!-- Runs nobody knows the end of: the process they were in went away before they
                      finished. Above the history rather than in it, because this is not a record of
                      something that happened - it is an offer to carry on - and a killed run usually
