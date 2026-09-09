@@ -2,6 +2,8 @@
 
 using System.Net;
 using System.Net.Http.Json;
+using System.Security.Cryptography;
+using System.Text.RegularExpressions;
 using Enactive.Remote.Contracts;
 using Enactive.Remote.Gateway.Services;
 using Enactive.Remote.Gateway.Storage;
@@ -148,6 +150,63 @@ public sealed class PanelTests(TestDatabase database) : IClassFixture<TestDataba
 
         Assert.False(response.IsSuccessStatusCode);
         Assert.Contains(FaultCode.ApprovalNotRemotelyDecidable, body);
+    }
+
+    /// <summary>
+    /// Everything the page names is addressed by its own contents.
+    ///
+    /// <para>The panel's files were served with <c>Cache-Control: no-cache</c>, which asks a client
+    /// to revalidate and then trusts it. A tab restored from iOS Safari's back-forward cache never
+    /// asks: it is the page as it was, scripts included. So a release reached the server, the
+    /// desktop showed it, and the same URL on a phone drew the previous build - which looks exactly
+    /// like a release that failed, and is the second afternoon this has cost.</para>
+    ///
+    /// <para>This asserts the property that makes trust unnecessary: the token in the page is the
+    /// fingerprint of the bytes actually served at that path. Not merely THAT there is a token -
+    /// a constant one, or one left over from a previous build, would satisfy that and fix nothing.
+    /// Change a file and its URL changes with it, and no cache anywhere holds an answer for the new
+    /// one.</para>
+    ///
+    /// <para>Shown red by serving index.html unrewritten, which is what the static file handler
+    /// does on its own.</para>
+    /// </summary>
+    [Fact]
+    public async Task Every_script_and_stylesheet_the_page_names_is_fingerprinted()
+    {
+        var page = await _owner.GetStringAsync("/");
+
+        var referenced = Regex.Matches(page, "(?:href|src)=\"(?<path>/[^\"?#]+\\.(?:css|js))(?<query>[^\"]*)\"");
+
+        Assert.NotEmpty(referenced);
+
+        foreach (Match reference in referenced)
+        {
+            var path = reference.Groups["path"].Value;
+            var query = reference.Groups["query"].Value;
+
+            Assert.StartsWith("?v=", query);
+
+            // The token has to BE the file. A page that stamps something constant onto every asset
+            // passes a "there is a version" check and goes on serving the same URL for a changed
+            // file, which is the bug wearing the shape of the fix.
+            var bytes = await _owner.GetByteArrayAsync(path + query);
+            var expected = Convert.ToHexStringLower(SHA256.HashData(bytes))[..8];
+
+            Assert.Equal("?v=" + expected, query);
+        }
+    }
+
+    /// <summary>
+    /// And the page that names them is never the cached one. It is the pointer: every fingerprint
+    /// is only as fresh as the document carrying it, so this is the one file that must still be
+    /// asked about on every load.
+    /// </summary>
+    [Fact]
+    public async Task The_page_itself_is_always_revalidated()
+    {
+        using var response = await _owner.GetAsync("/");
+
+        Assert.Equal("no-cache", Assert.Single(response.Headers.CacheControl!.ToString().Split(", ")));
     }
 
     /// <summary>
