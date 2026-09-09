@@ -194,32 +194,88 @@ section { padding: 84px 0; border-top: 1px solid var(--ink-800); }
   background: var(--ink-950);
   border-bottom: 1px solid var(--ink-700);
 }
-.window__bar .dot { width: 9px; height: 9px; border-radius: 999px; background: var(--ink-600); }
-.window__title { font-family: var(--mono); font-size: 0.7rem; letter-spacing: 0.1em; color: var(--ink-400); margin-left: 8px; }
+.window__title { font-family: var(--mono); font-size: 0.7rem; letter-spacing: 0.06em; color: var(--ink-300); }
+
+/* The app draws its own title bar, Windows-side: minimise, maximise, close. The mock used to show
+   macOS traffic lights, which is a different operating system's window and not this product's. */
+.window__caption { margin-left: auto; display: flex; gap: 14px; color: var(--ink-400); font-size: 0.72rem; font-style: normal; }
+.window__caption i { font-style: normal; }
+.window__caption .x { color: var(--ink-300); }
+
 .status { margin-left: auto; font-family: var(--mono); font-size: 0.7rem; padding: 2px 9px; border-radius: 999px; border: 1px solid currentColor; }
 .status--run { color: var(--ember-500); }
 .status--wait { color: var(--amber-400); }
 .window__body { padding: 18px; }
-.task__label { font-family: var(--mono); font-size: 0.65rem; letter-spacing: 0.14em; color: var(--ink-400); }
-.task__title { font-family: var(--display); font-weight: 700; font-size: 1.15rem; letter-spacing: -0.02em; margin: 4px 0 16px; }
 
-.plan { list-style: none; margin: 0 0 18px; padding: 0; display: flex; flex-direction: column; gap: 10px; }
-.plan li { display: flex; align-items: center; gap: 11px; font-size: 0.9rem; color: var(--ink-400); transition: color 220ms var(--ease); }
-.plan li::before {
-  content: "";
-  width: 9px; height: 9px; border-radius: 999px; flex: none;
-  background: var(--ink-500);
-  transition: background 220ms var(--ease);
+/* ---------- the desktop shell -------------------------------------------- */
+/* Panels, labels and status words follow src/Enactive.App.Ui/MainWindow.axaml. */
+/* The hero column is about 460px wide, so this is drawn for that width and grows with it. The
+   first attempt was laid out at desktop-window proportions and pushed its own buttons off the
+   card - a mock of a window that does not fit is a worse advertisement than no mock. */
+.app__grid { display: grid; grid-template-columns: 132px 1fr; }
+.app__rail { padding: 12px 10px; border-right: 1px solid var(--ink-700); background: var(--ink-950); min-width: 0; }
+.panelHeader { font-family: var(--mono); font-size: 0.56rem; letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-400); margin: 0 0 5px; }
+.rail__run + .panelHeader { margin-top: 14px; }
+.rail__name { font-size: 0.74rem; font-weight: 600; color: var(--ink-100); margin: 0; overflow-wrap: anywhere; }
+.rail__path { font-family: var(--mono); font-size: 0.56rem; color: var(--ink-400); margin: 2px 0 14px; overflow-wrap: anywhere; }
+.rail__run { display: flex; flex-direction: column; gap: 2px; padding: 6px 7px; margin-bottom: 5px; border-radius: 6px; border: 1px solid var(--ink-700); background: var(--ink-900); font-size: 0.68rem; line-height: 1.3; color: var(--ink-100); }
+.rail__run small { font-family: var(--mono); font-size: 0.56rem; color: var(--ink-400); }
+.rail__run--muted { color: var(--ink-300); border-style: dashed; }
+.rail__hint { font-family: var(--mono); font-size: 0.56rem; color: var(--ink-500); margin: 14px 0 0; overflow-wrap: anywhere; }
+
+.app__main { padding: 12px 13px 13px; min-width: 0; }
+.app__task { display: flex; align-items: flex-start; gap: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--ink-700); }
+.app__taskTitle { font-size: 0.86rem; font-weight: 600; line-height: 1.25; color: var(--ink-50); margin: 0; }
+.app__taskIntent { font-size: 0.7rem; line-height: 1.3; color: var(--ink-400); margin: 3px 0 0; }
+.pill { margin-left: auto; flex: none; font-family: var(--mono); font-size: 0.6rem; padding: 3px 9px; border-radius: 999px; background: var(--ember-500); color: #FFFFFF; }
+.pill.is-wait { background: var(--amber-400); color: var(--ink-950); }
+
+.app__tabs { display: flex; gap: 14px; border-bottom: 1px solid var(--ink-700); margin-bottom: 10px; }
+.app__tabs .tab { font-size: 0.72rem; color: var(--ink-400); padding: 8px 0; border-bottom: 2px solid transparent; }
+.app__tabs .tab.on { color: var(--ink-50); border-bottom-color: var(--ember-500); }
+
+/* A step card takes its LEFT EDGE colour from its status, which is what the application does. */
+.steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.steps li {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 10px; border-radius: 6px;
+  background: var(--ink-900); border: 1px solid var(--ink-700);
+  border-left: 3px solid var(--ink-500);
+  font-size: 0.76rem; line-height: 1.3; color: var(--ink-300);
+  transition: color 220ms var(--ease), border-left-color 220ms var(--ease);
 }
-.plan li.done { color: var(--ink-200); }
-.plan li.done::before { background: var(--success); }
-.plan li.run { color: var(--ink-50); }
-.plan li.run::before { background: var(--ember-500); animation: pulse 1.6s var(--ease) infinite; }
-.plan li .st { margin-left: auto; font-family: var(--mono); font-size: 0.68rem; color: var(--ink-500); }
+.steps li.done { color: var(--ink-100); border-left-color: var(--success); }
+.steps li.run { color: var(--ink-50); border-left-color: var(--ember-500); }
+.steps li .st { margin-left: auto; flex: none; font-family: var(--mono); font-size: 0.6rem; color: var(--ink-500); }
+.steps li.run .st { color: var(--ember-300); animation: pulse 1.6s var(--ease) infinite; }
+.step__title { min-width: 0; }
+
+.app__activity { font-family: var(--mono); font-size: 0.64rem; color: var(--ink-300); margin: 10px 0 0; min-height: 1.3em; overflow-wrap: anywhere; }
+
+/* Input first, then everything that decides what Run does, on one line beneath it - which is the
+   arrangement the window uses: the controls that change the next run sit beside the button that
+   starts it, not on the far side of the screen. */
+.app__command { border-top: 1px solid var(--ink-700); padding: 11px 13px; background: var(--ink-950); display: flex; flex-direction: column; gap: 9px; }
+.app__input { font-size: 0.74rem; color: var(--ink-500); margin: 0; padding: 9px 11px; border: 1px solid var(--ink-700); border-radius: 7px; background: var(--ink-900); }
+.app__controls { display: flex; flex-direction: column; gap: 4px; flex: 1 1 190px; min-width: 0; }
+.app__row { display: flex; gap: 9px; align-items: center; flex-wrap: nowrap; white-space: nowrap; }
+.combo { font-size: 0.66rem; color: var(--ink-100); border: 1px solid var(--ink-600); border-radius: 5px; padding: 2px 8px; background: var(--ink-900); }
+.check { font-size: 0.66rem; color: var(--ink-300); position: relative; padding-left: 15px; }
+.check::before { content: ""; position: absolute; left: 0; top: 2px; width: 10px; height: 10px; border: 1px solid var(--ink-500); border-radius: 3px; }
+/* The tier is named on the slider rather than floating above it, and the wording is
+   MainWindowViewModel.LevelName verbatim. Warning yellow is that tier's colour in Brand.cs. */
+.app__autonomy { font-size: 0.62rem; line-height: 1.3; color: var(--warning); margin: 1px 0 0; }
+.slider { display: flex; align-items: center; }
+.slider i { height: 2px; flex: 1; background: var(--ink-600); }
+.slider i.on { flex: none; width: 10px; height: 10px; border-radius: 999px; background: var(--warning); }
+.app__foot { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
+.app__buttons { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; flex: none; }
+.app__buttons .chip { font-size: 0.7rem; padding: 5px 11px; }
+
+.demo__note { font-size: 0.72rem; color: var(--ink-400); margin: 10px 2px 0; }
 
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
 
-.task__action { font-family: var(--mono); font-size: 0.82rem; color: var(--ink-200); margin: 4px 0 16px; min-height: 1.3em; }
 .window__actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .chip {
   font-size: 0.8rem; font-weight: 600;
@@ -228,6 +284,34 @@ section { padding: 84px 0; border-top: 1px solid var(--ink-800); }
 }
 .chip--muted { background: transparent; color: var(--ink-200); border: 1px solid var(--ink-600); }
 .chip--danger { background: transparent; color: var(--danger); border: 1px solid currentColor; }
+
+@media (max-width: 720px) {
+  .app__grid { grid-template-columns: 1fr; }
+  .app__rail { display: none; }
+  .app__command { grid-template-columns: 1fr; }
+  .app__controls { width: auto; }
+}
+
+/* ---------- the web panel ------------------------------------------------ */
+/* Drawn from the panel the gateway serves: its tabs, its counts, and the permission on the card
+   of the task that raised it rather than on a page of its own. */
+.panel__live { margin-left: auto; font-size: 0.72rem; color: var(--success); position: relative; padding-left: 14px; }
+.panel__live::before { content: ""; position: absolute; left: 0; top: 50%; transform: translateY(-50%); width: 7px; height: 7px; border-radius: 999px; background: var(--success); }
+.panel__tabs { display: flex; gap: 16px; padding: 0 16px; border-bottom: 1px solid var(--ink-700); background: var(--ink-950); }
+.panel__tabs .tab { font-size: 0.78rem; color: var(--ink-400); padding: 11px 0; border-bottom: 2px solid transparent; display: flex; align-items: center; gap: 6px; }
+.panel__tabs .tab.on { color: var(--ink-50); border-bottom-color: var(--ember-500); }
+.panel__tabs b { font-size: 0.64rem; font-weight: 600; background: var(--ember-500); color: #FFFFFF; border-radius: 999px; padding: 1px 6px; }
+.panel__body { padding: 16px; }
+.panel__card { border: 1px solid var(--ink-700); border-radius: var(--radius); background: var(--ink-900); padding: 14px; }
+.panel__head { display: flex; align-items: center; gap: 10px; }
+.panel__title { font-size: 0.9rem; font-weight: 600; color: var(--ink-50); }
+.panel__meta { font-family: var(--mono); font-size: 0.66rem; color: var(--ink-400); margin: 6px 0 12px; overflow-wrap: anywhere; }
+
+/* The question, inset in the card of the task that raised it. Ember-edged because a task waiting
+   on an answer should be the loudest thing on the page. */
+.ask { margin-top: 14px; padding: 13px; border: 1px solid var(--ember-500); border-left-width: 3px; border-radius: var(--radius); background: var(--ink-950); }
+.ask__state { margin-left: auto; font-size: 0.72rem; font-weight: 600; color: var(--warning); }
+.ask__topic { font-size: 0.85rem; color: var(--ink-100); margin: 10px 0 0; }
 
 /* ---------- pipeline strip ------------------------------------------------ */
 .pipeline { padding: 34px 0; }
@@ -259,13 +343,17 @@ section { padding: 84px 0; border-top: 1px solid var(--ink-800); }
 /* ---------- decision ------------------------------------------------------ */
 .decision__grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 470px); gap: 56px; align-items: center; }
 .window--wait { border-color: var(--amber-400); }
-.decision__text { color: var(--ink-100); font-size: 0.95rem; margin-bottom: 14px; }
-.options { display: grid; gap: 10px; margin-bottom: 16px; }
-.option { border: 1px solid var(--ink-700); border-radius: var(--radius); padding: 12px 14px; font-size: 0.9rem; color: var(--ink-300); }
-.option--rec { border-color: var(--amber-400); }
-.option__name { font-family: var(--mono); font-size: 0.7rem; letter-spacing: 0.1em; color: var(--ink-400); }
-.option__body { color: var(--ink-100); }
-.option__tag { font-family: var(--mono); font-size: 0.68rem; color: var(--amber-400); margin-top: 5px; }
+
+.decision__topic { font-size: 0.95rem; font-weight: 600; color: var(--ink-50); margin: 0; }
+.decision__meta { font-family: var(--mono); font-size: 0.68rem; color: var(--ink-400); margin: 4px 0 12px; overflow-wrap: anywhere; }
+/* The action is shown whole and scrolls inside its own box. A command that runs off the edge of
+   the card is a command nobody read, which is the failure this element exists to prevent. */
+.decision__action {
+  font-family: var(--mono); font-size: 0.76rem; color: var(--ink-100);
+  background: var(--ink-950); border: 1px solid var(--ink-700); border-radius: 8px;
+  padding: 11px 12px; margin: 0; max-height: 8.5em; overflow: auto; white-space: pre;
+}
+.decision__note { font-size: 0.74rem; color: var(--ink-400); margin: 10px 0 14px; }
 
 /* ---------- team of models ------------------------------------------------ */
 .phases { display: grid; grid-template-columns: repeat(auto-fit, minmax(258px, 1fr)); gap: 18px; margin-top: 42px; }
