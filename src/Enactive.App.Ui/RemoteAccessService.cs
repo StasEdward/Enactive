@@ -42,7 +42,7 @@ internal sealed class RemoteAccessService : IAsyncDisposable
     private static readonly TimeSpan MaxBackoff = TimeSpan.FromMinutes(2);
 
     private readonly RemoteAccessSettings _settings;
-    private readonly Func<Task<RunEnvironment>> _environment;
+    private readonly Func<WorkspaceEntry, Task<RunEnvironment>> _environment;
     private readonly Func<IReadOnlyList<WorkspaceEntry>> _workspaces;
     private readonly IDecisionHandler _desktop;
     private readonly string _databasePath;
@@ -69,8 +69,11 @@ internal sealed class RemoteAccessService : IAsyncDisposable
     private readonly RemoteApprovals _approvals = new();
 
     /// <param name="environment">
-    /// The run settings as the window has them right now. A function rather than a value because a
-    /// task arriving in an hour must run under the autonomy level that is on the slider then.
+    /// The run setup for one workspace. A function of the WORKSPACE rather than a value, because
+    /// the autonomy level, worker and staging flag are facts about a folder: a task naming one
+    /// project must not be governed by the slider belonging to whichever project is open on the
+    /// desktop. A function rather than a table read once, because those settings are editable and
+    /// a task arriving in an hour should run under what they say then.
     /// </param>
     /// <param name="desktop">
     /// Who answers a permission question at this machine. It is wrapped, not replaced: a question
@@ -79,7 +82,7 @@ internal sealed class RemoteAccessService : IAsyncDisposable
     /// </param>
     public RemoteAccessService(
         RemoteAccessSettings settings,
-        Func<Task<RunEnvironment>> environment,
+        Func<WorkspaceEntry, Task<RunEnvironment>> environment,
         Func<IReadOnlyList<WorkspaceEntry>> workspaces,
         IDecisionHandler desktop,
         string databasePath)
@@ -322,20 +325,33 @@ internal sealed class RemoteAccessService : IAsyncDisposable
         Func<IDecisionHandler, IDecisionHandler> wrap,
         CancellationToken ct)
     {
-        var workspace = Resolve(task.WorkspaceId)
+        var found = Resolve(task.WorkspaceId)
             ?? throw new InvalidOperationException(
                 "This computer has no workspace with that id any more. It may have been removed from "
                 + "the workspace list, or its folder may have been deleted or moved.");
 
+        var (workspace, entry) = found;
+
+        // Refused for the same reason a background run is: staging that survives an unattended run
+        // needs a store that persists its proposals, and there is not one. Running anyway would
+        // write to the files directly while the history said the changes were staged - and here
+        // nobody is at the machine to notice the difference.
+        if (entry.StageChanges)
+        {
+            throw new InvalidOperationException(
+                $"'{entry.Name}' is set to stage changes, and a task started from the web cannot "
+                + "stage: it would write to the files directly while the history claimed otherwise. "
+                + "Turn Stage changes off for that workspace to run it from here.");
+        }
+
         var composed = await UnattendedRun.ComposeAsync(
-            await _environment(),
+            // The autonomy, worker and staging saved against THE WORKSPACE THIS TASK NAMES - not
+            // the slider on the desktop, which is about whatever folder happens to be open there.
+            await _environment(entry),
             workspace,
             task.Prompt,
             IntentSource.Remote,
             wrap(_desktop),
-            // No worker: the box on the main window is about the run somebody is watching. A remote
-            // task naming nothing gets the default rather than whatever was last clicked here.
-            workerId: null,
             ct);
 
         return new RemotePreparation(composed.Engine, composed.Intent, composed.Resources);
@@ -348,7 +364,7 @@ internal sealed class RemoteAccessService : IAsyncDisposable
     /// one thing the application can say about a workspace id that the library deliberately cannot.
     /// </para>
     /// </summary>
-    private WorkspaceInfo? Resolve(string workspaceId)
+    private (WorkspaceInfo Workspace, WorkspaceEntry Entry)? Resolve(string workspaceId)
     {
         foreach (var entry in _workspaces())
         {
@@ -360,7 +376,7 @@ internal sealed class RemoteAccessService : IAsyncDisposable
                 var workspace = WorkspaceInfo.For(entry.RootPath);
 
                 if (string.Equals(workspace.Id.ToString(), workspaceId, StringComparison.OrdinalIgnoreCase))
-                    return workspace;
+                    return (workspace, entry);
             }
             catch (Exception)
             {

@@ -250,10 +250,14 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     {
         _remote = new RemoteAccessService(
             _settings.RemoteAccess,
-            // On the UI thread, because it reads the autonomy slider and the worker box. Read at
-            // the moment a task arrives rather than now: this runs once at startup, and a task that
-            // turns up in an hour must run under the settings that are on screen then.
-            () => Dispatcher.UIThread.InvokeAsync(SnapshotEnvironment).GetTask(),
+            // On the UI thread, because it reads the worker list and the app settings. Governed by
+            // the workspace THE TASK NAMED, not by the slider: the slider is about the folder open
+            // on this screen, and a phone naming a different project must get the level saved for
+            // that project. Read when the task arrives rather than now, so editing a workspace's
+            // autonomy takes effect without restarting.
+            entry => Dispatcher.UIThread.InvokeAsync(
+                () => SnapshotEnvironment(
+                    Math.Clamp(entry.Autonomy, 0, 3), entry.WorkerId, entry.StageChanges)).GetTask(),
             () => _registry.Entries,
             // The desktop's own handler. RemoteRunner wraps it rather than replacing it, so a
             // permission question from a remote run shows here as well as on the phone.
@@ -1339,16 +1343,43 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     ///
     /// <para>Read here rather than inside the run for the same reason
     /// <see cref="CurrentRunSettings"/> is: a run started now and finishing in ten minutes must be
-    /// governed by the autonomy level that was on screen when it was started, not by wherever the
-    /// slider has since been dragged. The MCP configurations are cloned for the same reason - the
-    /// settings dialog edits the live ones.</para>
+    /// governed by the autonomy level it was started under, not by wherever the slider has since
+    /// been dragged. The MCP configurations are cloned for the same reason - the settings dialog
+    /// edits the live ones.</para>
     /// </summary>
-    private RunEnvironment SnapshotEnvironment()
+    /// <param name="autonomy">
+    /// WHOSE autonomy, which is the whole reason this is a parameter. The slider on screen is about
+    /// the folder on screen; a task from a phone names a folder of its own and must be governed by
+    /// the level saved against THAT one. Reading the slider for both meant a remote task running at
+    /// whatever permission an unrelated project happened to be sitting at.
+    /// </param>
+    private RunEnvironment SnapshotEnvironment(int autonomy, string? workerRole, bool stageChanges)
         => new(
             _providerFactory, _modelResolver, _workerProvider, _toolRegistry,
             _settings.McpServers.Select(c => c.Clone()).ToArray(),
             _planner, _permissionEngine, BuildRouter(), _log, _settings,
-            PolicyFor(_vm.AutonomyTier), CurrentRunSettings());
+            PolicyFor(autonomy),
+            new RunSettings(
+                autonomy, MainWindowViewModel.LevelName(autonomy), workerRole, stageChanges),
+            WorkerIdForRole(workerRole));
+
+    /// <summary>
+    /// The worker a saved ROLE NAME refers to, or null for the default.
+    ///
+    /// <para>The registry stores the role, not the id - by name on purpose, because the worker list
+    /// is editable and an index would quietly select somebody else the first time a role was
+    /// added. The two lists are built together, so the position of a role is the position of its
+    /// worker.</para>
+    /// </summary>
+    private string? WorkerIdForRole(string? role)
+    {
+        if (role is null)
+            return null;
+
+        var index = _vm.WorkerRoles.IndexOf(role);
+
+        return index >= 0 && index < _workerProvider.All.Count ? _workerProvider.All[index].Id : null;
+    }
 
     /// <summary>The role the worker box is on, by name - null when there are no roles to pick from.</summary>
     private string? CurrentWorkerRole()
@@ -1381,10 +1412,8 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         // Adopt: a background run is a run, and the folder is being taken up as a workspace here
         // exactly as it is in the foreground.
         var workspace = WorkspaceInfo.Adopt(fullPath);
-        var environment = SnapshotEnvironment();
-        var workerId = _workerProvider.All.Count > 0
-            && _vm.SelectedWorkerIndex >= 0 && _vm.SelectedWorkerIndex < _workerProvider.All.Count
-            ? _workerProvider.All[_vm.SelectedWorkerIndex].Id : null;
+        // The slider on screen, and rightly: this run is against the folder on screen.
+        var environment = SnapshotEnvironment(_vm.AutonomyTier, CurrentWorkerRole(), _vm.StageChanges);
         var inbox = InboxStoreFactory.Create(workspace);
         _registry.Touch(fullPath);
         RefreshWorkspaces();
@@ -1407,7 +1436,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             {
                 var composed = await UnattendedRun.ComposeAsync(
                     environment, workspace, text, IntentSource.Inbox,
-                    new BackgroundDecisionHandler(inbox, workspace), workerId, CancellationToken.None);
+                    new BackgroundDecisionHandler(inbox, workspace), CancellationToken.None);
 
                 await using (composed.Resources)
                 {

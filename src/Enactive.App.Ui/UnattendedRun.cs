@@ -25,6 +25,13 @@ namespace Enactive.App.Ui;
 /// later, on a thread pool thread, by which time the slider has moved and the settings dialog has
 /// been through two round trips - so reading these live would mean a run whose permissions changed
 /// underneath it and a history that could not say what it had been allowed to do.</para>
+///
+/// <para><see cref="Policy"/>, <see cref="RunSettings"/> and <see cref="WorkerId"/> are the three
+/// that belong to a WORKSPACE rather than to the application, and the caller is what decides which
+/// workspace's. For a run started here that is the slider on screen, because the slider on screen
+/// is about the folder on screen. For a run started from a phone it is emphatically not: that task
+/// names a workspace of its own, and the level saved against THAT folder is the one its owner
+/// chose for it.</para>
 /// </summary>
 internal sealed record RunEnvironment(
     IChatProviderFactory Providers,
@@ -38,7 +45,8 @@ internal sealed record RunEnvironment(
     LogHub Log,
     AppSettings Settings,
     PermissionPolicy Policy,
-    RunSettings RunSettings);
+    RunSettings RunSettings,
+    string? WorkerId);
 
 /// <summary>
 /// One composed run, ready to submit: the engine to run it with, the intent to run, and the things
@@ -89,7 +97,6 @@ internal static class UnattendedRun
         string prompt,
         IntentSource source,
         IDecisionHandler decisions,
-        string? workerId,
         CancellationToken ct)
     {
         var memory = MemoryStoreFactory.Create(workspace);
@@ -137,7 +144,8 @@ internal static class UnattendedRun
                     new RunRecorder(
                         RunStoreFactory.Create(workspace), memory, workspace.Id, environment.RunSettings),
                     environment.Log),
-                new Intent(Guid.NewGuid(), prompt, source, context, DateTimeOffset.UtcNow, workerId),
+                new Intent(
+                    Guid.NewGuid(), prompt, source, context, DateTimeOffset.UtcNow, environment.WorkerId),
                 tools);
         }
         catch
