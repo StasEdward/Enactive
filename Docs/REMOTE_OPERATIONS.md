@@ -88,7 +88,18 @@ sudo systemctl enable --now enactive-remote
 curl -fsS http://127.0.0.1:5099/health
 ```
 
-Then point the Cloudflare tunnel's ingress at `http://127.0.0.1:5099` and open the panel.
+Then point the Cloudflare tunnel's ingress at `http://127.0.0.1:5099` — either in cloudflared's
+`config.yml`, or in Cloudflare Zero Trust under **Networks → Tunnels → Public hostnames** if the
+tunnel is managed from there, in which case the file on the machine decides nothing and editing it
+will look like a change that did not take.
+
+```bash
+sudo systemctl restart cloudflared      # restart, NOT reload: this unit has no reload
+curl -s https://remote.enactive.com/health
+```
+
+Check it from outside, not from the box. `curl` against `127.0.0.1:5099` proves the gateway is up
+and says nothing about which service the tunnel is pointed at, which is the thing being changed.
 
 ---
 

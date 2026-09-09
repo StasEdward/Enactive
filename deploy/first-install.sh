@@ -205,8 +205,20 @@ cat <<NEXT
 The gateway is running on http://127.0.0.1:$PORT and nothing outside this machine can reach it yet.
 Two steps remain, and they are yours because they take the site down and put it back up:
 
-  1. Point the tunnel at it. In your cloudflared config, the ingress for remote.enactive.com
-     becomes http://127.0.0.1:$PORT, then:  sudo systemctl reload cloudflared
+  1. Point the tunnel at it. The ingress for remote.enactive.com becomes http://127.0.0.1:$PORT -
+     in cloudflared's config.yml, or in Cloudflare Zero Trust under Networks > Tunnels > Public
+     hostnames if the tunnel is managed from there, in which case the file on this machine decides
+     nothing. Then:
+
+       sudo systemctl restart cloudflared
+
+     RESTART, not reload: cloudflared's unit does not implement reload, and systemd answers
+     "Job type reload is not applicable for unit cloudflared.service" rather than doing nothing
+     quietly. The tunnel drops for a second or two.
+
+     Then check it from outside, which is the only place the answer counts:
+
+       curl -s https://remote.enactive.com/health
 
   2. Stop whatever is serving the site now:  sudo systemctl disable --now <the preview's unit>
      Disable it, do not delete it. It is the rollback.
