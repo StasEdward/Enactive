@@ -137,29 +137,51 @@ public sealed class RemoteApprovalTests : IDisposable
     // ── the boundary ────────────────────────────────────────────────────────
 
     /// <summary>
-    /// A shell is published so the panel can say what is being asked, and marked as one the panel
-    /// may not answer. An answer offered for it does nothing here - and the gateway refuses it as
-    /// well. Two independent refusals, because this one alone would be a promise and that one alone
-    /// would be trusting the panel.
+    /// A run started from the web does not run a shell, and NOBODY is asked whether it should.
+    ///
+    /// <para>The request is still published - the panel has to be able to show what the run wanted
+    /// to do - and then refused on the spot. The desktop is not consulted at all, which is the part
+    /// worth a test: an earlier version raced it, so a person at the keyboard could approve, with
+    /// one click, a shell command they had not started. A leaked owner key plus a casual click is a
+    /// shorter path to arbitrary command execution than a leaked owner key alone.</para>
+    ///
+    /// <para>Shown red by restoring that race: the desktop is asked, and answers.</para>
     /// </summary>
     [Fact]
-    public async Task A_shell_is_published_but_cannot_be_answered_remotely()
+    public async Task A_shell_in_a_remote_run_is_refused_without_asking_anybody()
     {
         var desktop = new SilentDesktop();
-        var handler = Handler(desktop);
 
-        var deciding = handler.RequestAsync(Ask("run_command"), CancellationToken.None);
-        await desktop.Asked.Task;
+        var outcome = await Handler(desktop).RequestAsync(Ask("run_command"), CancellationToken.None);
+
+        Assert.False(desktop.Asked.Task.IsCompleted, "the desktop was asked about a shell it should never have seen.");
+        Assert.Equal("deny", outcome.OptionId);
+
+        // Drained ONCE: Queued() empties the outbox as it reads it, so asking twice is asking an
+        // empty queue the second time.
+        var queued = Queued();
+
+        var published = Assert.Single(queued, e => e.Kind == RemoteEventKind.ApprovalRequested).Request!;
+        Assert.False(published.RemoteDecidable);
+        Assert.Equal("run_command", published.Tool);
+
+        // Published AND resolved, in that order. The panel shows what was asked for and that it was
+        // refused; a refusal nobody is shown is indistinguishable from a step that never happened.
+        var resolved = Assert.Single(queued, e => e.Kind == RemoteEventKind.ApprovalResolved).Resolution!;
+        Assert.Equal(ApprovalOutcome.Denied, resolved.Outcome);
+        Assert.Equal(published.ApprovalId, resolved.ApprovalId);
+        Assert.Equal(RemoteEventKind.ApprovalRequested, queued[0].Kind);
+    }
+
+    /// <summary>And an answer offered for it over the wire still does nothing, as before.</summary>
+    [Fact]
+    public async Task An_answer_offered_for_a_shell_is_not_accepted()
+    {
+        await Handler(new SilentDesktop()).RequestAsync(Ask("run_command"), CancellationToken.None);
 
         var published = Assert.Single(Queued(), e => e.Kind == RemoteEventKind.ApprovalRequested).Request!;
 
-        Assert.False(published.RemoteDecidable);
-        Assert.Equal("run_command", published.Tool);
         Assert.False(_approvals.TryAnswer(published.ApprovalId, published.ActionHash, RemoteDecision.Allow));
-
-        // And the machine can still answer it, which is the whole point of publishing it at all.
-        desktop.Answer("allow");
-        Assert.Equal("allow", (await deciding).OptionId);
     }
 
     /// <summary>

@@ -314,9 +314,14 @@ function renderApprovals() {
     } else {
       // Not a disabled button: the server refuses this whatever the page draws,
       // and the card says why rather than looking broken.
+      //
+      // It says REFUSED and not "answer it on the computer", which is what it said first. A task
+      // started from here does not run shell commands at all - not even for somebody sitting at
+      // the machine - so telling the owner to go and answer it there would have sent them to a
+      // card that was never going to appear.
       card.append(node("p", "local-only",
-        "A shell command can only be answered on the computer itself. Enactive is open there, "
-        + "and this request is waiting in it."));
+        "A task started from here does not run shell commands, so this was refused. "
+        + "Run it on the computer if it needs one."));
     }
 
     return card;

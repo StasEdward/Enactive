@@ -12,12 +12,22 @@ using Enactive.Remote.Contracts;
 /// earlier local decision" true by construction instead of by a check somebody has to remember to
 /// write - and it means sitting down at the computer always works, whatever the phone is doing.</para>
 ///
-/// <para><b>A shell is never offered remotely.</b> The request is still published, so the panel can
-/// say what is being asked and that the answer has to be given here; only the desktop is raced.
-/// This is what keeps SANDBOX_PLAN.md's threat model standing now that starting a task has a
-/// network origin: a leaked owner key must not become arbitrary command execution. The gateway
-/// refuses such an answer as well - two independent refusals, because this one alone would be a
-/// promise and that one alone would trust the panel.</para>
+/// <para><b>A run started from the web never runs a shell.</b> Not "unless somebody happens to be
+/// at the machine": the request is published so the panel can show what was asked, and then refused
+/// at once, without the desktop being asked at all.</para>
+///
+/// <para>An earlier version raced the desktop for shells, on the reasoning that the person at the
+/// keyboard should always be able to answer. That leaves a path where a leaked owner key plus one
+/// casual click on a card somebody did not start becomes arbitrary command execution - and the
+/// click is the easy half. SANDBOX_PLAN.md's threat model is justified by "the machine is the
+/// developer's own, the projects are theirs"; a network origin is exactly what that argument does
+/// not cover, so the rule is flat and has no exception to reason about. The gateway refuses such an
+/// answer as well: two independent refusals, because this one alone would be a promise and that one
+/// alone would trust the panel.</para>
+///
+/// <para>Refused AT ONCE rather than left to expire. The outcome is the same either way and the
+/// step is dead the moment it is asked, so waiting two hours to say so buys nothing and costs the
+/// owner an afternoon of watching a run that was never going to move.</para>
 /// </summary>
 /// <param name="remoteRunId">The run as the gateway knows it. A remote answer is about that id.</param>
 /// <param name="timeout">
@@ -55,13 +65,20 @@ public sealed class RemoteDecisionHandler(
                 approvalId, action.ToolCallId, action.Tool, request.FullText,
                 action.WorkingDirectory, actionHash, remotelyDecidable));
 
+        // Published first, refused second, and the desktop is never asked. Publishing it anyway is
+        // the point: the panel shows what the run wanted to do and that it was refused, which is
+        // the difference between a rule and a silence.
+        if (!remotelyDecidable)
+        {
+            Report(approvalId, actionHash, ApprovalOutcome.Denied);
+            return Refuse(request, "a task started from the web may not run shell commands");
+        }
+
         using var race = CancellationTokenSource.CreateLinkedTokenSource(ct);
         race.CancelAfter(timeout);
 
         var local = desktop.RequestAsync(request, race.Token);
-        var remote = remotelyDecidable
-            ? approvals.WaitAsync(approvalId, actionHash)
-            : NeverAsync(race.Token);
+        var remote = approvals.WaitAsync(approvalId, actionHash);
 
         try
         {
@@ -131,11 +148,4 @@ public sealed class RemoteDecisionHandler(
 
     private static bool Allowed(DecisionRequest request, DecisionOutcome outcome)
         => !string.Equals(outcome.OptionId, Refuse(request).OptionId, StringComparison.Ordinal);
-
-    /// <summary>A task that only ever ends by cancellation - the remote side of a shell request.</summary>
-    private static async Task<RemoteDecision> NeverAsync(CancellationToken ct)
-    {
-        await Task.Delay(Timeout.Infinite, ct);
-        return RemoteDecision.Deny;
-    }
 }
