@@ -445,11 +445,15 @@
                     <StackPanel DockPanel.Dock="Right" Spacing="6" VerticalAlignment="Center"
                                 Margin="8,0,0,0">
                         <StackPanel Orientation="Horizontal" Spacing="6">
-                            <Button Classes="primary" Content="Run" Width="86"
+                            <Button Classes="go" Content="Run" Width="86"
                                     Command="{Binding RunCommand}" />
-                            <Button Content="Stop" Width="64" Command="{Binding StopCommand}" />
+                            <!-- Stop throws away work that is half done, which is the same act as
+                                 Reject, and Danger is the palette's colour for it. Outlined, not
+                                 filled: it must be findable without competing with Run. -->
+                            <Button Classes="destructive" Content="Stop" Width="64"
+                                    Command="{Binding StopCommand}" />
                         </StackPanel>
-                        <Button Content="Run in background"
+                        <Button Classes="goSoft" Content="Run in background"
                                 HorizontalAlignment="Stretch"
                                 Command="{Binding RunBackgroundCommand}"
                                 ToolTip.Tip="Runs it headless: the window stays free and it reports back to the Inbox when it is done." />
@@ -816,11 +820,11 @@
 
                             <!-- Retry repeats THIS run exactly; Run again re-resolves the template
                                  as it stands now. Both are new attempts at the same task. -->
-                            <Button Classes="primary" Content="Retry" Padding="16,5"
+                            <Button Classes="go" Content="Retry" Padding="16,5"
                                     Command="{Binding PastRun.RetryCommand}"
                                     IsVisible="{Binding PastRun.CanRetry}"
                                     ToolTip.Tip="Run this again, exactly as it was" />
-                            <Button Classes="accent" Content="Run again" Padding="16,5"
+                            <Button Classes="goSoft" Content="Run again" Padding="16,5"
                                     Command="{Binding PastRun.RunAgainCommand}"
                                     IsVisible="{Binding PastRun.CanRunAgain}"
                                     ToolTip.Tip="{Binding PastRun.RunAgainTooltip}" />

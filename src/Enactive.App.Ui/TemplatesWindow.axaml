@@ -62,7 +62,7 @@
 
                         <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
                             <Button Content="Cancel" Click="OnCancel" />
-                            <Button Content="Run" Classes="primary" Click="OnRun"
+                            <Button Content="Run" Classes="go" Click="OnRun"
                                     IsEnabled="{Binding CanRun}" />
                         </StackPanel>
                     </StackPanel>

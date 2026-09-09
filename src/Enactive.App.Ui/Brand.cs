@@ -52,6 +52,19 @@ internal static class Brand
     public static readonly Color SuccessDeep = Color.Parse("#0B7A55");
     public static readonly Color InfoDeep = Color.Parse("#1D4FD8");
 
+    // ── Go ──────────────────────────────────────────────────────────────────
+    // Starting work has its own colour. Ember stays the app's accent - selection, focus, the
+    // running step, the Allow button - and the buttons that START a run are green, so the thing
+    // you press to begin is not the same colour as everything else asking for attention.
+    //
+    // The base IS SuccessDeep, one hex under two names on purpose: green already means "this
+    // finished well" on a run card, and the button green is the same family a shade heavier, so
+    // the two read as related rather than as two unrelated greens fighting. It is the deep step
+    // because the button carries WHITE text; #34D399 under white is unreadable.
+    public static readonly Color Go500 = Color.Parse("#0F9C6C");   // hover — one step up
+    public static readonly Color Go600 = SuccessDeep;              // PRIMARY fill
+    public static readonly Color Go700 = Color.Parse("#075A3E");   // pressed
+
     // ── Surfaces ────────────────────────────────────────────────────────────
     public static readonly IBrush Bg = Of(Ink900);
     /// <summary>The icon rail: one step darker than the app, so it reads as chrome, not content.</summary>
@@ -95,6 +108,14 @@ internal static class Brand
     public static readonly IBrush AccentPressed = Of(Ember600);
     public static readonly IBrush AccentSoft = Of(Ember300);
     public static readonly IBrush Amber = Of(Amber400);
+
+    /// <summary>The fill of a button that starts a run. White text on it — see the Go ramp.</summary>
+    public static readonly IBrush Go = Of(Go600);
+    public static readonly IBrush GoHover = Of(Go500);
+    public static readonly IBrush GoPressed = Of(Go700);
+    /// <summary>Go light enough to read as text or an edge on a dark ground: the outline peer.</summary>
+    public static readonly IBrush GoSoft = Of(SuccessColor);
+
     public static readonly IBrush Success = Of(SuccessColor);
     public static readonly IBrush Warning = Of(WarningColor);
     public static readonly IBrush Danger = Of(DangerColor);
@@ -264,6 +285,10 @@ internal static class Brand
         r["Brand.AccentPressed"] = AccentPressed;
         r["Brand.AccentSoft"] = AccentSoft;
         r["Brand.Amber"] = Amber;
+        r["Brand.Go"] = Go;
+        r["Brand.GoHover"] = GoHover;
+        r["Brand.GoPressed"] = GoPressed;
+        r["Brand.GoSoft"] = GoSoft;
         r["Brand.Success"] = Success;
         r["Brand.Warning"] = Warning;
         r["Brand.Danger"] = Danger;

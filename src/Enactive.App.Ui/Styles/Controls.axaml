@@ -126,10 +126,9 @@
     <Style Selector="Button:pressed /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="{DynamicResource Brand.CardFillActive}" />
     </Style>
-    <Style Selector="Button:disabled /template/ ContentPresenter#PART_ContentPresenter">
-        <Setter Property="Background" Value="{DynamicResource Brand.Scrim}" />
-        <Setter Property="BorderBrush" Value="{DynamicResource Brand.Line}" />
-    </Style>
+    <!-- The disabled button is at the BOTTOM of this file, not here. A rule here is beaten by
+         every class below that repaints the presenter, which is how Run stayed Ember while it was
+         disabled. See the "Off" block at the end. -->
 
     <!-- Declared after the plain button, and in every state, because Fluent repaints a
          button's background on hover and pressed - which would take the ember off the
@@ -180,6 +179,61 @@
         <Setter Property="Foreground" Value="White" />
     </Style>
 
+    <!-- ── Go ──────────────────────────────────────────────────────────────
+         The buttons that START a run: Run, Retry, and Run in a template row.
+
+         Its own colour rather than .primary, which is also Save and OK in seven dialogs - a green
+         Save is not what was asked for and is not what "go" means. Ember keeps the accent's other
+         jobs; this is the one thing on the screen you press to begin work.
+
+         Solid with white text, so the deep step of the ramp: the bright green a run card uses for
+         "completed" is unreadable under white. Same family, one shade heavier.
+    -->
+    <Style Selector="Button.go">
+        <Setter Property="Foreground" Value="White" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style Selector="Button.go /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource Brand.Go}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Brand.Go}" />
+        <Setter Property="Foreground" Value="White" />
+    </Style>
+    <Style Selector="Button.go:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource Brand.GoHover}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Brand.GoHover}" />
+        <Setter Property="Foreground" Value="White" />
+    </Style>
+    <Style Selector="Button.go:pressed /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource Brand.GoPressed}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Brand.GoPressed}" />
+        <Setter Property="Foreground" Value="White" />
+    </Style>
+
+    <!-- The other ways to start one: Run in background, and Run again beside Retry.
+         
+         The outline peer of .go, the same relationship .accent has to .primary. Two identical
+         solid buttons side by side invite pressing either, and these are not the same act - one
+         runs here and now, one runs headless; one repeats a run exactly, one re-resolves the
+         template as it stands today. Plainly a peer, not the same button twice. -->
+    <Style Selector="Button.goSoft">
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style Selector="Button.goSoft /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Brand.GoSoft}" />
+        <Setter Property="Foreground" Value="{DynamicResource Brand.GoSoft}" />
+    </Style>
+    <Style Selector="Button.goSoft:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource Brand.Go}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Brand.Go}" />
+        <Setter Property="Foreground" Value="White" />
+    </Style>
+    <Style Selector="Button.goSoft:pressed /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource Brand.GoPressed}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Brand.GoPressed}" />
+        <Setter Property="Foreground" Value="White" />
+    </Style>
+
     <!-- A button that destroys something, and is not the action you came for.
          
          Outlined in Danger and filled only on hover: it has to be findable and must not compete
@@ -194,11 +248,6 @@
         <Setter Property="Background" Value="{DynamicResource Brand.Danger}" />
         <Setter Property="BorderBrush" Value="{DynamicResource Brand.Danger}" />
         <Setter Property="Foreground" Value="White" />
-    </Style>
-    <Style Selector="Button.destructive:disabled /template/ ContentPresenter#PART_ContentPresenter">
-        <Setter Property="Background" Value="{DynamicResource Brand.Scrim}" />
-        <Setter Property="BorderBrush" Value="{DynamicResource Brand.Line}" />
-        <Setter Property="Foreground" Value="{DynamicResource Brand.TextFaint}" />
     </Style>
 
     <!-- The attempt count on a run row: a quiet pill, not a button competing with the row it sits
@@ -706,6 +755,40 @@
         <Setter Property="Background" Value="{DynamicResource Brand.CardFillActive}" />
         <Setter Property="BorderBrush" Value="{DynamicResource Brand.Accent}" />
         <Setter Property="Foreground" Value="{DynamicResource Brand.Text}" />
+    </Style>
+
+    <!-- ── Off ─────────────────────────────────────────────────────────────
+         DECLARED LAST, AND ON PURPOSE. Every class above repaints the content presenter, and a
+         class setter beats the plain Button:disabled rule near the top of this file - so a
+         disabled .primary button kept full Ember and a disabled .wsCard kept its card fill. They
+         looked exactly like themselves.
+
+         What that cost: Run is disabled for the whole length of a run. It went on looking pressable.
+         Pressing it flashed :pressed for a tenth of a second and then sat there in Ember, so
+         starting a run from Retry - or from Run itself - produced no lasting change in the one
+         control the eye was on, and there was no way to tell "working" from "blocked" except by
+         trying. Stop, being a plain button, greyed correctly, which made the pair say two different
+         things at once.
+
+         One rule rather than a :disabled variant per class, because the per-class version is a list
+         that has to be remembered: it was already missing from five of the six classes that need
+         it, and the next class added would make six. Declaration order is what makes this work -
+         Avalonia takes the last setter at the same priority - so this block stays at the bottom.
+         Nothing here sets CornerRadius, BorderThickness or Padding, so each class keeps its shape
+         and loses only its colour.
+    -->
+    <Style Selector="Button:disabled">
+        <Setter Property="Foreground" Value="{DynamicResource Brand.TextFaint}" />
+    </Style>
+    <Style Selector="Button:disabled /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource Brand.Scrim}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Brand.Line}" />
+        <Setter Property="Foreground" Value="{DynamicResource Brand.TextFaint}" />
+    </Style>
+    <!-- The icon buttons draw their glyph as a Path, which no presenter setter reaches: the bin in
+         a run row stayed Danger red while the row it sits in was inert. -->
+    <Style Selector="Button:disabled Path">
+        <Setter Property="Stroke" Value="{DynamicResource Brand.TextFaint}" />
     </Style>
 
 </Styles>
