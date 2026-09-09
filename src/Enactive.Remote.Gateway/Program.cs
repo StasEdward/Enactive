@@ -254,6 +254,29 @@ if (!app.Environment.IsDevelopment())
     }
 }
 
+// The page, with its scripts and stylesheets fingerprinted - BEFORE the static file handler, so
+// index.html is never served raw. See PanelAssets: no-cache asks a client to revalidate, and a tab
+// restored from a phone's back-forward cache never asks at all, so the release that reached the
+// server was invisible on the device the panel exists for.
+var panel = PanelAssets.Load(app.Environment.WebRootPath!);
+
+app.Use(async (context, next) =>
+{
+    if (!HttpMethods.IsGet(context.Request.Method)
+        || (context.Request.Path != "/" && context.Request.Path != "/index.html"))
+    {
+        await next();
+        return;
+    }
+
+    // The pointer revalidates, always. Everything it points at is now addressed by its contents,
+    // so this one request is what makes the rest correct.
+    context.Response.Headers.CacheControl = "no-cache";
+    context.Response.ContentType = "text/html; charset=utf-8";
+
+    await context.Response.WriteAsync(panel.Page, context.RequestAborted);
+});
+
 app.UseDefaultFiles();
 
 // The panel is told to revalidate, always.
