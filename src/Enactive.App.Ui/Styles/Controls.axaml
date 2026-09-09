@@ -154,6 +154,32 @@
         <Setter Property="Foreground" Value="White" />
     </Style>
 
+    <!-- The ember button that is NOT the only thing on the screen worth pressing.
+         
+         Retry and Run again sit next to each other and are two different acts: Retry repeats this
+         run exactly, Run again re-resolves the template as it stands now, which can behave
+         differently from the run being looked at. Two identical solid buttons would invite pressing
+         either, so the one that repeats what you just saw is solid and this one is its outline —
+         the same colour and the same weight, plainly a peer, and not the same button twice. -->
+    <Style Selector="Button.accent">
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style Selector="Button.accent /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Brand.Accent}" />
+        <Setter Property="Foreground" Value="{DynamicResource Brand.AccentSoft}" />
+    </Style>
+    <Style Selector="Button.accent:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource Brand.Accent}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Brand.Accent}" />
+        <Setter Property="Foreground" Value="White" />
+    </Style>
+    <Style Selector="Button.accent:pressed /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource Brand.AccentPressed}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Brand.AccentPressed}" />
+        <Setter Property="Foreground" Value="White" />
+    </Style>
+
     <!-- A vertical form: a column of label/input pairs with room to breathe. -->
 
     <!-- A source filter in the log, and anything else that is on or off. Fluent
