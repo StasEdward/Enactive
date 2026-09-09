@@ -1,6 +1,7 @@
 namespace Enactive.App.Ui.ViewModels;
 
 using System.Collections.ObjectModel;
+using Avalonia.Media;
 using Enactive.App.Ui.Mvvm;
 using Enactive.Providers;
 using Enactive.Core.Providers;
@@ -14,7 +15,9 @@ internal sealed class ProviderEditViewModel : ObservableObject
 {
     // One client for every editor: fetching a model list is a short, occasional call, and a client
     // per window is how socket exhaustion starts.
-    private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(10) };
+    // Shared with the Providers list, which checks the same endpoints with the same timeout. Two
+    // clients would be two socket pools and two different ideas of how long is too long.
+    internal static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(10) };
 
     private readonly ProviderConfig _config;
     private readonly Action _onSaved;
@@ -45,6 +48,7 @@ internal sealed class ProviderEditViewModel : ObservableObject
         _modelsText = string.Join("\n", config.Models);
 
         FetchCommand = new AsyncRelayCommand(FetchModelsAsync);
+        TestCommand = new AsyncRelayCommand(TestAsync);
         SaveCommand = new RelayCommand(Save);
         CancelCommand = new RelayCommand(() => CloseRequested?.Invoke());
     }
@@ -84,8 +88,55 @@ internal sealed class ProviderEditViewModel : ObservableObject
     }
 
     public AsyncRelayCommand FetchCommand { get; }
+    public AsyncRelayCommand TestCommand { get; }
     public RelayCommand SaveCommand { get; }
     public RelayCommand CancelCommand { get; }
+
+    /// <summary>The colour of the last check. Grey until one has been made - not green.</summary>
+    public IBrush StatusBrush { get => _statusBrush; set => Set(ref _statusBrush, value); }
+
+    private IBrush _statusBrush = Brand.TextFaint;
+
+    /// <summary>
+    /// Asks the provider whether it is there, using the FIRST model this provider lists.
+    ///
+    /// <para>The first one because a provider's model list here is what the workers may be bound
+    /// to, and checking the endpoint without checking a model answers the easier question: a
+    /// server that is up and a model that was never pulled look identical to a status check, and
+    /// the second is how a working setup usually stops working.</para>
+    ///
+    /// <para>It does not send a completion. That is the only thing that would prove generation
+    /// works, and it costs money on a metered provider and can take half a minute on a local model
+    /// loading for the first time - for a button pressed while filling in a form. So the answer
+    /// says what was actually established, and does not say "OK".</para>
+    /// </summary>
+    private async Task TestAsync()
+    {
+        Status = "checking…";
+        StatusBrush = Brand.TextFaint;
+
+        var status = await ProviderProbe.CheckAsync(
+            Http, Kind, Id.Trim(), BaseUrl.Trim(), ApiKey,
+            ModelFetch.ParseHeaders(HeadersText), ModelLines().FirstOrDefault());
+
+        Status = status.Summary;
+        StatusBrush = BrushFor(status.Health);
+    }
+
+    /// <summary>
+    /// Three states, three colours, and grey for "nobody has asked".
+    ///
+    /// <para>Amber rather than red for a missing model: the provider answered and the credential
+    /// was accepted, so nothing is broken - something is not installed or is misspelled, and that
+    /// is a different repair.</para>
+    /// </summary>
+    internal static IBrush BrushFor(ProviderHealth health) => health switch
+    {
+        ProviderHealth.Ready => Brand.Success,
+        ProviderHealth.ModelMissing => Brand.Warning,
+        ProviderHealth.Unreachable => Brand.Danger,
+        _ => Brand.TextFaint
+    };
 
     private async Task FetchModelsAsync()
     {

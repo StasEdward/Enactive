@@ -3,6 +3,7 @@ namespace Enactive.App.Ui.ViewModels;
 using System.Collections.ObjectModel;
 using Avalonia.Media;
 using Enactive.App.Ui.Mvvm;
+using Enactive.Providers;
 using Enactive.Core.Execution;
 using Enactive.Workspace;
 using Enactive.Core.Providers;
@@ -47,7 +48,42 @@ internal sealed class ProviderRow : ObservableObject
         OnPropertyChanged(nameof(Meta));
         OnPropertyChanged(nameof(EdgeBrush));
         OnPropertyChanged(nameof(Reach));
+
+        // A card that was edited has not been re-checked, and the light must not go on claiming
+        // what it learned about the address that was there before.
+        Health = ProviderStatus.Unknown;
     }
+
+    /// <summary>
+    /// What the last check learned, and when. <see cref="ProviderStatus.Unknown"/> until one is
+    /// made — the light starts grey, never green.
+    /// </summary>
+    public ProviderStatus Health
+    {
+        get => _health;
+        set
+        {
+            _health = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(HealthBrush));
+            OnPropertyChanged(nameof(HealthTip));
+        }
+    }
+
+    private ProviderStatus _health = ProviderStatus.Unknown;
+
+    public IBrush HealthBrush => ProviderEditViewModel.BrushFor(Health.Health);
+
+    /// <summary>
+    /// The summary AND the time it was learned.
+    ///
+    /// <para>The time is not decoration. A green dot on its own says how things were at an unstated
+    /// moment and lets the reader supply "now" — the same shape as a card that went on saying
+    /// "Waiting" after the answer had been accepted.</para>
+    /// </summary>
+    public string HealthTip => Health.Health == ProviderHealth.Unknown
+        ? "Not checked. Open this provider and press Test."
+        : $"{Health.Summary}\nChecked at {Health.At.ToLocalTime():HH:mm:ss}";
 }
 
 /// <summary>One row of the Team list, on the same terms as <see cref="ProviderRow"/>.</summary>
@@ -158,6 +194,50 @@ internal sealed partial class SettingsViewModel : ObservableObject
             OnPropertyChanged(nameof(IsMcp));
             OnPropertyChanged(nameof(IsTemplates));
             OnPropertyChanged(nameof(IsRemote));
+
+            // Checked when the list is opened, once. Not on every visit: these are network calls
+            // made without being asked, and a light that re-checks each time somebody passes
+            // through the section spends the person's connection to tell them what it already knew.
+            if (_section == SectionAiProviders && !_providersChecked)
+            {
+                _providersChecked = true;
+                _ = CheckProvidersAsync();
+            }
+        }
+    }
+
+    private bool _providersChecked;
+
+    /// <summary>
+    /// Asks every provider whether it is there, in the background, without blocking the window.
+    ///
+    /// <para>They are asked in PARALLEL and each row updates as its own answer arrives. One
+    /// unreachable endpoint waits out the client's timeout, and doing this in sequence would mean a
+    /// single dead provider hides the state of every provider after it — the reverse of what these
+    /// lights are for.</para>
+    /// </summary>
+    private async Task CheckProvidersAsync()
+    {
+        await Task.WhenAll(Providers.ToArray().Select(CheckProviderAsync));
+    }
+
+    private async Task CheckProviderAsync(ProviderRow row)
+    {
+        var config = row.Config;
+
+        try
+        {
+            row.Health = await ProviderProbe.CheckAsync(
+                ProviderEditViewModel.Http, config.Kind, config.Id, config.BaseUrl,
+                config.ApiKey, config.Headers, config.Models?.FirstOrDefault());
+        }
+        catch (Exception ex)
+        {
+            // The probe answers rather than throws, so this is a fault in the check itself. It
+            // still has to reach the light: a dot that stayed grey because the checker broke would
+            // be indistinguishable from one nobody had asked about.
+            row.Health = new ProviderStatus(
+                ProviderHealth.Unreachable, "The check itself failed: " + ex.Message, [], DateTimeOffset.UtcNow);
         }
     }
 
