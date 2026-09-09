@@ -45,14 +45,16 @@ public sealed class RemoteRunnerTests : IDisposable
         => new(commandId, "host-1", CommandKind.StartTask, RemoteJson.Serialize(task ?? Task1),
             CommandStatus.PendingDelivery, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddHours(24));
 
-    private static RemoteRunner Runner(HostStore store, IOrchestrator orchestrator)
-        => new(store, new RemoteApprovals(), (task, _, _) => System.Threading.Tasks.Task.FromResult<
-            (IOrchestrator, Intent)>((
-            orchestrator,
-            new Intent(
-                Guid.NewGuid(), task.Prompt, IntentSource.Remote,
-                new WorkContext(Guid.NewGuid(), task.WorkspaceId, null, null, null, [], []),
-                DateTimeOffset.UtcNow))));
+    private static RemoteRunner Runner(
+        HostStore store, IOrchestrator orchestrator, IAsyncDisposable? resources = null)
+        => new(store, new RemoteApprovals(), (task, _, _) =>
+            System.Threading.Tasks.Task.FromResult(new RemotePreparation(
+                orchestrator,
+                new Intent(
+                    Guid.NewGuid(), task.Prompt, IntentSource.Remote,
+                    new WorkContext(Guid.NewGuid(), task.WorkspaceId, null, null, null, [], []),
+                    DateTimeOffset.UtcNow),
+                resources)));
 
     private static WorkEvent Event(EventKind kind, string summary, string? payload = null)
         => new(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.UtcNow, kind, summary, payload);
@@ -230,6 +232,76 @@ public sealed class RemoteRunnerTests : IDisposable
         Assert.Contains("provider is down", last.Detail!, StringComparison.Ordinal);
     }
 
+    // ── what the preparation opened ─────────────────────────────────────────
+
+    /// <summary>
+    /// The first version of the preparation handed back only an engine and an intent, and the first
+    /// real caller had to open MCP tool servers to build the engine - which are child processes.
+    /// One set per remote run would have been left running until the desktop was closed, and the
+    /// person leaking them would have been the one who used the feature most.
+    ///
+    /// <para>Both endings are here because a run that only closes its resources when it succeeds
+    /// leaks on exactly the days it matters: a failing provider or an owner cancelling from the
+    /// phone are the two things most likely to happen twenty times in a row.</para>
+    /// </summary>
+    [Fact]
+    public async Task Whatever_the_preparation_opened_is_closed_when_the_run_completes()
+    {
+        using var store = Open();
+        store.Accept(Start());
+        var opened = new Closable();
+
+        await Runner(
+            store,
+            new FakeOrchestrator(Event(
+                EventKind.TaskCompleted, "done",
+                WorkEventPayload.OutcomePayload(RunOutcomeKind.Completed))),
+            opened)
+            .ApplyAsync(Start());
+
+        Assert.Equal(1, opened.Closures);
+    }
+
+    /// <summary>The same, for a run that ends by throwing.</summary>
+    [Fact]
+    public async Task Whatever_the_preparation_opened_is_closed_when_the_run_fails()
+    {
+        using var store = Open();
+        store.Accept(Start());
+        var opened = new Closable();
+
+        await Runner(
+            store,
+            new FakeOrchestrator { Throw = new InvalidOperationException("provider is down") },
+            opened)
+            .ApplyAsync(Start());
+
+        Assert.Equal(1, opened.Closures);
+    }
+
+    /// <summary>The same, for a run stopped from the phone while it was under way.</summary>
+    [Fact]
+    public async Task Whatever_the_preparation_opened_is_closed_when_the_run_is_cancelled()
+    {
+        using var store = Open();
+        store.Accept(Start());
+        var opened = new Closable();
+
+        var orchestrator = new FakeOrchestrator(Event(EventKind.StepStarted, "[1/1] Working"))
+        {
+            BlockAfterFirst = true
+        };
+        var runner = Runner(store, orchestrator, opened);
+
+        var running = runner.ApplyAsync(Start());
+        await orchestrator.Reached.Task;
+
+        runner.Cancel("run-1");
+        await running;
+
+        Assert.Equal(1, opened.Closures);
+    }
+
     /// <summary>
     /// An answer for a request nobody is waiting on any more - the desktop got there first, or it
     /// expired. Doing nothing is correct and is not silence: the outcome that actually happened is
@@ -245,6 +317,22 @@ public sealed class RemoteRunnerTests : IDisposable
             CommandStatus.PendingDelivery, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddHours(24));
 
         await Runner(store, new FakeOrchestrator()).ApplyAsync(resolve);
+    }
+
+    /// <summary>
+    /// Stands in for whatever the application opened to build the engine. It counts rather than
+    /// flagging, so a second close would be a failure too - disposing twice is not free when the
+    /// thing being disposed is a child process.
+    /// </summary>
+    private sealed class Closable : IAsyncDisposable
+    {
+        public int Closures { get; private set; }
+
+        public ValueTask DisposeAsync()
+        {
+            Closures++;
+            return ValueTask.CompletedTask;
+        }
     }
 
     /// <summary>An orchestrator that emits what the test says and nothing else.</summary>

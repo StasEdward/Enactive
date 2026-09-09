@@ -41,6 +41,8 @@
                                 Content="General" Command="{Binding ShowGeneralCommand}" />
                         <Button Classes="nav" Classes.on="{Binding IsAccount}"
                                 Content="Account" Command="{Binding ShowAccountCommand}" />
+                        <Button Classes="nav" Classes.on="{Binding IsRemote}"
+                                Content="Remote access" Command="{Binding ShowRemoteCommand}" />
                         <Button Classes="nav" Classes.on="{Binding IsAbout}"
                                 Content="About" Command="{Binding ShowAboutCommand}" />
 
@@ -189,6 +191,35 @@
                     <TextBlock Classes="label" Text="Account" />
                     <TextBlock Classes="hint"
                                Text="Nothing here yet. Enactive has no account of its own; provider credentials live under AI · Providers." />
+                </StackPanel>
+
+                <StackPanel IsVisible="{Binding IsRemote}" Margin="12" Spacing="6">
+                    <TextBlock Classes="label" Text="Remote access" />
+                    <TextBlock Classes="hint" TextWrapping="Wrap"
+                               Text="Lets you start tasks on this computer from a phone. This computer connects out to the gateway and holds the connection open; nothing listens for incoming connections here, and no port needs opening." />
+
+                    <CheckBox Content="Answer this computer's remote gateway"
+                              IsChecked="{Binding RemoteEnabled}" Margin="0,6,0,0" />
+
+                    <TextBlock Classes="label" Text="Gateway address" Margin="0,8,0,0" />
+                    <TextBox Text="{Binding RemoteGatewayUrl}" PlaceholderText="https://remote.enactive.dev" />
+
+                    <TextBlock Classes="label" Text="Computer id" Margin="0,8,0,0" />
+                    <TextBox Text="{Binding RemoteHostId}" PlaceholderText="issued with the token" />
+
+                    <TextBlock Classes="label" Text="Display name" Margin="0,8,0,0" />
+                    <TextBox Text="{Binding RemoteDisplayName}" PlaceholderText="what the phone calls this computer" />
+
+                    <TextBlock Classes="label" Text="Device token" Margin="0,8,0,0" />
+                    <TextBox Text="{Binding RemoteToken}" PasswordChar="•" />
+                    <TextBlock Classes="hint" TextWrapping="Wrap"
+                               Text="Stored encrypted with your Windows account, the same as an API key, and never shown again once saved. Leave the box as it is to keep the stored token; empty it to remove it." />
+
+                    <TextBlock Classes="hint" TextWrapping="Wrap" Foreground="{DynamicResource Brand.Danger}"
+                               IsVisible="{Binding HasRemoteProblem}" Text="{Binding RemoteProblem}" />
+
+                    <TextBlock Classes="hint" TextWrapping="Wrap" Margin="0,10,0,0"
+                               Text="A task started from the phone runs at the autonomy level set on the main window and never runs shell commands, whatever that level says. Permission questions it does raise can be answered from either the phone or here - whichever answers first decides." />
                 </StackPanel>
 
                 <DockPanel IsVisible="{Binding IsAbout}" Margin="12" LastChildFill="True">

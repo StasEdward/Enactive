@@ -7,6 +7,19 @@ using Enactive.Core.Permissions;
 using Enactive.Remote.Contracts;
 
 /// <summary>
+/// What the application hands back for one task: the engine to run it with, the intent to run, and
+/// anything opened along the way that has to be closed again.
+///
+/// <para><see cref="Resources"/> is optional because not every composition opens anything. When it
+/// is present it is disposed once the run has finished, however it finished - completed, failed or
+/// cancelled.</para>
+/// </summary>
+public sealed record RemotePreparation(
+    IOrchestrator Engine,
+    Intent Intent,
+    IAsyncDisposable? Resources = null);
+
+/// <summary>
 /// Turns a remote command into a real run.
 ///
 /// <para>This is the whole of the engine binding, and it is deliberately small: the engine gets no
@@ -25,12 +38,18 @@ using Enactive.Remote.Contracts;
 /// decision handler. That is how a permission becomes answerable from the phone without the
 /// desktop losing it: the wrapper races the two. Ignoring <c>wrap</c> produces a run that works and
 /// can only be answered at the machine - a defensible choice, and a deliberate one.</para>
+///
+/// <para>Anything it opens that must be closed goes in <see cref="RemotePreparation.Resources"/>,
+/// which is disposed when the run ends however it ends. The first version returned only the engine
+/// and the intent, and the first real caller had to open MCP tool servers to build one - which are
+/// child processes. They would have been left running, one set per remote run, until the desktop
+/// was closed.</para>
 /// </param>
 public sealed class RemoteRunner(
     HostStore store,
     RemoteApprovals approvals,
     Func<StartTaskPayload, Func<IDecisionHandler, IDecisionHandler>, CancellationToken,
-        Task<(IOrchestrator Engine, Intent Intent)>> prepare)
+        Task<RemotePreparation>> prepare)
 {
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _running = new();
 
@@ -105,16 +124,22 @@ public sealed class RemoteRunner(
 
         try
         {
-            var (engine, intent) = await prepare(
+            var prepared = await prepare(
                 task,
                 desktop => new RemoteDecisionHandler(
                     desktop, store, approvals, task.RunId, RemoteDecisionHandler.DefaultTimeout),
                 cancellation.Token);
 
-            store.Enqueue(task.RunId, RemoteEventKind.Running, $"Started: {task.Title}");
-            store.MarkRunState(task.RunId, LocalRunState.Running);
+            // Whatever the preparation opened is closed here, however this ends - cancelled,
+            // failed, or finished. `await using` on a null is a no-op, so a preparation with
+            // nothing to close says so by leaving it null rather than by handing over a stub.
+            await using (prepared.Resources)
+            {
+                store.Enqueue(task.RunId, RemoteEventKind.Running, $"Started: {task.Title}");
+                store.MarkRunState(task.RunId, LocalRunState.Running);
 
-            await ConsumeAsync(task.RunId, engine, intent, cancellation.Token);
+                await ConsumeAsync(task.RunId, prepared.Engine, prepared.Intent, cancellation.Token);
+            }
         }
         catch (OperationCanceledException)
         {

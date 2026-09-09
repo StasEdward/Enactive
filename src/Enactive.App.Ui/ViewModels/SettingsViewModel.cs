@@ -157,6 +157,7 @@ internal sealed partial class SettingsViewModel : ObservableObject
             OnPropertyChanged(nameof(IsAiPhases));
             OnPropertyChanged(nameof(IsMcp));
             OnPropertyChanged(nameof(IsTemplates));
+            OnPropertyChanged(nameof(IsRemote));
         }
     }
 
@@ -195,6 +196,7 @@ internal sealed partial class SettingsViewModel : ObservableObject
         ToolNames = toolNames ?? Array.Empty<string>();
         InitializeMcp();
         InitializeTemplates(workspaceRoot);
+        InitializeRemote();
 
         _numCtxText = _working.NumCtx?.ToString() ?? string.Empty;
         _globalInstructions = _working.GlobalInstructions;
@@ -477,6 +479,8 @@ internal sealed partial class SettingsViewModel : ObservableObject
             RunAtStartup = StartupEntry.IsEnabled();
             StartupNote = "Windows would not let that be changed. Start-up is left as it was.";
         }
+
+        SaveRemote();
 
         _working.Bindings.Plan = FromSelection(Plan);
         _working.Bindings.Review = FromSelection(Review);

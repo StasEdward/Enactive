@@ -218,6 +218,43 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         // The history is always on screen now, so it is always loaded - including for the workspace
         // restored at startup.
         _ = LoadRunsAsync();
+
+        StartRemoteAccess();
+    }
+
+    // ── Remote access ────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// This computer's end of remote access, or null when the settings say not to connect. Held so
+    /// it can be let go of on exit; everything else about it happens on its own.
+    /// </summary>
+    private RemoteAccessService? _remote;
+
+    /// <summary>Where this computer keeps what it was asked to do and has not yet reported.</summary>
+    private static string RemoteDatabasePath()
+        => Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "Enactive", "remote.db");
+
+    private void StartRemoteAccess()
+    {
+        _remote = new RemoteAccessService(
+            _settings.RemoteAccess,
+            // On the UI thread, because it reads the autonomy slider and the worker box. Read at
+            // the moment a task arrives rather than now: this runs once at startup, and a task that
+            // turns up in an hour must run under the settings that are on screen then.
+            () => Dispatcher.UIThread.InvokeAsync(SnapshotEnvironment).GetTask(),
+            () => _registry.Entries,
+            // The desktop's own handler. RemoteRunner wraps it rather than replacing it, so a
+            // permission question from a remote run shows here as well as on the phone.
+            this,
+            RemoteDatabasePath());
+
+        _remote.Changed += () => Dispatcher.UIThread.Post(() =>
+            _log.Info(LogSource.System, "Remote access: " + _remote!.Status));
+
+        _remote.Start();
+        _log.Info(LogSource.System, "Remote access: " + _remote.Status);
     }
 
     // ── Closing ──────────────────────────────────────────────────────────────
@@ -227,13 +264,28 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     /// halfway through whatever they were writing.
     /// </summary>
     private bool HasWorkInFlight()
-        => _vm.IsBusy || _pendingDecision is not null || Volatile.Read(ref _backgroundRuns) > 0;
+        => _vm.IsBusy || _pendingDecision is not null
+            || Volatile.Read(ref _backgroundRuns) > 0 || RemoteRunsInFlight > 0;
+
+    /// <summary>
+    /// Runs a phone started that are still going. They die with the process exactly as a background
+    /// run does, and the person being asked about quitting is not the person watching them - which
+    /// is the reason to say so rather than to count them in silently.
+    /// </summary>
+    private int RemoteRunsInFlight => _remote?.Running.Count ?? 0;
 
     private string DescribeWorkInFlight()
     {
         var background = Volatile.Read(ref _backgroundRuns);
+        var remote = RemoteRunsInFlight;
+
         if (_pendingDecision is not null)
             return "A run is waiting for your decision. Closing now cancels it.";
+
+        if (remote > 0)
+            return remote == 1
+                ? "A task started from your phone is still going. Closing now stops it where it is."
+                : $"{remote} tasks started from your phone are still going. Closing now stops them where they are.";
         if (_vm.IsBusy && background > 0)
             return $"A run is going, and {background} more in the background. Closing now stops all of them where they are.";
         if (_vm.IsBusy)
@@ -281,6 +333,12 @@ public sealed partial class MainWindow : Window, IDecisionHandler
 
             _cts?.Cancel();
         }
+
+        // Let go of the gateway before the process ends. Runs a phone started are cancelled with
+        // it; they are reported Interrupted the next time this computer connects, which is true and
+        // is what the owner needs to know.
+        if (_remote is not null)
+            await _remote.DisposeAsync();
 
         _forceClose = true;
         Close();
@@ -1212,6 +1270,23 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     private RunSettings CurrentRunSettings()
         => new(_vm.AutonomyTier, MainWindowViewModel.LevelName(_vm.AutonomyTier), CurrentWorkerRole(), _vm.StageChanges);
 
+    /// <summary>
+    /// Everything an unattended run needs from this window, read while we are still on the UI
+    /// thread and then handed over as a frozen thing.
+    ///
+    /// <para>Read here rather than inside the run for the same reason
+    /// <see cref="CurrentRunSettings"/> is: a run started now and finishing in ten minutes must be
+    /// governed by the autonomy level that was on screen when it was started, not by wherever the
+    /// slider has since been dragged. The MCP configurations are cloned for the same reason - the
+    /// settings dialog edits the live ones.</para>
+    /// </summary>
+    private RunEnvironment SnapshotEnvironment()
+        => new(
+            _providerFactory, _modelResolver, _workerProvider, _toolRegistry,
+            _settings.McpServers.Select(c => c.Clone()).ToArray(),
+            _planner, _permissionEngine, BuildRouter(), _log, _settings,
+            PolicyFor(_vm.AutonomyTier), CurrentRunSettings());
+
     /// <summary>The role the worker box is on, by name - null when there are no roles to pick from.</summary>
     private string? CurrentWorkerRole()
         => _vm.SelectedWorkerIndex >= 0 && _vm.SelectedWorkerIndex < _vm.WorkerRoles.Count
@@ -1240,12 +1315,10 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             return;
         }
 
-        var mcpConfigs = _settings.McpServers.Select(c => c.Clone()).ToArray();
         // Adopt: a background run is a run, and the folder is being taken up as a workspace here
         // exactly as it is in the foreground.
         var workspace = WorkspaceInfo.Adopt(fullPath);
-        var policy = PolicyFor(_vm.AutonomyTier);
-        var runSettings = CurrentRunSettings();
+        var environment = SnapshotEnvironment();
         var workerId = _workerProvider.All.Count > 0
             && _vm.SelectedWorkerIndex >= 0 && _vm.SelectedWorkerIndex < _workerProvider.All.Count
             ? _workerProvider.All[_vm.SelectedWorkerIndex].Id : null;
@@ -1269,38 +1342,16 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         {
             try
             {
-                var runStore = RunStoreFactory.Create(workspace);
-                var backgroundMemory = MemoryStoreFactory.Create(workspace);
-                var contextProvider = new ContextProvider(workspace, new EnvironmentProbe(), backgroundMemory);
-                var decisions = new BackgroundDecisionHandler(inbox, workspace);
-                await using var mcp = await McpRunTools.ConnectAsync(_toolRegistry, mcpConfigs, fullPath, CancellationToken.None);
-                IToolRegistry runTools = new LoggingToolRegistry(mcp, _log);
-                var orchestrator = new Orchestrator(
-                    _providerFactory, _modelResolver, _workerProvider, runTools, new DiskArtifactStore(workspace),
-                    workspace, _planner, _permissionEngine, decisions, policy, new EmptyProvider(),
-                    router: BuildRouter(),
-                    reviewRetries: _settings.ReviewRetries,
-                    successRetries: _settings.SuccessRetries,
-                    numCtx: _settings.NumCtx,
-                    disableThinking: _settings.DisableThinking,
-                    maxParallelSteps: _settings.MaxParallelSteps,
-                    evidenceBudget: _settings.EvidenceBudget,
-                    allowImplicitToolCalls: _settings.AllowImplicitToolCalls,
-                    reviewContent: _settings.ReviewContent,
-                    checkSoundness: _settings.CheckSoundness,
-                    revertRejectedSteps: _settings.RevertRejectedSteps,
-                    // A background run is the one that most needs this: it lives in a Task owned by
-                    // this process, so closing the app kills it wherever it happens to be, and
-                    // without a checkpoint there is nothing for Resume to offer afterwards.
-                    checkpoints: new JsonCheckpointStore(workspace),
-                    settings: runSettings);
-                var recorder = new RunRecorder(runStore, backgroundMemory, workspace.Id, runSettings);
-                var context = await contextProvider.BuildAsync(new IntentFocus(workspace.Id), CancellationToken.None);
-                var intent = new Intent(Guid.NewGuid(), text, IntentSource.Inbox, context, DateTimeOffset.UtcNow, workerId);
-                var recorded = recorder.RecordAsync(
-                    orchestrator.SubmitIntentAsync(intent, CancellationToken.None).TeeToLog(_log, CancellationToken.None),
-                    CancellationToken.None);
-                await BackgroundRunner.RunAsync(recorded, inbox, workspace, text, CancellationToken.None);
+                var composed = await UnattendedRun.ComposeAsync(
+                    environment, workspace, text, IntentSource.Inbox,
+                    new BackgroundDecisionHandler(inbox, workspace), workerId, CancellationToken.None);
+
+                await using (composed.Resources)
+                {
+                    await BackgroundRunner.RunAsync(
+                        composed.Engine.SubmitIntentAsync(composed.Intent, CancellationToken.None),
+                        inbox, workspace, text, CancellationToken.None);
+                }
             }
             catch (Exception ex)
             {
