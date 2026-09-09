@@ -42,11 +42,16 @@ GRANT SELECT, LOCK TABLES, SHOW VIEW, EVENT, TRIGGER
   ON `enactive_remote`.*
   TO 'enactive_backup'@'localhost';
 
-GRANT SELECT, INSERT, CREATE, ALTER, INDEX, DROP, REFERENCES
+-- TRIGGER and EVENT are here because the dump is taken with --routines --events --triggers. There
+-- are none today; the day somebody adds one, a restore without these rights fails with a
+-- permissions error that says nothing about the real cause.
+GRANT SELECT, INSERT, CREATE, ALTER, INDEX, DROP, REFERENCES, TRIGGER, EVENT
   ON `enactive\_remote\_verify\_%`.*
   TO 'enactive_backup'@'localhost';
 
--- Needed for --single-transaction against a server with binary logging on, and for nothing else.
-GRANT RELOAD ON *.* TO 'enactive_backup'@'localhost';
+-- No RELOAD and no PROCESS, on purpose. Both are server-wide: RELOAD is not needed by
+-- --single-transaction on its own, and PROCESS - which mysqldump 8.0 wants for the tablespace
+-- query - would let this account watch every statement running on the machine. backup.sh passes
+-- --no-tablespaces instead, which is the same result without the privilege.
 
 FLUSH PRIVILEGES;

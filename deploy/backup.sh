@@ -31,9 +31,14 @@ trap cleanup EXIT
 # --set-gtid-purged=OFF: this dump is for restoring a copy, not for seeding a replica; leaving GTID
 #   state in it makes a restore into a scratch database fail for reasons that have nothing to do
 #   with the data.
+# --no-tablespaces: mysqldump 8.0 reads INFORMATION_SCHEMA.FILES unless told not to, and reading it
+#   needs the PROCESS privilege - which is server-wide and would let this account watch every query
+#   running on the machine. This schema has no tablespaces of its own, so the choice is between a
+#   flag and a privilege that exists for something else entirely.
 mysqldump \
   --defaults-file="$DEFAULTS_FILE" \
   --single-transaction \
+  --no-tablespaces \
   --routines --events --triggers \
   --set-gtid-purged=OFF \
   "$DATABASE" \
