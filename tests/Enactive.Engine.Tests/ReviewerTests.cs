@@ -168,6 +168,111 @@ public sealed class ContentReviewTests
                                      && e.Summary.Contains("libmkfailover-dev", StringComparison.Ordinal));
     }
 
+    // ── a step that composed nothing ─────────────────────────────────────────────────
+
+    /// <summary>
+    /// Copying a file is not writing one, and the copy is not this step's prose to be judged.
+    ///
+    /// <para>The mode turned on "did anything land in the store", and a copy lands. So a step that
+    /// moved bytes from one name to another was asked whether its CONTENT was true - and the
+    /// reviewer dutifully answered, about a document somebody else had written, possibly months
+    /// ago. Reported from a real run: "PASS (Content review): The excerpt contains no factually
+    /// incorrect assertions. The technologies, commands, flags and paths all appear accurate."
+    /// Nothing about that judgement is about the copy.</para>
+    ///
+    /// <para>It is not merely a wasted model call. The reviewer returns PASS or FAIL, a FAIL reverts
+    /// the step, and a verdict on the wrong question can fail a copy that was performed perfectly
+    /// because the file it duplicated says something the reviewer disagrees with.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_step_that_only_copied_a_file_is_reviewed_on_execution()
+    {
+        using var fx = new EngineFixture();
+        fx.Write("notes.md", "Install libmkfailover-dev.\n");
+
+        var worker = new FakeChatProvider(
+            Turn.Says("""{"disposition":"quick_action","title":"copy the notes"}"""),
+            Turn.Calls1("copy_file", """{"from":"notes.md","to":"notes-backup.md"}"""),
+            Turn.Says("Copied it."));
+
+        var reviewer = new FakeChatProvider { WhenExhausted = Verdicts.Pass() };
+
+        var orchestrator = fx.Build(
+            worker,
+            // The harness's default role does not carry the file tools this is about.
+            worker: EngineFixture.WorkerWith("read_file", "write_file", "copy_file"),
+            router: Routers.WithReviewer(),
+            reviewProvider: reviewer);
+
+        var events = await fx.RunAsync(orchestrator, "copy the notes");
+
+        Assert.Contains(events, e => e.Kind == EventKind.ReviewPassed
+                                     && e.Summary.Contains("Execution review", StringComparison.Ordinal));
+    }
+
+    /// <summary>Same for a rename, and for a deletion - neither composes anything either.</summary>
+    [Theory]
+    [InlineData("move_file", """{"from":"notes.md","to":"renamed.md"}""")]
+    [InlineData("delete_file", """{"path":"notes.md"}""")]
+    public async Task A_step_that_only_relocated_a_file_is_reviewed_on_execution(
+        string tool, string arguments)
+    {
+        using var fx = new EngineFixture();
+        fx.Write("notes.md", "Install libmkfailover-dev.\n");
+
+        var worker = new FakeChatProvider(
+            Turn.Says($$"""{"disposition":"quick_action","title":"{{tool}}"}"""),
+            Turn.Calls1(tool, arguments),
+            Turn.Says("Done."));
+
+        var reviewer = new FakeChatProvider { WhenExhausted = Verdicts.Pass() };
+
+        var orchestrator = fx.Build(
+            worker,
+            worker: EngineFixture.WorkerWith("read_file", "write_file", "move_file", "delete_file"),
+            router: Routers.WithReviewer(),
+            reviewProvider: reviewer,
+            // delete_file asks at every tier, and the fixture's default answer is not "allow" - so
+            // without this the step is refused and there is no review to have an opinion about.
+            decisions: new ScriptedDecisionHandler("allow"));
+
+        var events = await fx.RunAsync(orchestrator, "relocate it");
+
+        Assert.Contains(events, e => e.Kind == EventKind.ReviewPassed
+                                     && e.Summary.Contains("Execution review", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// But a step that wrote something AND moved something is still judged on what it wrote. The
+    /// rule is about steps that composed nothing, not about the presence of a file operation - and
+    /// getting that backwards would take content review away from most real work, since a step that
+    /// writes a file and then puts it where it belongs is an ordinary shape.
+    /// </summary>
+    [Fact]
+    public async Task A_step_that_wrote_and_then_moved_is_still_reviewed_on_its_content()
+    {
+        using var fx = new EngineFixture();
+
+        var worker = new FakeChatProvider(
+            Turn.Says("""{"disposition":"quick_action","title":"write then file it"}"""),
+            Turn.Calls1("write_file", """{"path":"draft.md","content":"Install libmkfailover-dev."}""", "c1"),
+            Turn.Calls1("move_file", """{"from":"draft.md","to":"guide.md"}""", "c2"),
+            Turn.Says("Wrote and filed it."));
+
+        var reviewer = new FakeChatProvider { WhenExhausted = Verdicts.Pass() };
+
+        var orchestrator = fx.Build(
+            worker,
+            worker: EngineFixture.WorkerWith("read_file", "write_file", "move_file"),
+            router: Routers.WithReviewer(),
+            reviewProvider: reviewer);
+
+        var events = await fx.RunAsync(orchestrator, "write then file it");
+
+        Assert.Contains(events, e => e.Kind == EventKind.ReviewPassed
+                                     && e.Summary.Contains("Content review", StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task Content_review_can_be_switched_off()
     {

@@ -146,6 +146,33 @@ public sealed class ExecutionJournal
     }
 
     /// <summary>
+    /// Whether everything recorded from <paramref name="from"/> on used one of these tools - and
+    /// something was recorded at all.
+    ///
+    /// <para>The "at all" half is the point. An empty range satisfies "every action was one of
+    /// these" vacuously, and a caller asking this question is asking what the step DID; answering
+    /// "only those" about a step that did nothing would let a silence stand in for an observation.
+    /// So nothing recorded is false, and the caller keeps whatever it does when it cannot tell.</para>
+    /// </summary>
+    public bool UsedOnly(IReadOnlyCollection<string> tools, int from = 0)
+    {
+        lock (_gate)
+        {
+            var seen = false;
+
+            for (var i = Math.Max(0, from); i < _actions.Count; i++)
+            {
+                seen = true;
+
+                if (!tools.Contains(_actions[i].Tool, StringComparer.OrdinalIgnoreCase))
+                    return false;
+            }
+
+            return seen;
+        }
+    }
+
+    /// <summary>
     /// The default size of the whole evidence block, shared between every call's output.
     ///
     /// <para>A DEFAULT and not a rule: it is divided among the calls, so what it buys per call
