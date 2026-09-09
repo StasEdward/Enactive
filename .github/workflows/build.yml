@@ -73,3 +73,24 @@ jobs:
         run: dotnet test tests/Enactive.Remote.Gateway.Tests/Enactive.Remote.Gateway.Tests.csproj --configuration Release --verbosity normal
         env:
           ENACTIVE_REMOTE_DB: "Server=127.0.0.1;Port=3306;User ID=root;Password=enactive-dev;Database=enactive_remote;"
+
+      # Built here and deployed by hand. Deliberate for v1: a migration is DDL, MySQL cannot roll
+      # it back, and the person who would have to fix a half-applied schema should be watching when
+      # it is applied. The pipeline's job is to make sure the thing being deployed is the thing
+      # that was tested.
+      #
+      # linux-x64 because that is what the server is, and the tests above have just run on it.
+      # Publishing from any other job would ship a build nothing had exercised.
+      - name: Publish the gateway
+        if: success()
+        run: dotnet publish src/Enactive.Remote.Gateway/Enactive.Remote.Gateway.csproj --configuration Release --runtime linux-x64 --no-self-contained --output publish
+
+      - name: Keep it
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          # The commit is in the name because "which build is on the server" is the first question
+          # of every incident, and a file called gateway.zip cannot answer it.
+          name: gateway-${{ github.sha }}
+          path: publish
+          retention-days: 30

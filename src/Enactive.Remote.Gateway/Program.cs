@@ -1,3 +1,4 @@
+using System.Net;
 using System.Security.Claims;
 using System.Threading.RateLimiting;
 using Enactive.Remote.Contracts;
@@ -8,6 +9,7 @@ using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.HttpOverrides;
 
 // Stage 2 of Docs/REMOTE_DESIGN.md. The panel itself is stage 6; what is here is the surface it
 // will call and the hub a Host connects to.
@@ -152,7 +154,39 @@ builder.Services.AddRateLimiter(o =>
         }));
 });
 
+// Reached through a Cloudflare tunnel: cloudflared runs on this machine and connects outward, so
+// nothing here listens publicly and every request arrives from 127.0.0.1. See Deployment.
+var behindTunnel = Deployment.BehindTunnel(builder.Configuration);
+
+if (behindTunnel)
+{
+    Deployment.RequireLoopbackListeners(builder.Configuration);
+
+    builder.Services.Configure<ForwardedHeadersOptions>(o =>
+    {
+        o.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+        o.ForwardedForHeaderName = Deployment.ClientAddressHeader;
+
+        // One hop, and only from this machine. Cleared first because the defaults trust loopback
+        // AND every private network - which is a different, larger promise than the one being made
+        // here, and one nobody would notice had been made.
+        o.ForwardLimit = 1;
+        o.KnownNetworks.Clear();
+        o.KnownProxies.Clear();
+        o.KnownProxies.Add(IPAddress.Loopback);
+        o.KnownProxies.Add(IPAddress.IPv6Loopback);
+    });
+}
+
 var app = builder.Build();
+
+// FIRST, before anything reads a scheme or an address: the security headers below, the rate
+// limiter's partition, and every log line all describe the caller, and until this has run they
+// describe cloudflared instead.
+if (behindTunnel)
+{
+    app.UseForwardedHeaders();
+}
 
 app.Use(async (context, next) =>
 {
@@ -191,8 +225,18 @@ app.Use(async (context, next) =>
 
 if (!app.Environment.IsDevelopment())
 {
+    // HSTS either way: the header is for the browser, and the browser is talking to Cloudflare over
+    // HTTPS whether or not this process ever sees a certificate.
     app.UseHsts();
-    app.UseHttpsRedirection();
+
+    // Redirecting is for a gateway that is itself reachable over plain HTTP. Behind the tunnel it
+    // is not: the edge already refuses HTTP, the last hop is loopback and http by design, and
+    // UseHttpsRedirection would answer a perfectly good request with a redirect to a port it cannot
+    // name. This is why the two settings are read together rather than one being assumed.
+    if (!behindTunnel)
+    {
+        app.UseHttpsRedirection();
+    }
 }
 
 app.UseDefaultFiles();
