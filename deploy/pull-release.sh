@@ -220,7 +220,8 @@ It has been downloaded to $release and NOT installed.
 MySQL cannot roll a schema change back, so this is the one step whose failure putting the old files
 back does not undo. Take a backup, then install it while watching:
 
-  sudo -u enactive $CONFIG/backup.sh
+  sudo -u enactive $ROOT/deploy/backup.sh
+  sudo -u enactive $ROOT/deploy/verify-restore.sh
   sudo -u enactive $ROOT/deploy/pull-release.sh --allow-migration
 
 PARKED

@@ -201,7 +201,22 @@ sudo systemctl restart enactive-remote
 
 ### 4.4 Setting it up
 
+**There is no checkout on the server** and there is not meant to be — it holds a release, not a
+repository. The files come from a workstation that has one. From the checkout:
+
 ```bash
+scp deploy/pull-release.sh deploy/enactive-deploy.service \
+    deploy/enactive-deploy.timer deploy/49-enactive-deploy.rules \
+    <you>@<server>:/tmp/
+```
+
+Then on the server:
+
+```bash
+sudo install -o enactive -g enactive -m 0755 /tmp/pull-release.sh /opt/enactive-remote/deploy/
+sudo install -m 0644 /tmp/enactive-deploy.service /tmp/enactive-deploy.timer /etc/systemd/system/
+sudo install -m 0644 /tmp/49-enactive-deploy.rules /etc/polkit-1/rules.d/
+
 sudo install -o enactive -g enactive -m 0600 /dev/null /etc/enactive-remote/deploy.env
 sudo -u enactive tee /etc/enactive-remote/deploy.env >/dev/null <<'ENV'
 ENACTIVE_DEPLOY_REPO=StasEdward/Enactive
@@ -209,10 +224,16 @@ ENACTIVE_DEPLOY_BRANCH=feature/remote-access
 ENACTIVE_DEPLOY_TOKEN=github_pat_...
 ENV
 
-sudo cp deploy/enactive-deploy.service deploy/enactive-deploy.timer /etc/systemd/system/
-sudo cp deploy/49-enactive-deploy.rules /etc/polkit-1/rules.d/
 sudo systemctl daemon-reload
 sudo systemctl enable --now enactive-deploy.timer
+```
+
+Run the first one by hand and read the journal rather than waiting for the timer — the first run is
+the one that finds a wrong repository name, a token without the right scope, or a missing tool:
+
+```bash
+sudo systemctl start enactive-deploy
+journalctl -u enactive-deploy -n 50 --no-pager
 ```
 
 **The token** is a fine-grained personal access token, scoped to this repository alone, with
