@@ -771,11 +771,11 @@
 
                             <!-- Retry repeats THIS run exactly; Run again re-resolves the template
                                  as it stands now. Both are new attempts at the same task. -->
-                            <Button Content="Retry" FontSize="11" Padding="8,2"
+                            <Button Classes="primary" Content="Retry" Padding="16,5"
                                     Command="{Binding PastRun.RetryCommand}"
                                     IsVisible="{Binding PastRun.CanRetry}"
                                     ToolTip.Tip="Run this again, exactly as it was" />
-                            <Button Content="Run again" FontSize="11" Padding="8,2"
+                            <Button Classes="accent" Content="Run again" Padding="16,5"
                                     Command="{Binding PastRun.RunAgainCommand}"
                                     IsVisible="{Binding PastRun.CanRunAgain}"
                                     ToolTip.Tip="{Binding PastRun.RunAgainTooltip}" />
