@@ -128,29 +128,119 @@ follow these instructions disabled this one. A port is unambiguous; a name is no
 
 ## 4. Deploying a new version
 
-CI publishes `gateway-<commit>` on every green build of the branch. Download it, put it beside the
-current one, and move a symlink:
+`enactive-deploy.timer` checks every ten minutes and installs the newest **green** build of the
+tracked branch. It is a PULL: this server is on a private address and nothing on the internet can
+reach it, so there is no pipeline that could push a release in, and the credential it holds is
+read-only.
+
+It does **not** install a release that carries a migration. That distinction is the whole design,
+and §4.2 is why.
+
+### 4.1 What a run does
+
+1. Asks GitHub for the newest run of `build.yml` on the branch with `status=success`. Success is
+   asked of GitHub rather than inferred from an artifact existing — a run can upload one and then
+   fail a later step, and "there is a build" is not "the tests passed".
+2. Stops if that commit is already the one in `current/.commit`.
+3. Downloads `gateway-<commit>` into `/opt/enactive-remote/releases/<timestamp>-<commit>`.
+4. Asks the **new build** what schema version it carries, by running it with `--schema-version`.
+   The build answers for itself: migrations are embedded resources, so an unzipped release has no
+   `.sql` files to count, and a number the pipeline wrote into a manifest is a claim about the
+   assembly that nothing keeps true.
+5. Compares that with `MAX(version)` in `schema_version`, read with the read-only backup account.
+6. Same version → swaps the symlink, restarts, and polls `/health`. Higher → parks it (§4.2).
+7. Keeps the last five releases, never removing the one that is running.
+
+Watching it, or running one on demand:
 
 ```bash
-release=/opt/enactive-remote/$(date --utc +%Y%m%dT%H%M%SZ)
-sudo -u enactive mkdir -p "$release"
-sudo -u enactive unzip -q gateway-<commit>.zip -d "$release"
-
-sudo systemctl stop enactive-remote
-sudo -u enactive ln -sfn "$release" /opt/enactive-remote/current
-sudo systemctl start enactive-remote
-sudo journalctl -u enactive-remote -n 50 --no-pager
-curl -fsS http://127.0.0.1:5099/health
+systemctl list-timers enactive-deploy.timer
+sudo systemctl start enactive-deploy          # check now rather than waiting
+journalctl -u enactive-deploy -n 50 --no-pager
+cat /opt/enactive-remote/current/.commit      # which build is on the server
 ```
 
-**Take a backup before a release that carries a migration**, and know which one it is: the gateway
-applies migrations at startup, MySQL cannot roll DDL back, and a rollback to the previous release
-does **not** undo a schema change. That is the whole reason deployment is manual — a person who
-would have to fix a half-applied schema should be watching when it is applied. `journalctl` will
-name the migration if one runs.
+### 4.2 Migrations are parked, not applied
 
-Rolling back is the same three lines with the previous directory, and it is only a rollback of the
-code.
+A release whose schema version is ahead of the database is downloaded, checked, and left
+**uninstalled**, with the reason on stderr — so it lands in the journal as an error and
+`systemctl status enactive-deploy` shows it. `/opt/enactive-remote/PARKED` names the directory.
+
+The reason is not caution for its own sake. MySQL cannot roll DDL back, so a schema change is the
+one step whose failure putting the old files back does not undo, and the person who would have to
+repair a half-applied schema should be looking at it when it is applied. That was the reason
+deployment used to be manual altogether; it still holds for migrations and no longer holds for
+anything else.
+
+Install a parked release while watching:
+
+```bash
+sudo -u enactive /opt/enactive-remote/deploy/backup.sh
+sudo -u enactive /opt/enactive-remote/deploy/verify-restore.sh     # the backup is only worth what a restore proves
+sudo -u enactive /opt/enactive-remote/deploy/pull-release.sh --allow-migration
+```
+
+### 4.3 What happens when it does not come up
+
+`/health` is polled for about thirty seconds after the restart. If it never answers:
+
+- **No migration in the release** — the symlink goes back to the previous one and the service is
+  restarted. That is a true rollback: the schema never moved, so the old code meets the database it
+  was written for. The run then exits non-zero, so the failure is visible in `systemctl status`.
+- **A migration was applied** — nothing is rolled back, deliberately, and the run says so. Putting
+  the previous release back would run old code against the new schema, which is a second fault on
+  top of the first. Read `journalctl -u enactive-remote -n 100 --no-pager` and decide.
+
+Rolling back by hand at any time is a symlink and a restart, and it is only ever a rollback of the
+**code**:
+
+```bash
+sudo -u enactive ln -sfn /opt/enactive-remote/releases/<older> /opt/enactive-remote/current
+sudo systemctl restart enactive-remote
+```
+
+### 4.4 Setting it up
+
+```bash
+sudo install -o enactive -g enactive -m 0600 /dev/null /etc/enactive-remote/deploy.env
+sudo -u enactive tee /etc/enactive-remote/deploy.env >/dev/null <<'ENV'
+ENACTIVE_DEPLOY_REPO=StasEdward/Enactive
+ENACTIVE_DEPLOY_BRANCH=feature/remote-access
+ENACTIVE_DEPLOY_TOKEN=github_pat_...
+ENV
+
+sudo cp deploy/enactive-deploy.service deploy/enactive-deploy.timer /etc/systemd/system/
+sudo cp deploy/49-enactive-deploy.rules /etc/polkit-1/rules.d/
+sudo systemctl daemon-reload
+sudo systemctl enable --now enactive-deploy.timer
+```
+
+**The token** is a fine-grained personal access token, scoped to this repository alone, with
+**Actions: read** and nothing else. It can download build artifacts and cannot push, cannot read
+secrets and cannot start a workflow. Downloading an artifact needs authentication even from a
+public repository, so there is no token-free version of this.
+
+**The polkit rule** lets `enactive` restart `enactive-remote.service` — one verb, one unit, one
+account. Not a sudoers line: the deploy unit sets `NoNewPrivileges=true`, under which `sudo` cannot
+work at all, so using sudo would mean weakening the unit to accommodate it.
+
+Requires `curl`, `unzip`, `python3`, `mysql`, `dotnet` and `systemctl`. The script names any that
+are missing and stops, because each of them otherwise fails later as something else — a missing
+`python3` empties a pipeline and reads as "GitHub returned nothing".
+
+Artifacts expire after 30 days. A server that has been off longer than that has no release to pull
+and says so; build the branch again.
+
+**The deploy scripts do not update themselves.** `/opt/enactive-remote/deploy/` is copied there by
+hand, and a change to `pull-release.sh` in the repository does nothing until it is copied again.
+That is deliberate: a script that replaces itself and then runs the replacement has no way back if
+the replacement is broken — the one component whose failure removes the means of fixing it. Copy it
+the way it got there:
+
+```bash
+scp deploy/*.sh you@your-server:/tmp/
+sudo install -o enactive -g enactive -m 0700 /tmp/pull-release.sh /opt/enactive-remote/deploy/
+```
 
 ---
 

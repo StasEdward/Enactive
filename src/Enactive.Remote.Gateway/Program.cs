@@ -16,6 +16,21 @@ using Microsoft.AspNetCore.HttpOverrides;
 
 const string OwnerScheme = "Owner";
 
+// Answered before ANYTHING else, including the configuration checks below: this asks the assembly
+// what it knows and must work on a build that has been downloaded and not yet configured. That is
+// exactly when it is asked - the deploy timer runs it on a release sitting in a directory, to find
+// out whether installing it would change the schema, before deciding whether it may install it
+// unattended at all.
+//
+// The build answers for itself rather than the pipeline answering for it. Migrations are embedded
+// resources, so an unzipped release has no .sql files to count, and a number CI wrote into a
+// manifest is a claim ABOUT the assembly that nothing keeps true.
+if (args.Contains("--schema-version"))
+{
+    Console.WriteLine(Migrator.KnownVersions().Max());
+    return;
+}
+
 var builder = WebApplication.CreateBuilder(args);
 
 // Both required, both from the environment. A gateway that starts without them and finds out on

@@ -74,10 +74,16 @@ jobs:
         env:
           ENACTIVE_REMOTE_DB: "Server=127.0.0.1;Port=3306;User ID=root;Password=enactive-dev;Database=enactive_remote;"
 
-      # Built here and deployed by hand. Deliberate for v1: a migration is DDL, MySQL cannot roll
-      # it back, and the person who would have to fix a half-applied schema should be watching when
-      # it is applied. The pipeline's job is to make sure the thing being deployed is the thing
-      # that was tested.
+      # Built here and PULLED from here: the server is on a private address, so nothing in this
+      # pipeline can reach it. enactive-deploy.timer asks the API for the newest run of this
+      # workflow with status=success and installs its artifact - unless that build carries a
+      # migration, which it parks for a person instead. A migration is DDL, MySQL cannot roll it
+      # back, and whoever would have to fix a half-applied schema should be watching when it is
+      # applied. See Docs/REMOTE_OPERATIONS.md §4.
+      #
+      # This job's success is therefore load-bearing in a way it was not before: it is what the
+      # server treats as permission to deploy. A step added after the publish that can fail keeps
+      # that meaning; one that cannot fail quietly widens what "green" promises.
       #
       # linux-x64 because that is what the server is, and the tests above have just run on it.
       # Publishing from any other job would ship a build nothing had exercised.

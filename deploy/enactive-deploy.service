@@ -1,0 +1,53 @@
+# Pulls and installs the newest green build. Install to /etc/systemd/system/enactive-deploy.service.
+#
+# Started by enactive-deploy.timer, and runnable by hand for the same thing on demand:
+#
+#   sudo systemctl start enactive-deploy
+#   journalctl -u enactive-deploy -n 50 --no-pager
+#
+# It is a SEPARATE unit from the gateway rather than something the gateway does to itself. A process
+# that can replace its own files can be made to replace them with something else, and the whole
+# point of the gateway's hardening is that it may serve HTTP and talk to MySQL and nothing more.
+
+[Unit]
+Description=Install the newest green Enactive Remote build
+Documentation=https://github.com/StasEdward/Enactive/blob/master/Docs/REMOTE_OPERATIONS.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=enactive
+Group=enactive
+WorkingDirectory=/opt/enactive-remote
+
+ExecStart=/opt/enactive-remote/deploy/pull-release.sh
+
+# The token, the repository and the branch. Readable only by this account - it is a credential, and
+# a unit file is world-readable however carefully it is written.
+EnvironmentFile=/etc/enactive-remote/deploy.env
+
+Environment=DOTNET_PRINT_TELEMETRY_MESSAGE=false
+# Asking a downloaded build for its schema version must not leave a first-run banner or a extraction
+# cache in a home directory this account may not have.
+Environment=DOTNET_NOLOGO=true
+Environment=DOTNET_CLI_HOME=/tmp
+
+# Long enough to download an artifact over a slow link and wait out the health checks, short enough
+# that a hung run does not sit on top of the next one.
+TimeoutStartSec=900
+
+# Deliberately NOT ProtectSystem=strict: this writes to /opt/enactive-remote, which is the whole
+# job. It is narrowed instead - full is read-only for /usr and /boot, and the one path it may write
+# is named.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/opt/enactive-remote
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+LockPersonality=true
