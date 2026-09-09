@@ -98,7 +98,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         _toolRegistry = new ToolRegistry(new ITool[]
         {
             new WriteFileTool(), new EditFileTool(), new ReadFileTool(), new SearchFilesTool(),
-            new ListDirectoryTool(), new CreateDirectoryTool(), new MoveFileTool(),
+            new ListDirectoryTool(), new CreateDirectoryTool(), new MoveFileTool(), new CopyFileTool(), new DeleteFileTool(),
             new RunCommandTool(), new RunPowerShellTool(), new GitTool(), new DockerTool()
         });
 

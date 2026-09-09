@@ -154,7 +154,7 @@ internal enum ShellCommandPolicy
 internal sealed partial class AppSettings
 {
     /// <summary>The newest settings.json schema this build writes. See <see cref="SchemaVersion"/>.</summary>
-    public const int CurrentSchemaVersion = 4;
+    public const int CurrentSchemaVersion = 5;
 
     /// <summary>
     /// settings.json schema version. Files written before 2026-09-06 have no such field and read as 1,
@@ -428,7 +428,13 @@ internal sealed partial class AppSettings
                 w.Tools.Insert(w.Tools.IndexOf("write_file") + 1, "edit_file");
         }
 
-        if (SchemaVersion < 4)
+        // Deliberately "< CurrentSchemaVersion" rather than "< 4": every future tool added to the
+        // implication table then reaches everybody on the next version bump, instead of reaching
+        // new installations and waiting for somebody to notice. That waiting is the whole defect
+        // being fixed here - it happened to edit_file, then to three more tools, then to copy_file
+        // - and a gate pinned to one number would have set it up to happen again. WithImplied is
+        // idempotent and only ever adds, so running it on every upgrade is safe.
+        if (SchemaVersion < CurrentSchemaVersion)
         {
             // The same thing happened again, three times over. search_files, create_directory and
             // move_file were added to the default roles and reached nobody who already had a

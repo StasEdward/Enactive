@@ -30,6 +30,28 @@ public sealed class WorkerToolsTests
         => Assert.Contains(implied, WorkerTools.WithImplied([has]), StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
+    /// copy_file needs BOTH halves, and that is the one entry where it matters. A worker that can
+    /// read a file and write another can already copy one by hand - badly, because reading stops at
+    /// 8000 characters and the copy comes out partial and looks whole. Naming the capability is
+    /// therefore free.
+    /// </summary>
+    [Fact]
+    public void Copying_follows_from_being_able_to_read_and_write()
+        => Assert.Contains("copy_file", WorkerTools.WithImplied(["write_file", "read_file"]),
+            StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// And with only one half it is NOT granted. Taking the requirement loosely would let a worker
+    /// that may write but not read duplicate content it is not allowed to see - the one way this
+    /// table could widen access instead of naming what is already held.
+    /// </summary>
+    [Theory]
+    [InlineData("write_file")]
+    [InlineData("read_file")]
+    public void Copying_is_not_granted_on_half_the_requirement(string half)
+        => Assert.DoesNotContain("copy_file", WorkerTools.WithImplied([half]), StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
     /// The developer role as it was actually saved before those three tools existed - the list that
     /// produced a run which could only rename a file with a shell.
     /// </summary>
@@ -66,6 +88,20 @@ public sealed class WorkerToolsTests
         Assert.DoesNotContain("edit_file", granted, StringComparer.OrdinalIgnoreCase);
         Assert.DoesNotContain("move_file", granted, StringComparer.OrdinalIgnoreCase);
         Assert.DoesNotContain("create_directory", granted, StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// delete_file is not granted either, and for a different reason than the shells: nothing a
+    /// worker already has removes a file. Overwriting destroys a file's contents and leaves the
+    /// path. Handing every saved role a new power inside a migration would be a worse failure than
+    /// the one this class fixes, so it stays a decision somebody makes in Settings.
+    /// </summary>
+    [Fact]
+    public void Deleting_is_not_granted_to_anybody()
+    {
+        var granted = WorkerTools.WithImplied(["write_file", "edit_file", "read_file", "list_dir"]);
+
+        Assert.DoesNotContain("delete_file", granted, StringComparer.OrdinalIgnoreCase);
     }
 
     /// <summary>

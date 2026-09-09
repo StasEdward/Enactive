@@ -1,4 +1,4 @@
-namespace Enactive.Engine.Tests;
+﻿namespace Enactive.Engine.Tests;
 
 using Enactive.Agents;
 using Enactive.Core.Artifacts;
@@ -307,6 +307,23 @@ public sealed class EngineFixture : IDisposable
     public DiskArtifactStore Artifacts { get; }
     public ScriptedDecisionHandler Decisions { get; } = new();
 
+    /// <summary>
+    /// Invokes a tool the way the engine does: a fresh context over this fixture's workspace, with
+    /// this fixture's journalled artifact store unless the caller hands in a step's own.
+    ///
+    /// <para>It lives on the fixture rather than on whichever test class needed it first. It used
+    /// to be a private helper on <c>FileToolsTests</c>, which was fine right up until a second and
+    /// third file tool arrived with test classes of their own and could not reach it.</para>
+    /// </summary>
+    public Task<ToolResult> Invoke(ITool tool, string argumentsJson, IArtifactStore? store = null)
+        => tool.InvokeAsync(argumentsJson, ContextFor(store), CancellationToken.None);
+
+    /// <summary>The context a tool is called with here: permissive policy, this workspace, this root.</summary>
+    public ToolContext ContextFor(IArtifactStore? store = null)
+        => new(TaskId: Guid.NewGuid(), RunId: Guid.NewGuid(), WorkspaceId: Workspace.Id,
+               Context: null!, PermissionPolicy: PermissionPolicy.PermissiveDefault,
+               WorkspaceRoot: Root, Artifacts: store ?? Artifacts, Services: null!);
+
     public string PathOf(string relative) => Path.Combine(Root, relative);
     public bool Exists(string relative) => File.Exists(PathOf(relative));
     public string Read(string relative) => File.ReadAllText(PathOf(relative));
@@ -530,7 +547,7 @@ public sealed class EngineFixture : IDisposable
     public static ITool[] ShippedTools() => new ITool[]
     {
         new WriteFileTool(), new EditFileTool(), new ReadFileTool(), new SearchFilesTool(),
-        new ListDirectoryTool(), new CreateDirectoryTool(), new MoveFileTool(),
+        new ListDirectoryTool(), new CreateDirectoryTool(), new MoveFileTool(), new CopyFileTool(), new DeleteFileTool(),
         new RunCommandTool(), new RunPowerShellTool(), new GitTool(), new DockerTool()
     };
 

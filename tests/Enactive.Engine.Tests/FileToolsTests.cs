@@ -18,13 +18,11 @@ using Xunit;
 public sealed class FileToolsTests
 {
     private static ToolContext Context(EngineFixture fx, IArtifactStore? store = null)
-        => new(TaskId: Guid.NewGuid(), RunId: Guid.NewGuid(), WorkspaceId: fx.Workspace.Id,
-               Context: null!, PermissionPolicy: PermissionPolicy.PermissiveDefault,
-               WorkspaceRoot: fx.Root, Artifacts: store ?? fx.Artifacts, Services: null!);
+        => fx.ContextFor(store);
 
     private static Task<ToolResult> Call(ITool tool, EngineFixture fx, string argumentsJson,
         IArtifactStore? store = null)
-        => tool.InvokeAsync(argumentsJson, Context(fx, store), CancellationToken.None);
+        => fx.Invoke(tool, argumentsJson, store);
 
     // ── edit_file ─────────────────────────────────────────────────────────────────────
 

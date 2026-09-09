@@ -1,4 +1,4 @@
-namespace Enactive.Agents;
+﻿namespace Enactive.Agents;
 
 /// <summary>
 /// Tools a worker already has the capability for, whether or not its saved list names them.
@@ -23,20 +23,41 @@ namespace Enactive.Agents;
 /// which is unjournalled and therefore cannot be reverted when a reviewer rejects the step.</item>
 /// <item><c>read_file</c> → <c>search_files</c>: finding a string is a faster way to do what
 /// reading files one at a time already does.</item>
+/// <item><c>read_file</c> AND <c>write_file</c> → <c>copy_file</c>: a worker that can read a file
+/// and write another can already make a copy by hand. It just cannot make a WHOLE one - reading
+/// stops at 8000 characters, so the copy comes out partial and looks complete. Both are required:
+/// with write_file alone, copy_file would let a worker duplicate content it is not allowed to
+/// read, which is the one way this table could widen access rather than name it.</item>
 /// </list>
 ///
 /// <para>Deliberately NOT here: anything that reaches outside the workspace or hands a command line
 /// to the operating system. A shell is not implied by anything, and never will be.</para>
+///
+/// <para><b>And deliberately not <c>delete_file</c>.</b> It is tempting - it shipped at the same
+/// time as <c>copy_file</c> and will otherwise reach only new installations, which is the exact
+/// complaint this class exists to answer. But it is not a capability anybody already has under
+/// another name: overwriting a file destroys its contents and leaves the path, and no combination
+/// of the existing tools removes one. Granting it here would be handing every saved role a power it
+/// never had, in a migration, silently - which is a worse failure than the one being fixed. It is
+/// in the built-in roles, and somebody who wants it in a role they already have can add it in
+/// Settings, having decided to.</para>
 /// </summary>
 public static class WorkerTools
 {
-    /// <summary>(the tool a worker has, the tool that follows from having it).</summary>
-    private static readonly (string Has, string Implies)[] Implications =
+    /// <summary>
+    /// (what the worker must ALREADY have, what then follows from having it).
+    ///
+    /// <para>A set rather than a single tool, because <c>copy_file</c> needs both halves: it is the
+    /// one entry where taking the requirement loosely would grant something new instead of naming
+    /// something already held.</para>
+    /// </summary>
+    private static readonly (string[] Requires, string Implies)[] Implications =
     [
-        ("write_file", "edit_file"),
-        ("write_file", "create_directory"),
-        ("write_file", "move_file"),
-        ("read_file", "search_files")
+        (["write_file"], "edit_file"),
+        (["write_file"], "create_directory"),
+        (["write_file"], "move_file"),
+        (["write_file", "read_file"], "copy_file"),
+        (["read_file"], "search_files")
     ];
 
     /// <summary>
@@ -56,22 +77,24 @@ public static class WorkerTools
 
         var result = tools.ToList();
 
-        foreach (var (has, implies) in Implications)
+        foreach (var (requires, implies) in Implications)
         {
-            var at = result.FindIndex(t => string.Equals(t, has, StringComparison.OrdinalIgnoreCase));
-
-            if (at < 0 || result.Contains(implies, StringComparer.OrdinalIgnoreCase))
+            // EVERY requirement, not any of them.
+            if (!requires.All(r => result.Contains(r, StringComparer.OrdinalIgnoreCase))
+                || result.Contains(implies, StringComparer.OrdinalIgnoreCase))
             {
                 continue;
             }
 
-            // After the tool it follows from, and after anything already inserted there, so the
-            // order reads write_file, edit_file, create_directory, move_file rather than reversed.
+            // After the first tool it follows from, and after anything already inserted there, so
+            // the order reads write_file, edit_file, create_directory, move_file rather than
+            // reversed. Cosmetic, and it is what the settings editor shows somebody.
+            var at = result.FindIndex(t => string.Equals(t, requires[0], StringComparison.OrdinalIgnoreCase));
             var insert = at + 1;
+
             while (insert < result.Count
                    && Implications.Any(i =>
-                       string.Equals(i.Has, has, StringComparison.OrdinalIgnoreCase)
-                       && string.Equals(i.Implies, result[insert], StringComparison.OrdinalIgnoreCase)))
+                       string.Equals(i.Implies, result[insert], StringComparison.OrdinalIgnoreCase)))
             {
                 insert++;
             }
