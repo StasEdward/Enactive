@@ -154,7 +154,7 @@ internal enum ShellCommandPolicy
 internal sealed partial class AppSettings
 {
     /// <summary>The newest settings.json schema this build writes. See <see cref="SchemaVersion"/>.</summary>
-    public const int CurrentSchemaVersion = 3;
+    public const int CurrentSchemaVersion = 4;
 
     /// <summary>
     /// settings.json schema version. Files written before 2026-09-06 have no such field and read as 1,
@@ -426,6 +426,32 @@ internal sealed partial class AppSettings
                          w.Tools.Contains("write_file", StringComparer.OrdinalIgnoreCase)
                          && !w.Tools.Contains("edit_file", StringComparer.OrdinalIgnoreCase)))
                 w.Tools.Insert(w.Tools.IndexOf("write_file") + 1, "edit_file");
+        }
+
+        if (SchemaVersion < 4)
+        {
+            // The same thing happened again, three times over. search_files, create_directory and
+            // move_file were added to the default roles and reached nobody who already had a
+            // settings.json - which is everybody. They were written, tested and documented, and
+            // were dead the whole time.
+            //
+            // It showed up as a task started from a phone that could not rename a file: with the
+            // shells now denied for a remote run, and move_file never granted, the model had no
+            // tool that could move anything and correctly gave up. The tool it wanted did exist.
+            //
+            // Handled by WorkerTools.WithImplied rather than three more lines here, so the rule -
+            // and the argument that each of these is a capability the worker already has under
+            // another name - is written down once and can be tested.
+            foreach (var w in Workers)
+            {
+                var granted = WorkerTools.WithImplied(w.Tools);
+
+                if (granted.Count == w.Tools.Count)
+                    continue;
+
+                w.Tools.Clear();
+                w.Tools.AddRange(granted);
+            }
         }
 
         SchemaVersion = CurrentSchemaVersion;
