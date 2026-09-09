@@ -43,9 +43,13 @@ The Avalonia desktop UI is the richest host. It provides:
 
 The console host executes one task and exits, or prints timeline/Inbox data. It supports interactive free-text tasks and unattended template tasks. It uses its own environment-based model configuration and built-in workers. See [Console](Console.md) before transferring a desktop workflow into a scheduled job.
 
-### Remote server preview
+### Remote access
 
-The separate `server/` application implements a gateway and a browser interface for remote tasks, host registration, queues, decisions, and results. A production host bridge connecting it to the local Enactive engine is still missing. See [Remote preview](Operations.md#remote-server-preview).
+A task can be started from a browser and run on a computer where the desktop application is
+installed. A gateway you deploy holds the queue and the history and serves the panel; the desktop
+application connects outward to it and runs the work. A task started this way runs through the same
+engine as one typed into the app, under that workspace's own saved autonomy and role, and with two
+additional rules: no shell at any tier, and no staged changes. See [Remote access](Remote-Access.md).
 
 ## Core concepts
 

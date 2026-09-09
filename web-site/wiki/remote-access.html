@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Remote Access · Enactive Wiki</title><meta name="description" content="Enactive Wiki: Remote Access. Practical workflows, configuration details, and implementation references.">
+<link rel="canonical" href="https://enactive.dev/wiki/remote-access.html">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/brand.css"><link rel="stylesheet" href="assets/fonts.css"><link rel="stylesheet" href="wiki.css">
+<script src="theme.js"></script><script src="search-index.js" defer></script><script src="wiki.js" defer></script>
+</head><body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="wiki-header"><a class="brand" href="../index.html" aria-label="Enactive home"><img class="brand-mark" src="assets/mark-loop.svg" alt="" width="32" height="32"><img class="wordmark dark-mark" src="assets/wordmark.svg" alt="Enactive" width="144" height="18"><img class="wordmark light-mark" src="assets/wordmark-light.svg" alt="Enactive" width="144" height="18"></a><a class="wiki-label" href="index.html">Wiki</a><div class="header-actions"><button type="button" class="search-trigger" aria-haspopup="dialog">Search wiki <kbd>Ctrl K</kbd></button><button type="button" id="theme-toggle" aria-label="Switch to light theme">Light theme</button><button type="button" id="menu-toggle" aria-expanded="false" aria-controls="sidebar">Menu</button></div></header>
+<div class="wiki-layout"><aside id="sidebar" class="sidebar"><nav aria-label="Wiki chapters"><p class="nav-group">Start here</p><a href="index.html">Wiki home</a><a href="overview.html">Application overview</a><a href="getting-started.html">Getting started</a><p class="nav-group">Workflows</p><a href="running-tasks.html">Running tasks</a><a href="console.html">Console & automation</a><a href="templates.html">Templates</a><a href="remote-access.html" aria-current="page">Remote access</a><p class="nav-group">Configuration</p><a href="settings.html">Settings</a><a href="models-and-phases.html">Models & Phases</a><p class="nav-group">Reference</p><a href="architecture.html">Architecture</a><a href="operations.html">Operations & troubleshooting</a></nav><div class="sidebar-footer"><a href="../index.html">← Back to Enactive</a><span>Product & engineering handbook</span></div></aside>
+<main id="main" class="" tabindex="-1"><div class="page-heading"><div class="breadcrumb"><a href="index.html">Documentation</a><span aria-hidden="true">/</span><span>Remote access</span></div><p class="eyebrow">Workflows · Enactive</p><h1>Remote Access</h1><div class="page-meta"><span>6 min read</span><span>English</span><a href="https://github.com/StasEdward/Enactive/blob/master/Docs/wiki/Remote-Access.md">Markdown source ↗</a></div></div><details class="mobile-toc"><summary>On this page</summary><nav aria-label="On this page"><a href="#what-this-is">What this is</a><a href="#trust-boundary">Trust boundary</a><a href="#what-a-remote-run-may-and-may-not-do">What a remote run may and may not do</a><a href="#permissions">Permissions</a><a href="#setting-it-up">Setting it up</a><a href="#what-the-panel-shows">What the panel shows</a><a href="#connection-behaviour">Connection behaviour</a><a href="#limitations">Limitations</a><a href="#implementation-references">Implementation references</a></nav></details><article><h2 id="what-this-is">What this is<a class="heading-anchor" href="#what-this-is" aria-label="Link to What this is">#</a></h2>
+<p>Remote access lets a task be started from a browser and run on a computer where Enactive is
+installed. The browser does not execute anything: it queues a request, the desktop application
+picks it up, runs it through the same engine as a task typed into the app, and reports back.</p>
+<p>Three parts:</p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Part / Where it runs / What it does"><table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Where it runs</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Gateway</td>
+<td>A server you deploy</td>
+<td>Serves the panel, holds the queue and the history, authenticates the owner and the computers</td>
+</tr>
+<tr>
+<td>Panel</td>
+<td>A browser</td>
+<td>Starts tasks, shows their timeline, answers permission requests</td>
+</tr>
+<tr>
+<td>Host</td>
+<td>Inside the desktop application</td>
+<td>Connects outward to the gateway, runs the tasks, publishes the events</td>
+</tr>
+</tbody></table>
+</div><p>The host <strong>dials out</strong>. Nothing listens on the computer running Enactive, and no inbound port is
+opened on it. A computer that is switched off is simply not available; the task waits in the queue
+or its start command expires.</p>
+<p>This replaces an earlier prototype that lived in <code>server/</code>. That directory no longer exists; its
+files are kept for reference under <a href="https://github.com/StasEdward/Enactive/blob/master/Docs/RemoteServerWWW/README.md">Docs/RemoteServerWWW</a>.</p>
+<h2 id="trust-boundary">Trust boundary<a class="heading-anchor" href="#trust-boundary" aria-label="Link to Trust boundary">#</a></h2>
+<p>The gateway can see task text, workspace names, tool arguments and results. It is a trusted
+gateway, not an end-to-end encrypted channel. Deploy it somewhere you would be willing to keep the
+same information.</p>
+<p>The panel authenticates with a single <strong>owner key</strong>. There are no user accounts: whoever has the
+key is the owner. Each computer additionally holds its own <strong>device token</strong>, issued once when the
+computer is added and revocable from the panel.</p>
+<h2 id="what-a-remote-run-may-and-may-not-do">What a remote run may and may not do<a class="heading-anchor" href="#what-a-remote-run-may-and-may-not-do" aria-label="Link to What a remote run may and may not do">#</a></h2>
+<p>A task started from the web is not the same as a task typed into the app, and the difference is
+enforced rather than described.</p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Rule / Where it is enforced"><table>
+<thead>
+<tr>
+<th>Rule</th>
+<th>Where it is enforced</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>No shell. <code>run_command</code> and <code>run_powershell</code> are denied for the whole run, at every autonomy tier including Autonomous</td>
+<td><code>RemotePolicy.ForRemoteRun</code></td>
+</tr>
+<tr>
+<td>A shell permission cannot be answered from the panel; it is published so the request is visible, then refused</td>
+<td><code>RemoteDecisionHandler</code>, and again in the gateway</td>
+</tr>
+<tr>
+<td>A workspace set to stage changes cannot be run from the web</td>
+<td><code>RemoteAccessService</code></td>
+</tr>
+<tr>
+<td>Permissions and autonomy come from the workspace&#39;s own saved settings, not from whatever is selected on screen</td>
+<td><code>MainWindow.SnapshotEnvironment</code></td>
+</tr>
+</tbody></table>
+</div><p>The shell rule is absolute and has no exception for somebody being at the keyboard. The reasoning
+is in <a href="https://github.com/StasEdward/Enactive/blob/master/Docs/SANDBOX_PLAN.md">SANDBOX_PLAN</a>: the sandbox threat model is justified by &quot;the machine is
+the developer&#39;s own, the projects are theirs&quot;, and a network origin is exactly what that argument
+does not cover. It is enforced in two independent places because one alone would be a promise and
+the other alone would be trusting the panel.</p>
+<p>The staging rule exists because a staged run needs a store that keeps its proposals until somebody
+applies them, and there is not one here. Running anyway would write to the files directly while the
+history said the changes were staged, with nobody at the machine to notice.</p>
+<h2 id="permissions">Permissions<a class="heading-anchor" href="#permissions" aria-label="Link to Permissions">#</a></h2>
+<p>A run that needs an approval publishes it. The request appears <strong>on the task&#39;s own card</strong> in the
+panel, with the whole action shown, and in the Permissions tab, which is the queue across every
+computer and run. It appears on the desktop at the same time.</p>
+<p>Both ends are asked and the first answer wins. Sitting down at the computer always works, whatever
+the phone is doing.</p>
+<p>An answer given in the panel is not an outcome. It becomes a command that still has to reach the
+computer, which may refuse it — the desktop may have answered first, or the run may have ended. The
+card says <code>Sent</code> until the computer has acted on it.</p>
+<p>An unanswered request expires after two hours and is treated as a refusal. A step that waits
+forever for an answer nobody can give is a hang, not a permission model.</p>
+<h2 id="setting-it-up">Setting it up<a class="heading-anchor" href="#setting-it-up" aria-label="Link to Setting it up">#</a></h2>
+<h3 id="1-deploy-the-gateway">1. Deploy the gateway<a class="heading-anchor" href="#1-deploy-the-gateway" aria-label="Link to 1. Deploy the gateway">#</a></h3>
+<p>Server-side installation, the systemd units, the database accounts, TLS through Cloudflare Tunnel,
+backups and the automatic pull-based deploy are all in
+<a href="https://github.com/StasEdward/Enactive/blob/master/Docs/REMOTE_OPERATIONS.md">REMOTE_OPERATIONS</a>. That document is the runbook; this page does not
+duplicate it.</p>
+<h3 id="2-sign-in-to-the-panel">2. Sign in to the panel<a class="heading-anchor" href="#2-sign-in-to-the-panel" aria-label="Link to 2. Sign in to the panel">#</a></h3>
+<p>Open the gateway&#39;s address and enter the owner key configured as <code>ENACTIVE_OWNER_KEY</code>.</p>
+<h3 id="3-add-the-computer">3. Add the computer<a class="heading-anchor" href="#3-add-the-computer" aria-label="Link to 3. Add the computer">#</a></h3>
+<p>In the panel, add a computer. The gateway issues a device token <strong>once</strong> and does not store it in a
+form it can show again. Copy it at that moment.</p>
+<h3 id="4-connect-the-desktop-application">4. Connect the desktop application<a class="heading-anchor" href="#4-connect-the-desktop-application" aria-label="Link to 4. Connect the desktop application">#</a></h3>
+<p>In Enactive, open Settings → Remote access, enter the gateway address and the device token, and
+enable it. <strong>Test connection</strong> verifies the address and the token and publishes this computer&#39;s
+workspaces, which is what makes them selectable in the panel.</p>
+<p>The token is stored encrypted with the operating system&#39;s user-level protection, alongside the
+provider keys. Settings changes take effect without restarting the application.</p>
+<h3 id="5-start-a-task">5. Start a task<a class="heading-anchor" href="#5-start-a-task" aria-label="Link to 5. Start a task">#</a></h3>
+<p>Choose a computer and one of its published workspaces, write the task, and start it. The prompt is
+shown back in the panel exactly as it was typed — judging what a run did against a title somebody
+wrote is judging it against the wrong thing.</p>
+<h2 id="what-the-panel-shows">What the panel shows<a class="heading-anchor" href="#what-the-panel-shows" aria-label="Link to What the panel shows">#</a></h2>
+<div class="table-wrap" tabindex="0" role="region" aria-label="View / Contents"><table>
+<thead>
+<tr>
+<th>View</th>
+<th>Contents</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Tasks</td>
+<td>Every run, its status, its prompt, and any permission it is waiting on</td>
+</tr>
+<tr>
+<td>Permissions</td>
+<td>The queue of unanswered requests across all computers</td>
+</tr>
+<tr>
+<td>Inbox</td>
+<td>Notices the runs produced, with an unread count</td>
+</tr>
+<tr>
+<td>Computers</td>
+<td>Registered computers, last seen, and revocation</td>
+</tr>
+</tbody></table>
+</div><p>The page polls every three seconds and asks for a delta rather than the whole state. History older
+than the configured retention (30 days by default) is deleted hourly, and the panel says so rather
+than showing a truncated timeline as though it were complete.</p>
+<p>A run&#39;s timeline is a modal opened from its card, and it updates while it is open.</p>
+<h2 id="connection-behaviour">Connection behaviour<a class="heading-anchor" href="#connection-behaviour" aria-label="Link to Connection behaviour">#</a></h2>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Interval / What"><table>
+<thead>
+<tr>
+<th>Interval</th>
+<th>What</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>2 seconds</td>
+<td>The host flushes queued events to the gateway</td>
+</tr>
+<tr>
+<td>15 seconds</td>
+<td>The host re-publishes its workspace list and its liveness</td>
+</tr>
+<tr>
+<td>up to 2 minutes</td>
+<td>Backoff between retries when the gateway is unreachable</td>
+</tr>
+</tbody></table>
+</div><p>Events are queued in a local SQLite outbox and delivered in order, so a run whose connection drops
+mid-way reports the rest of itself when the connection returns rather than losing it. A run
+interrupted by the application closing is reported as interrupted the next time the host connects.</p>
+<p>The panel shows <strong>Live</strong> or <strong>Stale</strong> depending on whether its last poll succeeded.</p>
+<h2 id="limitations">Limitations<a class="heading-anchor" href="#limitations" aria-label="Link to Limitations">#</a></h2>
+<p>These are current, deliberate, and worth knowing before relying on the feature.</p>
+<ul>
+<li><strong>One owner.</strong> There are no accounts, roles or sharing. The key is the product&#39;s whole
+authorization model.</li>
+<li><strong>A trusted gateway.</strong> Task text and results are visible to it.</li>
+<li><strong>No shells from the web</strong>, as above. A task that genuinely needs a command line has to be run at
+the computer.</li>
+<li><strong>No staging from the web.</strong></li>
+<li><strong>Data Protection keys are the session.</strong> Whoever can read the gateway&#39;s key directory can mint a
+session cookie. This is protected by directory permissions and nothing else in this build.</li>
+<li><strong>Not designed for a shared or hostile network origin</strong> beyond the rules listed above.</li>
+</ul>
+<h2 id="implementation-references">Implementation references<a class="heading-anchor" href="#implementation-references" aria-label="Link to Implementation references">#</a></h2>
+<ul>
+<li><a href="https://github.com/StasEdward/Enactive/blob/master/Docs/REMOTE_DESIGN.md">Design and staged plan</a></li>
+<li><a href="https://github.com/StasEdward/Enactive/blob/master/Docs/REMOTE_OPERATIONS.md">Deployment and operations runbook</a></li>
+<li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.Remote.Contracts/Messages.cs">Protocol contracts</a></li>
+<li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.Remote.Gateway/Program.cs">Gateway</a></li>
+<li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.App.Ui/RemoteAccessService.cs">Host connection and run loop</a></li>
+<li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.Remote.Host/RemotePolicy.cs">Shell rule for a remote run</a></li>
+<li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.Remote.Host/RemoteDecisionHandler.cs">Permission handling across both ends</a></li>
+<li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.Remote.Host/HostStore.cs">Local outbox</a></li>
+</ul>
+</article><nav class="pagination" aria-label="Adjacent chapters"><a href="templates.html"><small>← Previous</small><strong>Templates</strong></a><a href="settings.html"><small>Next →</small><strong>Settings</strong></a></nav><footer class="page-footer"><span>Enactive · Real, reviewable, recorded action.</span><a href="#main">Back to top ↑</a></footer></main>
+<aside class="page-toc"><p class="nav-group">On this page</p><nav aria-label="Page sections"><a href="#what-this-is">What this is</a><a href="#trust-boundary">Trust boundary</a><a href="#what-a-remote-run-may-and-may-not-do">What a remote run may and may not do</a><a href="#permissions">Permissions</a><a href="#setting-it-up">Setting it up</a><a href="#what-the-panel-shows">What the panel shows</a><a href="#connection-behaviour">Connection behaviour</a><a href="#limitations">Limitations</a><a href="#implementation-references">Implementation references</a></nav><a class="source-link" href="https://github.com/StasEdward/Enactive/blob/master/Docs/wiki/Remote-Access.md">View Markdown source ↗</a></aside></div>
+<dialog id="search-dialog" aria-labelledby="search-title"><div class="search-heading"><h2 id="search-title">Search the wiki</h2><button id="close-search" type="button" aria-label="Close search">Close <kbd>Esc</kbd></button></div><label for="search-input">Find a topic, setting, or command</label><input id="search-input" type="search" placeholder="Try templates, Review, or --workspace" autocomplete="off"><p id="search-status" role="status" aria-live="polite">Search across all chapters.</p><div id="search-results"></div></dialog><div id="copy-status" class="sr-only" role="status" aria-live="polite"></div>
+</body></html>

@@ -1,10 +1,10 @@
 # Enactive Wiki
 
-**Product and engineering handbook · English · Verified against the repository on 8 September 2026**
+**Product and engineering handbook · English · Verified against the repository on 8 September 2026. Remote access, the file tools, the settings schema and the console's arguments re-verified on 9 September 2026.**
 
 Enactive is a desktop workspace for AI agents. You describe an outcome, choose a workspace and a worker, and let the application plan and execute work through tools. It records the actions, decisions, outputs, and final outcome so that you can inspect what happened and repeat a task later.
 
-This wiki covers the desktop application, its shared execution engine, the console host, and the separate remote-server preview. It describes current implementation behavior. Recommendations are identified as recommendations; incomplete features are identified where they affect a workflow.
+This wiki covers the desktop application, its shared execution engine, the console host, and remote access from a browser. It describes current implementation behavior. Recommendations are identified as recommendations; incomplete features are identified where they affect a workflow.
 
 ## Contents
 
@@ -18,7 +18,8 @@ This wiki covers the desktop application, its shared execution engine, the conso
 | [Templates](Templates.md) | Library, built-ins, parameters, editing, JSON, success criteria, and Global versus Workspace |
 | [Settings](Settings.md) | Providers, Team, Phases, behavior toggles, persistence, and configuration scope |
 | [Choosing models by phase and role](Models-and-Phases.md) | Model responsibilities, selection guidance, routing, recommended setups, and evaluation |
-| [Operations and troubleshooting](Operations.md) | History, logs, storage, MCP, remote preview, recovery, and common problems |
+| [Remote access](Remote-Access.md) | Starting tasks from a browser: the gateway, the panel, permissions, and what a remote run may not do |
+| [Operations and troubleshooting](Operations.md) | History, logs, storage, MCP, recovery, and common problems |
 
 ## Recommended reading paths
 
@@ -45,7 +46,7 @@ This wiki covers the desktop application, its shared execution engine, the conso
 
 The desktop and console share engine code but have different configuration roots. Desktop Providers, Team, Phases, and MCP settings do **not** configure the current console executable.
 
-The remote server is a separate preview. It is not a working remote execution connection to the desktop application in this checkout.
+Remote access is a working connection in this checkout, with its own limits: it needs a gateway you deploy, it is authorized by a single owner key, and a task started from a browser may not run a shell or stage its changes. See [Remote access](Remote-Access.md).
 
 Older design documents remain under [`Docs`](../Docs/README.md). Some describe historical states or intended behavior. When those documents disagree with current composition code, this wiki follows the code. Each detailed page includes implementation links for maintenance.
 

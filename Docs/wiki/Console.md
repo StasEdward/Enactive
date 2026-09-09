@@ -85,15 +85,53 @@ dotnet run --project src/Enactive.App.Console -- --template fix-bug --workspace 
 
 This demonstrates valid syntax. It is **not** a promise that Fix Bug can complete unattended with the current console policy: shell execution and required checks need approval and will be refused.
 
+## Tier, role, and answers
+
+Three arguments describe the conditions a run acts under. They exist so a behavior can be checked
+from a command line instead of by driving the desktop by hand; see
+[SCENARIO_CHECKS](../SCENARIO_CHECKS.md).
+
+| Argument | Values | Default |
+| --- | --- | --- |
+| `--autonomy` | `observe`, `suggest`, `execute`, `autonomous` (or `0`-`3`) | `execute` |
+| `--role` | `developer`, `reviewer`, `ops`, `writer` | `developer` |
+| `--approve` | `allow`, `deny` | unset |
+
+`--autonomy` uses the desktop application's own mapping, shared by both hosts. A check run here is
+evidence about the product only if the console and the window agree on what `execute` means.
+
+| Tier | Asks before |
+| --- | --- |
+| `observe`, `suggest` | nothing; the level itself limits what may run |
+| `execute` | `run_command`, `run_powershell`, `git`, `docker` |
+| `autonomous` | nothing |
+
+A tool whose own definition requires approval still asks at every tier, including `autonomous`.
+`delete_file` is the current example.
+
+`--role` decides which tools exist for the run at all. That is half of any permission question, and
+the two halves are easy to confuse from outside: a task that reaches for a shell because the tool
+it needed was never granted fails in the same shape as a task the policy refused.
+
+`--approve` gives one fixed answer to every permission. Both directions are useful — `deny` checks
+that a refusal actually stops an action, `allow` gets past a gate to see what is behind it — and
+neither is a default.
+
+A value none of these recognizes is refused with exit code `64` and the list of what was meant.
+A typo is not rounded to the nearest tier in either direction.
+
 ## Unattended permission behavior
 
-The console composes an Execute policy with `run_command`, `run_powershell`, `git`, and `docker` in AskBefore. Its unattended decision handler implements:
+Without `--approve`, a free-text run asks at the terminal and a `--template` run uses the unattended
+handler:
 
 ```text
 Unattended + Ask = Deny
 ```
 
-Templates can add restrictions but cannot remove this AskBefore list or grant more autonomy. The console does not read the desktop autonomy slider, workspace registry, or remembered approvals, and exposes no CLI switch to relax this policy.
+Templates can add restrictions but cannot grant more autonomy.
+
+The console does not read the desktop workspace registry or remembered approvals.
 
 Consequences:
 
@@ -102,7 +140,16 @@ Consequences:
 - A required check that cannot execute is not counted as passed; inspect Incomplete and the report details.
 - There is no benefit to adding an `Allow` field to template JSON: the template schema has no grant mechanism.
 
-If unattended build/test execution is required, that requires a deliberate change to the console host's policy/configuration integration. It is not achievable solely by editing a template. Use the desktop foreground workflow for the currently supported approval path.
+Those consequences describe a run left to the unattended handler. `--autonomy autonomous` or
+`--approve allow` changes them, and both are deliberate instructions typed for that invocation
+rather than something a template can grant itself.
+
+The last line of output names the conditions alongside the outcome, so a result can be read without
+knowing how it was invoked:
+
+```text
+RESULT outcome=Incomplete autonomy=autonomous role=developer
+```
 
 ## Environment configuration
 
@@ -134,7 +181,7 @@ The report includes workspace, run/task identifiers, outcome and reason, recorde
 | `0` | Completed |
 | `1` | Failed, or handled provider connection failure |
 | `2` | Incomplete |
-| `64` | Invalid template invocation/resolution |
+| `64` | Invalid invocation: an unknown template parameter, tier, role, or approval answer. Nothing ran |
 | `130` | Cancelled, including handled Ctrl+C |
 
 Configuration/startup exceptions outside the handled run path may terminate before a structured report is produced. The table is the host's explicit outcome mapping, not a guarantee for every process-level failure.
@@ -161,6 +208,7 @@ Use an explicit working directory and run under the intended account: Global tem
 ## Implementation references
 
 - [Complete CLI and composition](../src/Enactive.App.Console/Program.cs)
+- [Autonomy tiers, shared with the desktop](../src/Enactive.Agents/AutonomyTiers.cs)
 - [Unattended decisions](../src/Enactive.Agents/UnattendedDecisionHandler.cs)
 - [Report and exit-code mapping](../src/Enactive.Core/RunReport.cs)
 - [Template resolution](../src/Enactive.Core/TemplateResolution.cs)
