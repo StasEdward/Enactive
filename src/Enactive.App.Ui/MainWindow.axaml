@@ -269,6 +269,45 @@
                             Command="{Binding Runs.RefreshCommand}" />
                 </Grid>
 
+                <!-- What is happening RIGHT NOW. Above everything, because the column's first job
+                     is the present tense and it used to have nothing to say about it: a run is
+                     written to the store when it ENDS, so between Run and the end it appeared
+                     nowhere but the middle column. Start a run, open an older one to compare, and
+                     the run you had just started was findable in no list at all.
+
+                     NOT frozen with the rest of the column. Everything else here is disabled while
+                     a run is on - that is the point - but this row exists to be pressed while a run
+                     is on, and a greyed-out way back is no way back. -->
+                <StackPanel DockPanel.Dock="Top" Margin="12,0,12,8"
+                            IsVisible="{Binding Runs.HasRunning}">
+                    <TextBlock Classes="panelHeader" Text="RUNNING" Margin="0,0,0,6" />
+                    <ItemsControl ItemsSource="{Binding Runs.Running}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:LiveRunViewModel">
+                                <!-- The same shape as an UNFINISHED row: a card, and a small button
+                                     for the one thing you can do with it. Open is absent on a
+                                     background run rather than disabled - there is no live view to
+                                     go to, and an offer that cannot be taken is not an offer. -->
+                                <Border Classes="card" BorderBrush="{Binding StatusBrush}"
+                                        ToolTip.Tip="{Binding Tooltip}">
+                                    <Grid ColumnDefinitions="*,Auto">
+                                        <StackPanel>
+                                            <TextBlock Classes="cardTitle" Text="{Binding Title}"
+                                                       TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Classes="cardMeta" Text="{Binding Meta}"
+                                                       TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
+                                        </StackPanel>
+                                        <Button Grid.Column="1" Content="Open" FontSize="11" Padding="8,1"
+                                                VerticalAlignment="Center" Margin="6,0,0,0"
+                                                IsVisible="{Binding CanOpen}"
+                                                Command="{Binding OpenCommand}" />
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+
                 <!-- The filter decides the set, and the button destroys exactly what is on screen.
                      Removing runs one at a time was the only way to remove any, and a workspace
                      used for a few days had 37 of them - most of them repeat attempts at one task.

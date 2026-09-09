@@ -86,6 +86,19 @@ public sealed partial class MainWindow : Window, IDecisionHandler
 
     /// <summary>What each workspace was left showing in the middle column. See OpenRunMemory.</summary>
     private readonly OpenRunMemory _openRuns = new();
+
+    /// <summary>
+    /// Runs in flight, and the workspace each belongs to.
+    ///
+    /// <para>Held here because nothing else knows: a run is written to the store when it ENDS, so
+    /// between Run and the end this list is the only record that it is happening at all. The
+    /// workspace is carried alongside because a background run keeps going after the workspace has
+    /// been switched, and it must not appear in another project's column.</para>
+    /// </summary>
+    private readonly Dictionary<Guid, (LiveRun Run, string Workspace)> _live = new();
+
+    /// <summary>The foreground run's row, so events can find it. Null when nothing is running.</summary>
+    private Guid _liveRow;
     private int _backgroundRuns;
     private bool _forceClose;
     private StagingArtifactStore? _staging;
@@ -147,6 +160,9 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         _vm.Runs.DeleteRequested += summary => _ = DeleteRunAsync(summary);
         _vm.Runs.DeleteShownRequested += shown => _ = DeleteRunsAsync(shown);
         _vm.Runs.ResumeRequested += checkpoint => _ = RunAsync(background: false, resume: checkpoint);
+        // Pressing the running row is the way back to the live feed. The "← Back" in the past-run
+        // header does the same thing and is where nobody looks.
+        _vm.Runs.OpenLiveRequested += () => _vm.ShowLiveRun();
         _vm.WorkspacePathChanged += RefreshWorkspaces;
         _vm.WorkspaceSwitchRequested += SwitchWorkspace;
         _vm.WorkspaceRenameRequested += path => _ = RenameWorkspaceAsync(path);
@@ -520,6 +536,11 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         _vm.TaskTitle = Summarise(text);
         _vm.HasTask = true;
         _vm.StatusPhase = "Running";
+
+        // A row in the column from the FIRST moment, not from the last one. The store learns about
+        // a run when it ends, so without this the run is on screen nowhere but the middle column -
+        // and opening an older run to compare loses it.
+        _liveRow = BeginLive(_vm.TaskTitle, Path.GetFullPath(workspacePath), headless: false);
         _vm.StatusProgress = "—";
         _vm.StatusElapsed = "0s";
         _vm.CurrentAction = string.Empty;
@@ -647,9 +668,15 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             _elapsedTimer = null;
             _runStopwatch.Stop();
             var finalElapsed = FormatElapsed(_runStopwatch.Elapsed);
+            var endedRow = _liveRow;
+            _liveRow = Guid.Empty;
             Dispatcher.UIThread.Post(() =>
             {
                 _vm.StatusElapsed = finalElapsed;
+                // The row goes BEFORE the history is re-read, so the moment it stops running is the
+                // moment it stops being listed as running. RunColumn.Live is the belt to this
+                // brace: if the two ever cross, the run is not shown twice.
+                EndLive(endedRow);
                 // The run that just ended belongs at the top of the history under the workspace.
                 _ = LoadRunsAsync();
             });
@@ -664,8 +691,11 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         Dispatcher.UIThread.Post(() =>
         {
             // The run id is the orchestrator's to mint, so the log tab learns it from the first
-            // event rather than being told in advance.
+            // event rather than being told in advance. So does the live row, which needs it to be
+            // matched against the history when the run ends.
             _vm.RunLog?.SetRun(ev.RunId);
+            if (_liveRow != Guid.Empty)
+                UpdateLive(_liveRow, r => r.RunId == ev.RunId ? r : r with { RunId = ev.RunId });
 
             switch (ev.Kind)
             {
@@ -933,7 +963,19 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     }
 
     private void UpdateProgress()
-        => _vm.StatusProgress = _totalSteps > 0 ? $"{_doneSteps} / {_totalSteps} steps" : "—";
+    {
+        _vm.StatusProgress = _totalSteps > 0 ? $"{_doneSteps} / {_totalSteps} steps" : "—";
+
+        // The one place step counts change, so the one place the live row has to be told. The row
+        // also carries the planner's title, which arrives after the row does.
+        if (_liveRow != Guid.Empty)
+            UpdateLive(_liveRow, r => r with
+            {
+                Title = _vm.TaskTitle,
+                StepsDone = _doneSteps,
+                StepsTotal = _totalSteps
+            });
+    }
 
     /// <summary>A one-line title from a request that may be a paragraph. Held until the planner
     /// produces a real title, which it almost always does.</summary>
@@ -1102,6 +1144,57 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                 _vm.RequestSwitch,
                 _vm.RequestRename,
                 _vm.RequestForget));
+    }
+
+    // ── Runs in flight ───────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Starts a live row and returns its handle. The run id is not known yet - the orchestrator
+    /// mints it and it arrives with the first event - so the row is identified by its own key
+    /// until then. See <see cref="LiveRun"/>.
+    /// </summary>
+    private Guid BeginLive(string title, string workspace, bool headless)
+    {
+        var row = Guid.NewGuid();
+        _live[row] = (new LiveRun(row, Guid.Empty, title, headless, 0, 0, DateTimeOffset.Now), workspace);
+        RefreshLive();
+        return row;
+    }
+
+    /// <summary>Updates a live row, if it is still there. Silent when it is not: a run that has
+    /// ended while an event was in flight is not an error to report.</summary>
+    private void UpdateLive(Guid row, Func<LiveRun, LiveRun> change)
+    {
+        if (!_live.TryGetValue(row, out var held))
+            return;
+
+        _live[row] = (change(held.Run), held.Workspace);
+        RefreshLive();
+    }
+
+    private void EndLive(Guid row)
+    {
+        if (_live.Remove(row))
+            RefreshLive();
+    }
+
+    /// <summary>
+    /// Pushes the live rows for the CURRENT workspace into the column.
+    ///
+    /// <para>Filtered by workspace here rather than in RunColumn: which folder a run belongs to is
+    /// the window's business, and a background run started in one project keeps running after a
+    /// switch. Filtered against the history there, which is the rule that has a test.</para>
+    /// </summary>
+    private void RefreshLive()
+    {
+        var here = WorkspaceRegistry.Normalise(_vm.WorkspacePath);
+
+        _vm.Runs.ShowRunning(
+            RunColumn.Live(
+                _live.Values
+                     .Where(e => string.Equals(e.Workspace, here, StringComparison.OrdinalIgnoreCase))
+                     .Select(e => e.Run),
+                _vm.Runs.All));
     }
 
     /// <summary>
@@ -1484,6 +1577,12 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         // in a Task owned by this process - closing kills it wherever it happens to be.
         Interlocked.Increment(ref _backgroundRuns);
 
+        // A row of its own, carrying the workspace it belongs to: the window is free again the
+        // moment this starts, so this row is the only thing on screen that says it is happening.
+        // It never learns a run id - the events go to the Inbox writer, not here - so it is removed
+        // by this method and by nothing else.
+        var row = BeginLive(_vm.TaskTitle, fullPath, headless: true);
+
         _ = Task.Run(async () =>
         {
             try
@@ -1508,7 +1607,21 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             {
                 Interlocked.Decrement(ref _backgroundRuns);
             }
-            Dispatcher.UIThread.Post(RefreshInboxButton);
+
+            Dispatcher.UIThread.Post(() =>
+            {
+                EndLive(row);
+                RefreshInboxButton();
+                // Its record is in the store now, so the workspace it ran in has a card for it.
+                // Only when that workspace is the one on screen: LoadRunsAsync reads whichever is
+                // current, and a run finishing elsewhere is not a reason to re-read this one.
+                if (string.Equals(
+                        WorkspaceRegistry.Normalise(_vm.WorkspacePath), fullPath,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    _ = LoadRunsAsync();
+                }
+            });
         });
     }
 
@@ -1965,6 +2078,10 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             records = await TrimAsync(store, records);
 
             _vm.Runs.Show(records);
+            // The history has just changed, and a live row whose run is now IN it must go. See
+            // RunColumn.Live: the window learns a run ended by two paths and they arrive in
+            // whatever order they arrive in.
+            RefreshLive();
         }
         catch (Exception ex)
         {

@@ -146,6 +146,44 @@ internal sealed class RunListItemViewModel
 }
 
 /// <summary>
+/// A run that is happening right now, as a row at the TOP of the column.
+///
+/// <para>Above the history because it is not history, and above UNFINISHED because a run in flight
+/// is more current than one that was abandoned. It exists so the column can answer "what is
+/// happening here", which it could not: a run had no row anywhere until it ENDED, so starting one
+/// and then opening an older run to compare left the new run findable nowhere.</para>
+///
+/// <para>Pressing it goes back to the live feed - the same thing the "← Back" in the past-run
+/// header does, in the place people look for it. A headless run has no feed, so it is not
+/// pressable and its row says where its answer will be instead.</para>
+/// </summary>
+internal sealed class LiveRunViewModel
+{
+    public LiveRunViewModel(LiveRun run, Action open)
+    {
+        Run = run;
+        Title = RunTitle.OneLine(run.Title);
+        Meta = RunColumn.Meta(run);
+        CanOpen = !run.Headless;
+        Tooltip = run.Headless
+            ? "Running in the background. It reports to the Inbox when it is done; there is no live "
+              + "view to open."
+            : "Back to this run";
+        OpenCommand = new RelayCommand(open, () => CanOpen);
+    }
+
+    public LiveRun Run { get; }
+    public string Title { get; }
+    public string Meta { get; }
+    public string Tooltip { get; }
+    public bool CanOpen { get; }
+    public RelayCommand OpenCommand { get; }
+
+    /// <summary>Ember: this is the thing that is happening, which is what ember means here.</summary>
+    public IBrush StatusBrush => Brand.Accent;
+}
+
+/// <summary>
 /// A run that never reached an end: the process it was in is gone, and what it had done is on disk
 /// with a checkpoint beside it.
 ///
@@ -477,6 +515,35 @@ internal sealed class RunsViewModel : ObservableObject
 
     public bool HasResumable => Resumable.Count > 0;
 
+    /// <summary>Runs in flight in this workspace, newest first. See LiveRunViewModel.</summary>
+    public ObservableCollection<LiveRunViewModel> Running { get; } = new();
+
+    public bool HasRunning => Running.Count > 0;
+
+    /// <summary>Back to the live feed: a row was pressed. The window owns what "live" means.</summary>
+    public event Action? OpenLiveRequested;
+
+    /// <summary>
+    /// Replaces the live rows, unless they would come out identical.
+    ///
+    /// <para>The window calls this on every engine event, because an event is what changes what a
+    /// row says - and most events change nothing about it. Rebuilding regardless would restyle two
+    /// rows several times a second under somebody's pointer, so an unchanged list is left exactly
+    /// as it is, objects included.</para>
+    /// </summary>
+    public void ShowRunning(IReadOnlyList<LiveRun> live)
+    {
+        if (Running.Count == live.Count
+            && Running.Select(r => r.Run).SequenceEqual(live))
+            return;
+
+        Running.Clear();
+        foreach (var run in live)
+            Running.Add(new LiveRunViewModel(run, () => OpenLiveRequested?.Invoke()));
+
+        OnPropertyChanged(nameof(HasRunning));
+    }
+
     /// <summary>
     /// Offers the interrupted runs found in this workspace.
     ///
@@ -645,6 +712,10 @@ internal sealed class RunsViewModel : ObservableObject
     {
         Resumable.Clear();
         OnPropertyChanged(nameof(HasResumable));
+        // A background run belongs to the workspace it was started in. The window re-offers the
+        // ones that belong here.
+        Running.Clear();
+        OnPropertyChanged(nameof(HasRunning));
         Items.Clear();
         _selected = null;
         OnPropertyChanged(nameof(Selected));
