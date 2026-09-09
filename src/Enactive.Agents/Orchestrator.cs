@@ -1,4 +1,4 @@
-namespace Enactive.Agents;
+﻿namespace Enactive.Agents;
 
 using System.Globalization;
 using System.Runtime.CompilerServices;
@@ -2340,7 +2340,17 @@ public sealed class Orchestrator : IOrchestrator
                             Subject: _tools.RequiresApprovalOf(call.Name) ? null : call.Name,
                             FullDetail: DescribeCall(call),
                             // A shell may be approved for this session and no longer than that.
-                            SessionOnly: ShellTools.IsShell(call.Name));
+                            SessionOnly: ShellTools.IsShell(call.Name),
+                            // WHICH call this authorises, so a handler somewhere other than this
+                            // thread can name it. Optional on the record, and left unset here for
+                            // five weeks: every remote permission therefore took the "no bound
+                            // action, so this is a local question" branch and was asked on the
+                            // desktop and nowhere else. A task started from a phone put its
+                            // question on a screen the person was not looking at and expired two
+                            // hours later. The handler was right, the panel was right, and the
+                            // shape they agreed on was one nothing produced.
+                            Action: new BoundAction(
+                                runId, call.Id, call.Name, call.ArgumentsJson, _workspace.RootPath));
 
                         // Parallel steps must not race to put two cards on screen at once.
                         DecisionOutcome outcome;

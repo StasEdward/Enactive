@@ -1,0 +1,41 @@
+# Development and test database for Enactive.Remote.Gateway.
+#
+# The production gateway runs against MySQL 8.0.46 on Ubuntu. This is pinned to the same 8.0 series
+# on purpose: what changes between series is the set of available collations and a good deal of SQL
+# behaviour, and a test suite that passes on a newer server than production runs on is a suite that
+# proves nothing about production.
+#
+# As of the first time this file was actually run, `mysql:8.0` resolves to 8.0.46 - the same upstream
+# patch level production is on. That is luck rather than a guarantee: the tag moves, and Ubuntu's
+# build number (8.0.46-0ubuntu0.24.04.4) has no equivalent among the official images either way. The
+# series is what is being promised here; anything closer is a bonus that will expire.
+#
+# Nothing here is a production configuration. The credentials are fixed, weak and bound to
+# localhost, and the server runs as root because the tests create and drop a database per class. A
+# deployed gateway gets a scoped user with rights on one schema and no CREATE DATABASE at all.
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: enactive-mysql
+    restart: unless-stopped
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+    environment:
+      MYSQL_ROOT_PASSWORD: enactive-dev
+      MYSQL_DATABASE: enactive_remote
+    ports:
+      # Not 3306: a developer machine often already has something there, and a test suite that
+      # silently connects to somebody's real database is a bad afternoon.
+      - "13306:3306"
+    volumes:
+      - enactive-mysql:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-p$$MYSQL_ROOT_PASSWORD"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+volumes:
+  enactive-mysql:

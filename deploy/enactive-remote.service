@@ -1,0 +1,64 @@
+# The gateway, as a service. Install to /etc/systemd/system/enactive-remote.service.
+#
+# It listens on LOOPBACK ONLY, and that is not a preference. Behind a Cloudflare tunnel the gateway
+# trusts CF-Connecting-IP to say who is calling, which is true for exactly as long as cloudflared is
+# the only thing that can open a connection to it. The process refuses to start if these two
+# settings disagree - see Deployment.RequireLoopbackListeners - so this file cannot drift into
+# looking configured while enforcing nothing.
+
+[Unit]
+Description=Enactive Remote gateway
+Documentation=https://github.com/StasEdward/Enactive/blob/master/Docs/REMOTE_OPERATIONS.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=enactive
+Group=enactive
+WorkingDirectory=/opt/enactive-remote/current
+ExecStart=/usr/bin/dotnet /opt/enactive-remote/current/Enactive.Remote.Gateway.dll
+
+# The secrets are in a file readable only by this account, not in this unit: a unit file is
+# world-readable by default and `systemctl cat` prints it to anyone who asks.
+EnvironmentFile=/etc/enactive-remote/gateway.env
+
+Environment=ASPNETCORE_ENVIRONMENT=Production
+Environment=ASPNETCORE_URLS=http://127.0.0.1:5099
+Environment=ENACTIVE_BEHIND_TUNNEL=true
+Environment=DOTNET_PRINT_TELEMETRY_MESSAGE=false
+
+# Data Protection keys live here. They are what the owner's session cookie is signed with: lose
+# them and every browser is signed out, copy them and somebody else can mint a session. systemd
+# creates the directory 0700 and owned by this account, which is the only protection they have -
+# this build does not encrypt them separately.
+Environment=ENACTIVE_DATA=/var/lib/enactive-remote
+StateDirectory=enactive-remote
+StateDirectoryMode=0700
+
+Restart=always
+RestartSec=5
+
+# A migration runs at startup and MySQL cannot roll DDL back, so a start killed part way through
+# leaves a schema half applied and the version row unwritten. Generous enough that a slow ALTER on
+# a large events table finishes rather than being interrupted.
+TimeoutStartSec=180
+
+# It serves HTTP on loopback and talks to MySQL. It has no business doing anything else, and after
+# a compromise the difference between "no business" and "no ability" is the whole difference.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target

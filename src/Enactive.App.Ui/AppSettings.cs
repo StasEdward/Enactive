@@ -96,6 +96,47 @@ internal sealed class PhaseBindings
 /// the legacy single-endpoint + Anthropic-reasoner fields are read once to migrate an old file, then inert.
 /// </summary>
 /// <summary>
+/// How this computer reaches the gateway that a phone talks to, and whether it does at all.
+///
+/// <para>The token is a bearer credential: whoever holds it can register as this computer and be
+/// handed its commands. So it lives beside the API keys and under the same protection - encrypted
+/// with DPAPI, never written in the clear, and blanked out of the serialized form the way the
+/// provider keys are.</para>
+/// </summary>
+internal sealed class RemoteAccessSettings
+{
+    /// <summary>
+    /// Whether to connect at all. Off by default, and off is not the same as unconfigured: somebody
+    /// who has set this up and turned it off wants their settings kept, not forgotten.
+    /// </summary>
+    public bool Enabled { get; set; }
+
+    /// <summary>The gateway's base address, e.g. https://remote.enactive.dev.</summary>
+    public string GatewayUrl { get; set; } = string.Empty;
+
+    // There is deliberately no computer id and no display name here. The first version of this pane
+    // asked for both, and neither was ever read: the hub takes the Host from the AUTHENTICATED
+    // identity and never from an argument, so the token alone says which computer this is, and the
+    // name is the one given when it was registered. Asking for them made the pane look like it
+    // needed three things to work when it needed two - and the id box was the one somebody then
+    // filled in with the computer's name.
+
+    /// <summary>The device token, DPAPI-encrypted. The only form that reaches disk.</summary>
+    public string TokenProtected { get; set; } = string.Empty;
+
+    /// <summary>The token in memory. Never serialized - see <see cref="TokenProtected"/>.</summary>
+    [JsonIgnore] public string Token { get; set; } = string.Empty;
+
+    public RemoteAccessSettings Clone() => new()
+    {
+        Enabled = Enabled,
+        GatewayUrl = GatewayUrl,
+        TokenProtected = TokenProtected,
+        Token = Token
+    };
+}
+
+/// <summary>
 /// What may hand a command line to the operating system.
 /// </summary>
 internal enum ShellCommandPolicy
@@ -113,7 +154,7 @@ internal enum ShellCommandPolicy
 internal sealed partial class AppSettings
 {
     /// <summary>The newest settings.json schema this build writes. See <see cref="SchemaVersion"/>.</summary>
-    public const int CurrentSchemaVersion = 3;
+    public const int CurrentSchemaVersion = 5;
 
     /// <summary>
     /// settings.json schema version. Files written before 2026-09-06 have no such field and read as 1,
@@ -215,6 +256,9 @@ internal sealed partial class AppSettings
     // there is work in flight. Ignored when the desktop has no tray: there is nowhere to hide.
     public bool CloseToTray { get; set; } = true;
 
+    // Whether this computer answers a phone, and how. Off until somebody fills it in.
+    public RemoteAccessSettings RemoteAccess { get; set; } = new();
+
     // ── Legacy fields (migration source only; superseded by the schema above) ──
     public string BaseUrl { get; set; } = "http://localhost:11434/v1";
     public string Model { get; set; } = "qwen2.5-coder";
@@ -257,6 +301,9 @@ internal sealed partial class AppSettings
                     // Legacy key: encrypted form wins; a legacy plaintext value is kept for migration.
                     if (!string.IsNullOrEmpty(loaded.AnthropicApiKeyProtected))
                         loaded.AnthropicApiKey = Secret.Unprotect(loaded.AnthropicApiKeyProtected);
+
+                    if (!string.IsNullOrEmpty(loaded.RemoteAccess.TokenProtected))
+                        loaded.RemoteAccess.Token = Secret.Unprotect(loaded.RemoteAccess.TokenProtected);
 
                     loaded.LoadMcpSecrets();
                     loaded.MigrateIfNeeded();
@@ -321,6 +368,9 @@ internal sealed partial class AppSettings
             foreach (var p in Providers)
                 p.ApiKeyProtected = Secret.Protect(p.ApiKey);
 
+            // The device token, same rule: the encrypted form is the only one that reaches disk.
+            RemoteAccess.TokenProtected = Secret.Protect(RemoteAccess.Token);
+
             // Legacy key: persist only the encrypted form, blanking the plaintext during serialization.
             AnthropicApiKeyProtected = Secret.Protect(AnthropicApiKey);
             var legacyPlain = AnthropicApiKey;
@@ -376,6 +426,38 @@ internal sealed partial class AppSettings
                          w.Tools.Contains("write_file", StringComparer.OrdinalIgnoreCase)
                          && !w.Tools.Contains("edit_file", StringComparer.OrdinalIgnoreCase)))
                 w.Tools.Insert(w.Tools.IndexOf("write_file") + 1, "edit_file");
+        }
+
+        // Deliberately "< CurrentSchemaVersion" rather than "< 4": every future tool added to the
+        // implication table then reaches everybody on the next version bump, instead of reaching
+        // new installations and waiting for somebody to notice. That waiting is the whole defect
+        // being fixed here - it happened to edit_file, then to three more tools, then to copy_file
+        // - and a gate pinned to one number would have set it up to happen again. WithImplied is
+        // idempotent and only ever adds, so running it on every upgrade is safe.
+        if (SchemaVersion < CurrentSchemaVersion)
+        {
+            // The same thing happened again, three times over. search_files, create_directory and
+            // move_file were added to the default roles and reached nobody who already had a
+            // settings.json - which is everybody. They were written, tested and documented, and
+            // were dead the whole time.
+            //
+            // It showed up as a task started from a phone that could not rename a file: with the
+            // shells now denied for a remote run, and move_file never granted, the model had no
+            // tool that could move anything and correctly gave up. The tool it wanted did exist.
+            //
+            // Handled by WorkerTools.WithImplied rather than three more lines here, so the rule -
+            // and the argument that each of these is a capability the worker already has under
+            // another name - is written down once and can be tested.
+            foreach (var w in Workers)
+            {
+                var granted = WorkerTools.WithImplied(w.Tools);
+
+                if (granted.Count == w.Tools.Count)
+                    continue;
+
+                w.Tools.Clear();
+                w.Tools.AddRange(granted);
+            }
         }
 
         SchemaVersion = CurrentSchemaVersion;
@@ -475,6 +557,7 @@ internal sealed partial class AppSettings
         WindowWidth = WindowWidth,
         WindowHeight = WindowHeight,
         Bindings = Bindings.Clone(),
+        RemoteAccess = RemoteAccess.Clone(),
         McpServers = McpServers.Select(x => x.Clone()).ToList(),
         Providers = Providers.Select(x => x.Clone()).ToList(),
         Workers = Workers.Select(x => x.Clone()).ToList()
@@ -508,6 +591,7 @@ internal sealed partial class AppSettings
         repairs.AddRange(RenameDuplicates(Providers, p => p.Id, (p, id) => p.Id = id, "provider"));
         repairs.AddRange(RenameDuplicates(Workers, w => w.Id, (w, id) => w.Id = id, "worker"));
         repairs.AddRange(UnencryptedSecrets());
+        repairs.AddRange(UnreadableRemoteToken());
 
         LoadProblems = repairs;
         return repairs;
@@ -529,6 +613,31 @@ internal sealed partial class AppSettings
         if (!string.IsNullOrEmpty(AnthropicApiKeyProtected) && !Secret.IsProtected(AnthropicApiKeyProtected))
             yield return "The stored Anthropic API key is UNENCRYPTED in settings.json. "
                        + "It will be encrypted the next time settings are saved.";
+
+        if (!string.IsNullOrEmpty(RemoteAccess.TokenProtected) && !Secret.IsProtected(RemoteAccess.TokenProtected))
+            yield return "The remote access device token is stored UNENCRYPTED in settings.json. "
+                       + "It will be encrypted the next time settings are saved. Anyone who can read "
+                       + "that file can register as this computer, so consider revoking it and "
+                       + "pasting a new one.";
+    }
+
+    /// <summary>
+    /// A device token that is encrypted but cannot be decrypted here: the settings file was copied
+    /// from another computer, or the Windows account was rebuilt. DPAPI ciphertext bound to a user
+    /// and machine that no longer exist will never open again, so it is not something to keep and
+    /// retry - it is a token that has to be reissued.
+    ///
+    /// <para>Said out loud because the alternative is the worst version of this: remote access
+    /// simply stops working, the pane still shows a token stored, and the next Save quietly
+    /// replaces the unreadable bytes with nothing.</para>
+    /// </summary>
+    private IEnumerable<string> UnreadableRemoteToken()
+    {
+        if (Secret.IsProtected(RemoteAccess.TokenProtected) && string.IsNullOrEmpty(RemoteAccess.Token))
+            yield return "The remote access device token cannot be decrypted by this Windows account "
+                       + "- these settings were most likely copied from another computer. Issue a new "
+                       + "token and paste it under Remote access; this computer cannot connect until "
+                       + "you do.";
     }
 
     private static IEnumerable<string> DropUnnamed<T>(List<T> items, Func<T, string> id, string what)

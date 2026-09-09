@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.4" />
+
+    <!-- Hosts the real gateway in-process, so the end-to-end test talks to the actual pipeline:
+         authentication, the hub, the JSON protocol, the state machine and MySQL. -->
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.0" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Enactive.Remote.Gateway\Enactive.Remote.Gateway.csproj" />
+
+    <!-- Both halves, because the end-to-end test is the first place they have to agree. Everything
+         before it proved one side against a stand-in for the other. -->
+    <ProjectReference Include="..\..\src\Enactive.Remote.Host\Enactive.Remote.Host.csproj" />
+  </ItemGroup>
+
+  <!--
+    Separate from Enactive.Engine.Tests because everything here needs a MySQL server. That is the
+    split worth its own project: the main suite stays fast and runs anywhere, and this one is
+    allowed to demand a database and to fail loudly rather than skip when it has none.
+  -->
+
+</Project>

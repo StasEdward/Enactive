@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>Enactive · Remote</title>
+  <meta name="theme-color" content="#101216">
+  <link rel="icon" href="/brand/mark-loop.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/brand/brand.css">
+  <link rel="stylesheet" href="/fonts.css">
+  <link rel="stylesheet" href="/app.css">
+  <!-- Deferred, not inline: the Content-Security-Policy this gateway sends allows scripts and
+       styles from 'self' only, so every line of both lives in a file it can name. -->
+  <script src="/app.js" type="module"></script>
+</head>
+<body>
+
+<!-- ── signing in ──────────────────────────────────────────────────────── -->
+<section id="login" class="login" hidden>
+  <div class="login-card">
+    <img class="mark" src="/brand/mark-loop.svg" alt="" width="40" height="40">
+    <h1>Enactive Remote</h1>
+    <p class="muted">Your computer does the work. This is the window onto it.</p>
+    <form id="login-form">
+      <label for="owner-key">Owner access key</label>
+      <input id="owner-key" type="password" autocomplete="current-password" required
+             placeholder="The key configured on the gateway">
+      <button class="primary" type="submit">Sign in</button>
+      <p id="login-error" class="error" role="alert"></p>
+    </form>
+  </div>
+</section>
+
+<!-- ── the panel ───────────────────────────────────────────────────────── -->
+<div id="panel" hidden>
+  <header class="topbar">
+    <span class="brand">
+      <img class="mark" src="/brand/mark-loop.svg" alt="" width="22" height="22">
+      <span class="wordmark">Enactive</span>
+    </span>
+    <span class="spacer"></span>
+    <span id="link" class="link-state" title="Gateway connection"><span class="dot"></span><span id="link-label">…</span></span>
+    <button id="theme" class="icon-button" type="button" title="Switch theme" aria-label="Switch theme">◐</button>
+    <button id="logout" class="icon-button" type="button" title="Sign out" aria-label="Sign out">⏻</button>
+  </header>
+
+  <p id="stale" class="banner" role="status" hidden>
+    Not reaching the gateway. Everything below is the last state it sent.
+  </p>
+
+  <!-- Before <main> in the document, because on a wide screen it sits under the header. On a
+       phone it is fixed to the bottom, inside thumb reach, and its position in the source is
+       what keeps the tab order the same on both. -->
+  <nav class="tabs" aria-label="Sections">
+    <button class="tab is-current" type="button" data-view="runs">Tasks<span id="count-runs" class="count"></span></button>
+    <button class="tab" type="button" data-view="approvals">Permissions<span id="count-approvals" class="count"></span></button>
+    <button class="tab" type="button" data-view="inbox">Inbox<span id="count-inbox" class="count"></span></button>
+    <button class="tab" type="button" data-view="hosts">Computers</button>
+  </nav>
+
+  <main>
+    <!-- Runs ---------------------------------------------------------------->
+    <section id="view-runs" class="view">
+      <div class="view-head">
+        <h2>Tasks</h2>
+        <button id="new-task" class="primary" type="button">New task</button>
+      </div>
+      <div id="run-list" class="list"></div>
+      <p id="runs-empty" class="empty" hidden>Nothing yet. A task you start here runs on your computer.</p>
+    </section>
+
+    <!-- Permissions --------------------------------------------------------->
+    <section id="view-approvals" class="view" hidden>
+      <div class="view-head"><h2>Permissions</h2></div>
+      <div id="approval-list" class="list"></div>
+      <p id="approvals-empty" class="empty" hidden>Nothing is waiting on you.</p>
+    </section>
+
+    <!-- Inbox --------------------------------------------------------------->
+    <section id="view-inbox" class="view" hidden>
+      <div class="view-head">
+        <h2>Inbox</h2>
+        <button id="mark-read" class="secondary" type="button">Mark all read</button>
+      </div>
+      <p class="note">Kept on the gateway. A phone with this page closed is told nothing.</p>
+      <p id="retention" class="note"></p>
+      <div id="notice-list" class="list"></div>
+      <p id="inbox-empty" class="empty" hidden>No activity yet.</p>
+    </section>
+
+    <!-- Computers ----------------------------------------------------------->
+    <section id="view-hosts" class="view" hidden>
+      <div class="view-head">
+        <h2>Computers</h2>
+        <button id="add-host" class="secondary" type="button">Register</button>
+      </div>
+      <p class="note">A computer publishes the workspaces it offers when it connects. This page
+        never learns where any of them are on disk.</p>
+      <div id="host-list" class="list"></div>
+    </section>
+  </main>
+</div>
+
+<!-- ── dialogs ─────────────────────────────────────────────────────────── -->
+<dialog id="task-dialog">
+  <form id="task-form" method="dialog">
+    <h2>New task</h2>
+    <label for="task-workspace">Where</label>
+    <select id="task-workspace" required></select>
+    <label for="task-title">Title</label>
+    <input id="task-title" required maxlength="140" placeholder="A short, specific title">
+    <label for="task-prompt">What needs doing</label>
+    <textarea id="task-prompt" required maxlength="16000" rows="6"
+              placeholder="The outcome, the context, and anything it must not do."></textarea>
+    <p id="task-error" class="error" role="alert"></p>
+    <div class="actions">
+      <button type="button" class="secondary" data-close>Cancel</button>
+      <button id="task-submit" type="button" class="primary">Create and start</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="host-dialog">
+  <form id="host-form" method="dialog">
+    <h2>Register a computer</h2>
+    <label for="host-name">Name</label>
+    <input id="host-name" required maxlength="80" placeholder="Studio PC">
+    <div id="host-secret" hidden>
+      <p class="note">Put this in the computer's Enactive settings. It is shown once and is not
+        stored anywhere it can be read back.</p>
+      <label for="host-id">Host id</label>
+      <input id="host-id" readonly spellcheck="false">
+      <label for="host-token">Device token</label>
+      <textarea id="host-token" readonly rows="3" spellcheck="false"></textarea>
+    </div>
+    <p id="host-error" class="error" role="alert"></p>
+    <div class="actions">
+      <button type="button" class="secondary" data-close>Close</button>
+      <button id="host-submit" type="button" class="primary">Create credential</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="run-dialog" class="wide">
+  <div class="dialog-head">
+    <h2 id="run-title">Task</h2>
+    <button type="button" class="icon-button" data-close aria-label="Close">×</button>
+  </div>
+  <div id="run-detail"></div>
+</dialog>
+
+<div id="toast" class="toast" role="status" hidden></div>
+
+</body>
+</html>

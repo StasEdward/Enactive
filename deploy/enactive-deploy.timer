@@ -1,0 +1,26 @@
+# Checks for a new green build. Install to /etc/systemd/system/enactive-deploy.timer, then:
+#
+#   sudo systemctl enable --now enactive-deploy.timer
+#   systemctl list-timers enactive-deploy.timer
+
+[Unit]
+Description=Check for a new Enactive Remote build
+Documentation=https://github.com/StasEdward/Enactive/blob/master/Docs/REMOTE_OPERATIONS.md
+
+[Timer]
+# Ten minutes is about how long you are willing to wait after a push before wondering whether it
+# worked. A run that finds nothing new costs one API call and exits, so this is cheap; a run that
+# finds something is the only one that does any work.
+OnBootSec=5min
+OnUnitActiveSec=10min
+
+# Spread across the minute rather than firing exactly on it. Nothing else here is on a schedule
+# today, and the habit costs nothing.
+RandomizedDelaySec=60
+
+# A machine that was off through several windows should check ONCE on the way up, not once for
+# every window it missed.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

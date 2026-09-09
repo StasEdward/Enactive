@@ -52,7 +52,7 @@ public static class AtomicWrite
                 stream.Write(bytes, 0, bytes.Length);
             }
 
-            File.Move(temp, fullPath, overwrite: true);
+            MoveIntoPlace(temp, fullPath);
         }
         catch
         {
@@ -78,7 +78,7 @@ public static class AtomicWrite
             await using (stream.ConfigureAwait(false))
                 await write(stream).ConfigureAwait(false);
 
-            File.Move(temp, fullPath, overwrite: true);
+            await MoveIntoPlaceAsync(temp, fullPath).ConfigureAwait(false);
         }
         catch
         {
@@ -88,6 +88,79 @@ public static class AtomicWrite
             throw;
         }
     }
+
+    /// <summary>
+    /// The last step, with a short budget for whoever else has the target open.
+    ///
+    /// <para>Replacing a file needs the target, and on Windows something holds it: a virus scanner
+    /// opens a file to scan it the moment it is closed, a search indexer opens it a little later, a
+    /// backup agent picks its own moment. None of them keep it for long, and while they have it the
+    /// move fails with "Access to the path is denied" - a Win32 message that reached the model as a
+    /// failed tool call and the step as Incomplete, for nothing the run did wrong.</para>
+    ///
+    /// <para>That is not the race <c>DiskArtifactStore</c>'s per-path lock closed. That one was two
+    /// of OUR writers on one path, and it is closed. This one is somebody else's handle, and no
+    /// lock of ours can reach it. It showed up as a test that failed about one run in twenty, first
+    /// on a developer's machine and then on CI.</para>
+    ///
+    /// <para>Retrying the MOVE is safe in a way that retrying the write would not be: the temp file
+    /// is complete and the target is untouched, so a failed attempt leaves the operation exactly
+    /// where it started. What this must not do is retry forever, or turn a genuine permission
+    /// problem into a hang - so the budget is about six tenths of a second and then the original
+    /// exception goes on its way, unchanged.</para>
+    ///
+    /// <para>The synchronous version sleeps, and on the UI thread that is a stall of up to that
+    /// budget while a scanner lets go. It is a stall and not a deadlock - nothing is waiting on a
+    /// continuation this thread owes itself, which is the trap the rest of this file exists to
+    /// avoid - and a save that pauses briefly is a better answer than a save that fails.</para>
+    /// </summary>
+    private static void MoveIntoPlace(string temp, string fullPath)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                File.Move(temp, fullPath, overwrite: true);
+                return;
+            }
+            catch (Exception error) when (IsTransient(error) && attempt < MoveAttempts)
+            {
+                Thread.Sleep(BackoffMs(attempt));
+            }
+        }
+    }
+
+    /// <inheritdoc cref="MoveIntoPlace"/>
+    private static async Task MoveIntoPlaceAsync(string temp, string fullPath)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                File.Move(temp, fullPath, overwrite: true);
+                return;
+            }
+            catch (Exception error) when (IsTransient(error) && attempt < MoveAttempts)
+            {
+                await Task.Delay(BackoffMs(attempt)).ConfigureAwait(false);
+            }
+        }
+    }
+
+    /// <summary>Six retries: 10, 20, 40, 80, 160, 320ms — 630ms in total.</summary>
+    private const int MoveAttempts = 6;
+
+    private static int BackoffMs(int attempt) => 10 << attempt;
+
+    /// <summary>
+    /// Somebody else has it open, or might have. A sharing violation surfaces as either of these
+    /// depending on which operation inside the replace hit it, and neither says so in its type.
+    ///
+    /// <para>"The file is not there" is not that, and waiting 630ms to say so helps nobody.</para>
+    /// </summary>
+    private static bool IsTransient(Exception error)
+        => error is UnauthorizedAccessException
+            || (error is IOException and not (FileNotFoundException or DirectoryNotFoundException));
 
     /// <summary>
     /// Creates a temp file next to the target that did not exist a moment ago. Beside it rather than

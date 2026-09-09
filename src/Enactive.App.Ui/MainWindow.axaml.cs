@@ -26,6 +26,7 @@ using Enactive.Core.Templates;
 using Enactive.Core.Tools;
 using Enactive.Core.Workers;
 using Enactive.Providers;
+using Enactive.Remote.Host;
 using Enactive.Tools;
 using Enactive.Tools.Mcp;
 using Enactive.Workspace;
@@ -97,7 +98,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         _toolRegistry = new ToolRegistry(new ITool[]
         {
             new WriteFileTool(), new EditFileTool(), new ReadFileTool(), new SearchFilesTool(),
-            new ListDirectoryTool(), new CreateDirectoryTool(), new MoveFileTool(),
+            new ListDirectoryTool(), new CreateDirectoryTool(), new MoveFileTool(), new CopyFileTool(), new DeleteFileTool(),
             new RunCommandTool(), new RunPowerShellTool(), new GitTool(), new DockerTool()
         });
 
@@ -153,6 +154,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             // (Cancel/close leave them untouched), so it gets _settings directly, not a partial copy.
             new SettingsWindow(_settings, workspaceRoot: WorkspaceRootOrNull(),
                 toolNames: _toolRegistry.Definitions.Select(d => d.Name).ToArray(),
+                remoteCheck: CheckRemoteAsync,
                 onSaved: saved =>
             {
                 if (!saved.Save())
@@ -160,8 +162,16 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                         saved.LastSaveError is { Length: > 0 } why
                             ? "Settings were not saved. " + why
                             : "Settings could not be saved. Check disk access and Windows credential encryption.");
+
+                // Read BEFORE _settings is replaced: the comparison is the only thing that decides
+                // whether to disturb a connection that may have a run on it.
+                var wasRemote = Describe(_settings.RemoteAccess);
+
                 _settings = saved;
                 ApplySettings();
+
+                if (Describe(_settings.RemoteAccess) != wasRemote)
+                    _ = RestartRemoteAccessAsync();
             }).Show(this);
         _vm.InputFocusRequested += () =>
         {
@@ -218,6 +228,100 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         // The history is always on screen now, so it is always loaded - including for the workspace
         // restored at startup.
         _ = LoadRunsAsync();
+
+        StartRemoteAccess();
+    }
+
+    // ── Remote access ────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// This computer's end of remote access, or null when the settings say not to connect. Held so
+    /// it can be let go of on exit; everything else about it happens on its own.
+    /// </summary>
+    private RemoteAccessService? _remote;
+
+    /// <summary>Where this computer keeps what it was asked to do and has not yet reported.</summary>
+    private static string RemoteDatabasePath()
+        => Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "Enactive", "remote.db");
+
+    private void StartRemoteAccess()
+    {
+        _remote = new RemoteAccessService(
+            _settings.RemoteAccess,
+            // On the UI thread, because it reads the worker list and the app settings. Governed by
+            // the workspace THE TASK NAMED, not by the slider: the slider is about the folder open
+            // on this screen, and a phone naming a different project must get the level saved for
+            // that project. Read when the task arrives rather than now, so editing a workspace's
+            // autonomy takes effect without restarting.
+            entry => Dispatcher.UIThread.InvokeAsync(
+                () => SnapshotEnvironment(
+                    Math.Clamp(entry.Autonomy, 0, 3), entry.WorkerId, entry.StageChanges)).GetTask(),
+            () => _registry.Entries,
+            // The desktop's own handler. RemoteRunner wraps it rather than replacing it, so a
+            // permission question from a remote run shows here as well as on the phone.
+            this,
+            RemoteDatabasePath());
+
+        _remote.Changed += () => Dispatcher.UIThread.Post(() =>
+            _log.Info(LogSource.System, "Remote access: " + _remote!.Status));
+
+        _remote.Start();
+        _log.Info(LogSource.System, "Remote access: " + _remote.Status);
+    }
+
+    /// <summary>
+    /// The remote settings as a value that can be compared, so a Save that did not touch them
+    /// leaves the connection alone.
+    ///
+    /// <para>The token is compared by whether there is one, not by what it is: this decides whether
+    /// to reconnect, and putting a bearer credential into a string that is compared, logged by
+    /// accident or held in a local is not worth the precision. A token REPLACED with a different
+    /// one of the same emptiness is the one case this misses, and Test connection is what covers
+    /// it.</para>
+    /// </summary>
+    private static string Describe(RemoteAccessSettings remote)
+        => $"{remote.Enabled}|{remote.GatewayUrl}|{remote.Token.Length > 0}";
+
+    /// <summary>
+    /// Applies changed remote settings without restarting the application.
+    ///
+    /// <para>This exists because of what happened the first time somebody set this up. The service
+    /// was built once in the constructor from the settings as they were AT STARTUP - which said
+    /// off, because the token had not been pasted yet. Entering everything correctly and pressing
+    /// Save then did nothing at all, said nothing at all, and the panel went on reporting the
+    /// computer Offline. There was no way to tell that from settings that were simply wrong.</para>
+    /// </summary>
+    private async Task RestartRemoteAccessAsync()
+    {
+        var previous = _remote;
+        _remote = null;
+
+        if (previous is not null)
+        {
+            _log.Info(LogSource.System, "Remote access: settings changed, reconnecting.");
+            await previous.DisposeAsync();
+        }
+
+        StartRemoteAccess();
+    }
+
+    /// <summary>
+    /// Tries a gateway address and token for the settings window, and says what happened.
+    ///
+    /// <para>It runs against the REAL gateway with this computer's real workspace list, because a
+    /// check that stopped short of that would answer a narrower question than the one being
+    /// asked - and the question being asked is "why does the phone say Offline".</para>
+    /// </summary>
+    private async Task<string> CheckRemoteAsync(string gatewayUrl, string token, CancellationToken ct)
+    {
+        var workspaces = RemoteAccessService.Publishable(_registry.Entries);
+        var check = await GatewayProbe.CheckAsync(gatewayUrl, token, workspaces, ct);
+
+        _log.Info(LogSource.System, "Remote access check: " + check.Detail);
+
+        return check.Detail;
     }
 
     // ── Closing ──────────────────────────────────────────────────────────────
@@ -227,13 +331,28 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     /// halfway through whatever they were writing.
     /// </summary>
     private bool HasWorkInFlight()
-        => _vm.IsBusy || _pendingDecision is not null || Volatile.Read(ref _backgroundRuns) > 0;
+        => _vm.IsBusy || _pendingDecision is not null
+            || Volatile.Read(ref _backgroundRuns) > 0 || RemoteRunsInFlight > 0;
+
+    /// <summary>
+    /// Runs a phone started that are still going. They die with the process exactly as a background
+    /// run does, and the person being asked about quitting is not the person watching them - which
+    /// is the reason to say so rather than to count them in silently.
+    /// </summary>
+    private int RemoteRunsInFlight => _remote?.Running.Count ?? 0;
 
     private string DescribeWorkInFlight()
     {
         var background = Volatile.Read(ref _backgroundRuns);
+        var remote = RemoteRunsInFlight;
+
         if (_pendingDecision is not null)
             return "A run is waiting for your decision. Closing now cancels it.";
+
+        if (remote > 0)
+            return remote == 1
+                ? "A task started from your phone is still going. Closing now stops it where it is."
+                : $"{remote} tasks started from your phone are still going. Closing now stops them where they are.";
         if (_vm.IsBusy && background > 0)
             return $"A run is going, and {background} more in the background. Closing now stops all of them where they are.";
         if (_vm.IsBusy)
@@ -281,6 +400,12 @@ public sealed partial class MainWindow : Window, IDecisionHandler
 
             _cts?.Cancel();
         }
+
+        // Let go of the gateway before the process ends. Runs a phone started are cancelled with
+        // it; they are reported Interrupted the next time this computer connects, which is true and
+        // is what the owner needs to know.
+        if (_remote is not null)
+            await _remote.DisposeAsync();
 
         _forceClose = true;
         Close();
@@ -1212,6 +1337,50 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     private RunSettings CurrentRunSettings()
         => new(_vm.AutonomyTier, MainWindowViewModel.LevelName(_vm.AutonomyTier), CurrentWorkerRole(), _vm.StageChanges);
 
+    /// <summary>
+    /// Everything an unattended run needs from this window, read while we are still on the UI
+    /// thread and then handed over as a frozen thing.
+    ///
+    /// <para>Read here rather than inside the run for the same reason
+    /// <see cref="CurrentRunSettings"/> is: a run started now and finishing in ten minutes must be
+    /// governed by the autonomy level it was started under, not by wherever the slider has since
+    /// been dragged. The MCP configurations are cloned for the same reason - the settings dialog
+    /// edits the live ones.</para>
+    /// </summary>
+    /// <param name="autonomy">
+    /// WHOSE autonomy, which is the whole reason this is a parameter. The slider on screen is about
+    /// the folder on screen; a task from a phone names a folder of its own and must be governed by
+    /// the level saved against THAT one. Reading the slider for both meant a remote task running at
+    /// whatever permission an unrelated project happened to be sitting at.
+    /// </param>
+    private RunEnvironment SnapshotEnvironment(int autonomy, string? workerRole, bool stageChanges)
+        => new(
+            _providerFactory, _modelResolver, _workerProvider, _toolRegistry,
+            _settings.McpServers.Select(c => c.Clone()).ToArray(),
+            _planner, _permissionEngine, BuildRouter(), _log, _settings,
+            PolicyFor(autonomy),
+            new RunSettings(
+                autonomy, MainWindowViewModel.LevelName(autonomy), workerRole, stageChanges),
+            WorkerIdForRole(workerRole));
+
+    /// <summary>
+    /// The worker a saved ROLE NAME refers to, or null for the default.
+    ///
+    /// <para>The registry stores the role, not the id - by name on purpose, because the worker list
+    /// is editable and an index would quietly select somebody else the first time a role was
+    /// added. The two lists are built together, so the position of a role is the position of its
+    /// worker.</para>
+    /// </summary>
+    private string? WorkerIdForRole(string? role)
+    {
+        if (role is null)
+            return null;
+
+        var index = _vm.WorkerRoles.IndexOf(role);
+
+        return index >= 0 && index < _workerProvider.All.Count ? _workerProvider.All[index].Id : null;
+    }
+
     /// <summary>The role the worker box is on, by name - null when there are no roles to pick from.</summary>
     private string? CurrentWorkerRole()
         => _vm.SelectedWorkerIndex >= 0 && _vm.SelectedWorkerIndex < _vm.WorkerRoles.Count
@@ -1240,15 +1409,11 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             return;
         }
 
-        var mcpConfigs = _settings.McpServers.Select(c => c.Clone()).ToArray();
         // Adopt: a background run is a run, and the folder is being taken up as a workspace here
         // exactly as it is in the foreground.
         var workspace = WorkspaceInfo.Adopt(fullPath);
-        var policy = PolicyFor(_vm.AutonomyTier);
-        var runSettings = CurrentRunSettings();
-        var workerId = _workerProvider.All.Count > 0
-            && _vm.SelectedWorkerIndex >= 0 && _vm.SelectedWorkerIndex < _workerProvider.All.Count
-            ? _workerProvider.All[_vm.SelectedWorkerIndex].Id : null;
+        // The slider on screen, and rightly: this run is against the folder on screen.
+        var environment = SnapshotEnvironment(_vm.AutonomyTier, CurrentWorkerRole(), _vm.StageChanges);
         var inbox = InboxStoreFactory.Create(workspace);
         _registry.Touch(fullPath);
         RefreshWorkspaces();
@@ -1269,38 +1434,16 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         {
             try
             {
-                var runStore = RunStoreFactory.Create(workspace);
-                var backgroundMemory = MemoryStoreFactory.Create(workspace);
-                var contextProvider = new ContextProvider(workspace, new EnvironmentProbe(), backgroundMemory);
-                var decisions = new BackgroundDecisionHandler(inbox, workspace);
-                await using var mcp = await McpRunTools.ConnectAsync(_toolRegistry, mcpConfigs, fullPath, CancellationToken.None);
-                IToolRegistry runTools = new LoggingToolRegistry(mcp, _log);
-                var orchestrator = new Orchestrator(
-                    _providerFactory, _modelResolver, _workerProvider, runTools, new DiskArtifactStore(workspace),
-                    workspace, _planner, _permissionEngine, decisions, policy, new EmptyProvider(),
-                    router: BuildRouter(),
-                    reviewRetries: _settings.ReviewRetries,
-                    successRetries: _settings.SuccessRetries,
-                    numCtx: _settings.NumCtx,
-                    disableThinking: _settings.DisableThinking,
-                    maxParallelSteps: _settings.MaxParallelSteps,
-                    evidenceBudget: _settings.EvidenceBudget,
-                    allowImplicitToolCalls: _settings.AllowImplicitToolCalls,
-                    reviewContent: _settings.ReviewContent,
-                    checkSoundness: _settings.CheckSoundness,
-                    revertRejectedSteps: _settings.RevertRejectedSteps,
-                    // A background run is the one that most needs this: it lives in a Task owned by
-                    // this process, so closing the app kills it wherever it happens to be, and
-                    // without a checkpoint there is nothing for Resume to offer afterwards.
-                    checkpoints: new JsonCheckpointStore(workspace),
-                    settings: runSettings);
-                var recorder = new RunRecorder(runStore, backgroundMemory, workspace.Id, runSettings);
-                var context = await contextProvider.BuildAsync(new IntentFocus(workspace.Id), CancellationToken.None);
-                var intent = new Intent(Guid.NewGuid(), text, IntentSource.Inbox, context, DateTimeOffset.UtcNow, workerId);
-                var recorded = recorder.RecordAsync(
-                    orchestrator.SubmitIntentAsync(intent, CancellationToken.None).TeeToLog(_log, CancellationToken.None),
-                    CancellationToken.None);
-                await BackgroundRunner.RunAsync(recorded, inbox, workspace, text, CancellationToken.None);
+                var composed = await UnattendedRun.ComposeAsync(
+                    environment, workspace, text, IntentSource.Inbox,
+                    new BackgroundDecisionHandler(inbox, workspace), CancellationToken.None);
+
+                await using (composed.Resources)
+                {
+                    await BackgroundRunner.RunAsync(
+                        composed.Engine.SubmitIntentAsync(composed.Intent, CancellationToken.None),
+                        inbox, workspace, text, CancellationToken.None);
+                }
             }
             catch (Exception ex)
             {

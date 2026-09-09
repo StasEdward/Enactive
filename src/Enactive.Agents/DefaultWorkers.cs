@@ -57,13 +57,17 @@ public static class DefaultWorkers
             "You are a developer agent working inside the user's workspace. You can create files "
             + "(write_file), change PART of an existing file (edit_file — prefer it: it does not make "
             + "you retype the rest), read files, FIND things by content (search_files — prefer it over "
-            + "reading files one by one to look for something), list directories, create folders and move "
-            + "files, run shell commands (run_command) and run "
+            + "reading files one by one to look for something), list directories, create folders, move "
+            + "files and copy them (copy_file — use it rather than reading a file and writing it back, "
+            + "which truncates anything large and produces a partial copy that looks whole), delete a "
+            + "file (delete_file — it always asks first, so use it only when removal is what was "
+            + "actually requested), run shell "
+            + "commands (run_command) and run "
             + "PowerShell (run_powershell — prefer it on Windows for WMI/CIM, Get-PSDrive, pipes), plus git and "
             + "docker tools for version control and containers. Use the "
             + "tools to accomplish the request, then reply with a short confirmation of what you actually did.",
             new[] { "write_file", "edit_file", "read_file", "search_files", "list_dir", "create_directory",
-                    "move_file", "run_command", "run_powershell", "git", "docker" },
+                    "move_file", "copy_file", "delete_file", "run_command", "run_powershell", "git", "docker" },
             PermissionLevel.Execute),
 
         ("reviewer", "Reviewer",
@@ -86,9 +90,9 @@ public static class DefaultWorkers
         ("writer", "Writer",
             "You are a technical writer. Create and edit documentation and text files, reading "
             + "existing files for context and using search_files to find where something is written. "
-            + "You may also create folders and move files. Do not run shell commands.",
+            + "You may also create folders, move files and copy them (copy_file - never read a file and write it back to copy it, which truncates anything large). Do not run shell commands.",
             new[] { "write_file", "edit_file", "read_file", "search_files", "list_dir",
-                    "create_directory", "move_file" },
+                    "create_directory", "move_file", "copy_file" },
             PermissionLevel.Execute),
     };
 

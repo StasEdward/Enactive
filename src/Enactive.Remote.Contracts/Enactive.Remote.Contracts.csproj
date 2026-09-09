@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    The words the desktop and the gateway both use, and nothing else. No packages, no project
+    references, no transport types: both sides depend on this, so anything that leaks in here is
+    forced on both of them for as long as the protocol lives.
+  -->
+</Project>

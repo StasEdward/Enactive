@@ -150,6 +150,8 @@ IToolRegistry toolRegistry = new LoggingToolRegistry(new ToolRegistry(new ITool[
     new ListDirectoryTool(),
     new CreateDirectoryTool(),
     new MoveFileTool(),
+    new CopyFileTool(),
+    new DeleteFileTool(),
     new RunCommandTool(),
     new RunPowerShellTool(),
     new GitTool(),

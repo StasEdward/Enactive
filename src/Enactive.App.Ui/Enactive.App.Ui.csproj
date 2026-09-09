@@ -47,5 +47,9 @@
     <ProjectReference Include="..\Enactive.Workspace\Enactive.Workspace.csproj" />
     <ProjectReference Include="..\Enactive.Agents\Enactive.Agents.csproj" />
     <ProjectReference Include="..\Enactive.Secrets\Enactive.Secrets.csproj" />
+    <!-- Remote access. Contracts comes in transitively through the Host; naming it here as well
+         would say the window talks the protocol directly, which it does not - it hands the Host a
+         way to prepare a run and reads back what the Host says is connected. -->
+    <ProjectReference Include="..\Enactive.Remote.Host\Enactive.Remote.Host.csproj" />
   </ItemGroup>
 </Project>

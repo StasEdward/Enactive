@@ -1,0 +1,24 @@
+/*
+ * Lets the enactive account restart ITS OWN service, and nothing else.
+ * Install to /etc/polkit-1/rules.d/49-enactive-deploy.rules (root-owned, 0644).
+ *
+ * The deploy job runs as enactive and has to restart the gateway after swapping the symlink.
+ * Restarting a unit is a privileged operation, so something has to grant it.
+ *
+ * A polkit rule rather than a sudoers line, for two reasons. The deploy unit sets
+ * NoNewPrivileges=true, under which sudo cannot work at all - it is setuid, and that is precisely
+ * what the setting forbids - so a sudoers line would mean weakening the unit to use it. And this
+ * grants ONE verb on ONE unit to ONE account, which a sudoers entry for /bin/systemctl approximates
+ * at best: systemctl takes a great many other arguments.
+ *
+ * There is deliberately no rule for enactive-deploy itself. The timer starts it; a job that can
+ * start itself is a loop waiting to be discovered.
+ */
+polkit.addRule(function (action, subject) {
+    if (action.id === "org.freedesktop.systemd1.manage-units"
+        && action.lookup("unit") === "enactive-remote.service"
+        && action.lookup("verb") === "restart"
+        && subject.user === "enactive") {
+        return polkit.Result.YES;
+    }
+});

@@ -1,4 +1,4 @@
-using Avalonia;
+﻿using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.VisualTree;
@@ -14,16 +14,25 @@ namespace Enactive.App.Ui;
 /// </summary>
 internal sealed partial class SettingsWindow : Window
 {
+    /// <param name="remoteCheck">
+    /// Tries a gateway address and token and says what happened. Supplied by the main window rather
+    /// than done here, because the check publishes this computer's workspaces and the workspace
+    /// list belongs to the registry.
+    /// </param>
     public SettingsWindow(
         AppSettings settings, Action<AppSettings> onSaved,
-        string? workspaceRoot = null, IReadOnlyList<string>? toolNames = null)
+        string? workspaceRoot = null, IReadOnlyList<string>? toolNames = null,
+        Func<string, string, CancellationToken, Task<string>>? remoteCheck = null)
     {
-        var viewModel = new SettingsViewModel(settings, onSaved, workspaceRoot, toolNames);
+        var viewModel = new SettingsViewModel(settings, onSaved, workspaceRoot, toolNames)
+        {
+            RemoteCheck = remoteCheck
+        };
         viewModel.CloseRequested += () => Close();
         viewModel.ProviderEditRequested += (config, saved) =>
             new ProviderEditWindow(config, saved).Show(this);
         viewModel.WorkerEditRequested += (config, catalog, saved) =>
-            new WorkerEditWindow(config, catalog, saved).Show(this);
+            new WorkerEditWindow(config, catalog, viewModel.ToolNames, saved).Show(this);
         viewModel.ConfirmRequested += (headline, detail) =>
             ConfirmWindow.AskAsync(this, headline, detail, "Remove", "Keep");
 

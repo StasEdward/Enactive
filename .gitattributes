@@ -61,3 +61,17 @@
 #*.PDF   diff=astextplain
 #*.rtf   diff=astextplain
 #*.RTF   diff=astextplain
+
+###############################################################################
+# Files that Linux reads, not Windows.
+#
+# "* text=auto" above already stores LF in the repository, so a clone on the
+# server is fine. This is about the other path: a file copied straight out of a
+# Windows working tree, where it would be CRLF. A shell script with CRLF fails
+# on Linux with "bad interpreter: /bin/bash^M", and a unit file with CRLF is
+# refused by systemd - both for a reason that nothing about the file explains.
+#
+# So these stay LF everywhere, including in the working tree on Windows.
+###############################################################################
+*.sh      text eol=lf
+*.service text eol=lf

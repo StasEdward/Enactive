@@ -26,6 +26,8 @@
     <ProjectReference Include="..\..\src\Enactive.Workspace\Enactive.Workspace.csproj" />
     <ProjectReference Include="..\..\src\Enactive.Providers\Enactive.Providers.csproj" />
     <ProjectReference Include="..\..\src\Enactive.Secrets\Enactive.Secrets.csproj" />
+    <ProjectReference Include="..\..\src\Enactive.Remote.Contracts\Enactive.Remote.Contracts.csproj" />
+    <ProjectReference Include="..\..\src\Enactive.Remote.Host\Enactive.Remote.Host.csproj" />
   </ItemGroup>
 
   <!--
