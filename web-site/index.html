@@ -37,7 +37,7 @@
         <a href="#features">Features</a>
         <a href="#models">Models</a>
         <a href="#architecture">Architecture</a>
-        <a href="https://remote.enactive.dev/" target="_blank" rel="noopener noreferrer">Remote Access</a>
+        <a href="#remote">Remote access</a>
       </nav>
       <!-- ====== SOURCE BUTTON ====== -->
       <a href="wiki/index.html" class="btn btn--sm btn--wiki">Wiki</a>
@@ -68,30 +68,76 @@
       </div>
 
       <div class="hero__demo">
-        <div class="window">
+        <!-- The desktop shell, rebuilt from src/Enactive.App.Ui/MainWindow.axaml: the same panels
+             in the same order, the same labels, the same status words, and the autonomy line
+             verbatim from MainWindowViewModel.LevelName. It used to be an invented window with
+             macOS traffic lights and OPTION A / OPTION B buttons, which are not in the product. -->
+        <div class="window app" role="img"
+             aria-label="The Enactive desktop window: a workspace panel, a run in progress with its steps, and the command box with the autonomy slider.">
           <div class="window__bar">
-            <span class="dot"></span><span class="dot"></span><span class="dot"></span>
-            <span class="window__title">GATE · DEVELOPER</span>
-            <span class="status status--run" id="demoStatus">● Running</span>
+            <span class="window__title">Enactive — Gate.Station</span>
+            <span class="window__caption" aria-hidden="true"><i>&#x2500;</i><i>&#x25a1;</i><i class="x">&#x2715;</i></span>
           </div>
-          <div class="window__body">
-            <div class="task__label">TASK</div>
-            <div class="task__title">Add a MySQL replica health probe</div>
-            <ul class="plan" id="demoPlan">
-              <li data-action="Reading StationCnfWriter.cs">Read the replication config<span class="st"></span></li>
-              <li data-action="run_command: mysql -e 'SHOW REPLICA STATUS'">Probe lag on 3 instances<span class="st"></span></li>
-              <li data-action="write_file: src/Enactive.Workspace/Probe.cs">Write Probe.cs and its test<span class="st"></span></li>
-              <li data-action="Checking the step against the tool transcript">Review against the transcript<span class="st"></span></li>
-            </ul>
-            <div class="task__label">CURRENT ACTION</div>
-            <div class="task__action" id="demoAction">Reading StationCnfWriter.cs</div>
-            <div class="window__actions">
-              <span class="chip">Apply</span>
-              <span class="chip chip--muted">Review</span>
-              <span class="chip chip--danger">Reject</span>
+
+          <div class="app__grid">
+            <aside class="app__rail">
+              <p class="panelHeader">Workspace</p>
+              <p class="rail__name">Gate.Station</p>
+              <p class="rail__path">C:\repos\Gate.Station</p>
+              <p class="panelHeader">Runs</p>
+              <div class="rail__run"><span>Add a replica health probe</span><small>2 / 4 steps</small></div>
+              <div class="rail__run rail__run--muted"><span>Convert README to HTML</span><small>done · 2 files</small></div>
+              <p class="rail__hint">gemma4:31b-cloud</p>
+            </aside>
+
+            <div class="app__main">
+              <div class="app__task">
+                <div>
+                  <p class="app__taskTitle">Add a MySQL replica health probe</p>
+                  <p class="app__taskIntent">Probe lag on the three instances and write the result</p>
+                </div>
+                <span class="pill" id="demoStatus">Running</span>
+              </div>
+
+              <div class="app__tabs" role="presentation">
+                <span class="tab on">Execution</span><span class="tab">Artifacts (1)</span><span class="tab">Log</span>
+              </div>
+
+              <ol class="steps" id="demoPlan">
+                <li data-activity="Reading StationCnfWriter.cs…">
+                  <span class="step__title">Read the replication config</span><span class="st"></span></li>
+                <li data-activity="run_command: mysql -e &quot;SHOW REPLICA STATUS&quot;">
+                  <span class="step__title">Probe lag on 3 instances</span><span class="st"></span></li>
+                <li data-activity="Writing Probe.cs…">
+                  <span class="step__title">Write Probe.cs and its test</span><span class="st"></span></li>
+                <li data-activity="Checking the step against the tool transcript…">
+                  <span class="step__title">Review against the transcript</span><span class="st"></span></li>
+              </ol>
+
+              <p class="app__activity" id="demoAction">Reading StationCnfWriter.cs…</p>
+            </div>
+          </div>
+
+          <div class="app__command">
+            <p class="app__input">What do you want to accomplish?</p>
+            <div class="app__foot">
+            <div class="app__controls">
+              <div class="app__row">
+                <span class="combo">Developer</span>
+                <span class="check">Stage changes</span>
+              </div>
+              <p class="app__autonomy">Execute — edits freely, asks before run_command</p>
+              <div class="slider" aria-hidden="true"><i></i><i></i><i class="on"></i><i></i></div>
+            </div>
+            <div class="app__buttons">
+              <span class="chip">Run</span>
+              <span class="chip chip--muted">Stop</span>
+              <span class="chip chip--muted">Run in background</span>
+            </div>
             </div>
           </div>
         </div>
+        <p class="demo__note">The desktop window, drawn from the application's own layout and labels.</p>
       </div>
     </div>
   </section>
@@ -144,7 +190,7 @@
         <article class="card">
           <div class="card__icon">04</div>
           <h3>You are asked only at real forks</h3>
-          <p>The agent runs the plan end to end and raises a decision card when the choice is genuinely yours — with the options and a recommendation.</p>
+          <p>The agent runs the plan end to end and stops where the autonomy tier says to ask — showing the whole action, never a summary of it.</p>
         </article>
       </div>
     </div>
@@ -205,35 +251,34 @@
         <p class="eyebrow">The fork</p>
         <h2>Autonomous by default.<br />Human where it matters.</h2>
         <p class="section-lead">
-          The agent scans, plans, writes and tests on its own. When it reaches an ambiguity it cannot
-          resolve honestly, it stops and asks — with the options laid out and a recommendation — instead
-          of guessing and reporting success.
+          The agent scans, plans, writes and tests on its own. Where the tier says to ask, it stops and
+          shows exactly what it is about to do — the whole command, the whole path — instead of guessing
+          and reporting success. Some tools ask at every tier, however far the slider is pushed:
+          deleting a file leaves an absence, and an absence is the hardest thing to notice afterwards.
         </p>
         <p class="section-lead">
           That pause is the whole point of the autonomy slider, and it is the gap in the logo.
         </p>
       </div>
-      <div class="window window--wait">
+      <!-- The approval as the application actually asks it: the topic is "Run tool 'X'?", the
+           whole action is shown rather than a summary, and the two options are Allow and Deny.
+           This used to show OPTION A / OPTION B with a recommendation, which is a decision shape
+           the engine builds for a fork in a plan, not for a tool call. -->
+      <div class="window window--wait" role="img"
+           aria-label="An approval request: run tool run_command with the full command shown, and Allow and Deny buttons.">
         <div class="window__bar">
-          <span class="window__title">DECISION REQUIRED</span>
-          <span class="status status--wait">● Waiting</span>
+          <span class="window__title">User decision required</span>
+          <span class="status status--wait">Waiting</span>
         </div>
         <div class="window__body">
-          <p class="decision__text">The replica on <code>ate-db-02</code> is 40 s behind. Probing it will hold a read lock for about a second.</p>
-          <div class="options">
-            <div class="option option--rec">
-              <div class="option__name">OPTION A</div>
-              <div class="option__body">Probe anyway — the lock is short</div>
-              <div class="option__tag">Recommended</div>
-            </div>
-            <div class="option">
-              <div class="option__name">OPTION B</div>
-              <div class="option__body">Skip this instance and report it</div>
-            </div>
-          </div>
+          <p class="decision__topic">Run tool 'run_command'?</p>
+          <p class="decision__meta">run_command · in C:\Users\user\source\repos\ArcMapConditions.App</p>
+          <pre class="decision__action">command:
+mysql --host ate-db-02 -e "SHOW REPLICA STATUS\G"</pre>
+          <p class="decision__note">The whole command, never a summary. A 400-character script used to be approved on its first 120.</p>
           <div class="window__actions">
-            <span class="chip">Choose A</span>
-            <span class="chip chip--muted">Choose B</span>
+            <span class="chip">Allow</span>
+            <span class="chip chip--muted">Deny</span>
           </div>
         </div>
       </div>
@@ -241,6 +286,72 @@
   </section>
 
   <!-- ====== TEAM OF MODELS ====== -->
+  <!-- ====== REMOTE ====== -->
+  <section id="remote">
+    <div class="container decision__grid">
+      <div>
+        <p class="eyebrow">From anywhere</p>
+        <h2>Start it from your phone.<br />It runs on your machine.</h2>
+        <p class="section-lead">
+          A gateway you deploy holds the queue and the history and serves a browser panel. The desktop
+          application connects outward to it — nothing listens on your computer, and no port is opened.
+          The task runs through the same engine as one typed into the app.
+        </p>
+        <p class="section-lead">
+          A permission appears on the task's own card, so you answer it next to what you asked for.
+          Both ends are asked at once and the first answer wins: sitting down at the computer always
+          works, whatever the phone is doing.
+        </p>
+        <ul class="hero__facts">
+          <li>No shell from the web, at any tier</li>
+          <li>One owner, one key</li>
+          <li>The whole action, before you allow it</li>
+        </ul>
+        <p class="section-lead"><a class="btn btn--ghost" href="wiki/remote-access.html">How remote access works ↗</a></p>
+      </div>
+
+      <!-- The panel as it is: the tabs it has, with the permission drawn inside the card of the
+           task that raised it. -->
+      <div class="window panel" role="img"
+           aria-label="The web panel: a task waiting on a permission, with the request and its Allow and Deny buttons shown on the task's own card.">
+        <div class="window__bar">
+          <span class="window__title">Enactive</span>
+          <span class="panel__live">Live</span>
+        </div>
+        <div class="panel__tabs">
+          <span class="tab on">Tasks <b>1</b></span><span class="tab">Permissions <b>1</b></span><span class="tab">Inbox <b>3</b></span><span class="tab">Computers</span>
+        </div>
+        <div class="panel__body">
+          <div class="panel__card">
+            <div class="panel__head">
+              <span class="panel__title">Delete file</span>
+              <span class="pill is-wait">Needs you</span>
+            </div>
+            <p class="panel__meta">Started 9/9/2026, 7:06:53&nbsp;PM</p>
+            <div class="window__actions">
+              <span class="chip chip--muted">Timeline</span>
+              <span class="chip chip--danger">Stop</span>
+            </div>
+            <div class="ask">
+              <div class="panel__head">
+                <span class="panel__title">Permission requested</span>
+                <span class="ask__state">Waiting</span>
+              </div>
+              <p class="ask__topic">Run tool 'delete_file'?</p>
+              <p class="panel__meta">delete_file · in C:\Users\user\source\repos\ArcMapConditions.App</p>
+              <pre class="decision__action">path:
+README8.html</pre>
+              <div class="window__actions">
+                <span class="chip">Allow</span>
+                <span class="chip chip--muted">Deny</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <section id="models">
     <div class="container">
       <p class="eyebrow">Team of models</p>

@@ -4,7 +4,7 @@
 
 ## System structure
 
-Enactive is a .NET application with shared domain and execution libraries, a desktop host, and a console host. The remote gateway is a separate ASP.NET Core application outside the main solution.
+Enactive is a .NET application with shared domain and execution libraries, a desktop host, and a console host. The remote gateway is an ASP.NET Core application in the same solution, deployed separately to a server; see [Remote access](Remote-Access.md).
 
 ```mermaid
 flowchart TD
@@ -38,7 +38,10 @@ flowchart TD
 | `Enactive.App.Console` | Command-line composition and interactive/unattended execution |
 | `tests/Enactive.Engine.Tests` | xUnit coverage of execution behavior and regressions |
 | `tests/Enactive.Mcp.TestServer` | Local fixture used to exercise MCP integration |
-| `server` | Independent remote gateway preview and web panel |
+| `Enactive.Remote.Contracts` | Messages, faults, lifecycle states, and action identity shared by the gateway and the host |
+| `Enactive.Remote.Gateway` | ASP.NET Core gateway over MySQL, with the browser panel it serves |
+| `Enactive.Remote.Host` | The half that lives inside the desktop application: outbound connection, local outbox, remote runs, and remote approvals |
+| `tests/Enactive.Remote.Gateway.Tests` | Gateway coverage against a real MySQL instance |
 
 The desktop follows MVVM with a small in-repository observable-object/command layer. XAML uses compiled bindings. Code-behind handles operations that require windows or controls and composes execution services.
 
@@ -85,12 +88,19 @@ The model receives the tools allowed for its worker and performs a streaming con
 | Tool group | Tool names | Purpose |
 | --- | --- | --- |
 | Inspect files | `read_file`, `search_files`, `list_dir` | Read windows of a file, find content, and inspect directory entries |
-| Modify files | `write_file`, `edit_file`, `create_directory`, `move_file` | Create/replace content, make focused edits, and organize files |
+| Modify files | `write_file`, `edit_file`, `create_directory`, `move_file`, `copy_file` | Create/replace content, make focused edits, and organize files |
+| Remove a file | `delete_file` | Delete one file. Always asks first, at every autonomy tier |
 | Shell | `run_command`, `run_powershell` | Execute commands; PowerShell has its own script transport |
 | Development operations | `git`, `docker` | Invoke version-control and container operations |
 | External tools | `mcp__...` | Tools discovered from configured MCP servers in the desktop host |
 
 Use `edit_file` for a small change to an existing file. Asking a small model to rewrite the whole file increases the chance of losing unrelated content.
+
+Use `copy_file` rather than reading a file and writing it back. `read_file` returns a window of at most 8000 characters, so a read-then-write copy of a larger file silently produces a shortened one that can still look complete. `copy_file` streams bytes and never decodes them.
+
+`delete_file` asks for approval at every tier, including Autonomous, and no policy setting turns that off. Every other file tool leaves something a person can look at and judge; this one leaves an absence.
+
+Every file tool writes through the artifact store, so a step a reviewer rejects can be undone — including a deletion, which is restored with its contents. Shell effects are not journalled and cannot be undone.
 
 `run_command` uses `cmd.exe` on Windows and a shell on Unix. `run_powershell` avoids embedding PowerShell syntax into a cmd command string. Starting a shell in the workspace is not OS-level containment of everything that shell can do.
 

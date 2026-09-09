@@ -17,6 +17,7 @@ const pages = [
   ['Running-Tasks', 'running-tasks', 'Running tasks', 'Workflows'],
   ['Console', 'console', 'Console & automation', 'Workflows'],
   ['Templates', 'templates', 'Templates', 'Workflows'],
+  ['Remote-Access', 'remote-access', 'Remote access', 'Workflows'],
   ['Settings', 'settings', 'Settings', 'Configuration'],
   ['Models-and-Phases', 'models-and-phases', 'Models & Phases', 'Configuration'],
   ['Architecture', 'architecture', 'Architecture', 'Reference'],
@@ -76,8 +77,13 @@ await fs.mkdir(out, {recursive:true});
 await fs.mkdir(path.join(out,'assets/fonts'), {recursive:true});
 await fs.copyFile(path.join(root,'brand/brand.css'), path.join(out,'assets/brand.css'));
 for (const name of ['mark-loop.svg','wordmark.svg','wordmark-light.svg']) await fs.copyFile(path.join(root,'brand/logos',name),path.join(out,'assets',name));
-for (const name of await fs.readdir(path.join(root,'server/wwwroot/fonts'))) {
-  if (/\.(woff2|txt)$/.test(name)) await fs.copyFile(path.join(root,'server/wwwroot/fonts',name),path.join(out,'assets/fonts',name));
+// The fonts come from the gateway's wwwroot, which is where the shipped copies live. They used to
+// be read from server/wwwroot - the prototype gateway - and that directory was removed when the
+// real one replaced it, so this build had been failing since. The wiki was still being served from
+// its last committed HTML, which is exactly the shape of failure that goes unnoticed.
+const fonts = path.join(root,'src/Enactive.Remote.Gateway/wwwroot/fonts');
+for (const name of await fs.readdir(fonts)) {
+  if (/\.(woff2|txt)$/.test(name)) await fs.copyFile(path.join(fonts,name),path.join(out,'assets/fonts',name));
 }
 const search = [];
 for (const [index, page] of pages.entries()) {

@@ -10,9 +10,9 @@
 </head><body>
 <a class="skip-link" href="#main">Skip to content</a>
 <header class="wiki-header"><a class="brand" href="../index.html" aria-label="Enactive home"><img class="brand-mark" src="assets/mark-loop.svg" alt="" width="32" height="32"><img class="wordmark dark-mark" src="assets/wordmark.svg" alt="Enactive" width="144" height="18"><img class="wordmark light-mark" src="assets/wordmark-light.svg" alt="Enactive" width="144" height="18"></a><a class="wiki-label" href="index.html">Wiki</a><div class="header-actions"><button type="button" class="search-trigger" aria-haspopup="dialog">Search wiki <kbd>Ctrl K</kbd></button><button type="button" id="theme-toggle" aria-label="Switch to light theme">Light theme</button><button type="button" id="menu-toggle" aria-expanded="false" aria-controls="sidebar">Menu</button></div></header>
-<div class="wiki-layout"><aside id="sidebar" class="sidebar"><nav aria-label="Wiki chapters"><p class="nav-group">Start here</p><a href="index.html">Wiki home</a><a href="overview.html">Application overview</a><a href="getting-started.html">Getting started</a><p class="nav-group">Workflows</p><a href="running-tasks.html">Running tasks</a><a href="console.html">Console & automation</a><a href="templates.html">Templates</a><p class="nav-group">Configuration</p><a href="settings.html">Settings</a><a href="models-and-phases.html">Models & Phases</a><p class="nav-group">Reference</p><a href="architecture.html" aria-current="page">Architecture</a><a href="operations.html">Operations & troubleshooting</a></nav><div class="sidebar-footer"><a href="../index.html">← Back to Enactive</a><span>Product & engineering handbook</span></div></aside>
-<main id="main" class="" tabindex="-1"><div class="page-heading"><div class="breadcrumb"><a href="index.html">Documentation</a><span aria-hidden="true">/</span><span>Architecture</span></div><p class="eyebrow">Reference · Enactive</p><h1>Architecture and Execution</h1><div class="page-meta"><span>7 min read</span><span>English</span><a href="https://github.com/StasEdward/Enactive/blob/master/Docs/wiki/Architecture.md">Markdown source ↗</a></div></div><details class="mobile-toc"><summary>On this page</summary><nav aria-label="On this page"><a href="#system-structure">System structure</a><a href="#from-a-request-to-an-outcome">From a request to an outcome</a><a href="#limits-are-scheduling-boundaries">Limits are scheduling boundaries</a><a href="#implementation-references">Implementation references</a></nav></details><article><h2 id="system-structure">System structure<a class="heading-anchor" href="#system-structure" aria-label="Link to System structure">#</a></h2>
-<p>Enactive is a .NET application with shared domain and execution libraries, a desktop host, and a console host. The remote gateway is a separate ASP.NET Core application outside the main solution.</p>
+<div class="wiki-layout"><aside id="sidebar" class="sidebar"><nav aria-label="Wiki chapters"><p class="nav-group">Start here</p><a href="index.html">Wiki home</a><a href="overview.html">Application overview</a><a href="getting-started.html">Getting started</a><p class="nav-group">Workflows</p><a href="running-tasks.html">Running tasks</a><a href="console.html">Console & automation</a><a href="templates.html">Templates</a><a href="remote-access.html">Remote access</a><p class="nav-group">Configuration</p><a href="settings.html">Settings</a><a href="models-and-phases.html">Models & Phases</a><p class="nav-group">Reference</p><a href="architecture.html" aria-current="page">Architecture</a><a href="operations.html">Operations & troubleshooting</a></nav><div class="sidebar-footer"><a href="../index.html">← Back to Enactive</a><span>Product & engineering handbook</span></div></aside>
+<main id="main" class="" tabindex="-1"><div class="page-heading"><div class="breadcrumb"><a href="index.html">Documentation</a><span aria-hidden="true">/</span><span>Architecture</span></div><p class="eyebrow">Reference · Enactive</p><h1>Architecture and Execution</h1><div class="page-meta"><span>8 min read</span><span>English</span><a href="https://github.com/StasEdward/Enactive/blob/master/Docs/wiki/Architecture.md">Markdown source ↗</a></div></div><details class="mobile-toc"><summary>On this page</summary><nav aria-label="On this page"><a href="#system-structure">System structure</a><a href="#from-a-request-to-an-outcome">From a request to an outcome</a><a href="#limits-are-scheduling-boundaries">Limits are scheduling boundaries</a><a href="#implementation-references">Implementation references</a></nav></details><article><h2 id="system-structure">System structure<a class="heading-anchor" href="#system-structure" aria-label="Link to System structure">#</a></h2>
+<p>Enactive is a .NET application with shared domain and execution libraries, a desktop host, and a console host. The remote gateway is an ASP.NET Core application in the same solution, deployed separately to a server; see <a href="remote-access.html">Remote access</a>.</p>
 <figure class="diagram" aria-labelledby="diagram-1"><figcaption id="diagram-1">Flow from input to outcome</figcaption><ol class="diagram-levels"><li><div class="diagram-row"><div class="diagram-node"><strong>Desktop host</strong><small>Input</small></div><div class="diagram-node"><strong>Console host</strong><small>Input</small></div><div class="diagram-node"><strong>Workspace context and environment</strong><small>Input</small></div></div></li><li><div class="diagram-row"><div class="diagram-node"><strong>Template store and resolution</strong><ul><li>From Desktop host</li><li>From Console host</li></ul></div></div></li><li><div class="diagram-row"><div class="diagram-node"><strong>Resolved task specification</strong><ul><li>From Template store and resolution</li></ul></div></div></li><li><div class="diagram-row"><div class="diagram-node"><strong>Agents: orchestration</strong><ul><li>From Desktop host</li><li>From Console host</li><li>From Resolved task specification</li><li>From Workspace context and environment</li></ul></div></div></li><li><div class="diagram-row"><div class="diagram-node"><strong>Provider adapters</strong><ul><li>From Agents: orchestration</li></ul></div><div class="diagram-node"><strong>Role and permission checks</strong><ul><li>From Agents: orchestration</li></ul></div><div class="diagram-node"><strong>Typed run events</strong><ul><li>From Agents: orchestration</li></ul></div></div></li><li><div class="diagram-row"><div class="diagram-node"><strong>Built-in tools / desktop MCP</strong><ul><li>From Role and permission checks</li></ul></div><div class="diagram-node"><strong>History / memory / logs</strong><ul><li>From Typed run events</li></ul></div><div class="diagram-node"><strong>Desktop views / console report</strong><ul><li>From Typed run events</li></ul></div></div></li><li><div class="diagram-row"><div class="diagram-node"><strong>Workspace and external effects</strong><ul><li>From Built-in tools / desktop MCP</li></ul></div></div></li></ol><details><summary>View diagram source</summary><pre><code>flowchart TD
     UI[Desktop host] --&gt; Engine[Agents: orchestration]
     CLI[Console host] --&gt; Engine
@@ -76,8 +76,20 @@
 <td>Local fixture used to exercise MCP integration</td>
 </tr>
 <tr>
-<td><code>server</code></td>
-<td>Independent remote gateway preview and web panel</td>
+<td><code>Enactive.Remote.Contracts</code></td>
+<td>Messages, faults, lifecycle states, and action identity shared by the gateway and the host</td>
+</tr>
+<tr>
+<td><code>Enactive.Remote.Gateway</code></td>
+<td>ASP.NET Core gateway over MySQL, with the browser panel it serves</td>
+</tr>
+<tr>
+<td><code>Enactive.Remote.Host</code></td>
+<td>The half that lives inside the desktop application: outbound connection, local outbox, remote runs, and remote approvals</td>
+</tr>
+<tr>
+<td><code>tests/Enactive.Remote.Gateway.Tests</code></td>
+<td>Gateway coverage against a real MySQL instance</td>
 </tr>
 </tbody></table>
 </div><p>The desktop follows MVVM with a small in-repository observable-object/command layer. XAML uses compiled bindings. Code-behind handles operations that require windows or controls and composes execution services.</p>
@@ -119,8 +131,13 @@
 </tr>
 <tr>
 <td>Modify files</td>
-<td><code>write_file</code>, <code>edit_file</code>, <code>create_directory</code>, <code>move_file</code></td>
+<td><code>write_file</code>, <code>edit_file</code>, <code>create_directory</code>, <code>move_file</code>, <code>copy_file</code></td>
 <td>Create/replace content, make focused edits, and organize files</td>
+</tr>
+<tr>
+<td>Remove a file</td>
+<td><code>delete_file</code></td>
+<td>Delete one file. Always asks first, at every autonomy tier</td>
 </tr>
 <tr>
 <td>Shell</td>
@@ -139,6 +156,9 @@
 </tr>
 </tbody></table>
 </div><p>Use <code>edit_file</code> for a small change to an existing file. Asking a small model to rewrite the whole file increases the chance of losing unrelated content.</p>
+<p>Use <code>copy_file</code> rather than reading a file and writing it back. <code>read_file</code> returns a window of at most 8000 characters, so a read-then-write copy of a larger file silently produces a shortened one that can still look complete. <code>copy_file</code> streams bytes and never decodes them.</p>
+<p><code>delete_file</code> asks for approval at every tier, including Autonomous, and no policy setting turns that off. Every other file tool leaves something a person can look at and judge; this one leaves an absence.</p>
+<p>Every file tool writes through the artifact store, so a step a reviewer rejects can be undone — including a deletion, which is restored with its contents. Shell effects are not journalled and cannot be undone.</p>
 <p><code>run_command</code> uses <code>cmd.exe</code> on Windows and a shell on Unix. <code>run_powershell</code> avoids embedding PowerShell syntax into a cmd command string. Starting a shell in the workspace is not OS-level containment of everything that shell can do.</p>
 <h3 id="7-keep-evidence-and-apply-execution-guards">7. Keep evidence and apply execution guards<a class="heading-anchor" href="#7-keep-evidence-and-apply-execution-guards" aria-label="Link to 7. Keep evidence and apply execution guards">#</a></h3>
 <p>Each step has an execution journal recording tool calls, arguments, results, and outcomes as they occur. The review evidence is separate from the conversational transcript, so trimming the prompt does not remove the underlying journal.</p>

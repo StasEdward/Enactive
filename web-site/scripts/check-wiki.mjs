@@ -8,7 +8,7 @@ const errors=[]; let links=0, examples=0;
 const escape=s=>s.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const pages=new Map();
 for (const name of names) pages.set(path.join(wiki,name),await fs.readFile(path.join(wiki,name),'utf8'));
-if (names.length!==10) errors.push(`Expected 10 article pages, found ${names.length}`);
+if (names.length!==11) errors.push(`Expected 11 article pages, found ${names.length}`);
 async function checkLink(from,target) {
   if (/^(?:https?:|mailto:|data:)/.test(target)) return;
   const [pathname,anchor]=target.split('#');

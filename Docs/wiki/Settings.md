@@ -140,13 +140,33 @@ The desktop seeds its initial model/endpoint from `ENACTIVE_MODEL` and `ENACTIVE
 
 `ENACTIVE_WORKSPACE` supplies a desktop workspace startup value. Storage/logging variables apply to the components that read them; the console-specific interpretation is documented in [Console](Console.md#environment-configuration).
 
-Current settings schema version is 3. Migrations preserve older tool-access behavior explicitly and add `edit_file` to workers that already had `write_file`. Startup repair can retain a `settings.before-repair-*.json` copy when repairing problematic settings.
+Current settings schema version is 5. Migrations preserve older tool-access behavior explicitly and hand a saved worker the tools it already had the capability for under another name — `edit_file`, `create_directory`, `move_file` and `search_files` to a worker that could already write or read, and `copy_file` to one that could do both. `delete_file` is deliberately excluded: it is not a capability anybody already held, so it is added in Settings by somebody who decided to, never by a migration. Startup repair can retain a `settings.before-repair-*.json` copy when repairing problematic settings.
 
 Old legacy fields such as `MultiAgent`, `ReasonerModel`, and the single `BaseUrl`/`Model` are migration inputs. Configure the current Providers/Workers/Bindings schema rather than trying to control a migrated installation through those fields.
+
+## Remote access
+
+| Field | Meaning |
+| --- | --- |
+| Enabled | Whether this computer connects to the gateway at all |
+| Gateway URL | The address of the deployed gateway |
+| Token | The device token the panel issued when this computer was added |
+| Test connection | Verifies address and token, and publishes this computer's workspaces |
+
+The token is stored with the same operating-system user-level protection as the provider keys, and
+is never written to the settings file in clear text. Changes take effect without restarting the
+application: the connection is re-established with the new settings.
+
+**Test connection is not only a check.** It connects and syncs, which is what makes this computer's
+workspaces selectable in the panel. A computer that has never synced appears with no workspaces to
+choose.
+
+See [Remote access](Remote-Access.md) for the panel, permissions, and what a remote run may not do.
 
 ## Implementation references
 
 - [Settings schema, defaults, migration, and persistence](../src/Enactive.App.Ui/AppSettings.cs)
+- [Tool implication rules used by the migration](../src/Enactive.Agents/WorkerTools.cs)
 - [Settings UI](../src/Enactive.App.Ui/SettingsWindow.axaml)
 - [Workspace preferences](../src/Enactive.Workspace/WorkspaceRegistry.cs)
 - [Model router](../src/Enactive.Agents/ModelRouter.cs)

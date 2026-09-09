@@ -24,7 +24,7 @@ dotnet build Enactive.sln
 dotnet test tests/Enactive.Engine.Tests/Enactive.Engine.Tests.csproj
 ```
 
-This repository's engine tests use xUnit. The separate remote gateway has its own checks described in [Operations](Operations.md#remote-server-preview).
+This repository's engine tests use xUnit. The remote gateway has its own suite, which needs a MySQL 8 instance — `docker compose up -d` provides one, and `ENACTIVE_REMOTE_DB` points the tests at it. See [Remote access](Remote-Access.md).
 
 ## Prepare the default local provider
 

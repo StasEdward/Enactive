@@ -158,45 +158,25 @@ The historical AIClient → Enactive rename changed names, environment-variable 
 | MCP failure prevents all work | An enabled server cannot initialize | Test, fix, or disable that server |
 | App closes and background work stops | Process exited rather than hiding | Close-to-tray and explicit Quit behavior |
 
-## Remote server preview
+## Remote access
 
-`server/` is an independent ASP.NET Core/.NET 10 gateway with a plain HTML/CSS/JavaScript panel. It is not in `Enactive.sln` and is not required to run desktop or console tasks.
+Starting tasks from a browser has its own chapter: [Remote access](Remote-Access.md). Server-side
+installation, the systemd units, database accounts, backups and the automatic deploy are in
+[REMOTE_OPERATIONS](../REMOTE_OPERATIONS.md).
 
-### Implemented preview features
+Two things belong here because they are troubleshooting rather than setup.
 
-- Single-owner login using a configured private key, cookie sessions, and CSRF protection.
-- Computer registration with a separate device token and revocation.
-- SignalR host connections and host-published workspaces.
-- Task drafts, queued run commands, retry/cancel requests, and command acknowledgements.
-- Approval requests/responses, stored events, outcomes, and an internal Inbox.
-- Task search/filtering, computer/history views, and responsive light/dark UI.
+**The panel shows an old build after a deploy.** It should not: the page's stylesheets and scripts
+are addressed by a fingerprint of their own contents, so a new build is a new URL that no cache has
+an answer for. If it happens anyway, the deploy has not run or has not succeeded — check
+`journalctl -u enactive-deploy`, and remember that the deploy only installs a build that is green
+in CI for the branch named in `/etc/enactive-remote/deploy.env`.
 
-The browser polls state approximately every three seconds; host command delivery uses periodic Sync. This is a trusted gateway that can see task text and results, not an end-to-end encrypted execution channel.
-
-### Local start
-
-From `server/`:
-
-```powershell
-./scripts/dev.ps1
-```
-
-The script starts the local preview at `http://127.0.0.1:5187` and creates a local owner key in `data/dev-owner-key.txt`. Use the generated key to log in. The data directory is excluded from Git.
-
-Manual configuration uses `ENACTIVE_OWNER_KEY` (at least 24 characters), `ENACTIVE_DATA` for the data directory, standard ASP.NET environment settings, and Kestrel listen configuration. Development HTTP is for local use; production exposure requires its own verified deployment setup.
-
-### Validation commands
-
-From `server/`, with .NET 10 and Node.js 22+:
-
-```powershell
-dotnet build Enactive.Server.csproj
-node --test tests/gateway.test.mjs
-```
-
-The test host client is a protocol fixture. It does not execute shell commands or inspect real workspace files. A production bridge to Enactive's local engine, durable host-side queues/recovery, pairing, external notifications, retention, and production deployment remain separate work. Do not interpret the browser's task UI as proof that those integrations exist.
-
-See [server README](../server/README.md) and [protocol](../server/PROTOCOL.md) for the maintained preview contract.
+**A computer shows as Offline.** The host connects outward every 15 seconds and backs off up to two
+minutes when the gateway is unreachable. Offline means the desktop application is not running, the
+remote setting is off, the token has been revoked, or the address is wrong. Settings → Remote
+access → **Test connection** reports which of those it is; it connects and publishes this
+computer's workspaces, so a success there is also what makes the workspaces selectable.
 
 ## Maintaining this wiki
 
@@ -212,4 +192,5 @@ For documentation-only changes, validate relative links, headings/anchors, and e
 - [Logging](../src/Enactive.Workspace/LogHub.cs)
 - [MCP run connections](../src/Enactive.Tools/Mcp/McpRunTools.cs)
 - [Artifact recovery](../src/Enactive.Workspace/DiskArtifactStore.cs)
-- [Remote server](../server/Program.cs)
+- [Remote gateway](../src/Enactive.Remote.Gateway/Program.cs)
+- [Remote host inside the desktop app](../src/Enactive.App.Ui/RemoteAccessService.cs)

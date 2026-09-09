@@ -10,8 +10,8 @@
 </head><body>
 <a class="skip-link" href="#main">Skip to content</a>
 <header class="wiki-header"><a class="brand" href="../index.html" aria-label="Enactive home"><img class="brand-mark" src="assets/mark-loop.svg" alt="" width="32" height="32"><img class="wordmark dark-mark" src="assets/wordmark.svg" alt="Enactive" width="144" height="18"><img class="wordmark light-mark" src="assets/wordmark-light.svg" alt="Enactive" width="144" height="18"></a><a class="wiki-label" href="index.html">Wiki</a><div class="header-actions"><button type="button" class="search-trigger" aria-haspopup="dialog">Search wiki <kbd>Ctrl K</kbd></button><button type="button" id="theme-toggle" aria-label="Switch to light theme">Light theme</button><button type="button" id="menu-toggle" aria-expanded="false" aria-controls="sidebar">Menu</button></div></header>
-<div class="wiki-layout"><aside id="sidebar" class="sidebar"><nav aria-label="Wiki chapters"><p class="nav-group">Start here</p><a href="index.html">Wiki home</a><a href="overview.html">Application overview</a><a href="getting-started.html">Getting started</a><p class="nav-group">Workflows</p><a href="running-tasks.html">Running tasks</a><a href="console.html" aria-current="page">Console & automation</a><a href="templates.html">Templates</a><p class="nav-group">Configuration</p><a href="settings.html">Settings</a><a href="models-and-phases.html">Models & Phases</a><p class="nav-group">Reference</p><a href="architecture.html">Architecture</a><a href="operations.html">Operations & troubleshooting</a></nav><div class="sidebar-footer"><a href="../index.html">← Back to Enactive</a><span>Product & engineering handbook</span></div></aside>
-<main id="main" class="" tabindex="-1"><div class="page-heading"><div class="breadcrumb"><a href="index.html">Documentation</a><span aria-hidden="true">/</span><span>Console &amp; automation</span></div><p class="eyebrow">Workflows · Enactive</p><h1>Console and Unattended Execution</h1><div class="page-meta"><span>6 min read</span><span>English</span><a href="https://github.com/StasEdward/Enactive/blob/master/Docs/wiki/Console.md">Markdown source ↗</a></div></div><details class="mobile-toc"><summary>On this page</summary><nav aria-label="On this page"><a href="#scope-of-the-console-host">Scope of the console host</a><a href="#supported-commands">Supported commands</a><a href="#unattended-permission-behavior">Unattended permission behavior</a><a href="#environment-configuration">Environment configuration</a><a href="#reports-and-exit-codes">Reports and exit codes</a><a href="#scheduling-a-suitable-task">Scheduling a suitable task</a><a href="#implementation-references">Implementation references</a></nav></details><article><h2 id="scope-of-the-console-host">Scope of the console host<a class="heading-anchor" href="#scope-of-the-console-host" aria-label="Link to Scope of the console host">#</a></h2>
+<div class="wiki-layout"><aside id="sidebar" class="sidebar"><nav aria-label="Wiki chapters"><p class="nav-group">Start here</p><a href="index.html">Wiki home</a><a href="overview.html">Application overview</a><a href="getting-started.html">Getting started</a><p class="nav-group">Workflows</p><a href="running-tasks.html">Running tasks</a><a href="console.html" aria-current="page">Console & automation</a><a href="templates.html">Templates</a><a href="remote-access.html">Remote access</a><p class="nav-group">Configuration</p><a href="settings.html">Settings</a><a href="models-and-phases.html">Models & Phases</a><p class="nav-group">Reference</p><a href="architecture.html">Architecture</a><a href="operations.html">Operations & troubleshooting</a></nav><div class="sidebar-footer"><a href="../index.html">← Back to Enactive</a><span>Product & engineering handbook</span></div></aside>
+<main id="main" class="" tabindex="-1"><div class="page-heading"><div class="breadcrumb"><a href="index.html">Documentation</a><span aria-hidden="true">/</span><span>Console &amp; automation</span></div><p class="eyebrow">Workflows · Enactive</p><h1>Console and Unattended Execution</h1><div class="page-meta"><span>8 min read</span><span>English</span><a href="https://github.com/StasEdward/Enactive/blob/master/Docs/wiki/Console.md">Markdown source ↗</a></div></div><details class="mobile-toc"><summary>On this page</summary><nav aria-label="On this page"><a href="#scope-of-the-console-host">Scope of the console host</a><a href="#supported-commands">Supported commands</a><a href="#tier-role-and-answers">Tier, role, and answers</a><a href="#unattended-permission-behavior">Unattended permission behavior</a><a href="#environment-configuration">Environment configuration</a><a href="#reports-and-exit-codes">Reports and exit codes</a><a href="#scheduling-a-suitable-task">Scheduling a suitable task</a><a href="#implementation-references">Implementation references</a></nav></details><article><h2 id="scope-of-the-console-host">Scope of the console host<a class="heading-anchor" href="#scope-of-the-console-host" aria-label="Link to Scope of the console host">#</a></h2>
 <p>The current console host is a separate composition of the shared engine. It supports a free-text task, template execution, a timeline view, and an Inbox view. It is not a command-line front end to every desktop setting.</p>
 <div class="table-wrap" tabindex="0" role="region" aria-label="Capability / Desktop / Current console"><table>
 <thead>
@@ -124,10 +124,72 @@
 <h3 id="a-multi-parameter-invocation">A multi-parameter invocation<a class="heading-anchor" href="#a-multi-parameter-invocation" aria-label="Link to A multi-parameter invocation">#</a></h3>
 <div class="code-block"><div class="code-toolbar"><span>powershell</span><button class="copy-button" type="button" aria-label="Copy powershell example">Copy</button></div><pre tabindex="0"><code class="language-powershell">dotnet run --project src/Enactive.App.Console -- --template fix-bug --workspace &quot;C:\work\sample&quot; --param &quot;problem=An empty search query throws an exception&quot; --param &quot;build_command=dotnet build&quot; --param &quot;test_command=dotnet test&quot; --report &quot;C:\work\reports\fix-bug.txt&quot;</code></pre></div>
 <p>This demonstrates valid syntax. It is <strong>not</strong> a promise that Fix Bug can complete unattended with the current console policy: shell execution and required checks need approval and will be refused.</p>
+<h2 id="tier-role-and-answers">Tier, role, and answers<a class="heading-anchor" href="#tier-role-and-answers" aria-label="Link to Tier, role, and answers">#</a></h2>
+<p>Three arguments describe the conditions a run acts under. They exist so a behavior can be checked
+from a command line instead of by driving the desktop by hand; see
+<a href="https://github.com/StasEdward/Enactive/blob/master/Docs/SCENARIO_CHECKS.md">SCENARIO_CHECKS</a>.</p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Argument / Values / Default"><table>
+<thead>
+<tr>
+<th>Argument</th>
+<th>Values</th>
+<th>Default</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>--autonomy</code></td>
+<td><code>observe</code>, <code>suggest</code>, <code>execute</code>, <code>autonomous</code> (or <code>0</code>-<code>3</code>)</td>
+<td><code>execute</code></td>
+</tr>
+<tr>
+<td><code>--role</code></td>
+<td><code>developer</code>, <code>reviewer</code>, <code>ops</code>, <code>writer</code></td>
+<td><code>developer</code></td>
+</tr>
+<tr>
+<td><code>--approve</code></td>
+<td><code>allow</code>, <code>deny</code></td>
+<td>unset</td>
+</tr>
+</tbody></table>
+</div><p><code>--autonomy</code> uses the desktop application&#39;s own mapping, shared by both hosts. A check run here is
+evidence about the product only if the console and the window agree on what <code>execute</code> means.</p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Tier / Asks before"><table>
+<thead>
+<tr>
+<th>Tier</th>
+<th>Asks before</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>observe</code>, <code>suggest</code></td>
+<td>nothing; the level itself limits what may run</td>
+</tr>
+<tr>
+<td><code>execute</code></td>
+<td><code>run_command</code>, <code>run_powershell</code>, <code>git</code>, <code>docker</code></td>
+</tr>
+<tr>
+<td><code>autonomous</code></td>
+<td>nothing</td>
+</tr>
+</tbody></table>
+</div><p>A tool whose own definition requires approval still asks at every tier, including <code>autonomous</code>.
+<code>delete_file</code> is the current example.</p>
+<p><code>--role</code> decides which tools exist for the run at all. That is half of any permission question, and
+the two halves are easy to confuse from outside: a task that reaches for a shell because the tool
+it needed was never granted fails in the same shape as a task the policy refused.</p>
+<p><code>--approve</code> gives one fixed answer to every permission. Both directions are useful — <code>deny</code> checks
+that a refusal actually stops an action, <code>allow</code> gets past a gate to see what is behind it — and
+neither is a default.</p>
+<p>A value none of these recognizes is refused with exit code <code>64</code> and the list of what was meant.
+A typo is not rounded to the nearest tier in either direction.</p>
 <h2 id="unattended-permission-behavior">Unattended permission behavior<a class="heading-anchor" href="#unattended-permission-behavior" aria-label="Link to Unattended permission behavior">#</a></h2>
-<p>The console composes an Execute policy with <code>run_command</code>, <code>run_powershell</code>, <code>git</code>, and <code>docker</code> in AskBefore. Its unattended decision handler implements:</p>
+<p>Without <code>--approve</code>, a free-text run asks at the terminal and a <code>--template</code> run uses the unattended
+handler:</p>
 <div class="code-block"><div class="code-toolbar"><span>text</span><button class="copy-button" type="button" aria-label="Copy text example">Copy</button></div><pre tabindex="0"><code class="language-text">Unattended + Ask = Deny</code></pre></div>
-<p>Templates can add restrictions but cannot remove this AskBefore list or grant more autonomy. The console does not read the desktop autonomy slider, workspace registry, or remembered approvals, and exposes no CLI switch to relax this policy.</p>
+<p>Templates can add restrictions but cannot grant more autonomy.</p>
+<p>The console does not read the desktop workspace registry or remembered approvals.</p>
 <p>Consequences:</p>
 <ul>
 <li>File-only work may complete if its worker and template allow the necessary tools.</li>
@@ -135,7 +197,12 @@
 <li>A required check that cannot execute is not counted as passed; inspect Incomplete and the report details.</li>
 <li>There is no benefit to adding an <code>Allow</code> field to template JSON: the template schema has no grant mechanism.</li>
 </ul>
-<p>If unattended build/test execution is required, that requires a deliberate change to the console host&#39;s policy/configuration integration. It is not achievable solely by editing a template. Use the desktop foreground workflow for the currently supported approval path.</p>
+<p>Those consequences describe a run left to the unattended handler. <code>--autonomy autonomous</code> or
+<code>--approve allow</code> changes them, and both are deliberate instructions typed for that invocation
+rather than something a template can grant itself.</p>
+<p>The last line of output names the conditions alongside the outcome, so a result can be read without
+knowing how it was invoked:</p>
+<div class="code-block"><div class="code-toolbar"><span>text</span><button class="copy-button" type="button" aria-label="Copy text example">Copy</button></div><pre tabindex="0"><code class="language-text">RESULT outcome=Incomplete autonomy=autonomous role=developer</code></pre></div>
 <h2 id="environment-configuration">Environment configuration<a class="heading-anchor" href="#environment-configuration" aria-label="Link to Environment configuration">#</a></h2>
 <div class="code-block"><div class="code-toolbar"><span>powershell</span><button class="copy-button" type="button" aria-label="Copy powershell example">Copy</button></div><pre tabindex="0"><code class="language-powershell">$env:ENACTIVE_MODEL = &#39;qwen2.5-coder&#39;
 $env:ENACTIVE_OLLAMA_URL = &#39;http://localhost:11434/v1&#39;
@@ -200,7 +267,7 @@ $env:ENACTIVE_LOG_LEVEL = &#39;Debug&#39;</code></pre></div>
 </tr>
 <tr>
 <td><code>64</code></td>
-<td>Invalid template invocation/resolution</td>
+<td>Invalid invocation: an unknown template parameter, tier, role, or approval answer. Nothing ran</td>
 </tr>
 <tr>
 <td><code>130</code></td>
@@ -222,11 +289,12 @@ exit $taskExitCode</code></pre></div>
 <h2 id="implementation-references">Implementation references<a class="heading-anchor" href="#implementation-references" aria-label="Link to Implementation references">#</a></h2>
 <ul>
 <li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.App.Console/Program.cs">Complete CLI and composition</a></li>
+<li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.Agents/AutonomyTiers.cs">Autonomy tiers, shared with the desktop</a></li>
 <li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.Agents/UnattendedDecisionHandler.cs">Unattended decisions</a></li>
 <li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.Core/RunReport.cs">Report and exit-code mapping</a></li>
 <li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.Core/TemplateResolution.cs">Template resolution</a></li>
 </ul>
 </article><nav class="pagination" aria-label="Adjacent chapters"><a href="running-tasks.html"><small>← Previous</small><strong>Running tasks</strong></a><a href="templates.html"><small>Next →</small><strong>Templates</strong></a></nav><footer class="page-footer"><span>Enactive · Real, reviewable, recorded action.</span><a href="#main">Back to top ↑</a></footer></main>
-<aside class="page-toc"><p class="nav-group">On this page</p><nav aria-label="Page sections"><a href="#scope-of-the-console-host">Scope of the console host</a><a href="#supported-commands">Supported commands</a><a href="#unattended-permission-behavior">Unattended permission behavior</a><a href="#environment-configuration">Environment configuration</a><a href="#reports-and-exit-codes">Reports and exit codes</a><a href="#scheduling-a-suitable-task">Scheduling a suitable task</a><a href="#implementation-references">Implementation references</a></nav><a class="source-link" href="https://github.com/StasEdward/Enactive/blob/master/Docs/wiki/Console.md">View Markdown source ↗</a></aside></div>
+<aside class="page-toc"><p class="nav-group">On this page</p><nav aria-label="Page sections"><a href="#scope-of-the-console-host">Scope of the console host</a><a href="#supported-commands">Supported commands</a><a href="#tier-role-and-answers">Tier, role, and answers</a><a href="#unattended-permission-behavior">Unattended permission behavior</a><a href="#environment-configuration">Environment configuration</a><a href="#reports-and-exit-codes">Reports and exit codes</a><a href="#scheduling-a-suitable-task">Scheduling a suitable task</a><a href="#implementation-references">Implementation references</a></nav><a class="source-link" href="https://github.com/StasEdward/Enactive/blob/master/Docs/wiki/Console.md">View Markdown source ↗</a></aside></div>
 <dialog id="search-dialog" aria-labelledby="search-title"><div class="search-heading"><h2 id="search-title">Search the wiki</h2><button id="close-search" type="button" aria-label="Close search">Close <kbd>Esc</kbd></button></div><label for="search-input">Find a topic, setting, or command</label><input id="search-input" type="search" placeholder="Try templates, Review, or --workspace" autocomplete="off"><p id="search-status" role="status" aria-live="polite">Search across all chapters.</p><div id="search-results"></div></dialog><div id="copy-status" class="sr-only" role="status" aria-live="polite"></div>
 </body></html>
