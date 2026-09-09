@@ -292,6 +292,7 @@ internal sealed class MainWindowViewModel : ObservableObject
         {
             if (!Set(ref _workspacePath, value))
                 return;
+            OnPropertyChanged(nameof(WorkspaceCardTip));
             Runs.Reset();
             Runs.RefreshCommand.Execute(null);
             WorkspacePathChanged?.Invoke();
@@ -676,6 +677,7 @@ internal sealed class MainWindowViewModel : ObservableObject
             if (!Set(ref _isBusy, value))
                 return;
             OnPropertyChanged(nameof(IsIdle));
+            OnPropertyChanged(nameof(WorkspaceCardTip));
             RunCommand.RaiseCanExecuteChanged();
             RunBackgroundCommand.RaiseCanExecuteChanged();
             StopCommand.RaiseCanExecuteChanged();
@@ -683,6 +685,19 @@ internal sealed class MainWindowViewModel : ObservableObject
     }
 
     public bool IsIdle => !IsBusy;
+
+    /// <summary>
+    /// What the workspace card says when you hover it: the folder, or - while a run is on - why it
+    /// cannot be opened.
+    ///
+    /// <para>A greyed control answers "not now"; it does not answer "why", and the reason used to
+    /// be written into Current action, which the running orchestrator overwrites within a second.
+    /// The tooltip is where a disabled control can still say something.</para>
+    /// </summary>
+    public string WorkspaceCardTip
+        => IsBusy
+            ? "A run is in progress. Finish or stop it before switching workspace."
+            : WorkspacePath;
 
     /// <summary>Shows the agent pill, unless it already says exactly this.</summary>
     public void SetAgent(string label, IBrush fill)

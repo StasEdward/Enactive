@@ -143,8 +143,14 @@
                     <Panel>
                         <Border BorderBrush="{Binding WorkspaceEdgeBrush}"
                                 BorderThickness="2,0,0,0" CornerRadius="0,5,5,0">
+                        <!-- Frozen while a run is on, like the autonomy slider and the Run button.
+                             Switching was already refused, but the refusal was written into
+                             "Current action" - the line the running orchestrator overwrites on
+                             every event - so it flashed and vanished, and the control read as
+                             broken rather than as closed. A closed control looks closed. -->
                         <Button Classes="wsCard" Command="{Binding ToggleSwitcherCommand}"
-                                ToolTip.Tip="{Binding WorkspacePath}">
+                                IsEnabled="{Binding IsIdle}"
+                                ToolTip.Tip="{Binding WorkspaceCardTip}">
                             <Grid ColumnDefinitions="*,Auto">
                                 <StackPanel Grid.Column="0" Spacing="1" Margin="0,0,8,0">
                                     <TextBlock Text="{Binding WorkspaceName}"
@@ -259,6 +265,7 @@
                     <TextBlock Grid.Column="0" Classes="panelHeader" Text="RUNS" Margin="0"
                                VerticalAlignment="Center" />
                     <Button Grid.Column="1" Content="Refresh" FontSize="11" Padding="8,1"
+                            IsEnabled="{Binding IsIdle}"
                             Command="{Binding Runs.RefreshCommand}" />
                 </Grid>
 
@@ -267,7 +274,8 @@
                      used for a few days had 37 of them - most of them repeat attempts at one task.
                      The button carries the COUNT so it says how much it takes before it is pressed,
                      not in a dialog afterwards. -->
-                <Grid DockPanel.Dock="Top" Margin="12,0,12,6" ColumnDefinitions="*,Auto">
+                <Grid DockPanel.Dock="Top" Margin="12,0,12,6" ColumnDefinitions="*,Auto"
+                      IsEnabled="{Binding IsIdle}">
                     <ComboBox Grid.Column="0" FontSize="11" HorizontalAlignment="Stretch"
                               ItemsSource="{Binding Runs.FilterNames}"
                               SelectedIndex="{Binding Runs.FilterIndex, Mode=TwoWay}"
@@ -285,6 +293,7 @@
                      something that happened - it is an offer to carry on - and a killed run usually
                      wrote no record at all. Nothing shows when there are none, which is normally. -->
                 <StackPanel DockPanel.Dock="Top" Margin="12,0,12,8"
+                            IsEnabled="{Binding IsIdle}"
                             IsVisible="{Binding Runs.HasResumable}">
                     <TextBlock Classes="panelHeader" Text="UNFINISHED" Margin="0,0,0,6" />
                     <ItemsControl ItemsSource="{Binding Runs.Resumable}">
@@ -312,15 +321,18 @@
                 <TextBlock DockPanel.Dock="Bottom" Classes="hint" Margin="12,6,12,0"
                            Text="{Binding Runs.Status}" />
 
-                <!-- Picking one opens it read-only over the live run, which keeps running
-                     underneath. -->
+                <!-- Picking one opens it read-only, and Back returns. The whole column is frozen
+                     while a run is on: the workspace cannot be changed then, and a column whose
+                     rows still answered would be the one part of "where" that moved while the rest
+                     was held. It comes back the moment the run ends. -->
                 <ListBox Classes="cards" Margin="12,0,12,0"
+                         IsEnabled="{Binding IsIdle}"
                          ItemsSource="{Binding Runs.Items}"
                          SelectedItem="{Binding Runs.Selected}">
                     <ListBox.ItemTemplate>
                         <DataTemplate x:DataType="vm:RunListItemViewModel">
                             <Border Classes="card" BorderBrush="{Binding StatusBrush}"
-                                    ToolTip.Tip="{Binding Tooltip}" Margin="{Binding Indent}">
+                                    ToolTip.Tip="{Binding Tooltip}" Margin="{Binding CardMargin}">
                                 <Grid ColumnDefinitions="Auto,*,Auto">
                                     <!-- The attempt count, on a task that took more than one go.
                                          Twelve tries at one task used to be twelve rows and read as

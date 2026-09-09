@@ -83,6 +83,9 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     private DispatcherTimer? _elapsedTimer;
     private string _currentWorkspaceRoot = string.Empty;
     private readonly WorkspaceRegistry _registry = WorkspaceRegistry.Load();
+
+    /// <summary>What each workspace was left showing in the middle column. See OpenRunMemory.</summary>
+    private readonly OpenRunMemory _openRuns = new();
     private int _backgroundRuns;
     private bool _forceClose;
     private StagingArtifactStore? _staging;
@@ -505,31 +508,17 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             return;
         }
 
+        // Everything the previous run left on screen goes first, through the one method that knows
+        // what "on screen" is made of. Reading history is fine; watching it while a new run of your
+        // own starts is not.
+        ClearRunView();
+
         // The command bar clears, so the request moves into the header - otherwise what you asked
         // for survives only in the log.
+        _vm.InputText = string.Empty;
         _vm.TaskIntent = text;
         _vm.TaskTitle = Summarise(text);
         _vm.HasTask = true;
-        _vm.ToolCalls = 0;
-        _vm.ResetUsage();
-        _vm.Routing.Clear();
-        _vm.SelectedTab = 0;
-        // Reading history is fine; watching it while a new run of your own starts is not.
-        _vm.ShowLiveRun();
-
-        // reset run state / panels
-        _vm.InputText = string.Empty;
-        _vm.Steps.Clear();
-        _vm.Artifacts.Clear();
-        _shownArtifacts.Clear();
-        _cards.Clear();
-        _currentCard = null;
-        _running.Clear();
-        _stepIndex = 0;
-        _doneSteps = 0;
-        _totalSteps = 0;
-        _vm.IsDecisionVisible = false;
-        _vm.IsAgentVisible = false;
         _vm.StatusPhase = "Running";
         _vm.StatusProgress = "—";
         _vm.StatusElapsed = "0s";
@@ -1116,9 +1105,53 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     }
 
     /// <summary>
+    /// Empties the middle column and the tiles beside it: the step feed, the artifacts, the tabs,
+    /// the counters, and any past run being read.
+    ///
+    /// <para>One method, called by both the things that need it - a run starting, and a workspace
+    /// switch - because the failure being fixed is precisely that one of them cleared less than the
+    /// other. Two lists of what is on screen drift, and what drifts off the list is what stays on
+    /// screen belonging to somewhere else.</para>
+    /// </summary>
+    private void ClearRunView()
+    {
+        _vm.ShowLiveRun();
+        _vm.HasTask = false;
+        _vm.TaskIntent = string.Empty;
+        _vm.TaskTitle = string.Empty;
+
+        _vm.Steps.Clear();
+        _vm.Artifacts.Clear();
+        _shownArtifacts.Clear();
+        _cards.Clear();
+        _currentCard = null;
+        _running.Clear();
+        _stepIndex = 0;
+        _doneSteps = 0;
+        _totalSteps = 0;
+
+        _vm.ToolCalls = 0;
+        _vm.ResetUsage();
+        _vm.Routing.Clear();
+        _vm.SelectedTab = 0;
+        _vm.IsDecisionVisible = false;
+        _vm.IsAgentVisible = false;
+
+        _vm.StatusPhase = "Idle";
+        _vm.StatusProgress = "—";
+        _vm.StatusElapsed = "—";
+        _vm.CurrentAction = string.Empty;
+    }
+
+    /// <summary>
     /// Switching a workspace re-scopes everything the window shows - runs, memory, the inbox badge,
     /// artifacts - because every store is built from the workspace it is asked about. It does not
     /// touch the folder, and it does not start anything.
+    ///
+    /// <para>The middle column is re-scoped here too, which it was not: it kept the previous
+    /// workspace's execution feed and tiles under the new workspace's name. It is emptied, and then
+    /// filled again only with what THIS workspace was left reading - see OpenRunMemory for why that
+    /// is the rule rather than "show the newest run".</para>
     /// </summary>
     private void SwitchWorkspace(string path)
     {
@@ -1128,7 +1161,27 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             return;
         }
 
-        _vm.WorkspacePath = WorkspaceRegistry.Normalise(path);
+        var next = WorkspaceRegistry.Normalise(path);
+
+        // Switching to the workspace already open is not a switch. Said before anything is cleared:
+        // otherwise clicking the current workspace would empty the middle column, and the person
+        // would have lost what they were reading by pressing the thing they were already on.
+        if (string.Equals(next, WorkspaceRegistry.Normalise(_vm.WorkspacePath), StringComparison.OrdinalIgnoreCase))
+            return;
+
+        // Asked before anything moves, and asked of the window rather than remembered as it went:
+        // a person who opened a run and then pressed Back has nothing open, and this cannot get
+        // that wrong.
+        _openRuns.Leaving(_vm.WorkspacePath.Trim(), _vm.PastRun?.Record.RunId);
+        ClearRunView();
+
+        // What the workspace being entered was left reading, handed over BEFORE the path changes:
+        // assigning the path is what starts its run list loading, and the list arriving is when
+        // there is a row to select. Null for a workspace nobody has opened a run in, which is a
+        // fresh start and every workspace at launch.
+        _vm.Runs.Reopen = _openRuns.Entering(next);
+
+        _vm.WorkspacePath = next;
         _registry.Touch(_vm.WorkspacePath);
         RefreshWorkspaces();
         ApplyWorkspaceDefaults();
@@ -1777,6 +1830,10 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             }
         }
 
+        // Not something to come back to, in this workspace or any other.
+        foreach (var run in runs)
+            _openRuns.Forget(run.RunId);
+
         if (_vm.PastRun is { } open && runs.Any(r => r.RunId == open.Record.RunId))
             _vm.ShowLiveRun();
 
@@ -1819,6 +1876,8 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             _vm.Runs.Fail("Could not delete that run: " + ex.Message);
             return;
         }
+
+        _openRuns.Forget(record.RunId);
 
         // Reading a run that no longer exists is worse than being sent back to the live one.
         if (_vm.PastRun?.Record.RunId == record.RunId)
