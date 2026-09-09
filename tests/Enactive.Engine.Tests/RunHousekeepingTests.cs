@@ -1,6 +1,8 @@
 namespace Enactive.Engine.Tests;
 
 using Enactive.Core.History;
+using Enactive.Core.Permissions;
+using Enactive.Core.Templates;
 using Xunit;
 
 /// <summary>
@@ -117,7 +119,7 @@ public sealed class RunHousekeepingTests
         var task = Guid.NewGuid();
         var runs = Enumerable.Range(0, 4).Select(i => Attempt(task, "Failed", i)).ToArray();
 
-        var rows = RunHousekeeping.Rows(runs, new HashSet<Guid> { task });
+        var rows = RunHousekeeping.Rows(runs, new HashSet<string> { RunHousekeeping.GroupKey(runs[0]) });
 
         Assert.Equal(4, rows.Count);
         Assert.True(rows[0].IsLead);
@@ -158,6 +160,84 @@ public sealed class RunHousekeepingTests
         var only = Assert.Single(rows);
         Assert.Equal(12, only.Attempts);
         Assert.Equal("Failed", only.Run.Status);
+    }
+
+    private static RunSummary Launch(string templateId, int daysAgo, string status = "Completed")
+    {
+        var spec = new ResolvedTaskSpec(
+            templateId, 1, "WSFC Workgroup Cluster Setup", Guid.NewGuid(), "ws", "C:/ws",
+            "set up the cluster", new Dictionary<string, string>(),
+            new PermissionPolicy(PermissionLevel.Execute, ["*"], []),
+            [], new ExecutionLimits(), null, false);
+
+        return new RunSummary(
+            Guid.NewGuid(), Guid.NewGuid(), "WSFC Workgroup Cluster Setup", "ollama/x",
+            Now.AddDays(-daysAgo), Now.AddDays(-daysAgo), status, [], [], Spec: spec.Snapshot());
+    }
+
+    /// <summary>
+    /// The case the first version of this missed entirely.
+    ///
+    /// <para>Grouping by task id alone collapsed only Retry and Run again, because launching a
+    /// template mints a fresh task id every time - so twelve launches of one template stayed twelve
+    /// rows, which is exactly the list this was built for. Launches of one template are the same
+    /// defined piece of work, repeated.</para>
+    /// </summary>
+    [Fact]
+    public void Twelve_launches_of_one_template_are_one_row()
+    {
+        var runs = Enumerable.Range(0, 12).Select(i => Launch("wsfc-setup", i)).ToArray();
+
+        var only = Assert.Single(RunHousekeeping.Rows(runs));
+
+        Assert.Equal(12, only.Attempts);
+    }
+
+    [Fact]
+    public void Different_templates_are_different_rows()
+    {
+        var rows = RunHousekeeping.Rows([Launch("wsfc-setup", 1), Launch("code-review", 0)]);
+
+        Assert.Equal(2, rows.Count);
+    }
+
+    /// <summary>
+    /// A retry of a template launch shares the task id AND the template, and belongs with the other
+    /// launches of that template rather than in a group of its own. They are all "that template,
+    /// run again".
+    /// </summary>
+    [Fact]
+    public void A_retry_of_a_template_launch_joins_its_template()
+    {
+        var launch = Launch("wsfc-setup", 2);
+        var retry = launch with { RunId = Guid.NewGuid(), StartedAt = Now.AddDays(-1) };
+
+        Assert.Equal(2, Assert.Single(RunHousekeeping.Rows([launch, retry])).Attempts);
+    }
+
+    /// <summary>
+    /// Typed runs are NOT grouped by their text. Two tasks reading "clean the directory", started
+    /// on different days against a workspace in different states, are two different pieces of work;
+    /// folding them into one row would be a claim about them that is not true. Identical text means
+    /// the phrase matched, not that the work was the same.
+    /// </summary>
+    [Fact]
+    public void Two_typed_runs_with_the_same_words_stay_apart()
+    {
+        var first = Run("Completed", daysAgo: 1);
+        var second = Run("Completed", daysAgo: 0);
+
+        Assert.Equal(2, RunHousekeeping.Rows([first, second]).Count);
+    }
+
+    /// <summary>A spec that cannot be read falls back to the task id rather than to one big group.</summary>
+    [Fact]
+    public void An_unreadable_spec_does_not_merge_unrelated_runs()
+    {
+        var a = Run("Completed", 1) with { Spec = "{not json" };
+        var b = Run("Completed", 0) with { Spec = "{not json" };
+
+        Assert.Equal(2, RunHousekeeping.Rows([a, b]).Count);
     }
 
     // ── retention ────────────────────────────────────────────────────────────────

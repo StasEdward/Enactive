@@ -568,7 +568,7 @@ internal sealed class RunsViewModel : ObservableObject
             Items.Add(new RunListItemViewModel(
                 row.Run,
                 item => DeleteRequested?.Invoke(item.Record),
-                row.Attempts, row.IsLead, _expanded.Contains(row.Run.TaskId), Toggle));
+                row.Attempts, row.IsLead, _expanded.Contains(RunHousekeeping.GroupKey(row.Run)), Toggle));
 
         Status = records.Count == 0
             ? "No runs recorded in this workspace."
@@ -599,13 +599,15 @@ internal sealed class RunsViewModel : ObservableObject
     /// </summary>
     private void Toggle(RunListItemViewModel row)
     {
-        if (!_expanded.Remove(row.Record.TaskId))
-            _expanded.Add(row.Record.TaskId);
+        var key = RunHousekeeping.GroupKey(row.Record);
+
+        if (!_expanded.Remove(key))
+            _expanded.Add(key);
 
         Show(All);
     }
 
-    private readonly HashSet<Guid> _expanded = new();
+    private readonly HashSet<string> _expanded = new(StringComparer.Ordinal);
 
     /// <summary>The workspace changed: what is listed belongs to the old one.</summary>
     public void Reset()

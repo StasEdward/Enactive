@@ -1,5 +1,7 @@
 namespace Enactive.Core.History;
 
+using Enactive.Core.Templates;
+
 /// <summary>Which runs a person is looking at. The order is the order they are offered in.</summary>
 public enum RunFilter
 {
@@ -88,12 +90,12 @@ public static class RunHousekeeping
     /// </summary>
     /// <param name="expanded">Task ids the person has opened. Everything else shows its lead only.</param>
     public static IReadOnlyList<RunRow> Rows(
-        IReadOnlyList<RunSummary> runs, IReadOnlySet<Guid>? expanded = null)
+        IReadOnlyList<RunSummary> runs, IReadOnlySet<string>? expanded = null)
     {
         var rows = new List<RunRow>();
 
         var groups = runs
-            .GroupBy(r => r.TaskId)
+            .GroupBy(Together)
             .Select(g => g.OrderByDescending(r => r.StartedAt).ToArray())
             .OrderByDescending(g => g[0].StartedAt);
 
@@ -103,7 +105,7 @@ public static class RunHousekeeping
 
             // A single attempt is not a group and gets no expander: "1 attempt" on every ordinary
             // run is noise on the common case to serve the rare one.
-            if (attempts.Length == 1 || expanded is null || !expanded.Contains(attempts[0].TaskId))
+            if (attempts.Length == 1 || expanded is null || !expanded.Contains(Key(attempts[0])))
                 continue;
 
             for (var i = 1; i < attempts.Length; i++)
@@ -112,6 +114,44 @@ public static class RunHousekeeping
 
         return rows;
     }
+
+    /// <summary>
+    /// What makes two runs the same piece of work.
+    ///
+    /// <para>Two things do, and the first version of this knew only one of them.</para>
+    ///
+    /// <para><b>The same task id</b> — Retry and Run again, which repeat a run and carry its task
+    /// id forward. That is what "attempt 2 of 3" means.</para>
+    ///
+    /// <para><b>The same template</b> — launching a template mints a FRESH task id every time, so
+    /// grouping by task id alone left twelve launches of one template as twelve rows, which is the
+    /// list this exists to fix. Launches of one template are the same defined work, repeated, and a
+    /// retry of a launch shares both keys and belongs with the others: they are all "that template,
+    /// run again".</para>
+    ///
+    /// <para><b>And not the same words.</b> Two typed tasks reading "clean the directory", started
+    /// on different days against a workspace in different states, are two different pieces of work.
+    /// Folding them into one row would be a claim about them that is not true — identical text means
+    /// the phrase matched, not that the work was.</para>
+    ///
+    /// <para>A spec that will not parse falls back to the task id. Anything else would put every
+    /// unreadable record into one group, which is the worst possible answer to not knowing.</para>
+    /// </summary>
+    private static string Together(RunSummary run) => Key(run);
+
+    private static string Key(RunSummary run)
+    {
+        if (run.Spec is { Length: > 0 } spec
+            && ResolvedTaskSpec.Parse(spec) is { TemplateId.Length: > 0 } parsed)
+        {
+            return "template:" + parsed.TemplateId;
+        }
+
+        return "task:" + run.TaskId;
+    }
+
+    /// <summary>What identifies this row's group, for remembering which are open.</summary>
+    public static string GroupKey(RunSummary run) => Key(run);
 
     /// <summary>
     /// The runs a retention setting would remove: everything past the newest <paramref name="keep"/>.
