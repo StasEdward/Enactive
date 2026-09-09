@@ -26,6 +26,7 @@ using Enactive.Core.Templates;
 using Enactive.Core.Tools;
 using Enactive.Core.Workers;
 using Enactive.Providers;
+using Enactive.Remote.Host;
 using Enactive.Tools;
 using Enactive.Tools.Mcp;
 using Enactive.Workspace;
@@ -153,6 +154,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             // (Cancel/close leave them untouched), so it gets _settings directly, not a partial copy.
             new SettingsWindow(_settings, workspaceRoot: WorkspaceRootOrNull(),
                 toolNames: _toolRegistry.Definitions.Select(d => d.Name).ToArray(),
+                remoteCheck: CheckRemoteAsync,
                 onSaved: saved =>
             {
                 if (!saved.Save())
@@ -160,8 +162,16 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                         saved.LastSaveError is { Length: > 0 } why
                             ? "Settings were not saved. " + why
                             : "Settings could not be saved. Check disk access and Windows credential encryption.");
+
+                // Read BEFORE _settings is replaced: the comparison is the only thing that decides
+                // whether to disturb a connection that may have a run on it.
+                var wasRemote = Describe(_settings.RemoteAccess);
+
                 _settings = saved;
                 ApplySettings();
+
+                if (Describe(_settings.RemoteAccess) != wasRemote)
+                    _ = RestartRemoteAccessAsync();
             }).Show(this);
         _vm.InputFocusRequested += () =>
         {
@@ -255,6 +265,59 @@ public sealed partial class MainWindow : Window, IDecisionHandler
 
         _remote.Start();
         _log.Info(LogSource.System, "Remote access: " + _remote.Status);
+    }
+
+    /// <summary>
+    /// The remote settings as a value that can be compared, so a Save that did not touch them
+    /// leaves the connection alone.
+    ///
+    /// <para>The token is compared by whether there is one, not by what it is: this decides whether
+    /// to reconnect, and putting a bearer credential into a string that is compared, logged by
+    /// accident or held in a local is not worth the precision. A token REPLACED with a different
+    /// one of the same emptiness is the one case this misses, and Test connection is what covers
+    /// it.</para>
+    /// </summary>
+    private static string Describe(RemoteAccessSettings remote)
+        => $"{remote.Enabled}|{remote.GatewayUrl}|{remote.Token.Length > 0}";
+
+    /// <summary>
+    /// Applies changed remote settings without restarting the application.
+    ///
+    /// <para>This exists because of what happened the first time somebody set this up. The service
+    /// was built once in the constructor from the settings as they were AT STARTUP - which said
+    /// off, because the token had not been pasted yet. Entering everything correctly and pressing
+    /// Save then did nothing at all, said nothing at all, and the panel went on reporting the
+    /// computer Offline. There was no way to tell that from settings that were simply wrong.</para>
+    /// </summary>
+    private async Task RestartRemoteAccessAsync()
+    {
+        var previous = _remote;
+        _remote = null;
+
+        if (previous is not null)
+        {
+            _log.Info(LogSource.System, "Remote access: settings changed, reconnecting.");
+            await previous.DisposeAsync();
+        }
+
+        StartRemoteAccess();
+    }
+
+    /// <summary>
+    /// Tries a gateway address and token for the settings window, and says what happened.
+    ///
+    /// <para>It runs against the REAL gateway with this computer's real workspace list, because a
+    /// check that stopped short of that would answer a narrower question than the one being
+    /// asked - and the question being asked is "why does the phone say Offline".</para>
+    /// </summary>
+    private async Task<string> CheckRemoteAsync(string gatewayUrl, string token, CancellationToken ct)
+    {
+        var workspaces = RemoteAccessService.Publishable(_registry.Entries);
+        var check = await GatewayProbe.CheckAsync(gatewayUrl, token, workspaces, ct);
+
+        _log.Info(LogSource.System, "Remote access check: " + check.Detail);
+
+        return check.Detail;
     }
 
     // ── Closing ──────────────────────────────────────────────────────────────

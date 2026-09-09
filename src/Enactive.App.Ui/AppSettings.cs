@@ -114,14 +114,12 @@ internal sealed class RemoteAccessSettings
     /// <summary>The gateway's base address, e.g. https://remote.enactive.dev.</summary>
     public string GatewayUrl { get; set; } = string.Empty;
 
-    /// <summary>
-    /// What this computer calls itself to the gateway. Issued with the token rather than chosen
-    /// here, because the gateway is what has to keep them apart.
-    /// </summary>
-    public string HostId { get; set; } = string.Empty;
-
-    /// <summary>The name the phone shows for this computer. Cosmetic, and worth getting right.</summary>
-    public string DisplayName { get; set; } = string.Empty;
+    // There is deliberately no computer id and no display name here. The first version of this pane
+    // asked for both, and neither was ever read: the hub takes the Host from the AUTHENTICATED
+    // identity and never from an argument, so the token alone says which computer this is, and the
+    // name is the one given when it was registered. Asking for them made the pane look like it
+    // needed three things to work when it needed two - and the id box was the one somebody then
+    // filled in with the computer's name.
 
     /// <summary>The device token, DPAPI-encrypted. The only form that reaches disk.</summary>
     public string TokenProtected { get; set; } = string.Empty;
@@ -133,8 +131,6 @@ internal sealed class RemoteAccessSettings
     {
         Enabled = Enabled,
         GatewayUrl = GatewayUrl,
-        HostId = HostId,
-        DisplayName = DisplayName,
         TokenProtected = TokenProtected,
         Token = Token
     };

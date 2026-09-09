@@ -214,7 +214,7 @@ internal sealed class RemoteAccessService : IAsyncDisposable
             {
                 nextSync = DateTimeOffset.UtcNow + SyncEvery;
 
-                foreach (var command in await loop.TurnAsync(Publishable(), ct))
+                foreach (var command in await loop.TurnAsync(Publishable(_workspaces()), ct))
                 {
                     Begin(command, ct);
                 }
@@ -249,11 +249,11 @@ internal sealed class RemoteAccessService : IAsyncDisposable
     /// deleted should stop being offered. A folder that cannot be read is skipped rather than
     /// failing the sync - one missing project must not take remote access down.</para>
     /// </summary>
-    private IReadOnlyList<WorkspaceRef> Publishable()
+    public static IReadOnlyList<WorkspaceRef> Publishable(IReadOnlyList<WorkspaceEntry> entries)
     {
         var published = new List<WorkspaceRef>();
 
-        foreach (var entry in _workspaces())
+        foreach (var entry in entries)
         {
             try
             {
