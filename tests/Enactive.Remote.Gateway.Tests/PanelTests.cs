@@ -1,4 +1,4 @@
-namespace Enactive.Remote.Gateway.Tests;
+﻿namespace Enactive.Remote.Gateway.Tests;
 
 using System.Net;
 using System.Net.Http.Json;
@@ -148,6 +148,47 @@ public sealed class PanelTests(TestDatabase database) : IClassFixture<TestDataba
 
         Assert.False(response.IsSuccessStatusCode);
         Assert.Contains(FaultCode.ApprovalNotRemotelyDecidable, body);
+    }
+
+    /// <summary>
+    /// An answered permission keeps reaching the panel, and says it was answered.
+    ///
+    /// <para>An answer is not an outcome. The gateway records DecisionQueued because the command
+    /// still has to reach the computer and may be refused there - the desktop may have answered
+    /// first, or the run may be over. That distinction was recorded, projected on every poll, and
+    /// drawn nowhere: the card came back saying "Waiting" with both buttons live, exactly as it had
+    /// looked before the click, so the only honest reading of the screen was that nothing had
+    /// happened. Somebody pressing again would send Deny after Allow, which is a different command
+    /// and not a retry.</para>
+    ///
+    /// <para>Two claims, and the card needs both: the answered approval is still in the snapshot at
+    /// all - the projection could easily have filtered to Pending and dropped it - and its status
+    /// arrives as the name the page compares against.</para>
+    /// </summary>
+    [Fact]
+    public async Task An_answered_permission_still_reaches_the_panel_and_says_it_was_answered()
+    {
+        var runId = await RunningRunAsync();
+        var approvalId = "approval-" + Guid.NewGuid().ToString("N");
+
+        await new HostService(new Database(database.ConnectionString)).PublishAsync(HostId, new HostEvent(
+            Guid.NewGuid().ToString("N"), runId, 2, RemoteEventKind.ApprovalRequested, "Delete a file",
+            new ApprovalRequest(approvalId, "call-1", "delete_file", """{"path":"README8.html"}""",
+                "C:/work", "hash-1", RemoteDecidable: true)));
+
+        using var answer = new HttpRequestMessage(HttpMethod.Post, $"/api/approvals/{approvalId}/resolve")
+        {
+            Content = JsonContent.Create(
+                new { commandId = Guid.NewGuid().ToString(), decision = "Allow", actionHash = "hash-1" },
+                options: RemoteJson.Options)
+        };
+        answer.Headers.Add("X-CSRF-TOKEN", _csrf);
+        (await _owner.SendAsync(answer)).EnsureSuccessStatusCode();
+
+        var json = await _owner.GetStringAsync("/api/state");
+
+        Assert.Contains(approvalId, json);
+        Assert.Contains("\"status\":\"DecisionQueued\"", json);
     }
 
     /// <summary>

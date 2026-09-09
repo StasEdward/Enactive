@@ -296,9 +296,17 @@ function renderApprovals() {
   const cards = state.approvals.map((approval) => {
     const card = node("div", "card");
 
+    // An answer is not an outcome. The gateway marks the approval DecisionQueued the moment it
+    // takes the answer, because the command still has to reach the computer and the computer may
+    // refuse it - the desktop may have answered first, or the run may be over. The panel was told
+    // all of that on every poll and drew "Waiting" regardless.
+    const queued = approval.status === "DecisionQueued";
+
     const head = node("div", "card-head");
     head.append(node("h3", null, "Permission requested"));
-    head.append(node("span", "status is-waiting", approval.remoteDecidable ? "Waiting" : "At the computer"));
+    head.append(queued
+      ? node("span", "status is-queued", "Sent")
+      : node("span", "status is-waiting", approval.remoteDecidable ? "Waiting" : "At the computer"));
     card.append(head);
 
     if (approval.reason) {
@@ -311,7 +319,13 @@ function renderApprovals() {
     // not shown, and a truncated command is one nobody read.
     card.append(node("pre", "action", approval.arguments));
 
-    if (approval.remoteDecidable) {
+    if (queued) {
+      // No buttons at all rather than disabled ones. The answer has been given; what is left is
+      // the computer picking it up, and that is not something a second click makes happen sooner.
+      card.append(node("p", "local-only",
+        "Your answer is on its way to the computer. If it was already answered there, that answer "
+        + "stands - sitting at the machine always wins."));
+    } else if (approval.remoteDecidable) {
       const actions = node("div", "actions");
       actions.append(decide(approval, "Allow", "primary"));
       actions.append(decide(approval, "Deny", "secondary"));
@@ -510,15 +524,22 @@ function showRun(run, task) {
  * this page's guess about what its own request achieved.
  */
 async function act(button, action) {
-  button.disabled = true;
+  // The whole group, not just the button that was clicked. Allow and Deny are one question, and
+  // leaving Deny live while Allow is in flight offers an answer that is already being given.
+  const group = Array.from(button.parentElement?.querySelectorAll("button") ?? [button]);
+  group.forEach((one) => { one.disabled = true; });
 
   try {
     await action();
   } catch (error) {
     toast(error.message, true);
   } finally {
-    button.disabled = false;
+    // Refreshed BEFORE the buttons come back. They used to be re-enabled first, so a card whose
+    // answer the gateway had already accepted spent a whole round trip looking exactly as it did
+    // before the click - same "Waiting", same two live buttons. That is what makes a person press
+    // it again, and pressing Deny after Allow is a different command, not a retry.
     await refresh();
+    group.forEach((one) => { one.disabled = false; });
   }
 }
 

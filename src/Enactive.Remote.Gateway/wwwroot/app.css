@@ -148,6 +148,9 @@ main {
 .status.is-running { color: var(--ember-300); background: var(--grad-ember-soft); }
 .status.is-waiting { color: var(--warning); }
 .status.is-done    { color: var(--success); }
+/* Answered here, not yet carried out there. Deliberately not the "done" green: nothing has
+   happened on the computer yet, and a green pill would say it had. */
+.status.is-queued  { color: var(--ember-300); background: var(--grad-ember-soft); }
 .status.is-failed  { color: var(--danger); }
 
 /* An action the owner is being asked to allow, shown whole. A truncated command
