@@ -5,7 +5,7 @@ using System.Net;
 /// <summary>
 /// What changes when the gateway is reached through a tunnel rather than directly.
 ///
-/// <para>`remote.enactive.com` is served through a Cloudflare tunnel: `cloudflared` runs on the
+/// <para>`remote.enactive.dev` is served through a Cloudflare tunnel: `cloudflared` runs on the
 /// same machine and makes an OUTWARD connection to Cloudflare, so nothing on the server listens on
 /// a public port at all. Every request the gateway sees therefore arrives from 127.0.0.1, and two
 /// things it relies on quietly stop working.</para>

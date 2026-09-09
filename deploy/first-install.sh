@@ -205,7 +205,7 @@ cat <<NEXT
 The gateway is running on http://127.0.0.1:$PORT and nothing outside this machine can reach it yet.
 Two steps remain, and they are yours because they take the site down and put it back up:
 
-  1. Point the tunnel at it. The ingress for remote.enactive.com becomes http://127.0.0.1:$PORT -
+  1. Point the tunnel at it. The ingress for remote.enactive.dev becomes http://127.0.0.1:$PORT -
      in cloudflared's config.yml, or in Cloudflare Zero Trust under Networks > Tunnels > Public
      hostnames if the tunnel is managed from there, in which case the file on this machine decides
      nothing. Then:
@@ -218,7 +218,11 @@ Two steps remain, and they are yours because they take the site down and put it 
 
      Then check it from outside, which is the only place the answer counts:
 
-       curl -s https://remote.enactive.com/health
+       curl -s https://remote.enactive.dev/health
+
+     A hostname the tunnel has no rule for falls through to its catch-all and answers with an
+     EMPTY body and no error, which reads exactly like a gateway that is not running. If that is
+     what you get, check the hostname before you check the service.
 
   2. Stop whatever was serving the site before. Find it BY THE PORT IT LISTENS ON, never by
      searching unit names for "enactive" - this service is called enactive-remote, the old one is

@@ -4,9 +4,19 @@ Stage 7 of `REMOTE_DESIGN.md`. What that stage is allowed to claim is *"it can b
 other than the person who wrote it"*, so this is written for that person: what to install, what
 each setting means, what to do when it breaks, and what has deliberately been left manual.
 
-Everything here has been read against a running gateway. What has **not** been done is a real
-deployment onto `remote.enactive.com` — that server currently runs the preview, and replacing it is
-a decision with a date on it, not a step in a document.
+This has been done, once, on the machine it describes. `remote.enactive.dev` serves this gateway;
+the preview it replaced is disabled rather than deleted, because that is the rollback.
+
+The domain is `.dev`. An earlier draft of this document said `.com` throughout, which is what the
+project was described as using, and the tunnel routes only `.dev` — so every check against `.com`
+came back empty from the catch-all `http_status:404` rule and looked like a gateway that was not
+answering. If `.com` is ever meant to serve this too, it needs its own hostname in the tunnel.
+
+Three things in these instructions were wrong and were found by somebody following them rather than
+by any test: a `reload` that cloudflared's unit does not implement, scripts that cared which
+directory they were started from, and "find the old service by name" when both services have
+`enactive` in their names. They are fixed below, and each says why, because the next person will
+meet the same machine.
 
 ---
 
@@ -95,7 +105,7 @@ will look like a change that did not take.
 
 ```bash
 sudo systemctl restart cloudflared      # restart, NOT reload: this unit has no reload
-curl -s https://remote.enactive.com/health
+curl -s https://remote.enactive.dev/health
 ```
 
 Check it from outside, not from the box. `curl` against `127.0.0.1:5099` proves the gateway is up
@@ -173,6 +183,9 @@ nowhere has the same reputation problem.
 
 | What you see | What it usually is |
 |---|---|
+| A blank dark page after switching the tunnel, on the machine you always use — while a phone shows it fine | The browser's cache. The page it replaced used the same brand assets and the same dark background, so a stale copy looks like a broken new one rather than like an old page. `Ctrl+Shift+R`; it has happened on both switchovers so far. A second device is the fastest way to tell a caching problem from a server one. |
+| A blank dark page everywhere | `app.js` did not run. Both the sign-in form and the panel start `hidden` and only the script reveals them, so anything that stops it leaves the background and nothing else. The Console names it in one line. |
+| Empty body, no error, from any URL | A hostname the tunnel has no rule for, falling through its catch-all `http_status:404`. Check the hostname before the service. |
 | Service will not start, log names `CF-Connecting-IP` and an address | `ASPNETCORE_URLS` is not loopback while `ENACTIVE_BEHIND_TUNNEL` is on. This is the check in §1 doing its job; fix the binding, do not turn the setting off. |
 | `Set ENACTIVE_REMOTE_DB…` / `Set ENACTIVE_OWNER_KEY…` | The env file is missing, unreadable by `enactive`, or has a typo. `sudo -u enactive cat` it. |
 | Start times out after 180s | A migration is running against a large table, or is stuck on `GET_LOCK`. Look for another gateway process before doing anything else. |
