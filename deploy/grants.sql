@@ -42,10 +42,21 @@ GRANT SELECT, LOCK TABLES, SHOW VIEW, EVENT, TRIGGER
   ON `enactive_remote`.*
   TO 'enactive_backup'@'localhost';
 
--- TRIGGER and EVENT are here because the dump is taken with --routines --events --triggers. There
--- are none today; the day somebody adds one, a restore without these rights fails with a
--- permissions error that says nothing about the real cause.
-GRANT SELECT, INSERT, CREATE, ALTER, INDEX, DROP, REFERENCES, TRIGGER, EVENT
+-- Everything a restore of THIS dump can need, on scratch schemas this account creates and drops.
+--
+-- The list is wide because the rule is: verify-restore.sh must restore the same dump you would
+-- restore in anger. The first version was narrower and the first real run failed on LOCK TABLES -
+-- mysqldump wraps its inserts in them by default, and restoring that needs the privilege on the
+-- TARGET. The tempting fix was to pass --skip-add-locks and make the dump fit the account. That
+-- would have verified a different artifact from the one kept, which is the one thing this job
+-- exists not to do.
+--
+-- CREATE VIEW, CREATE ROUTINE, TRIGGER and EVENT cover what the dump does not contain today. The
+-- day somebody adds a view or a trigger, the backup keeps working and the verification does not
+-- start failing with a permissions error that says nothing about the real cause.
+GRANT SELECT, INSERT, CREATE, ALTER, INDEX, DROP, REFERENCES,
+      LOCK TABLES, CREATE VIEW, SHOW VIEW, CREATE ROUTINE, ALTER ROUTINE, EXECUTE,
+      TRIGGER, EVENT
   ON `enactive\_remote\_verify\_%`.*
   TO 'enactive_backup'@'localhost';
 

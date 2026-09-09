@@ -45,6 +45,17 @@ mysql --defaults-file="$DEFAULTS_FILE" \
 
 drop() { mysql --defaults-file="$DEFAULTS_FILE" -e "DROP DATABASE IF EXISTS \`$scratch\`"; }
 
+# A failure anywhere from here on leaves the scratch database behind on purpose - there is
+# something to look at, and a verification that tidies away its own evidence is not much of a
+# verification. What it must not do is leave it behind SILENTLY: the restore failing on a
+# permission was the first thing this job ever did, and without this the only trace was a database
+# nobody was told about, once per nightly run, for as long as it kept failing.
+stranded() {
+  printf '\nLeft %s in place to look at. Drop it when you are done:\n' "$scratch" >&2
+  printf '  mysql --defaults-file=%s -e "DROP DATABASE \\`%s\\`"\n' "$DEFAULTS_FILE" "$scratch" >&2
+}
+trap stranded ERR
+
 gunzip -c "$newest" | mysql --defaults-file="$DEFAULTS_FILE" "$scratch"
 
 ask() { mysql --defaults-file="$DEFAULTS_FILE" -N -B -D "$scratch" -e "$1"; }
