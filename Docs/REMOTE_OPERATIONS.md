@@ -136,6 +136,20 @@ read-only.
 It does **not** install a release that carries a migration. That distinction is the whole design,
 and §4.2 is why.
 
+It has been run on the real machine and installed a real release end to end: found the push run,
+matched the artifact by name, asked the build for its schema version (2, against a database at 2),
+swapped the symlink, restarted the gateway through the polkit rule, and passed the health check —
+
+```
+Fetching 124e455a4b00 from run 34346160780.
+Installing 124e455a4b00 (schema 2, database at 2).
+Deployed 124e455a4b00.
+```
+
+What that leaves **unproven** is every branch it did not take: the parked-migration path, the
+rollback after a failed health check, and pruning on a real tree. Those are covered by
+`deploy/pull-release.test.sh` and by nothing else yet.
+
 ### 4.1 What a run does
 
 1. Asks GitHub for the newest run of `build.yml` on the branch with `status=success` **and
