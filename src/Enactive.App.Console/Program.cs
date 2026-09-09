@@ -19,6 +19,13 @@ using Enactive.Workspace;
 //
 // Usage:
 //   dotnet run --project src/Enactive.App.Console -- "<command>" "<workspace path>"
+//     [--autonomy observe|suggest|execute|autonomous]  the slider, same mapping as the window
+//     [--role developer|reviewer|ops|writer]           which role, and so which tools at all
+//     [--approve allow|deny]                           one fixed answer to every permission
+//
+// Those three exist so a behaviour can be checked from a command line rather than by driving the
+// window by hand: a tier, a role and an answer are what a question about permissions is made of,
+// and the last line of output names all three next to the outcome.
 // Environment overrides:
 //   ENACTIVE_MODEL       (default: qwen2.5-coder)
 //   ENACTIVE_OLLAMA_URL  (default: http://localhost:11434/v1)
@@ -160,17 +167,50 @@ IToolRegistry toolRegistry = new LoggingToolRegistry(new ToolRegistry(new ITool[
 var contextProvider = new ContextProvider(workspace, new EnvironmentProbe(), memoryStore);
 var modelResolver = new ModelResolver();
 
-var workerProvider = new StaticWorkerProvider(
-    DefaultWorkers.Build(new ModelRef("ollama", model)),
-    DefaultWorkers.DefaultId);
+var workers = DefaultWorkers.Build(new ModelRef("ollama", model));
+var workerProvider = new StaticWorkerProvider(workers, DefaultWorkers.DefaultId);
+
+// ── The role this run is given ────────────────────────────────────────────────
+//   --role developer | reviewer | ops | writer
+//
+// Which role runs a task decides which tools it may call at all, and that is half of what there is
+// to check about permissions: a task that reaches for a shell because the tool it needed was never
+// granted looks exactly like a task the policy refused, and they are different facts.
+var roleId = Option("--role");
+
+if (roleId is { Length: > 0 }
+    && !workers.Any(w => string.Equals(w.Id, roleId, StringComparison.OrdinalIgnoreCase)))
+{
+    // Named and refused, with the list. An unknown role silently falling back to the default would
+    // produce a run under a role nobody asked for, reported as though it had been honoured.
+    Console.Error.WriteLine($"There is no role '{roleId}'.");
+    Console.Error.WriteLine($"  Roles: {string.Join(", ", workers.Select(w => w.Id))}");
+    return 64;
+}
 var planner = new Planner();
 var permissionEngine = new PermissionEngine();
 
-// Workspace autonomy policy: everything is allowed at Execute level, but run_command always asks first.
-var permissionPolicy = new PermissionPolicy(
-    PermissionLevel.Execute,
-    Allow: new[] { "*" },
-    AskBefore: new[] { "run_command", "run_powershell", "git", "docker" });
+// ── The tier this run acts under ──────────────────────────────────────────────
+//   --autonomy observe | suggest | execute | autonomous   (or 0-3)
+//
+// From AutonomyTiers, which is the window's own mapping - not a policy written again here. This
+// file used to carry a hard-coded one, roughly tier 2 and belonging to no slider position, so a
+// run started from a command line was not running under any tier the app can be set to. Checking
+// behaviour here then said something about the console rather than about the product.
+//
+// Execute by default, which is what the hard-coded policy was and what the app opens on.
+var autonomyText = Option("--autonomy");
+var autonomyTier = AutonomyTiers.Parse(autonomyText ?? "execute");
+
+if (autonomyTier is null)
+{
+    // Refused rather than rounded: a typo must not become a tier in either direction.
+    Console.Error.WriteLine($"'{autonomyText}' is not an autonomy tier.");
+    Console.Error.WriteLine($"  Use one of: {string.Join(", ", AutonomyTiers.Names)} (or 0-{AutonomyTiers.Names.Count - 1}).");
+    return 64;   // EX_USAGE: the invocation is wrong, not the work
+}
+
+var permissionPolicy = AutonomyTiers.PolicyFor(autonomyTier.Value);
 
 // ── A saved task, run without a prompt ────────────────────────────────────────
 ResolvedTaskSpec? spec = null;
@@ -201,9 +241,30 @@ if (templateId is { Length: > 0 })
 
 // Unattended when a template drove it: nobody is at this console, and an approval nobody can give
 // must not default to yes. See UnattendedDecisionHandler.
-IDecisionHandler decisionHandler = spec is null
-    ? new ConsoleDecisionHandler()
-    : new UnattendedDecisionHandler();
+// ── How permission questions are answered ─────────────────────────────────────
+//   --approve allow | deny
+//
+// A fixed answer, for a run nobody is sitting in front of. Without it a scenario that reaches an
+// approval either blocks on a prompt or - worse - is refused by the end-of-input rule and reported
+// as a run that could not do its work, when what was being checked was whether it CAN.
+//
+// Both directions matter and neither is a default. "deny" is how you check that a refusal really
+// stops the action rather than being recorded after it; "allow" is how you get past a gate to
+// check what is behind it. Left unset, this behaves exactly as before.
+var approveText = Option("--approve");
+var approve = approveText?.Trim().ToLowerInvariant();
+
+if (approve is not (null or "allow" or "deny"))
+{
+    Console.Error.WriteLine($"'{approveText}' is not an answer. Use --approve allow or --approve deny.");
+    return 64;
+}
+
+IDecisionHandler decisionHandler = approve switch
+{
+    "allow" or "deny" => new FixedDecisionHandler(approve),
+    _ => spec is null ? new ConsoleDecisionHandler() : new UnattendedDecisionHandler()
+};
 
 var checkpointStore = new JsonCheckpointStore(workspace);
 
@@ -263,6 +324,9 @@ Console.WriteLine($"  Workspace : {workspace.RootPath}");
 Console.WriteLine($"  Provider  : {descriptor.DisplayName} ({baseUrl})");
 Console.WriteLine($"  Model     : {model}");
 Console.WriteLine($"  Command   : {command}");
+Console.WriteLine($"  Autonomy  : {AutonomyTiers.Names[autonomyTier.Value]}");
+Console.WriteLine($"  Role      : {roleId ?? DefaultWorkers.DefaultId}");
+Console.WriteLine($"  Approvals : {approve ?? (spec is null ? "asked at this console" : "refused, unattended")}");
 Console.WriteLine(new string('-', 72));
 
 var focus = new IntentFocus(workspace.Id);
@@ -272,7 +336,9 @@ var intent = new Intent(
     // A scheduled run says so about itself. IntentSource.Schedule existed from the first version
     // and had never been used by anything.
     spec is null ? IntentSource.CommandBar : IntentSource.Schedule,
-    workContext, DateTimeOffset.UtcNow, spec?.WorkerId);
+    // --role wins over a template's own worker: it is the more specific instruction, typed for
+    // this invocation.
+    workContext, DateTimeOffset.UtcNow, roleId ?? spec?.WorkerId);
 
 var streaming = false;
 RunOutcomeKind? outcome = null;
@@ -386,6 +452,16 @@ if (finished is not null)
     outcome ??= RunReport.OutcomeOf(finished);
 }
 
+// One line, last, in a shape something other than a person can read.
+//
+// The report above is for reading; this is for a scenario runner deciding what happened. The exit
+// code already carries the outcome, but a code is a number in a shell variable and says nothing
+// about which tier or role produced it - and a scenario's whole claim is usually about that pair.
+Console.WriteLine(
+    $"RESULT outcome={outcome ?? RunOutcomeKind.Incomplete} "
+    + $"autonomy={AutonomyTiers.Names[autonomyTier.Value]} "
+    + $"role={roleId ?? DefaultWorkers.DefaultId}");
+
 Console.WriteLine("Done.");
 return RunReport.ExitCodeFor(outcome ?? RunOutcomeKind.Incomplete);
 
@@ -393,6 +469,38 @@ return RunReport.ExitCodeFor(outcome ?? RunOutcomeKind.Incomplete);
 sealed class EmptyServiceProvider : IServiceProvider
 {
     public object? GetService(Type serviceType) => null;
+}
+
+/// <summary>
+/// One answer, to every question, decided before the run started.
+///
+/// <para>For a run nobody is watching but somebody is checking. It is not the unattended handler:
+/// that one files the question and refuses, which is right for a scheduled job and useless for a
+/// scenario, because "the run could not do it" and "the run was not allowed to do it" then look the
+/// same from outside.</para>
+///
+/// <para>It says WHY in the outcome, so the reason reaches the timeline and the report rather than
+/// only the exit code.</para>
+/// </summary>
+sealed class FixedDecisionHandler(string answer) : IDecisionHandler
+{
+    public Task<DecisionOutcome> RequestAsync(DecisionRequest request, CancellationToken ct)
+    {
+        // The option that IS this answer, never a guess at one. A request whose options are not
+        // allow/deny - a fork with named branches - gets the last option, which for every request
+        // this engine builds is the conservative one.
+        var chosen = request.Options.FirstOrDefault(
+                         o => string.Equals(o.Id, answer, StringComparison.OrdinalIgnoreCase))
+                     ?? request.Options[^1];
+
+        Console.WriteLine();
+        Console.WriteLine($"  !! USER DECISION REQUIRED — answering '{chosen.Id}' (--approve {answer})");
+        Console.WriteLine($"  {request.Topic}");
+        if (!string.IsNullOrEmpty(request.FullText))
+            Console.WriteLine($"  {request.FullText}");
+
+        return Task.FromResult(new DecisionOutcome(chosen.Id, $"--approve {answer}"));
+    }
 }
 
 // Console approver for decision forks. A future Avalonia UI implements IDecisionHandler with a card.
