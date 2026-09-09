@@ -138,9 +138,16 @@ and §4.2 is why.
 
 ### 4.1 What a run does
 
-1. Asks GitHub for the newest run of `build.yml` on the branch with `status=success`. Success is
-   asked of GitHub rather than inferred from an artifact existing — a run can upload one and then
-   fail a later step, and "there is a build" is not "the tests passed".
+1. Asks GitHub for the newest run of `build.yml` on the branch with `status=success` **and
+   `event=push`**. Success is asked of GitHub rather than inferred from an artifact existing — a run
+   can upload one and then fail a later step, and "there is a build" is not "the tests passed".
+
+   `event=push` is not a detail. The artifact is named for `github.sha`, which equals the run's
+   `head_sha` only on a push; on a `pull_request` run `github.sha` is the merge commit GitHub
+   builds, a commit that exists nowhere in the branch. Once a PR is open every push produces both
+   runs and the `pull_request` one is often newer, so without this filter deployment stops the day
+   a PR is opened and resumes the day it is merged, with nothing in the log to say why. It is the
+   first thing this actually did.
 2. Stops if that commit is already the one in `current/.commit`.
 3. Downloads `gateway-<commit>` into `/opt/enactive-remote/releases/<timestamp>-<commit>`.
 4. Asks the **new build** what schema version it carries, by running it with `--schema-version`.

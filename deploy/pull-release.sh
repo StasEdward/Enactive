@@ -118,24 +118,47 @@ api() {
 # The newest run of the workflow that SUCCEEDED on the tracked branch. Success is asked of GitHub
 # rather than inferred from an artifact existing: a run can upload one and then fail a later step,
 # and "there is a build" is not the same claim as "the tests passed".
+#
+# event=push, and that is not a detail. The artifact is named for github.sha, which equals the run's
+# head_sha only on a push. On a PULL_REQUEST run github.sha is the merge commit GitHub builds - a
+# commit that exists nowhere in the branch - so its artifact is called gateway-<merge sha> while
+# this script, reading head_sha, looks for gateway-<branch head> and finds nothing. Both runs happen
+# for every push once a pull request is open, and the pull_request one is often the newer of the
+# two, so without this the deploy stops working the day a PR is opened and starts again the day it
+# is merged, for no reason anybody could see from here.
 newest_green_run() {
-    api "https://api.github.com/repos/$ENACTIVE_DEPLOY_REPO/actions/workflows/$ENACTIVE_DEPLOY_WORKFLOW/runs?branch=$ENACTIVE_DEPLOY_BRANCH&status=success&per_page=1" \
+    api "https://api.github.com/repos/$ENACTIVE_DEPLOY_REPO/actions/workflows/$ENACTIVE_DEPLOY_WORKFLOW/runs?branch=$ENACTIVE_DEPLOY_BRANCH&status=success&event=push&per_page=1" \
         | python3 -c 'import json,sys; r=json.load(sys.stdin)["workflow_runs"]; print(f"{r[0]['"'"'id'"'"']} {r[0]['"'"'head_sha'"'"']}" if r else "")'
 }
 
 # The download URL of this run's gateway artifact, by NAME. A run has several artifacts and taking
 # the first one would silently ship whichever the API happened to list first.
+#
+# When nothing matches it names what the run DOES have, on stderr. The first version said only that
+# the artifact was missing and guessed at expiry, which sent the reader to look at retention while
+# the actual answer - a pull_request run whose artifact is named for a merge commit - was sitting
+# right there in the listing, unprinted.
 artifact_url() {
     local run=$1 sha=$2
-    api "https://api.github.com/repos/$ENACTIVE_DEPLOY_REPO/actions/runs/$run/artifacts" \
-        | python3 -c "
+    artifacts_json "$run" | python3 -c "
 import json, sys
+
 name = 'gateway-$sha'
-for a in json.load(sys.stdin)['artifacts']:
+artifacts = json.load(sys.stdin)['artifacts']
+
+for a in artifacts:
     if a['name'] == name and not a['expired']:
         print(a['archive_download_url'])
         break
+else:
+    have = ', '.join(f\"{a['name']}{' (expired)' if a['expired'] else ''}\" for a in artifacts)
+    print('This run has: ' + (have or 'no artifacts at all'), file=sys.stderr)
 "
+}
+
+# Split out so a test can stand in for the call without stubbing curl itself.
+artifacts_json() {
+    api "https://api.github.com/repos/$ENACTIVE_DEPLOY_REPO/actions/runs/$1/artifacts"
 }
 
 fetch() {
@@ -198,7 +221,7 @@ main() {
     else
         local url
         url=$(artifact_url "$run" "$sha")
-        [ -n "$url" ] || fail "Run $run has no gateway-$sha artifact. Artifacts expire after 30 days."
+        [ -n "$url" ] || fail "Run $run has no gateway-$sha artifact (see above). Artifacts expire after 30 days."
 
         say "Fetching ${sha:0:12} from run $run."
         fetch "$url" "$release"

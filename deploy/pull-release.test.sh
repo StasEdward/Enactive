@@ -70,6 +70,45 @@ check "a release behind the database does not carry a migration" \
     "no" "$(carries_migration 1 2 && echo yes || echo no)"
 cleanup
 
+# ── picking the artifact ────────────────────────────────────────────────────
+
+sandbox
+
+# What the API would return for a run carrying the artifact under its own name, one belonging to a
+# different commit, and an expired one. Defined AFTER sandbox, which sources the script and would
+# otherwise put the real one back over it.
+artifacts_json() {
+    cat <<'JSON'
+{"artifacts": [
+  {"name": "gateway-cccccccccccc", "expired": false, "archive_download_url": "https://example.invalid/other"},
+  {"name": "gateway-bbbbbbbbbbbb", "expired": false, "archive_download_url": "https://example.invalid/right"},
+  {"name": "gateway-dddddddddddd", "expired": true,  "archive_download_url": "https://example.invalid/gone"}
+]}
+JSON
+}
+
+# By name, never by position. A run carries more than one, and taking the first would ship whichever
+# the API happened to list first - which is not a mistake anything downstream could catch, because
+# the wrong build installs and runs perfectly well.
+check "the artifact is chosen by the commit's own name" \
+    "https://example.invalid/right" "$(artifact_url 1 bbbbbbbbbbbb 2>/dev/null)"
+
+# The case that actually happened: a pull_request run's artifact is named for the MERGE commit, so
+# nothing matches the branch head. Nothing must be returned - installing a near-match would be
+# installing a commit that exists nowhere in the branch.
+check "a run with no artifact for this commit yields nothing" \
+    "" "$(artifact_url 1 aaaaaaaaaaaa 2>/dev/null)"
+
+# And it must say what the run DOES have. The first version reported only that the artifact was
+# missing and guessed at expiry, which sent the reader to look at retention while the answer was
+# sitting unprinted in the listing.
+check "and says what the run does have" \
+    "yes" "$(artifact_url 1 aaaaaaaaaaaa 2>&1 >/dev/null | grep -q 'gateway-cccccccccccc' && echo yes || echo no)"
+
+check "an expired artifact is not offered even under the right name" \
+    "" "$(artifact_url 1 dddddddddddd 2>/dev/null)"
+cleanup
+
 # ── what is already installed ───────────────────────────────────────────────
 
 sandbox
