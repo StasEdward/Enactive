@@ -178,9 +178,25 @@ chmod 0644 /etc/cron.d/enactive-remote
 
 # Once, now, rather than trusting tomorrow morning. A backup regime whose first proof of life is
 # the night you need it is not a backup regime.
+#
+# Started from / rather than from wherever the caller was standing. These run as the service
+# account, which usually cannot read an administrator's home directory, and `find` refuses to
+# finish if it cannot return to the directory it started in. The scripts cd there themselves too;
+# this is the same fix from the other side, because the first version of this failed here and took
+# the rest of the install's output with it.
 say "Taking one backup and restoring it, to prove both work"
-sudo -u "$ACCOUNT" "$ROOT/deploy/backup.sh"
-sudo -u "$ACCOUNT" "$ROOT/deploy/verify-restore.sh"
+backups_proven=yes
+(cd / && sudo -u "$ACCOUNT" "$ROOT/deploy/backup.sh") || backups_proven=no
+[ "$backups_proven" = yes ] && { (cd / && sudo -u "$ACCOUNT" "$ROOT/deploy/verify-restore.sh") || backups_proven=no; }
+
+# Not fatal, and deliberately so. The gateway is installed and answering by this point, and losing
+# the instructions below to a failed backup would trade the useful part of this run for the part
+# that can be re-run on its own in one command.
+if [ "$backups_proven" != yes ]; then
+  printf '\n!! The backup or its verification FAILED. The gateway is installed and running.\n'
+  printf '!! Fix that above, then:  sudo -u %s %s/deploy/backup.sh && sudo -u %s %s/deploy/verify-restore.sh\n' \
+    "$ACCOUNT" "$ROOT" "$ACCOUNT" "$ROOT"
+fi
 
 say "Done. What is left is the part that changes what the world sees."
 

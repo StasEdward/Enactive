@@ -10,6 +10,14 @@
 # obviously empty.
 set -euo pipefail
 
+# Every path below is absolute, so where this was started from is nobody's business - except that
+# it IS, silently: this runs as the service account, and it is normally started from somewhere that
+# account cannot read. GNU find returns to its starting directory when it finishes and fails if it
+# cannot, so `find -delete` ended the whole job with "Failed to restore initial working directory:
+# /home/someone: Permission denied" - a message about the caller's home directory, from a backup
+# script, which is not a sentence that leads anywhere useful at three in the morning.
+cd /
+
 DEFAULTS_FILE="${ENACTIVE_BACKUP_DEFAULTS:-/etc/enactive-remote/backup.cnf}"
 DATABASE="${ENACTIVE_BACKUP_DATABASE:-enactive_remote}"
 DESTINATION="${ENACTIVE_BACKUP_DIR:-/var/backups/enactive-remote}"

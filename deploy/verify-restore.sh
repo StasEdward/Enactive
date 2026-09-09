@@ -12,6 +12,10 @@
 # when it failed, so there is something to look at.
 set -euo pipefail
 
+# See backup.sh: this runs as the service account, from wherever the caller happened to be, and
+# `find` refuses to finish if it cannot get back there. Every path here is absolute.
+cd /
+
 DEFAULTS_FILE="${ENACTIVE_BACKUP_DEFAULTS:-/etc/enactive-remote/backup.cnf}"
 DATABASE="${ENACTIVE_BACKUP_DATABASE:-enactive_remote}"
 DESTINATION="${ENACTIVE_BACKUP_DIR:-/var/backups/enactive-remote}"
