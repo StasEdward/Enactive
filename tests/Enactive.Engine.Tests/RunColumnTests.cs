@@ -15,9 +15,9 @@ public sealed class RunColumnTests
 {
     private static LiveRun Running(
         Guid? runId = null, string title = "do the thing", bool headless = false,
-        int done = 0, int total = 0, int minutesAgo = 0)
+        int done = 0, int total = 0, int minutesAgo = 0, bool waiting = false)
         => new(Guid.NewGuid(), runId ?? Guid.Empty, title, headless, done, total,
-               DateTimeOffset.UtcNow.AddMinutes(-minutesAgo));
+               DateTimeOffset.UtcNow.AddMinutes(-minutesAgo), waiting);
 
     private static RunSummary Finished(Guid runId)
         => new(runId, Guid.NewGuid(), "done thing", null,
@@ -104,4 +104,21 @@ public sealed class RunColumnTests
     [Fact]
     public void A_background_run_says_its_result_goes_to_the_inbox()
         => Assert.Contains("Inbox", RunColumn.Meta(Running(headless: true, done: 1, total: 3)));
+
+    /// <summary>
+    /// A run blocked on a question does not read as a run getting on with it.
+    ///
+    /// <para>This matters more than it looks. The middle column can now be showing a different
+    /// workspace, so the approval card itself may be nowhere on screen - and "step 3 of 5" on a run
+    /// that has been stopped for ten minutes waiting for a click is the app hiding the one thing
+    /// the person needs to do.</para>
+    /// </summary>
+    [Fact]
+    public void A_run_waiting_on_an_answer_says_so_instead_of_its_step()
+    {
+        var meta = RunColumn.Meta(Running(done: 2, total: 5, waiting: true));
+
+        Assert.Equal("waiting for your answer", meta);
+        Assert.DoesNotContain("step", meta, StringComparison.OrdinalIgnoreCase);
+    }
 }

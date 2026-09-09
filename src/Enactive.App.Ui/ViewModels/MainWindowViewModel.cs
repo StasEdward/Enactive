@@ -292,7 +292,6 @@ internal sealed class MainWindowViewModel : ObservableObject
         {
             if (!Set(ref _workspacePath, value))
                 return;
-            OnPropertyChanged(nameof(WorkspaceCardTip));
             Runs.Reset();
             Runs.RefreshCommand.Execute(null);
             WorkspacePathChanged?.Invoke();
@@ -677,7 +676,7 @@ internal sealed class MainWindowViewModel : ObservableObject
             if (!Set(ref _isBusy, value))
                 return;
             OnPropertyChanged(nameof(IsIdle));
-            OnPropertyChanged(nameof(WorkspaceCardTip));
+            OnPropertyChanged(nameof(RunTip));
             RunCommand.RaiseCanExecuteChanged();
             RunBackgroundCommand.RaiseCanExecuteChanged();
             StopCommand.RaiseCanExecuteChanged();
@@ -687,17 +686,31 @@ internal sealed class MainWindowViewModel : ObservableObject
     public bool IsIdle => !IsBusy;
 
     /// <summary>
-    /// What the workspace card says when you hover it: the folder, or - while a run is on - why it
-    /// cannot be opened.
+    /// Whether the RUN LIST may be touched: filtered, refreshed, emptied.
     ///
-    /// <para>A greyed control answers "not now"; it does not answer "why", and the reason used to
-    /// be written into Current action, which the running orchestrator overwrites within a second.
-    /// The tooltip is where a disabled control can still say something.</para>
+    /// <para>Separate from <see cref="IsIdle"/> because a run holds the whole app but belongs to
+    /// ONE workspace. Switching away from it is allowed now, and in the workspace you switched TO
+    /// nothing is running - so freezing its list there would be freezing it for a reason that is
+    /// not true in the place you are looking at.</para>
     /// </summary>
-    public string WorkspaceCardTip
+    public bool IsColumnIdle
+    {
+        get => _isColumnIdle;
+        set => Set(ref _isColumnIdle, value);
+    }
+
+    private bool _isColumnIdle = true;
+
+    /// <summary>
+    /// Why Run is greyed, when it is. A run holds the foreground for the whole app, and once you
+    /// can walk away from it the reason stops being obvious: the thing occupying Run may be
+    /// happening in a workspace that is not on screen.
+    /// </summary>
+    public string RunTip
         => IsBusy
-            ? "A run is in progress. Finish or stop it before switching workspace."
-            : WorkspacePath;
+            ? "A run is already in progress. Enactive runs one foreground run at a time, and that "
+              + "run may be in another workspace. Run in background is not held by it."
+            : "Run this here, and watch it.";
 
     /// <summary>Shows the agent pill, unless it already says exactly this.</summary>
     public void SetAgent(string label, IBrush fill)

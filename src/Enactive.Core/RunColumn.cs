@@ -16,6 +16,12 @@ namespace Enactive.Core.History;
 /// Started with "Run in background": there is no live feed to go back to, so the row must not offer
 /// one. Its result arrives in the Inbox.
 /// </param>
+/// <param name="Waiting">
+/// The run has asked a question and is stopped until it is answered. Its own state, and not a
+/// detail of the card that asks: the card lives in the middle column, and the middle column can now
+/// be showing another workspace entirely - so the row is the only thing that can say a run is
+/// blocked on you rather than working.
+/// </param>
 public sealed record LiveRun(
     Guid RowId,
     Guid RunId,
@@ -23,7 +29,8 @@ public sealed record LiveRun(
     bool Headless,
     int StepsDone,
     int StepsTotal,
-    DateTimeOffset StartedAt);
+    DateTimeOffset StartedAt,
+    bool Waiting = false);
 
 /// <summary>
 /// What the run column shows, when some of what it is about has not finished happening.
@@ -77,6 +84,12 @@ public static class RunColumn
     {
         if (run.Headless)
             return "in background · the result goes to the Inbox";
+
+        // First, because it is the only state that is about the READER. Everything else here says
+        // what the run is doing; this says the run is doing nothing and is waiting on them - and
+        // the card it is waiting on may be behind another workspace.
+        if (run.Waiting)
+            return "waiting for your answer";
 
         // No plan yet. Saying "step 0 of 0" would be a progress report about work that has not been
         // decided on; planning is a real phase and is what is actually happening.
