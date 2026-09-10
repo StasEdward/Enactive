@@ -370,9 +370,11 @@ internal sealed class PastRunViewModel : ObservableObject
         ShowArtifactsCommand = new RelayCommand(() => SelectedTab = 1);
         ShowTimelineCommand = new RelayCommand(() => SelectedTab = 2);
 
-        // A run recorded before step numbers existed rebuilds no cards, so Execution would be an
-        // empty tab claiming the run did nothing. It opens on the timeline instead, which is what
-        // that record actually holds.
+        // A record that rebuilds no cards would show Execution as an empty tab claiming the run did
+        // nothing, so it opens on the timeline instead - which is what such a record actually holds.
+        // WHY there are none is Core's answer, not this window's: there are two reasons and they
+        // send a person to two different places.
+        NoStepsReason = RunReport.WhyNoSteps(record);
         if (Steps.Count == 0)
             SelectedTab = 2;
     }
@@ -390,6 +392,9 @@ internal sealed class PastRunViewModel : ObservableObject
 
     public bool HasSteps => Steps.Count > 0;
     public bool HasNoSteps => Steps.Count == 0;
+
+    /// <summary>Why there are none, from Core — see RunReport.WhyNoSteps.</summary>
+    public string NoStepsReason { get; }
     public string StepsText { get; }
 
     public ObservableCollection<RunEventViewModel> Events { get; } = new();

@@ -44,16 +44,46 @@ public sealed class RunRecorder
         IAsyncEnumerable<WorkEvent> stream, [EnumeratorCancellation] CancellationToken ct)
     {
         var events = new List<WorkEvent>();
+
+        // Enumerated by hand rather than with `await foreach`, so the MoveNext can sit in a try with
+        // a CATCH while the yield sits outside it - an iterator may not yield inside a try that has
+        // one. The shape is only there to let the exception be RECORDED before it is rethrown.
+        var source = stream.GetAsyncEnumerator(ct);
         try
         {
-            await foreach (var ev in stream.WithCancellation(ct))
+            while (true)
             {
-                events.Add(ev);
-                yield return ev;
+                WorkEvent current;
+                try
+                {
+                    if (!await source.MoveNextAsync())
+                        break;
+                    current = source.Current;
+                }
+                catch (Exception ex)
+                {
+                    // THE POINT OF ALL THIS. An exception that ends a run used to leave the record
+                    // with whatever events had arrived and no terminal event at all - so the run
+                    // read as "Incomplete", the report had no reason, and the Inbox item said
+                    // "Incomplete · 0 artifact(s)". The cause existed only in a log file nobody was
+                    // told about.
+                    //
+                    // Found on 2026-09-10 by the first real scheduled runs: both died 40ms in on
+                    // "model 'qwen2.5-coder' not found", and neither the timeline, the report nor
+                    // the Inbox said so. A run that cannot say why it stopped is the failure the
+                    // whole unattended design exists to prevent.
+                    Note(events, ex);
+                    throw;
+                }
+
+                events.Add(current);
+                yield return current;
             }
         }
         finally
         {
+            await source.DisposeAsync().ConfigureAwait(false);
+
             if (events.Count > 0)
             {
                 var record = Build(events, _settings, _spec);
@@ -81,6 +111,53 @@ public sealed class RunRecorder
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// Writes what killed the run INTO the run: an error to look at, and a terminal outcome that
+    /// carries the reason as a value.
+    ///
+    /// <para>Two events rather than one, because they answer different questions and are read by
+    /// different things. <c>ErrorObserved</c> puts the message on the timeline, where somebody
+    /// scrolls to the bottom for it. <c>TaskFailed</c> carries the typed outcome, which is what the
+    /// report, the history's status column and the Inbox line are all built from - none of them
+    /// read prose.</para>
+    ///
+    /// <para>Nothing is invented. The events are stamped with the ids and the moment of the run
+    /// that was actually happening, and if no event ever arrived there is no run to attach them to
+    /// and none are made: a record fabricated out of an exception would be a run that never
+    /// started.</para>
+    /// </summary>
+    private static void Note(List<WorkEvent> events, Exception ex)
+    {
+        if (events.Count == 0)
+            return;
+
+        var last = events[^1];
+        var at = DateTimeOffset.Now;
+
+        // Cancelled is not failed. A person pressing Stop, or a scheduled run cut off by the task's
+        // time limit, has not produced a wrong answer - and telling them it failed would send them
+        // looking for a defect that is not there.
+        var cancelled = ex is OperationCanceledException;
+        var reason = cancelled
+            ? "the run was stopped before it finished"
+            : $"{ex.GetType().Name}: {ex.Message}";
+
+        if (!cancelled)
+            events.Add(new WorkEvent(
+                Guid.NewGuid(), last.TaskId, last.RunId, at,
+                EventKind.ErrorObserved, reason, null));
+
+        // TaskFailed for both: it is the terminal event kind for a run that did not complete, and
+        // there is no separate "cancelled" kind. Which of the two it was rides in the PAYLOAD, as a
+        // value - which is the whole reason the outcome stopped being inferred from the kind.
+        events.Add(new WorkEvent(
+            Guid.NewGuid(), last.TaskId, last.RunId, at,
+            EventKind.TaskFailed,
+            cancelled ? "Cancelled" : "Failed",
+            WorkEventPayload.OutcomePayload(
+                cancelled ? RunOutcomeKind.Cancelled : RunOutcomeKind.Failed, reason)));
     }
 
     /// <summary>

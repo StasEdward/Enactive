@@ -51,6 +51,38 @@ public static class RunReport
             : null;
     }
 
+    /// <summary>
+    /// Why a record rebuilds no step cards. Empty when it does have them.
+    ///
+    /// <para>There are two reasons and they are nothing alike, which is the point. A record written
+    /// before events carried step numbers cannot be rebuilt without guessing. A run that STOPPED
+    /// BEFORE PLANNING has no steps because it never had a plan - and telling that person their
+    /// record is too old sends them looking for a history problem instead of at the failure that is
+    /// sitting in the same record.</para>
+    ///
+    /// <para>Found on 2026-09-10: two scheduled runs died before planning, and the window explained
+    /// both with the sentence about old records. It was the only reason that had ever existed when
+    /// the sentence was written, and it was wrong the first time a run failed early.</para>
+    /// </summary>
+    public static string WhyNoSteps(RunRecord record)
+    {
+        if (record.Events.Any(e => e.Step is not null))
+            return "";
+
+        var planned = record.Events.Any(
+            e => string.Equals(e.Kind, nameof(EventKind.PlanCreated), StringComparison.Ordinal));
+
+        if (planned)
+            return "This run was recorded before step numbers were, so its steps cannot be rebuilt "
+                 + "without guessing which one each tool call came from. The timeline has everything "
+                 + "it does hold.";
+
+        var reason = ReasonOf(record);
+        return "This run stopped before it had a plan, so there are no steps to show"
+             + (string.IsNullOrWhiteSpace(reason) ? "" : " — " + reason)
+             + ". The timeline has what it got through.";
+    }
+
     public static string Render(RunRecord record, string workspaceRoot)
     {
         var sb = new StringBuilder();

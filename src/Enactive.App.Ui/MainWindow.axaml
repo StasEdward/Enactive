@@ -53,6 +53,20 @@
                     </Viewbox>
                 </Button>
 
+                <!-- Schedules: the same saved task, set to run on a day and a time with nobody
+                     watching. Next to Templates because it is what you reach for straight after. -->
+                <Button DockPanel.Dock="Top" Classes="rail" Command="{Binding SchedulesCommand}"
+                        ToolTip.Tip="Schedules · run it on a day and a time">
+                    <Viewbox Width="18" Height="18">
+                        <Canvas Width="24" Height="24">
+                            <Path Data="M 4,6 H 20 V 20 H 4 Z" />
+                            <Path Data="M 4,10 H 20" />
+                            <Path Data="M 8,4 V 7 M 16,4 V 7" />
+                            <Path Data="M 12,13 V 16 H 15" />
+                        </Canvas>
+                    </Viewbox>
+                </Button>
+
                 <Button DockPanel.Dock="Top" Classes="rail" Command="{Binding InboxCommand}"
                         ToolTip.Tip="{Binding InboxTooltip}">
                     <Panel>
@@ -899,7 +913,7 @@
                             <StackPanel Margin="16,12,10,12">
                                 <TextBlock Classes="hint" TextWrapping="Wrap"
                                            IsVisible="{Binding PastRun.HasNoSteps}"
-                                           Text="This run was recorded before step numbers were, so its steps cannot be rebuilt without guessing which one each tool call came from. The timeline has everything it does hold." />
+                                           Text="{Binding PastRun.NoStepsReason}" />
                                 <ItemsControl ItemsSource="{Binding PastRun.Steps}"
                                               IsVisible="{Binding PastRun.HasSteps}">
                                     <ItemsControl.ItemTemplate>
