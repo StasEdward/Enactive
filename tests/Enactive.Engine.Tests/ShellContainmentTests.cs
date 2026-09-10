@@ -103,11 +103,20 @@ public sealed class ShellContainmentTests
         return File.Exists(Path.Combine(fx.Root, "survivor.txt"));
     }
 
-    /// <summary>Waits for the detached process to say it exists, so the test knows its own setup worked.</summary>
+    /// <summary>
+    /// Waits for the detached process to say it exists, so the test knows its own setup worked.
+    ///
+    /// <para>Thirty seconds, and it costs nothing: it returns the moment the marker appears, so the
+    /// budget is only ever spent when the setup is genuinely slow. It was five, and CI failed on
+    /// it — the chain has to start <c>powershell.exe</c>, and a cold start on a loaded runner does
+    /// not fit in five seconds. Nothing was wrong with the product: the guard below reported that
+    /// the SETUP had not happened, which is exactly the job it was added for, and the honest fix is
+    /// to stop calling a slow machine a failure.</para>
+    /// </summary>
     private static async Task<bool> SurvivorStarted(EngineFixture fx)
     {
         var marker = Path.Combine(fx.Root, "started.txt");
-        for (var i = 0; i < 50 && !File.Exists(marker); i++)
+        for (var i = 0; i < 300 && !File.Exists(marker); i++)
             await Task.Delay(100);
         return File.Exists(marker);
     }
