@@ -6,6 +6,7 @@ using Enactive.Core.History;
 using Enactive.Core.Intents;
 using Enactive.Core.Permissions;
 using Enactive.Core.Providers;
+using Enactive.Core.Schedules;
 using Enactive.Core.Templates;
 using Enactive.Core.Tools;
 using Enactive.Core.Workers;
@@ -41,6 +42,10 @@ var isTimeline = args.Length > 0 && string.Equals(args[0], "timeline", StringCom
 // This is what makes a saved task a DAILY task: Windows Task Scheduler, cron or a pipeline step
 // drives it. Nothing here is interactive, and that is enforced rather than assumed - see
 // UnattendedDecisionHandler.
+//
+// --template names ONE task and runs it now. --due asks the saved schedules what is owed and runs
+// what is: same machinery, and the difference is only who decides which task. See the --due block
+// below and Docs/SCHEDULER_PLAN.md.
 string? Option(string name)
 {
     for (var i = 0; i < args.Length - 1; i++)
@@ -214,6 +219,76 @@ var permissionPolicy = AutonomyTiers.PolicyFor(autonomyTier.Value);
 
 // ── A saved task, run without a prompt ────────────────────────────────────────
 ResolvedTaskSpec? spec = null;
+
+// ── Whatever is due now ───────────────────────────────────────────────────────
+//   Enactive.App.Console --due --workspace c:\repos\Enactive
+//
+// This is the tick. Something wakes it every few minutes - a Windows scheduled task registered
+// once - and it asks the saved schedules what is due. See Docs/SCHEDULER_PLAN.md.
+//
+// It runs AT MOST ONE schedule per invocation, and that is a real limitation rather than an
+// oversight: everything below this point is written for one run, and threading a second through it
+// would be a larger change than the value at this stage. Two schedules due in the same minute means
+// the second one runs on the next tick, a few minutes later. It is reported as such rather than
+// silently deferred.
+IDisposable? scheduleClaim = null;
+if (args.Contains("--due", StringComparer.OrdinalIgnoreCase))
+{
+    var schedules = ScheduleStore.Default.For(workspace.RootPath);
+    var decisions = ScheduleTick.Decide(schedules, DateTimeOffset.Now, RunMarkers.Default.IsRunning);
+
+    Console.WriteLine($"SCHEDULES — {workspace.RootPath}");
+    foreach (var decision in decisions.Where(d => d.WorthReporting || d.ShouldRun))
+        Console.WriteLine($"  [{decision.Verdict}] {decision.Schedule.Name}: {decision.Why}");
+
+    // The most overdue first: if only one can go this tick, it should be the one that has been
+    // waiting longest, not whichever the file happened to list first.
+    var due = decisions.Where(d => d.ShouldRun).OrderBy(d => d.Occurrence).ToList();
+    if (due.Count == 0)
+    {
+        Console.WriteLine(decisions.Count == 0 ? "  (no schedules)" : "  nothing due");
+        return 0;
+    }
+
+    if (due.Count > 1)
+        Console.WriteLine($"  {due.Count - 1} more due; they run on the next tick.");
+
+    var chosen = due[0];
+
+    // Claimed BEFORE anything else, so a second tick that overlaps this one sees it as busy. Null
+    // means somebody claimed it between the decision and here, which is not an error - it is the
+    // overlap rule working.
+    scheduleClaim = RunMarkers.Default.Claim(chosen.Schedule.Id);
+    if (scheduleClaim is null)
+    {
+        Console.WriteLine($"  [Busy] {chosen.Schedule.Name}: claimed by another run just now");
+        return 0;
+    }
+
+    var resolved = ScheduledSpec.For(
+        chosen.Schedule, workspace, id => new TemplateStore(workspaceRoot).Find(id));
+
+    if (resolved.Spec is null)
+    {
+        // Reported and NOT retried in a loop: the occurrence is marked as fired below, so a
+        // template that cannot resolve produces one report a day rather than one every tick.
+        Console.Error.WriteLine($"  [Failed] {chosen.Schedule.Name}: {resolved.Why}");
+        ScheduleStore.Default.Save(chosen.Schedule with { LastFiredAt = chosen.Occurrence });
+        return 70;   // EX_SOFTWARE: the invocation was fine, the task could not be built
+    }
+
+    // Marked as fired NOW rather than when the run ends. An occurrence is considered exactly once,
+    // and a machine that loses power mid-run must not repeat the same occurrence on the way back
+    // up - the run is in the history either way, which is where a person looks.
+    ScheduleStore.Default.Save(chosen.Schedule with { LastFiredAt = chosen.Occurrence });
+
+    spec = resolved.Spec;
+    command = spec.Goal;
+    Console.WriteLine($"  running '{chosen.Schedule.Name}' — {chosen.Why}");
+}
+
+using var _scheduleClaim = scheduleClaim;
+
 if (templateId is { Length: > 0 })
 {
     var template = new TemplateStore(workspaceRoot).Find(templateId);
