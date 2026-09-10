@@ -81,6 +81,9 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     private int _totalSteps;
     private readonly Stopwatch _runStopwatch = new();
     private DispatcherTimer? _elapsedTimer;
+
+    /// <summary>See where it is started: the badge against work this process did not do.</summary>
+    private DispatcherTimer? _inboxPoll;
     private string _currentWorkspaceRoot = string.Empty;
     private readonly WorkspaceRegistry _registry = WorkspaceRegistry.Load();
 
@@ -226,6 +229,21 @@ public sealed partial class MainWindow : Window, IDecisionHandler
 
         DataContext = _vm;
         InitializeComponent();
+
+        // ── The badge, against work this process did not do ───────────────────────
+        // The Inbox count used to change only when THIS window did something: switched workspace,
+        // opened the Inbox, or finished a background run of its own. A scheduled run is a different
+        // process; its item lands in the store while this window sits showing the old number, so the
+        // one place a person would learn about the run says nothing.
+        //
+        // A poll rather than a file watcher, because the store may be SQLite, MySQL or JSON and only
+        // one of those has a file to watch. Once at startup — the count is a fact about the store,
+        // not about anything this session has done yet — and then on a minute, which is well inside
+        // "I looked over and it was right".
+        RefreshInboxButton();
+        _inboxPoll = new DispatcherTimer { Interval = TimeSpan.FromSeconds(60) };
+        _inboxPoll.Tick += (_, _) => RefreshInboxButton();
+        _inboxPoll.Start();
 
         // After InitializeComponent, or the XAML's own Width/Height would overwrite the saved bounds.
         TrySetIcon();
