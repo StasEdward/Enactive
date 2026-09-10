@@ -3,6 +3,7 @@ using Enactive.Core.Context;
 using Enactive.Core.Diagnostics;
 using Enactive.Core.Events;
 using Enactive.Core.History;
+using Enactive.Core.Inbox;
 using Enactive.Core.Intents;
 using Enactive.Core.Permissions;
 using Enactive.Core.Providers;
@@ -232,6 +233,12 @@ ResolvedTaskSpec? spec = null;
 // the second one runs on the next tick, a few minutes later. It is reported as such rather than
 // silently deferred.
 IDisposable? scheduleClaim = null;
+
+// Set only when a SCHEDULE drove this invocation. It is what decides whether an Inbox item is filed
+// at the end: a command somebody typed has somebody reading its output, and filing an item for it
+// would fill the Inbox with things its owner has already seen.
+string? scheduleName = null;
+
 if (args.Contains("--due", StringComparer.OrdinalIgnoreCase))
 {
     var schedules = ScheduleStore.Default.For(workspace.RootPath);
@@ -274,6 +281,14 @@ if (args.Contains("--due", StringComparer.OrdinalIgnoreCase))
         // template that cannot resolve produces one report a day rather than one every tick.
         Console.Error.WriteLine($"  [Failed] {chosen.Schedule.Name}: {resolved.Why}");
         ScheduleStore.Default.Save(chosen.Schedule with { LastFiredAt = chosen.Occurrence });
+
+        // Into the Inbox as well as onto stderr. Exit code 70 goes to a scheduler's log, and a
+        // schedule that has quietly stopped working is precisely the thing whose owner should be
+        // told rather than left to notice the work is not being done.
+        await InboxStoreFactory.Create(workspace).AppendAsync(
+            ScheduledOutcome.CouldNotStart(workspace.Id, chosen.Schedule.Name, resolved.Why, DateTimeOffset.UtcNow),
+            CancellationToken.None);
+
         return 70;   // EX_SOFTWARE: the invocation was fine, the task could not be built
     }
 
@@ -284,6 +299,7 @@ if (args.Contains("--due", StringComparer.OrdinalIgnoreCase))
 
     spec = resolved.Spec;
     command = spec.Goal;
+    scheduleName = chosen.Schedule.Name;
     Console.WriteLine($"  running '{chosen.Schedule.Name}' — {chosen.Why}");
 }
 
@@ -415,6 +431,43 @@ var intent = new Intent(
     // this invocation.
     workContext, DateTimeOffset.UtcNow, roleId ?? spec?.WorkerId);
 
+// ── The scheduled run's copy of the result ────────────────────────────────────
+// Exactly one Inbox item per scheduled run, whatever ending it reaches - including the ones that
+// return early below, which are the endings a person is least likely to hear about otherwise. A
+// scheduled run's stdout is a window nobody opened and a scheduler's log is gone by morning.
+//
+// Best-effort, and last: the run happened, and failing to file the paperwork does not unhappen it.
+async Task FileScheduledOutcome(RunRecord? known = null)
+{
+    if (scheduleName is null)
+        return;   // typed at a console - somebody is reading this
+
+    try
+    {
+        var record = known;
+        if (record is null)
+        {
+            // By header first, then the one record: reading every run whole to find the newest is
+            // how a workspace pays for its history on every invocation.
+            var header = (await runStore.LoadSummariesAsync(CancellationToken.None))
+                .Where(r => r.TaskId == (resumeFrom?.TaskId ?? intent.Id))
+                .OrderByDescending(r => r.StartedAt)
+                .FirstOrDefault();
+
+            if (header is not null)
+                record = await runStore.LoadAsync(header.RunId, CancellationToken.None);
+        }
+
+        await InboxStoreFactory.Create(workspace).AppendAsync(
+            ScheduledOutcome.For(workspace.Id, scheduleName, record, DateTimeOffset.UtcNow),
+            CancellationToken.None);
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"Could not file the Inbox item for '{scheduleName}': {ex.Message}");
+    }
+}
+
 var streaming = false;
 RunOutcomeKind? outcome = null;
 try
@@ -464,11 +517,13 @@ catch (HttpRequestException ex)
     if (ex is not ProviderUnreachableException)
         Console.WriteLine($"  Is Ollama running? Try:  ollama serve   and   ollama pull {model}");
 
+    await FileScheduledOutcome();
     return 1;
 }
 catch (OperationCanceledException)
 {
     Console.WriteLine("Cancelled.");
+    await FileScheduledOutcome();
     return 130;
 }
 catch (Exception ex)
@@ -485,6 +540,7 @@ catch (Exception ex)
     Console.Error.WriteLine("x The run stopped on an error nothing handled.");
     Console.Error.WriteLine($"  {ex.GetType().Name}: {ex.Message}");
     Console.Error.WriteLine("  Check the provider settings and the log; nothing further was run.");
+    await FileScheduledOutcome();
     return RunReport.ExitCodeFor(RunOutcomeKind.Failed);
 }
 
@@ -532,6 +588,9 @@ if (finished is not null)
 
     outcome ??= RunReport.OutcomeOf(finished);
 }
+
+// The record is already in hand here, so it is handed over rather than looked up again.
+await FileScheduledOutcome(finished);
 
 // One line, last, in a shape something other than a person can read.
 //

@@ -65,7 +65,7 @@ public static class RunReport
         sb.AppendLine($"  took      : {Duration(record.FinishedAt - record.StartedAt)}");
         sb.AppendLine($"  model     : {record.Model ?? "(not recorded)"}");
 
-        var reason = TerminalReason(record);
+        var reason = ReasonOf(record);
         sb.AppendLine($"  OUTCOME   : {outcome?.ToString() ?? record.Status}"
                     + (string.IsNullOrWhiteSpace(reason) ? "" : " — " + reason));
 
@@ -129,7 +129,13 @@ public static class RunReport
         return sb.ToString().TrimEnd();
     }
 
-    private static string? TerminalReason(RunRecord record)
+    /// <summary>
+    /// What the engine recorded about how the run ENDED, or null when it recorded nothing.
+    ///
+    /// <para>Public because the Inbox needs the same sentence the report prints. Two readings of
+    /// "why did it stop" drift, and the one that drifts is the one with no test.</para>
+    /// </summary>
+    public static string? ReasonOf(RunRecord record)
     {
         foreach (var ev in record.Events)
             if (string.Equals(ev.Kind, nameof(EventKind.TaskFailed), StringComparison.Ordinal)
