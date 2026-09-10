@@ -1,7 +1,7 @@
 namespace Enactive.Workspace;
 
-using System.Collections.Concurrent;
 using System.Text.Json;
+using Enactive.Core.Storage;
 
 /// <summary>
 /// The read/write half of the JSON-file stores, shared so the two of them cannot drift apart.
@@ -27,32 +27,15 @@ using System.Text.Json;
 ///    neither process saw an error. The read-modify-write now holds a lock FILE beside the target,
 ///    so the critical section is one per machine rather than one per process.
 ///
-/// A lock file rather than a named <c>Mutex</c> because these paths are async: a Mutex belongs to
-/// the thread that took it, and an await can resume on another thread, where releasing it throws.
+/// The lock itself is <see cref="FileLock"/>, in Core, because the schedules file needs the same one
+/// and is written from there. It was here first and moved when the second caller appeared; a lock
+/// implemented twice is two locks, which is no lock at all.
 ///
 /// SQLite and MySQL remain the answer for anything heavier — a shared store, or writers that are not
 /// this machine. This makes the file stores correct for two local processes, not distributed.
 /// </summary>
 internal static class JsonFileStore
 {
-    private static readonly ConcurrentDictionary<string, SemaphoreSlim> Gates =
-        new(StringComparer.OrdinalIgnoreCase);
-
-    /// <summary>
-    /// How long a writer waits for another process to finish its read-modify-write. The critical
-    /// section is a few milliseconds, so this is not a queue length - it is how long we are willing
-    /// to wait for a holder that has died without cleaning up.
-    /// </summary>
-    private static readonly TimeSpan LockWait = TimeSpan.FromSeconds(30);
-
-    /// <summary>
-    /// The in-process half of the lock for one FILE, shared by every store instance addressing it.
-    /// PRIVATE: taking it alone leaves the other process out, which is the defect above. Callers go
-    /// through <see cref="HoldAsync"/>, which takes both halves.
-    /// </summary>
-    private static SemaphoreSlim GateFor(string path)
-        => Gates.GetOrAdd(Path.GetFullPath(path), _ => new SemaphoreSlim(1, 1));
-
     /// <summary>
     /// Takes the file's critical section - against the other tasks in this process AND against the
     /// other processes on this machine - and gives it back when disposed.
@@ -61,67 +44,11 @@ internal static class JsonFileStore
     /// read that is going to be written back does: that is the pair the lock exists for.</para>
     /// </summary>
     /// <exception cref="TimeoutException">
-    /// Another process has held the file for <see cref="LockWait"/>. Thrown rather than returned,
-    /// because the alternative is writing anyway - which is the exact behaviour being removed.
+    /// Another process has held the file for <see cref="FileLock.Wait"/>. Thrown rather than
+    /// returned, because the alternative is writing anyway - the exact behaviour being removed.
     /// </exception>
-    public static async Task<IAsyncDisposable> HoldAsync(string path, CancellationToken ct)
-    {
-        var gate = GateFor(path);
-        await gate.WaitAsync(ct).ConfigureAwait(false);
-
-        try
-        {
-            var lockPath = Path.GetFullPath(path) + ".lock";
-            var deadline = DateTimeOffset.UtcNow + LockWait;
-
-            while (true)
-            {
-                try
-                {
-                    // DeleteOnClose so an ordinary exit leaves nothing behind; FileShare.None is
-                    // what makes the second process wait. A process killed outright leaves the file,
-                    // and Windows releases the handle with it - the next opener gets in.
-                    var handle = new FileStream(
-                        lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None,
-                        bufferSize: 1, FileOptions.DeleteOnClose);
-
-                    return new Hold(gate, handle);
-                }
-                catch (IOException) when (DateTimeOffset.UtcNow < deadline)
-                {
-                    await Task.Delay(15, ct).ConfigureAwait(false);
-                }
-                catch (UnauthorizedAccessException)
-                {
-                    // A read-only folder, or a lock file somebody else owns. The store still works
-                    // for the one process that can write; refusing to run at all would be worse.
-                    return new Hold(gate, handle: null);
-                }
-                catch (IOException ex)
-                {
-                    throw new TimeoutException(
-                        $"Waited {LockWait.TotalSeconds:0}s for another process to release '{lockPath}'.", ex);
-                }
-            }
-        }
-        catch
-        {
-            gate.Release();
-            throw;
-        }
-    }
-
-    private sealed class Hold(SemaphoreSlim gate, FileStream? handle) : IAsyncDisposable
-    {
-        public ValueTask DisposeAsync()
-        {
-            try { handle?.Dispose(); }
-            catch { /* DeleteOnClose can fail on a folder that vanished; the lock is gone either way */ }
-            finally { gate.Release(); }
-
-            return ValueTask.CompletedTask;
-        }
-    }
+    public static Task<FileLock.Hold> HoldAsync(string path, CancellationToken ct)
+        => FileLock.TakeAsync(path, ct);
 
     /// <summary>
     /// Reads the list. <c>Readable</c> is false when the file exists but could not be understood —

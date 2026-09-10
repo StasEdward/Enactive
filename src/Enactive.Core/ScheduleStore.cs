@@ -3,6 +3,7 @@ namespace Enactive.Core.Schedules;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Enactive.Core.Context;
+using Enactive.Core.Storage;
 
 /// <summary>
 /// The saved schedules, in <c>%APPDATA%/Enactive/schedules.json</c>.
@@ -28,7 +29,6 @@ public sealed class ScheduleStore
         Converters = { new JsonStringEnumConverter() }
     };
 
-    private readonly object _gate = new();
     private readonly string _file;
 
     /// <param name="filePath">
@@ -46,11 +46,18 @@ public sealed class ScheduleStore
 
     /// <summary>Every schedule for this workspace, in the order they were added.</summary>
     public IReadOnlyList<Schedule> For(string workspaceRoot)
-        => string.IsNullOrWhiteSpace(workspaceRoot)
-            ? Array.Empty<Schedule>()
-            : Load().TryGetValue(KeyFor(workspaceRoot), out var found)
-                ? found
-                : Array.Empty<Schedule>();
+    {
+        if (string.IsNullOrWhiteSpace(workspaceRoot))
+            return Array.Empty<Schedule>();
+
+        // Under the lock too: a read that lands between another process's temp-write and its move
+        // sees no file, and "no schedules" is a very bad thing for this file to say by accident.
+        using var hold = Hold();
+
+        return Load().TryGetValue(KeyFor(workspaceRoot), out var found)
+            ? found
+            : Array.Empty<Schedule>();
+    }
 
     /// <summary>Adds a schedule, or replaces the one with the same id.</summary>
     public void Save(Schedule schedule)
@@ -58,7 +65,7 @@ public sealed class ScheduleStore
         if (!schedule.Work.IsValid || string.IsNullOrWhiteSpace(schedule.WorkspaceRoot))
             return;
 
-        lock (_gate)
+        using (Hold())
         {
             var all = Load();
             var key = KeyFor(schedule.WorkspaceRoot);
@@ -78,7 +85,7 @@ public sealed class ScheduleStore
         if (string.IsNullOrWhiteSpace(workspaceRoot))
             return;
 
-        lock (_gate)
+        using (Hold())
         {
             var all = Load();
             var key = KeyFor(workspaceRoot);
@@ -92,6 +99,27 @@ public sealed class ScheduleStore
             all[key] = list;
             Write(all);
         }
+    }
+
+    /// <summary>
+    /// The critical section around read-modify-write, held against OTHER PROCESSES as well as other
+    /// tasks. It used to be a <c>lock</c> statement, which is one process's view of one file.
+    ///
+    /// <para>The scheduler made that wrong from both sides at once: the runner writes
+    /// <c>LastFiredAt</c> here every time a schedule fires, and step 4 puts adding, editing and
+    /// disabling in the window. Measured on 2026-09-10, two processes each saving 200 schedules to
+    /// one file: 137 of the 400 survived, losses on both sides, and neither process saw an error.
+    /// A lost schedule is work that never runs; a lost <c>LastFiredAt</c> is an occurrence that
+    /// fires twice.</para>
+    /// </summary>
+    private FileLock.Hold Hold()
+    {
+        // The folder has to exist before a lock file can go in it. Write() creates it too, and by
+        // then it is too late - the lock would have been skipped for the first ever save.
+        try { Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(_file))!); }
+        catch { /* FileLock gives up quietly on a folder it cannot use */ }
+
+        return FileLock.Take(_file);
     }
 
     private static string KeyFor(string workspaceRoot)

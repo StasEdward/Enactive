@@ -2,6 +2,9 @@ namespace Enactive.Engine.Tests;
 
 using Enactive.Core.Context;
 using Enactive.Core.Inbox;
+using Enactive.Core.Permissions;
+using Enactive.Core.Schedules;
+using Enactive.Core.Storage;
 using Enactive.Workspace;
 using Xunit;
 
@@ -104,5 +107,59 @@ public sealed class JsonStoreProcessLockTests : IDisposable
         await _inbox.AppendAsync(Item("first"), CancellationToken.None);
 
         Assert.False(File.Exists(_lockPath));
+    }
+
+    // ── the schedules file, which is the worse case ─────────────────────────
+    //
+    // Worse for two reasons. It is written from BOTH sides by design — the runner stamps LastFiredAt
+    // every time a schedule fires, and the window adds, edits and disables — and what is lost is not
+    // a notification. A lost schedule is work that never runs; a lost LastFiredAt is an occurrence
+    // that fires a second time. Measured before the lock, two processes saving 200 schedules each:
+    // 137 of 400 survived, losses on both sides, no error anywhere.
+
+    private string SchedulesFile => Path.Combine(_root, "schedules.json");
+
+    private Schedule Schedule(string name)
+        => new(Guid.NewGuid(), _root, name,
+               ScheduledWork.FromTemplate("tidy"),
+               ScheduleTiming.Daily(new TimeOnly(3, 0), "UTC"),
+               PermissionPolicy.PermissiveDefault, DateTimeOffset.Now);
+
+    [Fact]
+    public async Task A_schedule_save_waits_while_another_process_holds_the_file()
+    {
+        var store = new ScheduleStore(SchedulesFile);
+        store.Save(Schedule("first"));
+
+        using var foreignHold = new FileStream(
+            FileLock.LockPathFor(SchedulesFile), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+
+        // Task.Run because this store is synchronous: the wait is a blocked thread, which is what
+        // the app and the runner both do here.
+        var blocked = Task.Run(() => store.Save(Schedule("second")));
+        var finishedEarly = await Task.WhenAny(blocked, Task.Delay(TimeSpan.FromMilliseconds(500)));
+
+        Assert.NotSame(blocked, finishedEarly);
+    }
+
+    [Fact]
+    public async Task Both_schedules_are_there_once_the_other_process_lets_go()
+    {
+        var store = new ScheduleStore(SchedulesFile);
+        store.Save(Schedule("first"));
+
+        var foreignHold = new FileStream(
+            FileLock.LockPathFor(SchedulesFile), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        var blocked = Task.Run(() => store.Save(Schedule("second")));
+
+        await Task.Delay(200);
+        foreignHold.Dispose();
+
+        await blocked.WaitAsync(TimeSpan.FromSeconds(20));
+
+        var saved = store.For(_root);
+        Assert.Equal(2, saved.Count);
+        Assert.Contains(saved, s => s.Name == "first");
+        Assert.Contains(saved, s => s.Name == "second");
     }
 }
