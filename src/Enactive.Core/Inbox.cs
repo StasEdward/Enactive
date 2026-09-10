@@ -12,7 +12,21 @@ public sealed record InboxItem(
     string Summary,
     Guid RunId,
     string Status,      // "unread" | "read"
-    DateTimeOffset At);
+    DateTimeOffset At,
+
+    /// <summary>
+    /// The schedule this came from, when a schedule is what produced it.
+    ///
+    /// <para>An ID rather than the name in <see cref="Title"/>, because the name is the one thing
+    /// about a schedule a person is expected to change. Matching a schedule's outcomes by its title
+    /// would work until somebody renamed it and then quietly report that a schedule which has been
+    /// running for months has never run at all.</para>
+    ///
+    /// <para>Null for everything else, and for items filed before this existed - which is why it is
+    /// nullable rather than <see cref="Guid.Empty"/>: "not from a schedule" and "from a schedule
+    /// nobody recorded" are different, and only one of them is worth going to look for.</para>
+    /// </summary>
+    Guid? ScheduleId = null);
 
 /// <summary>Persists and loads inbox items for a workspace.</summary>
 public interface IInboxStore

@@ -238,6 +238,7 @@ IDisposable? scheduleClaim = null;
 // at the end: a command somebody typed has somebody reading its output, and filing an item for it
 // would fill the Inbox with things its owner has already seen.
 string? scheduleName = null;
+var scheduleId = Guid.Empty;
 
 if (args.Contains("--due", StringComparer.OrdinalIgnoreCase))
 {
@@ -286,7 +287,8 @@ if (args.Contains("--due", StringComparer.OrdinalIgnoreCase))
         // schedule that has quietly stopped working is precisely the thing whose owner should be
         // told rather than left to notice the work is not being done.
         await InboxStoreFactory.Create(workspace).AppendAsync(
-            ScheduledOutcome.CouldNotStart(workspace.Id, chosen.Schedule.Name, resolved.Why, DateTimeOffset.UtcNow),
+            ScheduledOutcome.CouldNotStart(
+                workspace.Id, chosen.Schedule.Id, chosen.Schedule.Name, resolved.Why, DateTimeOffset.UtcNow),
             CancellationToken.None);
 
         return 70;   // EX_SOFTWARE: the invocation was fine, the task could not be built
@@ -300,6 +302,7 @@ if (args.Contains("--due", StringComparer.OrdinalIgnoreCase))
     spec = resolved.Spec;
     command = spec.Goal;
     scheduleName = chosen.Schedule.Name;
+    scheduleId = chosen.Schedule.Id;
     Console.WriteLine($"  running '{chosen.Schedule.Name}' — {chosen.Why}");
 }
 
@@ -459,7 +462,7 @@ async Task FileScheduledOutcome(RunRecord? known = null)
         }
 
         await InboxStoreFactory.Create(workspace).AppendAsync(
-            ScheduledOutcome.For(workspace.Id, scheduleName, record, DateTimeOffset.UtcNow),
+            ScheduledOutcome.For(workspace.Id, scheduleId, scheduleName, record, DateTimeOffset.UtcNow),
             CancellationToken.None);
     }
     catch (Exception ex)

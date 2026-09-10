@@ -41,12 +41,12 @@ public sealed class MySqlInboxStore : IInboxStore
             command.CommandText =
                 """
                 INSERT INTO inbox
-                  (id, workspace_id, kind, title, summary, run_id, status, at)
+                  (id, workspace_id, kind, title, summary, run_id, status, at, schedule_id)
                 VALUES
-                  (@id, @workspace_id, @kind, @title, @summary, @run_id, @status, @at)
+                  (@id, @workspace_id, @kind, @title, @summary, @run_id, @status, @at, @schedule_id)
                 ON DUPLICATE KEY UPDATE
                   workspace_id=@workspace_id, kind=@kind, title=@title, summary=@summary,
-                  run_id=@run_id, status=@status, at=@at;
+                  run_id=@run_id, status=@status, at=@at, schedule_id=@schedule_id;
                 """;
             command.Parameters.AddWithValue("@id", item.Id.ToString());
             command.Parameters.AddWithValue("@workspace_id", item.WorkspaceId.ToString());
@@ -56,6 +56,8 @@ public sealed class MySqlInboxStore : IInboxStore
             command.Parameters.AddWithValue("@run_id", item.RunId.ToString());
             command.Parameters.AddWithValue("@status", item.Status);
             command.Parameters.AddWithValue("@at", item.At.ToString("o"));
+            command.Parameters.AddWithValue("@schedule_id",
+                item.ScheduleId is { } schedule ? schedule.ToString() : (object)DBNull.Value);
 
             await command.ExecuteNonQueryAsync(ct);
         }
@@ -75,7 +77,7 @@ public sealed class MySqlInboxStore : IInboxStore
             using var command = connection.CreateCommand();
             command.CommandText =
                 """
-                SELECT id, workspace_id, kind, title, summary, run_id, status, at
+                SELECT id, workspace_id, kind, title, summary, run_id, status, at, schedule_id
                 FROM inbox
                 WHERE workspace_id = @workspace_id
                 ORDER BY at ASC;
@@ -92,7 +94,10 @@ public sealed class MySqlInboxStore : IInboxStore
                     reader.GetString(4),
                     Guid.Parse(reader.GetString(5)),
                     reader.GetString(6),
-                    DateTimeOffset.Parse(reader.GetString(7), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)));
+                    DateTimeOffset.Parse(reader.GetString(7), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+                    // Null, not Guid.Empty: a row written before the column existed did not come
+                    // from "no schedule", it came from before anybody was recording which.
+                    reader.IsDBNull(8) ? null : Guid.Parse(reader.GetString(8))));
         }
         catch { /* best-effort */ }
 
@@ -158,10 +163,21 @@ public sealed class MySqlInboxStore : IInboxStore
                   run_id       CHAR(36),
                   status       VARCHAR(16),
                   at           VARCHAR(40),
+                  schedule_id  CHAR(36) NULL,
                   INDEX ix_inbox_workspace (workspace_id, at)
                 );
                 """;
             await command.ExecuteNonQueryAsync(ct);
+
+            // A database created before the column existed is upgraded in place. MySQL 8 has no
+            // "ADD COLUMN IF NOT EXISTS" either, and a duplicate-column error here is the success
+            // case: the column is already there.
+            using (var upgrade = connection.CreateCommand())
+            {
+                upgrade.CommandText = "ALTER TABLE inbox ADD COLUMN schedule_id CHAR(36) NULL;";
+                try { await upgrade.ExecuteNonQueryAsync(ct); }
+                catch (MySqlException) { /* already has it */ }
+            }
 
             _initialized = true;
         }
