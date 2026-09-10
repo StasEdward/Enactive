@@ -211,6 +211,7 @@ internal sealed class MainWindowViewModel : ObservableObject
         EnvironmentCommand = new RelayCommand(() => EnvironmentRequested?.Invoke());
         InboxCommand = new RelayCommand(() => InboxRequested?.Invoke());
         TemplatesCommand = new RelayCommand(() => TemplatesRequested?.Invoke());
+        SchedulesCommand = new RelayCommand(() => SchedulesRequested?.Invoke());
         SettingsCommand = new RelayCommand(() => SettingsRequested?.Invoke());
 
         UpdateAutonomyLabel();
@@ -259,6 +260,7 @@ internal sealed class MainWindowViewModel : ObservableObject
     public event Action? EnvironmentRequested;
     public event Action? InboxRequested;
     public event Action? TemplatesRequested;
+    public event Action? SchedulesRequested;
     public event Action? SettingsRequested;
 
     /// <summary>Raised after the input text was changed from here, so the view can restore focus.</summary>
@@ -458,6 +460,10 @@ internal sealed class MainWindowViewModel : ObservableObject
 
     /// <summary>Opens the template library - a saved task, run without typing a prompt.</summary>
     public RelayCommand TemplatesCommand { get; }
+
+    /// <summary>Opens the schedules — a saved task set to run on a day and a time, unattended.</summary>
+    public RelayCommand SchedulesCommand { get; }
+
     public RelayCommand SettingsCommand { get; }
 
     // ── Centre: the plan-step feed ────────────────────────────────────────────

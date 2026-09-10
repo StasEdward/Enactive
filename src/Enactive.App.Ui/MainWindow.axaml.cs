@@ -183,6 +183,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         _vm.EnvironmentRequested += () => _ = ShowEnvironmentAsync();
         _vm.InboxRequested += ShowInbox;
         _vm.TemplatesRequested += ShowTemplates;
+        _vm.SchedulesRequested += ShowSchedules;
         _vm.Runs.RefreshRequested += () => _ = LoadRunsAsync();
         _vm.Runs.OpenRequested += summary => _ = OpenPastRunAsync(summary);
         _vm.Runs.DeleteRequested += summary => _ = DeleteRunAsync(summary);
@@ -522,6 +523,40 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             });
         _templatesWindow.Closed += (_, _) => _templatesWindow = null;
         _templatesWindow.Show(this);
+    }
+
+    private SchedulesWindow? _schedulesWindow;
+
+    /// <summary>
+    /// Opens the schedules. Kept and re-shown like the library, and for the same reason: schedules
+    /// are per-workspace, and a second copy is a second answer to which workspace this is.
+    /// </summary>
+    private void ShowSchedules()
+    {
+        if (WorkspaceRootOrNull() is not { } root)
+        {
+            ShowViewer("Schedules", "Set a workspace first.");
+            return;
+        }
+
+        if (_schedulesWindow is not null)
+        {
+            _schedulesWindow.FollowWorkspace(root);
+            _schedulesWindow.Show();
+            _schedulesWindow.Activate();
+            return;
+        }
+
+        _schedulesWindow = new SchedulesWindow(root);
+        _schedulesWindow.Closed += (_, _) =>
+        {
+            _schedulesWindow = null;
+
+            // A schedule edited here may have fired, or been turned off; either way the count on
+            // the rail is now a fact about a moment that has passed.
+            RefreshInboxButton();
+        };
+        _schedulesWindow.Show(this);
     }
 
     /// <param name="taskId">
@@ -1478,6 +1513,11 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         // A library left open across the switch would go on offering the previous project's
         // templates for a project that has never heard of them.
         _templatesWindow?.FollowWorkspace(WorkspaceRootOrNull(), PolicyFor(_vm.AutonomyTier));
+
+        // And a schedules window left open would offer Delete and Disable for schedules belonging
+        // to a project it is no longer looking at.
+        if (WorkspaceRootOrNull() is { } schedulesRoot)
+            _schedulesWindow?.FollowWorkspace(schedulesRoot);
     }
 
     /// <summary>
