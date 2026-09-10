@@ -91,6 +91,15 @@ public sealed record ScheduleTiming(
 /// advance for every future run of it, so the thing that creates one has to show this back in
 /// words - a person cannot approve what they were not shown.
 /// </param>
+/// <param name="CreatedAt">
+/// The anchor for a schedule that has never fired, and it is not decoration.
+///
+/// <para>Without it there is nothing to measure the first occurrence FROM, and anchoring at "now"
+/// instead makes an occurrence earlier today invisible - so a schedule set for 03:00 and looked at
+/// during the morning reports its next run as tomorrow and nobody is ever told that today's did not
+/// happen. That is the whole missed-run question, answered wrongly and silently. Found by the first
+/// run of the tests below, which is the only reason this field exists.</para>
+/// </param>
 public sealed record Schedule(
     Guid Id,
     string WorkspaceRoot,
@@ -98,6 +107,7 @@ public sealed record Schedule(
     ScheduledWork Work,
     ScheduleTiming Timing,
     PermissionPolicy Permissions,
+    DateTimeOffset CreatedAt,
     MissedRun Missed = MissedRun.Skip,
     bool Enabled = true,
     DateTimeOffset? LastFiredAt = null);

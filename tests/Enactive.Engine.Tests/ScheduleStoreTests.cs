@@ -41,7 +41,8 @@ public sealed class ScheduleStoreTests : IDisposable
         => new(Guid.NewGuid(), workspace, name,
                work ?? ScheduledWork.FromTemplate("improve-tests", new Dictionary<string, string> { ["scope"] = "all" }),
                ScheduleTiming.Daily(new TimeOnly(3, 0), "Europe/Berlin"),
-               new PermissionPolicy(PermissionLevel.Execute, new[] { "*" }, Array.Empty<string>()));
+               new PermissionPolicy(PermissionLevel.Execute, new[] { "*" }, Array.Empty<string>()),
+               CreatedAt: DateTimeOffset.UtcNow);
 
     /// <summary>
     /// A schedule survives the round trip WHOLE. Everything on it decides what runs and what it may

@@ -52,6 +52,52 @@ public static class ScheduleClock
     }
 
     /// <summary>
+    /// The MOST RECENT occurrence at or before <paramref name="at"/> that is still after
+    /// <paramref name="notBefore"/>, or null when there is none.
+    ///
+    /// <para>The most recent, not the oldest, and that is the whole point of it. Walking forward
+    /// from the last firing finds the FIRST occurrence nobody ran - so a laptop opened after a week
+    /// away reports a schedule due seven days ago, and a run that made itself up would be making up
+    /// last Tuesday's rather than today's. Asked backwards, a backlog collapses to its most recent
+    /// member by construction rather than by a rule that has to remember to collapse it.</para>
+    /// </summary>
+    public static DateTimeOffset? MostRecent(Schedule schedule, DateTimeOffset at, DateTimeOffset notBefore)
+    {
+        if (!schedule.Enabled)
+            return null;
+
+        var timing = schedule.Timing;
+
+        if (timing.Repeat == ScheduleRepeat.Once)
+            return timing.OnceAt is { } once && once <= at && once > notBefore ? once : null;
+
+        if (Zone(timing.TimeZoneId) is not { } zone)
+            return null;
+
+        var local = TimeZoneInfo.ConvertTime(at, zone);
+        for (var day = 0; day < 400; day++)
+        {
+            var date = DateOnly.FromDateTime(local.Date).AddDays(-day);
+
+            if (timing.Repeat == ScheduleRepeat.Weekly
+                && timing.OnDay is { } wanted
+                && date.DayOfWeek != wanted)
+                continue;
+
+            if (Occurrence(date, timing.AtLocal, zone) is not { } occurrence)
+                continue;
+
+            if (occurrence <= notBefore)
+                return null;   // walked back past the window; there is nothing outstanding
+
+            if (occurrence <= at)
+                return occurrence;
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// One occurrence: this date, at this wall time, in this zone - resolving the two ways a local
     /// time can fail to be a single instant.
     ///

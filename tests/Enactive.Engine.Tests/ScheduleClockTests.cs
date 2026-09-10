@@ -30,7 +30,7 @@ public sealed class ScheduleClockTests
 
     private static Schedule With(ScheduleTiming timing, bool enabled = true)
         => new(Guid.NewGuid(), @"C:\ws", "test", ScheduledWork.FromTemplate("t"), timing,
-               PermissionPolicy.PermissiveDefault, Enabled: enabled);
+               PermissionPolicy.PermissiveDefault, CreatedAt: DateTimeOffset.MinValue, Enabled: enabled);
 
     /// <summary>A moment in that zone, written the way a person would say it.</summary>
     private static DateTimeOffset Local(int year, int month, int day, int hour, int minute)
