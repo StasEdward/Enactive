@@ -1,6 +1,7 @@
 namespace Enactive.Agents;
 
 using Enactive.Core.Artifacts;
+using Enactive.Core.Context;
 using Enactive.Core.Events;
 using Enactive.Core.Execution;
 using Enactive.Core.Providers;
@@ -43,6 +44,18 @@ public sealed class RunScope
 
     /// <summary>The files this run has produced. Mutated by the steps; read under <c>lock</c>.</summary>
     public List<ArtifactRef> Artifacts { get; }
+
+    /// <summary>
+    /// Places outside the workspace this run has been given permission to write to.
+    ///
+    /// <para>Per RUN rather than per step, which is the whole point of it being here: "yes, this
+    /// build may write to C:\out" is answered once and holds for the steps that follow. Per step it
+    /// would be the same question five times, and a question asked five times is one nobody reads
+    /// by the third.</para>
+    ///
+    /// <para>It goes no further than the run - see <see cref="GrantedRoots"/>.</para>
+    /// </summary>
+    public GrantedRoots Granted { get; } = new();
 
     /// <summary>
     /// Any event of this run.
