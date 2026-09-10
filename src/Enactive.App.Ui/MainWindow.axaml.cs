@@ -27,6 +27,7 @@ using Enactive.Core.Tools;
 using Enactive.Core.Workers;
 using Enactive.Providers;
 using Enactive.Remote.Host;
+using Enactive.Settings;
 using Enactive.Tools;
 using Enactive.Tools.Mcp;
 using Enactive.Workspace;

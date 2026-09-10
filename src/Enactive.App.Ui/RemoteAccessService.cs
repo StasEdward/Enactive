@@ -4,6 +4,7 @@ using Enactive.Core.Permissions;
 using Enactive.Remote.Contracts;
 using Enactive.Remote.Host;
 using Enactive.Workspace;
+using Enactive.Settings;
 
 namespace Enactive.App.Ui;
 

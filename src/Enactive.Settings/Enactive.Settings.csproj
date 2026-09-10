@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Enactive.Settings</RootNamespace>
+  </PropertyGroup>
+
+  <!--
+    What a person configured, and what builds an engine from it.
+
+    It lives outside Enactive.App.Ui because that is a WinExe and no other project can reference it.
+    While these settings were in there, the console could not read them and grew its own: a
+    hard-coded provider and a model name from an environment variable. On 2026-09-10 the first
+    scheduled runs went out on a different provider KIND, a model that was not installed, no phase
+    bindings and none of the review policy - none of which matched what the window was configured
+    with, and none of which anybody had chosen.
+
+    Not in Enactive.Core: the API key is DPAPI-protected and Core carries no external dependencies,
+    which is a rule worth keeping. Not in Enactive.Workspace either - these settings are about the
+    MACHINE, and a workspace's are a different thing with a different lifetime.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\Enactive.Core\Enactive.Core.csproj" />
+    <ProjectReference Include="..\Enactive.Agents\Enactive.Agents.csproj" />
+    <ProjectReference Include="..\Enactive.Providers\Enactive.Providers.csproj" />
+    <ProjectReference Include="..\Enactive.Tools\Enactive.Tools.csproj" />
+    <ProjectReference Include="..\Enactive.Workspace\Enactive.Workspace.csproj" />
+    <ProjectReference Include="..\Enactive.Secrets\Enactive.Secrets.csproj" />
+  </ItemGroup>
+</Project>

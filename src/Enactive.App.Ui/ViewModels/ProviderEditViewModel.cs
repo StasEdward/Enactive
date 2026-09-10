@@ -5,6 +5,7 @@ using Avalonia.Media;
 using Enactive.App.Ui.Mvvm;
 using Enactive.Providers;
 using Enactive.Core.Providers;
+using Enactive.Settings;
 
 /// <summary>
 /// Editing one provider endpoint. The view model holds a working copy as text - the way the fields

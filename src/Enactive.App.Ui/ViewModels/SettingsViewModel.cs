@@ -7,6 +7,7 @@ using Enactive.Providers;
 using Enactive.Core.Execution;
 using Enactive.Workspace;
 using Enactive.Core.Providers;
+using Enactive.Settings;
 
 /// <summary>One row of the Providers list. Wraps the config so the row can be told to re-read it
 /// after the edit dialog writes back, instead of rebuilding the whole list.</summary>

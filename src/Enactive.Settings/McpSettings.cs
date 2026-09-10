@@ -1,10 +1,10 @@
-namespace Enactive.App.Ui;
+namespace Enactive.Settings;
 
 using System.Text.Json;
 using Enactive.Tools.Mcp;
 using Enactive.Secrets;
 
-internal sealed partial class AppSettings
+public sealed partial class AppSettings
 {
     public List<McpServerConfig> McpServers { get; set; } = new();
 
