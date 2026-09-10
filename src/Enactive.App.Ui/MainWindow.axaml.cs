@@ -2411,31 +2411,20 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         ?? request.Options.FirstOrDefault()?.Id
         ?? "allow";
 
-    // Workspace-scoped approvals live OUTSIDE the workspace now — see ApprovalStore for why. The
-    // old <workspace>/.enactive/permissions.json is ignored, not imported.
+    // Workspace-scoped approvals live OUTSIDE the workspace — see ApprovalStore in Core, which is
+    // where the rules are and where they are tested. This window passes the FOLDER and decides
+    // nothing: which key an approval is filed under, whether a shell may ever be remembered, and
+    // whether a legacy in-workspace file counts are all answered in there.
     //
-    // Keyed by WorkspaceInfo.IdFor — the PATH — and deliberately NOT by the workspace's stable id.
-    // The stable id is read from a file inside the folder, and a repository can arrive from anywhere
-    // with that file already in it; a clone must not be able to bring somebody else's standing
-    // "yes, run_command is fine here" with it. Attribution may follow a folder that was renamed.
-    // Authority may not: it is granted to a place, and the place is the path.
-    //
-    // The cost is that renaming a folder asks again, once per tool. That is the right way round —
-    // being asked again is an inconvenience, and inheriting an approval nobody granted here is not.
+    // They used to be answered here, correctly, in a WinExe no test project references.
     private bool WorkspaceApproves(string tool)
-    {
-        if (string.IsNullOrEmpty(_currentWorkspaceRoot))
-            return false;
-
-        return ApprovalStore.Approves(WorkspaceInfo.IdFor(_currentWorkspaceRoot), tool);
-    }
+        => !string.IsNullOrEmpty(_currentWorkspaceRoot)
+        && ApprovalStore.Default.Approves(_currentWorkspaceRoot, tool);
 
     private void SaveWorkspaceApproval(string tool)
     {
-        if (string.IsNullOrEmpty(_currentWorkspaceRoot))
-            return;
-
-        ApprovalStore.Approve(WorkspaceInfo.IdFor(_currentWorkspaceRoot), tool);
+        if (!string.IsNullOrEmpty(_currentWorkspaceRoot))
+            ApprovalStore.Default.Approve(_currentWorkspaceRoot, tool);
     }
 
     /// <summary>
