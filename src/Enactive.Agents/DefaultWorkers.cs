@@ -21,9 +21,16 @@ public static class DefaultWorkers
         "\n\nImportant rules:\n"
         + "- Never invent or guess command output, file contents, numbers or results. Only state values you "
         + "actually obtained from a tool call during this run.\n"
-        + "- On Windows, for anything using PowerShell (WMI/CIM queries, Get-PSDrive, pipes, quotes) use the "
-        + "run_powershell tool and write the script plainly — do NOT fight cmd quoting with run_command, and do "
-        + "NOT put '| Out-File' or '>' in the script; let the tool return the output to you.\n"
+        // "do NOT fight cmd quoting" used to be here, and it was advice about a BUG in this
+        // application rather than about shells: run_command passed the command with the C runtime's
+        // escaping, which cmd does not speak, so every quote came out as \". That is fixed (see
+        // RunCommandTool), and telling the model to avoid quotes would now be teaching it to work
+        // around something that no longer happens. The reason to prefer PowerShell is objects and
+        // pipes, which is a real reason.
+        + "- On Windows, prefer the run_powershell tool for anything working with OBJECTS - WMI/CIM "
+        + "queries, Get-PSDrive, pipes, Select-Object - and write the script plainly. Quotes are safe in "
+        + "either tool: write the command exactly as you would type it. Do NOT put '| Out-File' or '>' in "
+        + "the script; let the tool return the output to you.\n"
         + "- To capture a command's output into a file: RUN the command (its stdout/stderr is returned to you in "
         + "the tool result), then write that exact returned text to the file with write_file. Do NOT redirect with "
         + "'>' into a file and then describe the output from memory — redirected output is not visible to you.\n"
