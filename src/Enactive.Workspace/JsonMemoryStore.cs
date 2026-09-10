@@ -30,10 +30,12 @@ public sealed class JsonMemoryStore : IMemoryStore
 
     public async Task AppendAsync(MemoryEntry entry, CancellationToken ct)
     {
-        var gate = JsonFileStore.GateFor(_path);
-        await gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
+            // Against the other processes on this machine too, not only the other tasks in this one:
+            // a scheduled run is a second process writing this same file. See JsonFileStore.
+            await using var hold = await JsonFileStore.HoldAsync(_path, ct).ConfigureAwait(false);
+
             var (items, readable) = await JsonFileStore.LoadAsync<MemoryEntry>(_path, JsonOpts, ct).ConfigureAwait(false);
 
             // Unparseable is not empty. Overwriting here would replace the file's real contents with
@@ -45,18 +47,16 @@ public sealed class JsonMemoryStore : IMemoryStore
             await JsonFileStore.SaveAsync(_path, items, JsonOpts, ct).ConfigureAwait(false);
         }
         catch { /* best-effort: memory is never load-bearing */ }
-        finally { gate.Release(); }
     }
 
     public async Task<IReadOnlyList<MemoryEntry>> LoadAllAsync(CancellationToken ct)
     {
-        var gate = JsonFileStore.GateFor(_path);
-        await gate.WaitAsync(ct).ConfigureAwait(false);
-        try
-        {
-            var (items, _) = await JsonFileStore.LoadAsync<MemoryEntry>(_path, JsonOpts, ct).ConfigureAwait(false);
-            return items;
-        }
-        finally { gate.Release(); }
+        // Under the lock as well: a read that overlaps another process's move-into-place sees the
+        // file vanish out from under it, and a memory that occasionally reads as empty is worse than
+        // one that waits a few milliseconds.
+        await using var hold = await JsonFileStore.HoldAsync(_path, ct).ConfigureAwait(false);
+
+        var (items, _) = await JsonFileStore.LoadAsync<MemoryEntry>(_path, JsonOpts, ct).ConfigureAwait(false);
+        return items;
     }
 }
