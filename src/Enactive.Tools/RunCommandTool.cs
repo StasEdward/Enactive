@@ -58,11 +58,29 @@ public sealed class RunCommandTool : ITool
         if (OperatingSystem.IsWindows())
         {
             startInfo.FileName = "cmd.exe";
-            startInfo.ArgumentList.Add("/c");
-            startInfo.ArgumentList.Add(command);
+
+            // Arguments, NOT ArgumentList - and this is the whole of the difference.
+            //
+            // .NET joins ArgumentList with the C RUNTIME's rules: wrap anything containing a space
+            // in quotes, and escape an inner quote as \". cmd.exe does not speak that language. So
+            // `start "" "C:\Program Files\totalcmd\TOTALCMD64.EXE"` - which is exactly how that is
+            // written - arrived at cmd as `\"\" \"C:\Program Files\...\"`, cmd read `\"\"` as the
+            // name of a program, and Windows put a modal dialog on the user's screen saying it
+            // cannot find `\\`. The run then sat for 24 seconds until somebody clicked OK. Measured
+            // 2026-09-10, from a real run; `echo` had hidden it for years by printing the
+            // backslashes without complaint.
+            //
+            // /s is what makes this exact rather than lucky: with /s, cmd strips the FIRST and LAST
+            // character if both are quotes and runs everything between them verbatim. Without it
+            // the rule is conditional on how many quotes are in the string - which is how a command
+            // came to depend on its own punctuation.
+            startInfo.Arguments = $"/s /c \"{command}\"";
         }
         else
         {
+            // A list is right here: execve takes an array, so nothing re-parses the arguments and
+            // there is no quoting to get wrong. Same for git and docker in ProcessExec, where the
+            // program being run does use the C runtime's rules and .NET's joining is correct.
             startInfo.FileName = "/bin/sh";
             startInfo.ArgumentList.Add("-c");
             startInfo.ArgumentList.Add(command);
@@ -76,20 +94,15 @@ public sealed class RunCommandTool : ITool
         process.OutputDataReceived += (_, e) => stdout.Add(e.Data);
         process.ErrorDataReceived += (_, e) => stderr.Add(e.Data);
 
+        ProcessExec.RunOutcome outcome;
         try
         {
-            process.Start();
-            process.BeginOutputReadLine();
-            process.BeginErrorReadLine();
-
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            timeout.CancelAfter(TimeSpan.FromSeconds(TimeoutSeconds));
-            await process.WaitForExitAsync(timeout.Token);
-        }
-        catch (OperationCanceledException)
-        {
-            try { if (!process.HasExited) process.Kill(entireProcessTree: true); } catch { /* ignore */ }
-            return ToolResults.Fail($"Command timed out after {TimeoutSeconds}s or was cancelled.");
+            // Contained: if this call is CANCELLED, the command and everything it started dies with
+            // it. A command that finishes normally leaves what it started running - `start "" app`
+            // is a thing people ask a shell to do. See ProcessJob for both halves of that.
+            outcome = await ProcessExec.RunContainedAsync(process, TimeoutSeconds, ct);
+            if (!outcome.Completed)
+                return ToolResults.Fail($"Command timed out after {TimeoutSeconds}s or was cancelled.");
         }
         catch (Exception ex)
         {
@@ -97,7 +110,8 @@ public sealed class RunCommandTool : ITool
         }
 
         return ProcessExec.BuildResult(
-            "Command", process.ExitCode, stdout.ToString(), stderr.ToString(), expected, declarable: true);
+            "Command", process.ExitCode, stdout.ToString(), stderr.ToString(), expected,
+            declarable: true, outputCutShort: outcome.OutputCutShort);
     }
 
     private static readonly string Schema = $$"""
