@@ -52,8 +52,14 @@ public sealed class RunPowerShellTool : ITool
         if (string.IsNullOrWhiteSpace(script))
             return ToolResults.Unreadable("'script' is required.");
 
+        // Progress records go to the ERROR stream, and a redirected error stream is where the model
+        // reads failures from. `Get-ChildItem -Recurse` alone put two "Preparing modules for first
+        // use" records in front of every answer. Silenced first, so a script that says nothing
+        // really says nothing - which is what the exit-code rule below depends on.
+        var prepared = "$ProgressPreference = 'SilentlyContinue'\r\n" + script;
+
         // -EncodedCommand takes base64 of the UTF-16LE script text — bypasses ALL cmd/shell quoting.
-        var encoded = Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
+        var encoded = Convert.ToBase64String(Encoding.Unicode.GetBytes(prepared));
 
         var startInfo = new ProcessStartInfo
         {
@@ -66,6 +72,11 @@ public sealed class RunPowerShellTool : ITool
         };
         startInfo.ArgumentList.Add("-NoProfile");
         startInfo.ArgumentList.Add("-NonInteractive");
+        // Pins the OUTPUT stream to text. It does NOT help the error stream: -EncodedCommand makes
+        // this a minishell, and a minishell serialises its non-output streams as CLIXML whatever
+        // this says - measured, both ways round. That is what CliXml is for.
+        startInfo.ArgumentList.Add("-OutputFormat");
+        startInfo.ArgumentList.Add("Text");
         startInfo.ArgumentList.Add("-EncodedCommand");
         startInfo.ArgumentList.Add(encoded);
 
@@ -97,8 +108,55 @@ public sealed class RunPowerShellTool : ITool
             return ToolResults.Fail($"Could not run PowerShell: {ex.Message}");
         }
 
+        // Decoded BEFORE anything is decided from it. A blob of progress records is not an error
+        // report, and reading it as one is how a script that had nothing to say was called a
+        // failure - see CliXml.
+        var errors = CliXml.ToText(stderr.ToString());
+
         return ProcessExec.BuildResult(
-            "PowerShell", process.ExitCode, stdout.ToString(), stderr.ToString(), expected, declarable: true);
+            "PowerShell", process.ExitCode, CliXml.ToText(stdout.ToString()), errors,
+            Tolerated(process.ExitCode, errors, expected), declarable: true);
+    }
+
+    /// <summary>
+    /// The exit codes that count as success for THIS run, given what the script actually said.
+    ///
+    /// <para><b>PowerShell's exit code is not a verdict on the script.</b> <c>powershell.exe</c>
+    /// returns 1 when the last statement left <c>$?</c> false - and <c>-ErrorAction
+    /// SilentlyContinue</c> silences the DISPLAY of an error, not the error. So a script doing
+    /// exactly what it was asked returns 1:</para>
+    ///
+    /// <list type="bullet">
+    /// <item><c>Get-ChildItem C:\ -Recurse -ErrorAction SilentlyContinue</c> - meets a folder it may
+    /// not read, which is the case that flag exists for. Exit 1.</item>
+    /// <item><c>Get-ItemProperty HKLM:\...\NotThere -ErrorAction SilentlyContinue</c> - the key is
+    /// absent, which was the question. Exit 1.</item>
+    /// <item><c>Get-Command whatever*</c> matching nothing - no error to silence. Exit 0.</item>
+    /// </list>
+    ///
+    /// <para>Measured, all three. So "found nothing" and "the script broke" arrived identically, a
+    /// run that answered its question correctly was recorded Incomplete, and the failure text told
+    /// the model to look at output that named no cause - or to declare 1 expected, which is the one
+    /// thing <see cref="ProcessExec.ExpectedExitCodes"/> says never to do.</para>
+    ///
+    /// <para><b>The discriminator is the error stream, not the number.</b> With progress silenced
+    /// and <c>-OutputFormat Text</c>, a script with nothing to report says NOTHING; a script that
+    /// really failed says why, in words. So a non-zero code with an empty error stream is a script
+    /// that ran, and the real code is still shown in the output and the metadata - nothing is
+    /// hidden, only re-read.</para>
+    ///
+    /// <para>Scoped to PowerShell on purpose. For <c>run_command</c>, git and docker the exit code
+    /// is the program's own and does mean something; there, <c>expectedExitCodes</c> is the answer.
+    /// </para>
+    /// </summary>
+    private static IReadOnlyCollection<int>? Tolerated(
+        int exitCode, string errors, IReadOnlyCollection<int>? declared)
+    {
+        if (exitCode == 0 || errors.Trim().Length > 0)
+            return declared;
+
+        var allowed = new HashSet<int>(declared ?? Array.Empty<int>()) { 0, exitCode };
+        return allowed;
     }
 
     private static readonly string Schema = $$"""
