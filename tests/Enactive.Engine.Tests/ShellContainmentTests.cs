@@ -5,6 +5,22 @@ using Enactive.Tools;
 using Xunit;
 
 /// <summary>
+/// The classes that start real processes and wait on real clocks.
+///
+/// <para>xUnit runs CLASSES in parallel, and these are the heaviest tests in the suite: each one
+/// spawns a tree of cmd processes and then waits seconds for it. Run alongside each other they
+/// multiply, and the runner has other tests on it whose assertions depend on something starting
+/// promptly - <c>McpTests</c> waits for a server process, and one of those failed on CI
+/// immediately after these arrived, taking 12 seconds where it normally takes 2.</para>
+///
+/// <para>One collection makes them take turns. It does not make them fast and it does not stop
+/// them competing with the rest of the suite; it stops them competing with each other, which is
+/// the part that belongs to these tests.</para>
+/// </summary>
+[CollectionDefinition("processes", DisableParallelization = true)]
+public sealed class ProcessTests { }
+
+/// <summary>
 /// What a shell command leaves behind when it is over.
 ///
 /// <para><c>process.Kill(entireProcessTree: true)</c> reads like a kill-tree guarantee and is not
@@ -36,6 +52,7 @@ using Xunit;
 /// <para><b>Windows only.</b> Job objects are a Windows mechanism and START is a cmd builtin. The
 /// engine suite runs on windows-latest for exactly this class of test - see build.yml.</para>
 /// </summary>
+[Collection("processes")]
 public sealed class ShellContainmentTests
 {
     /// <summary>
@@ -188,8 +205,57 @@ public sealed class ShellContainmentTests
         // The point of the whole reversal: the program is still there.
         Assert.True(await SurvivorAppeared(fx),
             "The program the command was asked to launch was killed when the command returned.");
+    }
 
-        // And the short output says it is short, rather than reading as a complete one.
+    /// <summary>
+    /// Holds the output pipe for far longer than the grace period, and writes nothing.
+    ///
+    /// <para><c>ping</c> rather than a marker file because this test is about the OUTPUT, not about
+    /// what survived; there is then nothing to clean up, and the child ends on its own.</para>
+    ///
+    /// <para>About seven seconds against a two-second grace: enough margin that no machine decides
+    /// the outcome, short enough that the child is gone quickly. It does OUTLIVE the test - that is
+    /// the behaviour under test - and a rebuild started in those seconds can find the test assembly
+    /// locked. That happened while writing this, and the rebuild then silently ran the PREVIOUS
+    /// binary, which is a contaminated measurement of exactly the kind this file keeps catching.</para>
+    /// </summary>
+    private const string HoldsThePipe =
+        "@echo off\r\nstart \"\" /b ping -n 8 127.0.0.1\r\necho launched\r\n";
+
+    /// <summary>
+    /// A command whose child still holds the output says so, instead of returning a short output
+    /// that reads like a complete one.
+    ///
+    /// <para><b>This assertion used to live in the test above, and it was an assertion about a
+    /// race.</b> The note appears when the grace period expires with the pipe still held; that
+    /// launcher's child lived about two seconds and the grace is two seconds, so which way it went
+    /// depended on the machine. It went one way on the developer's and the other on CI, where it
+    /// failed on first contact — the third time in this file that a test has been green for a
+    /// reason other than the one in its name.</para>
+    ///
+    /// <para>So the timing is no longer incidental: the child holds the pipe for about twenty
+    /// seconds against a two-second grace. And it is a separate test, because "what survives" and
+    /// "what the output admits" are two different claims and a test should fail for one reason.</para>
+    /// </summary>
+    [Fact]
+    public async Task Output_cut_short_by_a_child_still_holding_the_pipe_says_so()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        using var fx = new EngineFixture();
+        fx.Write("holds.cmd", HoldsThePipe);
+
+        var started = System.Diagnostics.Stopwatch.StartNew();
+        var result = await new RunCommandTool().InvokeAsync(
+            Arguments("holds.cmd"), fx.ContextFor(), CancellationToken.None);
+        started.Stop();
+
+        Assert.True(started.Elapsed < TimeSpan.FromSeconds(20),
+            $"The tool waited {started.Elapsed.TotalSeconds:F1}s for a pipe it should have stopped waiting for.");
+
+        Assert.True(result.Success, $"The command itself succeeded but was reported failed: {result.Error}");
+
         Assert.Contains("still running", result.Output ?? "", StringComparison.Ordinal);
     }
 }

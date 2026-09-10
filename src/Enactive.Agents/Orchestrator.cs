@@ -402,7 +402,7 @@ public sealed class Orchestrator : IOrchestrator
                     {
                         await foreach (var ev in RunToolLoopAsync(
                             scope.TaskId, scope.RunId, activeProvider, activeRef.Model, models.Worker, messages, scope.Artifacts,
-                            intent.Context, store, journal, reads, null, quickResult, scope.Budget, ct, activeRef.ProviderId))
+                            intent.Context, store, journal, reads, null, quickResult, scope.Budget, scope.Granted, ct, activeRef.ProviderId))
                             quick.Writer.TryWrite(ev);
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException
@@ -523,7 +523,7 @@ public sealed class Orchestrator : IOrchestrator
             await foreach (var checkEvent in VerifyAsync(
                 intent, scope.TaskId, scope.RunId, models.Worker, models.Provider, models.Model.Model, models.Model.ProviderId,
                 scope.Artifacts, scope.Budget, verified, scope.Criterion,
-                (kind, summary) => scope.Ev(kind, summary), ct))
+                (kind, summary) => scope.Ev(kind, summary), scope.Granted, ct))
                 yield return checkEvent;
 
             var adjusted = verified.Report.Apply(quickOutcome);
@@ -825,7 +825,7 @@ public sealed class Orchestrator : IOrchestrator
                 {
                     await foreach (var ev in RunToolLoopAsync(
                         scope.TaskId, scope.RunId, stepProvider, stepModel, models.Worker, convo, scope.Artifacts,
-                        intent.Context, store, journal, reads, stepNumber, stepResult, scope.Budget, ct, stepRef.ProviderId))
+                        intent.Context, store, journal, reads, stepNumber, stepResult, scope.Budget, scope.Granted, ct, stepRef.ProviderId))
                         events.Writer.TryWrite(ev);
 
                     outcome = stepResult.Kind;
@@ -1191,7 +1191,7 @@ public sealed class Orchestrator : IOrchestrator
             await foreach (var checkEvent in VerifyAsync(
                 intent, scope.TaskId, scope.RunId, models.Worker, models.Provider, models.Model.Model, models.Model.ProviderId,
                 scope.Artifacts, scope.Budget, verified, scope.Criterion,
-                (kind, summary) => scope.Ev(kind, summary), ct))
+                (kind, summary) => scope.Ev(kind, summary), scope.Granted, ct))
                 yield return checkEvent;
 
             var adjusted = verified.Report.Apply(runOutcome);
@@ -1824,6 +1824,10 @@ public sealed class Orchestrator : IOrchestrator
         IChatProvider provider, string model, string providerId,
         List<ArtifactRef> artifacts, RunBudget budget, VerifyResult result,
         Func<CriterionResult, WorkEvent> criterion, Func<EventKind, string, WorkEvent> ev,
+        // The run's, not a fresh one: a place the person allowed during the work is still allowed
+        // while fixing the work. Handing the repair its own would ask the same question again, at
+        // the least welcome moment - after the run has already been told it failed a check.
+        GrantedRoots granted,
         [EnumeratorCancellation] CancellationToken ct)
     {
         var report = await InScopeAsync(runId, taskId, null,
@@ -1869,7 +1873,7 @@ public sealed class Orchestrator : IOrchestrator
 
             await foreach (var repairEvent in RunToolLoopAsync(
                 taskId, runId, provider, model, worker, messages, artifacts,
-                intent.Context, store, journal, new ReadLedger(), null, loop, budget, ct, providerId))
+                intent.Context, store, journal, new ReadLedger(), null, loop, budget, granted, ct, providerId))
                 yield return repairEvent;
 
             report = await InScopeAsync(runId, taskId, null,
@@ -2005,6 +2009,10 @@ public sealed class Orchestrator : IOrchestrator
         // Named runBudget because this method already has a `budget` of its own: the room left in
         // the model's context window, which is a different thing entirely.
         RunBudget runBudget,
+        // Where outside the workspace this RUN has been allowed to write. Passed in rather than
+        // made here for the same reason as the budget: a step is not the unit somebody answers a
+        // permission question for.
+        GrantedRoots granted,
         [EnumeratorCancellation] CancellationToken ct,
         // Only for the usage record. The loop is handed a ready provider and a model NAME, which is
         // all it needs to talk; the id is what makes the tokens attributable afterwards.
@@ -2432,6 +2440,77 @@ public sealed class Orchestrator : IOrchestrator
                               + "could not do and why."));
                         continue;
                     }
+                }
+
+                // ── Geography gate: does this command write somewhere else? ──
+                //
+                // AFTER the permission gate, because "may this run use a shell at all" is a bigger
+                // question than "may this one write land there", and asking the second of somebody
+                // who is about to refuse the first is a question wasted.
+                //
+                // A guess, and it says so: see ShellGeography. It never refuses on its own - the
+                // whole reason it may exist at all is that its answer becomes a QUESTION. A check
+                // this rough deciding by itself would be the guard SANDBOX_PLAN warns about, and
+                // the first false positive would stop work the model was right to do.
+                var outside = ShellGeography.WritesOutsideFor(
+                    call.Name, call.ArgumentsJson, _workspace.RootPath, granted.Roots);
+
+                if (outside.Count > 0)
+                {
+                    var where = string.Join(", ", outside.Select(w => w.Known ? w.Path : w.Token));
+                    yield return Ev(EventKind.DecisionRequested,
+                        $"{call.Name} appears to write outside the workspace: {where}");
+
+                    var geographyRequest = new DecisionRequest(
+                        taskId,
+                        "Let this command write outside the workspace?",
+                        $"Writes to {where}",
+                        new[]
+                        {
+                            new DecisionOption("once", "Allow once"),
+                            new DecisionOption("run", "Allow for this run"),
+                            new DecisionOption("deny", "Keep to the workspace"),
+                        },
+                        // Nothing is recommended. Every other approval in this engine can lean on
+                        // "this is the tool you configured"; this one is a guess about a path, and
+                        // a highlighted button is an answer given on the reader's behalf.
+                        RecommendedOptionId: null,
+                        Subject: null,
+                        FullDetail: ShellGeography.Explain(outside, _workspace.RootPath)
+                                  + "\n\nThe command in full:\n" + DescribeCall(call),
+                        // Never remembered past this process, and see GrantedRoots for why "for
+                        // this run" is as far as even the second option goes.
+                        SessionOnly: true,
+                        Action: new BoundAction(
+                            runId, call.Id, call.Name, call.ArgumentsJson, _workspace.RootPath));
+
+                    DecisionOutcome geography;
+                    await _decisionGate.WaitAsync(ct);
+                    try { geography = await _decisions.RequestAsync(geographyRequest, ct); }
+                    finally { _decisionGate.Release(); }
+
+                    var keepOut = string.Equals(geography.OptionId, "deny", StringComparison.OrdinalIgnoreCase);
+                    var forRun = string.Equals(geography.OptionId, "run", StringComparison.OrdinalIgnoreCase);
+
+                    yield return Ev(EventKind.DecisionResolved,
+                        $"{call.Name}: {(keepOut ? "kept to the workspace" : forRun ? "allowed outside, for this run" : "allowed outside, once")}");
+
+                    if (keepOut)
+                    {
+                        // Refused like any other refusal - counted, journalled, and told to the
+                        // model in words it can act on. A step that quietly skipped the call would
+                        // report success over work that never happened.
+                        var why = ShellGeography.Explain(outside, _workspace.RootPath);
+                        openFailures.Failed(call, "the user kept this command inside the workspace");
+                        journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson),
+                                       ActionOutcome.Refused, "writes outside the workspace");
+                        messages.Add(ChatMessage.Tool(call.Id, "ERROR: " + why));
+                        continue;
+                    }
+
+                    if (forRun)
+                        foreach (var write in outside)
+                            granted.Grant(write);
                 }
 
                 actionsTaken++;

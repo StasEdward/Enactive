@@ -24,6 +24,12 @@ public static class ToolArguments
     /// declare that produced a different identity would leave the first failure open forever.</para>
     /// </summary>
     public const string ExpectedExitCodes = "expectedExitCodes";
+
+    /// <summary>The command line <c>run_command</c> is given.</summary>
+    public const string Command = "command";
+
+    /// <summary>The script <c>run_powershell</c> is given.</summary>
+    public const string Script = "script";
 }
 
 /// <summary>
@@ -58,6 +64,14 @@ public static class MutatingTools
 /// rest. <c>cd</c> elsewhere, an absolute path, a pipe to a network tool - none of it is reachable
 /// from here, and pretending otherwise by inspecting the command text would be the guard that is
 /// stepped around by writing <c>./x</c> instead of <c>x</c>.</para>
+///
+/// <para><b>2026-09-10: the command text IS now inspected, and the paragraph above is still
+/// right.</b> <see cref="Context.ShellGeography"/> reads a command line for writes that land
+/// outside the workspace - and everything said above about how easily that is stepped around holds
+/// exactly. What changed is what the answer is used for: it raises a QUESTION for the person, and
+/// it never refuses on its own. A guard that refuses on a guess this rough would be the failure
+/// named above; a guess that turns <c>dotnet publish -o C:\out</c> from silent into asked is worth
+/// having, and claims nothing it cannot do.</para>
 ///
 /// <para>So what this list is for is not containment. It marks the calls whose approval must not
 /// outlive the session: <c>run_command</c> approved once for a workspace is unlimited command
