@@ -5,6 +5,22 @@ using Enactive.Tools;
 using Xunit;
 
 /// <summary>
+/// The classes that start real processes and wait on real clocks.
+///
+/// <para>xUnit runs CLASSES in parallel, and these are the heaviest tests in the suite: each one
+/// spawns a tree of cmd processes and then waits seconds for it. Run alongside each other they
+/// multiply, and the runner has other tests on it whose assertions depend on something starting
+/// promptly - <c>McpTests</c> waits for a server process, and one of those failed on CI
+/// immediately after these arrived, taking 12 seconds where it normally takes 2.</para>
+///
+/// <para>One collection makes them take turns. It does not make them fast and it does not stop
+/// them competing with the rest of the suite; it stops them competing with each other, which is
+/// the part that belongs to these tests.</para>
+/// </summary>
+[CollectionDefinition("processes", DisableParallelization = true)]
+public sealed class ProcessTests { }
+
+/// <summary>
 /// What a shell command leaves behind when it is over.
 ///
 /// <para><c>process.Kill(entireProcessTree: true)</c> reads like a kill-tree guarantee and is not
@@ -36,6 +52,7 @@ using Xunit;
 /// <para><b>Windows only.</b> Job objects are a Windows mechanism and START is a cmd builtin. The
 /// engine suite runs on windows-latest for exactly this class of test - see build.yml.</para>
 /// </summary>
+[Collection("processes")]
 public sealed class ShellContainmentTests
 {
     /// <summary>

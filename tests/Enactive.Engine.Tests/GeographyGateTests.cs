@@ -16,6 +16,7 @@ using Xunit;
 /// the geographic one. Both gates firing would still work - they are asked in order - but a test
 /// that answers two questions with one string is not saying which one it tested.</para>
 /// </summary>
+[Collection("processes")]
 public sealed class GeographyGateTests : IDisposable
 {
     private readonly string _elsewhere =
