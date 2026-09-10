@@ -62,6 +62,14 @@ internal static class RunReplay
                 card.SetNeedsAttention();
                 break;
 
+            // A refused call is neither a tool that ran nor a remark, and it is told apart by the
+            // event's VALUE rather than by matching "denied" in the sentence - three wordings say
+            // it. A record from before that value existed has no decision to read and falls back to
+            // a note, which is what it always was.
+            case nameof(EventKind.DecisionResolved) when WorkEventPayload.WasRefusedIn(e.Payload) == true:
+                card.AddRefusal(e.Summary);
+                break;
+
             case nameof(EventKind.ReviewRequested):
             case nameof(EventKind.ReviewPassed):
             case nameof(EventKind.ReviewFailed):

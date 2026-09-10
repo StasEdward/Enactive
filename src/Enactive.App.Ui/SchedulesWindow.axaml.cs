@@ -2,6 +2,7 @@ namespace Enactive.App.Ui;
 
 using Avalonia.Controls;
 using Enactive.App.Ui.ViewModels;
+using Enactive.Settings;
 
 /// <summary>
 /// Managing schedules where the person is: the list, what each one is allowed to do in words, the
@@ -15,9 +16,9 @@ internal sealed partial class SchedulesWindow : Window
 {
     private readonly SchedulesViewModel _viewModel;
 
-    public SchedulesWindow(string workspaceRoot)
+    public SchedulesWindow(string workspaceRoot, AppSettings settings)
     {
-        _viewModel = new SchedulesViewModel(workspaceRoot);
+        _viewModel = new SchedulesViewModel(workspaceRoot, settings);
         DataContext = _viewModel;
         InitializeComponent();
 

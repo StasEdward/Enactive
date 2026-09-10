@@ -9,6 +9,7 @@ using Enactive.Core.History;
 using Enactive.Core.Inbox;
 using Enactive.Core.Schedules;
 using Enactive.Core.Templates;
+using Enactive.Settings;
 using Enactive.Workspace;
 
 /// <summary>One schedule in the list.</summary>
@@ -106,6 +107,14 @@ internal sealed class SchedulesViewModel : ObservableObject
     private readonly ScheduleStore _store;
     private readonly Func<DateTimeOffset> _now;
 
+    /// <summary>
+    /// What the person configured, for the one thing this form decides on their behalf: the policy
+    /// a scheduled run will hold. The tier comes from the picker; the shell rule comes from here,
+    /// and it has to, because a schedule saved with the tier alone would run commands on a machine
+    /// whose settings say never to.
+    /// </summary>
+    private readonly AppSettings _settings;
+
     private WorkspaceInfo _workspace;
     private TemplateStore _templates;
     private IRunStore _runs;
@@ -140,10 +149,15 @@ internal sealed class SchedulesViewModel : ObservableObject
     private bool _draftRunLate;
     private string _draftTier = "execute";
 
-    public SchedulesViewModel(string workspaceRoot, ScheduleStore? store = null, Func<DateTimeOffset>? now = null)
+    public SchedulesViewModel(
+        string workspaceRoot,
+        AppSettings settings,
+        ScheduleStore? store = null,
+        Func<DateTimeOffset>? now = null)
     {
         _store = store ?? ScheduleStore.Default;
         _now = now ?? (() => DateTimeOffset.Now);
+        _settings = settings;
 
         _workspace = WorkspaceInfo.For(workspaceRoot);
         _templates = new TemplateStore(workspaceRoot);
@@ -461,7 +475,7 @@ internal sealed class SchedulesViewModel : ObservableObject
             DraftName, _workspace.RootPath,
             DraftWork.ToWork(),
             BuildTiming(),
-            AutonomyTiers.PolicyFor(tier),
+            EngineComposition.PolicyFor(_settings, tier),
             DraftRunLate ? MissedRun.RunLate : MissedRun.Skip,
             Enabled: true,
             Id: _draftId);

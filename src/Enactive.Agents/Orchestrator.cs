@@ -971,10 +971,12 @@ public sealed class Orchestrator : IOrchestrator
                     Emit(EventKind.ArtifactReverted, $"[{stepNumber}] {line}");
             }
 
-            // The card's colour comes from this payload, not from the wording of the summary.
-            void EmitStepDone(string summary, int? no, StepOutcomeKind kind)
+            // The card's colour comes from this payload, not from the wording of the summary - and
+            // so does the LINE UNDER IT. The reason used to be glued into the summary only, so a
+            // replayed step said "Incomplete" and stopped there.
+            void EmitStepDone(string summary, int? no, StepOutcomeKind kind, string? why = null)
                 => events.Writer.TryWrite(scope.Event(
-                    EventKind.StepCompleted, summary, WorkEventPayload.StepPayload(no, kind)));
+                    EventKind.StepCompleted, summary, WorkEventPayload.StepPayload(no, kind, why)));
 
             // Succeeded is the ONLY outcome that unblocks what comes after it - and MarkDone is what
             // does the unblocking, so it goes LAST. It used to go first, which opened two races on
@@ -1014,7 +1016,7 @@ public sealed class Orchestrator : IOrchestrator
             var skippedSteps = scheduler.MarkFailed(step.Id);
             EmitStepDone(
                 $"[{stepNumber}/{total}] {step.Title} — {label}{(string.IsNullOrWhiteSpace(outcomeReason) ? "" : ": " + outcomeReason)}",
-                stepNumber, outcome);
+                stepNumber, outcome, outcomeReason);
 
             foreach (var sk in skippedSteps)
             {
@@ -2029,6 +2031,13 @@ public sealed class Orchestrator : IOrchestrator
             => new(Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow, kind, summary,
                    stepNo is { } n ? $"{{\"step\":{n}}}" : null);
 
+        // A resolved decision, with WHETHER THE CALL WENT THROUGH as a value beside the sentence.
+        // Every refusal path goes through here so none of them can be the one that forgets.
+        WorkEvent Decided(string tool, bool allowed, string summary)
+            => new(Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow,
+                   EventKind.DecisionResolved, summary,
+                   WorkEventPayload.DecisionPayload(stepNo, tool, allowed));
+
         WorkEvent Usage(int prompt, int completion)
         {
             runBudget.TokensUsed(prompt, completion);
@@ -2341,7 +2350,8 @@ public sealed class Orchestrator : IOrchestrator
                     openFailures.Failed(call, $"not available to the {worker.Role} role");
                     journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Refused,
                                    $"not available to the {worker.Role} role");
-                    yield return Ev(EventKind.DecisionResolved, $"{call.Name}: not available to role '{worker.Role}'");
+                    yield return Decided(call.Name, allowed: false,
+                        $"{call.Name}: not available to role '{worker.Role}'");
                     messages.Add(ChatMessage.Tool(call.Id, $"ERROR: tool '{call.Name}' is not available to the {worker.Role} role."));
                     continue;
                 }
@@ -2355,7 +2365,7 @@ public sealed class Orchestrator : IOrchestrator
                     openFailures.Failed(call, unread);
                     journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson),
                                    ActionOutcome.Refused, unread);
-                    yield return Ev(EventKind.DecisionResolved,
+                    yield return Decided(call.Name, allowed: false,
                         $"{call.Name}: refused — the file has only been read in part");
                     messages.Add(ChatMessage.Tool(call.Id, "ERROR: " + unread));
                     continue;
@@ -2407,12 +2417,12 @@ public sealed class Orchestrator : IOrchestrator
                         // Says WHO answered. A standing approval and a person clicking Allow used to
                         // produce the same line, separated only by how long it took.
                         var by = string.IsNullOrEmpty(outcome.Because) ? "" : $" ({outcome.Because})";
-                        yield return Ev(EventKind.DecisionResolved,
+                        yield return Decided(call.Name, approved,
                                         $"{call.Name}: {(approved ? "allowed" : "denied")}{by}");
                     }
                     else
                     {
-                        yield return Ev(EventKind.DecisionResolved, $"{call.Name}: blocked by policy");
+                        yield return Decided(call.Name, allowed: false, $"{call.Name}: blocked by policy");
                     }
 
                     if (!approved)
@@ -2492,7 +2502,10 @@ public sealed class Orchestrator : IOrchestrator
                     var keepOut = string.Equals(geography.OptionId, "deny", StringComparison.OrdinalIgnoreCase);
                     var forRun = string.Equals(geography.OptionId, "run", StringComparison.OrdinalIgnoreCase);
 
-                    yield return Ev(EventKind.DecisionResolved,
+                    // Kept to the workspace IS a refusal: this command does not run. The other two
+                    // answers let it run, and the difference between them is how long the permission
+                    // lasts, not whether the call happened.
+                    yield return Decided(call.Name, allowed: !keepOut,
                         $"{call.Name}: {(keepOut ? "kept to the workspace" : forRun ? "allowed outside, for this run" : "allowed outside, once")}");
 
                     if (keepOut)

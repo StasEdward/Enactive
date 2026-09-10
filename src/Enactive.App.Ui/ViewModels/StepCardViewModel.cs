@@ -4,6 +4,7 @@ using System.Collections.ObjectModel;
 using System.Text;
 using Avalonia.Media;
 using Enactive.App.Ui.Mvvm;
+using Enactive.Core.History;
 
 /// <summary>
 /// One line of a step's action log: an icon, a short label, and an optional muted one-line result
@@ -55,6 +56,7 @@ internal sealed class StepCardViewModel : ObservableObject
     private const string FileIcon = "▤";
     private const string ToolIcon = "▸";
     private const string NoteIcon = "•";
+    private const string RefusedIcon = "⊘";
 
     private readonly StringBuilder _noteBuffer = new();
 
@@ -69,6 +71,7 @@ internal sealed class StepCardViewModel : ObservableObject
     private int _commandCount;
     private int _fileCount;
     private int _noteCount;
+    private int _refusedCount;
 
     public StepCardViewModel(string title)
     {
@@ -222,6 +225,22 @@ internal sealed class StepCardViewModel : ObservableObject
         UpdateSummary();
     }
 
+    /// <summary>
+    /// A call the policy — or whoever answers for it — did not let through.
+    ///
+    /// <para>Counted apart from tools, and not as a tool: it never ran, and saying it did would be
+    /// the opposite of the lie this fixes. Until 2026-09-11 a refusal was logged with
+    /// <see cref="AddNote"/>, so a step stopped six times reported "14 notes" and nothing else — the
+    /// summary had no word for it.</para>
+    /// </summary>
+    public void AddRefusal(string text)
+    {
+        FlushPendingNote();
+        _refusedCount++;
+        AddEntry(RefusedIcon, Brand.Danger, text, Brand.TextBody, bold: false);
+        UpdateSummary();
+    }
+
     /// <summary>Commits any buffered streamed text as a single note, if there is any.</summary>
     public void FlushPendingNote()
     {
@@ -249,25 +268,13 @@ internal sealed class StepCardViewModel : ObservableObject
         OnPropertyChanged(nameof(HasEntries));
     }
 
-    private void UpdateSummary() => ToggleLabel = BuildSummary();
-
-    private string BuildSummary()
-    {
-        var parts = new List<string>();
-        if (_toolCount > 0)
-            parts.Add($"Used {_toolCount} tool{(_toolCount == 1 ? "" : "s")}");
-        if (_commandCount > 0)
-            parts.Add($"ran {_commandCount} command{(_commandCount == 1 ? "" : "s")}");
-        if (_fileCount > 0)
-            parts.Add($"edited {_fileCount} file{(_fileCount == 1 ? "" : "s")}");
-
-        var head = string.Join(", ", parts);
-        if (_noteCount == 0)
-            return head;
-
-        var noteText = $"{_noteCount} note{(_noteCount == 1 ? "" : "s")}";
-        return head.Length > 0 ? $"{head} · {noteText}" : noteText;
-    }
+    // The counting happens here because it is incremental; the SENTENCE is StepTally's, in Core,
+    // where a test can read it. It was a private method on this class - in a WinExe no test project
+    // references - which is why the one line a person reads to decide whether to open a step was
+    // the one thing about a step nothing checked.
+    private void UpdateSummary()
+        => ToggleLabel = new StepTally(_toolCount, _commandCount, _fileCount, _refusedCount, _noteCount)
+            .Words();
 
     private void SetStatus(string word, IBrush brush)
     {

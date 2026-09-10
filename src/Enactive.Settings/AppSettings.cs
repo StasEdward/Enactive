@@ -273,12 +273,22 @@ public sealed partial class AppSettings
     public RemoteAccessSettings RemoteAccess { get; set; } = new();
 
     // ── Legacy fields (migration source only; superseded by the schema above) ──
+    //
+    // A URL has a right default: Ollama listens there or it does not, and being wrong costs a
+    // connection error that names the address. A MODEL NAME has none. Which models exist is a fact
+    // about this machine, and until 2026-09-11 these two lines decided it: a fresh install was
+    // configured for "qwen2.5-coder" because that string was compiled in, and the first scheduled
+    // runs on a machine with only gemma4 installed died on `model 'qwen2.5-coder' not found`.
+    //
+    // Empty, therefore. A file that NAMES a model still migrates it - that is a person's choice and
+    // is carried over. A machine that has never been configured now says so, which the settings
+    // window can answer by asking the provider what it has (ModelFetch) instead of guessing.
     public string BaseUrl { get; set; } = "http://localhost:11434/v1";
-    public string Model { get; set; } = "qwen2.5-coder";
+    public string Model { get; set; } = string.Empty;
     public bool MultiAgent { get; set; }
     public string AnthropicApiKey { get; set; } = string.Empty;
     public string AnthropicApiKeyProtected { get; set; } = string.Empty;
-    public string ReasonerModel { get; set; } = "claude-3-5-sonnet-latest";
+    public string ReasonerModel { get; set; } = string.Empty;
     public string AnthropicWorkspaceId { get; set; } = string.Empty;
 
     // Main window placement (restored on start).
@@ -515,13 +525,18 @@ public sealed partial class AppSettings
         if (Providers.Count > 0)
             return;
 
+        // The endpoint, with whatever model the legacy file named - and NO model when it named
+        // none. An empty list is a provider a person can finish setting up: the provider editor
+        // asks it what it has (ModelFetch) and offers the answer. A list holding one invented name
+        // looks finished and is not, which is how a run reaches an endpoint asking for a model that
+        // was never installed.
         Providers.Add(new ProviderConfig
         {
             Id = "ollama",
             DisplayName = "Ollama (local)",
             Kind = ProviderKind.OllamaNative,
             BaseUrl = BaseUrl,
-            Models = new List<string> { Model }
+            Models = NamedOrEmpty(Model)
         });
 
         var hasAnthropic = !string.IsNullOrWhiteSpace(AnthropicApiKey);
@@ -539,10 +554,13 @@ public sealed partial class AppSettings
                 BaseUrl = "https://api.anthropic.com",
                 ApiKey = AnthropicApiKey,
                 Headers = headers,
-                Models = new List<string> { ReasonerModel }
+                Models = NamedOrEmpty(ReasonerModel)
             });
         }
 
+        // The team, on whatever the legacy file named. With no model named, the workers are seeded
+        // with an EMPTY model reference - which is what "nobody has chosen yet" looks like, and is
+        // what EngineComposition refuses to run on rather than substituting something.
         if (Workers.Count == 0)
             foreach (var w in DefaultWorkers.Seed(new ModelRef("ollama", Model)))
                 Workers.Add(new WorkerConfig
@@ -563,6 +581,10 @@ public sealed partial class AppSettings
             Bindings.Review = $"anthropic/{ReasonerModel}";
         }
     }
+
+    /// <summary>A one-model list, or an empty one when there is no name to put in it.</summary>
+    private static List<string> NamedOrEmpty(string model)
+        => string.IsNullOrWhiteSpace(model) ? new List<string>() : new List<string> { model };
 
     /// <summary>Deep copy — so an editor can work on a throwaway copy and discard it on Cancel.</summary>
     public AppSettings Clone() => new()
@@ -814,7 +836,9 @@ public sealed partial class AppSettings
     private static AppSettings SeedFromEnvironment() => new()
     {
         BaseUrl = Environment.GetEnvironmentVariable("ENACTIVE_OLLAMA_URL") ?? "http://localhost:11434/v1",
-        Model = Environment.GetEnvironmentVariable("ENACTIVE_MODEL") ?? "qwen2.5-coder",
+        // No default. A machine with ENACTIVE_MODEL set has been told which model to use; one
+        // without it has not, and the honest answer is none rather than a name from this file.
+        Model = Environment.GetEnvironmentVariable("ENACTIVE_MODEL") ?? string.Empty,
         GlobalInstructions = string.Empty
     };
 }

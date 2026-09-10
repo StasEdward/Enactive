@@ -60,7 +60,19 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     private readonly EnvironmentProbe _envProbe = new();
     private readonly Planner _planner = new();
     private readonly ModelResolver _modelResolver = new();
-    private StaticWorkerProvider _workerProvider = null!;
+    // The interface, not the concrete provider: what composes the team is EngineComposition now, and
+    // this window only reads it.
+    private IWorkerProvider _workerProvider = null!;
+
+    /// <summary>
+    /// Why there is no engine, or null when there is one.
+    ///
+    /// <para>Set when the settings name no model — which is now what a machine nobody has configured
+    /// looks like, instead of one configured for a model name compiled into the app. The window
+    /// still opens and everything that does not need a model still works; the things that DO need
+    /// one say this instead of running.</para>
+    /// </summary>
+    private string? _engineProblem;
     private readonly PermissionEngine _permissionEngine = new();
     private AppSettings _settings = new();
 
@@ -548,7 +560,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             return;
         }
 
-        _schedulesWindow = new SchedulesWindow(root);
+        _schedulesWindow = new SchedulesWindow(root, _settings);
         _schedulesWindow.Closed += (_, _) =>
         {
             _schedulesWindow = null;
@@ -593,6 +605,16 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         {
             _vm.StatusPhase = "Error";
             _vm.CurrentAction = $"No such folder: {workspacePath}. Pick another workspace, or create the folder yourself first.";
+            return;
+        }
+
+        // No model, no run - said here rather than discovered as a 404 from a provider. Before the
+        // model names came out of AppSettings this could not happen: an unconfigured machine was
+        // configured for whatever string was compiled in, and it ran.
+        if (_engineProblem is { Length: > 0 } notConfigured)
+        {
+            _vm.StatusPhase = "Error";
+            _vm.CurrentAction = notConfigured;
             return;
         }
 
@@ -913,7 +935,13 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                 case EventKind.DecisionResolved:
                     Live(() => _vm.CurrentAction = ev.Summary);
                     var decisionCard = CardFor(ev) ?? EnsureCurrentCard();
-                    decisionCard.AddNote(ev.Summary);
+                    // A refused call gets its own word in the summary rather than being folded in
+                    // with the remarks - by the event's VALUE, exactly as the replay reads it, so
+                    // the live card and the same run reopened later cannot disagree.
+                    if (ev.WasRefused() == true)
+                        decisionCard.AddRefusal(ev.Summary);
+                    else
+                        decisionCard.AddNote(ev.Summary);
                     if (ev.Kind == EventKind.DecisionRequested)
                     {
                         decisionCard.SetActivity("Waiting for your approval…");
@@ -1643,6 +1671,11 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     /// </summary>
     private Func<string, CancellationToken, Task<LogAnalysisResult>>? LogAnalysis()
     {
+        // No engine, no analysis - and the button already says so when this returns null, which is
+        // the behaviour a build with no Review binding has always had.
+        if (_engineProblem is not null)
+            return null;
+
         var worker = _workerProvider.Get(CurrentWorkerRole());
         var reference = BuildRouter().Resolve(ModelPurpose.Review, worker) ?? worker?.ModelPolicy.Preferred;
         if (reference is null)
@@ -1698,21 +1731,10 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         }
     }
 
-    // Builds the phase->model router. Today it mirrors the MultiAgent setting (Plan+Review -> Anthropic);
-    // the team/provider editors will populate richer bindings later (Docs/MODELS.md).
-    private IModelRouter BuildRouter()
-    {
-        var bindings = new Dictionary<ModelPurpose, ModelRef>();
-        if (AppSettings.ParseRef(_settings.Bindings.Plan) is { } plan)
-            bindings[ModelPurpose.Plan] = plan;
-        if (AppSettings.ParseRef(_settings.Bindings.Review) is { } review)
-            bindings[ModelPurpose.Review] = review;
-        return new ModelRouter(
-            _modelResolver,
-            bindings,
-            AppSettings.ParseRef(_settings.Bindings.ExecuteLight),
-            AppSettings.ParseRef(_settings.Bindings.ExecuteHeavy));
-    }
+    // The phase->model router, from the shared composition. A scheduled run built its own and was
+    // never given any bindings at all, so planning bound here to Anthropic ran on the local model
+    // and nothing said so.
+    private IModelRouter BuildRouter() => EngineComposition.Router(_settings, _modelResolver);
 
     /// <summary>
     /// The run's setup as it is RIGHT NOW, for the record. Read once at the start, because by the
@@ -1737,8 +1759,16 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     /// the level saved against THAT one. Reading the slider for both meant a remote task running at
     /// whatever permission an unrelated project happened to be sitting at.
     /// </param>
+    /// <exception cref="InvalidOperationException">
+    /// When no model is configured, so there is no engine to snapshot. The two callers are the
+    /// background run — stopped earlier, by RunAsync — and a task started from a phone, which has
+    /// no earlier gate and would otherwise reach a null provider. A named refusal is what the panel
+    /// can report; a NullReferenceException is not.
+    /// </exception>
     private RunEnvironment SnapshotEnvironment(int autonomy, string? workerRole, bool stageChanges)
-        => new(
+        => _engineProblem is { Length: > 0 } problem
+            ? throw new InvalidOperationException(problem)
+            : new(
             _providerFactory, _modelResolver, _workerProvider, _toolRegistry,
             _settings.McpServers.Select(c => c.Clone()).ToArray(),
             _planner, _permissionEngine, BuildRouter(), _log, _settings,
@@ -2592,40 +2622,31 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     {
         _globalInstructions = _settings.GlobalInstructions;
 
-        // Providers: build the factory from the whole universal list.
-        var descriptors = _settings.Providers.Select(p => new ProviderDescriptor(
-            p.Id,
-            string.IsNullOrWhiteSpace(p.DisplayName) ? p.Id : p.DisplayName,
-            p.Kind,
-            p.BaseUrl,
-            string.IsNullOrEmpty(p.ApiKey) ? null : p.ApiKey,
-            p.Models,
-            p.Headers.Count > 0 ? p.Headers : null,
-            p.MaxTokens)).ToList();
-        _providerFactory = new ChatProviderFactory(descriptors, _http, _log)
+        // Nothing to build an engine out of is a STATE, not an error. A machine where nobody has
+        // chosen a model now says so — where it used to be silently configured for a model name
+        // compiled into AppSettings, and the first anyone heard of it was a 404. The window opens
+        // either way; the run paths read this.
+        _engineProblem = EngineComposition.Missing(_settings) is { Count: > 0 } missing
+            ? string.Join(" ", missing)
+            : null;
+
+        if (_engineProblem is not null)
         {
-            PromptBodies = _settings.LogPromptBodies
-        };
+            _vm.ModelLabel = "no model chosen";
+            _vm.WorkerRoles.Clear();
+            return;
+        }
+
+        // The engine itself — providers, team, router — from the composition every host shares.
+        // It was built inline here, which is why nothing could check it and why the console's own
+        // version had drifted onto a different provider kind and a model nobody had installed.
+        var engine = EngineComposition.Build(_settings, _http, _log);
+        _providerFactory = engine.Providers;
+        _workerProvider = engine.Workers;
 
         // Applied here rather than at construction because the sink predates the settings. The
         // setter prunes, so lowering it takes effect on Save instead of at the next midnight.
         _logFile.RetentionDays = _settings.LogRetentionDays;
-
-        // Workers: the editable team, each with its own model; honesty + global instructions applied at build.
-        var fallbackModel = _settings.Providers.Count > 0 && _settings.Providers[0].Models.Count > 0
-            ? new ModelRef(_settings.Providers[0].Id, _settings.Providers[0].Models[0])
-            : new ModelRef("ollama", "qwen2.5-coder");
-        var workers = _settings.Workers.Select(w => new Worker(
-            w.Id,
-            w.Role,
-            DefaultWorkers.Augment(w.Instructions, _globalInstructions, _settings.VerifyWrites),
-            w.Tools,
-            w.Level,
-            new ModelPolicy(AppSettings.ParseRef(w.Model) ?? fallbackModel, AppSettings.ParseRef(w.Fallback)))).ToList();
-        if (workers.Count == 0)
-            workers = DefaultWorkers.Build(fallbackModel, _globalInstructions, _settings.VerifyWrites).ToList();
-        var defaultId = workers.Any(w => w.Id == DefaultWorkers.DefaultId) ? DefaultWorkers.DefaultId : workers[0].Id;
-        _workerProvider = new StaticWorkerProvider(workers, defaultId);
 
         // Refresh the role picker; settings can be re-applied after Save.
         // Rebuilding the role list is not the user choosing a role, so it must not be written back
@@ -2648,37 +2669,16 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         _vm.ModelLabel = $"model: {_model}";
     }
 
-    private PermissionPolicy PolicyFor(int level) => WithShellPolicy(level switch
-    {
-        0 => new PermissionPolicy(PermissionLevel.Observe, new[] { "*" }, Array.Empty<string>()),
-        1 => new PermissionPolicy(PermissionLevel.Suggest, new[] { "*" }, Array.Empty<string>()),
-        2 => new PermissionPolicy(PermissionLevel.Execute, new[] { "*" }, new[] { "run_command", "run_powershell", "git", "docker" }),
-        _ => new PermissionPolicy(PermissionLevel.Autonomous, new[] { "*" }, Array.Empty<string>())
-    });
-
     /// <summary>
-    /// The shells, decided separately from the autonomy tier.
+    /// The tier as a policy, with the shell setting on top — from the shared composition.
     ///
-    /// <para>Separately because they are a different KIND of permission. Every other tool is asked
-    /// for one named action against a path this engine resolves and checks; a shell is handed a
-    /// command line and the operating system does the rest, so the workspace is where it starts and
-    /// nothing more. At the Autonomous tier that is what "act without asking" already meant, which
-    /// is why <see cref="ShellCommandPolicy.Follow"/> is the default and changes nothing — the
-    /// control exists so that choosing a high tier for the file tools does not silently choose it
-    /// for command execution too.</para>
+    /// <para>This window used to hold both halves itself: its own copy of the tier table, plus the
+    /// shell rule applied to it. The console had neither, so a run started here and the same
+    /// workspace run from a command line or a schedule did not agree about what was permitted, and
+    /// "never run commands" was a setting that only held in one host. Both halves now live in
+    /// <see cref="EngineComposition"/>, where a test can reach them.</para>
     /// </summary>
-    private PermissionPolicy WithShellPolicy(PermissionPolicy policy)
-    {
-        var shells = new[] { "run_command", "run_powershell" };
-        return _settings.ShellCommands switch
-        {
-            ShellCommandPolicy.Off =>
-                policy with { Deny = policy.Deny.Concat(shells).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() },
-            ShellCommandPolicy.Ask =>
-                policy with { AskBefore = policy.AskBefore.Concat(shells).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() },
-            _ => policy
-        };
-    }
+    private PermissionPolicy PolicyFor(int level) => EngineComposition.PolicyFor(_settings, level);
 
     private sealed class EmptyProvider : IServiceProvider
     {

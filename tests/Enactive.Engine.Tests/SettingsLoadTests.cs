@@ -222,4 +222,81 @@ public sealed class SettingsLoadTests : IDisposable
 
         Assert.Equal(new[] { "*" }, Assert.Single(settings.Workers).Tools);
     }
+
+    // ── the model nobody chose ──────────────────────────────────────────────
+    //
+    // A URL has a right default: Ollama is listening on it or it is not, and being wrong costs a
+    // connection error naming the address. A MODEL NAME has none — which models exist is a fact
+    // about the machine. Until 2026-09-11 this file decided it: a fresh install was configured for
+    // "qwen2.5-coder", and the first scheduled runs on a machine holding only gemma4 died on
+    // `model 'qwen2.5-coder' not found`. Nobody had chosen either the model or the failure.
+
+    /// <summary>
+    /// A machine with no settings file has a provider — the endpoint is a good guess — and NO model,
+    /// because that is not a thing this build can know.
+    /// </summary>
+    [Fact]
+    public void A_machine_with_no_settings_file_has_no_model()
+    {
+        var settings = AppSettings.Load(Path.Combine(_dir, "nothing-here.json"));
+
+        var provider = Assert.Single(settings.Providers);
+        Assert.Equal("ollama", provider.Id);
+        Assert.Empty(provider.Models);
+    }
+
+    /// <summary>
+    /// The other half, and the one that must not regress: a legacy file that NAMES a model is a
+    /// person's choice, and it is migrated exactly as before. Refusing to guess is not the same as
+    /// throwing away what somebody already picked.
+    /// </summary>
+    [Fact]
+    public void A_legacy_file_that_names_a_model_still_migrates_it()
+    {
+        var settings = AppSettings.Load(Write("""
+        {
+          "BaseUrl": "http://localhost:11434/v1",
+          "Model": "gemma4:31b-cloud"
+        }
+        """));
+
+        var provider = Assert.Single(settings.Providers);
+        Assert.Equal(new[] { "gemma4:31b-cloud" }, provider.Models);
+    }
+
+    /// <summary>ENACTIVE_MODEL is still honoured on a machine with no file — it is somebody saying
+    /// which model to use, which is exactly what was missing.</summary>
+    [Fact]
+    public void The_environment_can_still_name_the_model()
+    {
+        Environment.SetEnvironmentVariable("ENACTIVE_MODEL", "llama3.3:70b");
+        try
+        {
+            var settings = AppSettings.Load(Path.Combine(_dir, "nothing-here.json"));
+
+            Assert.Equal(new[] { "llama3.3:70b" }, Assert.Single(settings.Providers).Models);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("ENACTIVE_MODEL", null);
+        }
+    }
+
+    /// <summary>
+    /// A legacy Anthropic key with no reasoner model named gets the provider and no model, for the
+    /// same reason: the key says the account exists, not which model it should use.
+    /// </summary>
+    [Fact]
+    public void A_legacy_anthropic_key_without_a_model_names_none()
+    {
+        var settings = AppSettings.Load(Write("""
+        {
+          "BaseUrl": "http://localhost:11434/v1",
+          "Model": "gemma4:31b-cloud",
+          "AnthropicApiKey": "sk-not-a-real-key"
+        }
+        """));
+
+        Assert.Empty(settings.Providers.Single(p => p.Id == "anthropic").Models);
+    }
 }

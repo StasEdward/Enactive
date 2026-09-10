@@ -1,13 +1,12 @@
-namespace Enactive.Remote.Host;
+namespace Enactive.Core.Permissions;
 
-using Enactive.Core.Permissions;
 using Enactive.Core.Tools;
 
 /// <summary>
 /// What a run started from the web is allowed to do, whatever its workspace says.
 ///
 /// <para><b>This is where the shell rule is actually enforced.</b>
-/// <see cref="RemoteDecisionHandler"/> refuses a shell too, and for five weeks that looked like
+/// <c>RemoteDecisionHandler</c> refuses a shell too, and for five weeks that looked like
 /// enough - but a decision handler only ever sees what the policy decided to ASK about. At the
 /// Autonomous tier the policy asks about nothing, so the handler was never consulted, and a task
 /// started from a phone ran <c>run_powershell</c> in a workspace saved at that tier. The rule that
@@ -23,11 +22,16 @@ using Enactive.Core.Tools;
 /// to a shell approval. Each covers a different way the others could be wrong - a policy assembled
 /// somewhere new, a handler installed without this, a panel that offers a button it should not.
 /// </para>
+///
+/// <para><b>In Core since 2026-09-10.</b> It lived in <c>Enactive.Remote.Host</c>, which meant the
+/// only code that could apply it was the remote stack — so <c>UnattendedRun</c>, which composes
+/// every run nobody is sitting in front of, had to live up in the WinExe to reach it, where no test
+/// project could see it. A rule this load-bearing does not belong behind a project reference.</para>
 /// </summary>
 public static class RemotePolicy
 {
     /// <summary>The tools this refuses. The same list <see cref="ShellTools.IsShell"/> answers for.</summary>
-    public static readonly IReadOnlyList<string> Shells = ["run_command", "run_powershell"];
+    public static IReadOnlyList<string> Shells => ShellTools.All;
 
     /// <summary>
     /// The same policy with every shell denied outright.
@@ -36,12 +40,5 @@ public static class RemotePolicy
     /// every workspace - including one whose owner deliberately set Autonomous, which is a decision
     /// about work they start at the machine and was never a decision about the network.</para>
     /// </summary>
-    public static PermissionPolicy ForRemoteRun(PermissionPolicy policy)
-        => policy with
-        {
-            Deny = policy.Deny
-                .Concat(Shells)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToArray()
-        };
+    public static PermissionPolicy ForRemoteRun(PermissionPolicy policy) => ShellTools.Denied(policy);
 }

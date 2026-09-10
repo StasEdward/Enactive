@@ -326,15 +326,88 @@ public static class WorkEventPayload
     private sealed record ArtifactPayloadShape(string Kind, string Path, int? Step);
 
     /// <summary>
-    /// Builds the payload of a <see cref="EventKind.StepCompleted"/> event: the step number plus how
-    /// that step ended. The UI used to decide whether a card goes green by searching the summary for
-    /// "FAILED:" and "skipped (dependency failed)", so rewording a message silently turned a red card
-    /// green. A value cannot be reworded.
+    /// Builds the payload of a <see cref="EventKind.StepCompleted"/> event: the step number, how
+    /// that step ended, and WHY when it did not simply succeed. The UI used to decide whether a card
+    /// goes green by searching the summary for "FAILED:" and "skipped (dependency failed)", so
+    /// rewording a message silently turned a red card green. A value cannot be reworded.
     /// </summary>
-    public static string StepPayload(int? stepNo, StepOutcomeKind outcome)
-        => stepNo is { } n
-            ? $"{{\"step\":{n},\"stepOutcome\":\"{outcome}\"}}"
-            : $"{{\"stepOutcome\":\"{outcome}\"}}";
+    /// <param name="reason">
+    /// The step's own account of why, under the key <c>reason</c> that
+    /// <see cref="OutcomeReasonIn"/> already reads — the same key a terminal event uses, because a
+    /// reader asking "why did this end like that" is asking one question.
+    ///
+    /// <para>It was in the summary and only there. A replayed run therefore showed a failed step as
+    /// the bare word "Incomplete", with the reason the orchestrator had computed sitting in a
+    /// sentence the card does not parse — so the one card a person opens the run to look at was the
+    /// one that would not say what happened.</para>
+    /// </param>
+    public static string StepPayload(int? stepNo, StepOutcomeKind outcome, string? reason = null)
+    {
+        var parts = new List<string>(3);
+        if (stepNo is { } n) parts.Add($"\"step\":{n}");
+        parts.Add($"\"stepOutcome\":\"{outcome}\"");
+        if (!string.IsNullOrWhiteSpace(reason)) parts.Add($"\"reason\":{Quote(reason)}");
+        return "{" + string.Join(',', parts) + "}";
+    }
+
+    /// <summary>
+    /// Builds the payload of a <see cref="EventKind.DecisionResolved"/> event: which tool, and
+    /// whether the call went through.
+    ///
+    /// <para>A value, for the reason the whole of this class exists. The event carried only a
+    /// sentence — <c>"git: denied"</c>, <c>"git: blocked by policy"</c>, <c>"run_command: not
+    /// available to role 'writer'"</c> — three wordings for one fact, and a reader that wanted the
+    /// fact had to match on the words. A step card counted them all as remarks because that is what
+    /// an unparsed string is.</para>
+    /// </summary>
+    /// <param name="allowed">
+    /// Whether the call proceeded. False covers every way it did not: a person answering Deny, a
+    /// policy that refused without asking, a tool the role does not have, and an unattended run
+    /// where nobody could have said yes. They differ in WHO decided, which the summary says; they do
+    /// not differ in whether the call happened, which is what a count of refusals is about.
+    /// </param>
+    public static string DecisionPayload(int? stepNo, string tool, bool allowed)
+    {
+        var parts = new List<string>(3);
+        if (stepNo is { } n) parts.Add($"\"step\":{n}");
+        parts.Add($"\"tool\":{Quote(tool)}");
+        parts.Add($"\"decision\":\"{(allowed ? "allowed" : "refused")}\"");
+        return "{" + string.Join(',', parts) + "}";
+    }
+
+    /// <summary>
+    /// Whether this event reports a call that did NOT go through. Null when the event carries no
+    /// decision at all — which is any event that is not a resolved decision, and any resolved
+    /// decision recorded before the payload existed.
+    /// </summary>
+    public static bool? WasRefused(this WorkEvent ev) => WasRefusedIn(ev.PayloadJson);
+
+    /// <summary>The same, from a stored event's payload.</summary>
+    public static bool? WasRefusedIn(string? payloadJson)
+    {
+        if (string.IsNullOrEmpty(payloadJson))
+            return null;
+
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(payloadJson);
+            if (doc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Object
+                || !doc.RootElement.TryGetProperty("decision", out var value)
+                || value.ValueKind != System.Text.Json.JsonValueKind.String)
+                return null;
+
+            return value.GetString() switch
+            {
+                "refused" => true,
+                "allowed" => false,
+                _ => null
+            };
+        }
+        catch
+        {
+            return null;
+        }
+    }
 
     /// <summary>How the step this event reports ended, when it says so.</summary>
     public static StepOutcomeKind? StepOutcome(this WorkEvent ev)

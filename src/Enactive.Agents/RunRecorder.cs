@@ -210,6 +210,12 @@ public sealed class RunRecorder
         var completionTokens = 0;
         var sawUsage = false;
 
+        // What each model was asked to do, and what it cost. Keyed by phase AND model because one
+        // model can serve two phases and two models can serve one - a run with ExecuteLight bound
+        // spends on two models under "execute", and folding them together loses the distinction the
+        // binding exists to make. Insertion-ordered, so the list reads in the order the run spent.
+        var spend = new Dictionary<(string Purpose, string Provider, string Model), ModelSpend>();
+
         foreach (var ev in events)
         {
             // The step number is stamped HERE, while the event still carries it. Nothing downstream
@@ -225,7 +231,27 @@ public sealed class RunRecorder
                     // four identical-looking paragraphs per card the moment templates arrived.
                     title = RunTitle.OneLine(StripPrefix(ev.Summary, "Intent: "));
                     break;
-                case EventKind.Routed when model is null && ev.Summary.Contains("-> model "):
+                // The worker's model, from the routing event's VALUES.
+                //
+                // It was scraped out of the summary with a search for "-> model ", which picked the
+                // right event only because the worker route is the one sentence that happens to
+                // contain that phrase - the planner's reads "Planner -> Antropic/...". So the field
+                // a run list shows was decided by five characters of wording in a message written
+                // for a person to read, and rewording it would have quietly emptied the column.
+                // The route now says which route it is.
+                //
+                // What this still cannot say is the OTHER models the run used. That is not a fault
+                // of the parsing and is not fixed here - see Usage.ByModel.
+                case EventKind.Routed when model is null && ev.Route() == "worker":
+                    model = ev.ProviderId() is { Length: > 0 } p && ev.ModelName() is { Length: > 0 } m
+                        ? $"{p}/{m}"
+                        : ExtractAfter(ev.Summary, "-> model ");
+                    break;
+
+                // A record from before routing carried values: the sentence is all there is.
+                case EventKind.Routed when model is null
+                                           && ev.Route() is null
+                                           && ev.Summary.Contains("-> model "):
                     model = ExtractAfter(ev.Summary, "-> model ");
                     break;
                 case EventKind.ArtifactProduced:
@@ -240,6 +266,7 @@ public sealed class RunRecorder
                     promptTokens += used.In;
                     completionTokens += used.Out;
                     sawUsage = true;
+                    Spent(spend, ev, used.In, used.Out);
                     break;
                 // The terminal event carries a typed outcome now, so the history stores what the
                 // engine DECIDED instead of a status inferred from which event happened to arrive
@@ -267,8 +294,44 @@ public sealed class RunRecorder
             first.At, last.At, status, eventRecords, artifacts, decisions, settings,
             // Null rather than zero when nothing reported: "this provider does not tell us" and
             // "this run used no tokens" are different facts and are shown differently.
-            sawUsage ? new RunUsage(promptTokens, completionTokens) : null,
+            sawUsage
+                ? new RunUsage(promptTokens, completionTokens)
+                {
+                    // Null rather than an empty list when no call named its model. Records written
+                    // before the usage payload carried one are exactly that case, and an empty list
+                    // would read as "this run spent nothing anywhere".
+                    ByModel = spend.Count > 0 ? spend.Values.ToList() : null
+                }
+                : null,
             spec);
+    }
+
+    /// <summary>
+    /// Adds one call's tokens to the model that spent them.
+    ///
+    /// <para>From the event's VALUES — provider, model, purpose — not from its sentence.</para>
+    ///
+    /// <para>A call that names no provider is not counted here. It is still in the totals, so the
+    /// two can disagree — deliberately: a breakdown that silently filed unattributed tokens under
+    /// some model would be worse than one that is visibly short.</para>
+    /// </summary>
+    private static void Spent(
+        Dictionary<(string, string, string), ModelSpend> spend, WorkEvent ev, int prompt, int completion)
+    {
+        if (ev.ProviderId() is not { Length: > 0 } provider || ev.ModelName() is not { Length: > 0 } name)
+            return;
+
+        var purpose = ev.Purpose() is { Length: > 0 } p ? p : WorkEventPayload.WorkPurpose.Execute;
+        var key = (purpose, provider, name);
+
+        spend[key] = spend.TryGetValue(key, out var running)
+            ? running with
+            {
+                PromptTokens = running.PromptTokens + prompt,
+                CompletionTokens = running.CompletionTokens + completion,
+                Calls = running.Calls + 1
+            }
+            : new ModelSpend(purpose, provider, name, prompt, completion, Calls: 1);
     }
 
     private static string StripPrefix(string value, string prefix)

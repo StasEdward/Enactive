@@ -1113,8 +1113,20 @@
                                 <TextBlock Classes="hint" Text="{Binding PastRun.StagingText}" FontSize="11" />
                             </StackPanel>
 
+                            <!-- What is left of a line written on 2026-09-05, when this panel could
+                                 only show. Two days later Retry and Run again were added to the
+                                 header above it and nobody re-read this: it went on saying "nothing
+                                 here re-runs it" directly under two buttons that do. A caption that
+                                 contradicts a button is worse than no caption - it tells the person
+                                 the button must mean something else.
+
+                                 "Read-only" went with it. It described the PANEL, and had come to
+                                 read as a claim about the RUN - which, on a run whose own settings
+                                 say changes were applied directly, was the opposite of true. That
+                                 the panel shows rather than edits is said by the panel; the log's
+                                 scope is the part that still needed saying. -->
                             <TextBlock Classes="hint" TextWrapping="Wrap"
-                                       Text="Read-only. This run has finished — nothing here re-runs it, and the log tab only holds the current session." />
+                                       Text="This run has finished. The log tab only holds the current session." />
                         </StackPanel>
                     </ScrollViewer>
                 </Grid>
