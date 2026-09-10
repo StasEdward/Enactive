@@ -94,20 +94,15 @@ public sealed class RunCommandTool : ITool
         process.OutputDataReceived += (_, e) => stdout.Add(e.Data);
         process.ErrorDataReceived += (_, e) => stderr.Add(e.Data);
 
+        ProcessExec.RunOutcome outcome;
         try
         {
-            process.Start();
-            process.BeginOutputReadLine();
-            process.BeginErrorReadLine();
-
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            timeout.CancelAfter(TimeSpan.FromSeconds(TimeoutSeconds));
-            await process.WaitForExitAsync(timeout.Token);
-        }
-        catch (OperationCanceledException)
-        {
-            try { if (!process.HasExited) process.Kill(entireProcessTree: true); } catch { /* ignore */ }
-            return ToolResults.Fail($"Command timed out after {TimeoutSeconds}s or was cancelled.");
+            // Contained: if this call is CANCELLED, the command and everything it started dies with
+            // it. A command that finishes normally leaves what it started running - `start "" app`
+            // is a thing people ask a shell to do. See ProcessJob for both halves of that.
+            outcome = await ProcessExec.RunContainedAsync(process, TimeoutSeconds, ct);
+            if (!outcome.Completed)
+                return ToolResults.Fail($"Command timed out after {TimeoutSeconds}s or was cancelled.");
         }
         catch (Exception ex)
         {
@@ -115,7 +110,8 @@ public sealed class RunCommandTool : ITool
         }
 
         return ProcessExec.BuildResult(
-            "Command", process.ExitCode, stdout.ToString(), stderr.ToString(), expected, declarable: true);
+            "Command", process.ExitCode, stdout.ToString(), stderr.ToString(), expected,
+            declarable: true, outputCutShort: outcome.OutputCutShort);
     }
 
     private static readonly string Schema = $$"""

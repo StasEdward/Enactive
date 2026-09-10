@@ -116,9 +116,16 @@ internal static class ProcessExec
     /// codebase follows — the git argument shape, the CRLF edit, the denied tool: put the fix in the
     /// message the model is actually reading, at the moment it is stuck.</para>
     /// </param>
+    /// <param name="outputCutShort">
+    /// The command ended while something it started still held the output pipe. Said in the result,
+    /// in one shared place, because the alternative is a model reading a short output as a complete
+    /// one - and "the build printed nothing" is a very different conclusion from "the build printed
+    /// something I did not wait for".
+    /// </param>
     public static ToolResult BuildResult(
         string what, int exitCode, string stdout, string stderr,
-        IReadOnlyCollection<int>? allowedExitCodes = null, bool declarable = false)
+        IReadOnlyCollection<int>? allowedExitCodes = null, bool declarable = false,
+        bool outputCutShort = false)
     {
         var combined = stdout;
         if (stderr.Length > 0)
@@ -126,6 +133,10 @@ internal static class ProcessExec
         combined = combined.Trim();
         if (combined.Length > MaxOutputChars)
             combined = combined[..MaxOutputChars] + "\n… (truncated)";
+
+        if (outputCutShort)
+            combined += "\n… (the command finished, but something it started is still running and "
+                      + "holding the output. Anything printed after this point is not here.)";
 
         // Label the result clearly so the model uses the OUTPUT (not the command text) when asked to save it.
         var output = $"exit code {exitCode}\n----- command output (this is the result) -----\n{combined}";
@@ -219,6 +230,108 @@ internal static class ProcessExec
         }
         """;
 
+    /// <summary>
+    /// How long output is still collected after the process itself has gone.
+    ///
+    /// <para>Bounded, and that is the whole point of it: the pipe belongs to whoever is holding it,
+    /// and something the command started on purpose may hold it for hours. Two seconds is long
+    /// enough for lines already written to arrive and short enough that nobody calls it a hang.</para>
+    /// </summary>
+    private static readonly TimeSpan OutputGrace = TimeSpan.FromSeconds(2);
+
+    /// <summary>What a contained run ended up doing.</summary>
+    /// <param name="Completed">
+    /// True when the process ran to its own end. False when it was cancelled or timed out - and
+    /// then it, and everything it started, is already dead.
+    /// </param>
+    /// <param name="OutputCutShort">
+    /// The process ended but something it started still holds the output pipe, so what was captured
+    /// may not be all of it. Said out loud rather than left for the reader to wonder about.
+    /// </param>
+    public readonly record struct RunOutcome(bool Completed, bool OutputCutShort);
+
+    /// <summary>
+    /// Starts a process CONTAINED, waits for THE PROCESS, and cleans up what this call is
+    /// responsible for.
+    ///
+    /// <para>One helper rather than the three near-copies this replaces - <c>run_command</c>,
+    /// <c>run_powershell</c> and <see cref="RunAsync"/> each had the same start / wait / kill dance,
+    /// and the same wrong kill in it. This codebase has already paid for that shape once: three
+    /// provider adapters had the same header code and two of them had quietly lost it.</para>
+    ///
+    /// <para>The process runs inside a <see cref="ProcessJob"/>, so cancelling really does cancel:
+    /// see that type for what a job changes, and for the deliberate limit on it - a call that ended
+    /// normally leaves running whatever it was asked to start.</para>
+    /// </summary>
+    /// <param name="process">Not started yet; this starts it. Output reading must not be started by the caller.</param>
+    public static async Task<RunOutcome> RunContainedAsync(
+        Process process, int timeoutSeconds, CancellationToken ct)
+    {
+        // Made BEFORE the process starts, so there is no window in which a child could be started
+        // outside it. Null on a platform without job objects; the process then runs as it always
+        // did rather than not at all.
+        using var job = OperatingSystem.IsWindows() ? ProcessJob.Create() : null;
+
+        // Waiting on the PROCESS, not on its streams - and this is the difference between a tool
+        // that returns and one that hangs.
+        //
+        // Process.WaitForExitAsync waits for the redirected output to reach end-of-file as well as
+        // for the process to exit. A process the command STARTED inherits those pipe handles, so
+        // the pipe stays open for as long as that process lives. `start "" "TOTALCMD64.EXE"` exits
+        // in milliseconds; Total Commander then held the pipe, the tool sat there for its full
+        // 60-second timeout, reported a timeout - and, with the job terminating on timeout, killed
+        // the application it had just been asked to launch. Reported from a real run, 2026-09-10.
+        //
+        // Exited fires when the process is gone, whoever is holding what.
+        process.EnableRaisingEvents = true;
+        var exited = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        process.Exited += (_, _) => exited.TrySetResult();
+
+        // Null arrives on each stream at end-of-file. Used to tell "the output is complete" from
+        // "somebody is still holding the pipe", which decides whether to say so.
+        var stdoutDone = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stderrDone = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        process.OutputDataReceived += (_, e) => { if (e.Data is null) stdoutDone.TrySetResult(); };
+        process.ErrorDataReceived += (_, e) => { if (e.Data is null) stderrDone.TrySetResult(); };
+
+        process.Start();
+        process.BeginOutputReadLine();
+        process.BeginErrorReadLine();
+
+        // After Start, because a job needs a process to hold. The gap is this thread's next few
+        // instructions: a child started inside it escapes containment but is still reached by the
+        // kill below, which is the behaviour that existed before this and is not made worse.
+        job?.Assign(process);
+
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
+
+        try
+        {
+            await exited.Task.WaitAsync(timeout.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            // Both, and in this order. The job is the exact set and kills it at once; the tree kill
+            // is what happens when there is no job, and costs nothing when there is.
+            job?.Terminate();
+            try { if (!process.HasExited) process.Kill(entireProcessTree: true); } catch { /* ignore */ }
+            return new RunOutcome(Completed: false, OutputCutShort: false);
+        }
+
+        // The process is gone; its last lines may still be in flight. Bounded, because the pipe may
+        // never close: waiting for it is exactly the bug above.
+        await Task.WhenAny(
+            Task.WhenAll(stdoutDone.Task, stderrDone.Task),
+            Task.Delay(OutputGrace, CancellationToken.None));
+
+        // Asked of the two streams themselves rather than of which task WhenAny handed back. The
+        // grace timer winning the race does not mean output was lost - both streams may have
+        // finished in the same instant - and the streams are the thing the answer is about.
+        var complete = stdoutDone.Task.IsCompleted && stderrDone.Task.IsCompleted;
+        return new RunOutcome(Completed: true, OutputCutShort: !complete);
+    }
+
     public static async Task<ToolResult> RunAsync(
         string fileName, IReadOnlyList<string> args, string workingDir, int timeoutSeconds,
         CancellationToken ct, IReadOnlyCollection<int>? allowedExitCodes = null)
@@ -241,20 +354,12 @@ internal static class ProcessExec
         process.OutputDataReceived += (_, e) => stdout.Add(e.Data);
         process.ErrorDataReceived += (_, e) => stderr.Add(e.Data);
 
+        RunOutcome outcome;
         try
         {
-            process.Start();
-            process.BeginOutputReadLine();
-            process.BeginErrorReadLine();
-
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            timeout.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
-            await process.WaitForExitAsync(timeout.Token);
-        }
-        catch (OperationCanceledException)
-        {
-            try { if (!process.HasExited) process.Kill(entireProcessTree: true); } catch { /* ignore */ }
-            return ToolResults.Fail($"{fileName} timed out after {timeoutSeconds}s or was cancelled.");
+            outcome = await RunContainedAsync(process, timeoutSeconds, ct);
+            if (!outcome.Completed)
+                return ToolResults.Fail($"{fileName} timed out after {timeoutSeconds}s or was cancelled.");
         }
         catch (Exception ex)
         {
@@ -262,7 +367,9 @@ internal static class ProcessExec
             return ToolResults.Fail($"Could not run {fileName}: {ex.Message}");
         }
 
-        return BuildResult(fileName, process.ExitCode, stdout.ToString(), stderr.ToString(), allowedExitCodes);
+        return BuildResult(
+            fileName, process.ExitCode, stdout.ToString(), stderr.ToString(), allowedExitCodes,
+            outputCutShort: outcome.OutputCutShort);
     }
 
     /// <summary>

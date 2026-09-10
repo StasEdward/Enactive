@@ -88,20 +88,14 @@ public sealed class RunPowerShellTool : ITool
         process.OutputDataReceived += (_, e) => stdout.Add(e.Data);
         process.ErrorDataReceived += (_, e) => stderr.Add(e.Data);
 
+        ProcessExec.RunOutcome outcome;
         try
         {
-            process.Start();
-            process.BeginOutputReadLine();
-            process.BeginErrorReadLine();
-
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            timeout.CancelAfter(TimeSpan.FromSeconds(TimeoutSeconds));
-            await process.WaitForExitAsync(timeout.Token);
-        }
-        catch (OperationCanceledException)
-        {
-            try { if (!process.HasExited) process.Kill(entireProcessTree: true); } catch { /* ignore */ }
-            return ToolResults.Fail($"PowerShell timed out after {TimeoutSeconds}s or was cancelled.");
+            // Contained, like run_command: Start-Process is exactly the shape that used to walk
+            // away from a cancelled run. See ProcessJob.
+            outcome = await ProcessExec.RunContainedAsync(process, TimeoutSeconds, ct);
+            if (!outcome.Completed)
+                return ToolResults.Fail($"PowerShell timed out after {TimeoutSeconds}s or was cancelled.");
         }
         catch (Exception ex)
         {
@@ -115,7 +109,8 @@ public sealed class RunPowerShellTool : ITool
 
         return ProcessExec.BuildResult(
             "PowerShell", process.ExitCode, CliXml.ToText(stdout.ToString()), errors,
-            Tolerated(process.ExitCode, errors, expected), declarable: true);
+            Tolerated(process.ExitCode, errors, expected), declarable: true,
+            outputCutShort: outcome.OutputCutShort);
     }
 
     /// <summary>
