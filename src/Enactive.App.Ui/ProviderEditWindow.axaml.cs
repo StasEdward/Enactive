@@ -1,5 +1,6 @@
 using Avalonia.Controls;
 using Enactive.App.Ui.ViewModels;
+using Enactive.Settings;
 
 namespace Enactive.App.Ui;
 

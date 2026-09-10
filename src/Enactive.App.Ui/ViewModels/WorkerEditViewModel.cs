@@ -1,9 +1,10 @@
-ï»¿namespace Enactive.App.Ui.ViewModels;
+namespace Enactive.App.Ui.ViewModels;
 
 using System.Collections.ObjectModel;
 using Enactive.Agents;
 using Enactive.App.Ui.Mvvm;
 using Enactive.Core.Permissions;
+using Enactive.Settings;
 
 /// <summary>One tool the worker may or may not use. A row in the tools list, not a checkbox built in code.</summary>
 internal sealed class ToolToggle : ObservableObject
@@ -61,7 +62,7 @@ internal sealed class WorkerEditViewModel : ObservableObject
         foreach (var tool in WorkerTools.Offerable(toolCatalog, config.Tools))
         {
             var toggle = new ToolToggle(tool, config.Tools.Contains(tool));
-            // An empty selection now means NO tools, which is invisible in a list of unticked boxes â€”
+            // An empty selection now means NO tools, which is invisible in a list of unticked boxes —
             // so the hint under the list has to react to every toggle, not just to Save.
             toggle.PropertyChanged += (_, _) => OnPropertyChanged(nameof(ToolsHint));
             Tools.Add(toggle);
@@ -110,9 +111,9 @@ internal sealed class WorkerEditViewModel : ObservableObject
         {
             var selected = Tools.Where(t => t.IsSelected).Select(t => t.Name).ToList();
             if (selected.Contains("*"))
-                return "\"*\" is selected â€” this worker may call EVERY tool, including shell commands.";
+                return "\"*\" is selected — this worker may call EVERY tool, including shell commands.";
             return selected.Count == 0
-                ? "Nothing selected â€” this worker cannot call any tool. Tick \"*\" for unrestricted access."
+                ? "Nothing selected — this worker cannot call any tool. Tick \"*\" for unrestricted access."
                 : $"{selected.Count} tool(s): {string.Join(", ", selected)}.";
         }
     }

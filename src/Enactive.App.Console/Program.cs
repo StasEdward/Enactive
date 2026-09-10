@@ -3,13 +3,16 @@ using Enactive.Core.Context;
 using Enactive.Core.Diagnostics;
 using Enactive.Core.Events;
 using Enactive.Core.History;
+using Enactive.Core.Inbox;
 using Enactive.Core.Intents;
 using Enactive.Core.Permissions;
 using Enactive.Core.Providers;
+using Enactive.Core.Schedules;
 using Enactive.Core.Templates;
 using Enactive.Core.Tools;
 using Enactive.Core.Workers;
 using Enactive.Providers;
+using Enactive.Settings;
 using Enactive.Tools;
 using Enactive.Workspace;
 
@@ -26,9 +29,10 @@ using Enactive.Workspace;
 // Those three exist so a behaviour can be checked from a command line rather than by driving the
 // window by hand: a tier, a role and an answer are what a question about permissions is made of,
 // and the last line of output names all three next to the outcome.
-// Environment overrides:
-//   ENACTIVE_MODEL       (default: qwen2.5-coder)
-//   ENACTIVE_OLLAMA_URL  (default: http://localhost:11434/v1)
+// Providers, models, the team and the engine's switches come from the same settings.json the
+// desktop reads - see the block below. These two override it, and only when set:
+//   ENACTIVE_MODEL       the model every worker runs on
+//   ENACTIVE_OLLAMA_URL  the first provider's base URL
 
 // "timeline" as the first argument shows the project's run history instead of running an intent:
 //   dotnet run --project src/Enactive.App.Console -- timeline "<workspace path>"
@@ -41,6 +45,10 @@ var isTimeline = args.Length > 0 && string.Equals(args[0], "timeline", StringCom
 // This is what makes a saved task a DAILY task: Windows Task Scheduler, cron or a pipeline step
 // drives it. Nothing here is interactive, and that is enforced rather than assumed - see
 // UnattendedDecisionHandler.
+//
+// --template names ONE task and runs it now. --due asks the saved schedules what is owed and runs
+// what is: same machinery, and the difference is only who decides which task. See the --due block
+// below and Docs/SCHEDULER_PLAN.md.
 string? Option(string name)
 {
     for (var i = 0; i < args.Length - 1; i++)
@@ -76,8 +84,40 @@ var templateId = Option("--template");
 var reportPath = Option("--report");
 var parameters = Params();
 
-var baseUrl = Environment.GetEnvironmentVariable("ENACTIVE_OLLAMA_URL") ?? "http://localhost:11434/v1";
-var model = Environment.GetEnvironmentVariable("ENACTIVE_MODEL") ?? "qwen2.5-coder";
+// ── What the person configured ────────────────────────────────────────────────
+// The same settings.json the desktop reads and the settings window writes.
+//
+// This host used to have none. It built one Ollama descriptor from two environment variables and a
+// team from DefaultWorkers, and on 2026-09-10 the first scheduled runs went out on
+// OpenAiCompatible against an OllamaNative endpoint, on qwen2.5-coder against an Ollama where only
+// gemma4 was installed, with no phase bindings at all - so planning, bound by its owner to
+// Anthropic, ran on a local model. Nobody had chosen any of that. It was simply what this file
+// happened to say, and there was no way for it to say anything else.
+//
+// Read here rather than inside --due, because the drift is not about schedules. A run started by
+// hand from a command line is the same product, and a check performed here is only evidence about
+// that product if this host and the window agree on what they are running.
+var settings = AppSettings.Load();
+
+foreach (var problem in settings.LoadProblems)
+    Console.Error.WriteLine($"settings: {problem}");
+
+// The environment variables stay, and now mean what they say: an override, applied only when SET.
+// ENACTIVE_MODEL used to have a DEFAULT, which made it an override that was always on - the model
+// the settings file names could not win because nothing ever asked it.
+//
+// On a machine with NO settings.json these two are already honoured, by AppSettings.SeedFromEnvironment,
+// which synthesizes an Ollama provider from them. What is applied here is the case that did not
+// exist before: a file IS present, and the variable is meant to override what it says.
+var modelOverride = Environment.GetEnvironmentVariable("ENACTIVE_MODEL");
+var urlOverride = Environment.GetEnvironmentVariable("ENACTIVE_OLLAMA_URL");
+
+if (urlOverride is { Length: > 0 } && settings.Providers.Count > 0)
+    settings.Providers[0].BaseUrl = urlOverride;
+
+if (modelOverride is { Length: > 0 })
+    foreach (var worker in settings.Workers)
+        worker.Model = $"{settings.Providers.FirstOrDefault()?.Id ?? "ollama"}/{modelOverride}";
 var command = args.Length > 0 && !string.IsNullOrWhiteSpace(args[0])
     ? args[0]
     : "Create a Python script named list_files.py in the current workspace that prints the list of files in the current directory.";
@@ -86,6 +126,46 @@ var workspaceRoot = Path.GetFullPath(
     ?? (args.Length > 1 && !string.IsNullOrWhiteSpace(args[1]) && !args[1].StartsWith("--", StringComparison.Ordinal)
         ? args[1]
         : Directory.GetCurrentDirectory()));
+
+// ── The tick, across every workspace ──────────────────────────────────────────
+//   Enactive.App.Console --due-all
+//
+// ONE thing on the machine wakes the runner, and it has to find work in every project rather than
+// in whichever folder it happens to start in. --due needs a workspace and answers for that one;
+// this asks all of them and then becomes --due for the workspace with the most overdue schedule.
+//
+// Decided HERE, before the workspace is adopted, because everything below is built for one
+// workspace: choosing later would leave the run store, the memory and the artifacts pointing at a
+// folder the run is not in.
+var dueAll = args.Contains("--due-all", StringComparer.OrdinalIgnoreCase);
+if (dueAll)
+{
+    // The pulse first, and unconditionally: it records that the schedules WERE ASKED, which is a
+    // different fact from whether anything was due, and it is the one the app has no other way to
+    // learn. Written before the answer, so a tick that dies deciding still leaves proof it ran.
+    Heartbeat.Stamp(DateTimeOffset.Now);
+
+    var roots = ScheduleStore.Default.Workspaces();
+    var across = roots
+        .SelectMany(root => ScheduleTick.Decide(
+            ScheduleStore.Default.For(root), DateTimeOffset.Now, RunMarkers.Default.IsRunning))
+        .ToArray();
+
+    Console.WriteLine($"SCHEDULES — {roots.Count} workspace(s)");
+    foreach (var decision in across.Where(d => d.WorthReporting || d.ShouldRun))
+        Console.WriteLine($"  [{decision.Verdict}] {decision.Schedule.Name}: {decision.Why}");
+
+    if (ScheduleTick.FirstDue(across) is not { } winner)
+    {
+        Console.WriteLine(across.Length == 0 ? "  (no schedules anywhere)" : "  nothing due");
+        return 0;
+    }
+
+    // Its own workspace from here on. The --due block below re-decides within that workspace,
+    // which lands on the same schedule and claims it - one decision point, not two.
+    workspaceRoot = Path.GetFullPath(winner.Schedule.WorkspaceRoot);
+    Console.WriteLine($"  in {workspaceRoot}");
+}
 
 Directory.CreateDirectory(workspaceRoot);
 
@@ -125,14 +205,6 @@ if (args.Length > 0 && string.Equals(args[0], "inbox", StringComparison.OrdinalI
 
 using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
 
-var descriptor = new ProviderDescriptor(
-    Id: "ollama",
-    DisplayName: "Ollama (local)",
-    Kind: ProviderKind.OpenAiCompatible,
-    BaseUrl: baseUrl,
-    ApiKey: null,
-    Models: new[] { model });
-
 // ── Global log ────────────────────────────────────────────────────────────────
 // Readable summaries + raw wire, mirrored to a daily file under %APPDATA%/Enactive/logs.
 // ENACTIVE_LOG_LEVEL (Trace|Debug|Info|Warn|Error, default Debug) controls verbosity;
@@ -141,9 +213,31 @@ var logLevel = Enum.TryParse<LogLevel>(Environment.GetEnvironmentVariable("ENACT
     ? lv : LogLevel.Debug;
 var logFile = new FileLogSink();
 using var logHub = new LogHub(minLevel: logLevel, downstream: new ILogSink[] { logFile });
-logHub.Info(LogSource.System, $"Enactive console starting — provider={descriptor.DisplayName}, model={model}, log dir={FileLogSink.DefaultDirectory()}");
+// ── The engine, from the settings ─────────────────────────────────────────────
+// Providers, team, phase router and default model, built by the same code the desktop calls.
+//
+// Asked what is MISSING first. A configuration with no model used to be run anyway, on a name
+// compiled into AppSettings, and the first anyone heard of it was a 404 from the provider - at
+// three in the morning, in a run record whose reason was an HTTP status. Refused here instead,
+// with the thing that is missing named.
+if (EngineComposition.Missing(settings) is { Count: > 0 } notConfigured)
+{
+    foreach (var problem in notConfigured)
+        Console.Error.WriteLine(problem);
 
-var providerFactory = new ChatProviderFactory(new[] { descriptor }, http, logHub);
+    // EX_CONFIG: the configuration is wrong, not the invocation and not the work.
+    return 78;
+}
+
+var engine = EngineComposition.Build(settings, http, logHub);
+var providerFactory = engine.Providers;
+var workerProvider = engine.Workers;
+var modelResolver = engine.Models;
+var model = engine.DefaultModel;
+
+logHub.Info(LogSource.System,
+    $"Enactive console starting — providers={string.Join(", ", settings.Providers.Select(p => $"{p.Id}:{p.Kind}"))}, "
+    + $"model={model}, log dir={FileLogSink.DefaultDirectory()}");
 var artifactStore = new DiskArtifactStore(workspace);
 IToolRegistry toolRegistry = new LoggingToolRegistry(new ToolRegistry(new ITool[]
 {
@@ -165,10 +259,7 @@ IToolRegistry toolRegistry = new LoggingToolRegistry(new ToolRegistry(new ITool[
     new DockerTool()
 }), logHub);
 var contextProvider = new ContextProvider(workspace, new EnvironmentProbe(), memoryStore);
-var modelResolver = new ModelResolver();
-
-var workers = DefaultWorkers.Build(new ModelRef("ollama", model));
-var workerProvider = new StaticWorkerProvider(workers, DefaultWorkers.DefaultId);
+var workers = workerProvider.All;
 
 // ── The role this run is given ────────────────────────────────────────────────
 //   --role developer | reviewer | ops | writer
@@ -210,10 +301,105 @@ if (autonomyTier is null)
     return 64;   // EX_USAGE: the invocation is wrong, not the work
 }
 
-var permissionPolicy = AutonomyTiers.PolicyFor(autonomyTier.Value);
+// The tier AND the shell setting, from the shared composition. The tier alone was what this file
+// used, so "never run commands" was a control that held in the window and did nothing here - which
+// is not a weaker setting, it is a setting that looks configured and enforces nothing.
+var permissionPolicy = EngineComposition.PolicyFor(settings, autonomyTier.Value);
 
 // ── A saved task, run without a prompt ────────────────────────────────────────
 ResolvedTaskSpec? spec = null;
+
+// ── Whatever is due now ───────────────────────────────────────────────────────
+//   Enactive.App.Console --due --workspace c:\repos\Enactive
+//
+// This is the tick. Something wakes it every few minutes - a Windows scheduled task registered
+// once - and it asks the saved schedules what is due. See Docs/SCHEDULER_PLAN.md.
+//
+// It runs AT MOST ONE schedule per invocation, and that is a real limitation rather than an
+// oversight: everything below this point is written for one run, and threading a second through it
+// would be a larger change than the value at this stage. Two schedules due in the same minute means
+// the second one runs on the next tick, a few minutes later. It is reported as such rather than
+// silently deferred.
+IDisposable? scheduleClaim = null;
+
+// Set only when a SCHEDULE drove this invocation. It is what decides whether an Inbox item is filed
+// at the end: a command somebody typed has somebody reading its output, and filing an item for it
+// would fill the Inbox with things its owner has already seen.
+string? scheduleName = null;
+var scheduleId = Guid.Empty;
+
+if (dueAll || args.Contains("--due", StringComparer.OrdinalIgnoreCase))
+{
+    // Also a pulse: --due asking one workspace is still the schedules being asked, and a person who
+    // wired the tick to --due rather than --due-all has a working scheduler that must not be
+    // reported as a dead one.
+    Heartbeat.Stamp(DateTimeOffset.Now);
+
+    var schedules = ScheduleStore.Default.For(workspace.RootPath);
+    var decisions = ScheduleTick.Decide(schedules, DateTimeOffset.Now, RunMarkers.Default.IsRunning);
+
+    Console.WriteLine($"SCHEDULES — {workspace.RootPath}");
+    foreach (var decision in decisions.Where(d => d.WorthReporting || d.ShouldRun))
+        Console.WriteLine($"  [{decision.Verdict}] {decision.Schedule.Name}: {decision.Why}");
+
+    // The most overdue first, by the same rule --due-all used to pick this workspace.
+    var due = decisions.Where(d => d.ShouldRun).OrderBy(d => d.Occurrence).ToList();
+    if (due.Count == 0)
+    {
+        Console.WriteLine(decisions.Count == 0 ? "  (no schedules)" : "  nothing due");
+        return 0;
+    }
+
+    if (due.Count > 1)
+        Console.WriteLine($"  {due.Count - 1} more due; they run on the next tick.");
+
+    var chosen = due[0];
+
+    // Claimed BEFORE anything else, so a second tick that overlaps this one sees it as busy. Null
+    // means somebody claimed it between the decision and here, which is not an error - it is the
+    // overlap rule working.
+    scheduleClaim = RunMarkers.Default.Claim(chosen.Schedule.Id);
+    if (scheduleClaim is null)
+    {
+        Console.WriteLine($"  [Busy] {chosen.Schedule.Name}: claimed by another run just now");
+        return 0;
+    }
+
+    var resolved = ScheduledSpec.For(
+        chosen.Schedule, workspace, id => new TemplateStore(workspaceRoot).Find(id));
+
+    if (resolved.Spec is null)
+    {
+        // Reported and NOT retried in a loop: the occurrence is marked as fired below, so a
+        // template that cannot resolve produces one report a day rather than one every tick.
+        Console.Error.WriteLine($"  [Failed] {chosen.Schedule.Name}: {resolved.Why}");
+        ScheduleStore.Default.Save(chosen.Schedule with { LastFiredAt = chosen.Occurrence });
+
+        // Into the Inbox as well as onto stderr. Exit code 70 goes to a scheduler's log, and a
+        // schedule that has quietly stopped working is precisely the thing whose owner should be
+        // told rather than left to notice the work is not being done.
+        await InboxStoreFactory.Create(workspace).AppendAsync(
+            ScheduledOutcome.CouldNotStart(
+                workspace.Id, chosen.Schedule.Id, chosen.Schedule.Name, resolved.Why, DateTimeOffset.UtcNow),
+            CancellationToken.None);
+
+        return 70;   // EX_SOFTWARE: the invocation was fine, the task could not be built
+    }
+
+    // Marked as fired NOW rather than when the run ends. An occurrence is considered exactly once,
+    // and a machine that loses power mid-run must not repeat the same occurrence on the way back
+    // up - the run is in the history either way, which is where a person looks.
+    ScheduleStore.Default.Save(chosen.Schedule with { LastFiredAt = chosen.Occurrence });
+
+    spec = resolved.Spec;
+    command = spec.Goal;
+    scheduleName = chosen.Schedule.Name;
+    scheduleId = chosen.Schedule.Id;
+    Console.WriteLine($"  running '{chosen.Schedule.Name}' — {chosen.Why}");
+}
+
+using var _scheduleClaim = scheduleClaim;
+
 if (templateId is { Length: > 0 })
 {
     var template = new TemplateStore(workspaceRoot).Find(templateId);
@@ -310,9 +496,24 @@ var orchestrator = new Orchestrator(
     successCriteria: spec?.SuccessCriteria, limits: spec?.Limits,
     checkpoints: checkpointStore,
     settings: resumeFrom?.Settings,
-    // On, like the window. A scheduled run is exactly where a step that passed review on a report
-    // nobody checked the reasoning of goes unnoticed - there is no one reading the transcript.
-    checkSoundness: true);
+    // Which model runs which phase. There was no router here at all, so a person who had bound
+    // planning to a stronger provider got none of it from a schedule, and was not told.
+    router: engine.Router,
+    // The engine's own switches, from the settings, as the desktop passes them. This file passed
+    // none, so a run started here used the ORCHESTRATOR's defaults - not the person's - for the
+    // context window, thinking, retries and review. checkSoundness was the one exception: it was
+    // hard-coded true here with a comment saying "on, like the window", written when there was no
+    // way to ask the window. Now there is, and the answer is the setting.
+    reviewRetries: settings.ReviewRetries,
+    successRetries: settings.SuccessRetries,
+    numCtx: settings.NumCtx,
+    disableThinking: settings.DisableThinking,
+    maxParallelSteps: settings.MaxParallelSteps,
+    evidenceBudget: settings.EvidenceBudget,
+    allowImplicitToolCalls: settings.AllowImplicitToolCalls,
+    reviewContent: settings.ReviewContent,
+    checkSoundness: settings.CheckSoundness,
+    revertRejectedSteps: settings.RevertRejectedSteps);
 var runRecorder = new RunRecorder(runStore, memoryStore, workspace.Id, spec: spec?.Snapshot());
 
 // ── Run ──────────────────────────────────────────────────────────────────────
@@ -321,8 +522,17 @@ Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 
 Console.WriteLine("Enactive — vertical slice");
 Console.WriteLine($"  Workspace : {workspace.RootPath}");
-Console.WriteLine($"  Provider  : {descriptor.DisplayName} ({baseUrl})");
+// Every configured endpoint and its KIND, not just a name. The kind is what a scheduled run had
+// wrong while the name looked right, and a banner that had said "Ollama (local)" either way would
+// have been read as confirmation.
+foreach (var p in settings.Providers)
+    Console.WriteLine($"  Provider  : {p.DisplayName} — {p.Kind} @ {p.BaseUrl}");
 Console.WriteLine($"  Model     : {model}");
+if (settings.Bindings.Plan is { Length: > 0 } planBinding)
+    Console.WriteLine($"  Plan      : {planBinding}");
+if (settings.Bindings.Review is { Length: > 0 } reviewBinding)
+    Console.WriteLine($"  Review    : {reviewBinding}");
+Console.WriteLine($"  Shells    : {settings.ShellCommands}");
 Console.WriteLine($"  Command   : {command}");
 Console.WriteLine($"  Autonomy  : {AutonomyTiers.Names[autonomyTier.Value]}");
 Console.WriteLine($"  Role      : {roleId ?? DefaultWorkers.DefaultId}");
@@ -339,6 +549,43 @@ var intent = new Intent(
     // --role wins over a template's own worker: it is the more specific instruction, typed for
     // this invocation.
     workContext, DateTimeOffset.UtcNow, roleId ?? spec?.WorkerId);
+
+// ── The scheduled run's copy of the result ────────────────────────────────────
+// Exactly one Inbox item per scheduled run, whatever ending it reaches - including the ones that
+// return early below, which are the endings a person is least likely to hear about otherwise. A
+// scheduled run's stdout is a window nobody opened and a scheduler's log is gone by morning.
+//
+// Best-effort, and last: the run happened, and failing to file the paperwork does not unhappen it.
+async Task FileScheduledOutcome(RunRecord? known = null)
+{
+    if (scheduleName is null)
+        return;   // typed at a console - somebody is reading this
+
+    try
+    {
+        var record = known;
+        if (record is null)
+        {
+            // By header first, then the one record: reading every run whole to find the newest is
+            // how a workspace pays for its history on every invocation.
+            var header = (await runStore.LoadSummariesAsync(CancellationToken.None))
+                .Where(r => r.TaskId == (resumeFrom?.TaskId ?? intent.Id))
+                .OrderByDescending(r => r.StartedAt)
+                .FirstOrDefault();
+
+            if (header is not null)
+                record = await runStore.LoadAsync(header.RunId, CancellationToken.None);
+        }
+
+        await InboxStoreFactory.Create(workspace).AppendAsync(
+            ScheduledOutcome.For(workspace.Id, scheduleId, scheduleName, record, DateTimeOffset.UtcNow),
+            CancellationToken.None);
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"Could not file the Inbox item for '{scheduleName}': {ex.Message}");
+    }
+}
 
 var streaming = false;
 RunOutcomeKind? outcome = null;
@@ -389,11 +636,13 @@ catch (HttpRequestException ex)
     if (ex is not ProviderUnreachableException)
         Console.WriteLine($"  Is Ollama running? Try:  ollama serve   and   ollama pull {model}");
 
+    await FileScheduledOutcome();
     return 1;
 }
 catch (OperationCanceledException)
 {
     Console.WriteLine("Cancelled.");
+    await FileScheduledOutcome();
     return 130;
 }
 catch (Exception ex)
@@ -410,6 +659,7 @@ catch (Exception ex)
     Console.Error.WriteLine("x The run stopped on an error nothing handled.");
     Console.Error.WriteLine($"  {ex.GetType().Name}: {ex.Message}");
     Console.Error.WriteLine("  Check the provider settings and the log; nothing further was run.");
+    await FileScheduledOutcome();
     return RunReport.ExitCodeFor(RunOutcomeKind.Failed);
 }
 
@@ -457,6 +707,9 @@ if (finished is not null)
 
     outcome ??= RunReport.OutcomeOf(finished);
 }
+
+// The record is already in hand here, so it is handed over rather than looked up again.
+await FileScheduledOutcome(finished);
 
 // One line, last, in a shape something other than a person can read.
 //

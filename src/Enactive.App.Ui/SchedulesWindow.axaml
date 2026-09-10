@@ -1,0 +1,220 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="using:Enactive.App.Ui"
+        xmlns:vm="using:Enactive.App.Ui.ViewModels"
+        x:Class="Enactive.App.Ui.SchedulesWindow"
+        x:DataType="vm:SchedulesViewModel"
+        Title="Enactive — Schedules"
+        Width="1020" Height="660"
+        WindowStartupLocation="CenterOwner"
+        Background="{DynamicResource Brand.Bg}"
+        WindowDecorations="BorderOnly"
+        ExtendClientAreaToDecorationsHint="True">
+
+    <Grid RowDefinitions="Auto,*" Margin="{Binding $parent[Window].OffScreenMargin}">
+
+        <local:TitleBarView Grid.Row="0" />
+
+        <DockPanel Grid.Row="1" LastChildFill="True">
+
+            <TextBlock DockPanel.Dock="Bottom" Classes="hint" Margin="10,4,10,8"
+                       Text="{Binding WorkspaceRoot}" />
+
+            <!-- Across the whole window and above everything, because it is not a detail of one
+                 schedule: while it is showing, none of them will run at all. -->
+            <Border DockPanel.Dock="Top" Margin="10,10,10,0" Padding="12,10"
+                    CornerRadius="4"
+                    Background="{DynamicResource Brand.Scrim}"
+                    BorderThickness="3,0,0,0"
+                    BorderBrush="{DynamicResource Brand.Danger}"
+                    IsVisible="{Binding HasTickWarning}">
+                <TextBlock Text="{Binding TickWarning}" TextWrapping="Wrap"
+                           Foreground="{DynamicResource Brand.Warning}" />
+            </Border>
+
+            <Grid ColumnDefinitions="320,*">
+
+                <!-- The schedules in this workspace. The left edge says at a glance what the second
+                     line says in words: green has a next run, grey is switched off, red cannot be
+                     timed at all. -->
+                <DockPanel Grid.Column="0" Margin="10,10,5,0" LastChildFill="True">
+
+                    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Spacing="8"
+                                Margin="0,8,0,10">
+                        <Button Content="New" Classes="go" Command="{Binding NewCommand}" />
+                        <Button Content="Refresh" Command="{Binding RefreshCommand}" />
+                    </StackPanel>
+
+                    <TextBlock DockPanel.Dock="Bottom" Classes="hint" Text="{Binding Status}"
+                               Margin="0,6,0,0" TextWrapping="Wrap" />
+
+                    <ListBox Classes="cards"
+                             ItemsSource="{Binding Schedules}"
+                             SelectedItem="{Binding Selected}">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate x:DataType="vm:ScheduleListItem">
+                                <Border Classes="card" BorderBrush="{Binding EdgeBrush}">
+                                    <StackPanel>
+                                        <TextBlock Classes="cardTitle" Text="{Binding Name}" TextWrapping="Wrap" />
+                                        <TextBlock Classes="cardMeta" Text="{Binding When}" TextWrapping="Wrap" />
+                                        <TextBlock Classes="cardMeta" Text="{Binding Next}"
+                                                   TextWrapping="Wrap" Margin="0,3,0,0" />
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </DockPanel>
+
+                <!-- ══ What is being agreed to, and what came of it ══════════════════════════ -->
+                <DockPanel Grid.Column="1" Margin="5,10,10,0" LastChildFill="True"
+                           IsVisible="{Binding IsNotEditing}">
+
+                    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Spacing="8"
+                                HorizontalAlignment="Right" Margin="0,8,0,10"
+                                IsVisible="{Binding HasSelection}">
+                        <Button Content="Delete" Command="{Binding DeleteCommand}" />
+                        <Button Content="{Binding EnableLabel}" Command="{Binding ToggleEnabledCommand}" />
+                        <Button Content="Edit" Classes="go" Command="{Binding EditCommand}" />
+                    </StackPanel>
+
+                    <ScrollViewer IsVisible="{Binding HasSelection}">
+                        <StackPanel Spacing="10">
+
+                            <!-- A schedule is an approval given in advance for every future run, so
+                                 this is not a summary of it - it is the whole of what is agreed.
+                                 Every line comes from ScheduleWords; nothing here picks. -->
+                            <TextBlock Text="What this will do" FontWeight="SemiBold" />
+                            <Border Background="{DynamicResource Brand.Scrim}" CornerRadius="4" Padding="10,8">
+                                <ItemsControl ItemsSource="{Binding Approval}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="x:String">
+                                            <TextBlock Text="{Binding}" TextWrapping="Wrap" Margin="0,0,0,4"
+                                                       Foreground="{DynamicResource Brand.TextBody}" />
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </Border>
+
+                            <TextBlock Text="What came of it" FontWeight="SemiBold" Margin="0,6,0,0" />
+                            <TextBlock Classes="hint" TextWrapping="Wrap"
+                                       Text="Nothing yet — this schedule has not reported back."
+                                       IsVisible="{Binding HasNoOutcomes}" />
+
+                            <ItemsControl ItemsSource="{Binding Outcomes}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:ScheduleOutcomeLine">
+                                        <Border Classes="card" BorderBrush="{Binding Brush}" Margin="0,0,0,6">
+                                            <StackPanel>
+                                                <TextBlock Classes="cardMeta" Text="{Binding When}" />
+                                                <TextBlock Text="{Binding Summary}" TextWrapping="Wrap"
+                                                           Foreground="{DynamicResource Brand.TextBody}" />
+                                            </StackPanel>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+
+                        </StackPanel>
+                    </ScrollViewer>
+                </DockPanel>
+
+                <!-- ══ The form ══════════════════════════════════════════════════════════════ -->
+                <DockPanel Grid.Column="1" Margin="5,10,10,0" LastChildFill="True"
+                           IsVisible="{Binding IsEditing}">
+
+                    <StackPanel DockPanel.Dock="Bottom" Margin="0,8,0,10">
+                        <Border Background="{DynamicResource Brand.Scrim}"
+                                CornerRadius="4" Padding="10,8" Margin="0,0,0,8"
+                                IsVisible="{Binding HasProblems}">
+                            <TextBlock Text="{Binding Problems}" TextWrapping="Wrap"
+                                       Foreground="{DynamicResource Brand.Warning}" />
+                        </Border>
+
+                        <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
+                            <Button Content="Cancel" Command="{Binding CancelEditCommand}" />
+                            <Button Content="Save" Classes="go" Command="{Binding SaveCommand}" />
+                        </StackPanel>
+                    </StackPanel>
+
+                    <ScrollViewer>
+                        <StackPanel Spacing="10">
+
+                            <StackPanel>
+                                <TextBlock Text="Name" FontWeight="SemiBold" />
+                                <TextBlock Classes="hint" TextWrapping="Wrap" Margin="0,1,0,3"
+                                           Text="What you will see in the Inbox when it reports back." />
+                                <TextBox Text="{Binding DraftName}" />
+                            </StackPanel>
+
+                            <StackPanel>
+                                <TextBlock Text="What it runs" FontWeight="SemiBold" />
+                                <TextBlock Classes="hint" TextWrapping="Wrap" Margin="0,1,0,3"
+                                           Text="A template, resolved fresh each time it fires — or a past run, repeated exactly as it ran." />
+                                <ComboBox ItemsSource="{Binding WorkChoices}"
+                                          SelectedItem="{Binding DraftWork}"
+                                          HorizontalAlignment="Stretch">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:WorkChoice">
+                                            <TextBlock Text="{Binding Label}" />
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+                            </StackPanel>
+
+                            <StackPanel>
+                                <TextBlock Text="How often" FontWeight="SemiBold" />
+                                <ComboBox ItemsSource="{Binding Repeats}" SelectedItem="{Binding DraftRepeat}"
+                                          HorizontalAlignment="Stretch" />
+                            </StackPanel>
+
+                            <StackPanel IsVisible="{Binding IsWeekly}">
+                                <TextBlock Text="Day" FontWeight="SemiBold" />
+                                <ComboBox ItemsSource="{Binding Days}" SelectedItem="{Binding DraftDay}"
+                                          HorizontalAlignment="Stretch" />
+                            </StackPanel>
+
+                            <StackPanel IsVisible="{Binding IsOnce}">
+                                <TextBlock Text="Date" FontWeight="SemiBold" />
+                                <DatePicker SelectedDate="{Binding DraftDate}" HorizontalAlignment="Stretch" />
+                            </StackPanel>
+
+                            <!-- Spinners, not a text box: a time that cannot be typed wrongly needs no
+                                 rule out here to say it was typed wrongly. -->
+                            <StackPanel>
+                                <TextBlock Text="Time" FontWeight="SemiBold" />
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <NumericUpDown Value="{Binding DraftHour}" Minimum="0" Maximum="23"
+                                                   FormatString="00" Width="110" />
+                                    <TextBlock Text=":" VerticalAlignment="Center" />
+                                    <NumericUpDown Value="{Binding DraftMinute}" Minimum="0" Maximum="59"
+                                                   FormatString="00" Width="110" />
+                                </StackPanel>
+                            </StackPanel>
+
+                            <StackPanel>
+                                <TextBlock Text="Time zone" FontWeight="SemiBold" />
+                                <TextBlock Classes="hint" TextWrapping="Wrap" Margin="0,1,0,3"
+                                           Text="A repeating time is a wall clock: it stays at the same hour when the clocks change." />
+                                <ComboBox ItemsSource="{Binding Zones}" SelectedItem="{Binding DraftZone}"
+                                          HorizontalAlignment="Stretch" />
+                            </StackPanel>
+
+                            <StackPanel>
+                                <TextBlock Text="What it may do" FontWeight="SemiBold" />
+                                <TextBlock Classes="hint" TextWrapping="Wrap" Margin="0,1,0,3"
+                                           Text="The same slider as a live run. Nobody is watching a scheduled run, so anything a tier would ask about is refused instead." />
+                                <ComboBox ItemsSource="{Binding Tiers}" SelectedItem="{Binding DraftTier}"
+                                          HorizontalAlignment="Stretch" />
+                            </StackPanel>
+
+                            <CheckBox IsChecked="{Binding DraftRunLate}"
+                                      Content="If the machine was off, run it as soon as it is back" />
+
+                        </StackPanel>
+                    </ScrollViewer>
+                </DockPanel>
+            </Grid>
+        </DockPanel>
+    </Grid>
+</Window>

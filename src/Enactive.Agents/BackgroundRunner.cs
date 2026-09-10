@@ -56,17 +56,12 @@ public static class BackgroundRunner
             error = ex.Message;
         }
 
-        // Anything that is not a completed run is worth flagging as such: an Inbox line saying
-        // "result" for a run that stopped half-way is the same lie as a green status pill.
-        var kind = status is "Failed" or "Incomplete" ? "error"
-                 : decisions > 0 ? "decision"
-                 : "result";
-        var summary = $"{status} · {artifacts} artifact(s)"
-            + (decisions > 0 ? $" · {decisions} decision(s) needed your approval" : "")
-            + (error is not null ? " · " + error : "");
+        // The wording and the kind come from InboxLines, which the scheduled path uses too. A run
+        // that ends unwatched should read the same way whether the app was running or not.
+        var line = InboxLines.For(status, artifacts, decisions, error);
 
         await inbox.AppendAsync(
-            new InboxItem(Guid.NewGuid(), workspace.Id, kind, title, summary, runId, "unread", DateTimeOffset.UtcNow),
+            new InboxItem(Guid.NewGuid(), workspace.Id, line.Kind, title, line.Summary, runId, "unread", DateTimeOffset.UtcNow),
             CancellationToken.None).ConfigureAwait(false);
     }
 }

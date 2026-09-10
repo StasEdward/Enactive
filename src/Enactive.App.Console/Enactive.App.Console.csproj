@@ -13,5 +13,9 @@
     <ProjectReference Include="..\Enactive.Tools\Enactive.Tools.csproj" />
     <ProjectReference Include="..\Enactive.Workspace\Enactive.Workspace.csproj" />
     <ProjectReference Include="..\Enactive.Agents\Enactive.Agents.csproj" />
+    <!-- What the person configured. Until 2026-09-10 this host had no way to read it and built a
+         provider, a model and a team of its own instead - so a scheduled run went out on an
+         endpoint kind nobody had chosen, on a model that was not installed. -->
+    <ProjectReference Include="..\Enactive.Settings\Enactive.Settings.csproj" />
   </ItemGroup>
 </Project>

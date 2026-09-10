@@ -44,16 +44,46 @@ public sealed class RunRecorder
         IAsyncEnumerable<WorkEvent> stream, [EnumeratorCancellation] CancellationToken ct)
     {
         var events = new List<WorkEvent>();
+
+        // Enumerated by hand rather than with `await foreach`, so the MoveNext can sit in a try with
+        // a CATCH while the yield sits outside it - an iterator may not yield inside a try that has
+        // one. The shape is only there to let the exception be RECORDED before it is rethrown.
+        var source = stream.GetAsyncEnumerator(ct);
         try
         {
-            await foreach (var ev in stream.WithCancellation(ct))
+            while (true)
             {
-                events.Add(ev);
-                yield return ev;
+                WorkEvent current;
+                try
+                {
+                    if (!await source.MoveNextAsync())
+                        break;
+                    current = source.Current;
+                }
+                catch (Exception ex)
+                {
+                    // THE POINT OF ALL THIS. An exception that ends a run used to leave the record
+                    // with whatever events had arrived and no terminal event at all - so the run
+                    // read as "Incomplete", the report had no reason, and the Inbox item said
+                    // "Incomplete · 0 artifact(s)". The cause existed only in a log file nobody was
+                    // told about.
+                    //
+                    // Found on 2026-09-10 by the first real scheduled runs: both died 40ms in on
+                    // "model 'qwen2.5-coder' not found", and neither the timeline, the report nor
+                    // the Inbox said so. A run that cannot say why it stopped is the failure the
+                    // whole unattended design exists to prevent.
+                    Note(events, ex);
+                    throw;
+                }
+
+                events.Add(current);
+                yield return current;
             }
         }
         finally
         {
+            await source.DisposeAsync().ConfigureAwait(false);
+
             if (events.Count > 0)
             {
                 var record = Build(events, _settings, _spec);
@@ -81,6 +111,53 @@ public sealed class RunRecorder
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// Writes what killed the run INTO the run: an error to look at, and a terminal outcome that
+    /// carries the reason as a value.
+    ///
+    /// <para>Two events rather than one, because they answer different questions and are read by
+    /// different things. <c>ErrorObserved</c> puts the message on the timeline, where somebody
+    /// scrolls to the bottom for it. <c>TaskFailed</c> carries the typed outcome, which is what the
+    /// report, the history's status column and the Inbox line are all built from - none of them
+    /// read prose.</para>
+    ///
+    /// <para>Nothing is invented. The events are stamped with the ids and the moment of the run
+    /// that was actually happening, and if no event ever arrived there is no run to attach them to
+    /// and none are made: a record fabricated out of an exception would be a run that never
+    /// started.</para>
+    /// </summary>
+    private static void Note(List<WorkEvent> events, Exception ex)
+    {
+        if (events.Count == 0)
+            return;
+
+        var last = events[^1];
+        var at = DateTimeOffset.Now;
+
+        // Cancelled is not failed. A person pressing Stop, or a scheduled run cut off by the task's
+        // time limit, has not produced a wrong answer - and telling them it failed would send them
+        // looking for a defect that is not there.
+        var cancelled = ex is OperationCanceledException;
+        var reason = cancelled
+            ? "the run was stopped before it finished"
+            : $"{ex.GetType().Name}: {ex.Message}";
+
+        if (!cancelled)
+            events.Add(new WorkEvent(
+                Guid.NewGuid(), last.TaskId, last.RunId, at,
+                EventKind.ErrorObserved, reason, null));
+
+        // TaskFailed for both: it is the terminal event kind for a run that did not complete, and
+        // there is no separate "cancelled" kind. Which of the two it was rides in the PAYLOAD, as a
+        // value - which is the whole reason the outcome stopped being inferred from the kind.
+        events.Add(new WorkEvent(
+            Guid.NewGuid(), last.TaskId, last.RunId, at,
+            EventKind.TaskFailed,
+            cancelled ? "Cancelled" : "Failed",
+            WorkEventPayload.OutcomePayload(
+                cancelled ? RunOutcomeKind.Cancelled : RunOutcomeKind.Failed, reason)));
     }
 
     /// <summary>
@@ -133,6 +210,12 @@ public sealed class RunRecorder
         var completionTokens = 0;
         var sawUsage = false;
 
+        // What each model was asked to do, and what it cost. Keyed by phase AND model because one
+        // model can serve two phases and two models can serve one - a run with ExecuteLight bound
+        // spends on two models under "execute", and folding them together loses the distinction the
+        // binding exists to make. Insertion-ordered, so the list reads in the order the run spent.
+        var spend = new Dictionary<(string Purpose, string Provider, string Model), ModelSpend>();
+
         foreach (var ev in events)
         {
             // The step number is stamped HERE, while the event still carries it. Nothing downstream
@@ -148,7 +231,27 @@ public sealed class RunRecorder
                     // four identical-looking paragraphs per card the moment templates arrived.
                     title = RunTitle.OneLine(StripPrefix(ev.Summary, "Intent: "));
                     break;
-                case EventKind.Routed when model is null && ev.Summary.Contains("-> model "):
+                // The worker's model, from the routing event's VALUES.
+                //
+                // It was scraped out of the summary with a search for "-> model ", which picked the
+                // right event only because the worker route is the one sentence that happens to
+                // contain that phrase - the planner's reads "Planner -> Antropic/...". So the field
+                // a run list shows was decided by five characters of wording in a message written
+                // for a person to read, and rewording it would have quietly emptied the column.
+                // The route now says which route it is.
+                //
+                // What this still cannot say is the OTHER models the run used. That is not a fault
+                // of the parsing and is not fixed here - see Usage.ByModel.
+                case EventKind.Routed when model is null && ev.Route() == "worker":
+                    model = ev.ProviderId() is { Length: > 0 } p && ev.ModelName() is { Length: > 0 } m
+                        ? $"{p}/{m}"
+                        : ExtractAfter(ev.Summary, "-> model ");
+                    break;
+
+                // A record from before routing carried values: the sentence is all there is.
+                case EventKind.Routed when model is null
+                                           && ev.Route() is null
+                                           && ev.Summary.Contains("-> model "):
                     model = ExtractAfter(ev.Summary, "-> model ");
                     break;
                 case EventKind.ArtifactProduced:
@@ -163,6 +266,7 @@ public sealed class RunRecorder
                     promptTokens += used.In;
                     completionTokens += used.Out;
                     sawUsage = true;
+                    Spent(spend, ev, used.In, used.Out);
                     break;
                 // The terminal event carries a typed outcome now, so the history stores what the
                 // engine DECIDED instead of a status inferred from which event happened to arrive
@@ -190,8 +294,44 @@ public sealed class RunRecorder
             first.At, last.At, status, eventRecords, artifacts, decisions, settings,
             // Null rather than zero when nothing reported: "this provider does not tell us" and
             // "this run used no tokens" are different facts and are shown differently.
-            sawUsage ? new RunUsage(promptTokens, completionTokens) : null,
+            sawUsage
+                ? new RunUsage(promptTokens, completionTokens)
+                {
+                    // Null rather than an empty list when no call named its model. Records written
+                    // before the usage payload carried one are exactly that case, and an empty list
+                    // would read as "this run spent nothing anywhere".
+                    ByModel = spend.Count > 0 ? spend.Values.ToList() : null
+                }
+                : null,
             spec);
+    }
+
+    /// <summary>
+    /// Adds one call's tokens to the model that spent them.
+    ///
+    /// <para>From the event's VALUES — provider, model, purpose — not from its sentence.</para>
+    ///
+    /// <para>A call that names no provider is not counted here. It is still in the totals, so the
+    /// two can disagree — deliberately: a breakdown that silently filed unattributed tokens under
+    /// some model would be worse than one that is visibly short.</para>
+    /// </summary>
+    private static void Spent(
+        Dictionary<(string, string, string), ModelSpend> spend, WorkEvent ev, int prompt, int completion)
+    {
+        if (ev.ProviderId() is not { Length: > 0 } provider || ev.ModelName() is not { Length: > 0 } name)
+            return;
+
+        var purpose = ev.Purpose() is { Length: > 0 } p ? p : WorkEventPayload.WorkPurpose.Execute;
+        var key = (purpose, provider, name);
+
+        spend[key] = spend.TryGetValue(key, out var running)
+            ? running with
+            {
+                PromptTokens = running.PromptTokens + prompt,
+                CompletionTokens = running.CompletionTokens + completion,
+                Calls = running.Calls + 1
+            }
+            : new ModelSpend(purpose, provider, name, prompt, completion, Calls: 1);
     }
 
     private static string StripPrefix(string value, string prefix)

@@ -11,12 +11,11 @@ using Enactive.Core.Providers;
 using Enactive.Core.Tools;
 using Enactive.Core.Workers;
 using Enactive.Providers;
-using Enactive.Remote.Host;
 using Enactive.Tools;
 using Enactive.Tools.Mcp;
 using Enactive.Workspace;
 
-namespace Enactive.App.Ui;
+namespace Enactive.Settings;
 
 /// <summary>
 /// What a run needs from the application that is not about any one run: the providers, the tools,
@@ -34,7 +33,7 @@ namespace Enactive.App.Ui;
 /// names a workspace of its own, and the level saved against THAT folder is the one its owner
 /// chose for it.</para>
 /// </summary>
-internal sealed record RunEnvironment(
+public sealed record RunEnvironment(
     IChatProviderFactory Providers,
     ModelResolver Models,
     IWorkerProvider Workers,
@@ -57,7 +56,7 @@ internal sealed record RunEnvironment(
 /// The MCP tool servers this run connected to. They are child processes, and a caller that forgets
 /// them leaves one set per run running until the application is closed.
 /// </param>
-internal sealed record ComposedRun(
+public sealed record ComposedRun(
     IOrchestrator Engine,
     Intent Intent,
     IAsyncDisposable Resources);
@@ -76,7 +75,7 @@ internal sealed record ComposedRun(
 /// as it goes and owns its own cancellation, and pulling it in would mean parameterising this on
 /// the differences rather than sharing what is actually the same.</para>
 /// </summary>
-internal static class UnattendedRun
+public static class UnattendedRun
 {
     /// <summary>
     /// Connects the tools and builds the engine and the intent for one run.

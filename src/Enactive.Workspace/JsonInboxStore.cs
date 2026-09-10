@@ -27,14 +27,13 @@ public sealed class JsonInboxStore : IInboxStore
 
     public async Task<IReadOnlyList<InboxItem>> LoadAllAsync(CancellationToken ct)
     {
-        var gate = JsonFileStore.GateFor(_path);
-        await gate.WaitAsync(ct).ConfigureAwait(false);
-        try
-        {
-            var (items, _) = await JsonFileStore.LoadAsync<InboxItem>(_path, JsonOpts, ct).ConfigureAwait(false);
-            return items;
-        }
-        finally { gate.Release(); }
+        // Under the lock as well: a read that overlaps another process's move-into-place sees the
+        // file vanish out from under it, and an inbox that occasionally reads as empty is worse
+        // than one that waits a few milliseconds.
+        await using var hold = await JsonFileStore.HoldAsync(_path, ct).ConfigureAwait(false);
+
+        var (items, _) = await JsonFileStore.LoadAsync<InboxItem>(_path, JsonOpts, ct).ConfigureAwait(false);
+        return items;
     }
 
     public Task MarkReadAsync(Guid id, CancellationToken ct)
@@ -53,14 +52,18 @@ public sealed class JsonInboxStore : IInboxStore
 
     /// <summary>
     /// Read-modify-write under the file's own lock. The read and the write are one critical section,
-    /// or two tasks each append to the list they read and the later write drops the earlier entry.
+    /// or two writers each append to the list they read and the later write drops the earlier entry.
+    ///
+    /// <para>"Writers" here means processes as well as tasks. It used to mean only tasks, and the
+    /// scheduler made that wrong: measured on 2026-09-10, two processes appending 200 items each
+    /// left 200 in the file and reported no error at all. See <see cref="JsonFileStore"/>.</para>
     /// </summary>
     private async Task MutateAsync(Func<List<InboxItem>, List<InboxItem>> change, CancellationToken ct)
     {
-        var gate = JsonFileStore.GateFor(_path);
-        await gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
+            await using var hold = await JsonFileStore.HoldAsync(_path, ct).ConfigureAwait(false);
+
             var (items, readable) = await JsonFileStore.LoadAsync<InboxItem>(_path, JsonOpts, ct).ConfigureAwait(false);
 
             // The file exists but could not be parsed. Writing now would replace whatever is in there
@@ -72,6 +75,5 @@ public sealed class JsonInboxStore : IInboxStore
             await JsonFileStore.SaveAsync(_path, change(items), JsonOpts, ct).ConfigureAwait(false);
         }
         catch { /* best-effort: the inbox is never load-bearing */ }
-        finally { gate.Release(); }
     }
 }

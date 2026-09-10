@@ -1,8 +1,9 @@
-﻿using Avalonia;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.VisualTree;
 using Enactive.App.Ui.ViewModels;
+using Enactive.Settings;
 
 namespace Enactive.App.Ui;
 

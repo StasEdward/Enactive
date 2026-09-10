@@ -29,12 +29,53 @@ public sealed record RunEventRecord(
 public sealed record RunSettings(int Autonomy, string AutonomyName, string? Worker, bool Staged);
 
 /// <summary>
+/// What one model was asked to do in a run, and what that cost.
+///
+/// <para>Not a breakdown for its own sake. A run with phase bindings is several models: the
+/// screenshot of 2026-09-10 shows a plan on <c>Antropic/claude-sonnet-4-6</c> and the work on
+/// <c>ollama/gemma4:31b-cloud</c>, and the record for it says <c>model: ollama/gemma4:31b-cloud</c>
+/// and nothing else. That is not a rounding of the truth — the expensive half of the run is the
+/// half the record leaves out, and a person reading a bill is looking for exactly that half.</para>
+/// </summary>
+/// <param name="Purpose">plan, execute or review — see <c>WorkEventPayload.WorkPurpose</c>.</param>
+/// <param name="Calls">
+/// How many times this model was asked. A phase that was BOUND but never ran does not appear here at
+/// all: this records what was spent, not what was configured, and "the reviewer was bound to Sonnet"
+/// is a different claim from "the reviewer ran".
+/// </param>
+public sealed record ModelSpend(
+    string Purpose,
+    string ProviderId,
+    string Model,
+    int PromptTokens,
+    int CompletionTokens,
+    int Calls)
+{
+    public int Total => PromptTokens + CompletionTokens;
+
+    /// <summary>"Antropic/claude-sonnet-4-6", as every other part of the app names a model.</summary>
+    public string Ref => $"{ProviderId}/{Model}";
+}
+
+/// <summary>
 /// What the run cost, summed over every turn. Providers report a total per turn rather than an
 /// increment, so this is the sum of the turns, not of a running counter.
 /// </summary>
 public sealed record RunUsage(int PromptTokens, int CompletionTokens)
 {
     public int Total => PromptTokens + CompletionTokens;
+
+    /// <summary>
+    /// The same tokens, split by the model and phase that spent them. Null — not empty — for a
+    /// record written before this existed: "nobody wrote it down" and "one model did everything"
+    /// are different facts, and a reader that shows an empty list as the second would be inventing
+    /// an answer about every run in the history.
+    ///
+    /// <para>An <c>init</c> property rather than a constructor parameter so that every
+    /// <c>new RunUsage(a, b)</c> already written still compiles and every row already stored still
+    /// deserialises. There is no schema change: this rides in the same <c>usage_json</c>.</para>
+    /// </summary>
+    public IReadOnlyList<ModelSpend>? ByModel { get; init; }
 }
 
 /// <summary>

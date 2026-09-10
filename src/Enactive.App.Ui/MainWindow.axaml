@@ -53,6 +53,20 @@
                     </Viewbox>
                 </Button>
 
+                <!-- Schedules: the same saved task, set to run on a day and a time with nobody
+                     watching. Next to Templates because it is what you reach for straight after. -->
+                <Button DockPanel.Dock="Top" Classes="rail" Command="{Binding SchedulesCommand}"
+                        ToolTip.Tip="Schedules · run it on a day and a time">
+                    <Viewbox Width="18" Height="18">
+                        <Canvas Width="24" Height="24">
+                            <Path Data="M 4,6 H 20 V 20 H 4 Z" />
+                            <Path Data="M 4,10 H 20" />
+                            <Path Data="M 8,4 V 7 M 16,4 V 7" />
+                            <Path Data="M 12,13 V 16 H 15" />
+                        </Canvas>
+                    </Viewbox>
+                </Button>
+
                 <Button DockPanel.Dock="Top" Classes="rail" Command="{Binding InboxCommand}"
                         ToolTip.Tip="{Binding InboxTooltip}">
                     <Panel>
@@ -899,7 +913,7 @@
                             <StackPanel Margin="16,12,10,12">
                                 <TextBlock Classes="hint" TextWrapping="Wrap"
                                            IsVisible="{Binding PastRun.HasNoSteps}"
-                                           Text="This run was recorded before step numbers were, so its steps cannot be rebuilt without guessing which one each tool call came from. The timeline has everything it does hold." />
+                                           Text="{Binding PastRun.NoStepsReason}" />
                                 <ItemsControl ItemsSource="{Binding PastRun.Steps}"
                                               IsVisible="{Binding PastRun.HasSteps}">
                                     <ItemsControl.ItemTemplate>
@@ -1099,8 +1113,20 @@
                                 <TextBlock Classes="hint" Text="{Binding PastRun.StagingText}" FontSize="11" />
                             </StackPanel>
 
+                            <!-- What is left of a line written on 2026-09-05, when this panel could
+                                 only show. Two days later Retry and Run again were added to the
+                                 header above it and nobody re-read this: it went on saying "nothing
+                                 here re-runs it" directly under two buttons that do. A caption that
+                                 contradicts a button is worse than no caption - it tells the person
+                                 the button must mean something else.
+
+                                 "Read-only" went with it. It described the PANEL, and had come to
+                                 read as a claim about the RUN - which, on a run whose own settings
+                                 say changes were applied directly, was the opposite of true. That
+                                 the panel shows rather than edits is said by the panel; the log's
+                                 scope is the part that still needed saying. -->
                             <TextBlock Classes="hint" TextWrapping="Wrap"
-                                       Text="Read-only. This run has finished — nothing here re-runs it, and the log tab only holds the current session." />
+                                       Text="This run has finished. The log tab only holds the current session." />
                         </StackPanel>
                     </ScrollViewer>
                 </Grid>

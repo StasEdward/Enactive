@@ -62,7 +62,7 @@ public sealed class SqliteInboxStore : IInboxStore
             using var command = connection.CreateCommand();
             command.CommandText =
                 """
-                SELECT id, workspace_id, kind, title, summary, run_id, status, at
+                SELECT id, workspace_id, kind, title, summary, run_id, status, at, schedule_id
                 FROM inbox
                 ORDER BY at ASC;
                 """;
@@ -77,7 +77,10 @@ public sealed class SqliteInboxStore : IInboxStore
                     reader.GetString(4),
                     Guid.Parse(reader.GetString(5)),
                     reader.GetString(6),
-                    DateTimeOffset.Parse(reader.GetString(7), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)));
+                    DateTimeOffset.Parse(reader.GetString(7), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+                    // Null, not Guid.Empty: a row written before the column existed did not come
+                    // from "no schedule", it came from before anybody was recording which.
+                    reader.IsDBNull(8) ? null : Guid.Parse(reader.GetString(8))));
         }
         catch { /* best-effort */ }
 
@@ -111,9 +114,9 @@ public sealed class SqliteInboxStore : IInboxStore
     private const string InsertSql =
         """
         INSERT OR REPLACE INTO inbox
-          (id, workspace_id, kind, title, summary, run_id, status, at)
+          (id, workspace_id, kind, title, summary, run_id, status, at, schedule_id)
         VALUES
-          ($id, $workspace_id, $kind, $title, $summary, $run_id, $status, $at);
+          ($id, $workspace_id, $kind, $title, $summary, $run_id, $status, $at, $schedule_id);
         """;
 
     private static void Bind(SqliteCommand command, InboxItem item)
@@ -126,6 +129,8 @@ public sealed class SqliteInboxStore : IInboxStore
         command.Parameters.AddWithValue("$run_id", item.RunId.ToString());
         command.Parameters.AddWithValue("$status", item.Status);
         command.Parameters.AddWithValue("$at", item.At.ToString("o"));
+        command.Parameters.AddWithValue("$schedule_id",
+            item.ScheduleId is { } schedule ? schedule.ToString() : (object)DBNull.Value);
     }
 
     private async Task EnsureSchemaAsync(CancellationToken ct)
@@ -154,10 +159,21 @@ public sealed class SqliteInboxStore : IInboxStore
                       summary      TEXT,
                       run_id       TEXT,
                       status       TEXT,
-                      at           TEXT
+                      at           TEXT,
+                      schedule_id  TEXT
                     );
                     """;
                 await command.ExecuteNonQueryAsync(ct);
+            }
+
+            // A database created before the column existed is upgraded in place; SQLite has no
+            // "ADD COLUMN IF NOT EXISTS", and a second run of this throws on a column that is
+            // already there - which is the success case, not a failure. Same shape as the run store.
+            using (var upgrade = connection.CreateCommand())
+            {
+                upgrade.CommandText = "ALTER TABLE inbox ADD COLUMN schedule_id TEXT;";
+                try { await upgrade.ExecuteNonQueryAsync(ct); }
+                catch (SqliteException) { /* already has it */ }
             }
 
             await ImportLegacyJsonAsync(connection, ct);

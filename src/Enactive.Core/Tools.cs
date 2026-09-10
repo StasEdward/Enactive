@@ -84,11 +84,40 @@ public static class MutatingTools
 /// </summary>
 public static class ShellTools
 {
-    private static readonly HashSet<string> Names =
-        new(StringComparer.OrdinalIgnoreCase) { "run_command", "run_powershell" };
+    /// <summary>
+    /// The names, for a caller that has to WRITE them somewhere rather than ask about one — into a
+    /// policy's deny list, say.
+    ///
+    /// <para>Public because it was being retyped. The same two strings were a literal in the remote
+    /// policy and a literal in the settings composition, next to this set that answers
+    /// <see cref="IsShell"/>: three copies of the list that decides what counts as handing a command
+    /// line to the machine. Adding a third shell tool would have had to be remembered in all three,
+    /// and the one that was forgotten would have been the one that refuses.</para>
+    /// </summary>
+    public static readonly IReadOnlyList<string> All = ["run_command", "run_powershell"];
+
+    private static readonly HashSet<string> Names = new(All, StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Whether a call by this name hands a command line to the operating system.</summary>
     public static bool IsShell(string tool) => Names.Contains(tool);
+
+    /// <summary>
+    /// The same policy with every shell added to a list on it — <c>Deny</c> to refuse them outright,
+    /// <c>AskBefore</c> to put the question to a person.
+    ///
+    /// <para>Here rather than at either call site because both of them are the same operation on the
+    /// same list, and they had each written it out. Case-insensitive and idempotent: applying it to a
+    /// policy that already names a shell must not name it twice.</para>
+    /// </summary>
+    public static PermissionPolicy Denied(PermissionPolicy policy)
+        => policy with { Deny = Plus(policy.Deny) };
+
+    /// <inheritdoc cref="Denied"/>
+    public static PermissionPolicy Asked(PermissionPolicy policy)
+        => policy with { AskBefore = Plus(policy.AskBefore) };
+
+    private static string[] Plus(IEnumerable<string> names)
+        => names.Concat(All).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
 }
 
 /// <summary>Structured tool result (PLAN_v2 §2A.2) — never a bare string.</summary>

@@ -7,10 +7,10 @@ using Enactive.Workspace;
 using Enactive.Core.Providers;
 using Enactive.Secrets;
 
-namespace Enactive.App.Ui;
+namespace Enactive.Settings;
 
 /// <summary>One configured provider endpoint as persisted in settings.json (Docs/MODELS.md).</summary>
-internal sealed class ProviderConfig
+public sealed class ProviderConfig
 {
     public string Id { get; set; } = string.Empty;
     public string DisplayName { get; set; } = string.Empty;
@@ -44,7 +44,7 @@ internal sealed class ProviderConfig
 }
 
 /// <summary>One team member (role + its own model) as persisted in settings.json.</summary>
-internal sealed class WorkerConfig
+public sealed class WorkerConfig
 {
     public string Id { get; set; } = string.Empty;
     public string Role { get; set; } = string.Empty;
@@ -71,7 +71,7 @@ internal sealed class WorkerConfig
 }
 
 /// <summary>Which model runs each orchestration phase. Empty Plan = plan on the executing model; empty Review = no review.</summary>
-internal sealed class PhaseBindings
+public sealed class PhaseBindings
 {
     public string Plan { get; set; } = string.Empty;
     public string Review { get; set; } = string.Empty;
@@ -103,7 +103,7 @@ internal sealed class PhaseBindings
 /// with DPAPI, never written in the clear, and blanked out of the serialized form the way the
 /// provider keys are.</para>
 /// </summary>
-internal sealed class RemoteAccessSettings
+public sealed class RemoteAccessSettings
 {
     /// <summary>
     /// Whether to connect at all. Off by default, and off is not the same as unconfigured: somebody
@@ -139,7 +139,7 @@ internal sealed class RemoteAccessSettings
 /// <summary>
 /// What may hand a command line to the operating system.
 /// </summary>
-internal enum ShellCommandPolicy
+public enum ShellCommandPolicy
 {
     /// <summary>As the autonomy tier says. The behaviour that shipped, and the default.</summary>
     Follow,
@@ -151,7 +151,7 @@ internal enum ShellCommandPolicy
     Off
 }
 
-internal sealed partial class AppSettings
+public sealed partial class AppSettings
 {
     /// <summary>The newest settings.json schema this build writes. See <see cref="SchemaVersion"/>.</summary>
     public const int CurrentSchemaVersion = 5;
@@ -273,12 +273,22 @@ internal sealed partial class AppSettings
     public RemoteAccessSettings RemoteAccess { get; set; } = new();
 
     // ── Legacy fields (migration source only; superseded by the schema above) ──
+    //
+    // A URL has a right default: Ollama listens there or it does not, and being wrong costs a
+    // connection error that names the address. A MODEL NAME has none. Which models exist is a fact
+    // about this machine, and until 2026-09-11 these two lines decided it: a fresh install was
+    // configured for "qwen2.5-coder" because that string was compiled in, and the first scheduled
+    // runs on a machine with only gemma4 installed died on `model 'qwen2.5-coder' not found`.
+    //
+    // Empty, therefore. A file that NAMES a model still migrates it - that is a person's choice and
+    // is carried over. A machine that has never been configured now says so, which the settings
+    // window can answer by asking the provider what it has (ModelFetch) instead of guessing.
     public string BaseUrl { get; set; } = "http://localhost:11434/v1";
-    public string Model { get; set; } = "qwen2.5-coder";
+    public string Model { get; set; } = string.Empty;
     public bool MultiAgent { get; set; }
     public string AnthropicApiKey { get; set; } = string.Empty;
     public string AnthropicApiKeyProtected { get; set; } = string.Empty;
-    public string ReasonerModel { get; set; } = "claude-3-5-sonnet-latest";
+    public string ReasonerModel { get; set; } = string.Empty;
     public string AnthropicWorkspaceId { get; set; } = string.Empty;
 
     // Main window placement (restored on start).
@@ -296,11 +306,24 @@ internal sealed partial class AppSettings
     private static string SettingsFile()
         => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Enactive", "settings.json");
 
-    public static AppSettings Load()
+    /// <param name="path">
+    /// A parameter so a test can point this at a fixture. The rules here are the ones worth
+    /// testing - the migrations, the repairs, the decryption - and until this moved out of the
+    /// desktop project no test could reach any of them; a test that read the developer's real
+    /// %APPDATA% is one nobody runs twice. Same argument as <c>ScheduleStore</c>'s.
+    /// </param>
+    public static AppSettings Load(string? path = null)
     {
+        var file = path ?? SettingsFile();
+
+        // Parse failures used to fall into the catch below with everything else, so a settings.json
+        // this build could not read became DEFAULTS, silently: the app opened on a provider list
+        // nobody chose, with the person's own file still on disk and no longer read. The window
+        // reports LoadProblems, so this is where the reason has to be put for it to be seen.
+        string? unreadable = null;
+
         try
         {
-            var file = SettingsFile();
             if (File.Exists(file))
             {
                 var loaded = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(file), JsonOptions);
@@ -331,12 +354,27 @@ internal sealed partial class AppSettings
 
                     return loaded;
                 }
+
+                unreadable = "settings.json holds nothing this build could read.";
             }
         }
-        catch { /* ignore */ }
+        catch (Exception ex)
+        {
+            unreadable =
+                $"settings.json could not be read ({ex.GetType().Name}: {ex.Message}). Running on "
+                + "defaults — your file has NOT been changed. Fix it, or open Settings and save to "
+                + "replace it.";
+        }
 
         var seeded = SeedFromEnvironment();
         seeded.MigrateIfNeeded();
+
+        // Said, not swallowed. Defaults are the right thing to RUN on - refusing to start over a
+        // damaged file leaves nowhere to fix it from - but they are the wrong thing to run on
+        // silently, because from the outside a defaulted configuration and a chosen one look alike.
+        if (unreadable is not null)
+            seeded.LoadProblems = new[] { unreadable };
+
         return seeded;
     }
 
@@ -487,13 +525,18 @@ internal sealed partial class AppSettings
         if (Providers.Count > 0)
             return;
 
+        // The endpoint, with whatever model the legacy file named - and NO model when it named
+        // none. An empty list is a provider a person can finish setting up: the provider editor
+        // asks it what it has (ModelFetch) and offers the answer. A list holding one invented name
+        // looks finished and is not, which is how a run reaches an endpoint asking for a model that
+        // was never installed.
         Providers.Add(new ProviderConfig
         {
             Id = "ollama",
             DisplayName = "Ollama (local)",
             Kind = ProviderKind.OllamaNative,
             BaseUrl = BaseUrl,
-            Models = new List<string> { Model }
+            Models = NamedOrEmpty(Model)
         });
 
         var hasAnthropic = !string.IsNullOrWhiteSpace(AnthropicApiKey);
@@ -511,10 +554,13 @@ internal sealed partial class AppSettings
                 BaseUrl = "https://api.anthropic.com",
                 ApiKey = AnthropicApiKey,
                 Headers = headers,
-                Models = new List<string> { ReasonerModel }
+                Models = NamedOrEmpty(ReasonerModel)
             });
         }
 
+        // The team, on whatever the legacy file named. With no model named, the workers are seeded
+        // with an EMPTY model reference - which is what "nobody has chosen yet" looks like, and is
+        // what EngineComposition refuses to run on rather than substituting something.
         if (Workers.Count == 0)
             foreach (var w in DefaultWorkers.Seed(new ModelRef("ollama", Model)))
                 Workers.Add(new WorkerConfig
@@ -535,6 +581,10 @@ internal sealed partial class AppSettings
             Bindings.Review = $"anthropic/{ReasonerModel}";
         }
     }
+
+    /// <summary>A one-model list, or an empty one when there is no name to put in it.</summary>
+    private static List<string> NamedOrEmpty(string model)
+        => string.IsNullOrWhiteSpace(model) ? new List<string>() : new List<string> { model };
 
     /// <summary>Deep copy — so an editor can work on a throwaway copy and discard it on Cancel.</summary>
     public AppSettings Clone() => new()
@@ -786,7 +836,9 @@ internal sealed partial class AppSettings
     private static AppSettings SeedFromEnvironment() => new()
     {
         BaseUrl = Environment.GetEnvironmentVariable("ENACTIVE_OLLAMA_URL") ?? "http://localhost:11434/v1",
-        Model = Environment.GetEnvironmentVariable("ENACTIVE_MODEL") ?? "qwen2.5-coder",
+        // No default. A machine with ENACTIVE_MODEL set has been told which model to use; one
+        // without it has not, and the honest answer is none rather than a name from this file.
+        Model = Environment.GetEnvironmentVariable("ENACTIVE_MODEL") ?? string.Empty,
         GlobalInstructions = string.Empty
     };
 }

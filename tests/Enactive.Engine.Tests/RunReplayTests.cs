@@ -160,4 +160,114 @@ public sealed class RunReplayTests
 
         Assert.Empty(RunReplayPlan.Segments(record));
     }
+
+    // ── why a planned step ended the way it did ──────────────────────────────────────
+    //
+    // A quick action has said this since it was written (see above). A planned step had not: the
+    // reason lived in the summary sentence and the segment carried none, so the run from
+    // 2026-09-11 replayed its failed step as the bare word "Incomplete" — the one card a person
+    // opens the run to look at, saying nothing about what happened.
+
+    [Fact]
+    public void A_planned_step_that_did_not_finish_says_why()
+    {
+        var record = Record(
+            Ev(nameof(EventKind.PlanCreated), "Review the diff — 2 steps: get the diff | write it up",
+               payload: null),
+            Ev(nameof(EventKind.ToolInvoked), """git {"args":["diff"]}""", step: 1),
+            Ev(nameof(EventKind.StepCompleted),
+               "[1/2] get the diff — INCOMPLETE: unresolved tool call: git — the user did not permit this action",
+               step: 1,
+               payload: WorkEventPayload.StepPayload(
+                   1, StepOutcomeKind.Incomplete,
+                   "unresolved tool call: git — the user did not permit this action")),
+            Ev(nameof(EventKind.StepCompleted), "[2/2] write it up — skipped (a dependency did not succeed)",
+               step: 2, payload: WorkEventPayload.StepPayload(2, StepOutcomeKind.Skipped)));
+
+        var segments = RunReplayPlan.Segments(record);
+
+        Assert.Equal(StepOutcomeKind.Incomplete, segments[0].Outcome);
+        Assert.Contains("did not permit", segments[0].Note);
+
+        // With the outcome word in front of it: "the user did not permit this action" alone does
+        // not say whether the step failed or merely stopped, and those are different cards.
+        Assert.StartsWith("Incomplete", segments[0].Note);
+    }
+
+    /// <summary>
+    /// A step that worked gets no reason line. "Why did this succeed" is not a question, and a note
+    /// under every green card is a note nobody reads.
+    /// </summary>
+    [Fact]
+    public void A_step_that_succeeded_carries_no_reason()
+    {
+        var record = Record(
+            Ev(nameof(EventKind.PlanCreated), "One thing — 1 steps: do it"),
+            Ev(nameof(EventKind.ToolInvoked), """write_file {"path":"a.txt"}""", step: 1),
+            Ev(nameof(EventKind.StepCompleted), "[1/1] do it — done",
+               step: 1, payload: WorkEventPayload.StepPayload(1, StepOutcomeKind.Succeeded)));
+
+        Assert.Null(Assert.Single(RunReplayPlan.Segments(record)).Note);
+    }
+
+    /// <summary>
+    /// A skipped step's reason belongs to the step that failed, not to this one. The card says
+    /// "Skipped — a dependency failed" in its own words; repeating another step's failure here
+    /// sends a person looking for a fault in the wrong card.
+    /// </summary>
+    [Fact]
+    public void A_skipped_step_carries_no_reason_of_its_own()
+    {
+        var record = Record(
+            Ev(nameof(EventKind.PlanCreated), "Two — 2 steps: a | b"),
+            Ev(nameof(EventKind.ToolInvoked), """git {"args":["diff"]}""", step: 1),
+            Ev(nameof(EventKind.StepCompleted), "[1/2] a — FAILED: it broke",
+               step: 1, payload: WorkEventPayload.StepPayload(1, StepOutcomeKind.Failed, "it broke")),
+            Ev(nameof(EventKind.StepCompleted), "[2/2] b — skipped (a dependency did not succeed)",
+               step: 2, payload: WorkEventPayload.StepPayload(2, StepOutcomeKind.Skipped)));
+
+        Assert.Null(RunReplayPlan.Segments(record)[1].Note);
+    }
+
+    /// <summary>
+    /// The VALUE wins over the sentence, which is the whole reason it exists — and the only test
+    /// here that could not pass on the fallback alone.
+    ///
+    /// <para>The test above cannot tell them apart: the summary it uses contains the reason too, so
+    /// parsing the sentence produces the same answer and the test would stay green with the payload
+    /// removed. That is a test green for a reason other than the one in its name, which is the thing
+    /// this project keeps catching. Here the two disagree on purpose.</para>
+    /// </summary>
+    [Fact]
+    public void The_recorded_reason_beats_the_sentence()
+    {
+        var record = Record(
+            Ev(nameof(EventKind.PlanCreated), "One — 1 steps: do it"),
+            Ev(nameof(EventKind.ToolInvoked), """git {"args":["diff"]}""", step: 1),
+            Ev(nameof(EventKind.StepCompleted), "[1/1] do it — INCOMPLETE: an older wording",
+               step: 1,
+               payload: WorkEventPayload.StepPayload(1, StepOutcomeKind.Incomplete, "what actually stopped it")));
+
+        var note = Assert.Single(RunReplayPlan.Segments(record)).Note;
+
+        Assert.Contains("what actually stopped it", note);
+        Assert.DoesNotContain("an older wording", note);
+    }
+
+    /// <summary>
+    /// A run recorded before the reason was a value still says something. The fallback reads the
+    /// tail of the summary, which is exactly as fragile as it looks and is never consulted for a run
+    /// recorded since — the same arrangement the outcome word itself has.
+    /// </summary>
+    [Fact]
+    public void An_older_record_falls_back_to_the_sentence()
+    {
+        var record = Record(
+            Ev(nameof(EventKind.PlanCreated), "One — 1 steps: do it"),
+            Ev(nameof(EventKind.ToolInvoked), """git {"args":["diff"]}""", step: 1),
+            Ev(nameof(EventKind.StepCompleted), "[1/1] do it — INCOMPLETE: unresolved tool call: git",
+               step: 1, payload: """{"step":1,"stepOutcome":"Incomplete"}"""));
+
+        Assert.Contains("unresolved tool call", Assert.Single(RunReplayPlan.Segments(record)).Note);
+    }
 }

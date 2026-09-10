@@ -1,7 +1,7 @@
 namespace Enactive.Workspace;
 
-using System.Collections.Concurrent;
 using System.Text.Json;
+using Enactive.Core.Storage;
 
 /// <summary>
 /// The read/write half of the JSON-file stores, shared so the two of them cannot drift apart.
@@ -20,18 +20,35 @@ using System.Text.Json;
 ///    invalid JSON — which then read as "empty", which then got saved. Writes go to a temp file and
 ///    are moved into place.
 ///
-/// Cross-process safety is still out of scope: this is one desktop app with several tasks inside it.
-/// Concurrent runs against a shared store belong on SQLite or MySQL, which is what the factories are
-/// for.
+/// 4. <b>The lock stopped at the process boundary.</b> That was a stated limitation — "one desktop
+///    app with several tasks inside it" — and the scheduler ended it: the runner the schedule wakes
+///    is a SECOND process writing the same files as the open window. MEASURED on 2026-09-10 with
+///    two processes appending 200 inbox items each: 200 arrived, 400 were reported written, and
+///    neither process saw an error. The read-modify-write now holds a lock FILE beside the target,
+///    so the critical section is one per machine rather than one per process.
+///
+/// The lock itself is <see cref="FileLock"/>, in Core, because the schedules file needs the same one
+/// and is written from there. It was here first and moved when the second caller appeared; a lock
+/// implemented twice is two locks, which is no lock at all.
+///
+/// SQLite and MySQL remain the answer for anything heavier — a shared store, or writers that are not
+/// this machine. This makes the file stores correct for two local processes, not distributed.
 /// </summary>
 internal static class JsonFileStore
 {
-    private static readonly ConcurrentDictionary<string, SemaphoreSlim> Gates =
-        new(StringComparer.OrdinalIgnoreCase);
-
-    /// <summary>The lock for one FILE, shared by every store instance addressing it.</summary>
-    public static SemaphoreSlim GateFor(string path)
-        => Gates.GetOrAdd(Path.GetFullPath(path), _ => new SemaphoreSlim(1, 1));
+    /// <summary>
+    /// Takes the file's critical section - against the other tasks in this process AND against the
+    /// other processes on this machine - and gives it back when disposed.
+    ///
+    /// <para>Every read-modify-write goes through this. A read on its own does not need it, but a
+    /// read that is going to be written back does: that is the pair the lock exists for.</para>
+    /// </summary>
+    /// <exception cref="TimeoutException">
+    /// Another process has held the file for <see cref="FileLock.Wait"/>. Thrown rather than
+    /// returned, because the alternative is writing anyway - the exact behaviour being removed.
+    /// </exception>
+    public static Task<FileLock.Hold> HoldAsync(string path, CancellationToken ct)
+        => FileLock.TakeAsync(path, ct);
 
     /// <summary>
     /// Reads the list. <c>Readable</c> is false when the file exists but could not be understood —

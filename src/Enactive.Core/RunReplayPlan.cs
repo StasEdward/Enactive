@@ -66,6 +66,7 @@ public static class RunReplayPlan
     {
         var buckets = new List<RunEventRecord>[titles.Count];
         var outcomes = new StepOutcomeKind?[titles.Count];
+        var notes = new string?[titles.Count];
         var attributed = false;
 
         for (var i = 0; i < titles.Count; i++)
@@ -79,9 +80,14 @@ public static class RunReplayPlan
             attributed = true;
 
             if (e.Kind == nameof(EventKind.StepCompleted))
+            {
                 outcomes[step - 1] = StepOutcomeOf(e);
+                notes[step - 1] = StepReasonOf(e);
+            }
             else
+            {
                 buckets[step - 1].Add(e);
+            }
         }
 
         // A plan whose events carry no step numbers is a record from before they existed. Drawing a
@@ -91,8 +97,43 @@ public static class RunReplayPlan
 
         var segments = new List<ReplaySegment>(titles.Count);
         for (var i = 0; i < titles.Count; i++)
-            segments.Add(new ReplaySegment(titles[i], i + 1, buckets[i], outcomes[i]));
+            segments.Add(new ReplaySegment(titles[i], i + 1, buckets[i], outcomes[i], notes[i]));
         return segments;
+    }
+
+    /// <summary>
+    /// Why a step ended the way it did — the typed <c>reason</c>, and for a record written before it
+    /// existed, the tail of the summary after the outcome word.
+    ///
+    /// <para>Nothing for a step that succeeded: "why did this work" is not a question, and a line
+    /// under every green card is a line nobody reads.</para>
+    ///
+    /// <para>The fallback parses "[1/2] Title — INCOMPLETE: &lt;reason&gt;", which is the shape the
+    /// orchestrator wrote and is exactly as fragile as it looks. It is here so an old run says
+    /// something rather than nothing, and it is never consulted for a run recorded since.</para>
+    /// </summary>
+    private static string? StepReasonOf(RunEventRecord e)
+    {
+        var outcome = StepOutcomeOf(e);
+        if (outcome is StepOutcomeKind.Succeeded or StepOutcomeKind.Skipped)
+            return null;
+
+        var reason = Stand(e).OutcomeReason() is { Length: > 0 } typed ? typed : FromSummary(e.Summary);
+
+        // The outcome word stays in front of it. "unresolved tool call: git …" alone does not say
+        // whether the step failed or merely did not finish, and those are different cards.
+        return reason is null ? null : $"{outcome} — {reason}";
+    }
+
+    /// <summary>The tail of "[1/2] Title — INCOMPLETE: &lt;reason&gt;", for records written before
+    /// the reason was a value.</summary>
+    private static string? FromSummary(string summary)
+    {
+        var colon = summary.IndexOf(": ", StringComparison.Ordinal);
+        if (colon <= 0 || colon + 2 >= summary.Length)
+            return null;
+
+        return summary[(colon + 2)..].Trim() is { Length: > 0 } tail ? tail : null;
     }
 
     private static IReadOnlyList<ReplaySegment> QuickActionSegment(RunRecord record)
