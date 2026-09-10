@@ -59,6 +59,26 @@ public sealed class ScheduleStore
             : Array.Empty<Schedule>();
     }
 
+    /// <summary>
+    /// Every workspace that has a schedule in it, as the folder each schedule names.
+    ///
+    /// <para>For the tick, which is ONE thing on the machine and has to find work in every project
+    /// rather than in whichever folder it was started from. Read from the schedules rather than from
+    /// the workspace registry on purpose: a workspace with no schedule is not work for the tick, and
+    /// a schedule whose workspace was never registered is still work.</para>
+    /// </summary>
+    public IReadOnlyList<string> Workspaces()
+    {
+        using var hold = Hold();
+
+        return Load().Values
+            .SelectMany(list => list)
+            .Select(s => s.WorkspaceRoot)
+            .Where(root => !string.IsNullOrWhiteSpace(root))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
     /// <summary>Adds a schedule, or replaces the one with the same id.</summary>
     public void Save(Schedule schedule)
     {

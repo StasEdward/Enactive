@@ -93,6 +93,46 @@ var workspaceRoot = Path.GetFullPath(
         ? args[1]
         : Directory.GetCurrentDirectory()));
 
+// ── The tick, across every workspace ──────────────────────────────────────────
+//   Enactive.App.Console --due-all
+//
+// ONE thing on the machine wakes the runner, and it has to find work in every project rather than
+// in whichever folder it happens to start in. --due needs a workspace and answers for that one;
+// this asks all of them and then becomes --due for the workspace with the most overdue schedule.
+//
+// Decided HERE, before the workspace is adopted, because everything below is built for one
+// workspace: choosing later would leave the run store, the memory and the artifacts pointing at a
+// folder the run is not in.
+var dueAll = args.Contains("--due-all", StringComparer.OrdinalIgnoreCase);
+if (dueAll)
+{
+    // The pulse first, and unconditionally: it records that the schedules WERE ASKED, which is a
+    // different fact from whether anything was due, and it is the one the app has no other way to
+    // learn. Written before the answer, so a tick that dies deciding still leaves proof it ran.
+    Heartbeat.Stamp(DateTimeOffset.Now);
+
+    var roots = ScheduleStore.Default.Workspaces();
+    var across = roots
+        .SelectMany(root => ScheduleTick.Decide(
+            ScheduleStore.Default.For(root), DateTimeOffset.Now, RunMarkers.Default.IsRunning))
+        .ToArray();
+
+    Console.WriteLine($"SCHEDULES — {roots.Count} workspace(s)");
+    foreach (var decision in across.Where(d => d.WorthReporting || d.ShouldRun))
+        Console.WriteLine($"  [{decision.Verdict}] {decision.Schedule.Name}: {decision.Why}");
+
+    if (ScheduleTick.FirstDue(across) is not { } winner)
+    {
+        Console.WriteLine(across.Length == 0 ? "  (no schedules anywhere)" : "  nothing due");
+        return 0;
+    }
+
+    // Its own workspace from here on. The --due block below re-decides within that workspace,
+    // which lands on the same schedule and claims it - one decision point, not two.
+    workspaceRoot = Path.GetFullPath(winner.Schedule.WorkspaceRoot);
+    Console.WriteLine($"  in {workspaceRoot}");
+}
+
 Directory.CreateDirectory(workspaceRoot);
 
 // ── Composition root (manual wiring — zero external NuGet packages) ──────────
@@ -240,8 +280,13 @@ IDisposable? scheduleClaim = null;
 string? scheduleName = null;
 var scheduleId = Guid.Empty;
 
-if (args.Contains("--due", StringComparer.OrdinalIgnoreCase))
+if (dueAll || args.Contains("--due", StringComparer.OrdinalIgnoreCase))
 {
+    // Also a pulse: --due asking one workspace is still the schedules being asked, and a person who
+    // wired the tick to --due rather than --due-all has a working scheduler that must not be
+    // reported as a dead one.
+    Heartbeat.Stamp(DateTimeOffset.Now);
+
     var schedules = ScheduleStore.Default.For(workspace.RootPath);
     var decisions = ScheduleTick.Decide(schedules, DateTimeOffset.Now, RunMarkers.Default.IsRunning);
 
@@ -249,8 +294,7 @@ if (args.Contains("--due", StringComparer.OrdinalIgnoreCase))
     foreach (var decision in decisions.Where(d => d.WorthReporting || d.ShouldRun))
         Console.WriteLine($"  [{decision.Verdict}] {decision.Schedule.Name}: {decision.Why}");
 
-    // The most overdue first: if only one can go this tick, it should be the one that has been
-    // waiting longest, not whichever the file happened to list first.
+    // The most overdue first, by the same rule --due-all used to pick this workspace.
     var due = decisions.Where(d => d.ShouldRun).OrderBy(d => d.Occurrence).ToList();
     if (due.Count == 0)
     {

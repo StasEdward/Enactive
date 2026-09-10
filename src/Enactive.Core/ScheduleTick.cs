@@ -67,6 +67,17 @@ public static class ScheduleTick
         IEnumerable<Schedule> schedules, DateTimeOffset now, Func<Guid, bool>? isRunning = null)
         => schedules.Select(s => Decide(s, now, isRunning)).ToArray();
 
+    /// <summary>
+    /// The one to run now: the most overdue of those that should run, or null when none should.
+    ///
+    /// <para>Most overdue first, because if only one can go this tick it should be the one that has
+    /// been waiting longest rather than whichever the file happened to list first. Here rather than
+    /// at the call site because there are two call sites now - one workspace, and every workspace -
+    /// and an ordering written twice is an ordering that will differ after the next edit.</para>
+    /// </summary>
+    public static ScheduleDecision? FirstDue(IEnumerable<ScheduleDecision> decisions)
+        => decisions.Where(d => d.ShouldRun).OrderBy(d => d.Occurrence).FirstOrDefault();
+
     public static ScheduleDecision Decide(Schedule schedule, DateTimeOffset now, Func<Guid, bool>? isRunning = null)
     {
         if (!schedule.Enabled)
