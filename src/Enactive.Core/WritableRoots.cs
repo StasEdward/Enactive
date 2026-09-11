@@ -4,6 +4,23 @@ using System.Text.Json;
 using Enactive.Core.Context;
 
 /// <summary>
+/// One workspace's standing grants, as a review screen needs them.
+/// </summary>
+/// <param name="Key">
+/// The raw store key. Carried because an orphan can be withdrawn by nothing else — there is no path
+/// left to name it with.
+/// </param>
+/// <param name="WorkspaceRoot">
+/// The workspace these belong to, or null when the app no longer knows a workspace with this id:
+/// it was removed from the list, or it was moved or renamed, which changes the id by design.
+/// </param>
+public sealed record GrantedTo(string Key, string? WorkspaceRoot, IReadOnlyList<string> Roots)
+{
+    /// <summary>A grant with no workspace left to point at. Still standing, so still shown.</summary>
+    public bool IsOrphan => WorkspaceRoot is null;
+}
+
+/// <summary>
 /// Folders outside a workspace that this workspace may write to, remembered past the run.
 ///
 /// <para><b>What this is for.</b> <c>SANDBOX_PLAN</c> step 4 offers a person three answers when a
@@ -128,6 +145,79 @@ public sealed class WritableRoots
                 return;
 
             if (roots.RemoveAll(existing => string.Equals(Normalise(existing), full, Comparison)) > 0)
+                Save(all);
+        }
+    }
+
+    /// <summary>
+    /// Everything this store holds, arranged so a person can look at it.
+    ///
+    /// <para><b>Why the known workspaces have to be passed in.</b> The file is keyed by the id the
+    /// PATH gives, never by the path — rule 1 of <see cref="ApprovalStore"/>, so a clone of a
+    /// repository cannot inherit somebody's grant. The consequence is that the store cannot name
+    /// the workspaces it holds grants for: it has hashes. The app knows the paths, so the join
+    /// happens here rather than the store keeping a second copy of something it deliberately does
+    /// not store.</para>
+    ///
+    /// <para>A grant whose workspace the app no longer knows comes back with a null
+    /// <see cref="GrantedTo.WorkspaceRoot"/> rather than being hidden. Hiding it would leave a
+    /// standing permission that nothing can see and nothing can withdraw, which is the exact
+    /// failure this method exists to end.</para>
+    /// </summary>
+    public IReadOnlyList<GrantedTo> Review(IEnumerable<string> knownWorkspaceRoots)
+    {
+        var byKey = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var root in knownWorkspaceRoots)
+        {
+            if (string.IsNullOrWhiteSpace(root))
+                continue;
+
+            // A path that cannot be turned into an id (a drive that is gone, a name the OS
+            // refuses) is skipped rather than throwing: this is a review screen, and it must open.
+            try { byKey[KeyFor(root)] = Normalise(root); }
+            catch { /* not a path we can key on; its grants, if any, show as unknown */ }
+        }
+
+        var result = new List<GrantedTo>();
+
+        lock (_gate)
+        {
+            foreach (var (key, roots) in Load())
+            {
+                if (roots.Count == 0)
+                    continue;
+
+                result.Add(new GrantedTo(
+                    key,
+                    byKey.TryGetValue(key, out var path) ? path : null,
+                    roots.ToArray()));
+            }
+        }
+
+        // Known workspaces first and alphabetical within that, so the list reads the same way twice
+        // running. Orphans last, where they look like what they are: leftovers.
+        return result
+            .OrderBy(e => e.WorkspaceRoot is null)
+            .ThenBy(e => e.WorkspaceRoot, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    /// <summary>
+    /// Drops every grant held under a raw key. For an orphan, which has no path to revoke by.
+    ///
+    /// <para>Separate from <see cref="Revoke"/> and deliberately not a path-taking overload: this
+    /// one cannot check what it is removing, because the workspace it belonged to is gone. That is
+    /// fine for forgetting and would be wrong for anything else.</para>
+    /// </summary>
+    public void Forget(string key)
+    {
+        if (string.IsNullOrWhiteSpace(key))
+            return;
+
+        lock (_gate)
+        {
+            var all = Load();
+            if (all.Remove(key))
                 Save(all);
         }
     }
