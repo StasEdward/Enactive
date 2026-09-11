@@ -90,14 +90,31 @@ public sealed class RunRecorder
                 var record = Build(events, _settings, _spec);
                 await _store.SaveAsync(record, CancellationToken.None);
 
-                // Fold each resolved decision into the project's durable memory (PLAN_v2 §2.6).
-                if (_memory is not null)
+                // Fold each resolved decision into the project's durable memory (PLAN_v2 §2.6) -
+                // but only what this project actually learned. See ProjectFacts: memory is read
+                // into the PROMPT of every step of every later run, so an entry that is not a fact
+                // about the project is a permanent tax on the window and on the bill.
+                if (_memory is not null && ProjectFacts.WorthRemembering(ToolsUsed(events), record.Artifacts))
                 {
+                    // Read once, for the duplicate check below. Best-effort like everything else
+                    // here: if memory cannot be read, write rather than lose the entry - a
+                    // duplicate costs one line, a silent drop costs the fact.
+                    IReadOnlyList<MemoryEntry> known = Array.Empty<MemoryEntry>();
+                    try { known = await _memory.LoadAllAsync(CancellationToken.None); }
+                    catch { /* keep going: writing is what matters */ }
+
                     foreach (var decision in record.Decisions)
+                    {
+                        // A standing answer re-recorded by every run that asks is not a second
+                        // decision. "git: denied" had six of the twenty places a run is given.
+                        if (ProjectFacts.AlreadyDecided(known, decision))
+                            continue;
+
                         await _memory.AppendAsync(
                             new MemoryEntry(Guid.NewGuid(), _workspaceId, MemoryKind.Decision, decision,
                                             null, record.FinishedAt),
                             CancellationToken.None);
+                    }
 
                     // And how the run ENDED. Until 2026-09-08 memory held decisions only, which meant
                     // that in a workspace where nothing ever needed approving it held nothing at all -
@@ -160,6 +177,16 @@ public sealed class RunRecorder
             WorkEventPayload.OutcomePayload(
                 cancelled ? RunOutcomeKind.Cancelled : RunOutcomeKind.Failed, reason)));
     }
+
+    /// <summary>
+    /// Every tool this run invoked, by name, read from the events as VALUES.
+    ///
+    /// <para>Taken from the live events rather than from the saved record on purpose: the name is
+    /// in the event's payload, and adding it to <see cref="RunRecord"/> would mean a new column in
+    /// both SQL stores and a migration, for a question only this method asks and only once.</para>
+    /// </summary>
+    private static IEnumerable<string?> ToolsUsed(IEnumerable<WorkEvent> events)
+        => events.Where(e => e.Kind == EventKind.ToolInvoked).Select(e => e.ToolName());
 
     /// <summary>
     /// One line about how a run ended, for the project's memory: what was asked, how it finished,

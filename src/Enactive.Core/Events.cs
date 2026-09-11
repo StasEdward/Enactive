@@ -218,6 +218,29 @@ public static class WorkEventPayload
     /// <summary>What this routing event decided - "worker", "plan", "review", "step" - or null.</summary>
     public static string? Route(this WorkEvent ev) => Field(ev.PayloadJson, RouteRegex);
 
+    /// <summary>
+    /// Builds the payload of a <see cref="EventKind.ToolInvoked"/> event: WHICH tool, as a value.
+    ///
+    /// <para>The summary is "<c>name {compacted arguments}</c>", which reads well and cannot be
+    /// asked a question. Whether a run reached into the workspace at all
+    /// (<see cref="Enactive.Core.Memory.ProjectFacts"/>) is decided by the tools it used, and
+    /// deciding it by looking for a tool's name at the front of a sentence would make that wording
+    /// load-bearing — the same mistake as parsing "-&gt; model " out of a routing summary, which
+    /// this file already carries the scar of.</para>
+    /// </summary>
+    public static string ToolPayload(string name, int? stepNo = null)
+        => "{" + (stepNo is { } n ? $"\"step\":{n}," : "") + "\"tool\":" + Quote(name) + "}";
+
+    /// <summary>
+    /// The tool an event names, or null for a record written before this was carried as a value.
+    ///
+    /// <para>Null means UNKNOWN, never "none" — callers must not read silence as a no.</para>
+    /// </summary>
+    public static string? ToolName(this WorkEvent ev) => Field(ev.PayloadJson, ToolRegex);
+
+    /// <summary>The same, from a stored event's payload.</summary>
+    public static string? ToolNameIn(string? payload) => Field(payload, ToolRegex);
+
     /// <summary>The complexity a routing event names, or null.</summary>
     public static string? RouteComplexity(this WorkEvent ev) => Field(ev.PayloadJson, ComplexityRegex);
 
@@ -255,6 +278,9 @@ public static class WorkEventPayload
 
     private static readonly System.Text.RegularExpressions.Regex RouteRegex =
         new("\"route\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    private static readonly System.Text.RegularExpressions.Regex ToolRegex =
+        new("\"tool\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"", System.Text.RegularExpressions.RegexOptions.Compiled);
 
     private static readonly System.Text.RegularExpressions.Regex ComplexityRegex =
         new("\"complexity\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"", System.Text.RegularExpressions.RegexOptions.Compiled);

@@ -2687,7 +2687,15 @@ public sealed class Orchestrator : IOrchestrator
                 }
 
                 actionsTaken++;
-                yield return Ev(EventKind.ToolInvoked, $"{call.Name} {Compact(call.ArgumentsJson)}");
+
+                // The tool's name as a VALUE beside the sentence, not only at the front of it.
+                // ProjectFacts decides from these whether the run reached into the workspace at
+                // all, and reading a tool name off the head of a message written for a person
+                // would make that wording load-bearing.
+                yield return new WorkEvent(
+                    Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow, EventKind.ToolInvoked,
+                    $"{call.Name} {Compact(call.ArgumentsJson)}",
+                    WorkEventPayload.ToolPayload(call.Name, stepNo));
 
                 var toolContext = new ToolContext(
                     TaskId: taskId,
