@@ -9,9 +9,12 @@ namespace Enactive.Core.Context;
 /// here dies with the run that made it, which is what makes it a smaller thing to agree to rather
 /// than the same thing with a shorter name.</para>
 ///
-/// <para>A persisted version - "add this as a writable root for this workspace" - belongs with the
-/// policy store of SANDBOX_PLAN step 2, which does not exist yet. Building the remembering half
-/// first, into the workspace folder, is precisely the design bug that step 2 is about.</para>
+/// <para><b>The persisted half now exists</b> - <see cref="Permissions.WritableRoots"/>, outside
+/// every workspace and keyed by the path. A run STARTS from what that store already holds and adds
+/// to it in memory; the two are deliberately different things, and the difference is what a person
+/// is agreeing to. "For this run" still dies here. Only the explicit fourth answer on the card
+/// reaches the disk, and only through a store that refuses a drive root, a system folder, or the
+/// folder holding Enactive's own permissions.</para>
 ///
 /// <para>The grant is the FOLDER, not the file: somebody who agrees to
 /// <c>C:\builds\out\app.exe</c> has agreed to that build going to <c>C:\builds\out</c>, and asking
@@ -22,6 +25,20 @@ namespace Enactive.Core.Context;
 public sealed class GrantedRoots
 {
     private readonly List<string> _roots = new();
+
+    public GrantedRoots() { }
+
+    /// <summary>
+    /// Starts from the folders this workspace was already given. The run then treats them exactly
+    /// like one granted a moment ago on the card — the geography question is about WHERE a write
+    /// lands, and where it lands does not depend on when somebody agreed to it.
+    /// </summary>
+    public GrantedRoots(IEnumerable<string> persisted)
+    {
+        foreach (var root in persisted)
+            if (!string.IsNullOrWhiteSpace(root))
+                _roots.Add(Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)));
+    }
 
     /// <summary>The roots granted so far, for handing to <see cref="ShellGeography"/>.</summary>
     public IReadOnlyCollection<string> Roots => _roots;

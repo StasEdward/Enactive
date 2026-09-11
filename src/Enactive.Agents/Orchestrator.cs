@@ -64,6 +64,42 @@ public sealed class Orchestrator : IOrchestrator
     private readonly PermissionPolicy _policy;
     private readonly IServiceProvider _services;
     private readonly IModelRouter _router;
+
+    /// <summary>Folders this workspace may write to outside itself, from earlier runs.</summary>
+    private readonly WritableRoots _writableRoots;
+
+    /// <summary>
+    /// The answers offered when a command appears to write outside the workspace.
+    ///
+    /// <para>Three always, and a fourth — <i>keep for this workspace</i> — only when every place
+    /// named could actually be kept. The store refuses a drive root, a system folder and the folder
+    /// holding Enactive's own settings, and a button that is offered and then refuses is worse than
+    /// one that was never there: the person has already decided by the time they are told no. So the
+    /// store is asked first, with the same method it will judge by.</para>
+    ///
+    /// <para>A write whose place is a variable is not keepable either — there is no folder to name,
+    /// and this is the same reason <see cref="GrantedRoots.Grant"/> ignores one.</para>
+    /// </summary>
+    private static IReadOnlyList<DecisionOption> KeepOptions(IReadOnlyList<OutsideWrite> outside)
+    {
+        var options = new List<DecisionOption>(4)
+        {
+            new("once", "Allow once"),
+            new("run", "Allow for this run"),
+        };
+
+        var folders = outside
+            .Where(w => w.Known)
+            .Select(w => Directory.Exists(w.Path) ? w.Path : Path.GetDirectoryName(w.Path))
+            .Where(f => !string.IsNullOrWhiteSpace(f))
+            .ToList();
+
+        if (folders.Count > 0 && folders.TrueForAll(f => WritableRoots.Refuses(f!) is null))
+            options.Add(new DecisionOption("keep", "Keep for this workspace"));
+
+        options.Add(new DecisionOption("deny", "Keep to the workspace"));
+        return options;
+    }
     private readonly IModelResolver _modelResolver;
     private readonly int _reviewRetries;
     private readonly int _successRetries;
@@ -153,8 +189,13 @@ public sealed class Orchestrator : IOrchestrator
         IReadOnlyList<SuccessCriterionDefinition>? successCriteria = null,
         ExecutionLimits? limits = null,
         IRunCheckpointStore? checkpoints = null,
-        RunSettings? settings = null)
+        RunSettings? settings = null,
+        WritableRoots? writableRoots = null)
     {
+        // The machine's own store unless a test points it somewhere temporary. Defaulted rather
+        // than required because a run that never writes outside the workspace never touches it, and
+        // making every caller name it would put a policy decision in the signature of every test.
+        _writableRoots = writableRoots ?? WritableRoots.Default;
         _checkpoints = checkpoints;
         _settings = settings;
         _successCriteria = successCriteria ?? Array.Empty<SuccessCriterionDefinition>();
@@ -259,7 +300,11 @@ public sealed class Orchestrator : IOrchestrator
         // Who this run is, what it has spent and what it has produced - and, from those, every event
         // it emits. See RunScope: the five factories that used to live here as local functions were
         // all closures over exactly these four things.
-        var scope = new RunScope(runId, taskId, budget, artifacts);
+        // Seeded with the folders this workspace was already given. Read once per run rather than
+        // per call: a person revoking a root in the middle of a run should not change what that run
+        // is allowed to do halfway through - it started under a policy, and the record says which.
+        var scope = new RunScope(
+            runId, taskId, budget, artifacts, _writableRoots.For(_workspace.RootPath));
 
         yield return scope.Event(
             EventKind.IntentReceived,
@@ -2475,12 +2520,7 @@ public sealed class Orchestrator : IOrchestrator
                         taskId,
                         "Let this command write outside the workspace?",
                         $"Writes to {where}",
-                        new[]
-                        {
-                            new DecisionOption("once", "Allow once"),
-                            new DecisionOption("run", "Allow for this run"),
-                            new DecisionOption("deny", "Keep to the workspace"),
-                        },
+                        KeepOptions(outside),
                         // Nothing is recommended. Every other approval in this engine can lean on
                         // "this is the tool you configured"; this one is a guess about a path, and
                         // a highlighted button is an answer given on the reader's behalf.
@@ -2488,8 +2528,10 @@ public sealed class Orchestrator : IOrchestrator
                         Subject: null,
                         FullDetail: ShellGeography.Explain(outside, _workspace.RootPath)
                                   + "\n\nThe command in full:\n" + DescribeCall(call),
-                        // Never remembered past this process, and see GrantedRoots for why "for
-                        // this run" is as far as even the second option goes.
+                        // Still true, and it is about the TOOL: no "Allow run_command in this
+                        // workspace" button appears here or anywhere, whatever is answered below.
+                        // The "keep" option remembers a PLACE, which the boundary is made of, and
+                        // leaves every question about the shell itself exactly where it was.
                         SessionOnly: true,
                         Action: new BoundAction(
                             runId, call.Id, call.Name, call.ArgumentsJson, _workspace.RootPath));
@@ -2501,12 +2543,16 @@ public sealed class Orchestrator : IOrchestrator
 
                     var keepOut = string.Equals(geography.OptionId, "deny", StringComparison.OrdinalIgnoreCase);
                     var forRun = string.Equals(geography.OptionId, "run", StringComparison.OrdinalIgnoreCase);
+                    var keepIt = string.Equals(geography.OptionId, "keep", StringComparison.OrdinalIgnoreCase);
 
-                    // Kept to the workspace IS a refusal: this command does not run. The other two
+                    // Kept to the workspace IS a refusal: this command does not run. The other three
                     // answers let it run, and the difference between them is how long the permission
                     // lasts, not whether the call happened.
                     yield return Decided(call.Name, allowed: !keepOut,
-                        $"{call.Name}: {(keepOut ? "kept to the workspace" : forRun ? "allowed outside, for this run" : "allowed outside, once")}");
+                        $"{call.Name}: {(keepOut ? "kept to the workspace"
+                                       : keepIt ? "allowed outside, kept for this workspace"
+                                       : forRun ? "allowed outside, for this run"
+                                       : "allowed outside, once")}");
 
                     if (keepOut)
                     {
@@ -2521,9 +2567,20 @@ public sealed class Orchestrator : IOrchestrator
                         continue;
                     }
 
-                    if (forRun)
+                    if (forRun || keepIt)
                         foreach (var write in outside)
                             granted.Grant(write);
+
+                    // Kept: the same folders, written down where they outlive the process. Through
+                    // the store's own rules, so a refusal there (a drive root, a system folder,
+                    // Enactive's own settings) leaves the run-scoped grant standing and nothing on
+                    // the disk - the command still runs, and the person is simply asked again next
+                    // time rather than silently given something the store would not grant.
+                    if (keepIt)
+                        foreach (var root in granted.Roots)
+                            if (_writableRoots.Add(_workspace.RootPath, root) is { } refused)
+                                yield return Ev(EventKind.DecisionResolved,
+                                    $"Not kept for this workspace: {refused}");
                 }
 
                 actionsTaken++;
