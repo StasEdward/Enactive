@@ -11,7 +11,11 @@ using Enactive.Core.Providers;
 /// verdict's are: this is a second call on the Review model, and a cost that is not counted is a
 /// cost that gets attributed to nothing.
 /// </summary>
-public sealed record ProofOutcome(ProofClaim Claim, int PromptTokens = 0, int CompletionTokens = 0);
+public sealed record ProofOutcome(ProofClaim Claim, int PromptTokens = 0, int CompletionTokens = 0)
+{
+    /// <summary>The cached share of <see cref="PromptTokens"/>, or null where nobody counted.</summary>
+    public int? CachedPromptTokens { get; init; }
+}
 
 /// <summary>
 /// Reviewer verdict for a step, plus what asking cost.
@@ -22,7 +26,15 @@ public sealed record ProofOutcome(ProofClaim Claim, int PromptTokens = 0, int Co
 /// was one - two calls were made, and two calls were paid for.</para>
 /// </summary>
 public sealed record ReviewResult(
-    bool Pass, string Notes, int PromptTokens = 0, int CompletionTokens = 0);
+    bool Pass, string Notes, int PromptTokens = 0, int CompletionTokens = 0)
+{
+    /// <summary>
+    /// The cached share of <see cref="PromptTokens"/>, or null where nobody counted. This is the
+    /// phase most likely to have one on a real machine: review is bound to a cloud model, and a
+    /// re-ask re-sends the same prefix it just sent.
+    /// </summary>
+    public int? CachedPromptTokens { get; init; }
+}
 
 /// <summary>One file the step wrote, as the reviewer needs to see it.</summary>
 /// <param name="Content">
@@ -109,9 +121,13 @@ public sealed class Reviewer
 
         var prompt = completion.PromptTokens ?? 0;
         var output = completion.CompletionTokens ?? 0;
+        var cached = completion.CachedPromptTokens;
 
         if (Parse(answer) is { } verdict)
-            return verdict with { PromptTokens = prompt, CompletionTokens = output };
+            return verdict with
+            {
+                PromptTokens = prompt, CompletionTokens = output, CachedPromptTokens = cached
+            };
 
         // No verdict in there. Ask once more, showing what came back and what was wanted, because a
         // model that wandered off format usually recovers when told exactly what shape to produce.
@@ -128,14 +144,22 @@ public sealed class Reviewer
 
         prompt += retry.PromptTokens ?? 0;
         output += retry.CompletionTokens ?? 0;
+        // Two calls with the same prefix is the shape caching exists for, so the re-ask is exactly
+        // where a cache read shows up. Added through TokenCounts, never with ?? 0: a retry that
+        // reports 400 on top of a first call that reported nothing is 400, and two silences are
+        // still silence.
+        cached = TokenCounts.Add(cached, retry.CachedPromptTokens);
 
         if (Parse(retry.Message.Content ?? "") is { } retried)
-            return retried with { PromptTokens = prompt, CompletionTokens = output };
+            return retried with
+            {
+                PromptTokens = prompt, CompletionTokens = output, CachedPromptTokens = cached
+            };
 
         // Twice with no verdict. A reviewer that cannot answer has not approved anything.
         return new ReviewResult(false,
             "the reviewer did not return a verdict, twice — treating the step as not reviewed",
-            prompt, output);
+            prompt, output) { CachedPromptTokens = cached };
     }
 
     /// <summary>
@@ -266,9 +290,10 @@ public sealed class Reviewer
 
         var prompt = completion.PromptTokens ?? 0;
         var output = completion.CompletionTokens ?? 0;
+        var cached = completion.CachedPromptTokens;
 
         if (ParseProof(answer) is { } claim)
-            return new ProofOutcome(claim, prompt, output);
+            return new ProofOutcome(claim, prompt, output) { CachedPromptTokens = cached };
 
         messages.Add(new ChatMessage(ChatRole.Assistant, answer, null));
         messages.Add(ChatMessage.User(
@@ -284,16 +309,17 @@ public sealed class Reviewer
 
         prompt += retry.PromptTokens ?? 0;
         output += retry.CompletionTokens ?? 0;
+        cached = TokenCounts.Add(cached, retry.CachedPromptTokens);
 
         if (ParseProof(retry.Message.Content ?? "") is { } retried)
-            return new ProofOutcome(retried, prompt, output);
+            return new ProofOutcome(retried, prompt, output) { CachedPromptTokens = cached };
 
         // Twice with nothing usable. Not proven — the same rule as the verdict, because "we could
         // not find out" and "it is fine" are different facts.
         return new ProofOutcome(
             new ProofClaim(ProofClaimKind.NotShown, Array.Empty<int>(),
                            "the proof pass did not answer, twice"),
-            prompt, output);
+            prompt, output) { CachedPromptTokens = cached };
     }
 
     /// <summary>The shape of a proof answer, for a provider that can hold a model to one.</summary>

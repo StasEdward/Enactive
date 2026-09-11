@@ -106,13 +106,20 @@ public sealed class RunScope
     /// the reviewer, on the most expensive model bound, read whole documents for free as far as the
     /// UI was concerned.</para>
     /// </summary>
-    public WorkEvent Usage(string purpose, ModelRef reference, int prompt, int completion, int? stepNo = null)
+    /// <param name="cached">
+    /// The share of the prompt the provider served from its cache, when it says. Null - not zero -
+    /// where it does not, which is every local runtime and every phase before 2026-09-11.
+    /// </param>
+    public WorkEvent Usage(string purpose, ModelRef reference, int prompt, int completion,
+                           int? stepNo = null, int? cached = null)
     {
         Budget.TokensUsed(prompt, completion);
         return new(Guid.NewGuid(), TaskId, RunId, DateTimeOffset.UtcNow, EventKind.UsageReported,
-                   $"tokens: {prompt} in, {completion} out ({reference.ProviderId}/{reference.Model}, {purpose})",
+                   $"tokens: {prompt} in, {completion} out"
+                   + (cached is > 0 ? $" ({cached} cached)" : "")
+                   + $" ({reference.ProviderId}/{reference.Model}, {purpose})",
                    WorkEventPayload.UsagePayload(prompt, completion, stepNo,
-                                                 reference.ProviderId, reference.Model, purpose));
+                                                 reference.ProviderId, reference.Model, purpose, cached));
     }
 
     /// <summary>

@@ -94,14 +94,53 @@ public sealed record PermissionCeiling(
 /// needs to DO and not as a tool it wants.
 /// </param>
 /// <param name="Otherwise">
-/// The other way out, when the need depends on how the template is filled in. Code Review needs a
-/// diff because its scope parameter DEFAULTS to "everything that has changed since the last
-/// commit" - point it at a folder instead and it needs nothing of the sort. A check cannot know
-/// that, and refusing a schedule that would have worked is the same failure as accepting one that
-/// would not, so whoever declares the need writes the escape here and the person is shown both
-/// ways out. Null where the need is unconditional.
+/// The other way out, in the words of whoever declared the need, for a need that only applies to
+/// some ways of filling the template in. Shown after the general advice, so a person sees both. Null
+/// where the need is unconditional.
 /// </param>
-public sealed record TemplateNeed(string What, IReadOnlyList<string> AnyOf, string? Otherwise = null);
+/// <param name="WhenParameterIsDefault">
+/// The need applies ONLY while this parameter still holds its default.
+///
+/// <para>Code Review needs a diff because its scope parameter defaults to "everything that has
+/// changed since the last commit" — point it at a folder and it needs nothing of the sort. The first
+/// version of this check ignored that and would have refused a schedule that was going to work
+/// perfectly well, which is the same failure as accepting one that was not, only more
+/// irritating.</para>
+///
+/// <para>It is a mechanical question, not a semantic one: did the person supply a value, and is it
+/// different from the default. That is knowable exactly. What it deliberately does NOT try to
+/// answer is whether the value they supplied is itself a diff — somebody who types "the changes
+/// since the last release" gets no warning. Under-refusing is the safe direction: the run is cheap
+/// now and says why it stopped, which is what §9an was for.</para>
+/// </summary>
+public sealed record TemplateNeed(
+    string What,
+    IReadOnlyList<string> AnyOf,
+    string? Otherwise = null,
+    string? WhenParameterIsDefault = null)
+{
+    /// <summary>
+    /// Whether this need applies to a template filled in like this.
+    /// </summary>
+    /// <param name="supplied">
+    /// What the person actually typed. A parameter absent from here is one they left alone, which
+    /// IS the default - the resolver fills it in later, and a need that only looked at supplied
+    /// values would never fire for the case it exists for.
+    /// </param>
+    public bool AppliesTo(TaskTemplate template, IReadOnlyDictionary<string, string>? supplied)
+    {
+        if (WhenParameterIsDefault is not { Length: > 0 } id)
+            return true;
+
+        if (supplied is null || !supplied.TryGetValue(id, out var value) || string.IsNullOrWhiteSpace(value))
+            return true;
+
+        var declared = template.ParameterList
+            .FirstOrDefault(p => string.Equals(p.Id, id, StringComparison.OrdinalIgnoreCase))?.Default;
+
+        return string.Equals(value.Trim(), declared?.Trim() ?? "", StringComparison.Ordinal);
+    }
+}
 
 /// <summary>
 /// A saved task: a pre-written command, the bounds it runs under, and what has to be true at the

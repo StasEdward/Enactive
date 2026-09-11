@@ -210,7 +210,11 @@ public static class BuiltinTemplates
                 new TemplateNeed(
                     "see what has changed",
                     new[] { "git", "run_command", "run_powershell" },
-                    Otherwise: "or set 'What to review' to a scope that is not a diff")
+                    Otherwise: "or set 'What to review' to a scope that is not a diff",
+                    // Only while the scope is still the default one, which IS a diff. Somebody who
+                    // has already pointed this at a folder needs no diff and must not be refused
+                    // for being unable to produce one.
+                    WhenParameterIsDefault: "scope")
             }
         },
 

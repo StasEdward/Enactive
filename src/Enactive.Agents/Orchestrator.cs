@@ -343,7 +343,8 @@ public sealed class Orchestrator : IOrchestrator
 
         if (plan.PromptTokens + plan.CompletionTokens > 0)
             yield return scope.Usage(
-                WorkEventPayload.WorkPurpose.Plan, models.Plan, plan.PromptTokens, plan.CompletionTokens);
+                WorkEventPayload.WorkPurpose.Plan, models.Plan, plan.PromptTokens, plan.CompletionTokens,
+                cached: plan.CachedPromptTokens);
 
         // A plan nobody could read is not a decision to do one thing. The two were the same value
         // and the same title until now, so a genuine multi-step request that arrived back as prose
@@ -482,7 +483,8 @@ public sealed class Orchestrator : IOrchestrator
                     if (review.PromptTokens + review.CompletionTokens > 0)
                         quick.Writer.TryWrite(scope.Usage(
                             WorkEventPayload.WorkPurpose.Review, models.Review!,
-                            review.PromptTokens, review.CompletionTokens));
+                            review.PromptTokens, review.CompletionTokens,
+                            cached: review.CachedPromptTokens));
 
                     if (review.Pass)
                     {
@@ -505,7 +507,8 @@ public sealed class Orchestrator : IOrchestrator
                         if (quickProven.Prompt + quickProven.Completion > 0)
                             quick.Writer.TryWrite(scope.Usage(
                                 WorkEventPayload.WorkPurpose.Review, models.Review!,
-                                quickProven.Prompt, quickProven.Completion));
+                                quickProven.Prompt, quickProven.Completion,
+                                cached: quickProven.Cached));
 
                         if (quickProven.Verdict.Sound)
                         {
@@ -925,7 +928,8 @@ public sealed class Orchestrator : IOrchestrator
                 if (review.PromptTokens + review.CompletionTokens > 0)
                     events.Writer.TryWrite(scope.Usage(
                         WorkEventPayload.WorkPurpose.Review, models.Review!,
-                        review.PromptTokens, review.CompletionTokens, stepNumber));
+                        review.PromptTokens, review.CompletionTokens, stepNumber,
+                        review.CachedPromptTokens));
 
                 if (review.Pass)
                 {
@@ -946,7 +950,7 @@ public sealed class Orchestrator : IOrchestrator
                         if (proven.Prompt + proven.Completion > 0)
                             events.Writer.TryWrite(scope.Usage(
                                 WorkEventPayload.WorkPurpose.Review, models.Review!,
-                                proven.Prompt, proven.Completion, stepNumber));
+                                proven.Prompt, proven.Completion, stepNumber, proven.Cached));
 
                         if (!proven.Verdict.Sound)
                         {
@@ -1696,7 +1700,7 @@ public sealed class Orchestrator : IOrchestrator
     /// "passed" - the caller treats it as nothing to act on, and nothing here pretends the step was
     /// proven.</para>
     /// </summary>
-    private async Task<(ProofVerdict Verdict, int Prompt, int Completion)?> ProveAsync(
+    private async Task<(ProofVerdict Verdict, int Prompt, int Completion, int? Cached)?> ProveAsync(
         string title, List<ChatMessage> convo, ExecutionJournal journal, int evidenceStart,
         IChatProvider reviewProvider, string reviewModel, CancellationToken ct)
     {
@@ -1732,7 +1736,8 @@ public sealed class Orchestrator : IOrchestrator
 
             // The claim is CHECKED, not believed: the numbers it names are resolved against the
             // calls that were actually made, in the same order and numbering the evidence used.
-            return (ProofAudit.Check(outcome.Claim, actions), outcome.PromptTokens, outcome.CompletionTokens);
+            return (ProofAudit.Check(outcome.Claim, actions), outcome.PromptTokens,
+                    outcome.CompletionTokens, outcome.CachedPromptTokens);
         }
         catch (OperationCanceledException)
         {
@@ -1742,7 +1747,9 @@ public sealed class Orchestrator : IOrchestrator
         {
             // Same rule as the reviewer beside it: a check that could not run has not approved
             // anything. It cost a step a retry before it costs a run a false green.
-            return (new ProofVerdict(false, "soundness check error: " + ex.Message), 0, 0);
+            // Null cached, not zero: the call did not come back, so there is nothing to report
+            // about what it would have cost.
+            return (new ProofVerdict(false, "soundness check error: " + ex.Message), 0, 0, null);
         }
     }
 
@@ -2083,14 +2090,18 @@ public sealed class Orchestrator : IOrchestrator
                    EventKind.DecisionResolved, summary,
                    WorkEventPayload.DecisionPayload(stepNo, tool, allowed));
 
-        WorkEvent Usage(int prompt, int completion)
+        WorkEvent Usage(int prompt, int completion, int? cached)
         {
             runBudget.TokensUsed(prompt, completion);
             return new(Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow, EventKind.UsageReported,
                        $"tokens: {prompt} in, {completion} out"
+                       // Only when there IS one, and only when it is not zero: "0 cached" on every
+                       // line of a run against a local model would be noise saying nothing, and the
+                       // reader who cares about caching is looking for the turns where it worked.
+                       + (cached is > 0 ? $" ({cached} cached)" : "")
                        + (providerId is { Length: > 0 } id ? $" ({id}/{model}, execute)" : ""),
                        WorkEventPayload.UsagePayload(prompt, completion, stepNo, providerId, model,
-                                                     WorkEventPayload.WorkPurpose.Execute));
+                                                     WorkEventPayload.WorkPurpose.Execute, cached));
         }
 
         // A reply that describes a call instead of making one earns exactly ONE re-ask per step; without
@@ -2251,7 +2262,9 @@ public sealed class Orchestrator : IOrchestrator
                             lastPromptTokens = prompted;
                             scale.Observe(sizeAtRequest, prompted);
                         }
-                        yield return Usage(usage.PromptTokens ?? 0, usage.CompletionTokens ?? 0);
+                        yield return Usage(
+                            usage.PromptTokens ?? 0, usage.CompletionTokens ?? 0,
+                            usage.CachedPromptTokens);
                         break;
                 }
             }

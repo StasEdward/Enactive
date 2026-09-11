@@ -116,7 +116,12 @@ public static class ScheduleDrafts
         // False, always, and not a parameter of this method: a schedule is the definition of a run
         // nobody is watching. Spelling it as a literal here is what keeps the check honest if this
         // ever grows a caller that is watched - it would have to say so.
-        return TemplateNeeds.Unmet(template, spec.Permissions, approvalIsPossible: false);
+        //
+        // The supplied parameters go in too, so a need that only applies to a template still
+        // holding its defaults is not held against a schedule that has changed them.
+        return TemplateNeeds.Unmet(
+            template, spec.Permissions, approvalIsPossible: false,
+            supplied: draft.Work.Parameters);
     }
 
     private static IEnumerable<string> TimingProblems(ScheduleTiming timing, DateTimeOffset now)

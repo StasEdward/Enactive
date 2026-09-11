@@ -85,7 +85,28 @@ public sealed record TextDelta(string Text) : ChatStreamEvent;
 public sealed record ToolCallDelta(int Index, string? Id, string? Name, string? ArgumentsJson) : ChatStreamEvent;
 
 /// <summary>Token usage, when the provider reports it.</summary>
-public sealed record UsageDelta(int? PromptTokens, int? CompletionTokens) : ChatStreamEvent;
+/// <param name="CachedPromptTokens">
+/// The share of <paramref name="PromptTokens"/> served from a cache — see
+/// <see cref="ChatCompletion.CachedPromptTokens"/>. Defaulted so every existing
+/// <c>new UsageDelta(a, b)</c> still compiles and still means what it meant: null, "nobody counted".
+/// </param>
+public sealed record UsageDelta(
+    int? PromptTokens, int? CompletionTokens, int? CachedPromptTokens = null) : ChatStreamEvent;
+
+/// <summary>
+/// Adding up counts that may not have been counted.
+///
+/// <para>Null is not zero anywhere cached tokens are involved, and the arithmetic has to keep it
+/// that way: a retry that reports 400 cache reads on top of a first call that reported nothing must
+/// come out as 400, while two calls that both said nothing must come out as null rather than 0. In
+/// one place because getting it wrong the obvious way — <c>(a ?? 0) + (b ?? 0)</c> — turns "this
+/// provider has no such number" into "this provider's caching is doing nothing", which is a claim
+/// about the user's setup that nobody made.</para>
+/// </summary>
+public static class TokenCounts
+{
+    public static int? Add(int? a, int? b) => a is null ? b : b is null ? a : a + b;
+}
 
 /// <summary>
 /// A reasoning model's own deliberation, which some providers return in a field of its own rather

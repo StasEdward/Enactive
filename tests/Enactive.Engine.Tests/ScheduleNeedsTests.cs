@@ -187,6 +187,118 @@ public sealed class ScheduleNeedsTests : IDisposable
         Assert.DoesNotContain("choose a tier", problem, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// The over-refusal this check must not commit. Code Review needs a diff only because its scope
+    /// DEFAULTS to one; somebody who has already pointed it at a folder needs nothing of the sort,
+    /// and refusing them would be the same failure as accepting a schedule that cannot work, only
+    /// more irritating.
+    /// </summary>
+    [Fact]
+    public void A_schedule_that_changed_the_parameter_the_need_depends_on_is_not_refused()
+    {
+        var draft = new ScheduleDraft(
+            "nightly", _root,
+            ScheduledWork.FromTemplate("code-review", new Dictionary<string, string>
+            {
+                ["scope"] = "the Widgets folder"
+            }),
+            ScheduleTiming.Daily(new TimeOnly(3, 0), "UTC"),
+            AutonomyTiers.PolicyFor(Execute));
+
+        var result = ScheduleDrafts.Check(draft, _workspace, DateTimeOffset.Now, Find);
+
+        Assert.Empty(result.Problems);
+        Assert.NotNull(result.Schedule);
+    }
+
+    /// <summary>
+    /// And leaving the parameter alone is still the case that IS refused. Without this the test
+    /// above passes over a check that has been switched off.
+    /// </summary>
+    [Fact]
+    public void Leaving_the_parameter_at_its_default_is_still_refused()
+    {
+        var draft = new ScheduleDraft(
+            "nightly", _root,
+            ScheduledWork.FromTemplate("code-review", new Dictionary<string, string>
+            {
+                ["scope"] = Review.ParameterList.Single(p => p.Id == "scope").Default!
+            }),
+            ScheduleTiming.Daily(new TimeOnly(3, 0), "UTC"),
+            AutonomyTiers.PolicyFor(Execute));
+
+        Assert.NotEmpty(ScheduleDrafts.Check(draft, _workspace, DateTimeOffset.Now, Find).Problems);
+    }
+
+    // ── what is already stored, not only what is being typed ────────────────
+
+    /// <summary>
+    /// The half the first version of this left out. A schedule saved before the check existed keeps
+    /// firing every night; the window's refusal only ever reached schedules somebody happened to
+    /// open again, and a schedule nobody will open again is exactly the kind this product is for.
+    /// </summary>
+    [Fact]
+    public void A_stored_schedule_that_cannot_work_is_not_run()
+    {
+        var stored = new Schedule(
+            Guid.NewGuid(), _root, "nightly review",
+            ScheduledWork.FromTemplate("code-review"),
+            ScheduleTiming.Daily(new TimeOnly(3, 0), "UTC"),
+            AutonomyTiers.PolicyFor(Execute),
+            CreatedAt: DateTimeOffset.Now.AddDays(-7));
+
+        // Long past due, so without the needs check this would be a Run.
+        var at = DateTimeOffset.Now;
+
+        var decision = ScheduleTick.Decide(stored, at, isRunning: null, findTemplate: Find);
+
+        Assert.Equal(DueVerdict.Unschedulable, decision.Verdict);
+        Assert.False(decision.ShouldRun);
+
+        // Told once, rather than found as a failed run each morning.
+        Assert.True(decision.WorthReporting);
+        Assert.Contains("cannot see what has changed", decision.Why, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Same schedule at a tier that can do the job: it runs. The check must stop what cannot work
+    /// and nothing else — a tick that refused everything would be a scheduler that never fires,
+    /// which is the quietest way for this to go wrong.
+    /// </summary>
+    [Fact]
+    public void A_stored_schedule_that_can_work_still_runs()
+    {
+        var stored = new Schedule(
+            Guid.NewGuid(), _root, "nightly review",
+            ScheduledWork.FromTemplate("code-review"),
+            ScheduleTiming.Daily(new TimeOnly(3, 0), "UTC"),
+            AutonomyTiers.PolicyFor(Autonomous),
+            CreatedAt: DateTimeOffset.Now.AddDays(-7));
+
+        var decision = ScheduleTick.Decide(stored, DateTimeOffset.Now, isRunning: null, findTemplate: Find);
+
+        Assert.NotEqual(DueVerdict.Unschedulable, decision.Verdict);
+    }
+
+    /// <summary>
+    /// A caller with no way to look a template up gets exactly the behaviour it had before. The
+    /// parameter is optional so that adding this could not change what any existing tick decided.
+    /// </summary>
+    [Fact]
+    public void A_tick_that_cannot_look_templates_up_decides_as_it_always_did()
+    {
+        var stored = new Schedule(
+            Guid.NewGuid(), _root, "nightly review",
+            ScheduledWork.FromTemplate("code-review"),
+            ScheduleTiming.Daily(new TimeOnly(3, 0), "UTC"),
+            AutonomyTiers.PolicyFor(Execute),
+            CreatedAt: DateTimeOffset.Now.AddDays(-7));
+
+        Assert.NotEqual(
+            DueVerdict.Unschedulable,
+            ScheduleTick.Decide(stored, DateTimeOffset.Now).Verdict);
+    }
+
     // ── the assumption this rests on, guarded ───────────────────────────────
 
     /// <summary>

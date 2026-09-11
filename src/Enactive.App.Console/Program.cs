@@ -148,7 +148,11 @@ if (dueAll)
     var roots = ScheduleStore.Default.Workspaces();
     var across = roots
         .SelectMany(root => ScheduleTick.Decide(
-            ScheduleStore.Default.For(root), DateTimeOffset.Now, RunMarkers.Default.IsRunning))
+            ScheduleStore.Default.For(root), DateTimeOffset.Now, RunMarkers.Default.IsRunning,
+            // Per workspace, because a template store is per workspace. A schedule whose template
+            // cannot do its job under the tier it was given is reported here instead of becoming a
+            // run that spends a model's time discovering the same thing.
+            new TemplateStore(root).Find))
         .ToArray();
 
     Console.WriteLine($"SCHEDULES — {roots.Count} workspace(s)");
@@ -336,7 +340,11 @@ if (dueAll || args.Contains("--due", StringComparer.OrdinalIgnoreCase))
     Heartbeat.Stamp(DateTimeOffset.Now);
 
     var schedules = ScheduleStore.Default.For(workspace.RootPath);
-    var decisions = ScheduleTick.Decide(schedules, DateTimeOffset.Now, RunMarkers.Default.IsRunning);
+    // The same needs check --due-all makes, so the two entry points agree about what can run. A
+    // scheduler wired to --due rather than --due-all must not get a different answer.
+    var decisions = ScheduleTick.Decide(
+        schedules, DateTimeOffset.Now, RunMarkers.Default.IsRunning,
+        new TemplateStore(workspace.RootPath).Find);
 
     Console.WriteLine($"SCHEDULES — {workspace.RootPath}");
     foreach (var decision in decisions.Where(d => d.WorthReporting || d.ShouldRun))

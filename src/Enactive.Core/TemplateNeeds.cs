@@ -38,11 +38,18 @@ public static class TemplateNeeds
     /// the first: a form that reveals its objections one at a time makes a person submit four times
     /// to learn four things.
     /// </returns>
+    /// <param name="supplied">
+    /// The parameter values this schedule or run supplies. A need declared with
+    /// <see cref="TemplateNeed.WhenParameterIsDefault"/> is checked against these, so a Code Review
+    /// pointed at a folder is not refused for being unable to produce a diff it was never going to
+    /// ask for.
+    /// </param>
     public static IReadOnlyList<string> Unmet(
         TaskTemplate template,
         PermissionPolicy policy,
         bool approvalIsPossible,
-        Func<string, PermissionLevel>? requiredLevelOf = null)
+        Func<string, PermissionLevel>? requiredLevelOf = null,
+        IReadOnlyDictionary<string, string>? supplied = null)
     {
         if (template.Needs.Count == 0)
             return Array.Empty<string>();
@@ -53,6 +60,10 @@ public static class TemplateNeeds
 
         foreach (var need in template.Needs)
         {
+            // A need that does not apply to THIS filling-in of the template is not a need at all.
+            if (!need.AppliesTo(template, supplied))
+                continue;
+
             var offer = ToolOffers.For(
                 need.AnyOf, tool => engine.Evaluate(policy, tool, levelOf(tool)), approvalIsPossible);
 

@@ -1,6 +1,7 @@
 namespace Enactive.Agents;
 
 using System.Runtime.CompilerServices;
+using Enactive.Core.Chat;
 using Enactive.Core.Events;
 using Enactive.Core.History;
 using Enactive.Core.Templates;
@@ -210,6 +211,11 @@ public sealed class RunRecorder
         var completionTokens = 0;
         var sawUsage = false;
 
+        // Nullable and starting at null, unlike the two above: zero here would be a claim that
+        // nothing was served from a cache, and for a run against a local model the truth is that
+        // nobody counted. See ModelSpend.CachedPromptTokens.
+        int? cachedTokens = null;
+
         // What each model was asked to do, and what it cost. Keyed by phase AND model because one
         // model can serve two phases and two models can serve one - a run with ExecuteLight bound
         // spends on two models under "execute", and folding them together loses the distinction the
@@ -266,7 +272,12 @@ public sealed class RunRecorder
                     promptTokens += used.In;
                     completionTokens += used.Out;
                     sawUsage = true;
-                    Spent(spend, ev, used.In, used.Out);
+                    // Through TokenCounts, never with ?? 0. A run where only the reviewer is on a
+                    // provider that reports cache reads must come out as the reviewer's number, and
+                    // a run where nothing reports one must come out as null - not as a zero saying
+                    // the caching achieved nothing.
+                    cachedTokens = TokenCounts.Add(cachedTokens, ev.CachedTokens());
+                    Spent(spend, ev, used.In, used.Out, ev.CachedTokens());
                     break;
                 // The terminal event carries a typed outcome now, so the history stores what the
                 // engine DECIDED instead of a status inferred from which event happened to arrive
@@ -300,7 +311,8 @@ public sealed class RunRecorder
                     // Null rather than an empty list when no call named its model. Records written
                     // before the usage payload carried one are exactly that case, and an empty list
                     // would read as "this run spent nothing anywhere".
-                    ByModel = spend.Count > 0 ? spend.Values.ToList() : null
+                    ByModel = spend.Count > 0 ? spend.Values.ToList() : null,
+                    CachedPromptTokens = cachedTokens
                 }
                 : null,
             spec);
@@ -316,7 +328,8 @@ public sealed class RunRecorder
     /// some model would be worse than one that is visibly short.</para>
     /// </summary>
     private static void Spent(
-        Dictionary<(string, string, string), ModelSpend> spend, WorkEvent ev, int prompt, int completion)
+        Dictionary<(string, string, string), ModelSpend> spend, WorkEvent ev,
+        int prompt, int completion, int? cached)
     {
         if (ev.ProviderId() is not { Length: > 0 } provider || ev.ModelName() is not { Length: > 0 } name)
             return;
@@ -329,9 +342,16 @@ public sealed class RunRecorder
             {
                 PromptTokens = running.PromptTokens + prompt,
                 CompletionTokens = running.CompletionTokens + completion,
-                Calls = running.Calls + 1
+                Calls = running.Calls + 1,
+                // One turn in a step reporting a cache read and the next not reporting one is a
+                // provider that answered once - the row says what it was told, and stays null only
+                // while nothing has told it anything.
+                CachedPromptTokens = TokenCounts.Add(running.CachedPromptTokens, cached)
             }
-            : new ModelSpend(purpose, provider, name, prompt, completion, Calls: 1);
+            : new ModelSpend(purpose, provider, name, prompt, completion, Calls: 1)
+            {
+                CachedPromptTokens = cached
+            };
     }
 
     private static string StripPrefix(string value, string prefix)

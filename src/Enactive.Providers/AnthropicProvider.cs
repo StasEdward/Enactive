@@ -52,7 +52,8 @@ public sealed class AnthropicProvider : IChatProvider
         // The counts were already in the response and were being thrown away here, which is why a
         // run on Claude reported no tokens at all while a local one did.
         if (completion.PromptTokens is not null || completion.CompletionTokens is not null)
-            yield return new UsageDelta(completion.PromptTokens, completion.CompletionTokens);
+            yield return new UsageDelta(
+                completion.PromptTokens, completion.CompletionTokens, completion.CachedPromptTokens);
 
         yield return new FinishDelta(completion.FinishReason);
     }

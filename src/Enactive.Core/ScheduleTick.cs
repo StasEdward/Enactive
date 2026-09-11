@@ -1,5 +1,7 @@
 namespace Enactive.Core.Schedules;
 
+using Enactive.Core.Templates;
+
 /// <summary>What a tick decided about one schedule.</summary>
 public enum DueVerdict
 {
@@ -63,9 +65,16 @@ public static class ScheduleTick
     /// Whether a previous run of this schedule is still going. Passed in rather than looked up, so
     /// the overlap rule can be tested without a second process to be overlapped with.
     /// </param>
+    /// <param name="findTemplate">
+    /// How to look a template up, when the caller can. Supplied, a schedule whose template cannot do
+    /// its job under the permissions this schedule grants is <see cref="DueVerdict.Unschedulable"/>
+    /// instead of a run that fails; omitted, nothing about needs is checked and the behaviour is
+    /// exactly what it was.
+    /// </param>
     public static IReadOnlyList<ScheduleDecision> Decide(
-        IEnumerable<Schedule> schedules, DateTimeOffset now, Func<Guid, bool>? isRunning = null)
-        => schedules.Select(s => Decide(s, now, isRunning)).ToArray();
+        IEnumerable<Schedule> schedules, DateTimeOffset now, Func<Guid, bool>? isRunning = null,
+        Func<string, TaskTemplate?>? findTemplate = null)
+        => schedules.Select(s => Decide(s, now, isRunning, findTemplate)).ToArray();
 
     /// <summary>
     /// The one to run now: the most overdue of those that should run, or null when none should.
@@ -78,7 +87,9 @@ public static class ScheduleTick
     public static ScheduleDecision? FirstDue(IEnumerable<ScheduleDecision> decisions)
         => decisions.Where(d => d.ShouldRun).OrderBy(d => d.Occurrence).FirstOrDefault();
 
-    public static ScheduleDecision Decide(Schedule schedule, DateTimeOffset now, Func<Guid, bool>? isRunning = null)
+    public static ScheduleDecision Decide(
+        Schedule schedule, DateTimeOffset now, Func<Guid, bool>? isRunning = null,
+        Func<string, TaskTemplate?>? findTemplate = null)
     {
         if (!schedule.Enabled)
             return new(schedule, DueVerdict.Off, null, "switched off");
@@ -86,6 +97,18 @@ public static class ScheduleTick
         if (!schedule.Work.IsValid)
             return new(schedule, DueVerdict.Unschedulable, null,
                        "this schedule does not say what to run - it names neither a template nor a past run");
+
+        // The check the schedules window runs on a DRAFT, run again on what is actually stored.
+        //
+        // Without this, the window's refusal only ever reached schedules saved after it existed: one
+        // written last week keeps firing and failing every night until somebody happens to open and
+        // re-save it. A schedule nobody will open again is exactly the kind this product is for.
+        //
+        // Reported rather than run, and Unschedulable is the verdict that already means "this
+        // cannot happen and here is the sentence" - it is in WorthReporting, so the person is told
+        // once rather than finding a failed run each morning.
+        if (findTemplate is not null && UnmetNeed(schedule, findTemplate) is { } unmet)
+            return new(schedule, DueVerdict.Unschedulable, null, unmet);
 
         if (ScheduleClock.Zone(schedule.Timing.TimeZoneId) is null
             && schedule.Timing.Repeat != ScheduleRepeat.Once)
@@ -127,6 +150,28 @@ public static class ScheduleTick
                    late > Grace
                        ? $"due at {Local(schedule, due)}, {Describe(late)} ago - running it late, once"
                        : $"due at {Local(schedule, due)}");
+    }
+
+    /// <summary>
+    /// The first thing this schedule's template cannot do under the permissions it was given, or
+    /// null when there is nothing in the way.
+    ///
+    /// <para>The policy checked is the schedule's own, NOT narrowed by the template's ceiling - that
+    /// narrowing needs a workspace to resolve against and this function has none. It therefore asks
+    /// a slightly LOOSER question than the schedules window does, which is the safe direction: this
+    /// stops a run only where the tier alone already makes the job impossible, and a template that
+    /// denies its own tools is caught when the schedule is written.</para>
+    ///
+    /// <para>A schedule repeating a past run has no template and is never stopped here.</para>
+    /// </summary>
+    private static string? UnmetNeed(Schedule schedule, Func<string, TaskTemplate?> findTemplate)
+    {
+        if (schedule.Work.TemplateId is not { Length: > 0 } id || findTemplate(id) is not { } template)
+            return null;
+
+        return TemplateNeeds.Unmet(
+            template, schedule.Permissions, approvalIsPossible: false,
+            supplied: schedule.Work.Parameters).FirstOrDefault();
     }
 
     /// <summary>The time as the schedule's own clock reads it, which is how the person set it.</summary>

@@ -115,6 +115,14 @@ public static class WorkEventPayload
         new("\"in\"\\s*:\\s*(\\d+)\\s*,\\s*\"out\"\\s*:\\s*(\\d+)",
             System.Text.RegularExpressions.RegexOptions.Compiled);
 
+    /// <summary>
+    /// The cached share, which is why it is written AFTER "out" in the payload: the pair above is
+    /// matched as an adjacent pair, and a field inserted between them would silently stop every
+    /// usage event being read at all.
+    /// </summary>
+    private static readonly System.Text.RegularExpressions.Regex CachedRegex =
+        new("\"cached\"\\s*:\\s*(\\d+)", System.Text.RegularExpressions.RegexOptions.Compiled);
+
     /// <summary>The plan step this event belongs to, or null when it carries no step number.</summary>
     public static int? StepNo(this WorkEvent ev)
     {
@@ -141,14 +149,23 @@ public static class WorkEventPayload
     /// total was execute-only, which understates a run whose reviewer reads whole documents on an
     /// expensive model.
     /// </param>
+    /// <param name="cachedPromptTokens">
+    /// How many of <paramref name="promptTokens"/> were served from the provider's prompt cache at a
+    /// tenth of the price. Null where the provider does not report it, which is a DIFFERENT fact
+    /// from zero: zero means the cache was cold or the prompt was too short, null means nobody
+    /// knows. A run record that could not tell those apart would report every local model as
+    /// getting no benefit from a feature it does not have.
+    /// </param>
     public static string UsagePayload(
         int promptTokens, int completionTokens, int? stepNo,
-        string? providerId = null, string? model = null, string? purpose = null)
+        string? providerId = null, string? model = null, string? purpose = null,
+        int? cachedPromptTokens = null)
     {
-        var parts = new List<string>(6);
+        var parts = new List<string>(7);
         if (stepNo is { } n) parts.Add($"\"step\":{n}");
         parts.Add($"\"in\":{promptTokens}");
         parts.Add($"\"out\":{completionTokens}");
+        if (cachedPromptTokens is { } cached) parts.Add($"\"cached\":{cached}");
         if (!string.IsNullOrWhiteSpace(providerId)) parts.Add($"\"provider\":{Quote(providerId)}");
         if (!string.IsNullOrWhiteSpace(model)) parts.Add($"\"model\":{Quote(model)}");
         if (!string.IsNullOrWhiteSpace(purpose)) parts.Add($"\"purpose\":{Quote(purpose)}");
@@ -570,6 +587,21 @@ public static class WorkEventPayload
         {
             return null;
         }
+    }
+
+    /// <summary>
+    /// How much of this event's prompt was served from a cache, or null when it does not say.
+    ///
+    /// <para>Separate from <see cref="Usage"/> rather than a third member of its tuple. It is a
+    /// different kind of fact - a SHARE of the "in" figure, not another total - and every record
+    /// written before 2026-09-11 has none, so a caller has to handle its absence either way.</para>
+    /// </summary>
+    public static int? CachedTokens(this WorkEvent ev)
+    {
+        if (string.IsNullOrEmpty(ev.PayloadJson))
+            return null;
+        var m = CachedRegex.Match(ev.PayloadJson);
+        return m.Success && int.TryParse(m.Groups[1].Value, out var cached) ? cached : null;
     }
 
     /// <summary>The tokens this event reports, or null when it is not a usage event.</summary>
