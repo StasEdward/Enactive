@@ -74,6 +74,36 @@ public sealed record PermissionCeiling(
 }
 
 /// <summary>
+/// One thing a template cannot do its job without, and the tools that could do it.
+///
+/// <para><b>Why a template has to state this rather than have it inferred.</b> There is already a
+/// test asserting no built-in denies a tool its own goal text NAMES, and that test says in its own
+/// summary that it would not have caught the case that happened: Code Review's goal never says
+/// "git" - it says "everything that has changed since the last commit", which requires git without
+/// naming it. A test can check the words; only a person can check the meaning. This is where that
+/// person writes the meaning down, once, next to the goal it belongs to.</para>
+///
+/// <para><b>Alternatives, not a list of requirements.</b> Seeing a diff needs git OR a shell, and a
+/// run that has either can do the job. Modelling this as a flat list of tools would refuse
+/// schedules that are perfectly able to run, which is the same failure as accepting ones that are
+/// not - just quieter and more annoying.</para>
+/// </summary>
+/// <param name="What">
+/// The capability, in the words a person would use: "see what has changed". It becomes the middle
+/// of the sentence explaining why a schedule cannot be saved, so it reads as a thing the template
+/// needs to DO and not as a tool it wants.
+/// </param>
+/// <param name="Otherwise">
+/// The other way out, when the need depends on how the template is filled in. Code Review needs a
+/// diff because its scope parameter DEFAULTS to "everything that has changed since the last
+/// commit" - point it at a folder instead and it needs nothing of the sort. A check cannot know
+/// that, and refusing a schedule that would have worked is the same failure as accepting one that
+/// would not, so whoever declares the need writes the escape here and the person is shown both
+/// ways out. Null where the need is unconditional.
+/// </param>
+public sealed record TemplateNeed(string What, IReadOnlyList<string> AnyOf, string? Otherwise = null);
+
+/// <summary>
 /// A saved task: a pre-written command, the bounds it runs under, and what has to be true at the
 /// end. It is NOT a plan and it executes nothing - the planner still plans and the orchestrator
 /// still runs the graph. The template says what to ask for and what the run may not do.
@@ -105,6 +135,17 @@ public sealed record TaskTemplate(
     bool ReviewRequired = true,
     bool Builtin = false)
 {
+    /// <summary>
+    /// What this template cannot work without. Empty means "nothing in particular", which is the
+    /// truthful answer for most of them and the only safe default: a template that has not been
+    /// thought about must not start refusing schedules.
+    ///
+    /// <para>An init property rather than another positional parameter, so every existing
+    /// construction of a template still compiles and every stored template still deserialises into
+    /// one. There are twenty-odd positional arguments already.</para>
+    /// </summary>
+    public IReadOnlyList<TemplateNeed> Needs { get; init; } = Array.Empty<TemplateNeed>();
+
     public IReadOnlyList<TemplateParameter> ParameterList => Parameters ?? Array.Empty<TemplateParameter>();
     public IReadOnlyList<SuccessCriterionDefinition> CriteriaList
         => SuccessCriteria ?? Array.Empty<SuccessCriterionDefinition>();

@@ -49,13 +49,19 @@ public sealed record ToolOffer(IReadOnlyList<string> Offered, IReadOnlyList<With
     }
 
     /// <summary>
-    /// What to put in the run record, or null when nothing was kept back.
+    /// Why the kept-back tools were kept back, or null when none were: "git — blocked by this run's
+    /// permission policy; run_command, docker — needs an approval nobody is there to give".
     ///
-    /// <para>Grouped by reason rather than listed one per line: four tools withheld for the same
+    /// <para>Grouped by reason rather than listed one per tool: four tools withheld for the same
     /// reason are one fact, and reading it four times invites the reader to look for four
     /// causes.</para>
+    ///
+    /// <para>Separate from <see cref="Sentence"/> because two different readers need it. The run
+    /// record wants a whole sentence; the schedules window is explaining why a template cannot do
+    /// its job and needs this as a clause inside a sentence of its own. Grouping it twice is how
+    /// the two would drift apart.</para>
     /// </summary>
-    public string? Sentence
+    public string? Because
     {
         get
         {
@@ -75,11 +81,12 @@ public sealed record ToolOffer(IReadOnlyList<string> Offered, IReadOnlyList<With
                 group.Tools.Add(held.Name);
             }
 
-            return "Withheld from the model: "
-                 + string.Join("; ", groups.Select(g => $"{string.Join(", ", g.Tools)} — {g.Reason}"))
-                 + ".";
+            return string.Join("; ", groups.Select(g => $"{string.Join(", ", g.Tools)} — {g.Reason}"));
         }
     }
+
+    /// <summary>What to put in the run record, or null when nothing was kept back.</summary>
+    public string? Sentence => Because is { } because ? $"Withheld from the model: {because}." : null;
 }
 
 /// <summary>Works out a <see cref="ToolOffer"/> from a policy and the run's decision handler.</summary>
