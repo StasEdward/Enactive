@@ -16,7 +16,19 @@ using Enactive.Core.Tasks;
 public sealed record PlanResult(
     IntentDisposition Disposition, string Title, Plan? Plan,
     int PromptTokens = 0, int CompletionTokens = 0,
-    PlanReadout Readout = PlanReadout.Understood);
+    PlanReadout Readout = PlanReadout.Understood)
+{
+    /// <summary>
+    /// How much of <see cref="PromptTokens"/> the provider served from its prompt cache. Null where
+    /// it does not report one - see <c>ChatCompletion.CachedPromptTokens</c>.
+    ///
+    /// <para>An init property so the six-argument construction above and every <c>with</c> of it
+    /// keep working. Carried for the same reason the token counts themselves are: the planning call
+    /// happens outside the tool loop, so anything it does not hand back is spent and never
+    /// counted.</para>
+    /// </summary>
+    public int? CachedPromptTokens { get; init; }
+}
 
 /// <summary>
 /// On what basis this run is doing what it is doing.
@@ -72,8 +84,16 @@ public sealed class Planner
         var prompt = completion.PromptTokens ?? 0;
         var output = completion.CompletionTokens ?? 0;
 
+        // Summed the same way as the tokens, and kept NULL until something reports one: adding a
+        // retry's cache reads to a first call that never mentioned any would turn "nobody counted"
+        // into a number, which is the one thing this field exists not to do.
+        var cached = completion.CachedPromptTokens;
+
         if (Parse(answer, request) is { } plan)
-            return plan with { PromptTokens = prompt, CompletionTokens = output };
+            return plan with
+            {
+                PromptTokens = prompt, CompletionTokens = output, CachedPromptTokens = cached
+            };
 
         // Nothing readable came back. Ask once more, showing what arrived and exactly what shape was
         // wanted - the same recovery the reviewer does, and for the same reason: a model that
@@ -87,16 +107,20 @@ public sealed class Planner
 
         prompt += retry.PromptTokens ?? 0;
         output += retry.CompletionTokens ?? 0;
+        cached = TokenCounts.Add(cached, retry.CachedPromptTokens);
 
         if (Parse(retry.Message.Content ?? "", request) is { } retried)
-            return retried with { PromptTokens = prompt, CompletionTokens = output };
+            return retried with
+            {
+                PromptTokens = prompt, CompletionTokens = output, CachedPromptTokens = cached
+            };
 
         // Twice with nothing readable. The request is still acted on - refusing it would be worse
         // than doing the obvious thing with it - but this is a FALLBACK and the difference travels
         // with the result instead of disappearing into a title.
         return new PlanResult(
             IntentDisposition.QuickAction, Truncate(request, 80), null,
-            prompt, output, PlanReadout.Unreadable);
+            prompt, output, PlanReadout.Unreadable) { CachedPromptTokens = cached };
     }
 
     /// <summary>Returns the plan, or null when the answer carried none.</summary>

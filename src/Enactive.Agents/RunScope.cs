@@ -30,12 +30,21 @@ using Enactive.Core.Templates;
 /// </summary>
 public sealed class RunScope
 {
-    public RunScope(Guid runId, Guid taskId, RunBudget budget, List<ArtifactRef> artifacts)
+    /// <param name="writableRoots">
+    /// Folders this workspace was granted in an earlier run, from
+    /// <see cref="Enactive.Core.Permissions.WritableRoots"/>. Null for a run that has none and for
+    /// every caller that does not deal in them — a test driving the engine is not making a statement
+    /// about the machine's policy by leaving it out.
+    /// </param>
+    public RunScope(
+        Guid runId, Guid taskId, RunBudget budget, List<ArtifactRef> artifacts,
+        IEnumerable<string>? writableRoots = null)
     {
         RunId = runId;
         TaskId = taskId;
         Budget = budget;
         Artifacts = artifacts;
+        Granted = writableRoots is null ? new GrantedRoots() : new GrantedRoots(writableRoots);
     }
 
     public Guid RunId { get; }
@@ -53,9 +62,11 @@ public sealed class RunScope
     /// would be the same question five times, and a question asked five times is one nobody reads
     /// by the third.</para>
     ///
-    /// <para>It goes no further than the run - see <see cref="GrantedRoots"/>.</para>
+    /// <para>What is granted HERE goes no further than the run — see <see cref="GrantedRoots"/>.
+    /// What it STARTS from may be older: a folder this workspace was given on an earlier card and
+    /// that the person chose to keep.</para>
     /// </summary>
-    public GrantedRoots Granted { get; } = new();
+    public GrantedRoots Granted { get; }
 
     /// <summary>
     /// Any event of this run.
@@ -95,13 +106,20 @@ public sealed class RunScope
     /// the reviewer, on the most expensive model bound, read whole documents for free as far as the
     /// UI was concerned.</para>
     /// </summary>
-    public WorkEvent Usage(string purpose, ModelRef reference, int prompt, int completion, int? stepNo = null)
+    /// <param name="cached">
+    /// The share of the prompt the provider served from its cache, when it says. Null - not zero -
+    /// where it does not, which is every local runtime and every phase before 2026-09-11.
+    /// </param>
+    public WorkEvent Usage(string purpose, ModelRef reference, int prompt, int completion,
+                           int? stepNo = null, int? cached = null)
     {
         Budget.TokensUsed(prompt, completion);
         return new(Guid.NewGuid(), TaskId, RunId, DateTimeOffset.UtcNow, EventKind.UsageReported,
-                   $"tokens: {prompt} in, {completion} out ({reference.ProviderId}/{reference.Model}, {purpose})",
+                   $"tokens: {prompt} in, {completion} out"
+                   + (cached is > 0 ? $" ({cached} cached)" : "")
+                   + $" ({reference.ProviderId}/{reference.Model}, {purpose})",
                    WorkEventPayload.UsagePayload(prompt, completion, stepNo,
-                                                 reference.ProviderId, reference.Model, purpose));
+                                                 reference.ProviderId, reference.Model, purpose, cached));
     }
 
     /// <summary>

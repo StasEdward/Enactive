@@ -156,7 +156,7 @@ section { padding: 84px 0; border-top: 1px solid var(--ink-800); }
     radial-gradient(58% 46% at 78% 6%, rgba(255, 95, 38, 0.14), transparent 68%),
     radial-gradient(46% 40% at 6% 86%, rgba(255, 176, 32, 0.07), transparent 70%);
 }
-.hero__grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 460px); gap: 56px; align-items: center; }
+.hero__grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 540px); gap: 56px; align-items: center; }
 .hero h1 .accent {
   background: var(--grad-ember);
   -webkit-background-clip: text;

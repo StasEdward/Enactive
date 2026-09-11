@@ -48,13 +48,32 @@ public sealed record ChatRequest(
     string? ResponseSchema = null);
 
 /// <summary>A completed assistant turn (content and/or tool calls).</summary>
+/// <param name="PromptTokens">
+/// EVERY input token this turn was billed for.
+///
+/// <para>Under prompt caching that is a sum rather than a field. Anthropic's <c>input_tokens</c>
+/// counts only what follows the last cache breakpoint, with the rest in
+/// <c>cache_read_input_tokens</c> and <c>cache_creation_input_tokens</c>; reading the one field
+/// would report a fraction of what was spent, and the number would look BETTER precisely because
+/// the accounting had broken. The adapter sums the three, so every consumer of this keeps meaning
+/// what it meant.</para>
+/// </param>
+/// <param name="CachedPromptTokens">
+/// How many of <paramref name="PromptTokens"/> were served from a cache, when the provider says so.
+///
+/// <para>Null for a provider that does not report it, which is a different fact from zero: zero
+/// means caching was attempted and missed, and null means nobody asked. It is also the only honest
+/// way to see the feature is working at all — a run whose prefix is being cached and a run whose is
+/// not look identical from every other number.</para>
+/// </param>
 public sealed record ChatCompletion(
     ChatMessage Message,
     string? FinishReason,
     int? PromptTokens,
     int? CompletionTokens,
     /// <summary>The model's own deliberation, where the provider returns it separately. See <see cref="ReasoningDelta"/>.</summary>
-    string? Thinking = null);
+    string? Thinking = null,
+    int? CachedPromptTokens = null);
 
 /// <summary>One event out of the streaming pipeline. Adapters map raw SSE to these.</summary>
 public abstract record ChatStreamEvent;
@@ -66,7 +85,28 @@ public sealed record TextDelta(string Text) : ChatStreamEvent;
 public sealed record ToolCallDelta(int Index, string? Id, string? Name, string? ArgumentsJson) : ChatStreamEvent;
 
 /// <summary>Token usage, when the provider reports it.</summary>
-public sealed record UsageDelta(int? PromptTokens, int? CompletionTokens) : ChatStreamEvent;
+/// <param name="CachedPromptTokens">
+/// The share of <paramref name="PromptTokens"/> served from a cache — see
+/// <see cref="ChatCompletion.CachedPromptTokens"/>. Defaulted so every existing
+/// <c>new UsageDelta(a, b)</c> still compiles and still means what it meant: null, "nobody counted".
+/// </param>
+public sealed record UsageDelta(
+    int? PromptTokens, int? CompletionTokens, int? CachedPromptTokens = null) : ChatStreamEvent;
+
+/// <summary>
+/// Adding up counts that may not have been counted.
+///
+/// <para>Null is not zero anywhere cached tokens are involved, and the arithmetic has to keep it
+/// that way: a retry that reports 400 cache reads on top of a first call that reported nothing must
+/// come out as 400, while two calls that both said nothing must come out as null rather than 0. In
+/// one place because getting it wrong the obvious way — <c>(a ?? 0) + (b ?? 0)</c> — turns "this
+/// provider has no such number" into "this provider's caching is doing nothing", which is a claim
+/// about the user's setup that nobody made.</para>
+/// </summary>
+public static class TokenCounts
+{
+    public static int? Add(int? a, int? b) => a is null ? b : b is null ? a : a + b;
+}
 
 /// <summary>
 /// A reasoning model's own deliberation, which some providers return in a field of its own rather

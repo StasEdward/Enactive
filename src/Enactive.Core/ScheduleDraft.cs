@@ -81,11 +81,47 @@ public static class ScheduleDrafts
             var resolved = ScheduledSpec.For(candidate, workspace, findTemplate);
             if (resolved.Spec is null)
                 problems.Add(Sentence(resolved.Why));
+            else
+                problems.AddRange(UnmetNeeds(draft, resolved.Spec, findTemplate));
         }
 
         return problems.Count == 0
             ? new ScheduleDraftResult(candidate, Array.Empty<string>())
             : new ScheduleDraftResult(null, problems);
+    }
+
+    /// <summary>
+    /// Whether the template can actually do its job under the permissions this schedule grants it.
+    ///
+    /// <para>The last thing checked, and the newest. Everything above asks whether the schedule is
+    /// well formed; this asks whether it can WORK — which is the question a person thought they had
+    /// answered by reading the two true sentences the window already showed them ("this runs Code
+    /// Review" and "run_command, git and docker will be refused, not asked about") without anybody
+    /// putting the two together.</para>
+    ///
+    /// <para>The policy is taken from the RESOLVED spec, not from the draft: a template narrows
+    /// what the workspace granted, and the run will use the narrowed one. Checking the draft's own
+    /// policy would pass a schedule whose template denies the very tool it needs.</para>
+    ///
+    /// <para>A schedule that repeats a past RUN has no template and so has no declared needs. That
+    /// is not a gap being tolerated: the spec was frozen when it ran, and what it needed then is a
+    /// question about a run that already happened.</para>
+    /// </summary>
+    private static IEnumerable<string> UnmetNeeds(
+        ScheduleDraft draft, ResolvedTaskSpec spec, Func<string, TaskTemplate?> findTemplate)
+    {
+        if (draft.Work.TemplateId is not { Length: > 0 } id || findTemplate(id) is not { } template)
+            return Array.Empty<string>();
+
+        // False, always, and not a parameter of this method: a schedule is the definition of a run
+        // nobody is watching. Spelling it as a literal here is what keeps the check honest if this
+        // ever grows a caller that is watched - it would have to say so.
+        //
+        // The supplied parameters go in too, so a need that only applies to a template still
+        // holding its defaults is not held against a schedule that has changed them.
+        return TemplateNeeds.Unmet(
+            template, spec.Permissions, approvalIsPossible: false,
+            supplied: draft.Work.Parameters);
     }
 
     private static IEnumerable<string> TimingProblems(ScheduleTiming timing, DateTimeOffset now)

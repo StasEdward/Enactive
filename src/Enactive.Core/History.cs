@@ -55,6 +55,32 @@ public sealed record ModelSpend(
 
     /// <summary>"Antropic/claude-sonnet-4-6", as every other part of the app names a model.</summary>
     public string Ref => $"{ProviderId}/{Model}";
+
+    /// <summary>
+    /// How many of <see cref="PromptTokens"/> this model was not charged full price for, because
+    /// the provider had the prefix already. Null when the provider does not report it — every local
+    /// runtime, and every record written before 2026-09-11.
+    ///
+    /// <para>Null is not zero and the difference is the whole reason this is nullable. Zero says
+    /// "the cache was cold, or the prompt was below the model's minimum"; null says "nobody counted
+    /// here". Rendering the second as the first would tell somebody their caching is not working
+    /// when what is actually true is that Ollama has no such number to give.</para>
+    ///
+    /// <para>An <c>init</c> property for the same reason as <see cref="RunUsage.ByModel"/>: there
+    /// are already <c>new ModelSpend(...)</c> calls with six positional arguments, and every row
+    /// stored before today has to deserialise into one.</para>
+    /// </summary>
+    public int? CachedPromptTokens { get; init; }
+
+    /// <summary>
+    /// The cached share as a percentage of the prompt, or null when there is nothing to divide.
+    /// Rounded to whole points: this is read to answer "is caching doing anything", and a figure to
+    /// two decimals invites a precision the sampling does not have.
+    /// </summary>
+    public int? CachedPercent
+        => CachedPromptTokens is { } cached && PromptTokens > 0
+            ? (int)Math.Round(100.0 * cached / PromptTokens)
+            : null;
 }
 
 /// <summary>
@@ -76,6 +102,22 @@ public sealed record RunUsage(int PromptTokens, int CompletionTokens)
     /// deserialises. There is no schema change: this rides in the same <c>usage_json</c>.</para>
     /// </summary>
     public IReadOnlyList<ModelSpend>? ByModel { get; init; }
+
+    /// <summary>
+    /// How much of this run's prompt was served from a cache, over every model that reported one.
+    /// Null when none did — see <see cref="ModelSpend.CachedPromptTokens"/> on why that is not zero.
+    ///
+    /// <para>A SUM over the models that answered, not over all of them. A run whose worker is on
+    /// Ollama and whose reviewer is on Anthropic reports the reviewer's cached tokens and says
+    /// nothing about the worker's, which is exactly right: there is no number there to add.</para>
+    /// </summary>
+    public int? CachedPromptTokens { get; init; }
+
+    /// <summary>The cached share of the prompt, in whole percent, or null when nothing reported one.</summary>
+    public int? CachedPercent
+        => CachedPromptTokens is { } cached && PromptTokens > 0
+            ? (int)Math.Round(100.0 * cached / PromptTokens)
+            : null;
 }
 
 /// <summary>

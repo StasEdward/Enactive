@@ -64,6 +64,42 @@ public sealed class Orchestrator : IOrchestrator
     private readonly PermissionPolicy _policy;
     private readonly IServiceProvider _services;
     private readonly IModelRouter _router;
+
+    /// <summary>Folders this workspace may write to outside itself, from earlier runs.</summary>
+    private readonly WritableRoots _writableRoots;
+
+    /// <summary>
+    /// The answers offered when a command appears to write outside the workspace.
+    ///
+    /// <para>Three always, and a fourth — <i>keep for this workspace</i> — only when every place
+    /// named could actually be kept. The store refuses a drive root, a system folder and the folder
+    /// holding Enactive's own settings, and a button that is offered and then refuses is worse than
+    /// one that was never there: the person has already decided by the time they are told no. So the
+    /// store is asked first, with the same method it will judge by.</para>
+    ///
+    /// <para>A write whose place is a variable is not keepable either — there is no folder to name,
+    /// and this is the same reason <see cref="GrantedRoots.Grant"/> ignores one.</para>
+    /// </summary>
+    private static IReadOnlyList<DecisionOption> KeepOptions(IReadOnlyList<OutsideWrite> outside)
+    {
+        var options = new List<DecisionOption>(4)
+        {
+            new("once", "Allow once"),
+            new("run", "Allow for this run"),
+        };
+
+        var folders = outside
+            .Where(w => w.Known)
+            .Select(w => Directory.Exists(w.Path) ? w.Path : Path.GetDirectoryName(w.Path))
+            .Where(f => !string.IsNullOrWhiteSpace(f))
+            .ToList();
+
+        if (folders.Count > 0 && folders.TrueForAll(f => WritableRoots.Refuses(f!) is null))
+            options.Add(new DecisionOption("keep", "Keep for this workspace"));
+
+        options.Add(new DecisionOption("deny", "Keep to the workspace"));
+        return options;
+    }
     private readonly IModelResolver _modelResolver;
     private readonly int _reviewRetries;
     private readonly int _successRetries;
@@ -153,8 +189,13 @@ public sealed class Orchestrator : IOrchestrator
         IReadOnlyList<SuccessCriterionDefinition>? successCriteria = null,
         ExecutionLimits? limits = null,
         IRunCheckpointStore? checkpoints = null,
-        RunSettings? settings = null)
+        RunSettings? settings = null,
+        WritableRoots? writableRoots = null)
     {
+        // The machine's own store unless a test points it somewhere temporary. Defaulted rather
+        // than required because a run that never writes outside the workspace never touches it, and
+        // making every caller name it would put a policy decision in the signature of every test.
+        _writableRoots = writableRoots ?? WritableRoots.Default;
         _checkpoints = checkpoints;
         _settings = settings;
         _successCriteria = successCriteria ?? Array.Empty<SuccessCriterionDefinition>();
@@ -259,7 +300,11 @@ public sealed class Orchestrator : IOrchestrator
         // Who this run is, what it has spent and what it has produced - and, from those, every event
         // it emits. See RunScope: the five factories that used to live here as local functions were
         // all closures over exactly these four things.
-        var scope = new RunScope(runId, taskId, budget, artifacts);
+        // Seeded with the folders this workspace was already given. Read once per run rather than
+        // per call: a person revoking a root in the middle of a run should not change what that run
+        // is allowed to do halfway through - it started under a policy, and the record says which.
+        var scope = new RunScope(
+            runId, taskId, budget, artifacts, _writableRoots.For(_workspace.RootPath));
 
         yield return scope.Event(
             EventKind.IntentReceived,
@@ -298,7 +343,8 @@ public sealed class Orchestrator : IOrchestrator
 
         if (plan.PromptTokens + plan.CompletionTokens > 0)
             yield return scope.Usage(
-                WorkEventPayload.WorkPurpose.Plan, models.Plan, plan.PromptTokens, plan.CompletionTokens);
+                WorkEventPayload.WorkPurpose.Plan, models.Plan, plan.PromptTokens, plan.CompletionTokens,
+                cached: plan.CachedPromptTokens);
 
         // A plan nobody could read is not a decision to do one thing. The two were the same value
         // and the same title until now, so a genuine multi-step request that arrived back as prose
@@ -437,7 +483,8 @@ public sealed class Orchestrator : IOrchestrator
                     if (review.PromptTokens + review.CompletionTokens > 0)
                         quick.Writer.TryWrite(scope.Usage(
                             WorkEventPayload.WorkPurpose.Review, models.Review!,
-                            review.PromptTokens, review.CompletionTokens));
+                            review.PromptTokens, review.CompletionTokens,
+                            cached: review.CachedPromptTokens));
 
                     if (review.Pass)
                     {
@@ -460,7 +507,8 @@ public sealed class Orchestrator : IOrchestrator
                         if (quickProven.Prompt + quickProven.Completion > 0)
                             quick.Writer.TryWrite(scope.Usage(
                                 WorkEventPayload.WorkPurpose.Review, models.Review!,
-                                quickProven.Prompt, quickProven.Completion));
+                                quickProven.Prompt, quickProven.Completion,
+                                cached: quickProven.Cached));
 
                         if (quickProven.Verdict.Sound)
                         {
@@ -880,7 +928,8 @@ public sealed class Orchestrator : IOrchestrator
                 if (review.PromptTokens + review.CompletionTokens > 0)
                     events.Writer.TryWrite(scope.Usage(
                         WorkEventPayload.WorkPurpose.Review, models.Review!,
-                        review.PromptTokens, review.CompletionTokens, stepNumber));
+                        review.PromptTokens, review.CompletionTokens, stepNumber,
+                        review.CachedPromptTokens));
 
                 if (review.Pass)
                 {
@@ -901,7 +950,7 @@ public sealed class Orchestrator : IOrchestrator
                         if (proven.Prompt + proven.Completion > 0)
                             events.Writer.TryWrite(scope.Usage(
                                 WorkEventPayload.WorkPurpose.Review, models.Review!,
-                                proven.Prompt, proven.Completion, stepNumber));
+                                proven.Prompt, proven.Completion, stepNumber, proven.Cached));
 
                         if (!proven.Verdict.Sound)
                         {
@@ -1651,7 +1700,7 @@ public sealed class Orchestrator : IOrchestrator
     /// "passed" - the caller treats it as nothing to act on, and nothing here pretends the step was
     /// proven.</para>
     /// </summary>
-    private async Task<(ProofVerdict Verdict, int Prompt, int Completion)?> ProveAsync(
+    private async Task<(ProofVerdict Verdict, int Prompt, int Completion, int? Cached)?> ProveAsync(
         string title, List<ChatMessage> convo, ExecutionJournal journal, int evidenceStart,
         IChatProvider reviewProvider, string reviewModel, CancellationToken ct)
     {
@@ -1687,7 +1736,8 @@ public sealed class Orchestrator : IOrchestrator
 
             // The claim is CHECKED, not believed: the numbers it names are resolved against the
             // calls that were actually made, in the same order and numbering the evidence used.
-            return (ProofAudit.Check(outcome.Claim, actions), outcome.PromptTokens, outcome.CompletionTokens);
+            return (ProofAudit.Check(outcome.Claim, actions), outcome.PromptTokens,
+                    outcome.CompletionTokens, outcome.CachedPromptTokens);
         }
         catch (OperationCanceledException)
         {
@@ -1697,7 +1747,9 @@ public sealed class Orchestrator : IOrchestrator
         {
             // Same rule as the reviewer beside it: a check that could not run has not approved
             // anything. It cost a step a retry before it costs a run a false green.
-            return (new ProofVerdict(false, "soundness check error: " + ex.Message), 0, 0);
+            // Null cached, not zero: the call did not come back, so there is nothing to report
+            // about what it would have cost.
+            return (new ProofVerdict(false, "soundness check error: " + ex.Message), 0, 0, null);
         }
     }
 
@@ -2038,14 +2090,18 @@ public sealed class Orchestrator : IOrchestrator
                    EventKind.DecisionResolved, summary,
                    WorkEventPayload.DecisionPayload(stepNo, tool, allowed));
 
-        WorkEvent Usage(int prompt, int completion)
+        WorkEvent Usage(int prompt, int completion, int? cached)
         {
             runBudget.TokensUsed(prompt, completion);
             return new(Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow, EventKind.UsageReported,
                        $"tokens: {prompt} in, {completion} out"
+                       // Only when there IS one, and only when it is not zero: "0 cached" on every
+                       // line of a run against a local model would be noise saying nothing, and the
+                       // reader who cares about caching is looking for the turns where it worked.
+                       + (cached is > 0 ? $" ({cached} cached)" : "")
                        + (providerId is { Length: > 0 } id ? $" ({id}/{model}, execute)" : ""),
                        WorkEventPayload.UsagePayload(prompt, completion, stepNo, providerId, model,
-                                                     WorkEventPayload.WorkPurpose.Execute));
+                                                     WorkEventPayload.WorkPurpose.Execute, cached));
         }
 
         // A reply that describes a call instead of making one earns exactly ONE re-ask per step; without
@@ -2069,7 +2125,38 @@ public sealed class Orchestrator : IOrchestrator
         // closing turn MEANS: after real work it is a missing sentence, before any it is silence.
         var actionsTaken = 0;
 
-        var toolDefs = _tools.Definitions.Where(d => Allows(worker, d.Name)).ToArray();
+        // What this ROLE carries, narrowed to what this RUN can actually do with it.
+        //
+        // The role filter alone is what shipped, and it is why a scheduled run on the Execute tier
+        // was handed run_command, run_powershell, git and docker while its handler was a refusal by
+        // construction. The model found out the only way it could - six denials, seven calls to the
+        // worker model, 28 167 prompt tokens - to learn a decision taken before the run started.
+        //
+        // Two gates, deliberately not merged: the role answers "may this WORKER do this", the offer
+        // answers "may this RUN do this". A role is saved and belongs to the person; a run's policy
+        // and its handler are chosen for the occasion.
+        var effective = EffectivePolicyFor(worker);
+        var offer = ToolOffers.For(
+            _tools.Definitions.Where(d => Allows(worker, d.Name)).Select(d => d.Name),
+            tool =>
+            {
+                var decision = _permissions.Evaluate(effective, tool, _tools.RequiredLevelOf(tool));
+                // Folded in HERE and not inside the rule, because it is the same upgrade the call
+                // site performs a few hundred lines below. A tool that always asks would otherwise
+                // be offered as allowed and then refused - the exact shape being fixed.
+                return decision == PermissionDecision.Allow && _tools.RequiresApprovalOf(tool)
+                    ? PermissionDecision.Ask
+                    : decision;
+            },
+            _decisions.CanApprove);
+
+        var toolDefs = _tools.Definitions.Where(d => offer.Offered.Contains(d.Name)).ToArray();
+
+        // Withheld VISIBLY. A run that quietly cannot use git and does not say so is a worse
+        // failure than the one above: the report would name a plan that could never have worked,
+        // with no reason in it anywhere.
+        if (offer.Sentence is { } withheldSentence)
+            yield return Ev(EventKind.ContextAssembled, withheldSentence);
 
         // The tool schemas are sent with every request and are not part of the message list, so they
         // have to be counted separately or the estimate is short by a constant few thousand
@@ -2175,7 +2262,9 @@ public sealed class Orchestrator : IOrchestrator
                             lastPromptTokens = prompted;
                             scale.Observe(sizeAtRequest, prompted);
                         }
-                        yield return Usage(usage.PromptTokens ?? 0, usage.CompletionTokens ?? 0);
+                        yield return Usage(
+                            usage.PromptTokens ?? 0, usage.CompletionTokens ?? 0,
+                            usage.CachedPromptTokens);
                         break;
                 }
             }
@@ -2376,6 +2465,16 @@ public sealed class Orchestrator : IOrchestrator
                     EffectivePolicyFor(worker), call.Name, _tools.RequiredLevelOf(call.Name));
                 if (gate == PermissionDecision.Allow && _tools.RequiresApprovalOf(call.Name))
                     gate = PermissionDecision.Ask;
+
+                // A tool kept out of this step's list can still be CALLED - a name remembered from
+                // earlier in the transcript, or invented - and when it is, the answer is the reason
+                // it was withheld, not a question. Asking a handler that cannot say yes would cost
+                // a round trip to reach the same refusal, which is the waste the withholding exists
+                // to remove; and the model is then told the tool will not become permitted, which
+                // is what stops it working around the refusal with a different tool.
+                if (offer.Withholds(call.Name))
+                    gate = PermissionDecision.Deny;
+
                 if (gate != PermissionDecision.Allow)
                 {
                     var approved = false;
@@ -2422,7 +2521,11 @@ public sealed class Orchestrator : IOrchestrator
                     }
                     else
                     {
-                        yield return Decided(call.Name, allowed: false, $"{call.Name}: blocked by policy");
+                        // The REASON, when there is a specific one. "Blocked by policy" was true of
+                        // a withheld tool and told the reader nothing they could act on; a run whose
+                        // shell was kept back because nobody was awake to approve it should say so.
+                        yield return Decided(call.Name, allowed: false,
+                            $"{call.Name}: {offer.Reason(call.Name) ?? "blocked by policy"}");
                     }
 
                     if (!approved)
@@ -2431,7 +2534,7 @@ public sealed class Orchestrator : IOrchestrator
                         // transcript lets the step finish green over an action that never happened.
                         var why = gate == PermissionDecision.Ask
                             ? "the user did not permit this action"
-                            : "blocked by the permission policy";
+                            : offer.Reason(call.Name) ?? "blocked by the permission policy";
                         openFailures.Failed(call, why);
                         journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson),
                                        ActionOutcome.Refused, why);
@@ -2468,6 +2571,38 @@ public sealed class Orchestrator : IOrchestrator
                 if (outside.Count > 0)
                 {
                     var where = string.Join(", ", outside.Select(w => w.Known ? w.Path : w.Token));
+
+                    // The same rule as the tool offer above, at the other place this engine puts a
+                    // question to a handler: one that cannot say yes is not asked.
+                    //
+                    // This is the case the tool offer does NOT cover, and it is reachable in the
+                    // configuration §9an recommends for schedules. At Execute the shells sit in
+                    // AskBefore and are withheld, so nothing gets this far; at Autonomous the shell
+                    // is allowed outright and rightly offered - and then every write it aims outside
+                    // the workspace becomes a question nobody is awake to answer. The answer is not
+                    // in doubt, so it is given here instead of fetched.
+                    //
+                    // Only the REQUEST is skipped. Everything below - the decision line, the
+                    // journal entry, the failure, the sentence the model is told - runs exactly as
+                    // it does when a person says no, because the outcome genuinely is the same.
+                    DecisionOutcome geography;
+
+                    if (!_decisions.CanApprove)
+                    {
+                        // The place, on the line that survives, since no request is emitted to
+                        // carry it. A refusal that does not say WHERE sends the reader looking.
+                        yield return Decided(call.Name, allowed: false,
+                            $"{call.Name}: kept to the workspace — {where}, and nobody is there to "
+                            + "allow it");
+
+                        var unattendedWhy = ShellGeography.Explain(outside, _workspace.RootPath);
+                        openFailures.Failed(call, "this run may not write outside the workspace");
+                        journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson),
+                                       ActionOutcome.Refused, "writes outside the workspace");
+                        messages.Add(ChatMessage.Tool(call.Id, "ERROR: " + unattendedWhy));
+                        continue;
+                    }
+
                     yield return Ev(EventKind.DecisionRequested,
                         $"{call.Name} appears to write outside the workspace: {where}");
 
@@ -2475,12 +2610,7 @@ public sealed class Orchestrator : IOrchestrator
                         taskId,
                         "Let this command write outside the workspace?",
                         $"Writes to {where}",
-                        new[]
-                        {
-                            new DecisionOption("once", "Allow once"),
-                            new DecisionOption("run", "Allow for this run"),
-                            new DecisionOption("deny", "Keep to the workspace"),
-                        },
+                        KeepOptions(outside),
                         // Nothing is recommended. Every other approval in this engine can lean on
                         // "this is the tool you configured"; this one is a guess about a path, and
                         // a highlighted button is an answer given on the reader's behalf.
@@ -2488,25 +2618,30 @@ public sealed class Orchestrator : IOrchestrator
                         Subject: null,
                         FullDetail: ShellGeography.Explain(outside, _workspace.RootPath)
                                   + "\n\nThe command in full:\n" + DescribeCall(call),
-                        // Never remembered past this process, and see GrantedRoots for why "for
-                        // this run" is as far as even the second option goes.
+                        // Still true, and it is about the TOOL: no "Allow run_command in this
+                        // workspace" button appears here or anywhere, whatever is answered below.
+                        // The "keep" option remembers a PLACE, which the boundary is made of, and
+                        // leaves every question about the shell itself exactly where it was.
                         SessionOnly: true,
                         Action: new BoundAction(
                             runId, call.Id, call.Name, call.ArgumentsJson, _workspace.RootPath));
 
-                    DecisionOutcome geography;
                     await _decisionGate.WaitAsync(ct);
                     try { geography = await _decisions.RequestAsync(geographyRequest, ct); }
                     finally { _decisionGate.Release(); }
 
                     var keepOut = string.Equals(geography.OptionId, "deny", StringComparison.OrdinalIgnoreCase);
                     var forRun = string.Equals(geography.OptionId, "run", StringComparison.OrdinalIgnoreCase);
+                    var keepIt = string.Equals(geography.OptionId, "keep", StringComparison.OrdinalIgnoreCase);
 
-                    // Kept to the workspace IS a refusal: this command does not run. The other two
+                    // Kept to the workspace IS a refusal: this command does not run. The other three
                     // answers let it run, and the difference between them is how long the permission
                     // lasts, not whether the call happened.
                     yield return Decided(call.Name, allowed: !keepOut,
-                        $"{call.Name}: {(keepOut ? "kept to the workspace" : forRun ? "allowed outside, for this run" : "allowed outside, once")}");
+                        $"{call.Name}: {(keepOut ? "kept to the workspace"
+                                       : keepIt ? "allowed outside, kept for this workspace"
+                                       : forRun ? "allowed outside, for this run"
+                                       : "allowed outside, once")}");
 
                     if (keepOut)
                     {
@@ -2521,9 +2656,20 @@ public sealed class Orchestrator : IOrchestrator
                         continue;
                     }
 
-                    if (forRun)
+                    if (forRun || keepIt)
                         foreach (var write in outside)
                             granted.Grant(write);
+
+                    // Kept: the same folders, written down where they outlive the process. Through
+                    // the store's own rules, so a refusal there (a drive root, a system folder,
+                    // Enactive's own settings) leaves the run-scoped grant standing and nothing on
+                    // the disk - the command still runs, and the person is simply asked again next
+                    // time rather than silently given something the store would not grant.
+                    if (keepIt)
+                        foreach (var root in granted.Roots)
+                            if (_writableRoots.Add(_workspace.RootPath, root) is { } refused)
+                                yield return Ev(EventKind.DecisionResolved,
+                                    $"Not kept for this workspace: {refused}");
                 }
 
                 actionsTaken++;

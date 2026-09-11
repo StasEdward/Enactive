@@ -1,0 +1,23 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="Enactive.App.Ui.HintView">
+
+    <!-- A question mark beside a label, and the answer behind it.
+
+         A Flyout rather than a ToolTip on purpose: this text is several sentences of
+         advice somebody reads while deciding, and a ToolTip vanishes the moment the
+         pointer moves toward it. The flyout stays until it is dismissed, which is what
+         "let me read that again" needs.
+
+         The button carries no keyboard focus (IsTabStop=False): it explains a control,
+         it is not a step on the way to using one, and a person tabbing through four
+         drop-downs should not have to pass four question marks. It is still reachable
+         by pointer, and the text it holds is never the only place a thing is said. -->
+    <Button x:Name="Dot" Classes="hintDot" Content="?" IsTabStop="False">
+        <Button.Flyout>
+            <Flyout Placement="RightEdgeAlignedTop" ShowMode="Standard">
+                <TextBlock x:Name="Body" Classes="hintBody" />
+            </Flyout>
+        </Button.Flyout>
+    </Button>
+</UserControl>

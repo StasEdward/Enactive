@@ -98,6 +98,26 @@ public sealed record DecisionOutcome(string OptionId, string? Because = null);
 public interface IDecisionHandler
 {
     Task<DecisionOutcome> RequestAsync(DecisionRequest request, CancellationToken ct);
+
+    /// <summary>
+    /// Whether an approval from this handler is possible at all.
+    ///
+    /// <para>False only where the answer is decided before the question is asked: an unattended run
+    /// (<c>UnattendedDecisionHandler</c>) and <c>--approve deny</c>. Everything with a person behind
+    /// it - a console prompt, a card on screen, a question relayed to a phone - says true, because
+    /// there the question is real and somebody who refuses once may allow the next time.</para>
+    ///
+    /// <para>The engine reads this to decide what to SHOW the model: a tool that could only ever be
+    /// refused is not offered at all (see <c>ToolOffers</c>). Without it the rule would have to be
+    /// inferred from the policy, and the policy does not know who is watching - which is precisely
+    /// the fact that decides the answer.</para>
+    ///
+    /// <para>Defaulted to true so that every existing handler keeps behaving exactly as it did, and
+    /// so that a handler added later has to say NO on purpose. Getting this wrong in the permissive
+    /// direction costs tokens; getting it wrong in the other direction takes away a question
+    /// somebody was going to answer, which is the worse mistake of the two.</para>
+    /// </summary>
+    bool CanApprove => true;
 }
 
 /// <summary>Decides whether a tool call is allowed, needs approval, or is blocked.</summary>

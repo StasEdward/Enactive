@@ -5,7 +5,7 @@
         x:Class="Enactive.App.Ui.WorkerEditWindow"
         x:DataType="vm:WorkerEditViewModel"
         Title="Team member"
-        Width="640" Height="720"
+        Width="640" Height="800"
         WindowStartupLocation="CenterOwner"
         Background="{DynamicResource Brand.Bg}"
         WindowDecorations="BorderOnly"
@@ -34,7 +34,14 @@
                          PlaceholderText="base instructions (honesty rules + global instructions are added automatically)" />
 
                 <!-- The tools list is data now: one row per tool, not a loop building checkboxes. -->
-                <TextBlock Classes="label" Text="Tools" />
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <TextBlock Classes="label" Text="Tools" />
+                    <!-- The one hint in this app whose wording depends on what is selected, which
+                         is why HintView.Text is a styled property rather than a plain one: it has
+                         to be bindable. It sat under the checkbox grid as a grey paragraph and
+                         pushed the rest of the form off the bottom of a 720px window. -->
+                    <local:HintView Text="{Binding ToolsHint}" VerticalAlignment="Center" />
+                </StackPanel>
                 <ItemsControl ItemsSource="{Binding Tools}">
                     <ItemsControl.ItemsPanel>
                         <ItemsPanelTemplate>
@@ -49,7 +56,6 @@
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
-                <TextBlock Classes="hint" TextWrapping="Wrap" Text="{Binding ToolsHint}" />
 
                 <TextBlock Classes="label" Text="Permission level" />
                 <ComboBox ItemsSource="{Binding Levels}" SelectedItem="{Binding Level}" />

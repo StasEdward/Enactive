@@ -57,7 +57,15 @@ public static class BuiltinTemplates
             },
             Limits: new ExecutionLimits(MaxSteps: 6),
             ReviewRequired: true,
-            Builtin: true),
+            Builtin: true)
+        {
+            // Unconditional: the goal is "build it, run its tests", and both parameters are
+            // commands. There is no way to fill this in that does not need a shell.
+            Needs = new[]
+            {
+                new TemplateNeed("build or test anything", new[] { "run_command", "run_powershell" })
+            }
+        },
 
         new TaskTemplate(
             Id: "investigate-build-failure",
@@ -187,7 +195,28 @@ public static class BuiltinTemplates
             // for one - so the run report will say "nothing verified this run", which is true.
             Limits: new ExecutionLimits(MaxSteps: 8),
             ReviewRequired: true,
-            Builtin: true),
+            Builtin: true)
+        {
+            // THE case FIX_PLAN §9an was written about. The goal never says "git" - it says
+            // "everything that has changed since the last commit", which needs a diff without
+            // naming one, which is why the test that checks a template's own WORDS could never have
+            // caught this. Written down here because only a person can read the meaning.
+            //
+            // Conditional, and the escape says so: point the scope at a folder and no diff is
+            // needed. Refusing a schedule that would have worked is the same failure as accepting
+            // one that would not.
+            Needs = new[]
+            {
+                new TemplateNeed(
+                    "see what has changed",
+                    new[] { "git", "run_command", "run_powershell" },
+                    Otherwise: "or set 'What to review' to a scope that is not a diff",
+                    // Only while the scope is still the default one, which IS a diff. Somebody who
+                    // has already pointed this at a folder needs no diff and must not be refused
+                    // for being unable to produce one.
+                    WhenParameterIsDefault: "scope")
+            }
+        },
 
         new TaskTemplate(
             Id: "improve-tests",
@@ -242,7 +271,16 @@ public static class BuiltinTemplates
             },
             Limits: new ExecutionLimits(MaxSteps: 10),
             ReviewRequired: true,
-            Builtin: true),
+            Builtin: true)
+        {
+            // Unconditional, and the goal spends three paragraphs on HOW to run the test command.
+            // A run that cannot run it can still write test files, which is the worst shape this
+            // template has: tests nobody has ever seen fail, delivered as though they had.
+            Needs = new[]
+            {
+                new TemplateNeed("run the tests it writes", new[] { "run_command", "run_powershell" })
+            }
+        },
 
         // ── Maintenance ──────────────────────────────────────────────────────
 
@@ -277,5 +315,15 @@ public static class BuiltinTemplates
             Limits: new ExecutionLimits(MaxSteps: 12),
             ReviewRequired: true,
             Builtin: true)
+        {
+            // Unconditional: the first instruction in the goal is to run a command and report what
+            // it returned.
+            Needs = new[]
+            {
+                new TemplateNeed(
+                    "find out what is outdated, or build after changing it",
+                    new[] { "run_command", "run_powershell" })
+            }
+        }
     };
 }

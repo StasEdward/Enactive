@@ -20,7 +20,25 @@ using Enactive.Core.Permissions;
 /// </summary>
 public sealed class UnattendedDecisionHandler : IDecisionHandler
 {
-    /// <summary>Every decision this handler refused, for the run report.</summary>
+    /// <summary>
+    /// No. Not "usually no" - this handler has one answer and it is known before any question is
+    /// put to it, which is what lets the engine stop offering the model tools it could only ever be
+    /// refused.
+    /// </summary>
+    public bool CanApprove => false;
+
+    /// <summary>
+    /// Every decision this handler was actually asked, and refused.
+    ///
+    /// <para>It said "for the run report" for five weeks and no report has ever read it — the run's
+    /// refusals reach a reader through the events and the journal, which is where every other
+    /// refusal in the engine goes. Said plainly here rather than left as a claim: a property that
+    /// describes a consumer it does not have is how somebody later builds on a feature that is not
+    /// there.</para>
+    ///
+    /// <para>What it IS good for, and what it is now used for: counting the questions that were put
+    /// to a handler which could only ever refuse them. An empty list is the whole point of §9an.</para>
+    /// </summary>
     public IReadOnlyList<string> Refusals => _refusals;
 
     private readonly List<string> _refusals = new();
