@@ -865,17 +865,28 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                     var wasFailed = wasSkipped
                         || (stepOutcome is not null && stepOutcome != StepOutcomeKind.Succeeded)
                         || (stepOutcome is null && ev.Summary.Contains("FAILED:", StringComparison.Ordinal));
+                    // The line under the title is the step's own REASON when it recorded one, and
+                    // the outcome word alone otherwise. It used to be three literals here, which is
+                    // how a run stopped by "nothing is listening at http://localhost:11434/v1"
+                    // showed a card that said "Failed" and nothing else, with the diagnosis sitting
+                    // unread in the payload this very method is holding. The wording is in Core
+                    // (RunOutcomeWords) because this file is in a WinExe no test can reach - which
+                    // is exactly where a literal like that gets written and never questioned.
+                    var stepSays = RunOutcomeWords.StepActivity(
+                        wasSkipped ? StepOutcomeKind.Skipped : stepOutcome,
+                        ev.OutcomeReason());
+
                     if (wasSkipped)
                     {
                         // Skipped is not failed: nothing went wrong in THIS step, and painting it red
                         // sends you looking for a fault that is in another card.
                         doneCard?.SetSkipped();
-                        doneCard?.SetActivity("Skipped — a dependency failed");
+                        doneCard?.SetActivity(stepSays);
                     }
                     else if (wasFailed)
                     {
                         doneCard?.SetFailed();
-                        doneCard?.SetActivity("Failed");
+                        doneCard?.SetActivity(stepSays);
                         doneCard?.ExpandForAttention();
                     }
                     else
