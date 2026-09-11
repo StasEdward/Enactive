@@ -656,6 +656,16 @@ public sealed class Orchestrator : IOrchestrator
         // end — not assumed to be success because the loop finished.
         var stepOutcomes = new Dictionary<Guid, StepOutcomeKind>();
 
+        // And WHY, for the ones that did not succeed, in the order they settled.
+        //
+        // Kept beside the outcomes rather than derived from them, because it cannot be: the reason
+        // is a sentence the step produced and the outcome is an enum. Without this the run's own
+        // explanation was assembled from the enums alone, so a run whose single failure carried a
+        // perfect diagnosis — "nothing is listening at http://localhost:11434/v1" — reported
+        // "1 step(s) failed" and threw the diagnosis away. A resumed step contributes nothing here:
+        // its reason belongs to the run that produced it.
+        var stepReasons = new List<string>();
+
         // Seeded on a resume, so the run's outcome accounts for the steps it INHERITED and not only
         // the ones it ran itself: a resume of a plan whose first step failed must not be able to
         // report Completed on the strength of the steps after it.
@@ -1008,7 +1018,15 @@ public sealed class Orchestrator : IOrchestrator
             }
 
             lock (stepOutcomes)
+            {
                 stepOutcomes[step.Id] = outcome;
+
+                // Only what did not succeed, and only when it has something to say. A step that
+                // failed without a reason contributes nothing rather than a blank the run would
+                // then have to decide how to render.
+                if (outcome != StepOutcomeKind.Succeeded && !string.IsNullOrWhiteSpace(outcomeReason))
+                    stepReasons.Add(outcomeReason!);
+            }
 
             // A rejected step puts its work back. Otherwise the gate stops only the REPORT: the run
             // says Failed while the rejected document — invented commands and all — stays in the
@@ -1223,14 +1241,18 @@ public sealed class Orchestrator : IOrchestrator
         }
 
         StepOutcomeKind[] outcomes;
+        string[] reasons;
         lock (stepOutcomes)
+        {
             outcomes = stepOutcomes.Values.ToArray();
+            reasons = stepReasons.ToArray();
+        }
 
         var runOutcome = RunOutcomeOf(outcomes);
         if (cycle && runOutcome == RunOutcomeKind.Completed)
             runOutcome = RunOutcomeKind.Incomplete;
 
-        var runReason = ExplainOutcome(outcomes, cycle, limitReason);
+        var runReason = ExplainOutcome(outcomes, reasons, cycle, limitReason);
 
         // The last word, and the only one in the run that is not somebody's opinion. Checked only
         // when everything else says the work is done: a run that already failed had its outcome
@@ -1350,30 +1372,22 @@ public sealed class Orchestrator : IOrchestrator
         return RunOutcomeKind.Completed;
     }
 
-    /// <summary>A short, honest summary of why a run did not simply complete.</summary>
+    /// <summary>
+    /// A short, honest summary of why a run did not simply complete.
+    ///
+    /// <para>The wording is <see cref="RunOutcomeWords.Explain"/>, in Core, so the sentence somebody
+    /// actually reads can be tested for what it says rather than only for the run reaching it. What
+    /// stays here is the gathering: which steps settled how, and what each of them gave as a reason.
+    /// That was the half that was missing — the counts were assembled from the OUTCOMES alone, so a
+    /// run whose only failure had a perfect diagnosis reported "1 step(s) failed" and dropped it.
+    /// </para>
+    /// </summary>
     private static string? ExplainOutcome(
-        IReadOnlyCollection<StepOutcomeKind> steps, bool cycle, string? limit = null)
-    {
-        var parts = new List<string>();
-
-        // First, because it EXPLAINS the skipped steps that follow it: without it a run that hit its
-        // ceiling reports "4 step(s) skipped" and nothing about why.
-        if (!string.IsNullOrWhiteSpace(limit))
-            parts.Add(limit!);
-
-        var failed = steps.Count(s => s == StepOutcomeKind.Failed);
-        var rejected = steps.Count(s => s == StepOutcomeKind.ReviewRejected);
-        var incomplete = steps.Count(s => s == StepOutcomeKind.Incomplete);
-        var skipped = steps.Count(s => s == StepOutcomeKind.Skipped);
-
-        if (failed > 0) parts.Add($"{failed} step(s) failed");
-        if (rejected > 0) parts.Add($"{rejected} step(s) rejected by the reviewer");
-        if (incomplete > 0) parts.Add($"{incomplete} step(s) did not finish");
-        if (skipped > 0) parts.Add($"{skipped} step(s) skipped");
-        if (cycle) parts.Add("the plan had unresolvable dependencies");
-
-        return parts.Count == 0 ? null : string.Join("; ", parts);
-    }
+        IReadOnlyCollection<StepOutcomeKind> steps,
+        IEnumerable<string?> reasons,
+        bool cycle,
+        string? limit = null)
+        => RunOutcomeWords.Explain(steps, reasons, cycle, limit);
 
     /// <summary>
     /// How a tool loop ended, filled in by <see cref="RunToolLoopAsync"/>. A class, not a return
@@ -2673,7 +2687,15 @@ public sealed class Orchestrator : IOrchestrator
                 }
 
                 actionsTaken++;
-                yield return Ev(EventKind.ToolInvoked, $"{call.Name} {Compact(call.ArgumentsJson)}");
+
+                // The tool's name as a VALUE beside the sentence, not only at the front of it.
+                // ProjectFacts decides from these whether the run reached into the workspace at
+                // all, and reading a tool name off the head of a message written for a person
+                // would make that wording load-bearing.
+                yield return new WorkEvent(
+                    Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow, EventKind.ToolInvoked,
+                    $"{call.Name} {Compact(call.ArgumentsJson)}",
+                    WorkEventPayload.ToolPayload(call.Name, stepNo));
 
                 var toolContext = new ToolContext(
                     TaskId: taskId,

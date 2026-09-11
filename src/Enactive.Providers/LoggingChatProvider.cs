@@ -65,12 +65,46 @@ public sealed class LoggingChatProvider : IChatProvider
         var calls = new SortedDictionary<int, (string? Id, string? Name, StringBuilder Args)>();
         string? finish = null;
         int? promptTokens = null, completionTokens = null;
-        var faulted = false;
+
+        // What the stream threw, if it threw.
+        //
+        // This used to be a `faulted` flag that nothing ever set, read by the `finally` below to
+        // choose Warn over Info — a guard that enforced nothing while looking configured. The
+        // reason it was never set is a language rule: a `yield return` cannot live inside a `try`
+        // that CATCHES, so the obvious catch around the loop does not compile, and the flag was
+        // left behind when it was removed.
+        //
+        // The cost, found in a log Stas sent on 2026-09-11 at 16:03 after starting a run with
+        // Ollama switched off: the call threw, and the log said
+        // "INF  response ← ollama/gemma4:31b-cloud (0 chars, 0 tool call(s))" — informational, and
+        // indistinguishable from a model that legitimately said nothing. The exception's message
+        // never reached the log at all from here. The non-streaming path below has logged it
+        // correctly all along, which is what made the gap invisible: the two halves of one
+        // decorator disagreed, and the half in use was the quiet one.
+        //
+        // The fix is to enumerate by hand so the MOVE is inside a catch and the `yield return`
+        // stays outside it.
+        Exception? failure = null;
 
         try
         {
-            await foreach (var evt in _inner.StreamChatAsync(request, ct))
+            await using var events = _inner.StreamChatAsync(request, ct).GetAsyncEnumerator(ct);
+
+            while (true)
             {
+                ChatStreamEvent evt;
+                try
+                {
+                    if (!await events.MoveNextAsync())
+                        break;
+                    evt = events.Current;
+                }
+                catch (Exception ex)
+                {
+                    failure = ex;
+                    throw;
+                }
+
                 switch (evt)
                 {
                     case TextDelta t:
@@ -104,15 +138,28 @@ public sealed class LoggingChatProvider : IChatProvider
         }
         finally
         {
-            _log.Write(faulted ? LogLevel.Warn : LogLevel.Info, LogSource.Llm,
-                $"response ← {_providerId}/{request.Model}"
-                    + $" ({text.Length} chars, {calls.Count} tool call(s)"
-                    + (reasoning.Length > 0 ? $", {reasoning.Length} chars of reasoning" : "")
-                    + (finish is null ? "" : $", finish={finish}")
-                    + (completionTokens is { } c ? $", {c} out-tokens" : "") + ")",
-                RenderResponse(text.ToString(), calls, finish, promptTokens, completionTokens,
-                               reasoning.ToString()),
-                request.Model);
+            // A call that threw is an ERROR line carrying the provider's own words, matching the
+            // non-streaming path exactly — the divergence between the two is what hid this.
+            // Whatever was received before the throw still goes in the body: a stream that failed
+            // half way is more legible with its half than without it.
+            if (failure is { } thrown)
+                _log.Error(LogSource.Llm,
+                    $"response ← {_providerId}/{request.Model} FAILED: {thrown.Message}",
+                    RenderResponse(text.ToString(), calls, finish, promptTokens, completionTokens,
+                                   reasoning.ToString())
+                        + Environment.NewLine + new string('-', 40) + Environment.NewLine
+                        + thrown,
+                    request.Model);
+            else
+                _log.Write(LogLevel.Info, LogSource.Llm,
+                    $"response ← {_providerId}/{request.Model}"
+                        + $" ({text.Length} chars, {calls.Count} tool call(s)"
+                        + (reasoning.Length > 0 ? $", {reasoning.Length} chars of reasoning" : "")
+                        + (finish is null ? "" : $", finish={finish}")
+                        + (completionTokens is { } c ? $", {c} out-tokens" : "") + ")",
+                    RenderResponse(text.ToString(), calls, finish, promptTokens, completionTokens,
+                                   reasoning.ToString()),
+                    request.Model);
         }
     }
 

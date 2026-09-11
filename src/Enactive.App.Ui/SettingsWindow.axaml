@@ -44,6 +44,8 @@
                                 Content="Account" Command="{Binding ShowAccountCommand}" />
                         <Button Classes="nav" Classes.on="{Binding IsRemote}"
                                 Content="Remote access" Command="{Binding ShowRemoteCommand}" />
+                        <Button Classes="nav" Classes.on="{Binding IsWritableRoots}"
+                                Content="Writable folders" Command="{Binding ShowWritableRootsCommand}" />
                         <Button Classes="nav" Classes.on="{Binding IsAbout}"
                                 Content="About" Command="{Binding ShowAboutCommand}" />
 
@@ -272,6 +274,44 @@
                     </ScrollViewer>
 
                 </DockPanel>
+
+                <!-- Writable folders: what has been granted, and the only place it can be taken
+                     back. Revoking is immediate and does not wait for Save - see the pane's own
+                     sentence, and RevokeWritableRoot for why. -->
+                <Panel IsVisible="{Binding IsWritableRoots}">
+                    <DockPanel LastChildFill="True" Margin="12">
+                        <TextBlock DockPanel.Dock="Top" Classes="hint" Margin="0,0,0,8"
+                                   Text="A run may only write inside its workspace. When a command tries to write somewhere else you are asked, and one of the answers is &quot;keep for this workspace&quot; — those are listed here. Revoking takes effect at once and is not undone by Cancel: taking a permission away is not a setting." />
+
+                        <TextBlock DockPanel.Dock="Top" Classes="hint" Margin="0,0,0,8"
+                                   IsVisible="{Binding !WritableRootRows.Count}"
+                                   Text="{Binding WritableRootsEmpty}" />
+
+                        <ScrollViewer>
+                            <ItemsControl ItemsSource="{Binding WritableRootRows}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:WritableRootRow">
+                                        <Border Classes="card" Margin="0,0,0,6" Padding="10">
+                                            <Grid ColumnDefinitions="*,Auto">
+                                                <StackPanel Grid.Column="0" Spacing="2">
+                                                    <TextBlock Text="{Binding Folder}" FontWeight="SemiBold" />
+                                                    <TextBlock Classes="hint" Text="{Binding Workspace}" />
+                                                    <TextBlock Classes="hint"
+                                                               IsVisible="{Binding IsOrphan}"
+                                                               Foreground="{DynamicResource Brand.Warning}"
+                                                               Text="Still in force. Revoking removes every folder kept for that workspace, because there is no path left to name one by." />
+                                                </StackPanel>
+                                                <Button Grid.Column="1" Classes="danger"
+                                                        VerticalAlignment="Center"
+                                                        Content="Revoke" Command="{Binding RevokeCommand}" />
+                                            </Grid>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                    </DockPanel>
+                </Panel>
 
                 <Panel IsVisible="{Binding IsAiGeneral}">
                     <ScrollViewer>

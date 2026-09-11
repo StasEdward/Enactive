@@ -195,6 +195,7 @@ internal sealed partial class SettingsViewModel : ObservableObject
             OnPropertyChanged(nameof(IsMcp));
             OnPropertyChanged(nameof(IsTemplates));
             OnPropertyChanged(nameof(IsRemote));
+            OnPropertyChanged(nameof(IsWritableRoots));
 
             // Checked when the list is opened, once. Not on every visit: these are network calls
             // made without being asked, and a light that re-checks each time somebody passes
@@ -278,6 +279,7 @@ internal sealed partial class SettingsViewModel : ObservableObject
         InitializeMcp();
         InitializeTemplates(workspaceRoot);
         InitializeRemote();
+        InitializeWritableRoots();
 
         _numCtxText = _working.NumCtx?.ToString() ?? string.Empty;
         _globalInstructions = _working.GlobalInstructions;
