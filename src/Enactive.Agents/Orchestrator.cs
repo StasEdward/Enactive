@@ -2114,7 +2114,38 @@ public sealed class Orchestrator : IOrchestrator
         // closing turn MEANS: after real work it is a missing sentence, before any it is silence.
         var actionsTaken = 0;
 
-        var toolDefs = _tools.Definitions.Where(d => Allows(worker, d.Name)).ToArray();
+        // What this ROLE carries, narrowed to what this RUN can actually do with it.
+        //
+        // The role filter alone is what shipped, and it is why a scheduled run on the Execute tier
+        // was handed run_command, run_powershell, git and docker while its handler was a refusal by
+        // construction. The model found out the only way it could - six denials, seven calls to the
+        // worker model, 28 167 prompt tokens - to learn a decision taken before the run started.
+        //
+        // Two gates, deliberately not merged: the role answers "may this WORKER do this", the offer
+        // answers "may this RUN do this". A role is saved and belongs to the person; a run's policy
+        // and its handler are chosen for the occasion.
+        var effective = EffectivePolicyFor(worker);
+        var offer = ToolOffers.For(
+            _tools.Definitions.Where(d => Allows(worker, d.Name)).Select(d => d.Name),
+            tool =>
+            {
+                var decision = _permissions.Evaluate(effective, tool, _tools.RequiredLevelOf(tool));
+                // Folded in HERE and not inside the rule, because it is the same upgrade the call
+                // site performs a few hundred lines below. A tool that always asks would otherwise
+                // be offered as allowed and then refused - the exact shape being fixed.
+                return decision == PermissionDecision.Allow && _tools.RequiresApprovalOf(tool)
+                    ? PermissionDecision.Ask
+                    : decision;
+            },
+            _decisions.CanApprove);
+
+        var toolDefs = _tools.Definitions.Where(d => offer.Offered.Contains(d.Name)).ToArray();
+
+        // Withheld VISIBLY. A run that quietly cannot use git and does not say so is a worse
+        // failure than the one above: the report would name a plan that could never have worked,
+        // with no reason in it anywhere.
+        if (offer.Sentence is { } withheldSentence)
+            yield return Ev(EventKind.ContextAssembled, withheldSentence);
 
         // The tool schemas are sent with every request and are not part of the message list, so they
         // have to be counted separately or the estimate is short by a constant few thousand
@@ -2421,6 +2452,16 @@ public sealed class Orchestrator : IOrchestrator
                     EffectivePolicyFor(worker), call.Name, _tools.RequiredLevelOf(call.Name));
                 if (gate == PermissionDecision.Allow && _tools.RequiresApprovalOf(call.Name))
                     gate = PermissionDecision.Ask;
+
+                // A tool kept out of this step's list can still be CALLED - a name remembered from
+                // earlier in the transcript, or invented - and when it is, the answer is the reason
+                // it was withheld, not a question. Asking a handler that cannot say yes would cost
+                // a round trip to reach the same refusal, which is the waste the withholding exists
+                // to remove; and the model is then told the tool will not become permitted, which
+                // is what stops it working around the refusal with a different tool.
+                if (offer.Withholds(call.Name))
+                    gate = PermissionDecision.Deny;
+
                 if (gate != PermissionDecision.Allow)
                 {
                     var approved = false;
@@ -2467,7 +2508,11 @@ public sealed class Orchestrator : IOrchestrator
                     }
                     else
                     {
-                        yield return Decided(call.Name, allowed: false, $"{call.Name}: blocked by policy");
+                        // The REASON, when there is a specific one. "Blocked by policy" was true of
+                        // a withheld tool and told the reader nothing they could act on; a run whose
+                        // shell was kept back because nobody was awake to approve it should say so.
+                        yield return Decided(call.Name, allowed: false,
+                            $"{call.Name}: {offer.Reason(call.Name) ?? "blocked by policy"}");
                     }
 
                     if (!approved)
@@ -2476,7 +2521,7 @@ public sealed class Orchestrator : IOrchestrator
                         // transcript lets the step finish green over an action that never happened.
                         var why = gate == PermissionDecision.Ask
                             ? "the user did not permit this action"
-                            : "blocked by the permission policy";
+                            : offer.Reason(call.Name) ?? "blocked by the permission policy";
                         openFailures.Failed(call, why);
                         journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson),
                                        ActionOutcome.Refused, why);
@@ -2513,6 +2558,38 @@ public sealed class Orchestrator : IOrchestrator
                 if (outside.Count > 0)
                 {
                     var where = string.Join(", ", outside.Select(w => w.Known ? w.Path : w.Token));
+
+                    // The same rule as the tool offer above, at the other place this engine puts a
+                    // question to a handler: one that cannot say yes is not asked.
+                    //
+                    // This is the case the tool offer does NOT cover, and it is reachable in the
+                    // configuration §9an recommends for schedules. At Execute the shells sit in
+                    // AskBefore and are withheld, so nothing gets this far; at Autonomous the shell
+                    // is allowed outright and rightly offered - and then every write it aims outside
+                    // the workspace becomes a question nobody is awake to answer. The answer is not
+                    // in doubt, so it is given here instead of fetched.
+                    //
+                    // Only the REQUEST is skipped. Everything below - the decision line, the
+                    // journal entry, the failure, the sentence the model is told - runs exactly as
+                    // it does when a person says no, because the outcome genuinely is the same.
+                    DecisionOutcome geography;
+
+                    if (!_decisions.CanApprove)
+                    {
+                        // The place, on the line that survives, since no request is emitted to
+                        // carry it. A refusal that does not say WHERE sends the reader looking.
+                        yield return Decided(call.Name, allowed: false,
+                            $"{call.Name}: kept to the workspace — {where}, and nobody is there to "
+                            + "allow it");
+
+                        var unattendedWhy = ShellGeography.Explain(outside, _workspace.RootPath);
+                        openFailures.Failed(call, "this run may not write outside the workspace");
+                        journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson),
+                                       ActionOutcome.Refused, "writes outside the workspace");
+                        messages.Add(ChatMessage.Tool(call.Id, "ERROR: " + unattendedWhy));
+                        continue;
+                    }
+
                     yield return Ev(EventKind.DecisionRequested,
                         $"{call.Name} appears to write outside the workspace: {where}");
 
@@ -2536,7 +2613,6 @@ public sealed class Orchestrator : IOrchestrator
                         Action: new BoundAction(
                             runId, call.Id, call.Name, call.ArgumentsJson, _workspace.RootPath));
 
-                    DecisionOutcome geography;
                     await _decisionGate.WaitAsync(ct);
                     try { geography = await _decisions.RequestAsync(geographyRequest, ct); }
                     finally { _decisionGate.Release(); }

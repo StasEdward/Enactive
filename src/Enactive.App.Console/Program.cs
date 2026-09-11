@@ -743,6 +743,13 @@ sealed class EmptyServiceProvider : IServiceProvider
 /// </summary>
 sealed class FixedDecisionHandler(string answer) : IDecisionHandler
 {
+    /// <summary>
+    /// Only <c>--approve allow</c> can ever say yes. Under <c>--approve deny</c> this handler is an
+    /// unattended run by another name, and the engine withholds the tools it would refuse rather
+    /// than letting the model discover them one refusal at a time.
+    /// </summary>
+    public bool CanApprove => string.Equals(answer, "allow", StringComparison.OrdinalIgnoreCase);
+
     public Task<DecisionOutcome> RequestAsync(DecisionRequest request, CancellationToken ct)
     {
         // The option that IS this answer, never a guess at one. A request whose options are not
