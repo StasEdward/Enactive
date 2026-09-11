@@ -60,8 +60,11 @@ public sealed class AnthropicProvider : IChatProvider
     public async Task<ChatCompletion> CompleteAsync(ChatRequest request, CancellationToken ct)
     {
         var systemParts = new List<string>();
-        var wire = new List<object>();
+        var wire = new List<Dictionary<string, object?>>();
 
+        // Content blocks are dictionaries rather than anonymous types for one reason: a cache
+        // breakpoint is a property added to ONE of them after the whole list is built, and there is
+        // no way to add a property to an anonymous type.
         foreach (var m in request.Messages)
         {
             switch (m.Role)
@@ -72,34 +75,52 @@ public sealed class AnthropicProvider : IChatProvider
                     break;
 
                 case ChatRole.Tool:
-                    wire.Add(new
+                    wire.Add(Turn("user", new Dictionary<string, object?>
                     {
-                        role = "user",
-                        content = new object[]
-                        {
-                            new { type = "tool_result", tool_use_id = m.ToolCallId ?? "", content = m.Content ?? "" }
-                        }
-                    });
+                        ["type"] = "tool_result",
+                        ["tool_use_id"] = m.ToolCallId ?? "",
+                        ["content"] = m.Content ?? ""
+                    }));
                     break;
 
                 case ChatRole.Assistant when m.ToolCalls is { Count: > 0 } calls:
-                    var blocks = new List<object>();
+                    var blocks = new List<Dictionary<string, object?>>();
                     if (!string.IsNullOrEmpty(m.Content))
-                        blocks.Add(new { type = "text", text = m.Content });
+                        blocks.Add(new Dictionary<string, object?> { ["type"] = "text", ["text"] = m.Content });
                     foreach (var call in calls)
-                        blocks.Add(new { type = "tool_use", id = call.Id, name = call.Name, input = ToElement(call.ArgumentsJson) });
-                    wire.Add(new { role = "assistant", content = blocks.ToArray() });
+                        blocks.Add(new Dictionary<string, object?>
+                        {
+                            ["type"] = "tool_use",
+                            ["id"] = call.Id,
+                            ["name"] = call.Name,
+                            ["input"] = ToElement(call.ArgumentsJson)
+                        });
+                    wire.Add(Turn("assistant", blocks.ToArray()));
                     break;
 
                 default:
-                    wire.Add(new
-                    {
-                        role = m.Role == ChatRole.Assistant ? "assistant" : "user",
-                        content = new object[] { new { type = "text", text = m.Content ?? "" } }
-                    });
+                    wire.Add(Turn(
+                        m.Role == ChatRole.Assistant ? "assistant" : "user",
+                        new Dictionary<string, object?> { ["type"] = "text", ["text"] = m.Content ?? "" }));
                     break;
             }
         }
+
+        // ── Cache breakpoints ────────────────────────────────────────────────
+        //
+        // Anthropic forms prefixes in the order tools -> system -> messages, and a change at any
+        // level invalidates that level and every level after it. So the breakpoints go where the
+        // content is FIXED for longest: the tool definitions (unchanged for a whole run), then the
+        // system prompt (likewise), then the end of the transcript (where the growth is, and where
+        // the money is - a twelve-step run re-sends the same prefix a few dozen times).
+        //
+        // Four are allowed and three are used, which leaves room for a fourth without a rewrite.
+        //
+        // Nothing is guarded on length. A prompt below the model's minimum - 1,024 tokens on Sonnet,
+        // 512 on Opus 5 - is simply processed without caching and costs nothing extra; there is no
+        // error and no penalty, so a guess about the token count here would add a rule that only
+        // ever gets it wrong.
+        MarkForCaching(wire.Count > 0 ? LastBlockOf(wire[^1]) : null);
 
         // Build + send in a local function so we can retry once without `temperature`: newer Anthropic models
         // (e.g. Opus 5.x) reject it with 400 "temperature is deprecated for this model", while older ones still
@@ -113,17 +134,36 @@ public sealed class AnthropicProvider : IChatProvider
                 ["max_tokens"] = maxTokens,
                 ["messages"] = wire.ToArray()
             };
+            // An ARRAY of blocks, not a string. A string cannot carry cache_control, and the system
+            // prompt is the second-largest fixed thing in every request.
             if (systemParts.Count > 0)
-                payload["system"] = string.Join("\n", systemParts);
+            {
+                var system = new Dictionary<string, object?>
+                {
+                    ["type"] = "text",
+                    ["text"] = string.Join("\n", systemParts)
+                };
+                MarkForCaching(system);
+                payload["system"] = new object[] { system };
+            }
+
             if (includeTemperature && request.Temperature is { } temperature)
                 payload["temperature"] = temperature;
+
             if (request.Tools is { Count: > 0 } tools)
-                payload["tools"] = tools.Select(t => new
+            {
+                // The breakpoint goes on the LAST definition, because it caches everything before
+                // it: tools are one prefix, and the tool set does not change within a run.
+                var defined = tools.Select(t => new Dictionary<string, object?>
                 {
-                    name = t.Name,
-                    description = t.Description,
-                    input_schema = ToElement(t.JsonSchema)
+                    ["name"] = t.Name,
+                    ["description"] = t.Description,
+                    ["input_schema"] = ToElement(t.JsonSchema)
                 }).ToArray();
+
+                MarkForCaching(defined[^1]);
+                payload["tools"] = defined;
+            }
 
             // Structured outputs (FIX_PLAN §9c). GA and not beta-gated, and compatible with tool
             // use - but incompatible with prefill and with citations, and the schema subset is
@@ -264,15 +304,64 @@ public sealed class AnthropicProvider : IChatProvider
 
         var finish = root.TryGetProperty("stop_reason", out var sr) && sr.ValueKind == JsonValueKind.String ? sr.GetString() : null;
 
-        int? inputTokens = null, outputTokens = null;
+        // ── What the turn actually cost ──────────────────────────────────────
+        //
+        // THREE fields, not one. With a cache breakpoint in the request, `input_tokens` counts only
+        // what follows the LAST breakpoint; the rest of the prompt is in cache_read_input_tokens
+        // (served from the cache, billed at 0.1x) and cache_creation_input_tokens (written to it,
+        // billed at 1.25x). Reading input_tokens alone would report a fraction of what was spent -
+        // and the run would look CHEAPER precisely because the accounting had broken, which is the
+        // one direction a bug in a cost number must never fail.
+        //
+        // The three are summed into PromptTokens so every consumer keeps meaning what it meant; the
+        // cached share rides along separately, because it is the only way to see the feature is on.
+        int? inputTokens = null, outputTokens = null, cached = null, created = null;
         if (root.TryGetProperty("usage", out var usage))
         {
             if (usage.TryGetProperty("input_tokens", out var it) && it.TryGetInt32(out var itv)) inputTokens = itv;
             if (usage.TryGetProperty("output_tokens", out var ot) && ot.TryGetInt32(out var otv)) outputTokens = otv;
+            if (usage.TryGetProperty("cache_read_input_tokens", out var cr) && cr.TryGetInt32(out var crv)) cached = crv;
+            if (usage.TryGetProperty("cache_creation_input_tokens", out var cc) && cc.TryGetInt32(out var ccv)) created = ccv;
         }
 
+        // Null when the response reported nothing at all - "this provider does not count" and "this
+        // turn cost zero" are different facts and are shown differently.
+        int? promptTokens = inputTokens is null && cached is null && created is null
+            ? null
+            : (inputTokens ?? 0) + (cached ?? 0) + (created ?? 0);
+
         var contentText = text.Length > 0 ? text.ToString() : null;
-        return new ChatCompletion(new ChatMessage(ChatRole.Assistant, contentText, toolCalls), finish, inputTokens, outputTokens);
+        return new ChatCompletion(
+            new ChatMessage(ChatRole.Assistant, contentText, toolCalls),
+            finish, promptTokens, outputTokens, CachedPromptTokens: cached);
+    }
+
+    /// <summary>One turn on the wire: a role and its content blocks.</summary>
+    private static Dictionary<string, object?> Turn(string role, params Dictionary<string, object?>[] blocks)
+        => new() { ["role"] = role, ["content"] = blocks };
+
+    /// <summary>
+    /// The last content block of a turn — where a breakpoint for the transcript belongs, because a
+    /// prefix ends at a block and the end of the last turn is the end of everything sent.
+    /// </summary>
+    private static Dictionary<string, object?>? LastBlockOf(Dictionary<string, object?> turn)
+        => turn.TryGetValue("content", out var content)
+           && content is Dictionary<string, object?>[] { Length: > 0 } blocks
+            ? blocks[^1]
+            : null;
+
+    /// <summary>
+    /// Puts a cache breakpoint on a block: everything up to and including it is cached.
+    ///
+    /// <para>Five minutes, the default, and deliberately not an hour. An hour costs twice a normal
+    /// input token to write instead of 1.25x, and only pays back if runs in one workspace come
+    /// close together — which is a thing to measure on a real machine, not to decide here. Steps
+    /// follow each other in seconds, so five minutes covers the case this exists for.</para>
+    /// </summary>
+    private static void MarkForCaching(Dictionary<string, object?>? block)
+    {
+        if (block is not null)
+            block["cache_control"] = new { type = "ephemeral" };
     }
 
     private static JsonElement ToElement(string json)

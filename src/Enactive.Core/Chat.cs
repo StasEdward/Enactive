@@ -48,13 +48,32 @@ public sealed record ChatRequest(
     string? ResponseSchema = null);
 
 /// <summary>A completed assistant turn (content and/or tool calls).</summary>
+/// <param name="PromptTokens">
+/// EVERY input token this turn was billed for.
+///
+/// <para>Under prompt caching that is a sum rather than a field. Anthropic's <c>input_tokens</c>
+/// counts only what follows the last cache breakpoint, with the rest in
+/// <c>cache_read_input_tokens</c> and <c>cache_creation_input_tokens</c>; reading the one field
+/// would report a fraction of what was spent, and the number would look BETTER precisely because
+/// the accounting had broken. The adapter sums the three, so every consumer of this keeps meaning
+/// what it meant.</para>
+/// </param>
+/// <param name="CachedPromptTokens">
+/// How many of <paramref name="PromptTokens"/> were served from a cache, when the provider says so.
+///
+/// <para>Null for a provider that does not report it, which is a different fact from zero: zero
+/// means caching was attempted and missed, and null means nobody asked. It is also the only honest
+/// way to see the feature is working at all — a run whose prefix is being cached and a run whose is
+/// not look identical from every other number.</para>
+/// </param>
 public sealed record ChatCompletion(
     ChatMessage Message,
     string? FinishReason,
     int? PromptTokens,
     int? CompletionTokens,
     /// <summary>The model's own deliberation, where the provider returns it separately. See <see cref="ReasoningDelta"/>.</summary>
-    string? Thinking = null);
+    string? Thinking = null,
+    int? CachedPromptTokens = null);
 
 /// <summary>One event out of the streaming pipeline. Adapters map raw SSE to these.</summary>
 public abstract record ChatStreamEvent;
