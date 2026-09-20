@@ -102,6 +102,12 @@ Use `copy_file` rather than reading a file and writing it back. `read_file` retu
 
 Every file tool writes through the artifact store, so a step a reviewer rejects can be undone — including a deletion, which is restored with its contents. Shell effects are not journalled and cannot be undone.
 
+One area is deliberately outside all of that: `.enactive/scratch/`, the worker's own working area. The state folder around it stays closed to tools; this one folder is open, and writes to it go straight to disk. They are not staged, not journalled, not counted among the paths the step changed, and not reverted when a step is rejected. It exists because a helper script, a scratch copy or a command's captured output had nowhere to go but the user's project, where a throwaway became a change the reviewer had to judge. Under staging it also matters that the write lands immediately: a staged script does not exist for the command written to run it. Use the workspace proper for the deliverable and this folder for everything that only serves the work.
+
+Two consequences follow from its being unstaged. `delete_file` works there even in a run that stages its changes — there is no proposal to be unable to express, so an agent that may create a working file can also clear it up; everywhere else under staging the refusal stands. And `search_files` leaves it out of a whole-workspace sweep, so a long captured log cannot spend the match and character caps on the worker's own notes, but searches it when you name it with `path` — which is how you find an error in a build log too long to read a window at a time.
+
+Nothing in the area survives a week. The first write that goes there in a run removes entries nothing has touched for seven days, taking a folder's age from the newest file anywhere inside it rather than from the folder itself. It is swept by age rather than emptied per run because a background run and a foreground one can share a workspace, and the second to start would otherwise delete the first's scripts while they were in use.
+
 `run_command` uses `cmd.exe` on Windows and a shell on Unix. `run_powershell` avoids embedding PowerShell syntax into a cmd command string. Starting a shell in the workspace is not OS-level containment of everything that shell can do.
 
 ### 7. Keep evidence and apply execution guards

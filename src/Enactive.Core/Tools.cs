@@ -1,5 +1,6 @@
 namespace Enactive.Core.Tools;
 
+using System.Text.Json;
 using Enactive.Core.Artifacts;
 using Enactive.Core.Context;
 using Enactive.Core.Permissions;
@@ -51,8 +52,83 @@ public static class MutatingTools
     private static readonly HashSet<string> Names =
         new(StringComparer.Ordinal) { "write_file", "edit_file", "move_file", "create_directory" };
 
-    /// <summary>Whether a call by this name changes the workspace.</summary>
+    /// <summary>
+    /// Whether a call by this name is the KIND of call that writes something.
+    ///
+    /// <para>Asked by the stall guard and the open-failure tracker, whose question is "did this
+    /// step get anywhere", and for them the answer is about the name alone: a write into the
+    /// worker's own scratch area is still the step doing something it had not done, which is
+    /// exactly what those guards are counting. See <see cref="ChangedTheWorkspace"/> for the other
+    /// question, which is not this one.</para>
+    /// </summary>
     public static bool Changes(string tool) => Names.Contains(tool);
+
+    /// <summary>
+    /// Every tool that changes the PROJECT, and which of its arguments name the path it changes.
+    ///
+    /// <para><c>copy_file</c> lists only its destination: the source is read, not changed.
+    /// <c>move_file</c> lists both, because the file disappears from one place as well as
+    /// appearing at the other.</para>
+    /// </summary>
+    private static readonly Dictionary<string, string[]> ChangedPaths = new(StringComparer.Ordinal)
+    {
+        ["write_file"] = new[] { "path" },
+        ["edit_file"] = new[] { "path" },
+        ["create_directory"] = new[] { "path" },
+        ["delete_file"] = new[] { "path" },
+        ["move_file"] = new[] { "from", "to" },
+        ["copy_file"] = new[] { "to" }
+    };
+
+    /// <summary>
+    /// Whether THIS call changed the user's project — the question <c>ProofAudit</c> asks before it
+    /// will believe a step that reports there was nothing to do.
+    ///
+    /// <para><b>Why this is not <see cref="Changes(string)"/>.</b> That one answers by name, and
+    /// two different questions were sharing it. A write into
+    /// <c>.enactive/scratch/</c> is progress — the stall guard should count it — and it is NOT a
+    /// change to the project: the stores do not journal it, the reviewer is not shown it, and a
+    /// rejected step does not undo it. Counting it here would refuse a true "nothing needed doing"
+    /// because the agent had written itself a helper script on the way to finding that out.</para>
+    ///
+    /// <para><b>And it is a longer list.</b> <see cref="Names"/> predates <c>delete_file</c> and
+    /// <c>copy_file</c>, so a step that removed a file could report that nothing needed doing and
+    /// be believed. Left out of <see cref="Names"/> deliberately rather than by oversight — adding
+    /// them there would change what the stall guard counts as progress, which is a different
+    /// decision and not one this needed.</para>
+    ///
+    /// <para>Unparseable arguments count as a change. "I could not tell" must not become
+    /// "nothing happened" in the one check standing between a step and being believed.</para>
+    /// </summary>
+    public static bool ChangedTheWorkspace(string tool, string? argumentsJson, string workspaceRoot)
+    {
+        if (!ChangedPaths.TryGetValue(tool, out var names))
+            return false;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(
+                string.IsNullOrWhiteSpace(argumentsJson) ? "{}" : argumentsJson);
+
+            foreach (var name in names)
+            {
+                if (!doc.RootElement.TryGetProperty(name, out var value)
+                    || value.ValueKind != JsonValueKind.String)
+                {
+                    return true;   // a path this cannot read is a path it cannot clear
+                }
+
+                if (!WorkspaceGuard.IsScratchRelative(workspaceRoot, value.GetString()))
+                    return true;
+            }
+
+            return false;
+        }
+        catch (JsonException)
+        {
+            return true;
+        }
+    }
 }
 
 /// <summary>

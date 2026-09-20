@@ -3,6 +3,7 @@ namespace Enactive.Tools;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using Enactive.Core.Context;
 using Enactive.Core.Permissions;
 using Enactive.Core.Tools;
 
@@ -22,7 +23,10 @@ public sealed class RunPowerShellTool : ITool
         Description: "Run a PowerShell script on Windows and return its stdout/stderr and exit code. "
                    + "PREFER this over run_command for anything using PowerShell (Get-WmiObject/Get-CimInstance, "
                    + "Get-PSDrive, pipes, quotes): write the script plainly — NO shell quote-escaping is needed. "
-                   + "To save results, take the returned output and write it with write_file; do not redirect to a file here. "
+                   + "To save results: write the returned output with write_file when it came back WHOLE, or - when "
+                   + "the result says it was cut - redirect into '" + WorkspaceGuard.ScratchPrefix
+                   + "/' and copy_file that into place, which keeps every byte. Output you redirected and did not "
+                   + "read is output you have not seen. "
                    + "A non-zero exit code is a FAILURE unless you declared it in 'expectedExitCodes' before running - "
                    + "do that when the exit code is part of the answer you want (a test runner reporting failing tests), "
                    + "never to excuse a script that was supposed to succeed.",

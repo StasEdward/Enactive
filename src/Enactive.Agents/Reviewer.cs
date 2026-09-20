@@ -378,7 +378,19 @@ public sealed class Reviewer
         + "do its work: use it only when the calls themselves say the work was not needed.\n\n"
         + "A call marked ERROR or REFUSED did not do its job and cannot be what shows an objective "
         + "was met. A call marked NOTHING THERE ran and answered — a file that is absent, an offset "
-        + "past the end — and can be exactly what shows one.";
+        + "past the end — and can be exactly what shows one.\n\n"
+        // The evidence header already says a long RESULT keeps its start and end. What it does not
+        // say, and what only this pass needs, is what to do about it when your answer is a list of
+        // call numbers: the engine can also leave whole calls out, and the older ones are the first
+        // to go. ExecutionJournal.HeadAndTail records the incident that taught this on the other
+        // pass - a reviewer read "1,645 characters cut from the middle" as proof the file did not
+        // contain what was quoted, and failed the step twice for a value inside those characters -
+        // and says the rule "belongs in the reviewer's instructions, where it is said ONCE". It was
+        // said once, in the execution reviewer's, and this pass never got it.
+        + "The evidence may be SHORTENED: a long result keeps its start and its end with the cut "
+        + "marked between them, and a note may say the oldest calls are not listed at all. Neither "
+        + "is an absence. Cite a call whose result was cut exactly as you would any other, and "
+        + "never answer \"no\" because what would have shown it is in a part you were not shown.";
 
     /// <summary>The claim, or null when the answer carried none.</summary>
     internal static ProofClaim? ParseProof(string text)

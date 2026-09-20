@@ -30,7 +30,10 @@ public sealed class SearchFilesTool : ITool
         Name: "search_files",
         Description: "Search the workspace for a regular expression and return matching lines with "
                    + "their file and line number. Optionally restrict to file names matching a glob "
-                   + "(e.g. \"*.cs\"). Use this to FIND things instead of reading files one by one.",
+                   + "(e.g. \"*.cs\"). Use this to FIND things instead of reading files one by one. "
+                   + "Build output and your own working area are left out of a whole-workspace "
+                   + "sweep; to search inside one, name it with 'path' (e.g. \"" + WorkspaceGuard.ScratchPrefix
+                   + "\" to search a long command output you saved there).",
         JsonSchema: Schema);
 
     public PermissionLevel RequiredLevel => PermissionLevel.Observe;
@@ -208,7 +211,7 @@ public sealed class SearchFilesTool : ITool
 
         foreach (var file in Directory.EnumerateFiles(root, string.IsNullOrWhiteSpace(glob) ? "*" : glob, options))
         {
-            if (!Skipped(file))
+            if (!Skipped(root, file))
                 yield return file;
         }
     }
@@ -216,9 +219,31 @@ public sealed class SearchFilesTool : ITool
     private static readonly string[] SkippedFolders =
         { WorkspaceGuard.ReservedFolder, "bin", "obj", "node_modules", ".git", ".vs", "dist", "packages" };
 
-    private static bool Skipped(string file)
+    /// <summary>
+    /// Whether this file sits in one of the skipped folders, asked of the path BELOW the search
+    /// root rather than of the whole path.
+    ///
+    /// <para>It used to split the absolute path, which made the names above mean two things they
+    /// were never meant to mean:</para>
+    /// <list type="number">
+    /// <item><b>A workspace whose own location contains one of them was unsearchable.</b> A project
+    /// under <c>C:\dev\packages\thing</c> or <c>~/bin/tool</c> matched on a segment of its own
+    /// address, so every file was skipped and every search answered "No matches" - a wrong answer
+    /// stated as a fact, which is the failure the skipped-file counters in this tool exist to
+    /// prevent.</item>
+    /// <item><b>Pointing a search AT a skipped folder could not work.</b> The worker's scratch area
+    /// is under <c>.enactive/</c>, so a search rooted there matched on the root's own segment and
+    /// returned nothing, always. Counting from the root gives the behaviour a person expects from
+    /// every other search tool: the noisy places are left out of a sweep, and looked in when you
+    /// name them. That is the whole of how scratch is reachable - there is no special case for it
+    /// here, and none is wanted.</item>
+    /// </list>
+    /// </summary>
+    private static bool Skipped(string searchRoot, string file)
     {
-        foreach (var segment in file.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
+        var relative = Path.GetRelativePath(searchRoot, file);
+
+        foreach (var segment in relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
             foreach (var skip in SkippedFolders)
                 if (string.Equals(segment, skip, WorkspaceGuard.Comparison))
                     return true;

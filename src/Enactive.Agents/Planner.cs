@@ -69,12 +69,19 @@ public enum PlanReadout
 /// </summary>
 public sealed class Planner
 {
+    /// <param name="maxSteps">
+    /// The run's own step budget, when it has one — <c>ExecutionLimits.MaxSteps</c> from the
+    /// template. Told to the planner rather than approximated by a number written into the prompt:
+    /// a plan longer than the budget cannot finish, and <c>RunBudget</c> stops it partway with the
+    /// work half done. Null when nothing limits the run, and then nothing is said.
+    /// </param>
     public async Task<PlanResult> PlanAsync(
-        string request, WorkContext context, IChatProvider provider, string model, CancellationToken ct)
+        string request, WorkContext context, IChatProvider provider, string model,
+        CancellationToken ct, int? maxSteps = null)
     {
         var messages = new List<ChatMessage>
         {
-            ChatMessage.System(SystemPrompt),
+            ChatMessage.System(SystemPromptFor(maxSteps)),
             ChatMessage.User(request)
         };
 
@@ -250,8 +257,24 @@ public sealed class Planner
         + "together - e.g. 'run script X and save its output to file Y' is ONE quick_action, not multiple steps. "
         + "For a \"task\", each step is an object with a \"title\" and \"dependsOn\": the 0-based indices of earlier "
         + "steps that must finish first ([] = can start immediately). Model the REAL dependencies as a graph — steps "
-        + "that do not depend on each other must have independent dependsOn so they are not forced into a chain. Use "
-        + "2-4 steps max. NEVER split one command into 'do it' / 'capture it' / 'save it'. Keep the title under 8 words. "
+        + "that do not depend on each other must have independent dependsOn so they are not forced into a chain. "
+        // "Use 2-4 steps max" was here, and it was the wrong quantity to limit - the same mistake
+        // Orchestrator.StallLimit describes having made with a flat cap of 12 turns: "Work is not
+        // the thing to limit; a project with a hundred files needs a hundred turns and no setting
+        // should have to say so." Nothing in FIX_PLAN records an incident that earned the number,
+        // and it contradicted the product outright: every built-in template declares a step budget
+        // of 6 to 12, so none of them could ever reach its own limit. It also worked against the
+        // rest of this prompt - forcing work into four steps makes each one a mixture of trivial
+        // and complex, which must then be routed as complex, so the expensive model does the
+        // trivial parts; and it capped the parallelism the dependsOn graph above exists to express.
+        //
+        // What is left is the rule that was doing the actual work: no ceremonial stages. The real
+        // ceiling is ExecutionLimits.MaxSteps - data, visible in the template editor, enforced by
+        // RunBudget - and it is now told to the planner rather than guessed at (see SystemPromptFor).
+        + "A step is one thing that can succeed or fail on its own: that is the unit a reviewer judges, the unit a "
+        + "rejection undoes, and the unit a model is chosen for. Use as many steps as the work genuinely has, and "
+        + "do not invent stages that only name parts of one action - NEVER split one command into 'do it' / "
+        + "'capture it' / 'save it'. Keep the title under 8 words. "
         + "For each step also set \"complexity\", which decides WHICH MODEL runs it: \"trivial\" (a rename, one "
         + "obvious edit, a one-line command) goes to a small fast model, \"normal\" to the standard one, and "
         + "\"complex\" to a much slower and far more expensive model. \"normal\" IS THE DEFAULT — use it unless the "
@@ -264,4 +287,23 @@ public sealed class Planner
         + "tool actually returned stays \"normal\", however many pages it is, and so does describing files that ARE "
         + "in this workspace — those can be read instead of recalled. No more than TWO steps in a plan may be "
         + "\"complex\".";
+
+    /// <summary>
+    /// The system prompt, plus the run's real step budget when it has one.
+    ///
+    /// <para>The budget is a fact about THIS run, not a rule of planning, which is why it is
+    /// appended rather than written into the constant. A template that allows twelve steps and one
+    /// that allows six want different plans for the same request, and a number baked into the
+    /// prompt can only be wrong for one of them — which is exactly what "2-4 steps max" was: every
+    /// built-in template declares six to twelve, and none of them could reach its own limit.</para>
+    ///
+    /// <para>Said as a consequence rather than as an order. A plan that exceeds the budget does not
+    /// get trimmed; it runs until the budget is gone and stops with the work unfinished, and that
+    /// is the thing worth avoiding.</para>
+    /// </summary>
+    internal static string SystemPromptFor(int? maxSteps)
+        => maxSteps is > 0
+            ? SystemPrompt + $" This run may take at most {maxSteps} step(s) in total — a plan longer than that "
+                           + "stops partway with the work unfinished, so do not exceed it."
+            : SystemPrompt;
 }

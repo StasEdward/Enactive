@@ -339,7 +339,13 @@ public sealed class Orchestrator : IOrchestrator
         var plan = resume is not null
             ? PlanOf(resume)
             : await InScopeAsync(runId, taskId, null,
-                () => _planner.PlanAsync(intent.RawText, intent.Context, models.PlanProvider, models.Plan.Model, ct));
+                // The run's own step budget goes to the planner. Without it the planner guessed -
+                // it carried "use 2-4 steps max", which no template wanted and every template
+                // contradicted - and a plan it made too long for the budget does not get trimmed,
+                // it runs until the budget is gone and stops with the work half done.
+                () => _planner.PlanAsync(
+                    intent.RawText, intent.Context, models.PlanProvider, models.Plan.Model, ct,
+                    _limits.MaxSteps));
 
         if (plan.PromptTokens + plan.CompletionTokens > 0)
             yield return scope.Usage(
@@ -1750,7 +1756,7 @@ public sealed class Orchestrator : IOrchestrator
 
             // The claim is CHECKED, not believed: the numbers it names are resolved against the
             // calls that were actually made, in the same order and numbering the evidence used.
-            return (ProofAudit.Check(outcome.Claim, actions), outcome.PromptTokens,
+            return (ProofAudit.Check(outcome.Claim, actions, _workspace.RootPath), outcome.PromptTokens,
                     outcome.CompletionTokens, outcome.CachedPromptTokens);
         }
         catch (OperationCanceledException)
@@ -2761,6 +2767,18 @@ public sealed class Orchestrator : IOrchestrator
 
                 foreach (var reference in result.Artifacts)
                 {
+                    // The worker's own working area is not an artifact of the run. The stores
+                    // already keep it out of the journal and out of the scope's touched paths, but
+                    // this list is a SECOND record of what was written and it is the one the
+                    // reviewer is handed as "Files changed" - and the one the run's closing line
+                    // and the artifact panel are built from. Filtering in the stores and not here
+                    // is exactly the shape of bug this codebase keeps finding: a rule enforced in
+                    // two of the three places that need it. A code review template whose goal says
+                    // "change nothing except the report" would otherwise be shown a second changed
+                    // file and could fail a step over the agent's own notes.
+                    if (WorkspaceGuard.IsScratchRelative(_workspace.RootPath, reference.RelativePath))
+                        continue;
+
                     lock (artifacts)
                         artifacts.Add(reference);
                     yield return new WorkEvent(

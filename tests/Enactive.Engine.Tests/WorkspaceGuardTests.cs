@@ -104,6 +104,77 @@ public sealed class WorkspaceGuardTests
         Assert.StartsWith(fx.Root, full, WorkspaceGuard.Comparison);
     }
 
+    // ── The scratch carve-out ────────────────────────────────────────────────
+    // The one place under the state folder a tool may write. Everything here is about the line
+    // between it and its neighbours: enactive.db and the undo journal's backups sit beside it.
+
+    [Theory]
+    [InlineData(".enactive/scratch")]
+    [InlineData(".enactive/scratch/probe.ps1")]
+    [InlineData(".enactive/scratch/nested/deep/out.txt")]
+    public void The_scratch_area_is_writable_by_tools(string relative)
+    {
+        using var fx = new EngineFixture();
+        var full = WorkspaceGuard.ResolveInside(fx.Root, relative);
+        Assert.StartsWith(fx.Root, full, WorkspaceGuard.Comparison);
+        Assert.True(WorkspaceGuard.IsScratch(fx.Root, full));
+    }
+
+    /// <summary>
+    /// The carve-out is exactly two segments. A name that merely starts the same way, a sibling of
+    /// scratch, and a path that climbs back out of it are all still the state folder — the last
+    /// one because Path.GetFullPath collapses `..` long before the reserved check is reached, so
+    /// `.enactive/scratch/../enactive.db` arrives as `.enactive/enactive.db`.
+    /// </summary>
+    [Theory]
+    [InlineData(".enactive/scratchy/x.txt")]
+    [InlineData(".enactive/scratch-of-mine/x.txt")]
+    [InlineData(".enactive/undo/x.txt")]
+    [InlineData(".enactive/scratch/../enactive.db")]
+    [InlineData(".enactive/scratch/../../.enactive/enactive.db")]
+    [InlineData("scratch/x.txt/../../.enactive/enactive.db")]
+    public void Everything_beside_the_scratch_area_is_still_refused(string relative)
+    {
+        using var fx = new EngineFixture();
+        Assert.Throws<ArgumentException>(() => WorkspaceGuard.ResolveInside(fx.Root, relative));
+    }
+
+    /// <summary>
+    /// A plain folder called <c>scratch</c> at the top of the workspace is the user's own and has
+    /// nothing to do with this: it is ordinary content, writable as ordinary content, and NOT the
+    /// scratch area. Getting this backwards would quietly stop journalling a real project folder.
+    /// </summary>
+    [Fact]
+    public void A_top_level_folder_called_scratch_is_ordinary_content()
+    {
+        using var fx = new EngineFixture();
+        var full = WorkspaceGuard.ResolveInside(fx.Root, "scratch/notes.md");
+        Assert.False(WorkspaceGuard.IsScratch(fx.Root, full));
+    }
+
+    /// <summary>
+    /// The carve-out is tested against the EFFECTIVE path, like every other rule here. A junction
+    /// named <c>scratch</c> that leads to the undo journal is not scratch just because of what it
+    /// is called — which is the same lesson as the junction test above, asked of the new rule.
+    /// </summary>
+    [Fact]
+    public void A_link_named_scratch_that_leads_into_the_state_folder_is_refused()
+    {
+        using var fx = new EngineFixture();
+        var state = Path.Combine(fx.Root, ".enactive");
+        var undo = Path.Combine(state, "undo");
+        Directory.CreateDirectory(undo);
+
+        if (!TryLinkDirectory(Path.Combine(state, "scratch"), undo))
+        {
+            RequireLinkSupport();
+            return;
+        }
+
+        Assert.Throws<ArgumentException>(
+            () => WorkspaceGuard.ResolveInside(fx.Root, ".enactive/scratch/stolen.txt"));
+    }
+
     /// <summary>
     /// Fails on Windows, where a directory junction always works, so a link test can never pass by
     /// quietly doing nothing. On other platforms an unprivileged symlink may be refused, and there

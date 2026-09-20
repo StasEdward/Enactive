@@ -1,6 +1,7 @@
 ﻿namespace Enactive.Tools;
 
 using System.Text.Json;
+using Enactive.Core.Context;
 using Enactive.Core.Permissions;
 using Enactive.Core.Tools;
 
@@ -69,7 +70,13 @@ public sealed class DeleteFileTool : ITool
             // Asked BEFORE anything happens, and for the same reason move_file asks it: a run that
             // stages its changes has no way to express "gone", so the deletion could only be
             // pretended. Saying so is better than a proposal nobody can apply.
-            if (!ctx.Artifacts.CanRemove)
+            //
+            // Except in the worker's own working area, which was never staged in the first place:
+            // the file is on disk, so removing it is just removing it. CanRemove is asked without
+            // a path and can only answer for the workspace it stages; here we have the path, and
+            // it knows more. Without this an agent could create a scratch file under staging and
+            // then not be allowed to clear up after itself.
+            if (!ctx.Artifacts.CanRemove && !WorkspaceGuard.IsScratch(ctx.WorkspaceRoot, target))
                 return ToolResults.Fail(
                     $"'{path}' is still there: this run stages changes for review, and staging cannot "
                     + "express a deletion. Delete it yourself once the staged changes are applied, or "

@@ -227,12 +227,21 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
         var fullPath = ResolveInsideRoot(relativePath);
         var key = WorkspaceGuard.KeyFor(_root, fullPath);
 
+        // The worker's own working area is not the work. It is written, it is readable, and it is
+        // deliberately absent from everything downstream: no backup, no journal entry, and so no
+        // appearance in TouchedBy - which is what the reviewer is shown as "what this step
+        // changed" and what a rejected step's revert is asked to put back. A helper script the
+        // agent wrote to do the job is not a change to the project, and judging it as one is how a
+        // sound piece of work gets rejected over its scaffolding.
+        var scratch = WorkspaceGuard.IsScratch(_root, fullPath);
+        if (scratch) SweepScratchOnce();
+
         // Everything below is one operation as far as this file is concerned - see _fileGates.
         var gate = GateFor(key);
         await gate.WaitAsync(ct);
         try
         {
-            var existed = File.Exists(fullPath);
+            var existed = !scratch && File.Exists(fullPath);
             var beforeHash = existed ? FileHash.OfFile(fullPath) : null;
             var backupPath = existed ? BackUp(fullPath) : null;
 
@@ -247,10 +256,13 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
             // exception now propagates with the file exactly as it was.
             await AtomicWrite.Replace(fullPath, write);
 
-            var afterHash = FileHash.OfFile(fullPath)!;
-            lock (_journalGate)
-                _journal.Add(new FileWriteRecord(
-                    relativePath, existed, beforeHash, backupPath, afterHash, owner, ++_sequence, key));
+            if (!scratch)
+            {
+                var afterHash = FileHash.OfFile(fullPath)!;
+                lock (_journalGate)
+                    _journal.Add(new FileWriteRecord(
+                        relativePath, existed, beforeHash, backupPath, afterHash, owner, ++_sequence, key));
+            }
         }
         finally
         {
@@ -286,6 +298,16 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
             if (!File.Exists(fullPath))
                 throw new FileNotFoundException(
                     $"No such file in this workspace: {relativePath}", relativePath);
+
+            // The same rule as the write, and for the same reason: the worker's own working area is
+            // not the work. Journalling a scratch deletion would put it in front of the reviewer as
+            // something the step removed, and make a rejected step restore a file nobody wanted
+            // back. Tidying up after itself must not read as a change to the project.
+            if (WorkspaceGuard.IsScratch(_root, fullPath))
+            {
+                File.Delete(fullPath);
+                return;
+            }
 
             var beforeHash = FileHash.OfFile(fullPath);
             var backupPath = BackUp(fullPath);
@@ -512,6 +534,24 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
         {
             return null;
         }
+    }
+
+    private int _scratchSwept;
+
+    /// <summary>
+    /// Clears what earlier runs left in the scratch area, once per store, on the way to the first
+    /// write that goes there.
+    ///
+    /// <para>Lazy and here rather than at the three places a host starts a run: it is the same
+    /// argument as <see cref="PruneOldBackups"/> - the folder's housekeeping belongs with the code
+    /// that writes the folder, and a run that never uses the area should not pay for tidying it.
+    /// <see cref="ScratchArea.Sweep"/> swallows its own failures, so this cannot be the reason a
+    /// write fails.</para>
+    /// </summary>
+    private void SweepScratchOnce()
+    {
+        if (Interlocked.Exchange(ref _scratchSwept, 1) == 0)
+            ScratchArea.Sweep(_root, DateTimeOffset.UtcNow);
     }
 
     /// <summary>
