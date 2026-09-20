@@ -1471,6 +1471,15 @@ public sealed class Orchestrator : IOrchestrator
         /// <c>git ["status"]</c> that worked, a truthful report, a file written — and a run failed
         /// for two calls that never happened.</para>
         /// </param>
+        /// <summary>
+        /// The operation each open SHELL failure was attempting, where it is one.
+        ///
+        /// <para>The counterpart of <see cref="_fileOf"/>. A failed write is made good by a later
+        /// write to the same FILE, whatever the call looked like; a failed command had no such
+        /// notion and could only be made good by re-running the byte-identical string.</para>
+        /// </summary>
+        private readonly Dictionary<string, string> _shellOf = new(StringComparer.Ordinal);
+
         public void Failed(ToolCall call, string? error, bool didNotRun = false)
         {
             var key = Key(call);
@@ -1478,6 +1487,8 @@ public sealed class Orchestrator : IOrchestrator
 
             if (FileNamedBy(call) is { } file)
                 _fileOf[key] = file;
+            else if (ShellOperation.For(call.Name, call.ArgumentsJson) is { } operation)
+                _shellOf[key] = operation;
             else if (didNotRun || MutatingTools.Changes(call.Name))
                 _namedNothing[key] = call.Name;
         }
@@ -1524,6 +1535,16 @@ public sealed class Orchestrator : IOrchestrator
                                             .Select(p => p.Key).ToArray())
                     Close(open);
 
+            // The same operation, run again and working, makes the earlier attempt good - whatever
+            // flags, redirection or pipe it is wearing this time. Measured 2026-09-20: a run wrote
+            // 63 passing tests and was reported Incomplete because its first `dotnet test … 2>&1`
+            // failed for a missing package, and the verification after the fix was spelled
+            // `dotnet test … --nologo 2>&1 | …`. Cause fixed, result proved, different string.
+            if (ShellOperation.For(call.Name, call.ArgumentsJson) is { } operation)
+                foreach (var open in _shellOf.Where(p => p.Value == operation)
+                                             .Select(p => p.Key).ToArray())
+                    Close(open);
+
             foreach (var open in _namedNothing.Where(p => p.Value == call.Name)
                                               .Select(p => p.Key).ToArray())
                 Close(open);
@@ -1534,6 +1555,7 @@ public sealed class Orchestrator : IOrchestrator
             _byCall.Remove(key);
             _foundNothing.Remove(key);
             _fileOf.Remove(key);
+            _shellOf.Remove(key);
             _namedNothing.Remove(key);
         }
 
