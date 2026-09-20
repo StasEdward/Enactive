@@ -1,5 +1,6 @@
 namespace Enactive.Core.Context;
 
+using System.Text.RegularExpressions;
 using Enactive.Core.Tools;
 
 /// <summary>
@@ -69,7 +70,7 @@ public static class ShellGeography
             ? StringComparer.Ordinal
             : StringComparer.OrdinalIgnoreCase);
 
-        foreach (var candidate in Candidates(Tokenize(command!)))
+        foreach (var candidate in Candidates(Tokenize(WithLiteralsResolved(command!))))
         {
             if (Classify(candidate, roots[0], roots) is not { } write)
                 continue;
@@ -80,6 +81,57 @@ public static class ShellGeography
         }
 
         return found;
+    }
+
+    /// <summary>
+    /// Variables the script gives a literal value to, substituted into the rest of it.
+    ///
+    /// <para><b>Why.</b> The worker is told to put helper scripts in
+    /// <c>.enactive/scratch/</c>, and the natural PowerShell way to build one is to name the root
+    /// once: <c>$root = ".enactive\scratch\probe"; New-Item -Path "$root\Calc"</c>. Every token
+    /// after that is a variable, so every one of them was reported as a write whose place is
+    /// unknown - and a question about a path that is plainly inside the workspace was put to the
+    /// person on every such command. Measured 2026-09-20: a run did exactly this, the question was
+    /// answered conservatively, and the agent was refused the working area it had been instructed
+    /// to use.</para>
+    ///
+    /// <para><b>What it may claim.</b> Nothing new. This does not decide anything - it makes the
+    /// same guess with more of the command read. A variable it cannot resolve stays unknown and
+    /// still asks; a variable it resolves is then judged like any written-down path, which can
+    /// come out inside OR outside. Substituting wrongly - a name reassigned later, a value built
+    /// from another variable - can hide a write, and that is the same false negative this class
+    /// already documents as expected: the adversary here is a mistaken agent, not a clever one.
+    /// </para>
+    ///
+    /// <para>Only literal assignments, and only from this command. An assignment whose value is
+    /// itself an expression teaches nothing and is left alone.</para>
+    /// </summary>
+    private static string WithLiteralsResolved(string command)
+    {
+        // $name = "literal"  /  $name='literal'  — PowerShell, which is where this bites.
+        var assignments = Regex.Matches(
+            command, @"\$(?<name>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?<q>[""'])(?<value>[^""'$]*)\k<q>",
+            RegexOptions.None, TimeSpan.FromSeconds(1));
+
+        if (assignments.Count == 0)
+            return command;
+
+        var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (Match m in assignments)
+            values[m.Groups["name"].Value] = m.Groups["value"].Value;
+
+        // The assignment itself is not a write, and leaving it in would turn the left-hand side
+        // into a candidate the moment its name is replaced by a path.
+        var text = Regex.Replace(
+            command, @"\$[A-Za-z_][A-Za-z0-9_]*\s*=\s*([""'])[^""'$]*\1\s*;?", " ",
+            RegexOptions.None, TimeSpan.FromSeconds(1));
+
+        foreach (var (name, value) in values)
+            text = Regex.Replace(
+                text, @"\$\{?" + Regex.Escape(name) + @"\}?", value.Replace("$", "$$"),
+                RegexOptions.IgnoreCase, TimeSpan.FromSeconds(1));
+
+        return text;
     }
 
     /// <summary>
