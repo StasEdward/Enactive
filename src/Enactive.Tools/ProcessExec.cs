@@ -3,6 +3,7 @@ namespace Enactive.Tools;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using Enactive.Core.Execution;
 using Enactive.Core.Tools;
 
 /// <summary>
@@ -13,7 +14,22 @@ using Enactive.Core.Tools;
 /// </summary>
 internal static class ProcessExec
 {
-    private const int MaxOutputChars = 6000;
+    /// <summary>
+    /// How much of a command's output reaches the model.
+    ///
+    /// <para>Doubled from 6,000 on 2026-09-20, with the evidence in hand: a run of
+    /// <c>dotnet test --verbosity normal</c> on a two-project solution spent more than six
+    /// thousand characters on restore chatter and certificate notices before reaching anything
+    /// about tests, and the output was shortened 52 times in one session. The captured ceiling is
+    /// <see cref="MaxCapturedChars"/> — ten times this — so the data was there and withheld.</para>
+    ///
+    /// <para>Not raised further, and this is the reason: the result goes into the transcript and
+    /// stays there. A local model with <c>num_ctx</c> of 16,384 holds about 49,000 characters in
+    /// total, so a handful of results at this size is already most of its window, and what
+    /// rescues it then is <c>Transcript.Elide</c> throwing the oldest ones away. A generous cap
+    /// buys one good answer and then starts destroying the conversation that needed it.</para>
+    /// </summary>
+    private const int MaxOutputChars = 12_000;
 
     /// <summary>
     /// How much of one stream is held in memory while a process runs. Far more than
@@ -131,8 +147,13 @@ internal static class ProcessExec
         if (stderr.Length > 0)
             combined += "\n[stderr]\n" + stderr;
         combined = combined.Trim();
-        if (combined.Length > MaxOutputChars)
-            combined = combined[..MaxOutputChars] + "\n… (truncated)";
+        // The START and the END, not the first N characters. A program reports its outcome last,
+        // so head-only shortening hands the model the part with no answer in it: on 2026-09-20 a
+        // step wrote its tests, ran them, and could not tell whether they passed - the summary was
+        // past the cut - then spent eight turns trying to pipe the output into a file and died on
+        // the stall guard. ExecutionJournal fixed exactly this on 2026-09-07 for the REVIEWER and
+        // the rule stayed private to it; the model that ran the command still got head-only.
+        combined = Shortening.ToFit(combined, MaxOutputChars);
 
         if (outputCutShort)
             combined += "\n… (the command finished, but something it started is still running and "

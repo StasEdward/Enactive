@@ -156,15 +156,31 @@ public sealed class CapsAnnounceThemselvesTests
 
     // ── one per limit: the code, past the cap, saying so ────────────────────
 
-    /// <summary>ProcessExec.MaxOutputChars — a build log longer than the model is shown.</summary>
+    /// <summary>
+    /// ProcessExec.MaxOutputChars — a build log longer than the model is shown, and the part it
+    /// is shown.
+    ///
+    /// <para>This used to assert only that the word "truncated" appeared, which the head-only cut
+    /// satisfied while throwing away the answer. A program reports its outcome LAST: on 2026-09-20
+    /// a step wrote its tests, ran them, and could not tell whether they had passed, because the
+    /// summary was past the cut. So the assertion is now on what survives.</para>
+    /// </summary>
     [Fact]
     public void Command_output_past_the_cap_says_it_was_truncated()
     {
-        var result = ProcessExec.BuildResult(
-            "Command", 0, string.Join('\n', Enumerable.Range(0, 2_000).Select(i => $"line {i} of a long build")), "");
+        var log = string.Join('\n', Enumerable.Range(0, 2_000).Select(i => $"line {i} of a long build"))
+                + "\nPassed!  - Failed: 0, Passed: 22, Skipped: 0";
+
+        var result = ProcessExec.BuildResult("Command", 0, log, "");
 
         Assert.True(result.Success);
-        Assert.Contains("truncated", result.Output, StringComparison.Ordinal);
+        Assert.Contains("not shown here", result.Output, StringComparison.Ordinal);
+
+        // The verdict is the whole reason a command was run, and it is the last thing printed.
+        Assert.Contains("Passed!  - Failed: 0, Passed: 22", result.Output, StringComparison.Ordinal);
+
+        // And the start, so the model can still tell what it is looking at.
+        Assert.Contains("line 0 of a long build", result.Output, StringComparison.Ordinal);
     }
 
     /// <summary>And not when it fits — a notice on ordinary output would teach the model to distrust all of it.</summary>

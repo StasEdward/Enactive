@@ -417,37 +417,16 @@ public sealed class ExecutionJournal
     /// <summary>
     /// A shortened result: the START and the END of it, with the cut marked between them.
     ///
-    /// <para>Keeping the first N characters is the obvious implementation and it is wrong for the
-    /// results that matter most. A command puts its restore and build noise first and its VERDICT
-    /// last, so head-only shortening reliably hands over the part with no answer in it. Reported
-    /// 2026-09-07 22:22, twice in one run, and the reviewer named the cause itself: <i>"the provided
-    /// tool output for 'dotnet test' is truncated and does not contain these specific numbers. The
-    /// agent fabricated the test summary."</i> The numbers were real — <c>Passed! Failed: 0, Passed:
-    /// 22</c> — and they were in the line after the cut.</para>
+    /// <para>Reported 2026-09-07 22:22, twice in one run, and the reviewer named the cause itself:
+    /// <i>"the provided tool output for 'dotnet test' is truncated and does not contain these
+    /// specific numbers. The agent fabricated the test summary."</i> The numbers were real —
+    /// <c>Passed! Failed: 0, Passed: 22</c> — and they were in the line after the cut.</para>
     ///
-    /// <para>Weighted to the end for the same reason the log analyst weights its excerpt that way:
-    /// the head says what was attempted, the tail says how it went, and only one of those is what a
-    /// reviewer is being asked about.</para>
+    /// <para>The rule itself moved to <see cref="Shortening"/>, because it was written here and
+    /// only here: the REVIEWER was shown the end of a command's output and the MODEL that ran the
+    /// command was not — <c>ProcessExec</c> kept its first N characters. Same failure, two
+    /// audiences, fixed for one of them.</para>
     /// </summary>
     private static string HeadAndTail(string text, int budget)
-    {
-        // Enough head to recognise WHAT ran; the rest to the end, which is where the answer is.
-        var head = Math.Max(1, budget * 2 / 5);
-        var tail = budget - head;
-
-        // Below this there is no room for two pieces and a marker between them, and half a marker
-        // is worse than a clean cut.
-        if (tail < 40)
-            return text[..budget] + $"… ({budget:N0} of {text.Length:N0})";
-
-        // "NOT SHOWN", not "cut". On 2026-09-08 17:31 a reviewer read "1,645 characters cut from the
-        // middle" as evidence that the file did not contain what the agent had quoted from it - and
-        // failed the step twice for a value that was in those 1,645 characters. The rule that
-        // follows from it belongs in the reviewer's instructions, where it is said ONCE; per result
-        // it would cost its own length times the number of calls, which is the budget the calls were
-        // rescued from. What the notice itself can do is stop reading as an absence.
-        return text[..head]
-             + $"\n… ({text.Length - budget:N0} characters not shown here; the end follows) …\n"
-             + text[^tail..];
-    }
+        => Shortening.HeadAndTail(text, budget);
 }

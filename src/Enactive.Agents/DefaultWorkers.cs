@@ -47,7 +47,9 @@ public static class DefaultWorkers
         + "characters and SAYS SO when it is: past that point redirecting is the only way to get the whole thing. "
         + "Send it to '" + WorkspaceGuard.ScratchPrefix + "/', then read_file it, or search_files with \"path\": \""
         + WorkspaceGuard.ScratchPrefix + "\" to find the error in a long build log without reading it a screenful "
-        + "at a time.\n"
+        + "at a time. REDIRECT WITH THE SHELL YOU ARE IN: in run_command that is '> path' and nothing else - it "
+        + "is cmd.exe, and Set-Content, Select-String, Out-File and every other cmdlet are PowerShell and will "
+        + "fail instantly with 'is not recognized'. Use run_powershell if you want a cmdlet or a pipe.\n"
         // The old pair of rules here - "write that exact returned text with write_file" and "the
         // file must contain the OUTPUT" - produced the very thing this rule set exists to stop.
         // Followed literally on a 500 KB build log they write six thousand characters and the words
