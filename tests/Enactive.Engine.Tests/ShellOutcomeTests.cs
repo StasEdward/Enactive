@@ -16,7 +16,7 @@ using Xunit;
 /// <i>"nothing here rescues a build that did not build"</i>. Every test below that ends in
 /// <c>False</c> is that line.</para>
 /// </summary>
-public sealed class ShellRefusalTests
+public sealed class ShellOutcomeTests
 {
     /// <summary>cmd.exe, verbatim, on the commonest of the measured cases.</summary>
     private const string CmdRefusal =
@@ -25,7 +25,7 @@ public sealed class ShellRefusalTests
 
     [Fact]
     public void Cmd_refusing_a_cmdlet_never_ran()
-        => Assert.True(ShellRefusal.NeverRan("Select-String -Path log.txt -Pattern error", CmdRefusal));
+        => Assert.Equal(ShellVerdict.NeverRan, ShellOutcome.Of("Select-String -Path log.txt -Pattern error", CmdRefusal));
 
     /// <summary>PowerShell's error record, which names the term a second time and in a different place.</summary>
     [Fact]
@@ -41,13 +41,13 @@ public sealed class ShellRefusalTests
             + "    + CategoryInfo          : ObjectNotFound: (Tee-File:String) [], CommandNotFoundException\n"
             + "    + FullyQualifiedErrorId : CommandNotFoundException";
 
-        Assert.True(ShellRefusal.NeverRan("Tee-File out.txt", output));
+        Assert.Equal(ShellVerdict.NeverRan, ShellOutcome.Of("Tee-File out.txt", output));
     }
 
     /// <summary>The refused word is not always the first on the line — a pipe has heads of its own.</summary>
     [Fact]
     public void A_cmdlet_after_a_pipe_is_still_a_head_of_this_line()
-        => Assert.True(ShellRefusal.NeverRan(
+        => Assert.Equal(ShellVerdict.NeverRan, ShellOutcome.Of(
             "dotnet test | Tee-Object -FilePath out.txt",
             "'Tee-Object' is not recognized as an internal or external command,"));
 
@@ -66,7 +66,7 @@ public sealed class ShellRefusalTests
             + "C:\\ws\\App\\App.csproj(31,5): error MSB3073: the command exited with code 9009.\n"
             + "Build FAILED.";
 
-        Assert.False(ShellRefusal.NeverRan("dotnet build App/App.csproj", output));
+        Assert.Equal(ShellVerdict.Ran, ShellOutcome.Of("dotnet build App/App.csproj", output));
     }
 
     /// <summary>
@@ -75,7 +75,7 @@ public sealed class ShellRefusalTests
     /// </summary>
     [Fact]
     public void One_refusal_from_inside_is_enough_to_keep_it_a_failure()
-        => Assert.False(ShellRefusal.NeverRan(
+        => Assert.Equal(ShellVerdict.Ran, ShellOutcome.Of(
             "build.cmd | Select-String error",
             "'protoc' is not recognized as an internal or external command,\n"
             + "'Select-String' is not recognized as an internal or external command,"));
@@ -83,14 +83,14 @@ public sealed class ShellRefusalTests
     /// <summary>A build that did not build. Nothing about this reads as a refusal.</summary>
     [Fact]
     public void A_compile_error_is_a_real_failure()
-        => Assert.False(ShellRefusal.NeverRan(
+        => Assert.Equal(ShellVerdict.Ran, ShellOutcome.Of(
             "dotnet build",
             "MoneyTests.cs(1,7): error CS0246: The type or namespace name 'Xunit' could not be found"));
 
     /// <summary>A test that ran and reported a failing test is the same: it ran.</summary>
     [Fact]
     public void A_failing_test_is_a_real_failure()
-        => Assert.False(ShellRefusal.NeverRan(
+        => Assert.Equal(ShellVerdict.Ran, ShellOutcome.Of(
             "dotnet test",
             "Failed!  - Failed:     1, Passed:    62, Skipped:     0, Total:    63"));
 
@@ -100,7 +100,7 @@ public sealed class ShellRefusalTests
     /// </summary>
     [Fact]
     public void A_command_that_ran_and_chose_to_fail_is_a_real_failure()
-        => Assert.False(ShellRefusal.NeverRan("exit /b 1", ""));
+        => Assert.Equal(ShellVerdict.Ran, ShellOutcome.Of("exit /b 1", ""));
 
     /// <summary>
     /// No command text, no answer. <c>ProcessExec.RunAsync</c> starts a named executable with an
@@ -109,12 +109,12 @@ public sealed class ShellRefusalTests
     /// </summary>
     [Fact]
     public void Without_the_command_line_nothing_is_reclassified()
-        => Assert.False(ShellRefusal.NeverRan(null, CmdRefusal));
+        => Assert.Equal(ShellVerdict.Ran, ShellOutcome.Of(null, CmdRefusal));
 
     /// <summary>The refusal must actually be there; silence is not one.</summary>
     [Fact]
     public void Silence_is_not_a_refusal()
-        => Assert.False(ShellRefusal.NeverRan("Select-String x", ""));
+        => Assert.Equal(ShellVerdict.Ran, ShellOutcome.Of("Select-String x", ""));
 
     /// <summary>
     /// Quoting and case are spellings, not different commands — the same reason
@@ -122,7 +122,7 @@ public sealed class ShellRefusalTests
     /// </summary>
     [Fact]
     public void Case_and_quotes_around_the_head_do_not_hide_it()
-        => Assert.True(ShellRefusal.NeverRan(
+        => Assert.Equal(ShellVerdict.NeverRan, ShellOutcome.Of(
             "\"select-string\" -Path log.txt",
             "'Select-String' is not recognized as an internal or external command,"));
 
@@ -135,7 +135,7 @@ public sealed class ShellRefusalTests
     /// </summary>
     [Fact]
     public void A_pipeline_whose_first_stage_printed_is_still_a_refusal()
-        => Assert.True(ShellRefusal.NeverRan(
+        => Assert.Equal(ShellVerdict.NeverRan, ShellOutcome.Of(
             "dotnet --version | tail -1",
             """
             10.0.401
@@ -163,7 +163,7 @@ public sealed class ShellRefusalTests
     [InlineData("rm")]
     [InlineData("Tee-File")]
     public void Every_word_cmd_actually_refused_reads_as_a_refusal(string word)
-        => Assert.True(ShellRefusal.NeverRan(
+        => Assert.Equal(ShellVerdict.NeverRan, ShellOutcome.Of(
             $"dotnet build | {word} whatever",
             $"'{word}' is not recognized as an internal or external command,"));
 
@@ -174,7 +174,7 @@ public sealed class ShellRefusalTests
     /// </summary>
     [Fact]
     public void A_script_powershell_could_not_parse_never_ran()
-        => Assert.True(ShellRefusal.NeverRan(
+        => Assert.Equal(ShellVerdict.NeverRan, ShellOutcome.Of(
             """
             $files = Get-ChildItem TicTacToe\TicTacToe.Tests\*.cs
             foreach ($f in $files) {
@@ -197,7 +197,7 @@ public sealed class ShellRefusalTests
     /// </summary>
     [Fact]
     public void A_parse_error_from_something_we_ran_is_a_real_failure()
-        => Assert.False(ShellRefusal.NeverRan(
+        => Assert.Equal(ShellVerdict.Ran, ShellOutcome.Of(
             "Invoke-Expression (Get-Content generated.ps1 -Raw)",
             """
             At line:4 char:9
@@ -211,21 +211,107 @@ public sealed class ShellRefusalTests
     /// <summary>
     /// A runtime error is not a parse error. The script compiled, ran, and something in it threw
     /// — which is work that was attempted and did not come out.
+    ///
+    /// <para>This test was written with <c>Get-Content</c> on a missing file, which is now
+    /// <see cref="ShellVerdict.FoundNothing"/> and has a test of its own. The distinction it was
+    /// guarding is between PARSING and RUNNING, so it needs an example that is neither a syntax
+    /// slip nor a lookup.</para>
     /// </summary>
     [Fact]
     public void A_script_that_ran_and_threw_is_a_real_failure()
-        => Assert.False(ShellRefusal.NeverRan(
-            "Get-Content missing.txt",
+        => Assert.Equal(ShellVerdict.Ran, ShellOutcome.Of(
+            "$n = 0; 10 / $n",
             """
-            Get-Content : Cannot find path 'C:\ws\missing.txt' because it does not exist.
-                + CategoryInfo          : ObjectNotFound: (C:\ws\missing.txt:String) [Get-Content], ItemNotFoundException
-                + FullyQualifiedErrorId : PathNotFound,Microsoft.PowerShell.Commands.GetContentCommand
+            RuntimeException: Attempted to divide by zero.
+                + CategoryInfo          : NotSpecified: (:) [], RuntimeException
+                + FullyQualifiedErrorId : RuntimeException
+            """));
+
+    // ── A call PowerShell could not bind ─────────────────────────────────────
+
+    /// <summary>
+    /// Verbatim from 2026-09-20 23:19. <c>Select-String</c> has no <c>-Recurse</c>, so binding
+    /// failed and the cmdlet never executed — a parse error one moment later.
+    /// </summary>
+    [Fact]
+    public void A_parameter_the_cmdlet_does_not_take_never_ran()
+        => Assert.Equal(ShellVerdict.NeverRan, ShellOutcome.Of(
+            "Select-String -Path src -Include *.cs -Recurse -Pattern 'MaxParallelSteps|ReviewRetries'",
+            """
+            Select-String : A parameter cannot be found that matches parameter name 'Recurse'.
+            At line:2 char:39
+            + Select-String -Path src -Include *.cs -Recurse -Pattern 'MaxParallelS ...
+            +                                       ~~~~~~~~
+                + CategoryInfo          : InvalidArgument: (:) [Select-String], ParameterBindingException
+                + FullyQualifiedErrorId : NamedParameterNotFound,Microsoft.PowerShell.Commands.SelectStringCommand
+            """));
+
+    /// <summary>
+    /// The echo above is CUT — PowerShell ends a long line with <c>...</c>. Comparing the whole of
+    /// that against the script never matches, so without dropping the marker this would fall back
+    /// to "it ran" on exactly the long scripts a model gets wrong most often. Here the script is
+    /// long enough that the echo really is a prefix of it.
+    /// </summary>
+    [Fact]
+    public void A_truncated_echo_is_matched_by_its_prefix()
+        => Assert.Equal(ShellVerdict.NeverRan, ShellOutcome.Of(
+            "Get-ChildItem -Path src -Recurse -Filter *.cs | Where-Object { $_.Length -gt 100000 } | Sort-Object Length -Descending",
+            """
+            Get-ChildItem : A parameter cannot be found that matches parameter name 'Bogus'.
+            At line:1 char:1
+            + Get-ChildItem -Path src -Recurse -Filter *.cs | Where-Object { $_.Len ...
+            + ~~~~~~~~~~~~~
+                + FullyQualifiedErrorId : NamedParameterNotFound,Microsoft.PowerShell.Commands.GetChildItemCommand
+            """));
+
+    // ── A lookup that found nothing ──────────────────────────────────────────
+
+    /// <summary>
+    /// Verbatim from 2026-09-20 23:19, and the pair of calls that failed a 662-line report. The
+    /// model was checking the wiki against the source; the wiki says <c>RunReport.cs</c> is in
+    /// <c>Enactive.Agents</c>, and it is in <c>Enactive.Core</c>. The miss WAS the finding.
+    /// </summary>
+    [Fact]
+    public void A_reading_cmdlet_told_there_is_no_such_path_found_nothing()
+        => Assert.Equal(ShellVerdict.FoundNothing, ShellOutcome.Of(
+            "Select-String -Path src/Enactive.Agents/RunReport.cs -Pattern 'ExitCodeFor'",
+            """
+            Select-String : Cannot find path 'C:\ws\src\Enactive.Agents\RunReport.cs' because it does not exist.
+                + CategoryInfo          : ObjectNotFound: (…RunReport.cs:String) [Select-String], ItemNotFoundException
+                + FullyQualifiedErrorId : PathNotFound,Microsoft.PowerShell.Commands.SelectStringCommand
+            """));
+
+    /// <summary>
+    /// A cmdlet that WRITES and cannot find its target is an edit that did not happen — the same
+    /// line <see cref="Enactive.Core.Tools.ToolResults.NotFound"/> already draws for the file
+    /// tools, in the same words.
+    /// </summary>
+    [Fact]
+    public void A_writing_cmdlet_that_cannot_find_its_target_really_failed()
+        => Assert.Equal(ShellVerdict.Ran, ShellOutcome.Of(
+            "Move-Item old.txt archive/old.txt",
+            """
+            Move-Item : Cannot find path 'C:\ws\old.txt' because it does not exist.
+                + FullyQualifiedErrorId : PathNotFound,Microsoft.PowerShell.Commands.MoveItemCommand
+            """));
+
+    /// <summary>
+    /// EVERY error, or none of it counts. A script that looked something up AND did something else
+    /// that broke is a script that broke.
+    /// </summary>
+    [Fact]
+    public void A_missing_path_next_to_a_real_error_is_still_a_failure()
+        => Assert.Equal(ShellVerdict.Ran, ShellOutcome.Of(
+            "Select-String -Path gone.cs -Pattern x; ./build.ps1",
+            """
+                + FullyQualifiedErrorId : PathNotFound,Microsoft.PowerShell.Commands.SelectStringCommand
+                + FullyQualifiedErrorId : NativeCommandError
             """));
 
     /// <summary>A multi-line script: every statement is a head.</summary>
     [Fact]
     public void A_head_on_a_later_line_of_a_script_counts()
-        => Assert.True(ShellRefusal.NeverRan(
+        => Assert.Equal(ShellVerdict.NeverRan, ShellOutcome.Of(
             "cd src\nSet-Content out.txt 'x'",
             "'Set-Content' is not recognized as an internal or external command,"));
 }

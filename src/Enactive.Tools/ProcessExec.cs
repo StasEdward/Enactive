@@ -156,9 +156,9 @@ internal static class ProcessExec
             combined += "\n[stderr]\n" + stderr;
         combined = combined.Trim();
 
-        // Asked of the WHOLE output, before it is shortened: a refusal that the cut fell through
-        // would read as an absence and be called a real failure.
-        var neverRan = ShellRefusal.NeverRan(commandLine, combined);
+        // Asked of the WHOLE output, before it is shortened: an error the cut fell through would
+        // read as an absence and be called a real failure.
+        var verdict = ShellOutcome.Of(commandLine, combined);
 
         // The START and the END, not the first N characters. A program reports its outcome last,
         // so head-only shortening hands the model the part with no answer in it: on 2026-09-20 a
@@ -184,15 +184,29 @@ internal static class ProcessExec
         // never started the line, so there is nothing here to declare an expected code for and
         // nothing half-done to make good - and the advice below would be actively wrong, inviting
         // a model to declare 255 "expected" for a cmdlet that does not exist in cmd.exe.
-        if (neverRan)
+        if (verdict == ShellVerdict.NeverRan)
             return ToolResults.NeverRan(
-                $"{what} did NOT run: the shell does not have that word, so it never started "
-                + "the command - this is a spelling the shell cannot read, not work that went "
-                + "wrong. run_command is cmd.exe; run_powershell is PowerShell, and a cmdlet "
+                $"{what} did NOT run: the shell could not read the line, so it never started it - "
+                + "a word it does not have, text it could not parse, or a parameter that cmdlet "
+                + "does not take. This is a spelling problem, not work that went wrong. "
+                + "run_command is cmd.exe; run_powershell is PowerShell, and a cmdlet "
                 + "(Select-String, Select-Object, Tee-Object, Out-File, Set-Content, Get-FileHash) "
-                + "exists only in the second. Send the same work to the shell that has the word, "
-                + "or write it the way this one spells it. Do NOT declare this exit code expected: "
-                + "there is no result here to expect.",
+                + "exists only in the second. Fix the spelling, or send the same work to the shell "
+                + "that has the word. Do NOT declare this exit code expected: there is no result "
+                + "here to expect.",
+                output, metadata);
+
+        // A lookup told there is no such path. The engine has always called that an ANSWER for
+        // read_file, list_dir and search_files - "guessing at a path and being told no is how
+        // exploring works" - and a Select-String asking the identical question was fatal.
+        // Measured 2026-09-20: a run checking the wiki against the source looked for two files
+        // where the WIKI says they are, they are elsewhere, and a 662-line report with 21 confirmed
+        // contradictions was failed for finding exactly that.
+        if (verdict == ShellVerdict.FoundNothing)
+            return ToolResults.NotFound(
+                $"{what} looked and found nothing: every error it reported is a path that is not "
+                + "there. Nothing went wrong and there is nothing to retry - if you were guessing "
+                + "at where something lives, guess again or use search_files to find it.",
                 output, metadata);
 
         // Said only when nothing was declared: repeating the option to somebody who used it and
