@@ -99,20 +99,36 @@ public static class ShellOperation
     }
 
     /// <summary>
-    /// The command up to where it stops being one command. <c>2&gt;&amp;1</c> is caught by the
-    /// <c>&gt;</c> in it, which is the point: what follows a redirection is where the output goes,
-    /// not what was run.
+    /// The command up to where it stops being one command. What follows a redirection is where
+    /// the output goes, not what was run.
+    ///
+    /// <para><b>The file descriptor belongs to the redirection.</b> Cutting <c>2&gt;&amp;1</c> at
+    /// its <c>&gt;</c> leaves a stray <c>2</c> on the end of the command, and that <c>2</c> is
+    /// then read as an operand: <c>type probe.txt 2>&amp;1</c> became "type probe.txt 2" and did
+    /// not match <c>type probe.txt</c>. The unit tests missed it because every example in them
+    /// was <c>dotnet test X …</c>, where the three parts of an identity are already full before
+    /// the stray digit is reached — it took driving the engine end to end to show it.</para>
     /// </summary>
     private static string UpToPlumbing(string command)
     {
         var cut = command.Length;
+        var redirect = false;
 
         foreach (var token in Plumbing)
         {
             var at = command.IndexOf(token, StringComparison.Ordinal);
-            if (at >= 0 && at < cut)
-                cut = at;
+            if (at < 0 || at >= cut)
+                continue;
+
+            cut = at;
+            redirect = token is ">" or ">>" or "<";
         }
+
+        // Back over the descriptor the redirection was written with, and only there: a trailing
+        // number is an operand anywhere else, and `sleep 5` is not `sleep 10`.
+        if (redirect)
+            while (cut > 0 && char.IsAsciiDigit(command[cut - 1]))
+                cut--;
 
         return command[..cut];
     }

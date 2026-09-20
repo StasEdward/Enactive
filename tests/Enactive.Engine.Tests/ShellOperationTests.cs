@@ -52,6 +52,24 @@ public sealed class ShellOperationTests
             ShellOperation.Of("dotnet build src/Thing/Thing.csproj"));
     }
 
+    /// <summary>
+    /// The file descriptor belongs to the redirection. Cutting at the '>' of 2>&amp;1 left a
+    /// stray '2' that was then read as an operand — and every example above is
+    /// <c>dotnet test X …</c>, where the three parts of an identity are already full before the
+    /// digit is reached, so none of them could see it. A two-word command can.
+    /// </summary>
+    [Theory]
+    [InlineData("type probe.txt 2>&1", "type probe.txt")]
+    [InlineData("dir 2> errors.txt", "dir")]
+    [InlineData("make 1>out.txt 2>&1", "make")]
+    public void A_redirections_file_descriptor_is_not_an_operand(string dressed, string plain)
+        => Assert.Equal(ShellOperation.Of(plain), ShellOperation.Of(dressed));
+
+    /// <summary>But a trailing number anywhere else IS an operand.</summary>
+    [Fact]
+    public void A_number_that_is_not_a_descriptor_still_counts()
+        => Assert.NotEqual(ShellOperation.Of("sleep 5"), ShellOperation.Of("sleep 10"));
+
     [Theory]
     [InlineData("dotnet test X --nologo", "dotnet test X")]
     [InlineData("dotnet test X > out.txt", "dotnet test X")]
