@@ -64,6 +64,52 @@ public sealed class ScratchGeographyTests
         Assert.Contains(writes, w => !w.Known);
     }
 
+    /// <summary>
+    /// Measured 2026-09-20, the SECOND time the working area asked a question about itself.
+    ///
+    /// <para>Verbatim from the log: <c>cd TicTacToe</c>, then the test output piped into
+    /// <c>..\.enactive\scratch\list_tests.txt</c>. The agent was right — after the cd, <c>..</c>
+    /// is the workspace root — and the file landed in <c>Game\.enactive\scratch\</c>, which was
+    /// checked on disk. This class resolved the token against the root instead, produced
+    /// <c>…\AI\.enactive\scratch\</c>, one level ABOVE the workspace, and put the question to
+    /// the person. <c>…\AI\.enactive</c> does not exist and never did.</para>
+    /// </summary>
+    [Fact]
+    public void A_scratch_path_reached_by_going_up_after_a_cd_asks_nothing()
+        => Assert.Empty(ShellGeography.WritesOutside(
+            """
+            cd TicTacToe
+            dotnet test T.csproj --list-tests | Set-Content ..\.enactive\scratch\list_tests.txt
+            """,
+            Root));
+
+    /// <summary>
+    /// The same in the other direction, which is the half that makes following a <c>cd</c> honest
+    /// rather than merely permissive: a script that moves OUT and then writes relatively used to
+    /// be judged against the root and look innocent. Now it is seen.
+    /// </summary>
+    [Fact]
+    public void Moving_outside_and_then_writing_relatively_is_now_reported()
+    {
+        var writes = ShellGeography.WritesOutside(
+            """
+            cd ..\..\elsewhere
+            copy a.txt drop\a.txt
+            """, Root);
+
+        Assert.NotEmpty(writes);
+        Assert.Contains(writes, w => w.Path.Contains("elsewhere", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>A cd it cannot read leaves the guess exactly where it was.</summary>
+    [Fact]
+    public void A_cd_into_a_variable_changes_nothing()
+        => Assert.Empty(ShellGeography.WritesOutside(
+            """
+            cd $somewhere
+            Set-Content .enactive\scratch\out.txt 'x'
+            """, Root));
+
     /// <summary>The assignment itself is not a write, and must not become one once substituted.</summary>
     [Fact]
     public void The_assignment_is_not_itself_reported()
