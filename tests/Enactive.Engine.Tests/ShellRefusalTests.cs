@@ -167,6 +167,61 @@ public sealed class ShellRefusalTests
             $"dotnet build | {word} whatever",
             $"'{word}' is not recognized as an internal or external command,"));
 
+    /// <summary>
+    /// Verbatim from the log of 2026-09-20 22:24, and the run it cost. PowerShell parses a script
+    /// whole before running any of it, so this one executed nothing at all — and the two steps
+    /// that were to WRITE the tests were skipped behind it.
+    /// </summary>
+    [Fact]
+    public void A_script_powershell_could_not_parse_never_ran()
+        => Assert.True(ShellRefusal.NeverRan(
+            """
+            $files = Get-ChildItem TicTacToe\TicTacToe.Tests\*.cs
+            foreach ($f in $files) {
+              $t = Get-Content $f.FullName -Raw
+            } | Format-Table -AutoSize
+            """,
+            """
+            At line:13 char:3
+            + } | Format-Table -AutoSize
+            +   ~
+            An empty pipe element is not allowed.
+                + CategoryInfo          : ParserError: (:) [], ParentContainsErrorRecordException
+                + FullyQualifiedErrorId : EmptyPipeElement
+            """));
+
+    /// <summary>
+    /// THE BOUNDARY, parse-error half. A script that RAN and asked PowerShell to compile text of
+    /// its own — <c>Invoke-Expression</c>, a generated .ps1 — gets a parse error about a line we
+    /// never sent. That script ran, and it failed.
+    /// </summary>
+    [Fact]
+    public void A_parse_error_from_something_we_ran_is_a_real_failure()
+        => Assert.False(ShellRefusal.NeverRan(
+            "Invoke-Expression (Get-Content generated.ps1 -Raw)",
+            """
+            At line:4 char:9
+            + $x = @{ broken
+            +         ~
+            Missing closing '}' in statement block.
+                + CategoryInfo          : ParserError: (:) [], ParseException
+                + FullyQualifiedErrorId : MissingEndCurlyBrace
+            """));
+
+    /// <summary>
+    /// A runtime error is not a parse error. The script compiled, ran, and something in it threw
+    /// — which is work that was attempted and did not come out.
+    /// </summary>
+    [Fact]
+    public void A_script_that_ran_and_threw_is_a_real_failure()
+        => Assert.False(ShellRefusal.NeverRan(
+            "Get-Content missing.txt",
+            """
+            Get-Content : Cannot find path 'C:\ws\missing.txt' because it does not exist.
+                + CategoryInfo          : ObjectNotFound: (C:\ws\missing.txt:String) [Get-Content], ItemNotFoundException
+                + FullyQualifiedErrorId : PathNotFound,Microsoft.PowerShell.Commands.GetContentCommand
+            """));
+
     /// <summary>A multi-line script: every statement is a head.</summary>
     [Fact]
     public void A_head_on_a_later_line_of_a_script_counts()

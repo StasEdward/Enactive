@@ -73,6 +73,80 @@ public static class ShellRefusal
         if (string.IsNullOrWhiteSpace(command) || string.IsNullOrWhiteSpace(output))
             return false;
 
+        return WordItDoesNotHave(command!, output!) || TextItCouldNotParse(command!, output!);
+    }
+
+    /// <summary>
+    /// PowerShell refusing to COMPILE the script, which is the same answer arrived at one step
+    /// earlier.
+    ///
+    /// <para><b>And a stronger guarantee than the rest of this class gives.</b> A script sent as
+    /// one text is parsed in full before a single statement of it runs, so a parse error means
+    /// literally nothing executed — where "I do not have that word" can still follow a pipeline
+    /// stage that already printed.</para>
+    ///
+    /// <para><b>Measured 2026-09-20.</b> A run inspected a test project for five minutes, built
+    /// it clean, and wrote an accurate report. One throwaway script for counting <c>[Fact]</c>
+    /// attributes ended <c>} | Format-Table -AutoSize</c> — <i>An empty pipe element is not
+    /// allowed</i>. The model rewrote it 1.6 seconds later and got its table. The step was marked
+    /// Incomplete for the typo, and the two steps that were to WRITE the tests were skipped
+    /// behind it. Six such events in three days of logs, against 270 shell failures; small, and
+    /// it cost a whole run.</para>
+    ///
+    /// <para><b>What keeps it honest</b> is the same thing as above, in the form the error record
+    /// offers: PowerShell echoes the source line it choked on, and that line has to be one WE
+    /// sent. A parse error echoing anything else came from a script or an
+    /// <c>Invoke-Expression</c> that we did run, and that is a failure.</para>
+    /// </summary>
+    private static bool TextItCouldNotParse(string command, string output)
+    {
+        var found = false;
+        string? echoed = null;
+
+        foreach (var raw in output.Split('\n'))
+        {
+            var line = raw.Trim();
+
+            if (line.Contains("ParserError", StringComparison.Ordinal))
+            {
+                if (echoed is null || !command.Contains(echoed, StringComparison.Ordinal))
+                    return false;
+
+                found = true;
+                continue;
+            }
+
+            if (SourceEcho(line) is { } source)
+                echoed = source;
+        }
+
+        return found;
+    }
+
+    /// <summary>
+    /// The line of OUR script that PowerShell prints under <c>At line:N char:C</c>, or null when
+    /// this is not that line. The error record's own fields are written the same way — a leading
+    /// <c>+</c> — and so is the caret that underlines the offending token, so both are excluded.
+    /// </summary>
+    private static string? SourceEcho(string line)
+    {
+        if (!line.StartsWith('+'))
+            return null;
+
+        var text = line[1..].Trim();
+
+        if (text.Length < 2
+            || text.StartsWith("CategoryInfo", StringComparison.Ordinal)
+            || text.StartsWith("FullyQualifiedErrorId", StringComparison.Ordinal)
+            || text.All(c => c is '~'))
+            return null;
+
+        return text;
+    }
+
+    /// <summary>The shell not having the word at all — see the class summary.</summary>
+    private static bool WordItDoesNotHave(string command, string output)
+    {
         var heads = Heads(command!);
         if (heads.Count == 0)
             return false;
