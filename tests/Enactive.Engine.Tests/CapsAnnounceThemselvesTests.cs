@@ -63,7 +63,10 @@ public sealed class CapsAnnounceThemselvesTests
         // The floor under a shared budget: with enough calls each gets very little, and what must
         // never be lost is the LIST of them.
         ["ExecutionJournal.MinOutputChars"] = "A_list_too_long_to_show_says_how_much_is_missing",
-        ["ExecutionJournal.ShortenedNoticeChars"] = "A_shortened_result_says_so_and_says_the_call_happened"
+        ["ExecutionJournal.ShortenedNoticeChars"] = "A_shortened_result_says_so_and_says_the_call_happened",
+        // The digest that replaced the excerpt for logs too large to hold. Its own caps: how much
+        // of one record's message survives, and how many timeline entries it will list.
+        ["LogDigest.MessageChars"] = "A_message_too_long_for_the_digest_is_cut_and_says_so"
     };
 
     /// <summary>

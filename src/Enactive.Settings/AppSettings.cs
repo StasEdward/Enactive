@@ -29,6 +29,26 @@ public sealed class ProviderConfig
     /// <summary>Max output tokens for this provider (blank = the provider's built-in default). Anthropic max_tokens.</summary>
     public int? MaxTokens { get; set; }
 
+    /// <summary>
+    /// How large a prompt this provider's models accept, in tokens — the CONTEXT window, not
+    /// <see cref="MaxTokens"/>, which caps the answer.
+    ///
+    /// <para><b>Why it has to be declared.</b> Nothing in this application can find it out.
+    /// <c>IChatProvider.ContextWindow</c> returns null by default and only the Ollama provider
+    /// implements it — by echoing back the <c>num_ctx</c> it was handed, so it is a mirror of the
+    /// request rather than a fact about the model. Every cloud provider answers "I do not know",
+    /// and the callers that need a number then guess one.</para>
+    ///
+    /// <para>What the guess costs: <c>LogAnalyst</c> assumes 16,000 tokens when nobody says, so a
+    /// log analysed by a model with a 200,000-token window was sent about a seventh of what would
+    /// have fitted. Worse, the number it was given came from <c>NumCtx</c> — an OLLAMA setting —
+    /// whichever provider was actually doing the work.</para>
+    ///
+    /// <para>Blank keeps the guess. A number that is wrong in the generous direction costs a
+    /// failed request, which is why nothing infers one from a model's name.</para>
+    /// </summary>
+    public int? ContextWindowTokens { get; set; }
+
     public ProviderConfig Clone() => new()
     {
         Id = Id,
@@ -39,7 +59,8 @@ public sealed class ProviderConfig
         ApiKey = ApiKey,
         Headers = new Dictionary<string, string>(Headers),
         Models = new List<string>(Models),
-        MaxTokens = MaxTokens
+        MaxTokens = MaxTokens,
+        ContextWindowTokens = ContextWindowTokens
     };
 }
 

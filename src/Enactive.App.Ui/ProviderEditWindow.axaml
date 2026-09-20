@@ -44,6 +44,10 @@
                 <TextBox Text="{Binding MaxTokensText}"
                          PlaceholderText="blank = auto (adjusts to the model's cap)" />
 
+                <TextBlock Classes="label" Text="Context window (tokens)" />
+                <TextBox Text="{Binding ContextWindowText}"
+                         PlaceholderText="blank = assume 16000 — nothing can ask the provider" />
+
                 <TextBlock Classes="label" Text="Headers" />
                 <TextBox Classes="multiline" MinHeight="60" Text="{Binding HeadersText}"
                          PlaceholderText="extra headers — one Header-Name: value per line" />

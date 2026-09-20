@@ -1692,12 +1692,24 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         if (reference is null)
             return null;
 
+        // How much of the log can be sent, from the provider that is actually going to read it.
+        // It used to be _settings.NumCtx unconditionally — an OLLAMA setting, applied to whatever
+        // model the Review binding points at. With Review on a cloud model and num_ctx left blank
+        // the analyst assumed 16,000 tokens and sent about a seventh of what a 200,000-token
+        // window would have taken; with num_ctx set for a local model it sent that model's window
+        // to Claude. Neither is a fact about the provider doing the work, and nothing can ask it —
+        // so it is declared per provider, and num_ctx is the fallback only because for Ollama it
+        // IS the window.
+        var declared = _settings.Providers
+            .FirstOrDefault(p => string.Equals(p.Id, reference.ProviderId, StringComparison.Ordinal))
+            ?.ContextWindowTokens;
+
         // promptBodies: false — this prompt CARRIES the log, and the provider decorator would write
         // it straight back into it. One analysis of a 10,429-line run added 4,785 lines; the second
         // then read a log that was half its own previous prompt. See LoggingChatProvider.
         return async (text, ct) => await new LogAnalyst().AnalyseAsync(
             text, _providerFactory.Create(reference.ProviderId, promptBodies: false),
-            reference.Model, _settings.NumCtx, ct);
+            reference.Model, declared ?? _settings.NumCtx, ct);
     }
 
     private void ShowLogWindow()

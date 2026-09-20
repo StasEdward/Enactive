@@ -1,4 +1,4 @@
-namespace Enactive.App.Ui.ViewModels;
+﻿namespace Enactive.App.Ui.ViewModels;
 
 using System.Collections.ObjectModel;
 using Avalonia.Media;
@@ -29,6 +29,7 @@ internal sealed class ProviderEditViewModel : ObservableObject
     private string _baseUrl;
     private string _apiKey;
     private string _maxTokensText;
+    private string _contextWindowText;
     private string _headersText;
     private string _modelsText;
     private string _status = string.Empty;
@@ -45,6 +46,7 @@ internal sealed class ProviderEditViewModel : ObservableObject
         _baseUrl = config.BaseUrl;
         _apiKey = config.ApiKey;
         _maxTokensText = config.MaxTokens?.ToString() ?? string.Empty;
+        _contextWindowText = config.ContextWindowTokens?.ToString() ?? string.Empty;
         _headersText = ModelFetch.FormatHeaders(config.Headers);
         _modelsText = string.Join("\n", config.Models);
 
@@ -63,6 +65,9 @@ internal sealed class ProviderEditViewModel : ObservableObject
     public string BaseUrl { get => _baseUrl; set => Set(ref _baseUrl, value); }
     public string ApiKey { get => _apiKey; set => Set(ref _apiKey, value); }
     public string MaxTokensText { get => _maxTokensText; set => Set(ref _maxTokensText, value); }
+
+    /// <summary>The CONTEXT window, which nothing can discover — see ProviderConfig.ContextWindowTokens.</summary>
+    public string ContextWindowText { get => _contextWindowText; set => Set(ref _contextWindowText, value); }
     public string HeadersText { get => _headersText; set => Set(ref _headersText, value); }
     public string ModelsText { get => _modelsText; set => Set(ref _modelsText, value); }
     public string Status { get => _status; set => Set(ref _status, value); }
@@ -167,6 +172,8 @@ internal sealed class ProviderEditViewModel : ObservableObject
         _config.BaseUrl = BaseUrl.Trim();
         _config.ApiKey = ApiKey.Trim();
         _config.MaxTokens = int.TryParse(MaxTokensText.Trim(), out var mt) && mt > 0 ? mt : null;
+        _config.ContextWindowTokens =
+            int.TryParse(ContextWindowText.Trim(), out var cw) && cw > 0 ? cw : null;
         _config.Headers = ModelFetch.ParseHeaders(HeadersText);
         _config.Models = ModelLines();
         _onSaved();
