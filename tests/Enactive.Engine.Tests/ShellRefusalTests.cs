@@ -6,12 +6,11 @@ using Xunit;
 /// <summary>
 /// A command the shell would not start did not fail — it did not happen.
 ///
-/// <para>Measured over one day of logs, 2026-09-20: about thirty non-zero exits were a PowerShell
-/// cmdlet sent to <c>run_command</c>, which is cmd.exe. <c>Select-String</c> nine times,
-/// <c>Tee-Object</c> eight, <c>Out-File</c> twice, and once a <c>Tee-File</c> that exists in no
-/// shell at all. Each held its step open exactly as hard as the twenty-nine builds that really
-/// did fail, and the model was then advised to declare the exit code "expected" — for a word that
-/// does not exist.</para>
+/// <para>Measured across three days of logs to 2026-09-20: 168 non-zero exits were the shell not
+/// having the word — almost all a PowerShell cmdlet sent to <c>run_command</c>, which is cmd.exe.
+/// Each held its step open exactly as hard as a build that really did fail, and the model was
+/// then advised to declare the exit code "expected", for a word that does not exist. The full
+/// census is in <see cref="Every_word_cmd_actually_refused_reads_as_a_refusal"/>.</para>
 ///
 /// <para>What these tests are really guarding is the OTHER side: the line from 2026-09-07 that
 /// <i>"nothing here rescues a build that did not build"</i>. Every test below that ends in
@@ -126,6 +125,47 @@ public sealed class ShellRefusalTests
         => Assert.True(ShellRefusal.NeverRan(
             "\"select-string\" -Path log.txt",
             "'Select-String' is not recognized as an internal or external command,"));
+
+    /// <summary>
+    /// Verbatim from the log, and the case that corrected the claim this makes. cmd.exe runs
+    /// <c>dotnet</c>, prints the version, and only then finds it has no <c>tail</c> — so 27 of the
+    /// 168 refusals in three days of logs had already produced output. "Nothing ran" would be
+    /// false; "the shell could not read the line, and nothing is half-finished" is what is true,
+    /// and it is the part the open-failure guard needs.
+    /// </summary>
+    [Fact]
+    public void A_pipeline_whose_first_stage_printed_is_still_a_refusal()
+        => Assert.True(ShellRefusal.NeverRan(
+            "dotnet --version | tail -1",
+            """
+            10.0.401
+
+            [stderr]
+            'tail' is not recognized as an internal or external command,
+            operable program or batch file.
+            """));
+
+    /// <summary>
+    /// The whole measured vocabulary: every name cmd.exe refused across three days of logs, by
+    /// frequency — Select-String 49, Select-Object 41, Get-FileHash 20, Tee-Object 17, Out-File
+    /// 15, tail 9, Set-Content 7, rm 5, and a Tee-File 5 times that exists in no shell at all.
+    /// Not one of them is a build tool. That is the census this change was sized against, and a
+    /// regression in the matching would show here first.
+    /// </summary>
+    [Theory]
+    [InlineData("Select-String")]
+    [InlineData("Select-Object")]
+    [InlineData("Get-FileHash")]
+    [InlineData("Tee-Object")]
+    [InlineData("Out-File")]
+    [InlineData("tail")]
+    [InlineData("Set-Content")]
+    [InlineData("rm")]
+    [InlineData("Tee-File")]
+    public void Every_word_cmd_actually_refused_reads_as_a_refusal(string word)
+        => Assert.True(ShellRefusal.NeverRan(
+            $"dotnet build | {word} whatever",
+            $"'{word}' is not recognized as an internal or external command,"));
 
     /// <summary>A multi-line script: every statement is a head.</summary>
     [Fact]

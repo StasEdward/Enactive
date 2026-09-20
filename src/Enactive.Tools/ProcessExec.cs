@@ -186,11 +186,13 @@ internal static class ProcessExec
         // a model to declare 255 "expected" for a cmdlet that does not exist in cmd.exe.
         if (neverRan)
             return ToolResults.NeverRan(
-                $"{what} did NOT run - the shell does not have that word, so nothing was executed "
-                + "and nothing changed. run_command is cmd.exe; run_powershell is PowerShell. A "
-                + "cmdlet - Select-String, Tee-Object, Out-File, Set-Content, Select-Object - "
-                + "exists only in the second. Send the same work to the shell that has it, or "
-                + "write it the way this one spells it.",
+                $"{what} did NOT run: the shell does not have that word, so it never started "
+                + "the command - this is a spelling the shell cannot read, not work that went "
+                + "wrong. run_command is cmd.exe; run_powershell is PowerShell, and a cmdlet "
+                + "(Select-String, Select-Object, Tee-Object, Out-File, Set-Content, Get-FileHash) "
+                + "exists only in the second. Send the same work to the shell that has the word, "
+                + "or write it the way this one spells it. Do NOT declare this exit code expected: "
+                + "there is no result here to expect.",
                 output, metadata);
 
         // Said only when nothing was declared: repeating the option to somebody who used it and

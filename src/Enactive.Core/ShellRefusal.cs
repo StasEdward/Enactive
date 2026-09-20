@@ -4,19 +4,27 @@ namespace Enactive.Core.Context;
 /// The shell saying it never ran the line at all.
 ///
 /// <para><b>Why this exists.</b> A failed shell call is held open until it is made good, and every
-/// non-zero exit was one kind of thing: a failure. Measured across one day's logs, 2026-09-20, it
-/// was two kinds. Twenty-nine calls exited non-zero because a build did not build or a test did
-/// not pass — work that was attempted and did not come out. About thirty exited because the shell
-/// did not have the word: <c>Select-String</c> nine times, <c>Tee-Object</c> eight,
-/// <c>Out-File</c> twice, <c>Select-Object</c>, <c>rm</c>, and once a <c>Tee-File</c> that exists
-/// in no shell at all. Every one of those was a model reaching for a PowerShell cmdlet inside
-/// <c>run_command</c>, which is cmd.exe. Nothing was executed, nothing was touched, nothing was
-/// left half-done — and each one poisoned its step exactly as hard as a broken build.</para>
+/// non-zero exit was one kind of thing: a failure. Measured across three days of logs to
+/// 2026-09-20, it was two kinds. Some exited because a build did not build or a test did not pass
+/// — work that was attempted and did not come out. And 168 exited because the shell did not have
+/// the word: <c>Select-String</c> 49 times, <c>Select-Object</c> 41, <c>Get-FileHash</c> 20,
+/// <c>Tee-Object</c> 17, <c>Out-File</c> 15, <c>tail</c> 9, <c>Set-Content</c> 7, <c>rm</c> 5,
+/// and 5 times a <c>Tee-File</c> that exists in no shell at all. Nearly every one was a model
+/// reaching for a PowerShell cmdlet inside <c>run_command</c>, which is cmd.exe — and each
+/// poisoned its step exactly as hard as a broken build, while the failure message advised
+/// declaring the exit code "expected" for a word that does not exist.</para>
 ///
 /// <para><b>It is the same distinction <see cref="Tools.ToolResults.Unreadable"/> already makes</b>
 /// between "a sentence that did not parse" and "an action that did not happen". Here the sentence
-/// did not parse in the shell rather than in the tool, which is a difference in who was reading,
-/// not in what happened afterwards: nothing.</para>
+/// did not parse in the shell rather than in the tool — a difference in who was reading, not in
+/// what was left behind.</para>
+///
+/// <para><b>Which is not quite "nothing ran".</b> Of the 168 refusals in three days of logs, 27
+/// printed something first: <c>dotnet --version | tail -1</c> gets the version out of dotnet and
+/// then finds cmd.exe has no <c>tail</c>. So the honest claim is the narrow one — the shell could
+/// not read the line, and no part of it is half-finished waiting to be made good. What a stage
+/// before the pipe did to the workspace is not hidden by this: the artifact store and
+/// <c>TouchedPaths</c> record that, and they are not consulted here.</para>
 ///
 /// <para><b>And the 2026-09-07 boundary is untouched.</b> <i>"Nothing here rescues a build that did
 /// not build."</i> A command that RAN and exited 1 still holds its step open; so does one that ran
