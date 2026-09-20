@@ -62,6 +62,21 @@ public sealed class ListDirectoryTool : ITool
             }
 
             // NotFound, not Fail: a listing of somewhere that is not there has answered the question.
+            //
+            // But say WHICH thing is not there. A path that exists and is a file is not a wrong
+            // path, and "Directory not found" sends the reader looking for a typo instead of at
+            // the request - the same confusion delete_file guards against in the other direction,
+            // where a directory would have been reported as a file that does not exist.
+            //
+            // Seen in a real run, 2026-09-20 16:05: list_dir on TicTacToe.csproj, told "Directory
+            // not found", and the model called it AGAIN on the same path before working out for
+            // itself that it wanted read_file. Two turns and two model calls spent on a message
+            // that described the wrong problem.
+            if (!onDisk && !proposed && File.Exists(full))
+                return Task.FromResult(ToolResults.NotFound(
+                    $"'{path}' is a file, not a directory — it IS there, so this is not a wrong "
+                    + "path. Use read_file to read it, or list_dir on the folder that contains it."));
+
             if (!onDisk && !proposed)
                 return Task.FromResult(ToolResults.NotFound($"Directory not found: {path ?? "."}"));
 
