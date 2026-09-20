@@ -287,6 +287,22 @@ public static class ToolResults
         string? output = null,
         IReadOnlyDictionary<string, object?>? metadata = null)
         => new(false, output, error, Array.Empty<ArtifactRef>(), metadata ?? EmptyMeta, DidNotRun: true);
+
+    /// <summary>
+    /// A command the SHELL refused to start — see <see cref="Context.ShellRefusal"/> for what that
+    /// means and how it is told apart from a command that ran and failed.
+    ///
+    /// <para><see cref="Unreadable"/>'s note says this must be <i>"set by the TOOL … no error text
+    /// can be parsed for it afterwards"</i>, and that is why this factory is called from inside
+    /// <c>ProcessExec</c> rather than from anything downstream. The tool is the one that knows: it
+    /// launched the shell, it holds the line it sent, and what it is reading is the shell's own
+    /// fixed wording about that line — not a message some later layer is guessing at.</para>
+    /// </summary>
+    public static ToolResult NeverRan(
+        string error,
+        string? output = null,
+        IReadOnlyDictionary<string, object?>? metadata = null)
+        => new(false, output, error, Array.Empty<ArtifactRef>(), metadata ?? EmptyMeta, DidNotRun: true);
 }
 
 /// <summary>The only surface a tool sees (PLAN_v2 §2A.1). No UI / Orchestrator back-channel.</summary>

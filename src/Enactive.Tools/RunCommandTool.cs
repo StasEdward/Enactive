@@ -111,7 +111,7 @@ public sealed class RunCommandTool : ITool
 
         return ProcessExec.BuildResult(
             "Command", process.ExitCode, stdout.ToString(), stderr.ToString(), expected,
-            declarable: true, outputCutShort: outcome.OutputCutShort);
+            declarable: true, outputCutShort: outcome.OutputCutShort, commandLine: command);
     }
 
     private static readonly string Schema = $$"""

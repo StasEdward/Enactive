@@ -1461,9 +1461,11 @@ public sealed class Orchestrator : IOrchestrator
             => !_anythingWorked && _byCall.Count == 0 && _foundNothing.Count > 0;
 
         /// <param name="didNotRun">
-        /// The tool could not READ the call and returned before attempting anything — see
-        /// <see cref="ToolResults.Unreadable"/>. Such a call is closed by the same tool succeeding
-        /// afterwards, because there is no residue from it to make good.
+        /// The call was never attempted. Two things set it, and they are the same thing seen from
+        /// two distances: the tool could not READ the call (<see cref="ToolResults.Unreadable"/>),
+        /// or the SHELL would not start the line (<see cref="ToolResults.NeverRan"/>). A sentence
+        /// that did not parse, in the tool or one layer further down. Such a call is closed by the
+        /// same KIND of tool succeeding afterwards, because there is no residue to make good.
         ///
         /// <para>That rule already existed and was written to depend on the tool being one that
         /// writes files, which was never its justification. Reported 2026-08 as
@@ -1485,12 +1487,18 @@ public sealed class Orchestrator : IOrchestrator
             var key = Key(call);
             _byCall[key] = Line(call, error);
 
-            if (FileNamedBy(call) is { } file)
+            // Asked FIRST, because it is the strongest thing known about the call: whatever the
+            // arguments name, nothing was attempted. Naming the file or the operation would put
+            // the call where only doing that same thing again can close it - and there is no
+            // "again", because there was never a first time.
+            if (didNotRun)
+                _namedNothing[key] = Kind(call.Name);
+            else if (FileNamedBy(call) is { } file)
                 _fileOf[key] = file;
             else if (ShellOperation.For(call.Name, call.ArgumentsJson) is { } operation)
                 _shellOf[key] = operation;
-            else if (didNotRun || MutatingTools.Changes(call.Name))
-                _namedNothing[key] = call.Name;
+            else if (MutatingTools.Changes(call.Name))
+                _namedNothing[key] = Kind(call.Name);
         }
 
         /// <summary>A lookup whose target is not there. An answer — unless the step has nothing else.</summary>
@@ -1545,10 +1553,24 @@ public sealed class Orchestrator : IOrchestrator
                                              .Select(p => p.Key).ToArray())
                     Close(open);
 
-            foreach (var open in _namedNothing.Where(p => p.Value == call.Name)
+            foreach (var open in _namedNothing.Where(p => p.Value == Kind(call.Name))
                                               .Select(p => p.Key).ToArray())
                 Close(open);
         }
+
+        /// <summary>
+        /// What a call has to be repeated AS, for a failure that attempted nothing.
+        ///
+        /// <para>The tool's own name, except that the two shells are one thing. A cmdlet sent to
+        /// <c>run_command</c> is refused by cmd.exe having done nothing at all, and the correct
+        /// second attempt is the same work sent to <c>run_powershell</c> - the model saying it to
+        /// the shell that has the word. Measured 2026-09-20: that is precisely the recovery a run
+        /// made, and the step was failed for it, because "the same tool succeeding afterwards"
+        /// was read as the same tool NAME.</para>
+        ///
+        /// <para>Prefixed so it can never be a tool name itself.</para>
+        /// </summary>
+        private static string Kind(string tool) => ShellTools.IsShell(tool) ? "shell:" : tool;
 
         private void Close(string key)
         {

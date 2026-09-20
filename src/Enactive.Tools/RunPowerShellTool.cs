@@ -114,7 +114,7 @@ public sealed class RunPowerShellTool : ITool
         return ProcessExec.BuildResult(
             "PowerShell", process.ExitCode, CliXml.ToText(stdout.ToString()), errors,
             Tolerated(process.ExitCode, errors, expected), declarable: true,
-            outputCutShort: outcome.OutputCutShort);
+            outputCutShort: outcome.OutputCutShort, commandLine: script);
     }
 
     /// <summary>

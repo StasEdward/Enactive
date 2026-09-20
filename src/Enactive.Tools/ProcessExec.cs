@@ -3,6 +3,7 @@ namespace Enactive.Tools;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using Enactive.Core.Context;
 using Enactive.Core.Execution;
 using Enactive.Core.Tools;
 
@@ -138,15 +139,27 @@ internal static class ProcessExec
     /// one - and "the build printed nothing" is a very different conclusion from "the build printed
     /// something I did not wait for".
     /// </param>
+    /// <param name="commandLine">
+    /// The line the shell was handed, when there was one. Only a caller that hands a SHELL a line
+    /// passes this: it is what lets a refusal be checked against the command it is supposed to be
+    /// about. <see cref="RunAsync"/>, which starts a named executable with an argument list, has
+    /// no such line and passes none — "not recognized" in ITS output came from inside the program
+    /// it started, and is a real failure.
+    /// </param>
     public static ToolResult BuildResult(
         string what, int exitCode, string stdout, string stderr,
         IReadOnlyCollection<int>? allowedExitCodes = null, bool declarable = false,
-        bool outputCutShort = false)
+        bool outputCutShort = false, string? commandLine = null)
     {
         var combined = stdout;
         if (stderr.Length > 0)
             combined += "\n[stderr]\n" + stderr;
         combined = combined.Trim();
+
+        // Asked of the WHOLE output, before it is shortened: a refusal that the cut fell through
+        // would read as an absence and be called a real failure.
+        var neverRan = ShellRefusal.NeverRan(commandLine, combined);
+
         // The START and the END, not the first N characters. A program reports its outcome last,
         // so head-only shortening hands the model the part with no answer in it: on 2026-09-20 a
         // step wrote its tests, ran them, and could not tell whether they passed - the summary was
@@ -166,6 +179,19 @@ internal static class ProcessExec
         var allowed = allowedExitCodes is { Count: > 0 } ? allowedExitCodes : DefaultAllowedExitCodes;
         if (allowed.Contains(exitCode))
             return ToolResults.Ok(output: output, metadata: metadata);
+
+        // Before the exit code is read as a verdict, because for this it is not one. The shell
+        // never started the line, so there is nothing here to declare an expected code for and
+        // nothing half-done to make good - and the advice below would be actively wrong, inviting
+        // a model to declare 255 "expected" for a cmdlet that does not exist in cmd.exe.
+        if (neverRan)
+            return ToolResults.NeverRan(
+                $"{what} did NOT run - the shell does not have that word, so nothing was executed "
+                + "and nothing changed. run_command is cmd.exe; run_powershell is PowerShell. A "
+                + "cmdlet - Select-String, Tee-Object, Out-File, Set-Content, Select-Object - "
+                + "exists only in the second. Send the same work to the shell that has it, or "
+                + "write it the way this one spells it.",
+                output, metadata);
 
         // Said only when nothing was declared: repeating the option to somebody who used it and
         // still failed is noise, and worse, reads as an invitation to widen the declaration.
