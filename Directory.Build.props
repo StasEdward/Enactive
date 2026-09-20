@@ -17,16 +17,38 @@
 
   <!-- The commit is the only part of the version that actually moves between builds, so it goes
        into InformationalVersion. ContinueOnError, because a copy of the source with no .git is
-       still a perfectly good thing to build. -->
+       still a perfectly good thing to build.
+
+       The EXIT CODE is what decides, not whether there is output. ConsoleToMSBuild captures
+       stderr as well as stdout, so every way git can fail wrote its COMPLAINT into the version
+       where the hash belongs - and the "is it empty" guard never fired, because a failure is not
+       silent. The case this comment claims to handle is the one that was broken.
+
+       Measured 2026-09-20, in a source copy with no .git:
+           InformationalVersion = 0.1.0+fatal: not a git repository (or any of the parent directories): .git
+       and the build stayed green. git missing from PATH gives 0.1.0+'git' is not recognized…;
+       a git that cannot be launched at all gives 0.1.0+Access is denied. - which is how this was
+       found, inside an AppContainer where MSBuild's Exec could not reach its own temporary batch
+       file. Three different failures, all of them stamped and shipped.
+
+       BuildInfo.AppVersion states the intended contract in as many words - "0.1.0+9c6cd2b when
+       the build could see git, 0.1.0 when it could not" - and the About panel it feeds is exactly
+       where the wrong answer was on show. -->
   <Target Name="StampCommit" BeforeTargets="GetAssemblyAttributes">
     <Exec Command="git rev-parse --short HEAD"
           ConsoleToMSBuild="true" StandardOutputImportance="low"
           ContinueOnError="true" IgnoreExitCode="true">
       <Output TaskParameter="ConsoleOutput" PropertyName="GitCommit" />
+      <Output TaskParameter="ExitCode" PropertyName="GitExitCode" />
     </Exec>
     <PropertyGroup>
-      <InformationalVersion Condition="'$(GitCommit)' != ''">$(Version)+$(GitCommit.Trim())</InformationalVersion>
-      <InformationalVersion Condition="'$(GitCommit)' == ''">$(Version)</InformationalVersion>
+      <!-- Empty unless git ANSWERED. Everything downstream then reads as it did before: a commit
+           we have, or none at all. Deliberately one guard in one place rather than a condition
+           repeated on both lines below - the bug was a guard that looked like it covered the
+           failure and did not. -->
+      <_StampedCommit Condition="'$(GitExitCode)' == '0'">$(GitCommit.Trim())</_StampedCommit>
+      <InformationalVersion Condition="'$(_StampedCommit)' != ''">$(Version)+$(_StampedCommit)</InformationalVersion>
+      <InformationalVersion Condition="'$(_StampedCommit)' == ''">$(Version)</InformationalVersion>
     </PropertyGroup>
   </Target>
 </Project>
