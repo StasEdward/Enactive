@@ -33,7 +33,8 @@ public sealed class SearchFilesTool : ITool
                    + "(e.g. \"*.cs\"). Use this to FIND things instead of reading files one by one. "
                    + "Build output and your own working area are left out of a whole-workspace "
                    + "sweep; to search inside one, name it with 'path' (e.g. \"" + WorkspaceGuard.ScratchPrefix
-                   + "\" to search a long command output you saved there).",
+                   + "\" to search a long command output you saved there). 'path' may name a single "
+                   + "FILE, which searches just that file.",
         JsonSchema: Schema);
 
     public PermissionLevel RequiredLevel => PermissionLevel.Observe;
@@ -79,9 +80,19 @@ public sealed class SearchFilesTool : ITool
         try { searchRoot = WorkspacePaths.ResolveInside(ctx.WorkspaceRoot, subPath); }
         catch (ArgumentException ex) { return ToolResults.Fail(ex.Message); }
 
-        // NotFound, not Fail: searching somewhere that does not exist is answered by saying so.
-        if (!Directory.Exists(searchRoot))
-            return ToolResults.NotFound($"Not a folder in this workspace: {subPath ?? "."}");
+        // A path that names ONE file is a search of that file, not a mistake.
+        //
+        // Measured 2026-09-20: a run asked for `error|failed|Passed!` in `build_output.txt` and was
+        // told "Not a folder in this workspace: build_output.txt" - about a file sitting in the
+        // workspace root, which it had listed a moment earlier. It then spent a turn on
+        // `for %f in (build_output.txt) do @echo %~zf bytes & findstr /n /i ...` to get what it had
+        // asked for. This is the same defect ListDirectoryTool was given the other half of a day
+        // before: a message that says "wrong path" about a path that is right. Answering is better
+        // than explaining, and searching one named file is a perfectly good question.
+        var one = File.Exists(searchRoot);
+
+        if (!one && !Directory.Exists(searchRoot))
+            return ToolResults.NotFound($"Not a folder or file in this workspace: {subPath ?? "."}");
 
         var output = new StringBuilder();
         var matches = 0;
@@ -97,7 +108,9 @@ public sealed class SearchFilesTool : ITool
 
         try
         {
-            foreach (var file in Enumerate(searchRoot, glob))
+            // A file named outright is searched whatever the glob says: naming it IS the filter,
+            // and the skip list is about where a walk WANDERS, not about what was asked for.
+            foreach (var file in one ? new[] { searchRoot } : Enumerate(searchRoot, glob))
             {
                 ct.ThrowIfCancellationRequested();
 
