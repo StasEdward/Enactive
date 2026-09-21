@@ -2089,7 +2089,14 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         try
         {
             var full = Path.Combine(root, item.RelativePath);
-            ShowViewer(item.RelativePath, File.Exists(full) ? File.ReadAllText(full) : "(file not found)");
+
+            // The PATH goes with the text, because it is what decides how the file is shown -
+            // see ArtifactViewerCatalog. A run's deliverable is often one Markdown document, and
+            // every one of them used to arrive as monospaced source that does not wrap.
+            ViewerWindow.Show(
+                this, item.RelativePath,
+                File.Exists(full) ? File.ReadAllText(full) : "(file not found)",
+                item.RelativePath);
         }
         catch (Exception ex)
         {
