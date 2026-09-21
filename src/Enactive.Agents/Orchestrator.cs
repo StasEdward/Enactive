@@ -2223,6 +2223,10 @@ public sealed class Orchestrator : IOrchestrator
     {
         var written = new List<WrittenFile>();
 
+        // Which of these the step does not have to itself. The journal has recorded the owner of
+        // every write since the revert needed it; nothing had ever asked the review.
+        var shared = store.SharedWithAnotherStep;
+
         foreach (var path in store.TouchedPaths)
         {
             string? content;
@@ -2249,7 +2253,9 @@ public sealed class Orchestrator : IOrchestrator
                 ? "(this file was removed, or could not be read back)"
                 : content.Length > MaxReviewFileChars ? content[..MaxReviewFileChars] : content;
 
-            written.Add(new WrittenFile(path, shown, content?.Length ?? shown.Length));
+            written.Add(new WrittenFile(
+                path, shown, content?.Length ?? shown.Length,
+                shared.Contains(path, StringComparer.OrdinalIgnoreCase)));
         }
 
         return written;

@@ -197,6 +197,39 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
     /// Every path this owner wrote or removed, from the journal — the record made when the operation
     /// happened, not a reading of what the model said it would do.
     /// </summary>
+    /// <summary>
+    /// Of the paths this owner wrote, the ones ANOTHER owner also wrote at or after the moment
+    /// this scope opened — that is, while it was live.
+    ///
+    /// <para>Everything needed was already recorded, for the revert. Owner says who, Sequence says
+    /// when on a counter that only goes up, and Key is the one name a file has however it was
+    /// spelled. The question had simply never been asked.</para>
+    /// </summary>
+    public IReadOnlyCollection<string> AlsoWrittenByAnother(int owner)
+    {
+        lock (_journalGate)
+        {
+            if (owner < 0 || owner >= _ownerCheckpoints.Count)
+                return Array.Empty<string>();
+
+            var opened = _ownerCheckpoints[owner];
+
+            var mine = _journal
+                .Where(w => w.Owner == owner)
+                .Select(w => w.Key)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            if (mine.Count == 0)
+                return Array.Empty<string>();
+
+            return _journal
+                .Where(w => w.Owner != owner && w.Sequence >= opened && mine.Contains(w.Key))
+                .Select(w => w.Key)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+        }
+    }
+
     public IReadOnlyCollection<string> TouchedBy(int owner)
     {
         // Keys, not spellings: a scope that wrote "doc.txt" and then "./doc.txt" touched ONE file,

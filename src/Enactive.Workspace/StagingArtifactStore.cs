@@ -343,9 +343,46 @@ public sealed class StagingArtifactStore : IOwnedArtifactStore
     /// alone. The owner comes from the scope, never from a shared "newest" field: that field gave
     /// two interleaved steps the same number, and rejecting the second dropped the first's work.
     /// </summary>
+    /// <summary>
+    /// Where the change list stood when this scope opened. Needed only by
+    /// <see cref="AlsoWrittenByAnother"/>: without it, "another step wrote this while I was open"
+    /// cannot be told from "an earlier step wrote it before I started", and the second is the
+    /// ordinary way a plan builds one document.
+    /// </summary>
+    private readonly Dictionary<int, int> _openedAt = new();
+
     public int NewOwner()
     {
-        lock (_gate) return ++_owners;
+        lock (_gate)
+        {
+            var owner = ++_owners;
+            _openedAt[owner] = _sequence;
+            return owner;
+        }
+    }
+
+    /// <inheritdoc/>
+    public IReadOnlyCollection<string> AlsoWrittenByAnother(int owner)
+    {
+        lock (_gate)
+        {
+            if (!_openedAt.TryGetValue(owner, out var opened))
+                return Array.Empty<string>();
+
+            var mine = _changes
+                .Where(c => c.Scope == owner)
+                .Select(c => c.Key)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            if (mine.Count == 0)
+                return Array.Empty<string>();
+
+            return _changes
+                .Where(c => c.Scope != owner && c.Sequence >= opened && mine.Contains(c.Key))
+                .Select(c => c.Key)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+        }
     }
 
     public IArtifactScope BeginStep() => new ArtifactScope(this, NewOwner());

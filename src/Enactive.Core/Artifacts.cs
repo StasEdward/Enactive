@@ -116,6 +116,23 @@ public interface IArtifactScope : IArtifactStore
     IReadOnlyCollection<string> TouchedPaths => Array.Empty<string>();
 
     /// <summary>
+    /// Of <see cref="TouchedPaths"/>, the ones another step running at the same time ALSO wrote.
+    ///
+    /// <para><b>Nothing asked this, and the review paid for it.</b> Measured 2026-09-21: a plan
+    /// gave two steps <c>dependsOn: []</c> and both wrote <c>Docs/DRIFT_ollama.md</c> — 21 edits
+    /// from one, 41 from the other, interleaved, with <c>MaxParallelSteps</c> at 10. The journal
+    /// had recorded the owner of every write all along, precisely so a revert could not destroy
+    /// another step's work. The REVIEW had no such protection: it reads each written file off the
+    /// disk as it stands now, so the step that finished second was judged on a document the step
+    /// that finished first had been editing. Both passed.</para>
+    ///
+    /// <para>This does not fix the attribution — a direct store keeps no per-step copy of the
+    /// content, so there is nothing to show instead. It makes the limit visible, which is the
+    /// difference between a reviewer that cannot tell and one that does not know it cannot.</para>
+    /// </summary>
+    IReadOnlyCollection<string> SharedWithAnotherStep => Array.Empty<string>();
+
+    /// <summary>
     /// Undoes what THIS scope wrote to <paramref name="paths"/>, restoring each one to the content
     /// it had when the scope opened (removing it if it did not exist).
     ///
@@ -153,6 +170,15 @@ public interface IOwnedArtifactStore : IArtifactStore
 
     /// <summary>Every path this owner has written or removed, as recorded when it happened.</summary>
     IReadOnlyCollection<string> TouchedBy(int owner);
+
+    /// <summary>
+    /// Of the paths this owner wrote, the ones ANOTHER owner also wrote while this scope was open.
+    ///
+    /// <para>Defaulted to empty so a store that does not track owners keeps behaving as it did,
+    /// and so the answer it gives is the honest one: a store that cannot tell has not found any.
+    /// </para>
+    /// </summary>
+    IReadOnlyCollection<string> AlsoWrittenByAnother(int owner) => Array.Empty<string>();
 }
 
 /// <summary>
@@ -183,6 +209,8 @@ public sealed class ArtifactScope : IArtifactScope
         => _store.RevertOwnedAsync(_owner, paths, ct);
 
     public IReadOnlyCollection<string> TouchedPaths => _store.TouchedBy(_owner);
+
+    public IReadOnlyCollection<string> SharedWithAnotherStep => _store.AlsoWrittenByAnother(_owner);
 
     public Task<Stream> OpenAsync(Guid artifactId, CancellationToken ct) => _store.OpenAsync(artifactId, ct);
     public Task DeleteAsync(Guid artifactId, CancellationToken ct) => _store.DeleteAsync(artifactId, ct);
