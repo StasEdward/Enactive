@@ -87,6 +87,13 @@ public sealed class ListDirectoryTool : ITool
                 output: listing,
                 metadata: new Dictionary<string, object?> { ["count"] = entries.Count }));
         }
+        // A read refused for being the workspace's own state has ANSWERED: the model asked
+        // whether it could look there and was told no, definitively. Nothing is half-done and
+        // there is nothing to retry, so it must not hold the step open. See ReservedPathException.
+        catch (ReservedPathException)
+        {
+            return Task.FromResult(ToolResults.NotFound(ReservedPathException.Explanation));
+        }
         catch (Exception ex)
         {
             return Task.FromResult(ToolResults.Fail($"Could not list '{path ?? "."}': {ex.Message}"));

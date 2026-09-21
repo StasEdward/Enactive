@@ -3,6 +3,7 @@ namespace Enactive.Tools;
 using System.Text;
 using System.Text.Json;
 using Enactive.Core.Permissions;
+using Enactive.Core.Context;
 using Enactive.Core.Tools;
 
 /// <summary>
@@ -112,6 +113,13 @@ public sealed class ReadFileTool : ITool
                     // reviewer judging from evidence has to be able to tell them apart.
                     ["staged"] = staged is not null
                 });
+        }
+        // A read refused for being the workspace's own state has ANSWERED: the model asked
+        // whether it could look there and was told no, definitively. Nothing is half-done and
+        // there is nothing to retry, so it must not hold the step open. See ReservedPathException.
+        catch (ReservedPathException)
+        {
+            return ToolResults.NotFound(ReservedPathException.Explanation);
         }
         catch (Exception ex)
         {

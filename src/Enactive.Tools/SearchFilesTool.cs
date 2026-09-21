@@ -78,6 +78,7 @@ public sealed class SearchFilesTool : ITool
 
         string searchRoot;
         try { searchRoot = WorkspacePaths.ResolveInside(ctx.WorkspaceRoot, subPath); }
+        catch (ReservedPathException) { return ToolResults.NotFound(ReservedPathException.Explanation); }
         catch (ArgumentException ex) { return ToolResults.Fail(ex.Message); }
 
         // A path that names ONE file is a search of that file, not a mistake.

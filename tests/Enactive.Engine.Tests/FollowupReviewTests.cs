@@ -4,6 +4,7 @@ using System.Diagnostics;
 using Enactive.Core.Artifacts;
 using Enactive.Core.Events;
 using Enactive.Workspace;
+using Enactive.Core.Context;
 using Xunit;
 
 /// <summary>
@@ -39,7 +40,7 @@ public sealed class FollowupReviewTests
 
         try
         {
-            await Assert.ThrowsAsync<ArgumentException>(
+            await Assert.ThrowsAsync<ReservedPathException>(
                 () => Write(fx.Artifacts, "alias/state.txt", "untrusted replacement"));
 
             Assert.Equal("trusted state", File.ReadAllText(fx.PathOf(".enactive/state.txt")));

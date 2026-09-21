@@ -241,7 +241,7 @@ public sealed class WorkspaceIdentityTests : IDisposable
     {
         var path = Folder("guarded");
 
-        var refused = Assert.Throws<ArgumentException>(
+        var refused = Assert.Throws<ReservedPathException>(
             () => WorkspaceGuard.ResolveInside(path, ".enactive/workspace.json"));
 
         Assert.Contains(".enactive", refused.Message, StringComparison.Ordinal);

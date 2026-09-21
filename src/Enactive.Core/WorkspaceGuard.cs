@@ -119,9 +119,7 @@ public static class WorkspaceGuard
             throw new ArgumentException("Path escapes the workspace root.", nameof(relativePath));
 
         if (!allowReserved && TouchesReserved(fullRoot, effective))
-            throw new ArgumentException(
-                $"'{ReservedFolder}' holds the workspace's own state and is not writable by tools.",
-                nameof(relativePath));
+            throw new ReservedPathException(nameof(relativePath));
 
         // The literal path is what the caller opens; the OS follows the same links we just did, so
         // it reaches the destination we vetted. Returning it keeps recorded paths as the user wrote
@@ -294,4 +292,35 @@ public static class WorkspaceGuard
 
         return effective;
     }
+}
+
+/// <summary>
+/// The caller asked for a path inside the workspace's own state.
+///
+/// <para><b>Its own type so that READING and WRITING can answer it differently.</b> It used to be
+/// a plain ArgumentException saying <i>"is not writable by tools"</i>, which every tool wrapped
+/// into a failure - so <c>list_dir .enactive</c> was told the folder is not WRITABLE, about a call
+/// that was only looking, and the refusal then held the step open as unfinished work. Measured
+/// twice on 2026-09-21, in two runs of two different requests; in one of them it was one of the
+/// two unresolved calls that failed the run.</para>
+///
+/// <para>A read refused here has ANSWERED - the model asked whether it could look, and was told
+/// no, definitively, with nothing left half-done and nothing to retry. That is the same rule
+/// <see cref="Tools.ToolResults.NotFound"/> already applies to a lookup that finds nothing. A
+/// WRITE refused here is still work that did not happen, so it stays a failure, and it does:
+/// this derives from ArgumentException, which is what every existing handler catches.</para>
+/// </summary>
+public sealed class ReservedPathException(string? parameterName)
+    : ArgumentException(Explanation, parameterName)
+{
+    /// <summary>
+    /// The text a MODEL is shown, without the "(Parameter 'relativePath')" that
+    /// <see cref="ArgumentException"/> appends to its own Message. The parameter name is for a
+    /// developer reading a stack trace; to an agent it is noise in the middle of an instruction.
+    /// </summary>
+    public const string Explanation =
+        "'" + WorkspaceGuard.ReservedFolder + "' is the workspace's own state - its undo journal, "
+        + "approvals and checkpoints - and tools do not go inside it, to read or to write. Your "
+        + "own working area is '" + WorkspaceGuard.ScratchPrefix + "/', which you may list, read "
+        + "and write freely.";
 }

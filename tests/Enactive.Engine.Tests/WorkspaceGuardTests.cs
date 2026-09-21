@@ -47,7 +47,7 @@ public sealed class WorkspaceGuardTests
     public void The_state_folder_is_not_writable_by_tools(string relative)
     {
         using var fx = new EngineFixture();
-        Assert.Throws<ArgumentException>(() => WorkspaceGuard.ResolveInside(fx.Root, relative));
+        Assert.Throws<ReservedPathException>(() => WorkspaceGuard.ResolveInside(fx.Root, relative));
     }
 
     [Fact]
@@ -136,7 +136,7 @@ public sealed class WorkspaceGuardTests
     public void Everything_beside_the_scratch_area_is_still_refused(string relative)
     {
         using var fx = new EngineFixture();
-        Assert.Throws<ArgumentException>(() => WorkspaceGuard.ResolveInside(fx.Root, relative));
+        Assert.Throws<ReservedPathException>(() => WorkspaceGuard.ResolveInside(fx.Root, relative));
     }
 
     /// <summary>
@@ -171,7 +171,7 @@ public sealed class WorkspaceGuardTests
             return;
         }
 
-        Assert.Throws<ArgumentException>(
+        Assert.Throws<ReservedPathException>(
             () => WorkspaceGuard.ResolveInside(fx.Root, ".enactive/scratch/stolen.txt"));
     }
 
