@@ -111,26 +111,73 @@ public sealed record SuccessReport(IReadOnlyList<CriterionResult> Results)
     public IReadOnlyList<CriterionResult> Blocking
         => Results.Where(r => r.Blocking).ToArray();
 
+    /// <summary>At least one required check RAN and passed. Not the same as "nothing blocked".</summary>
+    public bool Proved
+        => Results.Any(r => r.Required && r.Outcome == CriterionOutcome.Passed);
+
     /// <summary>
-    /// The run's outcome after the checks have had their say. Only ever equal to or worse than what
-    /// it was: criteria can hold a run back, never promote one. A run that already failed is left
-    /// alone — its outcome was decided by something that actually went wrong, and burying that under
-    /// a build result would lose it.
+    /// The run's outcome after the checks have had their say.
+    ///
+    /// <para><b>A check may answer an open question; it may never excuse a failure.</b>
+    /// <see cref="RunOutcomeKind.Failed"/> means something went wrong that is known about, and a
+    /// green build on top of that would bury it. <see cref="RunOutcomeKind.Incomplete"/> means the
+    /// opposite: <i>we could not establish that it finished</i> — an absence of evidence, which is
+    /// exactly the thing a command with an exit code is for. <see cref="RunOutcomeKind.Cancelled"/>
+    /// is the person's decision and is not ours to revisit.</para>
+    ///
+    /// <para><b>Measured 2026-09-21, which is why this changed.</b> A run was asked to add a method
+    /// and make the tests pass. It added the method, wrote two tests, and the planner's own
+    /// proposed check — <c>dotnet test --filter "FullyQualifiedName~Multiply"</c>, written before
+    /// any of the work — passes with exit 0 against the workspace the run left behind. The run was
+    /// reported Incomplete, for two shell calls that were never formally closed. The proof was
+    /// written, parsed, carried on the plan, and never run, because verification only happened on
+    /// a run that the transcript-readers had ALREADY called done. The one guard that looks at the
+    /// world ran last and could only tighten; the guards that read the transcript ran first and
+    /// decided. So mechanical evidence was systematically excluded from precisely the cases where
+    /// the transcript is wrong.</para>
+    ///
+    /// <para><b>Promotion needs proof, not merely the absence of an objection.</b> A report where
+    /// nothing blocked because nothing could be evaluated has established nothing — see
+    /// <see cref="Proved"/>. That is the difference between "the checks say yes" and "the checks
+    /// did not say no", and it is the whole safety of this.</para>
     /// </summary>
     public RunOutcomeKind Apply(RunOutcomeKind outcome)
     {
-        if (outcome != RunOutcomeKind.Completed)
+        if (outcome is not (RunOutcomeKind.Completed or RunOutcomeKind.Incomplete))
             return outcome;
 
         var blocking = Blocking;
-        if (blocking.Count == 0)
+        if (blocking.Count > 0)
+            // A check that FAILED says the work is wrong. A check that could not be evaluated says
+            // only that we do not know - which is not a success, and not the same accusation.
+            return blocking.Any(r => r.Outcome == CriterionOutcome.Failed)
+                ? RunOutcomeKind.Failed
+                : RunOutcomeKind.Incomplete;
+
+        if (outcome == RunOutcomeKind.Completed)
             return outcome;
 
-        // A check that FAILED says the work is wrong. A check that could not be evaluated says only
-        // that we do not know - which is not a success, and not the same accusation.
-        return blocking.Any(r => r.Outcome == CriterionOutcome.Failed)
-            ? RunOutcomeKind.Failed
-            : RunOutcomeKind.Incomplete;
+        return Proved ? RunOutcomeKind.Completed : outcome;
+    }
+
+    /// <summary>
+    /// Why a run the transcript could not call finished is being called finished anyway — and what
+    /// it was that the checks overruled.
+    ///
+    /// <para>The old reason is kept, not replaced. It is real information: two shell calls really
+    /// were left unclosed in the run that produced this. Dropping it would be the mirror of the
+    /// mistake being fixed — one judge silently overwriting the other.</para>
+    /// </summary>
+    public string Overruling(string? was)
+    {
+        var passed = Results.Where(r => r.Required && r.Outcome == CriterionOutcome.Passed)
+                            .Select(r => r.Name);
+
+        var why = $"the check(s) that decide this run passed: {string.Join(", ", passed)}";
+
+        return string.IsNullOrWhiteSpace(was)
+            ? why
+            : $"{why} — which overrules: {was!.Trim()}";
     }
 
     /// <summary>Why the run was held back, in the terminal event's own words.</summary>

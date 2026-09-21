@@ -574,7 +574,7 @@ public sealed class Orchestrator : IOrchestrator
         var quickOutcome = RunOutcomeOf(new[] { quickResult.Kind });
         var quickReason = quickResult.Reason;
 
-        if (quickOutcome == RunOutcomeKind.Completed)
+        if (quickOutcome is RunOutcomeKind.Completed or RunOutcomeKind.Incomplete)
         {
             var verified = new VerifyResult();
             await foreach (var checkEvent in VerifyAsync(
@@ -587,8 +587,10 @@ public sealed class Orchestrator : IOrchestrator
             var adjusted = verified.Report.Apply(quickOutcome);
             if (adjusted != quickOutcome)
             {
+                quickReason = adjusted == RunOutcomeKind.Completed
+                    ? verified.Report.Overruling(quickReason)
+                    : verified.Report.Explain();
                 quickOutcome = adjusted;
-                quickReason = verified.Report.Explain();
             }
         }
 
@@ -1264,11 +1266,21 @@ public sealed class Orchestrator : IOrchestrator
 
         var runReason = ExplainOutcome(outcomes, reasons, cycle, limitReason);
 
-        // The last word, and the only one in the run that is not somebody's opinion. Checked only
-        // when everything else says the work is done: a run that already failed had its outcome
-        // decided by something that actually went wrong, and a build result on top of that would
-        // bury it - besides costing a build to learn nothing.
-        if (runOutcome == RunOutcomeKind.Completed)
+        // The last word, and the only one in the run that is not somebody's opinion.
+        //
+        // Also asked of an INCOMPLETE run, as of 2026-09-21. It used to be asked only of a run
+        // everything else had already called done, which sounded careful and was the opposite: the
+        // one guard that looks at the WORKSPACE ran last and could only tighten, so it was silent
+        // in exactly the cases where the guards that read the TRANSCRIPT are wrong. Measured that
+        // day - a run added the method, wrote the tests, and its own proposed check passed against
+        // the workspace it left behind, while the report said Incomplete over two shell calls that
+        // were never formally closed.
+        //
+        // Failed and Cancelled are still not asked. Those had their outcome decided by something
+        // that actually went wrong, or by the person, and a green build on top would bury it.
+        // Incomplete is the one that means "we could not establish that it finished", and that is
+        // a question, not a verdict. See SuccessReport.Apply.
+        if (runOutcome is RunOutcomeKind.Completed or RunOutcomeKind.Incomplete)
         {
             var verified = new VerifyResult();
             await foreach (var checkEvent in VerifyAsync(
@@ -1281,8 +1293,10 @@ public sealed class Orchestrator : IOrchestrator
             var adjusted = verified.Report.Apply(runOutcome);
             if (adjusted != runOutcome)
             {
+                runReason = adjusted == RunOutcomeKind.Completed
+                    ? verified.Report.Overruling(runReason)
+                    : verified.Report.Explain();
                 runOutcome = adjusted;
-                runReason = verified.Report.Explain();
             }
         }
 

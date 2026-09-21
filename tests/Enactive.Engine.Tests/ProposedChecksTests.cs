@@ -18,10 +18,11 @@ using Xunit;
 /// teaching the transcript-judge new vocabulary.</para>
 ///
 /// <para><b>Why a model proposing its own checks is not circular.</b> Three properties, each with
-/// a test below. They are proposed BEFORE the work, so they cannot be fitted to the result.
-/// <c>SuccessReport.Apply</c> can only make a verdict worse, never better, so a weak check is no
-/// worse than the nothing it replaces. And a proposed check that could not be RUN holds nothing
-/// back — only one that ran and said no.</para>
+/// a test below. They are proposed BEFORE the work, by the planner, which has seen the request and
+/// where it runs and no result at all — so they cannot be fitted to one. A proposed check that
+/// could not be RUN holds nothing back; only one that ran and said no. And it can never excuse a
+/// FAILURE — the most it can do to a run is answer an <c>Incomplete</c>, which is the engine
+/// saying "we could not establish that it finished" and is a question rather than a verdict.</para>
 /// </summary>
 public sealed class ProposedChecksTests
 {
@@ -150,11 +151,12 @@ public sealed class ProposedChecksTests
     }
 
     /// <summary>
-    /// Checks never promote. A run that failed for something that actually went wrong keeps that
-    /// outcome however green the checks are — so the worst a weak proposed check can do is nothing.
+    /// A proposed check never excuses a FAILURE. Something went wrong that is known about, and a
+    /// green build on top of it would bury it — so the worst a weak proposed check can do to a run
+    /// that really broke is nothing at all.
     /// </summary>
     [Fact]
-    public void Checks_can_only_make_a_verdict_worse()
+    public void A_proposed_check_cannot_excuse_a_failure()
     {
         var report = new SuccessReport(new[]
         {
@@ -163,7 +165,26 @@ public sealed class ProposedChecksTests
         });
 
         Assert.Equal(RunOutcomeKind.Failed, report.Apply(RunOutcomeKind.Failed));
-        Assert.Equal(RunOutcomeKind.Incomplete, report.Apply(RunOutcomeKind.Incomplete));
+        Assert.Equal(RunOutcomeKind.Cancelled, report.Apply(RunOutcomeKind.Cancelled));
+    }
+
+    /// <summary>
+    /// It CAN answer an Incomplete, which is the whole reason the planner is asked for one. That
+    /// outcome means "we could not establish that it finished", and a command with an exit code is
+    /// what establishes things. See <c>SuccessCriteriaTests.A_passing_check_answers_an_Incomplete</c>
+    /// for the run that earned this.
+    /// </summary>
+    [Fact]
+    public void A_proposed_check_that_passed_answers_an_Incomplete()
+    {
+        var report = new SuccessReport(new[]
+        {
+            new CriterionResult("multiply test passes", "dotnet test --filter Multiply",
+                                Required: true, CriterionOutcome.Passed, 0, null,
+                                CriterionOrigin.Proposed)
+        });
+
+        Assert.Equal(RunOutcomeKind.Completed, report.Apply(RunOutcomeKind.Incomplete));
     }
 
     private static async Task<PlanResult> Plan(string answer)
