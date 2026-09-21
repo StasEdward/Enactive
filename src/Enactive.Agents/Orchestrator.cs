@@ -1352,7 +1352,25 @@ public sealed class Orchestrator : IOrchestrator
         // that actually went wrong, or by the person, and a green build on top would bury it.
         // Incomplete is the one that means "we could not establish that it finished", and that is
         // a question, not a verdict. See SuccessReport.Apply.
-        if (runOutcome is RunOutcomeKind.Completed or RunOutcomeKind.Incomplete)
+        // A step that never RAN is a different kind of Incomplete, and checks may not answer it.
+        //
+        // "Incomplete" was treated as one thing when the promotion shipped earlier today: an
+        // absence of evidence, which a command with an exit code is exactly the cure for. A
+        // SKIPPED step is not that. It is a known absence of work - the plan said three things
+        // were needed, one of them did not finish and two never started - and no check can make
+        // the missing two have happened.
+        //
+        // Measured 2026-09-21 20:57, a regression from that same promotion. Step 1 ended
+        // Incomplete, steps 2 and 3 were skipped behind it, and the run was reported Completed
+        // because "Docs/DRIFT_ollama.md exists and is not empty" passed - against the scaffold
+        // step 1 had written before it stopped. A third of the work, called done, on a check
+        // satisfied by a file's existence. The baseline could not catch it: the file was absent
+        // beforehand, so the check DID fail then and did count as proof. Proof of a write, which
+        // is all it ever claimed.
+        var nothingWasSkipped = !outcomes.Contains(StepOutcomeKind.Skipped);
+
+        if (runOutcome == RunOutcomeKind.Completed
+            || (runOutcome == RunOutcomeKind.Incomplete && nothingWasSkipped))
         {
             var verified = new VerifyResult();
             await foreach (var checkEvent in VerifyAsync(
