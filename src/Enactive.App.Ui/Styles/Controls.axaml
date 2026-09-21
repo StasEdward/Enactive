@@ -521,6 +521,36 @@
         <Setter Property="Padding" Value="16,10,16,12" />
     </Style>
 
+    <!-- The request itself, inside a task header.
+
+         It was a one-line TextBlock with an ellipsis and the whole thing on a hover, which had two
+         costs. A request is the one piece of text in this window a person most often wants to take
+         somewhere else - into an editor, into a message, back into the command bar - and a
+         TextBlock cannot be selected with a mouse. And a hover is not reading: a paragraph does not
+         become legible by being shown in a tooltip.
+
+         So it is a read-only TextBox: selectable, copyable, wrapped, scrolled. Fixed at three lines
+         so that the header is the SAME HEIGHT whatever was asked - a panel that grows with the
+         request moves the run underneath it, and the run is what a person is watching.
+
+         Dressed down to look like the hint it replaces: no border, no background, no caret. The
+         caret in particular, because a blinking bar in a header reads as an editable field, and
+         this is not one. -->
+    <Style Selector="TextBox.taskIntent">
+        <Setter Property="IsReadOnly" Value="True" />
+        <Setter Property="AcceptsReturn" Value="True" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+        <Setter Property="Height" Value="48" />
+        <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Auto" />
+        <Setter Property="Foreground" Value="{DynamicResource Brand.TextMuted}" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="CaretBrush" Value="Transparent" />
+        <Setter Property="MinHeight" Value="0" />
+    </Style>
+
     <!-- A pill states one word about the run - its phase, its worker. The colour
          comes from the view model, because only it knows which word this is. -->
     <Style Selector="Border.pill">

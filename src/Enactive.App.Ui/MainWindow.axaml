@@ -533,11 +533,11 @@
                     <StackPanel Grid.Column="0" Spacing="2" Margin="0,0,12,0">
                         <TextBlock Text="{Binding TaskTitle}" FontSize="15" FontWeight="SemiBold"
                                    TextTrimming="CharacterEllipsis" />
-                        <!-- One line: the header states the task, it does not reprint it.
-                             The whole request is on the hover. -->
-                        <TextBlock Classes="hint" Text="{Binding TaskIntent}" FontSize="12"
-                                   TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
-                                   ToolTip.Tip="{Binding TaskIntent}" />
+                        <!-- The request, readable and takeable. It was one line with an
+                             ellipsis and the rest on a hover; a hover is not reading, and a
+                             TextBlock cannot be selected with a mouse. Three lines, fixed, so
+                             the run underneath does not move when the request is long. -->
+                        <TextBox Classes="taskIntent" Text="{Binding TaskIntent}" />
                     </StackPanel>
                     <Border Grid.Column="1" Classes="pill" Background="{Binding StatusPillBrush}">
                         <TextBlock Text="{Binding StatusPhase}"
@@ -853,10 +853,12 @@
                                        TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
                             <!-- What was asked for. It used to BE the title, four paragraphs of it;
                                  it belongs here, on one line, with the whole thing in the tooltip. -->
-                            <TextBlock Classes="hint" Text="{Binding PastRun.Subtitle}" FontSize="11"
-                                       IsVisible="{Binding PastRun.HasSubtitle}"
-                                       TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
-                                       ToolTip.Tip="{Binding PastRun.Request}" />
+                            <!-- The same as the live header above, and for the same reasons:
+                                 a finished run's request is the one most likely to be copied,
+                                 into the command bar or into a message about what went wrong. -->
+                            <TextBox Classes="taskIntent" FontSize="11"
+                                     Text="{Binding PastRun.Request}"
+                                     IsVisible="{Binding PastRun.HasSubtitle}" />
                             <TextBlock Classes="hint" Text="{Binding PastRun.Meta}" FontSize="11"
                                        TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
                                        ToolTip.Tip="{Binding PastRun.Meta}" />
