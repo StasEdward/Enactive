@@ -661,6 +661,54 @@ public sealed class Orchestrator : IOrchestrator
             stepNumbers[builtPlan.Steps[i].Id] = i + 1;
         var maxParallel = _maxParallelSteps;
 
+        // WHETHER A STEP BEGINS WHERE THE LAST ONE LEFT OFF, or with a digest of what it concluded.
+        //
+        // This was `maxParallel == 1`, and that number was answering a question nobody had asked
+        // it. "Can two steps append to one message list?" is about PARALLELISM and only the degree
+        // can answer it. "Should a step carry the previous steps' whole conversation?" is about
+        // memory, and it inherited the degree's answer by accident: the fork was written for
+        // parallel branches, and the sequential path was left alone under "no behaviour change".
+        //
+        // Measured 2026-09-21 on a three-step plan at degree 1, before either step had done
+        // anything of its own:
+        //
+        //     step 2's first prompt   70 messages    40,549 tokens
+        //     step 3's first prompt  251 messages   140,576 tokens
+        //
+        // Step 3 made 41 tool calls and paid 4.85M prompt tokens, nearly all of it re-reading the
+        // other two steps. The run spent 12.4M in total. Nothing was ever dropped, because the
+        // trimming below only applies to a provider that declares a hard window and a cloud one
+        // does not.
+        //
+        // SO IT WAS TRIED, on the same task and the same workspace, and it came out WORSE:
+        //
+        //                          shared        forked
+        //     model calls             130           198
+        //     prompt tokens         12.4M         17.0M
+        //     wall clock          9m 29s       12m 37s
+        //     step 2's first prompt  40,549        4,290
+        //
+        // The fork did exactly what it promised - step 2 began with four messages instead of
+        // seventy - and the run cost 37% more. A step that cannot SEE what the last one read
+        // reads it again, and those reads then pile into its own conversation, which is re-sent
+        // every turn. The saving is taken at the start of a step and repaid with interest inside
+        // it: the forked step 2 made 139 calls against the shared run's 102 across two steps, and
+        // its prompt reached 190,017 against 175,819.
+        //
+        // Carrying the conversation is not waste. It is the cheapest form of memory available -
+        // already written, already cached by the provider - and re-deriving it costs tool calls
+        // whose results are bigger than the conversation they replace.
+        //
+        // CAVEAT, because one run each way is thin: the planner produced three steps the first
+        // time and two the second, so the comparison is not like for like. What the numbers do
+        // support is the mechanism - more calls, a larger peak prompt, a longer run - and that is
+        // the opposite of the effect the change was made to have.
+        //
+        // The journal follows this, not the degree - see runJournal below. That coupling is the
+        // rule already: the reviewer's window has to be the window the answer was drawn from, and
+        // it is why these two lines must always say the same thing.
+        var stepsShareOneConversation = maxParallel == 1;
+
         // Execute by readiness: a step runs only once all its dependencies are Done (a real DAG),
         // not in a fixed linear order. With MaxParallelSteps > 1 the independent branches of the graph
         // run at the same time; every step task writes into one channel so this method stays a single
@@ -684,7 +732,7 @@ public sealed class Orchestrator : IOrchestrator
         // read, said so, and was rejected for it: "the evidence shows it only read the .csproj
         // file". True of the evidence and false of the run. The retry re-read all five inside step 2
         // and passed — having spent the step's only retry on an artefact of this gap.
-        var runJournal = maxParallel == 1 ? new ExecutionJournal(spansSteps: true) : null;
+        var runJournal = stepsShareOneConversation ? new ExecutionJournal(spansSteps: true) : null;
         if (runJournal is not null && resume is { Transcript.Count: > 0 })
             runJournal.NotePriorTranscript();
 
@@ -833,12 +881,12 @@ public sealed class Orchestrator : IOrchestrator
             var depNote = step.DependsOn.Count > 0 ? $" (after {step.DependsOn.Count} dep)" : "";
             Emit(EventKind.StepStarted, $"[{stepNumber}/{total}] {step.Title}{depNote}");
 
-            // Degree 1 keeps the one shared conversation, exactly as before - no behaviour change.
-            // Above that a step gets its own fork, because two steps cannot append to one message list;
-            // it is seeded with the base prompt plus a digest of what earlier steps concluded, rather
-            // than replaying their whole tool transcript.
+            // Its own conversation unless the run is sharing one - see stepsShareOneConversation.
+            // Seeded with the base prompt plus a digest of what earlier steps concluded, rather
+            // than replaying their whole tool transcript. Two steps could never append to one list
+            // anyway, so a parallel run has always taken this path.
             List<ChatMessage> convo;
-            if (maxParallel == 1)
+            if (stepsShareOneConversation)
             {
                 convo = messages;
             }
