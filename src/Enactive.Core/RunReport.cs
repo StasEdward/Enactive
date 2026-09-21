@@ -133,8 +133,16 @@ public static class RunReport
 
         sb.AppendLine();
         sb.AppendLine($"  FILES     : {(record.Artifacts.Count == 0 ? "(none changed)" : string.Join(", ", record.Artifacts))}");
+        // The cached share, because without it the tokens are a volume and not a cost. A hit is
+        // roughly a tenth the price of a miss, so a run of 31 million prompt tokens - measured
+        // 2026-09-21 - is unknown within a factor of ten until this line says which they were.
+        // "not reported" is said rather than left blank: a provider that does not measure caching
+        // and one that cached nothing are different facts, and only one of them is good news.
         sb.AppendLine($"  TOKENS    : {(record.Usage is { } u
-            ? $"{u.Total} ({u.PromptTokens} in, {u.CompletionTokens} out)"
+            ? $"{u.Total} ({u.PromptTokens} in, {u.CompletionTokens} out; "
+              + (u.CachedPercent is { } pct
+                  ? $"{pct}% of the prompt from cache"
+                  : "cache not reported by this provider") + ")"
             : "not reported")}");
 
         if (record.Decisions.Count > 0)

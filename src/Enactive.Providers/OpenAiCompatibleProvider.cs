@@ -220,7 +220,7 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
             int? prompt = usage.TryGetProperty("prompt_tokens", out var pt) && pt.TryGetInt32(out var ptv) ? ptv : null;
             int? completion = usage.TryGetProperty("completion_tokens", out var cpt) && cpt.TryGetInt32(out var cptv) ? cptv : null;
             if (prompt is not null || completion is not null)
-                events.Add(new UsageDelta(prompt, completion));
+                events.Add(new UsageDelta(prompt, completion, CachedTokens(usage)));
         }
 
         return events;
@@ -312,15 +312,61 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
         if (choices[0].TryGetProperty("finish_reason", out var frEl) && frEl.ValueKind == JsonValueKind.String)
             finishReason = frEl.GetString();
 
-        int? promptTokens = null, completionTokens = null;
+        int? promptTokens = null, completionTokens = null, cached = null;
         if (root.TryGetProperty("usage", out var usage))
         {
             if (usage.TryGetProperty("prompt_tokens", out var pt) && pt.TryGetInt32(out var ptv)) promptTokens = ptv;
             if (usage.TryGetProperty("completion_tokens", out var cpt) && cpt.TryGetInt32(out var cptv)) completionTokens = cptv;
+            cached = CachedTokens(usage);
         }
 
         var assistant = new ChatMessage(ChatRole.Assistant, content, toolCalls);
-        return new ChatCompletion(assistant, finishReason, promptTokens, completionTokens);
+        return new ChatCompletion(assistant, finishReason, promptTokens, completionTokens)
+        {
+            CachedPromptTokens = cached
+        };
+    }
+
+    /// <summary>
+    /// How much of the prompt the provider served from its own cache, or null where it does not
+    /// say.
+    ///
+    /// <para><b>Nothing read this, and the cost of a run was therefore unknowable.</b> Measured
+    /// 2026-09-21: a twelve-minute task spent 31,391,109 prompt tokens over 333 completions, and
+    /// not one of them reported a cached figure - because only the Anthropic adapter looked for
+    /// one, and DeepSeek, Jan, llama.cpp and LM Studio all come through here. A cache hit costs
+    /// roughly a tenth of a miss, so that run's bill was unknown within a factor of ten, and no
+    /// decision about the engine's appetite could be made on it.</para>
+    ///
+    /// <para>Two spellings, because the providers that report it disagree. OpenAI and those
+    /// copying it nest it: <c>usage.prompt_tokens_details.cached_tokens</c>. DeepSeek puts it flat
+    /// as <c>prompt_cache_hit_tokens</c>, beside <c>prompt_cache_miss_tokens</c>. Both mean the
+    /// same thing and both are part of <c>prompt_tokens</c> already, which is what
+    /// <see cref="ChatCompletion.CachedPromptTokens"/> expects - see the Anthropic adapter, where
+    /// the total has to be assembled instead.</para>
+    ///
+    /// <para>Null and ZERO are different answers and are kept different. Zero is a provider
+    /// saying it cached nothing; null is a provider that does not report caching at all. Reading
+    /// the second as the first would put a confident 0% on a run nobody measured.</para>
+    /// </summary>
+    private static int? CachedTokens(JsonElement usage)
+    {
+        if (usage.ValueKind != JsonValueKind.Object)
+            return null;
+
+        // OpenAI and the adapters that copy its shape.
+        if (usage.TryGetProperty("prompt_tokens_details", out var details)
+            && details.ValueKind == JsonValueKind.Object
+            && details.TryGetProperty("cached_tokens", out var nested)
+            && nested.TryGetInt32(out var nestedValue))
+            return nestedValue;
+
+        // DeepSeek.
+        if (usage.TryGetProperty("prompt_cache_hit_tokens", out var flat)
+            && flat.TryGetInt32(out var flatValue))
+            return flatValue;
+
+        return null;
     }
 
     private static string Truncate(string value, int max)

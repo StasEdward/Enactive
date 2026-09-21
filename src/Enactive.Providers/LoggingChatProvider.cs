@@ -64,7 +64,7 @@ public sealed class LoggingChatProvider : IChatProvider
         var reasoning = new StringBuilder();
         var calls = new SortedDictionary<int, (string? Id, string? Name, StringBuilder Args)>();
         string? finish = null;
-        int? promptTokens = null, completionTokens = null;
+        int? promptTokens = null, completionTokens = null, cachedTokens = null;
 
         // What the stream threw, if it threw.
         //
@@ -127,6 +127,7 @@ public sealed class LoggingChatProvider : IChatProvider
                     case UsageDelta u:
                         promptTokens = u.PromptTokens ?? promptTokens;
                         completionTokens = u.CompletionTokens ?? completionTokens;
+                        cachedTokens = u.CachedPromptTokens ?? cachedTokens;
                         break;
                     case FinishDelta f:
                         finish = f.Reason;
@@ -146,7 +147,7 @@ public sealed class LoggingChatProvider : IChatProvider
                 _log.Error(LogSource.Llm,
                     $"response ← {_providerId}/{request.Model} FAILED: {thrown.Message}",
                     RenderResponse(text.ToString(), calls, finish, promptTokens, completionTokens,
-                                   reasoning.ToString())
+                                   cachedTokens, reasoning.ToString())
                         + Environment.NewLine + new string('-', 40) + Environment.NewLine
                         + thrown,
                     request.Model);
@@ -158,7 +159,7 @@ public sealed class LoggingChatProvider : IChatProvider
                         + (finish is null ? "" : $", finish={finish}")
                         + (completionTokens is { } c ? $", {c} out-tokens" : "") + ")",
                     RenderResponse(text.ToString(), calls, finish, promptTokens, completionTokens,
-                                   reasoning.ToString()),
+                                   cachedTokens, reasoning.ToString()),
                     request.Model);
         }
     }
@@ -233,7 +234,8 @@ public sealed class LoggingChatProvider : IChatProvider
 
     private static string RenderResponse(
         string text, SortedDictionary<int, (string? Id, string? Name, StringBuilder Args)> calls,
-        string? finish, int? promptTokens, int? completionTokens, string? reasoning = null)
+        string? finish, int? promptTokens, int? completionTokens, int? cachedTokens,
+        string? reasoning = null)
     {
         var sb = new StringBuilder();
         if (text.Length > 0) sb.AppendLine(text);
@@ -245,6 +247,7 @@ public sealed class LoggingChatProvider : IChatProvider
             sb.Append("  [tool_call ").Append(kv.Value.Name).Append("] ").AppendLine(kv.Value.Args.ToString());
         if (finish is not null) sb.Append("finish=").Append(finish).Append("  ");
         if (promptTokens is { } p) sb.Append("prompt_tokens=").Append(p).Append("  ");
+        if (cachedTokens is { } cache) sb.Append("cached_prompt_tokens=").Append(cache).Append("  ");
         if (completionTokens is { } c) sb.Append("completion_tokens=").Append(c);
         return sb.ToString().TrimEnd();
     }
@@ -260,6 +263,12 @@ public sealed class LoggingChatProvider : IChatProvider
                 sb.Append("  [tool_call ").Append(c.Name).Append("] ").AppendLine(c.ArgumentsJson);
         if (completion.FinishReason is { } fr) sb.Append("finish=").Append(fr).Append("  ");
         if (completion.PromptTokens is { } p) sb.Append("prompt_tokens=").Append(p).Append("  ");
+        // Printed whenever the provider answered, INCLUDING zero. "It cached nothing" and "it does
+        // not report caching" are different facts, and a log that shows only the first is how a
+        // run of 31 million prompt tokens came to have an unknowable cost - see
+        // OpenAiCompatibleProvider.CachedTokens.
+        if (completion.CachedPromptTokens is { } cache)
+            sb.Append("cached_prompt_tokens=").Append(cache).Append("  ");
         if (completion.CompletionTokens is { } c2) sb.Append("completion_tokens=").Append(c2);
         return sb.ToString().TrimEnd();
     }
