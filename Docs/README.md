@@ -19,17 +19,18 @@ Command -> Intent -> Context(+Environment) -> Planner -> Orchestrator -> Worker(
 
 ## Solution
 
-`Enactive.sln`, **8 projects** (`net10.0`, pinned via `global.json`) plus `tests/Enactive.Engine.Tests` (976 tests)
-and `tests/Enactive.Mcp.TestServer`. The engine is dependency-light: `Core`/`Providers`/`Tools`/`Agents`/`App.Console`
-use **zero external NuGet packages**; only `Workspace` (Microsoft.Data.Sqlite, SQLitePCLRaw, MySqlConnector), `Secrets`
-(ProtectedData) and `App.Ui` (Avalonia ×3) pull anything in. `Enactive.Agents` references **only** `Core` — a constant
+`Enactive.sln`, **8 projects** (`net10.0`, pinned via `global.json`) plus `tests/Enactive.Engine.Tests` (1798 tests)
+and `tests/Enactive.Mcp.TestServer`. The engine is dependency-light: `Core`/`Providers`/`Agents`/`App.Console`
+use **no external NuGet package the engine itself needs**; only `Workspace` (Microsoft.Data.Sqlite, SQLitePCLRaw,
+MySqlConnector), `Secrets` (ProtectedData), `Tools` (MailKit, for `send_email` — the one tool that leaves the
+machine) and `App.Ui` (Avalonia ×3) pull anything in. `Enactive.Agents` references **only** `Core` — a constant
 both the engine and a tool need (`ToolArguments.ExpectedExitCodes`) lives in `Core.Tools`, not in `Tools`.
 
 | Project | Responsibility |
 |---|---|
 | `Enactive.Core` | Domain model + abstractions only (Intent, WorkContext, Environment, Plan/PlanStep (DAG), Worker/ModelPolicy, Decision, Permissions, Memory, Inbox, events, diagnostics, task templates and their resolution, the `ExecutionJournal` a step's evidence is kept in, the built-in templates). No transport/SDK types. |
 | `Enactive.Providers` | `OpenAiCompatibleProvider`, `OllamaNativeProvider` (native `/api/chat` so per-run `num_ctx` works), `AnthropicProvider` (reasoner) behind `ChatProviderFactory`; `LoggingChatProvider` + `WireTap`. |
-| `Enactive.Tools` | `write_file`, `edit_file`, `read_file` (windowed), `search_files`, `list_dir`, `create_directory`, `move_file`, `run_command` (cmd.exe/sh), `run_powershell` (`-EncodedCommand`, no quoting), `git`, `docker`; `LoggingToolRegistry`. Every path goes through `WorkspacePaths` (inside the workspace or refused), and `.enactive/` is
+| `Enactive.Tools` | `write_file`, `edit_file`, `read_file` (windowed), `search_files`, `list_dir`, `create_directory`, `move_file`, `run_command` (cmd.exe/sh), `run_powershell` (`-EncodedCommand`, no quoting), `git`, `docker`, `copy_file`, `delete_file`, `send_email` (through the SMTP account in settings, and only to an address a person put on the recipient list — it always asks, whatever the policy says, because a sent message cannot be put back); `LoggingToolRegistry`. Every path goes through `WorkspacePaths` (inside the workspace or refused), and `.enactive/` is
 reserved from tools with one carve-out: `.enactive/scratch/` is the worker's own working area — for
 the files that are FOR the job but are not the job, such as a helper script it means to run or a
 command's output too long to come back in the tool result. It is written straight through: never
