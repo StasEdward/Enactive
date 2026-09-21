@@ -309,6 +309,16 @@ public sealed class Orchestrator : IOrchestrator
         var scope = new RunScope(
             runId, taskId, budget, artifacts, _writableRoots.For(_workspace.RootPath));
 
+        // The working area is made before the worker is told it has one, and the engine's own
+        // folder is kept out of the person's next commit. A prompt that promises a folder and a
+        // folder that does not exist are a defect, however sensible the laziness was: an agent
+        // looked for it with list_dir, with `dir /b /s` and with Get-ChildItem on three separate
+        // days and was told each time there is no such place.
+        //
+        // Also done when a workspace is OPENED, so the folder is there to be browsed before any
+        // run. Both are idempotent; this one is what covers the console, which opens nothing.
+        WorkspaceSetup.Prepare(_workspace.RootPath);
+
         yield return scope.Event(
             EventKind.IntentReceived,
             $"Intent: {intent.RawText}",

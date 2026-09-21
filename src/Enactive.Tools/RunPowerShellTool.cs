@@ -37,12 +37,18 @@ public sealed class RunPowerShellTool : ITool
     public async Task<ToolResult> InvokeAsync(string argumentsJson, ToolContext ctx, CancellationToken ct)
     {
         string? script;
+        bool sentCommand;
         IReadOnlyCollection<int>? expected;
         try
         {
             using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(argumentsJson) ? "{}" : argumentsJson);
             script = doc.RootElement.TryGetProperty("script", out var c) && c.ValueKind == JsonValueKind.String
                 ? c.GetString() : null;
+
+            // Read inside the try, while the document is still alive, and used after it.
+            sentCommand = doc.RootElement.TryGetProperty("command", out var other)
+                          && other.ValueKind == JsonValueKind.String
+                          && !string.IsNullOrWhiteSpace(other.GetString());
 
             // Refused before the script runs, not after it has had its effect.
             if (!ProcessExec.TryReadExpectedExitCodes(doc.RootElement, out expected, out var badCodes))
@@ -54,7 +60,8 @@ public sealed class RunPowerShellTool : ITool
         }
 
         if (string.IsNullOrWhiteSpace(script))
-            return ToolResults.Unreadable("'script' is required.");
+            return ToolResults.Unreadable(ProcessExec.NoCommandGiven(
+                sentCommand, "script", "command", "run_command", "PowerShell", "cmd.exe"));
 
         // Progress records go to the ERROR stream, and a redirected error stream is where the model
         // reads failures from. `Get-ChildItem -Recurse` alone put two "Preparing modules for first

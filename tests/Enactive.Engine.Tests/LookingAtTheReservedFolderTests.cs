@@ -131,6 +131,49 @@ public sealed class LookingAtTheReservedFolderTests
     }
 
     /// <summary>
+    /// THE ONE MY OWN TEST MISSED. The first version of this listing printed "scratch/" whatever
+    /// was there, and every test of it wrote a file into the area first - so a listing that
+    /// promised a folder <c>list_dir</c> would then refuse went unnoticed. That is the defect the
+    /// carve-out was added to remove, reintroduced by the fix for it.
+    ///
+    /// <para>A run makes the area before the worker is told it has one
+    /// (<c>ScratchArea.Ensure</c>), so in a real run it is there. A bare fixture has not run
+    /// anything, which is exactly the state that caught this.</para>
+    /// </summary>
+    [Fact]
+    public async Task An_area_that_is_not_there_yet_is_not_claimed_to_be()
+    {
+        using var fx = new EngineFixture();
+
+        var listing = await fx.Invoke(new ListDirectoryTool(), Path(".enactive"));
+
+        Assert.True(listing.Success, listing.Error);
+
+        // The ENTRIES, not the sentence beneath them - which names the area's path in the course
+        // of saying it is not there yet, and so contains the very word being looked for.
+        Assert.Empty(Entries(listing.Output));
+        Assert.Contains("create it", listing.Output ?? "", StringComparison.Ordinal);
+    }
+
+    /// <summary>And once a run has begun, it is there to be walked into.</summary>
+    [Fact]
+    public async Task A_run_makes_the_working_area_before_it_promises_one()
+    {
+        using var fx = new EngineFixture();
+
+        ScratchArea.Ensure(fx.Root);
+
+        Assert.True(Directory.Exists(ScratchArea.PathIn(fx.Root)));
+        Assert.Equal(
+            new[] { WorkspaceGuard.ScratchFolder + "/" },
+            Entries((await fx.Invoke(new ListDirectoryTool(), Path(".enactive"))).Output));
+
+        // And walking in works, which is the whole point of showing it.
+        var inside = await fx.Invoke(new ListDirectoryTool(), Path(WorkspaceGuard.ScratchPrefix));
+        Assert.True(inside.Success, inside.Error);
+    }
+
+    /// <summary>
     /// The carve-out still works, and is the whole reason a model looks in here: its own working
     /// area is inside the reserved folder and is ordinary.
     /// </summary>

@@ -41,6 +41,33 @@ internal static class ProcessExec
     /// </summary>
     private const int MaxCapturedChars = 64_000;
 
+    /// <summary>
+    /// What to say when a shell tool was given no command - which is usually not "none" but "the
+    /// other one's".
+    ///
+    /// <para>There are two shell tools and their argument is named after the shell:
+    /// <c>run_command</c> takes <c>command</c>, <c>run_powershell</c> takes <c>script</c>. A model
+    /// that reaches for PowerShell while holding the other tool's shape sends
+    /// <c>run_powershell {"command": …}</c> and is told <i>'script' is required</i> - true, and no
+    /// help at all, since it did send one. Nine such calls over two days, three of them in a
+    /// single fifteen-minute run.</para>
+    ///
+    /// <para><b>It says the fix instead of the symptom, and it refuses rather than guessing.</b>
+    /// The same answer <c>list_dir</c> gives for a path that is a file: the call did not work, the
+    /// reason is not what the plain message says, and the right tool is named. Silently reading
+    /// <c>command</c> as <c>script</c> would be worse than a wasted turn - the key is evidence of
+    /// which SHELL was meant, and cmd syntax run through PowerShell is a different command.</para>
+    /// </summary>
+    public static string NoCommandGiven(
+        bool sentTheOtherName, string wanted, string otherName, string otherTool,
+        string thisShell, string otherShell)
+        => sentTheOtherName
+            ? $"You sent '{otherName}', which is {otherTool}'s argument - this tool is {thisShell} "
+              + $"and takes '{wanted}'. If you meant to run it in {thisShell}, send the same text "
+              + $"as '{wanted}'. If you meant {otherShell}, call {otherTool} instead: the two "
+              + "shells do not understand each other's syntax."
+            : $"'{wanted}' is required.";
+
     /// <summary>Reads an "args" element that is either an array of strings or a single whitespace-split string.</summary>
     public static List<string> ParseArgs(JsonElement args)
     {

@@ -1624,6 +1624,12 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     /// </summary>
     private void ApplyWorkspaceDefaults()
     {
+        // Opening a workspace is where its working area comes into being, so that a person can
+        // see '.enactive/scratch/' in their own file manager before any run, and so that the
+        // engine's folder is on the project's .gitignore if the project keeps one. Idempotent,
+        // and never able to fail: a workspace that cannot be prepared is still a workspace.
+        WorkspaceSetup.Prepare(_vm.WorkspacePath.Trim());
+
         var entry = _registry.Find(_vm.WorkspacePath.Trim());
         if (entry is null)
             return;

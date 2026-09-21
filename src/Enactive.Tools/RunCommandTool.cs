@@ -27,12 +27,18 @@ public sealed class RunCommandTool : ITool
     public async Task<ToolResult> InvokeAsync(string argumentsJson, ToolContext ctx, CancellationToken ct)
     {
         string? command;
+        bool sentScript;
         IReadOnlyCollection<int>? expected;
         try
         {
             using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(argumentsJson) ? "{}" : argumentsJson);
             command = doc.RootElement.TryGetProperty("command", out var c) && c.ValueKind == JsonValueKind.String
                 ? c.GetString() : null;
+
+            // Read inside the try, while the document is still alive, and used after it.
+            sentScript = doc.RootElement.TryGetProperty("script", out var other)
+                         && other.ValueKind == JsonValueKind.String
+                         && !string.IsNullOrWhiteSpace(other.GetString());
 
             // Read here, used at the very end - so a malformed declaration is refused BEFORE the
             // command runs rather than after it has had its effect.
@@ -45,7 +51,8 @@ public sealed class RunCommandTool : ITool
         }
 
         if (string.IsNullOrWhiteSpace(command))
-            return ToolResults.Unreadable("'command' is required.");
+            return ToolResults.Unreadable(ProcessExec.NoCommandGiven(
+                sentScript, "command", "script", "run_powershell", "cmd.exe", "PowerShell"));
 
         var startInfo = new ProcessStartInfo
         {

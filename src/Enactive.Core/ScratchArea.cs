@@ -37,6 +37,31 @@ public static class ScratchArea
             Path.GetFullPath(workspaceRoot), WorkspaceGuard.ReservedFolder, WorkspaceGuard.ScratchFolder);
 
     /// <summary>
+    /// Makes the area exist, because the worker is TOLD it has one.
+    ///
+    /// <para>It used to appear only when something wrote into it, which left every instruction
+    /// about it false until the moment it stopped mattering. Measured across three days: an agent
+    /// looked for its own working area with <c>list_dir</c>, with <c>dir /b /s</c> and with
+    /// <c>Get-ChildItem</c>, and each time was told there is no such place - on 2026-09-20 one of
+    /// those was among the two unresolved calls that failed a run. A promise in a prompt and a
+    /// folder that is not there are a defect however sensible the laziness was.</para>
+    ///
+    /// <para>Returns the path either way and never throws. A workspace on a read-only share, or
+    /// one whose <c>.enactive</c> cannot be created, is a workspace where a great deal else will
+    /// fail first and more loudly; this must not be the thing that stops a run before it starts.
+    /// </para>
+    /// </summary>
+    public static string Ensure(string workspaceRoot)
+    {
+        var path = PathIn(workspaceRoot);
+
+        try { Directory.CreateDirectory(path); }
+        catch { /* see above: housekeeping never fails the work */ }
+
+        return path;
+    }
+
+    /// <summary>
     /// Removes everything at the top of the area that has not been touched for
     /// <paramref name="keepFor"/>, and answers how many entries went.
     ///

@@ -41,12 +41,23 @@ public sealed class ListDirectoryTool : ITool
         // '.enactive/scratch/' has been listable, readable and writable all along - what changes is
         // that it can be found by looking instead of only by knowing.
         if (WorkspaceGuard.IsReservedRoot(ctx.WorkspaceRoot, path))
+        {
+            // The area is made when a run starts (ScratchArea.Ensure), so the ordinary answer is
+            // that it is there. Checked rather than asserted: the first version of this printed
+            // "scratch/" unconditionally, which meant a listing promised a folder that list_dir
+            // itself would then refuse - a defect of exactly the kind this carve-out was added to
+            // remove. A test that wrote a file there first could never have caught it.
+            var area = ScratchArea.PathIn(ctx.WorkspaceRoot);
+            var there = Directory.Exists(area);
+
             return Task.FromResult(ToolResults.Ok(
-                output: WorkspaceGuard.ScratchFolder + "/" + Environment.NewLine
+                output: (there ? WorkspaceGuard.ScratchFolder + "/" + Environment.NewLine : "")
                       + $"(the rest of '{WorkspaceGuard.ReservedFolder}' is the workspace's own "
                       + "state - its undo journal, approvals and checkpoints - and tools do not go "
-                      + $"in there. '{WorkspaceGuard.ScratchPrefix}/' is yours.)",
-                metadata: new Dictionary<string, object?> { ["entries"] = 1 }));
+                      + $"in there. '{WorkspaceGuard.ScratchPrefix}/' is yours"
+                      + (there ? "" : ", and writing anything into it will create it") + ".)",
+                metadata: new Dictionary<string, object?> { ["entries"] = there ? 1 : 0 }));
+        }
 
         try
         {
