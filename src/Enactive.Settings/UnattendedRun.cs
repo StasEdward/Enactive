@@ -130,6 +130,7 @@ public static class UnattendedRun
                 router: environment.Router,
                 reviewRetries: settings.ReviewRetries,
                 successRetries: settings.SuccessRetries,
+                proposeChecks: settings.ProposeChecks,
                 numCtx: settings.NumCtx,
                 disableThinking: settings.DisableThinking,
                 maxParallelSteps: settings.MaxParallelSteps,

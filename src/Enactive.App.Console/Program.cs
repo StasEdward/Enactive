@@ -514,6 +514,7 @@ var orchestrator = new Orchestrator(
     // way to ask the window. Now there is, and the answer is the setting.
     reviewRetries: settings.ReviewRetries,
     successRetries: settings.SuccessRetries,
+    proposeChecks: settings.ProposeChecks,
     numCtx: settings.NumCtx,
     disableThinking: settings.DisableThinking,
     maxParallelSteps: settings.MaxParallelSteps,

@@ -249,6 +249,21 @@ public sealed partial class AppSettings
     // behaviour - check once, and stop. Clamped to 0..5 by the orchestrator.
     public int SuccessRetries { get; set; } = 1;
 
+    // Ask the planner, before any of the work, for commands that would PROVE the request was
+    // carried out - and judge the run by them when it was given no criteria of its own.
+    //
+    // Until 2026-09-21 the one guard that looks at the WORKSPACE instead of the transcript was
+    // reachable only through a template: `successCriteria: spec?.SuccessCriteria` in both hosts,
+    // and spec is a template. Every ad-hoc run was therefore judged on text a model wrote about
+    // its own work. A template's criteria still win outright and the planner is not even asked,
+    // so nothing about a template run changes.
+    //
+    // Safe to leave on: a proposed check can only make a verdict stricter (SuccessReport.Apply
+    // never promotes), and it can only do so by RUNNING and failing - one that the shell would not
+    // start, or that the policy forbids, reports Unknown and holds nothing back, because nobody
+    // asked for it. Turn it off to judge ad-hoc runs the way they were judged before.
+    public bool ProposeChecks { get; set; } = true;
+
     // Put a rejected step's files back to how they were before it ran. Without this the gate stops
     // only the REPORT: the run says Failed while the rejected document stays in the workspace, which
     // is the version someone is most likely to open next. A file changed since the step wrote it is

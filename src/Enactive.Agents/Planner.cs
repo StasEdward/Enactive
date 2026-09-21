@@ -5,6 +5,7 @@ using Enactive.Core.Chat;
 using Enactive.Core.Context;
 using Enactive.Core.Providers;
 using Enactive.Core.Tasks;
+using Enactive.Core.Templates;
 
 /// <summary>
 /// The result of the understand/plan phase. For a Task, Plan is a real dependency graph.
@@ -28,6 +29,20 @@ public sealed record PlanResult(
     /// counted.</para>
     /// </summary>
     public int? CachedPromptTokens { get; init; }
+
+    /// <summary>
+    /// Commands the planner said would PROVE this request was carried out, written before any of
+    /// the work. Empty when it proposed none, which is the right answer for a question, an
+    /// explanation, or anything else nothing can be run against.
+    ///
+    /// <para>An init property, like the cache count above and for the same reason: the positional
+    /// list is already six long and every <c>with</c> of it has to keep working.</para>
+    ///
+    /// <para>These are <see cref="CriterionOrigin.Proposed"/>, and the engine uses them only when
+    /// the run was given no criteria of its own — see <c>Orchestrator.CriteriaFor</c>.</para>
+    /// </summary>
+    public IReadOnlyList<SuccessCriterionDefinition> Checks { get; init; }
+        = Array.Empty<SuccessCriterionDefinition>();
 }
 
 /// <summary>
@@ -75,14 +90,19 @@ public sealed class Planner
     /// a plan longer than the budget cannot finish, and <c>RunBudget</c> stops it partway with the
     /// work half done. Null when nothing limits the run, and then nothing is said.
     /// </param>
+    /// <param name="proposeChecks">
+    /// Whether to ask the planner how this work will be PROVED — see <see cref="ChecksPrompt"/>.
+    /// Off by default so that nothing which constructs a planner directly starts paying for a
+    /// question it will not read the answer to.
+    /// </param>
     public async Task<PlanResult> PlanAsync(
         string request, WorkContext context, IChatProvider provider, string model,
-        CancellationToken ct, int? maxSteps = null)
+        CancellationToken ct, int? maxSteps = null, bool proposeChecks = false)
     {
         var messages = new List<ChatMessage>
         {
-            ChatMessage.System(SystemPromptFor(maxSteps)),
-            ChatMessage.User(request)
+            ChatMessage.System(SystemPromptFor(maxSteps, proposeChecks)),
+            ChatMessage.User(Where(context) + request)
         };
 
         var completion = await provider.CompleteAsync(new ChatRequest(model, messages, Temperature: 0.0), ct);
@@ -128,6 +148,51 @@ public sealed class Planner
         return new PlanResult(
             IntentDisposition.QuickAction, Truncate(request, 80), null,
             prompt, output, PlanReadout.Unreadable) { CachedPromptTokens = cached };
+    }
+
+    /// <summary>
+    /// The few facts about WHERE this run happens, put in front of the request.
+    ///
+    /// <para><b>The planner took a <c>WorkContext</c> and never read it.</b> It decided how many
+    /// steps the work has and WHICH MODEL runs each of them knowing only the sentence the person
+    /// typed — not the operating system, not whether this is a git repository, not what the
+    /// project is called. The worker two calls later gets all of it
+    /// (<c>Orchestrator.BuildUserPrompt</c>), which is where these lines come from: the same facts,
+    /// already assembled, already bounded, and thrown away by the one call that was planning the
+    /// work.</para>
+    ///
+    /// <para>In the USER message rather than the system prompt, deliberately. The system prompt is
+    /// identical for every run and every workspace, which is what lets a provider serve it from its
+    /// prompt cache; folding a workspace's name into it would make each workspace a cache miss to
+    /// say something that is not a rule of planning.</para>
+    ///
+    /// <para>Project memory is NOT here, and that is a judgement rather than an oversight. It is up
+    /// to twenty entries read into the prompt of every step already, it says what the project has
+    /// DECIDED rather than what it IS, and the planner's job is small. Facts about the place, not
+    /// its history.</para>
+    /// </summary>
+    internal static string Where(WorkContext context)
+    {
+        var lines = new List<string>();
+
+        if (!string.IsNullOrWhiteSpace(context.ProjectName))
+            lines.Add($"Workspace: {context.ProjectName}");
+
+        if (!string.IsNullOrWhiteSpace(context.GitBranch))
+            lines.Add($"Git branch: {context.GitBranch}");
+
+        if (context.Environment is { } env)
+            lines.AddRange(env.Summary().Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                              .Select(l => l.Trim()));
+
+        if (lines.Count == 0)
+            return "";
+
+        // Labelled as not being the request, because it is about to sit immediately above one. A
+        // planner that reads "Git branch: engeen_v2" as something to act on would plan to act on it.
+        return "Where this runs (background, NOT the request):\n"
+             + string.Join("\n", lines.Select(l => "  " + l))
+             + "\n\nThe request:\n";
     }
 
     /// <summary>Returns the plan, or null when the answer carried none.</summary>
@@ -214,7 +279,10 @@ public sealed class Planner
                 }
 
                 var plan = disposition == IntentDisposition.Task ? DagPlan.FromSpecs(specs) : null;
-                return new PlanResult(disposition, Truncate(title, 80), plan, Readout: readout);
+                return new PlanResult(disposition, Truncate(title, 80), plan, Readout: readout)
+                {
+                    Checks = ParseChecks(root)
+                };
             }
             catch (JsonException)
             {
@@ -224,6 +292,58 @@ public sealed class Planner
 
         return null;
     }
+
+    /// <summary>How many checks one plan may propose.</summary>
+    /// <remarks>
+    /// Each one is a real command run at the end of the run, and — when it fails — a repair loop
+    /// behind it. Four is enough to say "it builds, the tests pass, the file is there" and few
+    /// enough that a model listing everything it can think of cannot turn the verdict into a
+    /// second build system. Named here because <c>CapsAnnounceThemselvesTests</c> asks every size
+    /// limit which test drives it.
+    /// </remarks>
+    internal const int MaxChecks = 4;
+
+    /// <summary>
+    /// The checks the planner proposed, read strictly.
+    ///
+    /// <para><b>Only the name and the command are taken from the model.</b> The other two fields a
+    /// criterion has are exactly the two ways to write a check that cannot fail — an expected exit
+    /// code that is not zero, and <c>required: false</c> — so they are not read at all. A proposed
+    /// check passes on 0 and is required, or it is not a check.</para>
+    /// </summary>
+    private static IReadOnlyList<SuccessCriterionDefinition> ParseChecks(JsonElement root)
+    {
+        if (!root.TryGetProperty("checks", out var checks) || checks.ValueKind != JsonValueKind.Array)
+            return Array.Empty<SuccessCriterionDefinition>();
+
+        var found = new List<SuccessCriterionDefinition>();
+
+        foreach (var el in checks.EnumerateArray())
+        {
+            if (found.Count >= MaxChecks)
+                break;
+
+            if (el.ValueKind != JsonValueKind.Object)
+                continue;
+
+            var command = Text(el, "command");
+            if (string.IsNullOrWhiteSpace(command))
+                continue;
+
+            var name = Text(el, "name");
+            found.Add(new SuccessCriterionDefinition(
+                Name: string.IsNullOrWhiteSpace(name) ? Truncate(command!, 40) : Truncate(name!, 60),
+                Command: command!.Trim(),
+                Origin: CriterionOrigin.Proposed));
+        }
+
+        return found;
+    }
+
+    private static string? Text(JsonElement el, string name)
+        => el.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString()
+            : null;
 
     private static StepComplexity ParseComplexity(JsonElement el)
     {
@@ -301,9 +421,47 @@ public sealed class Planner
     /// get trimmed; it runs until the budget is gone and stops with the work unfinished, and that
     /// is the thing worth avoiding.</para>
     /// </summary>
-    internal static string SystemPromptFor(int? maxSteps)
-        => maxSteps is > 0
-            ? SystemPrompt + $" This run may take at most {maxSteps} step(s) in total — a plan longer than that "
-                           + "stops partway with the work unfinished, so do not exceed it."
-            : SystemPrompt;
+    internal static string SystemPromptFor(int? maxSteps, bool proposeChecks = false)
+    {
+        var prompt = SystemPrompt;
+
+        if (maxSteps is > 0)
+            prompt += $" This run may take at most {maxSteps} step(s) in total — a plan longer than that "
+                    + "stops partway with the work unfinished, so do not exceed it.";
+
+        if (proposeChecks)
+            prompt += ChecksPrompt;
+
+        return prompt;
+    }
+
+    /// <summary>
+    /// Asking the planner how the work will be PROVED, not just what it is.
+    ///
+    /// <para><b>This is the moment to ask, and the only one.</b> A check written now cannot be
+    /// fitted to the result, because there is no result yet — the planner has seen the request and
+    /// where it runs, and nothing else. Asked afterwards, "did it work" is answered by the same
+    /// model that did the work, which is the thing this engine exists not to rely on.</para>
+    ///
+    /// <para><b>Empty is a real answer and is said twice.</b> Most of what people ask for cannot
+    /// be proved by running something, and a model that feels obliged to produce a check will
+    /// produce <c>echo done</c>. That is worse than nothing: it looks like verification in the run
+    /// report.</para>
+    ///
+    /// <para>Appended rather than written into <see cref="SystemPrompt"/> so that a host which
+    /// turns proposed checks off pays nothing for them — no tokens, and no invitation the engine
+    /// will then ignore.</para>
+    /// </summary>
+    private const string ChecksPrompt =
+        " Also return \"checks\": shell commands that would PROVE this request has been carried out, "
+        + "or [] when nothing about it can be proved by running something. Shape: "
+        + "\"checks\":[{\"name\":\"short name\",\"command\":\"...\"}], at most "
+        + "4. THE EXIT CODE IS THE WHOLE VERDICT: 0 means done, anything else means not done, and "
+        + "nothing reads the output. Write each one so that it would FAIL right now and PASS once "
+        + "the request is satisfied — that is what makes it worth running. Use the project's own "
+        + "real commands, the ones this workspace actually has. A command that cannot fail proves "
+        + "nothing, so never propose echo, cd, dir, ls, type, cat or exit. Do not check something "
+        + "the request did not ask for. [] IS THE RIGHT ANSWER for a question, an explanation, a "
+        + "document, a review, a summary, or anything whose result a person has to read — do not "
+        + "invent a check in order to have one.";
 }

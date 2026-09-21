@@ -3,6 +3,32 @@ namespace Enactive.Core.Templates;
 using System.Text;
 using Enactive.Core.Events;
 
+/// <summary>
+/// Who said this was what finished work looks like.
+///
+/// <para>It decides ONE thing: what "we could not run the check" is allowed to mean. Everything
+/// else about a criterion is the same whoever wrote it — same tool, same permission gate, same
+/// exit code deciding, same repair attempt when it fails.</para>
+/// </summary>
+public enum CriterionOrigin
+{
+    /// <summary>
+    /// A person wrote it, in a template. If it cannot be run, the run cannot be called finished:
+    /// somebody said this is how you know, and nobody found out.
+    /// </summary>
+    Declared,
+
+    /// <summary>
+    /// The planner proposed it from the request, before any of the work was done.
+    ///
+    /// <para>It can hold a run back by FAILING — a command that ran and said no is evidence
+    /// whoever wrote it. It cannot hold one back by being unrunnable: nobody asked for this check,
+    /// so "the policy would not allow it" or "that program is not here" is a fact about a guess,
+    /// not about the work. See <see cref="CriterionResult.Blocking"/>.</para>
+    /// </summary>
+    Proposed
+}
+
 /// <summary>How one criterion came out.</summary>
 public enum CriterionOutcome
 {
@@ -31,9 +57,25 @@ public sealed record CriterionResult(
     bool Required,
     CriterionOutcome Outcome,
     int? ExitCode,
-    string? Detail)
+    string? Detail,
+    CriterionOrigin Origin = CriterionOrigin.Declared)
 {
-    public bool Blocking => Required && Outcome != CriterionOutcome.Passed;
+    /// <summary>
+    /// Whether this result holds the run back.
+    ///
+    /// <para>A required criterion that FAILED always does: it ran, and it said no. An
+    /// <see cref="CriterionOutcome.Unknown"/> one does only when a person
+    /// <see cref="CriterionOrigin.Declared"/> it — then "we could not find out" is exactly the
+    /// thing they need told. A check the planner merely proposed cannot fail a run by being
+    /// unrunnable, because nobody asked for it; that is what makes a proposed check safe to arm
+    /// by default, and it is the only asymmetry between the two.</para>
+    /// </summary>
+    public bool Blocking => Required && Outcome switch
+    {
+        CriterionOutcome.Passed => false,
+        CriterionOutcome.Failed => true,
+        _ => Origin == CriterionOrigin.Declared
+    };
 
     /// <summary>One line for a report or a prompt: what was asked, and what came back.</summary>
     public string Describe()

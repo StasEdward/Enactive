@@ -61,7 +61,7 @@ public sealed class SuccessEvaluator
     {
         CriterionResult Unknown(string why)
             => new(criterion.Name, criterion.Command, criterion.Required,
-                   CriterionOutcome.Unknown, null, why);
+                   CriterionOutcome.Unknown, null, why, criterion.Origin);
 
         PermissionLevel required;
         try
@@ -135,6 +135,18 @@ public sealed class SuccessEvaluator
             return Unknown($"the check could not be run: {ex.Message}");
         }
 
+        // A command the SHELL would not start - a word it does not have, text it could not parse,
+        // a parameter that cmdlet does not take. It still carries an exit code, so judging by the
+        // number alone reported "the work is wrong" about a check that never ran. That is the one
+        // verdict this must never give: it accuses the work of a fault in the check.
+        //
+        // The tool is the only thing that knows (see ToolResults.Unreadable), and since 2026-09-20
+        // it says so. This is why a PROPOSED check is safe to arm by default - a command the
+        // planner guessed wrong cannot fail a run, it can only fail to answer.
+        if (result.DidNotRun)
+            return Unknown("the shell would not start this check, so it has verified nothing. "
+                         + Trim(result.Error ?? result.Output));
+
         // The exit code, not the tool's own Success flag. run_command reports failure for any
         // non-zero code, but a criterion is allowed to EXPECT one - 'git diff --exit-code' means
         // something by returning 1 - so the number is what decides, and the flag is not consulted.
@@ -147,7 +159,8 @@ public sealed class SuccessEvaluator
             criterion.Name, criterion.Command, criterion.Required,
             exitCode == criterion.ExpectedExitCode ? CriterionOutcome.Passed : CriterionOutcome.Failed,
             exitCode,
-            exitCode == criterion.ExpectedExitCode ? null : Trim(result.Output ?? result.Error));
+            exitCode == criterion.ExpectedExitCode ? null : Trim(result.Output ?? result.Error),
+            criterion.Origin);
     }
 
     private static bool TryExitCode(ToolResult result, out int exitCode)

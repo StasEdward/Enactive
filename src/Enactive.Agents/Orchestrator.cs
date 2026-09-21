@@ -103,6 +103,7 @@ public sealed class Orchestrator : IOrchestrator
     private readonly IModelResolver _modelResolver;
     private readonly int _reviewRetries;
     private readonly int _successRetries;
+    private readonly bool _proposeChecks;
     private readonly int _maxParallelSteps;
 
     /// <summary>
@@ -178,6 +179,7 @@ public sealed class Orchestrator : IOrchestrator
         IModelRouter? router = null,
         int reviewRetries = 1,
         int successRetries = 1,
+        bool proposeChecks = true,
         int? numCtx = null,
         bool disableThinking = false,
         int maxParallelSteps = 1,
@@ -220,6 +222,7 @@ public sealed class Orchestrator : IOrchestrator
         // same reason: each attempt is a whole tool loop, paid for before anybody notices a stray
         // number. 0 restores the behaviour this had until 2026-09-08 - check once, and stop.
         _successRetries = Math.Clamp(successRetries, 0, 5);
+        _proposeChecks = proposeChecks;
         // 1 = the original behaviour: one step at a time on one shared conversation.
         _maxParallelSteps = Math.Max(1, maxParallelSteps);
         _evidenceBudget = Math.Max(ExecutionJournal.MinimumBudget, evidenceBudget);
@@ -345,7 +348,7 @@ public sealed class Orchestrator : IOrchestrator
                 // it runs until the budget is gone and stops with the work half done.
                 () => _planner.PlanAsync(
                     intent.RawText, intent.Context, models.PlanProvider, models.Plan.Model, ct,
-                    _limits.MaxSteps));
+                    _limits.MaxSteps, _proposeChecks && _successCriteria.Count == 0));
 
         if (plan.PromptTokens + plan.CompletionTokens > 0)
             yield return scope.Usage(
@@ -575,6 +578,7 @@ public sealed class Orchestrator : IOrchestrator
         {
             var verified = new VerifyResult();
             await foreach (var checkEvent in VerifyAsync(
+                CriteriaFor(plan),
                 intent, scope.TaskId, scope.RunId, models.Worker, models.Provider, models.Model.Model, models.Model.ProviderId,
                 scope.Artifacts, scope.Budget, verified, scope.Criterion,
                 (kind, summary) => scope.Ev(kind, summary), scope.Granted, ct))
@@ -1268,6 +1272,7 @@ public sealed class Orchestrator : IOrchestrator
         {
             var verified = new VerifyResult();
             await foreach (var checkEvent in VerifyAsync(
+                CriteriaFor(plan),
                 intent, scope.TaskId, scope.RunId, models.Worker, models.Provider, models.Model.Model, models.Model.ProviderId,
                 scope.Artifacts, scope.Budget, verified, scope.Criterion,
                 (kind, summary) => scope.Ev(kind, summary), scope.Granted, ct))
@@ -1938,6 +1943,7 @@ public sealed class Orchestrator : IOrchestrator
     /// alone decide. All this changes is whether the run gets a chance before the verdict.</para>
     /// </summary>
     private async IAsyncEnumerable<WorkEvent> VerifyAsync(
+        IReadOnlyList<SuccessCriterionDefinition> criteria,
         Intent intent, Guid taskId, Guid runId, Worker worker,
         IChatProvider provider, string model, string providerId,
         List<ArtifactRef> artifacts, RunBudget budget, VerifyResult result,
@@ -1949,7 +1955,7 @@ public sealed class Orchestrator : IOrchestrator
         [EnumeratorCancellation] CancellationToken ct)
     {
         var report = await InScopeAsync(runId, taskId, null,
-            () => CheckSuccessAsync(taskId, runId, intent.Context, ct));
+            () => CheckSuccessAsync(criteria, taskId, runId, intent.Context, ct));
 
         foreach (var checkResult in report.Results)
             yield return criterion(checkResult);
@@ -1995,7 +2001,7 @@ public sealed class Orchestrator : IOrchestrator
                 yield return repairEvent;
 
             report = await InScopeAsync(runId, taskId, null,
-                () => CheckSuccessAsync(taskId, runId, intent.Context, ct));
+                () => CheckSuccessAsync(criteria, taskId, runId, intent.Context, ct));
 
             foreach (var checkResult in report.Results)
                 yield return criterion(checkResult);
@@ -2028,10 +2034,29 @@ public sealed class Orchestrator : IOrchestrator
         return sb.ToString();
     }
 
+    /// <summary>
+    /// The checks this run is judged by: the ones it was GIVEN, or failing that the ones the
+    /// planner proposed.
+    ///
+    /// <para><b>Declared criteria win outright, and are not merged with proposed ones.</b> A
+    /// template says what finished work looks like for this job; a plan guesses. Letting a guess
+    /// sit alongside a person's definition would let it hold back a run that met the definition,
+    /// and the person who wrote the template would have no way to see why. A template with
+    /// criteria therefore runs exactly as it did before this existed - the planner is not even
+    /// asked (see the PlanAsync call above).</para>
+    ///
+    /// <para>A RESUMED run has no proposed checks: the plan is read back from the checkpoint,
+    /// which does not carry them. That is the same verification a resumed run has always had, and
+    /// the safe direction - fewer checks, never more.</para>
+    /// </summary>
+    private IReadOnlyList<SuccessCriterionDefinition> CriteriaFor(PlanResult plan)
+        => _successCriteria.Count > 0 ? _successCriteria : plan.Checks;
+
     private async Task<SuccessReport> CheckSuccessAsync(
+        IReadOnlyList<SuccessCriterionDefinition> criteria,
         Guid taskId, Guid runId, WorkContext context, CancellationToken ct)
     {
-        if (_successCriteria.Count == 0)
+        if (criteria.Count == 0)
             return SuccessReport.NothingToCheck;
 
         var toolContext = new ToolContext(
@@ -2045,7 +2070,7 @@ public sealed class Orchestrator : IOrchestrator
             Services: _services);
 
         return await _successEvaluator.EvaluateAsync(
-            _successCriteria, _tools, _permissions, _policy, _decisions, toolContext, taskId, ct);
+            criteria, _tools, _permissions, _policy, _decisions, toolContext, taskId, ct);
     }
 
     /// <summary>Per file, and in total — the same budget the reviewer prompt applies.</summary>

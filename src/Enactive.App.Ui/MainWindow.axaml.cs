@@ -724,6 +724,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                 router: BuildRouter(),
                 reviewRetries: _settings.ReviewRetries,
                 successRetries: _settings.SuccessRetries,
+                proposeChecks: _settings.ProposeChecks,
                 numCtx: _settings.NumCtx,
                 disableThinking: _settings.DisableThinking,
                 maxParallelSteps: _settings.MaxParallelSteps,
