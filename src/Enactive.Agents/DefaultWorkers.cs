@@ -99,7 +99,11 @@ public static class DefaultWorkers
             + "docker tools for version control and containers. Use the "
             + "tools to accomplish the request, then reply with a short confirmation of what you actually did.",
             new[] { "write_file", "edit_file", "read_file", "search_files", "list_dir", "create_directory",
-                    "move_file", "copy_file", "delete_file", "run_command", "run_powershell", "git", "docker" },
+                    "move_file", "copy_file", "delete_file", "run_command", "run_powershell", "git", "docker",
+                    // Offered only where an SMTP account is configured - the tool is not
+                    // registered otherwise, so naming it here costs nothing until somebody
+                    // fills the section in.
+                    "send_email" },
             PermissionLevel.Execute),
 
         ("reviewer", "Reviewer",
@@ -116,7 +120,8 @@ public static class DefaultWorkers
             + "on Windows for system/WMI queries); read files, search them by content (search_files) and "
             + "list directories for context. Avoid "
             + "editing source files unless explicitly asked. Prefer safe, read-only commands first.",
-            new[] { "read_file", "search_files", "list_dir", "run_command", "run_powershell", "git", "docker" },
+            new[] { "read_file", "search_files", "list_dir", "run_command", "run_powershell", "git", "docker",
+                    "send_email" },
             PermissionLevel.Execute),
 
         ("writer", "Writer",

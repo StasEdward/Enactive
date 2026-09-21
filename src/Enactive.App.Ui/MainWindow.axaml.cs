@@ -152,12 +152,19 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     {
         _log = new LogHub(minLevel: LogLevel.Debug, downstream: new ILogSink[] { _logFile });
         _settings = AppSettings.Load();
-        _toolRegistry = new ToolRegistry(new ITool[]
+        var builtInTools = new List<ITool>
         {
             new WriteFileTool(), new EditFileTool(), new ReadFileTool(), new SearchFilesTool(),
             new ListDirectoryTool(), new CreateDirectoryTool(), new MoveFileTool(), new CopyFileTool(), new DeleteFileTool(),
             new RunCommandTool(), new RunPowerShellTool(), new GitTool(), new DockerTool()
-        });
+        };
+
+        // Registered whether or not an account exists - the roles name it, and the two sets have
+        // to agree - and it says so itself when there is nowhere to send. Read once, because the
+        // registry is built once: filling in Settings → SMTP takes effect on the next start.
+        builtInTools.Add(new SendEmailTool(EngineComposition.Mail(_settings)));
+
+        _toolRegistry = new ToolRegistry(builtInTools);
 
         // A settings file the app cannot build from must not make the app unlaunchable. Saving is
         // validated now, but a file edited by hand — or written by an older build — can still be

@@ -1,4 +1,4 @@
-﻿namespace Enactive.Engine.Tests;
+namespace Enactive.Engine.Tests;
 
 using Enactive.Agents;
 using Enactive.Core.Artifacts;
@@ -14,6 +14,7 @@ using Enactive.Core.Providers;
 using Enactive.Core.Templates;
 using Enactive.Core.Tools;
 using Enactive.Core.Workers;
+using Enactive.Core.Mail;
 using Enactive.Tools;
 using Enactive.Workspace;
 
@@ -548,7 +549,12 @@ public sealed class EngineFixture : IDisposable
     {
         new WriteFileTool(), new EditFileTool(), new ReadFileTool(), new SearchFilesTool(),
         new ListDirectoryTool(), new CreateDirectoryTool(), new MoveFileTool(), new CopyFileTool(), new DeleteFileTool(),
-        new RunCommandTool(), new RunPowerShellTool(), new GitTool(), new DockerTool()
+        new RunCommandTool(), new RunPowerShellTool(), new GitTool(), new DockerTool(),
+
+        // With no account: a shipping host registers it either way - the roles name it, and the
+        // two sets have to be the same set - and it says so in its own description. A test that
+        // wants a working one builds its own with a MailAccount.
+        new SendEmailTool(MailAccount.None)
     };
 
     public void Dispose()

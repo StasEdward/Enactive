@@ -64,6 +64,64 @@ public sealed class ProviderConfig
     };
 }
 
+/// <summary>
+/// Where <c>send_email</c> sends from, and the only addresses it may send to.
+///
+/// <para><b>The recipients are settings, not an argument.</b> A model reads whatever it was
+/// pointed at - a log from somebody's server, a file in a repository - and text it reads is not
+/// an instruction, but a tool that mails wherever it is told turns that rule into a promise
+/// instead of a boundary. With <c>--approve allow</c> nobody is watching either. So the address
+/// is chosen by the person once, in this screen, and the tool can refuse anything else by
+/// comparison rather than by judgement.</para>
+///
+/// <para>Adding a second address is a deliberate act and takes a moment. That is the intended
+/// cost: the common case - "mail the report to me" - needs none.</para>
+/// </summary>
+public sealed class SmtpSettings
+{
+    public string Host { get; set; } = string.Empty;
+
+    /// <summary>587 is submission with STARTTLS, which is what most providers want.</summary>
+    public int Port { get; set; } = 587;
+
+    /// <summary>Upgrade the connection with STARTTLS. Off means implicit TLS (port 465) or none.</summary>
+    public bool StartTls { get; set; } = true;
+
+    public string User { get; set; } = string.Empty;
+
+    /// <summary>DPAPI-encrypted password ("dpapi:"-prefixed) — this is what lives on disk.</summary>
+    public string PasswordProtected { get; set; } = string.Empty;
+
+    /// <summary>Plaintext, in memory only; never serialized. Same rule as a provider's API key.</summary>
+    [JsonIgnore] public string Password { get; set; } = string.Empty;
+
+    /// <summary>The From address. Blank falls back to <see cref="User"/>, which is usually right.</summary>
+    public string From { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Every address <c>send_email</c> is allowed to write to. Empty means the tool is not
+    /// offered at all: a mail tool with nowhere to send is a way to be surprised later.
+    /// </summary>
+    public List<string> Recipients { get; set; } = new();
+
+    /// <summary>Whether enough is filled in for the tool to exist at all.</summary>
+    [JsonIgnore]
+    public bool Configured
+        => !string.IsNullOrWhiteSpace(Host) && Recipients.Count > 0;
+
+    public SmtpSettings Clone() => new()
+    {
+        Host = Host,
+        Port = Port,
+        StartTls = StartTls,
+        User = User,
+        PasswordProtected = PasswordProtected,
+        Password = Password,
+        From = From,
+        Recipients = new List<string>(Recipients)
+    };
+}
+
 /// <summary>One team member (role + its own model) as persisted in settings.json.</summary>
 public sealed class WorkerConfig
 {
@@ -308,6 +366,9 @@ public sealed partial class AppSettings
     // Whether this computer answers a phone, and how. Off until somebody fills it in.
     public RemoteAccessSettings RemoteAccess { get; set; } = new();
 
+    /// <summary>Where send_email sends from, and the only addresses it may send to.</summary>
+    public SmtpSettings Smtp { get; set; } = new();
+
     // ── Legacy fields (migration source only; superseded by the schema above) ──
     //
     // A URL has a right default: Ollama listens there or it does not, and being wrong costs a
@@ -376,6 +437,9 @@ public sealed partial class AppSettings
 
                     if (!string.IsNullOrEmpty(loaded.RemoteAccess.TokenProtected))
                         loaded.RemoteAccess.Token = Secret.Unprotect(loaded.RemoteAccess.TokenProtected);
+
+                    if (!string.IsNullOrEmpty(loaded.Smtp.PasswordProtected))
+                        loaded.Smtp.Password = Secret.Unprotect(loaded.Smtp.PasswordProtected);
 
                     loaded.LoadMcpSecrets();
                     loaded.MigrateIfNeeded();
@@ -457,6 +521,9 @@ public sealed partial class AppSettings
 
             // The device token, same rule: the encrypted form is the only one that reaches disk.
             RemoteAccess.TokenProtected = Secret.Protect(RemoteAccess.Token);
+
+            // And the mail password. [JsonIgnore] on the plaintext is what keeps it off disk.
+            Smtp.PasswordProtected = Secret.Protect(Smtp.Password);
 
             // Legacy key: persist only the encrypted form, blanking the plaintext during serialization.
             AnthropicApiKeyProtected = Secret.Protect(AnthropicApiKey);
