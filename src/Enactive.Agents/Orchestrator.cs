@@ -376,6 +376,20 @@ public sealed class Orchestrator : IOrchestrator
                 ChatMessage.User(BuildUserPrompt(intent))
             };
 
+        // What each proposed check is actually worth, asked before any of the work - see
+        // BaselineAsync. Replaces the plan's list with the checks that survived, so everything
+        // downstream keeps reading plan.Checks and knows nothing about this.
+        if (plan.Checks.Count > 0)
+        {
+            var (kept, notes) = await InScopeAsync(scope.RunId, scope.TaskId, null,
+                () => BaselineAsync(plan.Checks, scope.TaskId, scope.RunId, intent.Context, ct));
+
+            foreach (var note in notes)
+                yield return scope.Ev(EventKind.ErrorObserved, note);
+
+            plan = plan with { Checks = kept };
+        }
+
         if (plan.Disposition == IntentDisposition.QuickAction)
         {
             await foreach (var ev in RunQuickActionAsync(intent, scope, models, plan, messages, ct))
@@ -2065,6 +2079,115 @@ public sealed class Orchestrator : IOrchestrator
     /// </summary>
     private IReadOnlyList<SuccessCriterionDefinition> CriteriaFor(PlanResult plan)
         => _successCriteria.Count > 0 ? _successCriteria : plan.Checks;
+
+    /// <summary>
+    /// Runs the PROPOSED checks before any of the work, and decides what each one is worth.
+    ///
+    /// <para><b>A check that already passes proves nothing about this run.</b> Measured
+    /// 2026-09-21: a run was called finished on the strength of "Docs/DRIFT_ollama.md exists and
+    /// is not empty" and "every wiki page is named in it" - both true of a file that had been
+    /// sitting in the workspace since the previous evening. The work was real, but the evidence
+    /// for it was not. Only a check that FAILS now and passes later has shown anything.</para>
+    ///
+    /// <list type="bullet">
+    /// <item><b>Failed now</b> - keep it. This is the proof.</item>
+    /// <item><b>Passed now</b> - keep it, marked <c>AlreadyPassing</c>. It can still catch the
+    /// work BREAKING something, which nothing else in the engine would notice; it just cannot be
+    /// the reason a run is let through.</item>
+    /// <item><b>Could not be evaluated</b> - drop it. The shell has no such word, or the policy
+    /// forbids it, or it is not a command at all. It will never be a verdict, and carrying it to
+    /// the end only to learn that again costs a run its time and says nothing.</item>
+    /// </list>
+    ///
+    /// <para><b>DECLARED criteria are not baselined at all</b>, and are never passed here. A
+    /// person writing a template has said what finished work looks like; whether it happens to be
+    /// true already is not a fact about their definition. A template run is untouched by any of
+    /// this.</para>
+    ///
+    /// <para>It costs a second run of each check. That is the price of the distinction, it is
+    /// paid only by runs that have checks, and the alternative is a green light on evidence that
+    /// establishes nothing.</para>
+    /// </summary>
+    private async Task<(IReadOnlyList<SuccessCriterionDefinition> Kept, IReadOnlyList<string> Notes)>
+        BaselineAsync(
+            IReadOnlyList<SuccessCriterionDefinition> proposed,
+            Guid taskId, Guid runId, WorkContext context, CancellationToken ct)
+    {
+        var toolContext = new ToolContext(
+            TaskId: taskId,
+            RunId: runId,
+            WorkspaceId: _workspace.Id,
+            Context: context,
+            PermissionPolicy: _policy,
+            WorkspaceRoot: _workspace.RootPath,
+            Artifacts: _artifacts,
+            Services: _services);
+
+        SuccessReport report;
+        try
+        {
+            // The run's OWN decision handler, not a substitute that always says no.
+            //
+            // It was NeverAsks, on the reasoning that a question at this moment - about a command
+            // the model invented - and the same question again at the end is two interruptions to
+            // learn one thing. Measured 2026-09-21, first live run: the shell policy asks, the
+            // console answers it with --approve allow, and the substitute answered "no" on its
+            // behalf. BOTH checks came back "the user did not permit this check to run" and were
+            // thrown away. The baseline destroyed the evidence it was added to grade.
+            //
+            // The cost of this is that an attended run is asked once more per check. That is the
+            // honest price: a question somebody can answer is worth more than a check silently
+            // deleted on their behalf.
+            report = await _successEvaluator.EvaluateAsync(
+                proposed, _tools, _permissions, _policy, _decisions, toolContext, taskId, ct);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // The baseline is an improvement to the evidence, never a way for a run to fail. If it
+            // cannot be taken, every check keeps the meaning it would have had before this existed.
+            return (proposed, new[] { $"The checks could not be tried beforehand ({ex.Message}), "
+                                    + "so what each of them proves is not known." });
+        }
+
+        var kept = new List<SuccessCriterionDefinition>();
+        var notes = new List<string>();
+
+        foreach (var result in report.Results)
+        {
+            var criterion = proposed.First(c => c.Name == result.Name && c.Command == result.Command);
+
+            switch (result.Outcome)
+            {
+                case CriterionOutcome.Failed:
+                    kept.Add(criterion);
+                    break;
+
+                case CriterionOutcome.Passed:
+                    kept.Add(criterion with { AlreadyPassing = true });
+                    notes.Add($"The check '{result.Name}' already passes before any work, so it "
+                            + "cannot show this request was carried out. It is kept only to catch "
+                            + "the work breaking it.");
+                    break;
+
+                default:
+                    // Learned nothing, so nothing changes. A baseline that could not be taken is
+                    // an absence of information about the check, not a finding against it - the
+                    // same rule the catch above applies when the whole pass fails. The check
+                    // keeps exactly the meaning it would have had if this had never run; if it
+                    // really cannot run, the end will find that out and Unknown blocks nothing.
+                    kept.Add(criterion);
+                    notes.Add($"The check '{result.Name}' could not be tried before the work, so "
+                            + $"whether it proves anything is not known. {result.Detail}".TrimEnd());
+                    break;
+            }
+        }
+
+        return (kept, notes);
+    }
 
     private async Task<SuccessReport> CheckSuccessAsync(
         IReadOnlyList<SuccessCriterionDefinition> criteria,

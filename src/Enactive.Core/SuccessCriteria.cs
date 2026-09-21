@@ -58,7 +58,8 @@ public sealed record CriterionResult(
     CriterionOutcome Outcome,
     int? ExitCode,
     string? Detail,
-    CriterionOrigin Origin = CriterionOrigin.Declared)
+    CriterionOrigin Origin = CriterionOrigin.Declared,
+    bool AlreadyPassing = false)
 {
     /// <summary>
     /// Whether this result holds the run back.
@@ -87,8 +88,9 @@ public sealed record CriterionResult(
             _ => "NOT CHECKED"
         };
         var code = ExitCode is { } c ? $" (exit {c})" : "";
+        var already = AlreadyPassing ? "  [was already passing before the work]" : "";
         var why = string.IsNullOrWhiteSpace(Detail) ? "" : $"\n    {Detail!.Trim()}";
-        return $"{head}{code} — {Name}: {Command}{(Required ? "" : "  [optional]")}{why}";
+        return $"{head}{code} — {Name}: {Command}{(Required ? "" : "  [optional]")}{already}{why}";
     }
 }
 
@@ -111,9 +113,24 @@ public sealed record SuccessReport(IReadOnlyList<CriterionResult> Results)
     public IReadOnlyList<CriterionResult> Blocking
         => Results.Where(r => r.Blocking).ToArray();
 
-    /// <summary>At least one required check RAN and passed. Not the same as "nothing blocked".</summary>
+    /// <summary>
+    /// At least one required check RAN, passed, and was NOT already passing before the work.
+    ///
+    /// <para>Three different things, and the run measured on 2026-09-21 needed all three. "Nothing
+    /// blocked" is not proof: a report where every check was unevaluable has established nothing.
+    /// And a check that was ALREADY TRUE before the work started has established nothing about
+    /// this run either - it was the absence of that distinction that let a run be called finished
+    /// on the strength of <c>Docs/DRIFT_ollama.md exists and is not empty</c>, about a file that
+    /// had been sitting in the workspace since the previous evening.</para>
+    ///
+    /// <para>Such a check is still worth running: if the work BREAKS it, that is a regression
+    /// nothing else in the engine would notice. It can hold a run back. It just cannot be the
+    /// reason one is let through.</para>
+    /// </summary>
     public bool Proved
-        => Results.Any(r => r.Required && r.Outcome == CriterionOutcome.Passed);
+        => Results.Any(r => r.Required
+                            && r.Outcome == CriterionOutcome.Passed
+                            && !r.AlreadyPassing);
 
     /// <summary>
     /// The run's outcome after the checks have had their say.
@@ -170,7 +187,8 @@ public sealed record SuccessReport(IReadOnlyList<CriterionResult> Results)
     /// </summary>
     public string Overruling(string? was)
     {
-        var passed = Results.Where(r => r.Required && r.Outcome == CriterionOutcome.Passed)
+        var passed = Results.Where(r => r.Required && r.Outcome == CriterionOutcome.Passed
+                                        && !r.AlreadyPassing)
                             .Select(r => r.Name);
 
         var why = $"the check(s) that decide this run passed: {string.Join(", ", passed)}";

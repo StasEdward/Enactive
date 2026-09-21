@@ -61,7 +61,7 @@ public sealed class SuccessEvaluator
     {
         CriterionResult Unknown(string why)
             => new(criterion.Name, criterion.Command, criterion.Required,
-                   CriterionOutcome.Unknown, null, why, criterion.Origin);
+                   CriterionOutcome.Unknown, null, why, criterion.Origin, criterion.AlreadyPassing);
 
         PermissionLevel required;
         try
@@ -160,7 +160,8 @@ public sealed class SuccessEvaluator
             exitCode == criterion.ExpectedExitCode ? CriterionOutcome.Passed : CriterionOutcome.Failed,
             exitCode,
             exitCode == criterion.ExpectedExitCode ? null : Trim(result.Output ?? result.Error),
-            criterion.Origin);
+            criterion.Origin,
+            criterion.AlreadyPassing);
     }
 
     private static bool TryExitCode(ToolResult result, out int exitCode)
