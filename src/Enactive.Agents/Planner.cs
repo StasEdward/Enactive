@@ -462,8 +462,12 @@ public sealed class Planner
         + "every check is tried BEFORE the work starts, and one that already passes then is "
         + "recorded as proving nothing about this request. Use the project's own "
         + "real commands, the ones this workspace actually has. A command that cannot fail proves "
-        + "nothing, so never propose echo, cd, dir, ls, type, cat or exit. Do not check something "
-        + "the request did not ask for. [] IS THE RIGHT ANSWER for a question, an explanation, a "
+        + "nothing, so never propose echo, cd, dir, ls, type, cat or exit. CHECK ONLY WHAT THE "
+        + "REQUEST ITSELF NAMES - a file, a command, a target it actually mentions - and NEVER "
+        + "invent a file name: you cannot see this workspace, so a check against a path you made "
+        + "up fails when the work lands under the real name, and the run is then failed for your "
+        + "guess. If the request does not say where the result goes, check something else or "
+        + "return []. [] IS THE RIGHT ANSWER for a question, an explanation, a "
         + "document, a review, a summary, or anything whose result a person has to read — do not "
         + "invent a check in order to have one.";
 }
