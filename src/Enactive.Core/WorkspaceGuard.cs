@@ -204,6 +204,47 @@ public static class WorkspaceGuard
            && string.Equals(segments[1], ScratchFolder, Comparison);
 
     /// <summary>Whether any segment of the path below the root is the reserved state folder.</summary>
+    /// <summary>
+    /// Whether this path names the reserved folder ITSELF, rather than something inside it.
+    ///
+    /// <para><b>For one caller and one purpose:</b> <c>list_dir</c>, so that a model can WALK to
+    /// the working area it was told to use. The root listing shows <c>.enactive/</c>, the worker's
+    /// instructions say its own area is <c>.enactive/scratch/</c>, and opening the folder in
+    /// between was refused - the door shown and then shut. Measured twice on 2026-09-21, in two
+    /// live runs of two different requests.</para>
+    ///
+    /// <para>It grants nothing on its own. Everything a listing of this folder may show is already
+    /// reachable; what changes is that it can be found by looking rather than only by knowing.</para>
+    /// </summary>
+    public static bool IsReservedRoot(string root, string? relativePath)
+    {
+        if (string.IsNullOrWhiteSpace(relativePath))
+            return false;
+
+        try
+        {
+            var fullRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
+            var full = Path.TrimEndingDirectorySeparator(
+                Path.GetFullPath(Path.Combine(fullRoot, relativePath!)));
+
+            if (string.Equals(full, fullRoot, Comparison))
+                return false;
+
+            var relative = Path.GetRelativePath(fullRoot, full);
+            var segments = relative.Split(
+                new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
+                StringSplitOptions.RemoveEmptyEntries);
+
+            // Exactly the one segment, matched the way the refusal itself matches it.
+            return segments.Length == 1
+                && string.Equals(segments[0], ReservedFolder, StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private static bool TouchesReserved(string fullRoot, string full)
     {
         if (string.Equals(full, fullRoot, Comparison))

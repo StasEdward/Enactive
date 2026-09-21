@@ -32,9 +32,9 @@ public sealed class LookingAtTheReservedFolderTests
     /// step open — the same rule a lookup that finds nothing already gets.
     /// </summary>
     [Theory]
-    [InlineData(".enactive")]
     [InlineData(".enactive/runs")]
-    public async Task Looking_into_the_reserved_folder_is_answered_not_failed(string path)
+    [InlineData(".enactive/undo")]
+    public async Task Looking_inside_the_state_folder_is_answered_not_failed(string path)
     {
         using var fx = new EngineFixture();
 
@@ -44,13 +44,70 @@ public sealed class LookingAtTheReservedFolderTests
         Assert.True(result.IsAnswer, "a refusal to look is an answer, not unfinished work");
     }
 
+    /// <summary>
+    /// THE WAY IN HAS TO BE WALKABLE. The root listing shows <c>.enactive/</c>, the worker's
+    /// instructions say its own area is underneath it, and opening the folder in between was
+    /// refused — the door shown and then shut. So listing the state folder answers with the part
+    /// of it that belongs to the model.
+    ///
+    /// <para>Nothing is granted that was not reachable already; what changes is that it can be
+    /// found by looking instead of only by knowing.</para>
+    /// </summary>
+    [Theory]
+    [InlineData(".enactive")]
+    [InlineData(".enactive/")]
+    [InlineData("./.enactive")]
+    [InlineData(".ENACTIVE")]
+    [InlineData("sub/../.enactive")]
+    public async Task Listing_the_state_folder_shows_the_working_area(string path)
+    {
+        using var fx = new EngineFixture();
+
+        var result = await fx.Invoke(new ListDirectoryTool(), Path(path));
+
+        Assert.True(result.Success, result.Error);
+        Assert.Contains(WorkspaceGuard.ScratchFolder + "/", result.Output ?? "", StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// And it shows ONLY that. A listing that leaked the undo journal's filenames would be the
+    /// refusal undone by the message meant to explain it.
+    /// </summary>
+    [Fact]
+    public async Task Listing_the_state_folder_shows_nothing_else()
+    {
+        using var fx = new EngineFixture();
+        fx.Write(".enactive/scratch/mine.txt", "ok");
+
+        fx.Write(".enactive/runs/1.json", "{}");
+        fx.Write(".enactive/undo/journal.json", "{}");
+
+        var result = await fx.Invoke(new ListDirectoryTool(), Path(".enactive"));
+
+        // The ENTRIES, not a substring of the tool's own explanation - which mentions the undo
+        // journal by name in the course of saying it is out of bounds.
+        Assert.Equal(new[] { WorkspaceGuard.ScratchFolder + "/" }, Entries(result.Output));
+    }
+
+    /// <summary>The root listing still shows the folder, which is how a model gets here at all.</summary>
+    [Fact]
+    public async Task The_root_still_shows_the_state_folder()
+    {
+        using var fx = new EngineFixture();
+        fx.Write(".enactive/scratch/probe.txt", "hello");
+
+        var result = await fx.Invoke(new ListDirectoryTool(), Path("."));
+
+        Assert.Contains(WorkspaceGuard.ReservedFolder, result.Output ?? "", StringComparison.Ordinal);
+    }
+
     /// <summary>And it says the true thing, including where the model's own area actually is.</summary>
     [Fact]
     public async Task It_names_the_working_area_instead_of_talking_about_writing()
     {
         using var fx = new EngineFixture();
 
-        var text = (await fx.Invoke(new ListDirectoryTool(), Path(".enactive"))).Error ?? "";
+        var text = (await fx.Invoke(new ListDirectoryTool(), Path(".enactive/runs"))).Error ?? "";
 
         Assert.Contains(WorkspaceGuard.ScratchPrefix, text, StringComparison.Ordinal);
         Assert.DoesNotContain("not writable", text, StringComparison.OrdinalIgnoreCase);
@@ -104,4 +161,14 @@ public sealed class LookingAtTheReservedFolderTests
         Assert.False(result.Success);
         Assert.False(result.IsAnswer, "a write that did not happen is unfinished work");
     }
+
+    /// <summary>
+    /// The listed entries, without the sentence explaining what is NOT listed. One per line; the
+    /// note is the only line that opens with a bracket.
+    /// </summary>
+    private static string[] Entries(string? output)
+        => (output ?? "").Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                         .Select(l => l.Trim())
+                         .Where(l => l.Length > 0 && !l.StartsWith('('))
+                         .ToArray();
 }

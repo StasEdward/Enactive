@@ -30,6 +30,24 @@ public sealed class ListDirectoryTool : ITool
             return Task.FromResult(ToolResults.Unreadable($"Invalid arguments JSON: {ex.Message}"));
         }
 
+        // The one folder inside the workspace's own state that tools may use is the working area,
+        // and until now the way to it could not be WALKED: the root listing shows '.enactive/', the
+        // worker's instructions say its own area is under it, and opening it was refused. The door
+        // was shown and then shut - measured twice on 2026-09-21, in two live runs, and in one of
+        // them the refused look was one of the two unresolved calls that failed the run.
+        //
+        // So a listing of the state folder answers with the part of it that is the model's: one
+        // entry, and a sentence about the rest. Nothing is granted that was not reachable already -
+        // '.enactive/scratch/' has been listable, readable and writable all along - what changes is
+        // that it can be found by looking instead of only by knowing.
+        if (WorkspaceGuard.IsReservedRoot(ctx.WorkspaceRoot, path))
+            return Task.FromResult(ToolResults.Ok(
+                output: WorkspaceGuard.ScratchFolder + "/" + Environment.NewLine
+                      + $"(the rest of '{WorkspaceGuard.ReservedFolder}' is the workspace's own "
+                      + "state - its undo journal, approvals and checkpoints - and tools do not go "
+                      + $"in there. '{WorkspaceGuard.ScratchPrefix}/' is yours.)",
+                metadata: new Dictionary<string, object?> { ["entries"] = 1 }));
+
         try
         {
             var full = WorkspacePaths.ResolveInside(ctx.WorkspaceRoot, path);
