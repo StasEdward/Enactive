@@ -173,10 +173,17 @@ internal sealed partial class SettingsViewModel
         }
     }
 
+    /// <summary>
+    /// Every pane's complaint, recomputed. Shared because Save consults them together and a
+    /// second method would be a second thing to forget when a pane is added.
+    /// </summary>
     private void Revalidate()
     {
         RemoteProblem = RemoteFault() ?? string.Empty;
         OnPropertyChanged(nameof(HasRemoteProblem));
+
+        SmtpProblem = SmtpValidation();
+        OnPropertyChanged(nameof(SmtpState));
     }
 
     /// <summary>

@@ -46,6 +46,8 @@
                                 Content="Remote access" Command="{Binding ShowRemoteCommand}" />
                         <Button Classes="nav" Classes.on="{Binding IsWritableRoots}"
                                 Content="Writable folders" Command="{Binding ShowWritableRootsCommand}" />
+                        <Button Classes="nav" Classes.on="{Binding IsSmtp}"
+                                Content="SMTP" Command="{Binding ShowSmtpCommand}" />
                         <Button Classes="nav" Classes.on="{Binding IsAbout}"
                                 Content="About" Command="{Binding ShowAboutCommand}" />
 
@@ -194,6 +196,49 @@
                     <TextBlock Classes="label" Text="Account" />
                     <TextBlock Classes="hint"
                                Text="Nothing here yet. Enactive has no account of its own; provider credentials live under AI · Providers." />
+                </StackPanel>
+
+                <StackPanel IsVisible="{Binding IsSmtp}" Margin="12" Spacing="6">
+                    <TextBlock Classes="label" Text="SMTP" />
+                    <TextBlock Classes="hint" TextWrapping="Wrap"
+                               Text="The account the send_email tool sends from. Until a host and at least one recipient are set, the tool tells the agent it is unavailable rather than failing halfway through a task." />
+
+                    <TextBlock Classes="label" Text="Server" Margin="0,8,0,0" />
+                    <Grid ColumnDefinitions="*,90" ColumnSpacing="8">
+                        <TextBox Grid.Column="0" Text="{Binding SmtpHost}" PlaceholderText="smtp.example.com" />
+                        <TextBox Grid.Column="1" Text="{Binding SmtpPort}" PlaceholderText="587" />
+                    </Grid>
+                    <CheckBox Content="Upgrade the connection with STARTTLS" IsChecked="{Binding SmtpStartTls}" />
+                    <TextBlock Classes="hint" TextWrapping="Wrap"
+                               Text="587 with STARTTLS is what most providers want. For implicit TLS on 465, set the port and clear the box." />
+
+                    <TextBlock Classes="label" Text="User" Margin="0,8,0,0" />
+                    <TextBox Text="{Binding SmtpUser}" PlaceholderText="you@example.com" />
+                    <TextBlock Classes="hint" TextWrapping="Wrap"
+                               Text="Leave empty for a relay that wants no credentials — a submission agent on your own network. Nothing is sent to the server then." />
+
+                    <TextBlock Classes="label" Text="Password" Margin="0,8,0,0" />
+                    <TextBox Text="{Binding SmtpPassword}" PasswordChar="&#8226;" />
+                    <TextBlock Classes="hint" TextWrapping="Wrap"
+                               Text="Stored encrypted with your Windows account, the same as an API key. Leave the box as it is to keep the stored password; empty it to remove it." />
+
+                    <TextBlock Classes="label" Text="From" Margin="0,8,0,0" />
+                    <TextBox Text="{Binding SmtpFrom}" PlaceholderText="(the user above)" />
+
+                    <TextBlock Classes="label" Text="May send to" Margin="0,12,0,0" />
+                    <TextBox Text="{Binding SmtpRecipients}" AcceptsReturn="True" Height="70"
+                             TextWrapping="NoWrap" PlaceholderText="you@example.com" />
+                    <TextBlock Classes="hint" TextWrapping="Wrap"
+                               Text="One address per line, and this list is the whole of what send_email may do. An agent reads logs, files and pages it was pointed at, and text it reads is not an instruction — but a mail tool that sends wherever it is asked would make that a promise rather than a boundary. An address that is not on this list is refused, and no task can add one." />
+
+                    <TextBlock Classes="hint" TextWrapping="Wrap" Foreground="{DynamicResource Brand.Danger}"
+                               IsVisible="{Binding HasSmtpProblem}" Text="{Binding SmtpProblem}" />
+
+                    <TextBlock Classes="hint" TextWrapping="Wrap" Margin="0,10,0,0" Text="{Binding SmtpState}" />
+                    <TextBlock Classes="hint" TextWrapping="Wrap"
+                               Text="Sending always asks first, whatever the autonomy level says, and the question names the recipient, the subject and every attachment. A message cannot be recalled." />
+                    <TextBlock Classes="hint" TextWrapping="Wrap"
+                               Text="Changes here take effect the next time the application starts." />
                 </StackPanel>
 
                 <StackPanel IsVisible="{Binding IsRemote}" Margin="12" Spacing="6">
