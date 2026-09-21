@@ -29,6 +29,22 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
         _log = log;
     }
 
+
+    /// <summary>
+    /// The prompt window this provider was DECLARED to have, or null when nobody said.
+    ///
+    /// <para>Only Ollama could answer this, by echoing back the num_ctx it was handed - a mirror
+    /// of the request rather than a fact about the model. So the guard that trims a transcript to
+    /// fit never applied to a cloud provider at all, and a run's conversation grew without limit:
+    /// measured 2026-09-21, prompts reached 176,000 tokens and ContextTrimmed fired zero times in
+    /// a run that spent 12.4M.</para>
+    ///
+    /// <para>Null still means null. A number that is wrong in the generous direction costs a
+    /// failed request, which is why nothing is inferred from a model's name - the person says it
+    /// in the provider editor or nobody does.</para>
+    /// </summary>
+    public int? ContextWindow(ChatRequest request) => _descriptor.ContextWindowTokens;
+
     public async IAsyncEnumerable<ChatStreamEvent> StreamChatAsync(
         ChatRequest request, [EnumeratorCancellation] CancellationToken ct)
     {

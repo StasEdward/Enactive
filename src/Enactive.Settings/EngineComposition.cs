@@ -118,7 +118,8 @@ public static class EngineComposition
             string.IsNullOrEmpty(p.ApiKey) ? null : p.ApiKey,
             p.Models,
             p.Headers.Count > 0 ? p.Headers : null,
-            p.MaxTokens)).ToList();
+            p.MaxTokens,
+            p.ContextWindowTokens)).ToList();
 
     /// <summary>
     /// The configured team, or the built-in one when a person has never edited it. Global

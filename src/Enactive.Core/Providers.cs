@@ -18,7 +18,16 @@ public sealed record ProviderDescriptor(
     IReadOnlyList<string> Models,
     IReadOnlyDictionary<string, string>? Headers = null,
     // Max output tokens for this provider (Anthropic max_tokens). Null = the provider's built-in default.
-    int? MaxTokens = null);
+    int? MaxTokens = null,
+    /// <summary>
+    /// How large a prompt this provider accepts, when somebody has said — the CONTEXT window, not
+    /// <see cref="MaxTokens"/>, which caps the answer.
+    ///
+    /// <para>It has to be declared because nothing here can find it out; see
+    /// <c>ProviderConfig.ContextWindowTokens</c>, which is where the number comes from. Null means
+    /// nobody said, and then the engine does not pretend to know.</para>
+    /// </summary>
+    int? ContextWindowTokens = null);
 
 /// <summary>Talks to an LLM. Implementations live in Enactive.Providers (transport stays out of Core).</summary>
 public interface IChatProvider
