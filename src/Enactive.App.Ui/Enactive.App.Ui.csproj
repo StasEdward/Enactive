@@ -33,11 +33,12 @@
   <ItemGroup>
     <!-- All three MUST be the same version, or you get a TypeLoadException at startup.
          Pinned to match the Avalonia.Base that resolved on this machine. -->
-    <PackageReference Include="Avalonia" Version="12.1.1" />
-    <PackageReference Include="Avalonia.Desktop" Version="12.1.1" />
-    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.1" />
+    <PackageReference Include="Avalonia" Version="12.1.2" />
+    <PackageReference Include="Avalonia.Desktop" Version="12.1.2" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.2" />
+    <PackageReference Include="MailKit" Version="4.18.0" />
     <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="3.53.3" />
-    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="9.0.0" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.12" />
   </ItemGroup>
 
   <ItemGroup>

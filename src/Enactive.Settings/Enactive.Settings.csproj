@@ -5,6 +5,9 @@
     <Nullable>enable</Nullable>
     <RootNamespace>Enactive.Settings</RootNamespace>
   </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="MailKit" Version="4.18.0" />
+  </ItemGroup>
 
   <!--
     What a person configured, and what builds an engine from it.
