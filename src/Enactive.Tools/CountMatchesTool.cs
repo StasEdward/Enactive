@@ -79,7 +79,7 @@ public sealed class CountMatchesTool : ITool
         string searchRoot;
         try { searchRoot = WorkspacePaths.ResolveInside(ctx.WorkspaceRoot, subPath); }
         catch (ReservedPathException) { return ToolResults.NotFound(ReservedPathException.Explanation); }
-        catch (ArgumentException ex) { return ToolResults.Fail(ex.Message); }
+        catch (ArgumentException ex) { return ToolResults.Unreadable(ex.Message); }
 
         if (!Directory.Exists(searchRoot))
             return ToolResults.NotFound($"Not a folder in this workspace: {subPath ?? "."}");
@@ -129,6 +129,19 @@ public sealed class CountMatchesTool : ITool
                 + "Anchor it or make it more specific.");
         }
         catch (OperationCanceledException) { throw; }
+        // An argument the tool REFUSED before it looked at anything - a glob naming a path, a
+        // path outside the workspace. Nothing was searched, so this is a sentence that did not
+        // parse rather than work that went wrong, and Unreadable says so (DidNotRun). It matters
+        // because a search names no file, is not a shell and changes nothing, so an open failure
+        // recorded against it can be closed by NOTHING except repeating the identical bad call.
+        // Measured 2026-09-23 00:15: search_files {"glob":"src/Enactive.Remote.*/*.cs"} was
+        // refused with a perfectly good explanation, the model read the files another way, and
+        // step 2 was marked Incomplete for it with steps 3 and 4 skipped.
+        catch (ArgumentException ex)
+        {
+            return ToolResults.Unreadable(ex.Message);
+        }
+
         catch (Exception ex)
         {
             return ToolResults.Fail($"Count failed: {ex.Message}");

@@ -147,7 +147,7 @@ public sealed class SendEmailTool(MailAccount account) : ITool
 
             string full;
             try { full = WorkspacePaths.ResolveInside(ctx.WorkspaceRoot, relative); }
-            catch (ArgumentException ex) { return ToolResults.Fail(ex.Message); }
+            catch (ArgumentException ex) { return ToolResults.Unreadable(ex.Message); }
 
             if (!File.Exists(full))
                 return ToolResults.Fail(

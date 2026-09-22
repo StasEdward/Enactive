@@ -55,7 +55,7 @@ public sealed class FileStatsTool : ITool
         string scanRoot;
         try { scanRoot = WorkspacePaths.ResolveInside(ctx.WorkspaceRoot, subPath); }
         catch (ReservedPathException) { return ToolResults.NotFound(ReservedPathException.Explanation); }
-        catch (ArgumentException ex) { return ToolResults.Fail(ex.Message); }
+        catch (ArgumentException ex) { return ToolResults.Unreadable(ex.Message); }
 
         if (!Directory.Exists(scanRoot))
             return ToolResults.NotFound($"Not a folder in this workspace: {subPath ?? "."}");
@@ -92,6 +92,15 @@ public sealed class FileStatsTool : ITool
             }
         }
         catch (OperationCanceledException) { throw; }
+
+        // The glob check, which throws from inside the walk on the first step of the loop. An
+        // argument refused before anything was scanned is a sentence that did not parse, not work
+        // that went wrong - see the note in SearchFilesTool, where this cost a run.
+        catch (ArgumentException ex)
+        {
+            return ToolResults.Unreadable(ex.Message);
+        }
+
         catch (Exception ex)
         {
             return ToolResults.Fail($"Could not stat files: {ex.Message}");
