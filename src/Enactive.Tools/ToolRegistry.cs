@@ -19,8 +19,13 @@ public sealed class ToolRegistry : IToolRegistry
 
     public Task<ToolResult> InvokeAsync(ToolCall call, ToolContext ctx, CancellationToken ct)
     {
+        // A name with no tool behind it: nothing was attempted, so Unreadable rather than Fail.
+        // The orchestrator answers this before dispatch, with the nearest real spelling (9bk); this
+        // is the same sentence for every caller that does not come through that gate - the success
+        // criteria, a review's own checks, a remote host.
         if (!_tools.TryGetValue(call.Name, out var tool))
-            return Task.FromResult(ToolResults.Fail($"Unknown tool '{call.Name}'."));
+            return Task.FromResult(ToolResults.Unreadable(
+                $"There is no tool called '{call.Name}'. Nothing ran."));
 
         return tool.InvokeAsync(call.ArgumentsJson, ctx, ct);
     }

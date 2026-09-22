@@ -60,7 +60,7 @@ public sealed class EditFileTool : ITool
         // Absent is not the same as "". An empty new_string deletes the passage, which is a real
         // and useful edit; a MISSING one means the arguments are not what the model meant to send.
         if (newString is null)
-            return ToolResults.Fail(
+            return ToolResults.Unreadable(
                 "'new_string' is required. To delete the passage, pass an empty string explicitly.");
 
         if (string.Equals(oldString, newString, StringComparison.Ordinal))
@@ -125,6 +125,18 @@ public sealed class EditFileTool : ITool
                     ["editedStagedVersion"] = staged is not null
                 });
         }
+        // A path WorkspacePaths would not resolve - it leaves the workspace, or it is not a path.
+        // Nothing was opened, so this is an argument refused rather than an operation that went
+        // wrong, and the difference is the whole of 9bj-9bm. It also fixes the wording: without
+        // this the refusal arrives as "Could not read 'x': …", which reads as a read that failed.
+        //
+        // ArgumentException in this block comes from that resolution; the file system throws
+        // IOException and UnauthorizedAccessException, which fall through to the handler below.
+        catch (ArgumentException ex)
+        {
+            return ToolResults.Unreadable(ex.Message);
+        }
+
         catch (Exception ex)
         {
             return ToolResults.Fail($"Could not edit '{path}': {ex.Message}");

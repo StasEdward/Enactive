@@ -545,6 +545,13 @@ public sealed class EngineFixture : IDisposable
     /// Every tool a shipping host registers. Kept here so one list serves the whole suite, and so
     /// "a tool nobody can reach" is a question a test can ask.
     /// </summary>
+    /// <summary>
+    /// One shipped tool by the name a model would call it by — so a test can sweep the whole set
+    /// without naming each type, and a tool added to ShippedTools is covered the day it is added.
+    /// </summary>
+    public static ITool ToolNamed(string name)
+        => ShippedTools().Single(t => t.Definition.Name == name);
+
     public static ITool[] ShippedTools() => new ITool[]
     {
         new WriteFileTool(), new EditFileTool(), new ReadFileTool(), new SearchFilesTool(),

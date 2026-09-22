@@ -96,7 +96,7 @@ public sealed class SendEmailTool(MailAccount account) : ITool
     public async Task<ToolResult> InvokeAsync(string argumentsJson, ToolContext ctx, CancellationToken ct)
     {
         if (!account.Configured)
-            return ToolResults.Fail(
+            return ToolResults.Unreadable(
                 "No SMTP account is configured, so nothing can be sent. Fill in Settings → SMTP: "
                 + "a host and at least one allowed recipient.");
 
@@ -125,11 +125,11 @@ public sealed class SendEmailTool(MailAccount account) : ITool
 
         var recipient = string.IsNullOrWhiteSpace(to) ? account.Default : to!.Trim();
         if (recipient is null)
-            return ToolResults.Fail("No recipient is configured. Add one in Settings → SMTP.");
+            return ToolResults.Unreadable("No recipient is configured. Add one in Settings → SMTP.");
 
         // The refusal names the list, because a model that guessed once will otherwise guess again.
         if (!account.Allows(recipient))
-            return ToolResults.Fail(
+            return ToolResults.Unreadable(
                 $"'{recipient}' is not an address this workspace may send to. The allowed "
                 + $"address(es): {string.Join(", ", account.Recipients)}. This is set by the "
                 + "person in Settings → SMTP and cannot be changed from here - if the message "
@@ -141,7 +141,7 @@ public sealed class SendEmailTool(MailAccount account) : ITool
         foreach (var relative in attachments)
         {
             if (files.Count >= MaxAttachments)
-                return ToolResults.Fail(
+                return ToolResults.Unreadable(
                     $"Too many attachments: {attachments.Count}, and a message may carry "
                     + $"{MaxAttachments}. Send fewer, or put them in one file first.");
 
@@ -150,12 +150,12 @@ public sealed class SendEmailTool(MailAccount account) : ITool
             catch (ArgumentException ex) { return ToolResults.Unreadable(ex.Message); }
 
             if (!File.Exists(full))
-                return ToolResults.Fail(
+                return ToolResults.Unreadable(
                     $"There is no '{relative}' to attach. Write the file first, then attach it.");
 
             total += new FileInfo(full).Length;
             if (total > MaxAttachmentBytes)
-                return ToolResults.Fail(
+                return ToolResults.Unreadable(
                     $"The attachments come to more than {MaxAttachmentBytes / 1024 / 1024} MB "
                     + "together, which most servers will refuse. Send a summary instead, or one "
                     + "file at a time.");

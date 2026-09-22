@@ -187,7 +187,7 @@ public sealed class CompareFilesTool : ITool
     {
         string full;
         try { full = WorkspacePaths.ResolveInside(ctx.WorkspaceRoot, path); }
-        catch (ArgumentException ex) { return new Loaded(null, ToolResults.Fail(ex.Message)); }
+        catch (ArgumentException ex) { return new Loaded(null, ToolResults.Unreadable(ex.Message)); }
 
         var staged = await ctx.Artifacts.TryReadPendingAsync(path!, ct);
         if (staged is not null)

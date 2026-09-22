@@ -120,6 +120,18 @@ public sealed class MoveFileTool : ITool
                     ["bytes"] = moved
                 });
         }
+        // A path WorkspacePaths would not resolve - it leaves the workspace, or it is not a path.
+        // Nothing was opened, so this is an argument refused rather than an operation that went
+        // wrong, and the difference is the whole of 9bj-9bm. It also fixes the wording: without
+        // this the refusal arrives as "Could not read 'x': …", which reads as a read that failed.
+        //
+        // ArgumentException in this block comes from that resolution; the file system throws
+        // IOException and UnauthorizedAccessException, which fall through to the handler below.
+        catch (ArgumentException ex)
+        {
+            return ToolResults.Unreadable(ex.Message);
+        }
+
         catch (Exception ex)
         {
             return ToolResults.Fail($"Could not move '{from}' to '{to}': {ex.Message}");
