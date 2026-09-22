@@ -125,8 +125,13 @@ public sealed class ExecutionJournalTests
         var worker = new FakeChatProvider(
             Turn.Says(QuickPlan),
             Turn.Calls1("run_command", """{"command":"echo MARKER_ONE"}""", "c1"),
-            // Enough to push the conversation past the window, so the command's result is elided.
             Turn.Calls1("write_file", $$"""{"path":"big.txt","content":"{{bulky}}"}""", "c2"),
+            // The weight has to arrive as tool RESULTS now. A file's contents on their way to disk
+            // are remembered by their head and their size the moment the call is recorded
+            // (Transcript.ForHistory), so a 20,000-character write no longer fills a window - which
+            // is the point of that change and would have made this test pass for the wrong reason.
+            Turn.Calls1("read_file", """{"path":"big.txt"}""", "c3"),
+            Turn.Calls1("read_file", """{"path":"big.txt"}""", "c4"),
             Turn.Says("Ran it and wrote it."))
         {
             Window = 4096

@@ -59,6 +59,11 @@ public sealed class CapsAnnounceThemselvesTests
         // a search can never disagree about which files exist.
         ["WorkspaceScan.MaxFileBytes"] = nameof(A_file_too_large_to_search_is_reported_not_skipped_in_silence),
         ["CompareFilesTool.MaxShownChars"] = "A_very_long_differing_line_is_shown_cut",
+        // Not a cap on an ANSWER but on what the transcript remembers of a call already made. It
+        // announces itself the same way - the head, then the exact length - because a remembered
+        // argument that looked whole would have the model believe it wrote 200 characters.
+        ["Transcript.MaxRememberedValueChars"] = "A_file_sized_argument_is_remembered_by_its_head_and_its_length",
+        ["Transcript.RememberedHeadChars"] = "A_file_sized_argument_is_remembered_by_its_head_and_its_length",
         // A cap on how many FILES are listed, not how many characters. The totals above the list
         // stay complete - which is the whole difference between this and a search that stops early,
         // and the reason the notice has to say so rather than just trailing off.

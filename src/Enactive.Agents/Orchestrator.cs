@@ -2634,7 +2634,11 @@ public sealed class Orchestrator : IOrchestrator
                 recovered = true;
             }
 
-            messages.Add(new ChatMessage(ChatRole.Assistant, replyText, toolCalls));
+            // Remembered in a shorter form than it was sent in: the arguments of a call that has
+            // already been made are a file's contents on their way to disk, and they are re-sent on
+            // every turn after this one. See Transcript.ForHistory - the calls INVOKED below are the
+            // model's own text, untouched.
+            messages.Add(new ChatMessage(ChatRole.Assistant, replyText, Transcript.ForHistory(toolCalls)));
 
             if (toolCalls is null)
             {
