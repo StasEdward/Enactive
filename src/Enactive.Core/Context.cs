@@ -110,6 +110,15 @@ public sealed record WorkContext(
     /// of a context still compiles and still means what it meant.</para>
     /// </summary>
     public IReadOnlyList<MemoryEntry> Memory { get; init; } = Array.Empty<MemoryEntry>();
+
+    /// <summary>
+    /// How much of what there is, by folder — see <see cref="WorkspaceCensus"/>. Read by the
+    /// planner, which otherwise sizes steps against a workspace it has never seen.
+    ///
+    /// <para>An init property for the same reason as <see cref="Memory"/>: every existing
+    /// construction of a context still compiles and still means what it meant.</para>
+    /// </summary>
+    public IReadOnlyList<string> Inventory { get; init; } = Array.Empty<string>();
 }
 
 /// <summary>Builds <see cref="WorkContext"/> from the current focus.</summary>

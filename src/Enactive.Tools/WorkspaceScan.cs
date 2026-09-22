@@ -17,12 +17,11 @@ internal static class WorkspaceScan
     public const int MaxFileBytes = 2 * 1024 * 1024;
 
     /// <summary>
-    /// The places nobody means to search: the workspace's own state folder, and the build and
-    /// dependency trees that would otherwise supply thousands of hits from code the user did not
-    /// write.
+    /// The places nobody means to search — defined once, in <see cref="WorkspaceGuard"/>, because
+    /// the census the planner is given walks the same workspace and has to agree with this about
+    /// what is in it.
     /// </summary>
-    private static readonly string[] SkippedFolders =
-        { WorkspaceGuard.ReservedFolder, "bin", "obj", "node_modules", ".git", ".vs", "dist", "packages" };
+    private static string[] SkippedFolders => WorkspaceGuard.SkippedFolders;
 
     /// <summary>
     /// The glob as <see cref="Directory.EnumerateFiles(string, string, EnumerationOptions)"/> will

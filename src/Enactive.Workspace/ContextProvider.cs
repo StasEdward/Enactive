@@ -66,8 +66,82 @@ public sealed class ContextProvider : IContextProvider
             RecentChanges: Array.Empty<string>(),
             Environment: env)
         {
-            Memory = memory
+            Memory = memory,
+
+            // Best-effort like the two above, and for the same reason: a run must not fail because
+            // the workspace could not be counted. WorkspaceCensus swallows its own errors, so this
+            // is belt and braces.
+            Inventory = await CensusAsync(ct)
         };
+    }
+
+    /// <summary>
+    /// What the project contains, for the planner — asked of git where there is a repository, and
+    /// of the filesystem where there is not.
+    ///
+    /// <para><b>Why git and not a walk.</b> Run against this repository, a walk reported
+    /// <c>work — 417 .ps1, 210 .log</c> and four folders of <c>.dll</c> before it reached a single
+    /// source file: scratch piles, publish output and restored packages are most of what sits on
+    /// disk and none of what anybody means by "the project". The skip list can chase the ones we
+    /// know (<c>bin</c>, <c>obj</c>, <c>node_modules</c>) and will always be one folder behind the
+    /// next one somebody adds. The repository already answers this question exactly - a file is
+    /// part of the project when it is tracked - so where there is a repository, it is asked.</para>
+    ///
+    /// <para>Best-effort in both halves: no git, a broken repository, a slow disk or a timeout all
+    /// end with the planner being told nothing, which is where it was before any of this.</para>
+    /// </summary>
+    private async Task<IReadOnlyList<string>> CensusAsync(CancellationToken ct)
+    {
+        try
+        {
+            var tracked = await GitFilesAsync(_workspace.RootPath, ct);
+            if (tracked.Count > 0)
+                return WorkspaceCensus.Of(tracked);
+        }
+        catch { /* falls through to the walk */ }
+
+        try { return WorkspaceCensus.Of(_workspace.RootPath); }
+        catch { return Array.Empty<string>(); }
+    }
+
+    /// <summary>
+    /// Every file the repository tracks, or an empty list. Two seconds is generous for a command
+    /// that reads an index; past that the planner is better served by the fallback than by waiting.
+    /// </summary>
+    private static async Task<IReadOnlyList<string>> GitFilesAsync(string root, CancellationToken ct)
+    {
+        if (!Directory.Exists(Path.Combine(root, ".git")) && !File.Exists(Path.Combine(root, ".git")))
+            return Array.Empty<string>();
+
+        var psi = new System.Diagnostics.ProcessStartInfo("git", "ls-files")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WorkingDirectory = root
+        };
+
+        using var proc = new System.Diagnostics.Process { StartInfo = psi };
+        if (!proc.Start())
+            return Array.Empty<string>();
+
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(TimeSpan.FromSeconds(2));
+
+        var output = proc.StandardOutput.ReadToEndAsync();
+
+        try { await proc.WaitForExitAsync(timeout.Token); }
+        catch (OperationCanceledException)
+        {
+            try { proc.Kill(entireProcessTree: true); } catch { /* it is going away either way */ }
+            return Array.Empty<string>();
+        }
+
+        if (proc.ExitCode != 0)
+            return Array.Empty<string>();
+
+        return (await output).Split('\n', StringSplitOptions.RemoveEmptyEntries);
     }
 
     private static string? TryReadGitBranch(string root)

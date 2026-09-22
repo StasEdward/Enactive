@@ -186,6 +186,16 @@ public sealed class Planner
             lines.AddRange(env.Summary().Split('\n', StringSplitOptions.RemoveEmptyEntries)
                               .Select(l => l.Trim()));
 
+        // The one fact a planner cannot get for itself and cannot size a step without. "Check every
+        // page" is one step for eleven pages and a dead run for three hundred, and until this block
+        // existed nothing in the prompt said which of the two it was looking at. See
+        // WorkspaceCensus for the measurement that put it here.
+        if (context.Inventory.Count > 0)
+        {
+            lines.Add("What is in the workspace (build output not counted):");
+            lines.AddRange(context.Inventory.Select(i => "  " + i));
+        }
+
         if (lines.Count == 0)
             return "";
 
