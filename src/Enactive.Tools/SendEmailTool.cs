@@ -77,8 +77,21 @@ public sealed class SendEmailTool(MailAccount account) : ITool
     /// </summary>
     public PermissionLevel RequiredLevel => PermissionLevel.Execute;
 
-    /// <summary>Always, whatever the policy. A sent message cannot be put back.</summary>
-    public bool RequiresApproval => true;
+    /// <summary>
+    /// Whatever the policy says, unless the person turned the question off for this account.
+    ///
+    /// <para>A sent message cannot be put back, so the default is to ask, and the question names
+    /// the recipient, the subject and every attachment - the point of asking is that somebody can
+    /// see what is about to leave.</para>
+    ///
+    /// <para><b>And an unanswerable question is a refusal.</b> A run nobody is watching is not
+    /// offered a tool that can only end in an approval prompt, which took the scheduled errand this
+    /// tool exists for - read the log overnight, write the report, mail it - off the table
+    /// entirely. <see cref="MailAccount.SendWithoutAsking"/> is how a person says "I have already
+    /// answered": the recipient list then carries the whole of the consent, and it is still a list
+    /// they typed, that no task can add to.</para>
+    /// </summary>
+    public bool RequiresApproval => !account.SendWithoutAsking;
 
     public async Task<ToolResult> InvokeAsync(string argumentsJson, ToolContext ctx, CancellationToken ct)
     {

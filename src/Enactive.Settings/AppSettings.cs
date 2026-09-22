@@ -104,6 +104,15 @@ public sealed class SmtpSettings
     /// </summary>
     public List<string> Recipients { get; set; } = new();
 
+    /// <summary>
+    /// Send without the approval question — off unless a person turns it on.
+    ///
+    /// <para>A run nobody is watching is not offered a tool whose only outcome is a prompt, so
+    /// with this off a scheduled task cannot mail its own report. On, the recipient list above
+    /// carries the whole of the consent: see <c>MailAccount.SendWithoutAsking</c>.</para>
+    /// </summary>
+    public bool SendWithoutAsking { get; set; }
+
     /// <summary>Whether enough is filled in for the tool to exist at all.</summary>
     [JsonIgnore]
     public bool Configured
@@ -118,7 +127,8 @@ public sealed class SmtpSettings
         PasswordProtected = PasswordProtected,
         Password = Password,
         From = From,
-        Recipients = new List<string>(Recipients)
+        Recipients = new List<string>(Recipients),
+        SendWithoutAsking = SendWithoutAsking
     };
 }
 

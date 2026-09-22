@@ -28,6 +28,25 @@ public sealed record MailAccount(
     public static readonly MailAccount None =
         new("", 0, false, "", "", "", Array.Empty<string>());
 
+    /// <summary>
+    /// Send without asking each time — off unless a person turned it on.
+    ///
+    /// <para><b>What it is for.</b> The approval question cannot be answered in a run nobody is
+    /// watching, so a scheduled run or one started from a phone is not offered the tool at all
+    /// ("needs an approval nobody is there to give"). That is the whole of the errand this tool
+    /// was built for: read last night's log, write the report, mail it. Asking at three in the
+    /// morning is the same as refusing.</para>
+    ///
+    /// <para><b>What carries the consent instead.</b> <see cref="Recipients"/>, and nothing else.
+    /// A person typed those addresses; the tool still refuses every other address by comparison,
+    /// and the switch cannot be turned on from a task, a template or a model. So the worst a
+    /// runaway run can do is mail the person who asked for the mail.</para>
+    ///
+    /// <para>An init-only property rather than a constructor parameter so that every existing
+    /// construction of this record keeps the safe answer without being edited.</para>
+    /// </summary>
+    public bool SendWithoutAsking { get; init; }
+
     public bool Configured => !string.IsNullOrWhiteSpace(Host) && Recipients.Count > 0;
 
     /// <summary>Who a message goes to when the call does not say — the only one, when there is one.</summary>

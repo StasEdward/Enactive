@@ -234,6 +234,24 @@
                     <TextBlock Classes="hint" TextWrapping="Wrap" Foreground="{DynamicResource Brand.Danger}"
                                IsVisible="{Binding HasSmtpProblem}" Text="{Binding SmtpProblem}" />
 
+                    <TextBlock Classes="label" Text="Who may send" Margin="0,12,0,0"
+                               IsVisible="{Binding HasMailRoles}" />
+                    <ItemsControl ItemsSource="{Binding MailRoles}" IsVisible="{Binding HasMailRoles}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <CheckBox Content="{Binding Role}" IsChecked="{Binding Granted}"
+                                          IsEnabled="{Binding Changeable}" />
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <TextBlock Classes="hint" TextWrapping="Wrap"
+                               IsVisible="{Binding HasMailRoles}"
+                               Text="A role is offered send_email only if it is ticked here — the same list the Team screen edits, kept next to the account because an account nobody may use looks exactly like one that works. Only roles allowed to run things are listed: sending needs Execute, so a tick on a read-only role could only ever be refused. A role granted every tool (*) is shown on and left alone." />
+
+                    <CheckBox Content="Send without asking each time" Margin="0,12,0,0"
+                              IsChecked="{Binding SmtpSendWithoutAsking}" />
+                    <TextBlock Classes="hint" TextWrapping="Wrap" Text="{Binding SmtpAsking}" />
+
                     <TextBlock Classes="hint" TextWrapping="Wrap" Margin="0,10,0,0" Text="{Binding SmtpState}" />
                     <TextBlock Classes="hint" TextWrapping="Wrap"
                                Text="Sending always asks first, whatever the autonomy level says, and the question names the recipient, the subject and every attachment. A message cannot be recalled." />

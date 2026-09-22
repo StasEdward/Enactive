@@ -131,6 +131,7 @@ public static class EngineComposition
                     .Select(r => r.Trim())
                     .Where(r => r.Length > 0)
                     .ToArray())
+                { SendWithoutAsking = settings.Smtp.SendWithoutAsking }
             : MailAccount.None;
 
     /// <summary>Every configured endpoint, as the provider factory wants them.</summary>

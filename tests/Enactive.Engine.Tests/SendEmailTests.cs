@@ -66,6 +66,52 @@ public sealed class SendEmailTests
         Assert.Equal(PermissionLevel.Execute, tool.RequiredLevel);
     }
 
+    // ── the approval question, and turning it off ─────────────────────────────
+
+    /// <summary>
+    /// It asks by default, whatever the policy says. That is the feature: the question names the
+    /// recipient, the subject and every attachment, and a person sees what is about to leave.
+    /// </summary>
+    [Fact]
+    public void By_default_every_send_asks_first()
+        => Assert.True(new SendEmailTool(Account("me@test")).RequiresApproval);
+
+    /// <summary>
+    /// And a person can answer once, in settings, instead of every time.
+    ///
+    /// <para>Why that had to exist: a run nobody is watching is never OFFERED a tool whose only
+    /// outcome is a prompt ("needs an approval nobody is there to give"), so with the question
+    /// always on, a scheduled task could not mail its own report — which is the errand this tool
+    /// was built for. The consent is then carried entirely by the recipient list, which is still a
+    /// list a person typed and no task can add to; the test below is the half that proves the
+    /// switch did not also open the boundary.</para>
+    /// </summary>
+    [Fact]
+    public void A_person_can_answer_once_instead_of_every_time()
+    {
+        var standing = Account("me@test") with { SendWithoutAsking = true };
+
+        Assert.False(new SendEmailTool(standing).RequiresApproval);
+    }
+
+    /// <summary>
+    /// The switch turns off the QUESTION and nothing else. An address nobody listed is refused
+    /// exactly as before — the one thing that must not follow from "do not ask me again".
+    /// </summary>
+    [Fact]
+    public async Task Sending_without_asking_does_not_widen_who_may_be_written_to()
+    {
+        using var fx = new EngineFixture();
+        var standing = Account("me@test") with { SendWithoutAsking = true };
+
+        var result = await fx.Invoke(
+            new SendEmailTool(standing),
+            """{"subject":"hi","to":"someone.else@elsewhere.example"}""");
+
+        Assert.False(result.Success);
+        Assert.Contains("me@test", result.Error ?? "", StringComparison.Ordinal);
+    }
+
     // ── what the STARTTLS switch is worth ───────────────────────────────────
 
     /// <summary>
