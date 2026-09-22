@@ -357,4 +357,29 @@ public sealed class ShellOutcomeTests
 
         Assert.Equal(ShellVerdict.Ran, ShellOutcome.Of(@"powershell -File C:\tmp\generated.ps1", output));
     }
+    /// <summary>
+    /// THE ONE FROM 20:45, verbatim. PowerShell brackets a long echoed line with "..." on BOTH
+    /// sides when the offending token is in the middle; only the trailing marker was stripped, so
+    /// the comparison text began with "... " and matched no command anybody had sent. Select-String
+    /// was handed a -Recurse it does not have — nothing was searched — and the step was failed for
+    /// it with two more skipped behind it.
+    /// </summary>
+    [Fact]
+    public void An_echo_cut_at_both_ends_is_still_our_line()
+    {
+        const string command =
+            "Select-String -Path src -Pattern 'ENACTIVE_STORE|ENACTIVE_LOG_LEVEL|ENACTIVE_MYSQL' -SimpleMatch -Recurse | ForEach-Object { $_.Line }";
+
+        const string output = """
+            [stderr]
+            Select-String : A parameter cannot be found that matches parameter name 'Recurse'.
+            At line:4 char:98
+            + ... TORE|ENACTIVE_LOG_LEVEL|ENACTIVE_MYSQL' -SimpleMatch -Recurse | ForEa ...
+            +                                                        ~~~~~~~~
+            + CategoryInfo          : InvalidArgument: (:) [Select-String], ParameterBindingException
+            + FullyQualifiedErrorId : NamedParameterNotFound,Microsoft.PowerShell.Commands.SelectStringCommand
+            """;
+
+        Assert.Equal(ShellVerdict.NeverRan, ShellOutcome.Of(command, output));
+    }
 }

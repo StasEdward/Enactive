@@ -266,6 +266,15 @@ public static class ShellOutcome
 
         var text = line[1..].Trim();
 
+        // Cut on BOTH sides when the offending token sits in the middle of a long line. Only the
+        // trailing marker was handled, and the leading one then made every such echo compare as
+        // "... TORE|ENACTIVE_LOG_LEVEL' -SimpleMatch -Recurse | ForEa" - a string that is in no
+        // command anybody ever sent, so the answer fell back to "it ran". Measured 2026-09-22,
+        // 20:45: Select-String given a -Recurse it does not have, nothing searched, and the step
+        // failed with two more skipped behind it.
+        if (text.StartsWith("...", StringComparison.Ordinal))
+            text = text[3..].TrimStart();
+
         if (text.EndsWith("...", StringComparison.Ordinal))
             text = text[..^3].TrimEnd();
 
