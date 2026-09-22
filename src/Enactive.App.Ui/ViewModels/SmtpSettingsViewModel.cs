@@ -4,31 +4,16 @@ using System.Collections.ObjectModel;
 using Enactive.App.Ui.Mvvm;
 using Enactive.Settings;
 
-// The pane has a property called MailRoles (the rows); this is the RULE the rows are built from.
+// Read only, now: this pane REPORTS who may send and no longer decides it.
+//
+// It used to draw its own ticks, and on every Save it called MailRoles.Apply with whatever those
+// ticks said. The rows were built when the window opened, so a tool granted in the Team editor a
+// moment earlier was not in them - and Apply takes the tool from every role it is not given. The
+// pane silently revoked what the other screen had just granted, on a screen the person never
+// opened. Reported 2026-09-23: ticked twice, across two restarts, gone both times.
+//
+// One setting, one place. Tools are granted under the role, with every other tool.
 using MailRoleRules = Enactive.Settings.MailRoles;
-
-/// <summary>
-/// One role, and whether it may send. See <see cref="MailRoles"/> for why the tick is here rather
-/// than only in the team editor, and why a wildcarded role is shown on and left alone.
-/// </summary>
-internal sealed class MailRoleRow(string id, string role, bool granted, bool fixedOn) : ObservableObject
-{
-    private bool _granted = granted;
-
-    public string Id { get; } = id;
-    public string Role { get; } = role;
-
-    /// <summary>A role holding <c>*</c>: already has the tool, and not ours to take away here.</summary>
-    public bool Fixed { get; } = fixedOn;
-
-    public bool Changeable => !Fixed;
-
-    public bool Granted
-    {
-        get => _granted;
-        set => Set(ref _granted, value);
-    }
-}
 
 /// <summary>
 /// The SMTP pane: the account <c>send_email</c> sends from, and the only addresses it may send to.
@@ -123,13 +108,6 @@ internal sealed partial class SettingsViewModel
 
     public bool HasSmtpProblem => SmtpProblem.Length > 0;
 
-    /// <summary>
-    /// The roles that may call the tool, ticked here rather than only in the team editor — see
-    /// <see cref="MailRoles"/>. Empty when no role is allowed to run anything at all.
-    /// </summary>
-    public ObservableCollection<MailRoleRow> MailRoles { get; } = new();
-
-    public bool HasMailRoles => MailRoles.Count > 0;
 
     /// <summary>
     /// What the tool will do with what is typed, in one line, so the pane answers the question it
@@ -147,10 +125,11 @@ internal sealed partial class SettingsViewModel
                 ? "Not configured — send_email will tell the agent it is unavailable."
                 : RecipientLines().Count == 0
                     ? "No recipients, so send_email stays unavailable: there is nowhere it may write to."
-                    : MailRoles.All(r => !r.Granted)
-                        ? "Nobody may use it yet: tick a role below, or no run will be offered "
-                          + "send_email at all."
-                        : $"{string.Join(", ", MailRoles.Where(r => r.Granted).Select(r => r.Role))} "
+                    : !MailRoleRules.AnyoneCanSend(_working.Workers)
+                        ? "Nobody may use it yet. send_email is granted where every other tool is "
+                          + "- Settings → Team, open a role, tick send_email - and until some role "
+                          + "names it, no run is offered the tool at all."
+                        : $"{string.Join(", ", _working.Workers.Where(MailRoleRules.CanCarry).Where(MailRoleRules.Carries).Select(w => string.IsNullOrWhiteSpace(w.Role) ? w.Id : w.Role))} "
                           + $"may write to {string.Join(", ", RecipientLines())} and nowhere else.";
 
     private void InitializeSmtp()
@@ -169,19 +148,6 @@ internal sealed partial class SettingsViewModel
         _smtpPasswordUnreadable =
             string.IsNullOrEmpty(smtp.Password) && !string.IsNullOrEmpty(smtp.PasswordProtected);
 
-        foreach (var worker in _working.Workers.Where(MailRoleRules.CanCarry))
-        {
-            var row = new MailRoleRow(
-                worker.Id,
-                string.IsNullOrWhiteSpace(worker.Role) ? worker.Id : worker.Role,
-                granted: MailRoleRules.Carries(worker),
-                fixedOn: MailRoleRules.Wildcarded(worker));
-
-            // The sentence above the list has to change with the ticks, or a person turns the last
-            // one off and the pane goes on saying who may send.
-            row.PropertyChanged += (_, _) => OnPropertyChanged(nameof(SmtpState));
-            MailRoles.Add(row);
-        }
     }
 
     /// <summary>The recipients as typed, one per line, blanks dropped.</summary>
@@ -230,10 +196,6 @@ internal sealed partial class SettingsViewModel
         if (SmtpPassword != PasswordUnchanged)
             smtp.Password = SmtpPassword;
 
-        // The ticks are a change to the TEAM, written where the team is kept, so the team editor
-        // and this pane cannot disagree about who may send.
-        MailRoleRules.Apply(
-            _working.Workers,
-            MailRoles.Where(r => r.Granted).Select(r => r.Id).ToArray());
+
     }
 }

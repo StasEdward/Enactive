@@ -236,27 +236,6 @@
                     <TextBlock Classes="hint" TextWrapping="Wrap" Foreground="{DynamicResource Brand.Danger}"
                                IsVisible="{Binding HasSmtpProblem}" Text="{Binding SmtpProblem}" />
 
-                    <TextBlock Classes="label" Text="Who may send" Margin="0,12,0,0"
-                               IsVisible="{Binding HasMailRoles}" />
-                    <ItemsControl ItemsSource="{Binding MailRoles}" IsVisible="{Binding HasMailRoles}">
-                        <ItemsControl.ItemTemplate>
-                            <!-- x:DataType is not decoration here. Without it this was the only
-                                 DataTemplate in the application with no type at all, so its three
-                                 bindings fell back to reflection instead of being resolved and
-                                 checked at build time - including the one that carries the tick
-                                 BACK, which is the whole of what this control does. Every other
-                                 row in this window declares its type; this one did not. -->
-                            <DataTemplate x:DataType="vm:MailRoleRow">
-                                <CheckBox Content="{Binding Role}"
-                                          IsChecked="{Binding Granted, Mode=TwoWay}"
-                                          IsEnabled="{Binding Changeable}" />
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-                    <TextBlock Classes="hint" TextWrapping="Wrap"
-                               IsVisible="{Binding HasMailRoles}"
-                               Text="A role is offered send_email only if it is ticked here — the same list the Team screen edits, kept next to the account because an account nobody may use looks exactly like one that works. Only roles allowed to run things are listed: sending needs Execute, so a tick on a read-only role could only ever be refused. A role granted every tool (*) is shown on and left alone." />
-
                     <CheckBox Content="Send without asking each time" Margin="0,12,0,0"
                               IsChecked="{Binding SmtpSendWithoutAsking}" />
                     <TextBlock Classes="hint" TextWrapping="Wrap" Text="{Binding SmtpAsking}" />
