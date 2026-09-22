@@ -5,6 +5,7 @@ using Enactive.Core.Chat;
 using Enactive.Core.Context;
 using Enactive.Core.Providers;
 using Enactive.Core.Tasks;
+using Enactive.Core.Templates;
 
 /// <summary>
 /// The result of the understand/plan phase. For a Task, Plan is a real dependency graph.
@@ -28,6 +29,20 @@ public sealed record PlanResult(
     /// counted.</para>
     /// </summary>
     public int? CachedPromptTokens { get; init; }
+
+    /// <summary>
+    /// Commands the planner said would PROVE this request was carried out, written before any of
+    /// the work. Empty when it proposed none, which is the right answer for a question, an
+    /// explanation, or anything else nothing can be run against.
+    ///
+    /// <para>An init property, like the cache count above and for the same reason: the positional
+    /// list is already six long and every <c>with</c> of it has to keep working.</para>
+    ///
+    /// <para>These are <see cref="CriterionOrigin.Proposed"/>, and the engine uses them only when
+    /// the run was given no criteria of its own — see <c>Orchestrator.CriteriaFor</c>.</para>
+    /// </summary>
+    public IReadOnlyList<SuccessCriterionDefinition> Checks { get; init; }
+        = Array.Empty<SuccessCriterionDefinition>();
 }
 
 /// <summary>
@@ -69,13 +84,26 @@ public enum PlanReadout
 /// </summary>
 public sealed class Planner
 {
+    /// <param name="maxSteps">
+    /// The run's own step budget, when it has one — <c>ExecutionLimits.MaxSteps</c> from the
+    /// template. Told to the planner rather than approximated by a number written into the prompt:
+    /// a plan longer than the budget cannot finish, and <c>RunBudget</c> stops it partway with the
+    /// work half done. Null when nothing limits the run, and then nothing is said.
+    /// </param>
+    /// <param name="proposeChecks">
+    /// Whether to ask the planner how this work will be PROVED — see <see cref="ChecksPrompt"/>.
+    /// Off by default so that nothing which constructs a planner directly starts paying for a
+    /// question it will not read the answer to.
+    /// </param>
     public async Task<PlanResult> PlanAsync(
-        string request, WorkContext context, IChatProvider provider, string model, CancellationToken ct)
+        string request, WorkContext context, IChatProvider provider, string model,
+        CancellationToken ct, int? maxSteps = null, bool proposeChecks = false,
+        int? turnCeiling = null)
     {
         var messages = new List<ChatMessage>
         {
-            ChatMessage.System(SystemPrompt),
-            ChatMessage.User(request)
+            ChatMessage.System(SystemPromptFor(maxSteps, proposeChecks, turnCeiling)),
+            ChatMessage.User(Where(context) + request)
         };
 
         var completion = await provider.CompleteAsync(new ChatRequest(model, messages, Temperature: 0.0), ct);
@@ -121,6 +149,51 @@ public sealed class Planner
         return new PlanResult(
             IntentDisposition.QuickAction, Truncate(request, 80), null,
             prompt, output, PlanReadout.Unreadable) { CachedPromptTokens = cached };
+    }
+
+    /// <summary>
+    /// The few facts about WHERE this run happens, put in front of the request.
+    ///
+    /// <para><b>The planner took a <c>WorkContext</c> and never read it.</b> It decided how many
+    /// steps the work has and WHICH MODEL runs each of them knowing only the sentence the person
+    /// typed — not the operating system, not whether this is a git repository, not what the
+    /// project is called. The worker two calls later gets all of it
+    /// (<c>Orchestrator.BuildUserPrompt</c>), which is where these lines come from: the same facts,
+    /// already assembled, already bounded, and thrown away by the one call that was planning the
+    /// work.</para>
+    ///
+    /// <para>In the USER message rather than the system prompt, deliberately. The system prompt is
+    /// identical for every run and every workspace, which is what lets a provider serve it from its
+    /// prompt cache; folding a workspace's name into it would make each workspace a cache miss to
+    /// say something that is not a rule of planning.</para>
+    ///
+    /// <para>Project memory is NOT here, and that is a judgement rather than an oversight. It is up
+    /// to twenty entries read into the prompt of every step already, it says what the project has
+    /// DECIDED rather than what it IS, and the planner's job is small. Facts about the place, not
+    /// its history.</para>
+    /// </summary>
+    internal static string Where(WorkContext context)
+    {
+        var lines = new List<string>();
+
+        if (!string.IsNullOrWhiteSpace(context.ProjectName))
+            lines.Add($"Workspace: {context.ProjectName}");
+
+        if (!string.IsNullOrWhiteSpace(context.GitBranch))
+            lines.Add($"Git branch: {context.GitBranch}");
+
+        if (context.Environment is { } env)
+            lines.AddRange(env.Summary().Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                              .Select(l => l.Trim()));
+
+        if (lines.Count == 0)
+            return "";
+
+        // Labelled as not being the request, because it is about to sit immediately above one. A
+        // planner that reads "Git branch: engeen_v2" as something to act on would plan to act on it.
+        return "Where this runs (background, NOT the request):\n"
+             + string.Join("\n", lines.Select(l => "  " + l))
+             + "\n\nThe request:\n";
     }
 
     /// <summary>Returns the plan, or null when the answer carried none.</summary>
@@ -207,7 +280,10 @@ public sealed class Planner
                 }
 
                 var plan = disposition == IntentDisposition.Task ? DagPlan.FromSpecs(specs) : null;
-                return new PlanResult(disposition, Truncate(title, 80), plan, Readout: readout);
+                return new PlanResult(disposition, Truncate(title, 80), plan, Readout: readout)
+                {
+                    Checks = ParseChecks(root)
+                };
             }
             catch (JsonException)
             {
@@ -217,6 +293,58 @@ public sealed class Planner
 
         return null;
     }
+
+    /// <summary>How many checks one plan may propose.</summary>
+    /// <remarks>
+    /// Each one is a real command run at the end of the run, and — when it fails — a repair loop
+    /// behind it. Four is enough to say "it builds, the tests pass, the file is there" and few
+    /// enough that a model listing everything it can think of cannot turn the verdict into a
+    /// second build system. Named here because <c>CapsAnnounceThemselvesTests</c> asks every size
+    /// limit which test drives it.
+    /// </remarks>
+    internal const int MaxChecks = 4;
+
+    /// <summary>
+    /// The checks the planner proposed, read strictly.
+    ///
+    /// <para><b>Only the name and the command are taken from the model.</b> The other two fields a
+    /// criterion has are exactly the two ways to write a check that cannot fail — an expected exit
+    /// code that is not zero, and <c>required: false</c> — so they are not read at all. A proposed
+    /// check passes on 0 and is required, or it is not a check.</para>
+    /// </summary>
+    private static IReadOnlyList<SuccessCriterionDefinition> ParseChecks(JsonElement root)
+    {
+        if (!root.TryGetProperty("checks", out var checks) || checks.ValueKind != JsonValueKind.Array)
+            return Array.Empty<SuccessCriterionDefinition>();
+
+        var found = new List<SuccessCriterionDefinition>();
+
+        foreach (var el in checks.EnumerateArray())
+        {
+            if (found.Count >= MaxChecks)
+                break;
+
+            if (el.ValueKind != JsonValueKind.Object)
+                continue;
+
+            var command = Text(el, "command");
+            if (string.IsNullOrWhiteSpace(command))
+                continue;
+
+            var name = Text(el, "name");
+            found.Add(new SuccessCriterionDefinition(
+                Name: string.IsNullOrWhiteSpace(name) ? Truncate(command!, 40) : Truncate(name!, 60),
+                Command: command!.Trim(),
+                Origin: CriterionOrigin.Proposed));
+        }
+
+        return found;
+    }
+
+    private static string? Text(JsonElement el, string name)
+        => el.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString()
+            : null;
 
     private static StepComplexity ParseComplexity(JsonElement el)
     {
@@ -250,8 +378,24 @@ public sealed class Planner
         + "together - e.g. 'run script X and save its output to file Y' is ONE quick_action, not multiple steps. "
         + "For a \"task\", each step is an object with a \"title\" and \"dependsOn\": the 0-based indices of earlier "
         + "steps that must finish first ([] = can start immediately). Model the REAL dependencies as a graph — steps "
-        + "that do not depend on each other must have independent dependsOn so they are not forced into a chain. Use "
-        + "2-4 steps max. NEVER split one command into 'do it' / 'capture it' / 'save it'. Keep the title under 8 words. "
+        + "that do not depend on each other must have independent dependsOn so they are not forced into a chain. "
+        // "Use 2-4 steps max" was here, and it was the wrong quantity to limit - the same mistake
+        // Orchestrator.StallLimit describes having made with a flat cap of 12 turns: "Work is not
+        // the thing to limit; a project with a hundred files needs a hundred turns and no setting
+        // should have to say so." Nothing in FIX_PLAN records an incident that earned the number,
+        // and it contradicted the product outright: every built-in template declares a step budget
+        // of 6 to 12, so none of them could ever reach its own limit. It also worked against the
+        // rest of this prompt - forcing work into four steps makes each one a mixture of trivial
+        // and complex, which must then be routed as complex, so the expensive model does the
+        // trivial parts; and it capped the parallelism the dependsOn graph above exists to express.
+        //
+        // What is left is the rule that was doing the actual work: no ceremonial stages. The real
+        // ceiling is ExecutionLimits.MaxSteps - data, visible in the template editor, enforced by
+        // RunBudget - and it is now told to the planner rather than guessed at (see SystemPromptFor).
+        + "A step is one thing that can succeed or fail on its own: that is the unit a reviewer judges, the unit a "
+        + "rejection undoes, and the unit a model is chosen for. Use as many steps as the work genuinely has, and "
+        + "do not invent stages that only name parts of one action - NEVER split one command into 'do it' / "
+        + "'capture it' / 'save it'. Keep the title under 8 words. "
         + "For each step also set \"complexity\", which decides WHICH MODEL runs it: \"trivial\" (a rename, one "
         + "obvious edit, a one-line command) goes to a small fast model, \"normal\" to the standard one, and "
         + "\"complex\" to a much slower and far more expensive model. \"normal\" IS THE DEFAULT — use it unless the "
@@ -264,4 +408,114 @@ public sealed class Planner
         + "tool actually returned stays \"normal\", however many pages it is, and so does describing files that ARE "
         + "in this workspace — those can be read instead of recalled. No more than TWO steps in a plan may be "
         + "\"complex\".";
+
+    /// <summary>
+    /// The system prompt, plus the run's real step budget when it has one.
+    ///
+    /// <para>The budget is a fact about THIS run, not a rule of planning, which is why it is
+    /// appended rather than written into the constant. A template that allows twelve steps and one
+    /// that allows six want different plans for the same request, and a number baked into the
+    /// prompt can only be wrong for one of them — which is exactly what "2-4 steps max" was: every
+    /// built-in template declares six to twelve, and none of them could reach its own limit.</para>
+    ///
+    /// <para>Said as a consequence rather than as an order. A plan that exceeds the budget does not
+    /// get trimmed; it runs until the budget is gone and stops with the work unfinished, and that
+    /// is the thing worth avoiding.</para>
+    /// </summary>
+    /// <summary>
+    /// What a step IS, at the moment it runs — the one thing the planner decides and the one thing
+    /// it was never told.
+    ///
+    /// <para>A step is not a heading. It is a single conversation with the worker model, it carries
+    /// everything said in it so far into every following turn, and it is abandoned outright when it
+    /// runs too long — taking every step that depends on it with it. So the planner is making the
+    /// most expensive decision in a run blind to what it costs.</para>
+    ///
+    /// <para><b>Both halves are arithmetic, not opinion.</b> The cost of a step grows with the
+    /// SQUARE of its turns, because each turn re-sends what came before it: measured 2026-09-22 on
+    /// one request, a single 250-turn step cost 30.6M prompt tokens where the same work in five
+    /// steps of 20–60 turns cost 9.2M, and the average prompt fell from 117k to 64k on the split
+    /// alone. And the size of a step is a fact about the WORKSPACE, not about the request: "for
+    /// every project file" is one step in a repository with three and a dead run in one with three
+    /// hundred — a number the planner cannot see from here.</para>
+    ///
+    /// <para>The ceiling is passed as DATA rather than written into the text, for the same reason
+    /// <paramref name="maxSteps"/> is: a number in a prompt that does not come from the engine is a
+    /// number that goes stale the first time somebody changes it.</para>
+    ///
+    /// <para>This says nothing about which model will run the steps, deliberately. "The model is
+    /// weak, so plan smaller" is a guess about a name, and this codebase already refuses that kind
+    /// of guess elsewhere — a provider's context window is declared, never inferred. What is true
+    /// of every model and every workload is the arithmetic above.</para>
+    /// </summary>
+    /// <param name="turnCeiling">
+    /// How many turns a single step may take before the engine abandons it
+    /// (<c>Orchestrator.RunawayCeiling</c>). Null leaves the paragraph out entirely.
+    /// </param>
+    internal static string SystemPromptFor(int? maxSteps, bool proposeChecks = false, int? turnCeiling = null)
+    {
+        var prompt = SystemPrompt;
+
+        if (turnCeiling is > 0)
+            prompt += $" HOW BIG A STEP MAY BE: a step runs as ONE conversation with the worker, and "
+                    + "everything said in it is re-sent on every turn of it — so one step of 200 "
+                    + "turns costs several times what two steps of 100 cost, and a step that runs "
+                    + $"past {turnCeiling} turns is ABANDONED, with every step that depends on it "
+                    + "skipped. Give each step a size that is known before it starts. When work "
+                    + "repeats over many items — files, pages, records, tickets — do not write one "
+                    + "step for all of them: say how many at a time and use a step per batch "
+                    + "(\"the first 5 …\", \"the next 5 …\"), which is what the step budget is for. "
+                    + "This is about REPEATED work only: the rule above still holds for one action, "
+                    + "which is never split into stages.";
+
+        if (maxSteps is > 0)
+            prompt += $" This run may take at most {maxSteps} step(s) in total — a plan longer than that "
+                    + "stops partway with the work unfinished, so do not exceed it.";
+
+        if (proposeChecks)
+            prompt += ChecksPrompt;
+
+        return prompt;
+    }
+
+    /// <summary>
+    /// Asking the planner how the work will be PROVED, not just what it is.
+    ///
+    /// <para><b>This is the moment to ask, and the only one.</b> A check written now cannot be
+    /// fitted to the result, because there is no result yet — the planner has seen the request and
+    /// where it runs, and nothing else. Asked afterwards, "did it work" is answered by the same
+    /// model that did the work, which is the thing this engine exists not to rely on.</para>
+    ///
+    /// <para><b>Empty is a real answer and is said twice.</b> Most of what people ask for cannot
+    /// be proved by running something, and a model that feels obliged to produce a check will
+    /// produce <c>echo done</c>. That is worse than nothing: it looks like verification in the run
+    /// report.</para>
+    ///
+    /// <para>Appended rather than written into <see cref="SystemPrompt"/> so that a host which
+    /// turns proposed checks off pays nothing for them — no tokens, and no invitation the engine
+    /// will then ignore.</para>
+    /// </summary>
+    private const string ChecksPrompt =
+        " Also return \"checks\": shell commands that would PROVE this request has been carried out, "
+        + "or [] when nothing about it can be proved by running something. Shape: "
+        + "\"checks\":[{\"name\":\"short name\",\"command\":\"...\"}], at most "
+        + "4. EACH ONE IS RUN BY run_command, which is cmd.exe on Windows and /bin/sh elsewhere - "
+        + "the host is named above the request, and a check written for the wrong one of those "
+        + "simply never runs. On Windows that means no test, no grep, no awk, no [ ]: use the "
+        + "program itself (dotnet, git, npm), or findstr, or wrap PowerShell as "
+        + "powershell -NoProfile -Command \"...\". "
+        + "THE EXIT CODE IS THE WHOLE VERDICT: 0 means done, anything else means not done, and "
+        + "nothing reads the output. Write each one so that it would FAIL right now and PASS once "
+        + "the request is satisfied - that is what makes it worth running, and it is CHECKED: "
+        + "every check is tried BEFORE the work starts, and one that already passes then is "
+        + "recorded as proving nothing about this request. Use the project's own "
+        + "real commands, the ones this workspace actually has. A command that cannot fail proves "
+        + "nothing, so never propose echo, cd, dir, ls, type, cat or exit. CHECK ONLY WHAT THE "
+        + "REQUEST ITSELF NAMES - a file, a command, a target it actually mentions - and NEVER "
+        + "invent a file name: you cannot see this workspace, so a check against a path you made "
+        + "up fails when the work lands under the real name, and the run is then failed for your "
+        + "guess. If the request does not say where the result goes, check something else or "
+        + "return []. [] IS THE RIGHT ANSWER for a question, an explanation, a "
+        + "document, a review, a summary, or anything whose result a person has to read — do not "
+        + "invent a check in order to have one.";
 }

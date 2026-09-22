@@ -2,6 +2,10 @@
   <ItemGroup>
     <ProjectReference Include="..\Enactive.Core\Enactive.Core.csproj" />
     <PackageReference Include="ModelContextProtocol.Core" Version="2.2.0" />
+    <!-- System.Net.Mail.SmtpClient is the one in the box and Microsoft's own guidance is not to
+         use it for new work: no modern authentication, and STARTTLS handling that is a footgun.
+         MailKit is what that guidance points at. -->
+    <PackageReference Include="MailKit" Version="4.18.0" />
   </ItemGroup>
 
   <ItemGroup>

@@ -19,17 +19,26 @@ Command -> Intent -> Context(+Environment) -> Planner -> Orchestrator -> Worker(
 
 ## Solution
 
-`Enactive.sln`, **8 projects** (`net10.0`, pinned via `global.json`) plus `tests/Enactive.Engine.Tests` (976 tests)
-and `tests/Enactive.Mcp.TestServer`. The engine is dependency-light: `Core`/`Providers`/`Tools`/`Agents`/`App.Console`
-use **zero external NuGet packages**; only `Workspace` (Microsoft.Data.Sqlite, SQLitePCLRaw, MySqlConnector), `Secrets`
-(ProtectedData) and `App.Ui` (Avalonia ×3) pull anything in. `Enactive.Agents` references **only** `Core` — a constant
+`Enactive.sln`, **8 projects** (`net10.0`, pinned via `global.json`) plus `tests/Enactive.Engine.Tests` (1798 tests)
+and `tests/Enactive.Mcp.TestServer`. The engine is dependency-light: `Core`/`Providers`/`Agents`/`App.Console`
+use **no external NuGet package the engine itself needs**; only `Workspace` (Microsoft.Data.Sqlite, SQLitePCLRaw,
+MySqlConnector), `Secrets` (ProtectedData), `Tools` (MailKit, for `send_email` — the one tool that leaves the
+machine) and `App.Ui` (Avalonia ×3) pull anything in. `Enactive.Agents` references **only** `Core` — a constant
 both the engine and a tool need (`ToolArguments.ExpectedExitCodes`) lives in `Core.Tools`, not in `Tools`.
 
 | Project | Responsibility |
 |---|---|
 | `Enactive.Core` | Domain model + abstractions only (Intent, WorkContext, Environment, Plan/PlanStep (DAG), Worker/ModelPolicy, Decision, Permissions, Memory, Inbox, events, diagnostics, task templates and their resolution, the `ExecutionJournal` a step's evidence is kept in, the built-in templates). No transport/SDK types. |
 | `Enactive.Providers` | `OpenAiCompatibleProvider`, `OllamaNativeProvider` (native `/api/chat` so per-run `num_ctx` works), `AnthropicProvider` (reasoner) behind `ChatProviderFactory`; `LoggingChatProvider` + `WireTap`. |
-| `Enactive.Tools` | `write_file`, `edit_file`, `read_file` (windowed), `search_files`, `list_dir`, `create_directory`, `move_file`, `run_command` (cmd.exe/sh), `run_powershell` (`-EncodedCommand`, no quoting), `git`, `docker`; `LoggingToolRegistry`. Every path goes through `WorkspacePaths` (inside the workspace or refused). A command may declare `expectedExitCodes` — the exit codes that ARE its answer (a test runner reporting failures) — before it runs; the declaration is visible in the evidence and judged there. A lookup that finds nothing (`read_file` on a missing path or past the end) returns `ToolResults.NotFound`, an answer rather than a failure. |
+| `Enactive.Tools` | `write_file`, `edit_file`, `read_file` (windowed), `search_files`, `list_dir`, `create_directory`, `move_file`, `run_command` (cmd.exe/sh), `run_powershell` (`-EncodedCommand`, no quoting), `git`, `docker`, `copy_file`, `delete_file`, `send_email` (through the SMTP account in settings, and only to an address a person put on the recipient list — it always asks, whatever the policy says, because a sent message cannot be put back); `LoggingToolRegistry`. Every path goes through `WorkspacePaths` (inside the workspace or refused), and `.enactive/` is
+reserved from tools with one carve-out: `.enactive/scratch/` is the worker's own working area — for
+the files that are FOR the job but are not the job, such as a helper script it means to run or a
+command's output too long to come back in the tool result. It is written straight through: never
+staged, never journalled, absent from what the reviewer is shown as the step's changes, and left
+alone by a rejected step's revert. `delete_file` works there even under staging, and `search_files`
+skips it in a whole-workspace sweep but searches it when named with `path`. Entries untouched for
+seven days go on the next run's first write to it (`ScratchArea`), so it cannot grow without limit
+inside the user's project. The workspace proper stays for the deliverable. A command may declare `expectedExitCodes` — the exit codes that ARE its answer (a test runner reporting failures) — before it runs; the declaration is visible in the evidence and judged there. A lookup that finds nothing (`read_file` on a missing path or past the end) returns `ToolResults.NotFound`, an answer rather than a failure. |
 | `Enactive.Workspace` | Run, project-memory and inbox stores, each SQLite/MySQL/JSON behind `RunStoreFactory` / `MemoryStoreFactory` / `InboxStoreFactory`; artifact stores (disk + staging), `EnvironmentProbe`, `ProjectMemory`, `LogHub`/`FileLogSink`. |
 | `Enactive.Agents` | `Orchestrator` (DAG execution, role tool-filtering, permission gating, open-failure and stall guards, optional reasoner plan+review, success criteria), `Planner` (dependency graphs), `DagScheduler`, `Reviewer` (judges the step's own evidence journal, not the transcript), `SuccessEvaluator`, `LogAnalyst` (a model reads an exported log; the log is data, never instructions), `DefaultWorkers`, `BackgroundRunner`, the unattended decision handler. |
 | `Enactive.Secrets` | DPAPI protection for API keys; a key that cannot be protected is not written down. |

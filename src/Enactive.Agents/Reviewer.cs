@@ -57,7 +57,13 @@ public sealed record ReviewResult(
 /// defeated by the silence of the first. The size travels with the content now, so the notice fires
 /// whoever did the cutting.</para>
 /// </param>
-public sealed record WrittenFile(string RelativePath, string Content, int TotalChars)
+/// <param name="SharedWithAnotherStep">
+/// Another step, running at the same time, also wrote this file. What is shown is therefore the
+/// two of them together and cannot be attributed — see
+/// <see cref="Enactive.Core.Artifacts.IArtifactScope.SharedWithAnotherStep"/>.
+/// </param>
+public sealed record WrittenFile(
+    string RelativePath, string Content, int TotalChars, bool SharedWithAnotherStep = false)
 {
     public WrittenFile(string relativePath, string content)
         : this(relativePath, content, content.Length) { }
@@ -222,12 +228,25 @@ public sealed class Reviewer
             return sb.ToString();
         }
 
-        sb.AppendLine("This step ran no commands — it produced text. Here is exactly what it wrote:");
+        // "Exactly what it wrote" stopped being true the moment two steps could run at once, and
+        // said so anyway. Measured 2026-09-21: two steps with dependsOn [] made 21 and 41 edits to
+        // one document, and the second to finish was reviewed on a file the first had been editing.
+        // Both passed. A reviewer told what it is looking at can say it cannot attribute this; one
+        // told "exactly what it wrote" answers the question it was asked.
+        var shared = writtenFiles.Any(f => f.SharedWithAnotherStep);
+
+        sb.AppendLine(shared
+            ? "This step ran no commands — it produced text. Here is what it wrote, EXCEPT where "
+              + "marked: a file marked below was also being written by another step at the same "
+              + "time, so what you see is both of them and cannot be told apart."
+            : "This step ran no commands — it produced text. Here is exactly what it wrote:");
 
         var budget = MaxContentCharsTotal;
         foreach (var file in writtenFiles)
         {
-            sb.AppendLine().Append("----- ").Append(file.RelativePath).AppendLine(" -----");
+            sb.AppendLine().Append("----- ").Append(file.RelativePath)
+              .Append(file.SharedWithAnotherStep ? "  (ALSO WRITTEN BY ANOTHER STEP)" : "")
+              .AppendLine(" -----");
 
             var slice = file.Content.Length > MaxContentCharsPerFile
                 ? file.Content[..MaxContentCharsPerFile]
@@ -378,7 +397,19 @@ public sealed class Reviewer
         + "do its work: use it only when the calls themselves say the work was not needed.\n\n"
         + "A call marked ERROR or REFUSED did not do its job and cannot be what shows an objective "
         + "was met. A call marked NOTHING THERE ran and answered — a file that is absent, an offset "
-        + "past the end — and can be exactly what shows one.";
+        + "past the end — and can be exactly what shows one.\n\n"
+        // The evidence header already says a long RESULT keeps its start and end. What it does not
+        // say, and what only this pass needs, is what to do about it when your answer is a list of
+        // call numbers: the engine can also leave whole calls out, and the older ones are the first
+        // to go. ExecutionJournal.HeadAndTail records the incident that taught this on the other
+        // pass - a reviewer read "1,645 characters cut from the middle" as proof the file did not
+        // contain what was quoted, and failed the step twice for a value inside those characters -
+        // and says the rule "belongs in the reviewer's instructions, where it is said ONCE". It was
+        // said once, in the execution reviewer's, and this pass never got it.
+        + "The evidence may be SHORTENED: a long result keeps its start and its end with the cut "
+        + "marked between them, and a note may say the oldest calls are not listed at all. Neither "
+        + "is an absence. Cite a call whose result was cut exactly as you would any other, and "
+        + "never answer \"no\" because what would have shown it is in a part you were not shown.";
 
     /// <summary>The claim, or null when the answer carried none.</summary>
     internal static ProofClaim? ParseProof(string text)

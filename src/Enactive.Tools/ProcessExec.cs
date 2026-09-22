@@ -3,6 +3,8 @@ namespace Enactive.Tools;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using Enactive.Core.Context;
+using Enactive.Core.Execution;
 using Enactive.Core.Tools;
 
 /// <summary>
@@ -13,7 +15,22 @@ using Enactive.Core.Tools;
 /// </summary>
 internal static class ProcessExec
 {
-    private const int MaxOutputChars = 6000;
+    /// <summary>
+    /// How much of a command's output reaches the model.
+    ///
+    /// <para>Doubled from 6,000 on 2026-09-20, with the evidence in hand: a run of
+    /// <c>dotnet test --verbosity normal</c> on a two-project solution spent more than six
+    /// thousand characters on restore chatter and certificate notices before reaching anything
+    /// about tests, and the output was shortened 52 times in one session. The captured ceiling is
+    /// <see cref="MaxCapturedChars"/> — ten times this — so the data was there and withheld.</para>
+    ///
+    /// <para>Not raised further, and this is the reason: the result goes into the transcript and
+    /// stays there. A local model with <c>num_ctx</c> of 16,384 holds about 49,000 characters in
+    /// total, so a handful of results at this size is already most of its window, and what
+    /// rescues it then is <c>Transcript.Elide</c> throwing the oldest ones away. A generous cap
+    /// buys one good answer and then starts destroying the conversation that needed it.</para>
+    /// </summary>
+    private const int MaxOutputChars = 12_000;
 
     /// <summary>
     /// How much of one stream is held in memory while a process runs. Far more than
@@ -23,6 +40,33 @@ internal static class ProcessExec
     /// truncated to six thousand characters: every byte paid for, none of it read.
     /// </summary>
     private const int MaxCapturedChars = 64_000;
+
+    /// <summary>
+    /// What to say when a shell tool was given no command - which is usually not "none" but "the
+    /// other one's".
+    ///
+    /// <para>There are two shell tools and their argument is named after the shell:
+    /// <c>run_command</c> takes <c>command</c>, <c>run_powershell</c> takes <c>script</c>. A model
+    /// that reaches for PowerShell while holding the other tool's shape sends
+    /// <c>run_powershell {"command": …}</c> and is told <i>'script' is required</i> - true, and no
+    /// help at all, since it did send one. Nine such calls over two days, three of them in a
+    /// single fifteen-minute run.</para>
+    ///
+    /// <para><b>It says the fix instead of the symptom, and it refuses rather than guessing.</b>
+    /// The same answer <c>list_dir</c> gives for a path that is a file: the call did not work, the
+    /// reason is not what the plain message says, and the right tool is named. Silently reading
+    /// <c>command</c> as <c>script</c> would be worse than a wasted turn - the key is evidence of
+    /// which SHELL was meant, and cmd syntax run through PowerShell is a different command.</para>
+    /// </summary>
+    public static string NoCommandGiven(
+        bool sentTheOtherName, string wanted, string otherName, string otherTool,
+        string thisShell, string otherShell)
+        => sentTheOtherName
+            ? $"You sent '{otherName}', which is {otherTool}'s argument - this tool is {thisShell} "
+              + $"and takes '{wanted}'. If you meant to run it in {thisShell}, send the same text "
+              + $"as '{wanted}'. If you meant {otherShell}, call {otherTool} instead: the two "
+              + "shells do not understand each other's syntax."
+            : $"'{wanted}' is required.";
 
     /// <summary>Reads an "args" element that is either an array of strings or a single whitespace-split string.</summary>
     public static List<string> ParseArgs(JsonElement args)
@@ -122,17 +166,34 @@ internal static class ProcessExec
     /// one - and "the build printed nothing" is a very different conclusion from "the build printed
     /// something I did not wait for".
     /// </param>
+    /// <param name="commandLine">
+    /// The line the shell was handed, when there was one. Only a caller that hands a SHELL a line
+    /// passes this: it is what lets a refusal be checked against the command it is supposed to be
+    /// about. <see cref="RunAsync"/>, which starts a named executable with an argument list, has
+    /// no such line and passes none — "not recognized" in ITS output came from inside the program
+    /// it started, and is a real failure.
+    /// </param>
     public static ToolResult BuildResult(
         string what, int exitCode, string stdout, string stderr,
         IReadOnlyCollection<int>? allowedExitCodes = null, bool declarable = false,
-        bool outputCutShort = false)
+        bool outputCutShort = false, string? commandLine = null)
     {
         var combined = stdout;
         if (stderr.Length > 0)
             combined += "\n[stderr]\n" + stderr;
         combined = combined.Trim();
-        if (combined.Length > MaxOutputChars)
-            combined = combined[..MaxOutputChars] + "\n… (truncated)";
+
+        // Asked of the WHOLE output, before it is shortened: an error the cut fell through would
+        // read as an absence and be called a real failure.
+        var verdict = ShellOutcome.Of(commandLine, combined);
+
+        // The START and the END, not the first N characters. A program reports its outcome last,
+        // so head-only shortening hands the model the part with no answer in it: on 2026-09-20 a
+        // step wrote its tests, ran them, and could not tell whether they passed - the summary was
+        // past the cut - then spent eight turns trying to pipe the output into a file and died on
+        // the stall guard. ExecutionJournal fixed exactly this on 2026-09-07 for the REVIEWER and
+        // the rule stayed private to it; the model that ran the command still got head-only.
+        combined = Shortening.ToFit(combined, MaxOutputChars);
 
         if (outputCutShort)
             combined += "\n… (the command finished, but something it started is still running and "
@@ -145,6 +206,35 @@ internal static class ProcessExec
         var allowed = allowedExitCodes is { Count: > 0 } ? allowedExitCodes : DefaultAllowedExitCodes;
         if (allowed.Contains(exitCode))
             return ToolResults.Ok(output: output, metadata: metadata);
+
+        // Before the exit code is read as a verdict, because for this it is not one. The shell
+        // never started the line, so there is nothing here to declare an expected code for and
+        // nothing half-done to make good - and the advice below would be actively wrong, inviting
+        // a model to declare 255 "expected" for a cmdlet that does not exist in cmd.exe.
+        if (verdict == ShellVerdict.NeverRan)
+            return ToolResults.NeverRan(
+                $"{what} did NOT run: the shell could not read the line, so it never started it - "
+                + "a word it does not have, text it could not parse, or a parameter that cmdlet "
+                + "does not take. This is a spelling problem, not work that went wrong. "
+                + "run_command is cmd.exe; run_powershell is PowerShell, and a cmdlet "
+                + "(Select-String, Select-Object, Tee-Object, Out-File, Set-Content, Get-FileHash) "
+                + "exists only in the second. Fix the spelling, or send the same work to the shell "
+                + "that has the word. Do NOT declare this exit code expected: there is no result "
+                + "here to expect.",
+                output, metadata);
+
+        // A lookup told there is no such path. The engine has always called that an ANSWER for
+        // read_file, list_dir and search_files - "guessing at a path and being told no is how
+        // exploring works" - and a Select-String asking the identical question was fatal.
+        // Measured 2026-09-20: a run checking the wiki against the source looked for two files
+        // where the WIKI says they are, they are elsewhere, and a 662-line report with 21 confirmed
+        // contradictions was failed for finding exactly that.
+        if (verdict == ShellVerdict.FoundNothing)
+            return ToolResults.NotFound(
+                $"{what} looked and found nothing: every error it reported is a path that is not "
+                + "there. Nothing went wrong and there is nothing to retry - if you were guessing "
+                + "at where something lives, guess again or use search_files to find it.",
+                output, metadata);
 
         // Said only when nothing was declared: repeating the option to somebody who used it and
         // still failed is noise, and worse, reads as an invitation to widen the declaration.

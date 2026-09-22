@@ -1,4 +1,4 @@
-﻿namespace Enactive.App.Ui.ViewModels;
+namespace Enactive.App.Ui.ViewModels;
 
 using System.Collections.ObjectModel;
 using System.Text;
@@ -52,11 +52,11 @@ internal sealed class StepEntry : ObservableObject
 /// </summary>
 internal sealed class StepCardViewModel : ObservableObject
 {
-    private const string CommandIcon = "$";
-    private const string FileIcon = "▤";
-    private const string ToolIcon = "▸";
-    private const string NoteIcon = "•";
-    private const string RefusedIcon = "⊘";
+    private const string CommandIcon = "⌘";
+    private const string FileIcon = "📄";
+    private const string ToolIcon = "🛠";
+    private const string NoteIcon = "🔔";
+    private const string RefusedIcon = "🛇";
 
     private readonly StringBuilder _noteBuffer = new();
 
@@ -116,7 +116,12 @@ internal sealed class StepCardViewModel : ObservableObject
 
     public RelayCommand ToggleCommand { get; }
 
-    public void SetRunning() => SetStatus("running", Brand.StepRunning);
+    /// <summary>
+    /// The one status that is not a verdict but a state, and the ellipsis says so: "running" reads
+    /// like a label, "running…" reads like something still happening — the same punctuation the
+    /// activity line under it already uses.
+    /// </summary>
+    public void SetRunning() => SetStatus("running…", Brand.StepRunning);
 
     public void SetDone()
     {
@@ -160,13 +165,20 @@ internal sealed class StepCardViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Something is waiting on the user, or went wrong mid-step and the step may yet recover: open
-    /// the card AND mark it amber. Amber, not red - the step has not failed, it is asking.
+    /// The step is BLOCKED on the person: a question has been asked and nothing moves until it is
+    /// answered. Amber, not red - the step has not failed, it is waiting.
     ///
     /// <para>Whatever status the step ends with overwrites this, because that one is the truth about
-    /// how it finished and this is only the truth about right now.</para>
+    /// how it finished and this is only the truth about right now. <see cref="SetRunning"/> puts the
+    /// colour back when the answer arrives.</para>
+    ///
+    /// <para><b>This used to fire on every warning as well</b>, and that is what it looked like: a
+    /// run reported nine advisory notes - an MCP server nobody had granted, a check that already
+    /// passed - and its card sat amber for the whole eleven minutes it was working. A warning is
+    /// worth READING, which is why the card still opens itself and shows the note; it is not the
+    /// step being stuck, and the edge of a card says what the step is doing.</para>
     /// </summary>
-    public void SetNeedsAttention()
+    public void SetWaitingForYou()
     {
         ExpandForAttention();
         StatusBrush = Brand.Warning;
@@ -202,7 +214,7 @@ internal sealed class StepCardViewModel : ObservableObject
     {
         FlushPendingNote();
         _toolCount++;
-        AddEntry(ToolIcon, Brand.TextMuted, label, Brand.TextBody, bold: false);
+        AddEntry(ToolIcon, Brand.Info, label, Brand.TextBody, bold: false);
         UpdateSummary();
     }
 
@@ -258,7 +270,7 @@ internal sealed class StepCardViewModel : ObservableObject
         if (flat.Length == 0)
             return;
         _noteCount++;
-        AddEntry(NoteIcon, Brand.TextMuted, flat, Brand.Text, bold: true);
+        AddEntry(NoteIcon, Brand.Warning, flat, Brand.TextBody, bold: true);
     }
 
     private void AddEntry(string icon, IBrush iconBrush, string label, IBrush labelBrush, bool bold)

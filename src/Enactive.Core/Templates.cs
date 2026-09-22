@@ -37,7 +37,9 @@ public sealed record SuccessCriterionDefinition(
     string Name,
     string Command,
     int ExpectedExitCode = 0,
-    bool Required = true);
+    bool Required = true,
+    CriterionOrigin Origin = CriterionOrigin.Declared,
+    bool AlreadyPassing = false);
 
 /// <summary>
 /// Ceilings on a single run. Null means "no limit of its own" - which is not zero, and is not the

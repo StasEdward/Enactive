@@ -17,12 +17,42 @@ using System.Runtime.InteropServices;
 ///    system, where <c>/home/x/Work</c> and <c>/home/x/work</c> are two different folders.
 ///
 /// It also reserves <c>.enactive/</c>: that folder holds the workspace's own state, and nothing a
-/// model asks for is allowed to write there.
+/// model asks for is allowed to write there — with exactly one carve-out,
+/// <see cref="ScratchFolder"/>, described on it.
 /// </summary>
 public static class WorkspaceGuard
 {
     /// <summary>The workspace's own state folder. Off limits to tools, whatever the request says.</summary>
     public const string ReservedFolder = ".enactive";
+
+    /// <summary>
+    /// The one place under <see cref="ReservedFolder"/> that tools MAY write: the worker's own
+    /// working area, for the files that are not the deliverable.
+    ///
+    /// <para><b>Why a worker needs one.</b> Every path a tool touches had to be inside the
+    /// workspace or be refused, so a helper script, a scratch copy or a command's captured output
+    /// had nowhere to go but into the user's project - where it shows up in <c>git status</c>, goes
+    /// through staging, is judged by the reviewer as part of the work, and is tracked by revert. A
+    /// throwaway becomes a change. The instruction "do NOT redirect with '&gt;' into a file" in the
+    /// shared honesty rules exists only because there was no such place to redirect INTO.</para>
+    ///
+    /// <para><b>Why under the reserved folder rather than outside the workspace.</b> A place
+    /// outside would need a second root threaded through <c>ToolContext</c>, an entry in
+    /// <c>GrantedRoots</c> so the shell's geography check stays quiet, and absolute paths in the
+    /// prompt. Here the shell reaches it the same way everything else does - a relative path from
+    /// the workspace root - and three exclusions already exist for free: <c>.enactive/</c> is in
+    /// the repository's .gitignore, <c>search_files</c> skips it, and nothing walks it.</para>
+    ///
+    /// <para><b>The carve-out is exactly two segments and no more.</b> <c>enactive.db</c> and the
+    /// undo journal's backups live beside it, which is why this folder was closed in the first
+    /// place. The test of it is the same resolved, link-followed path every other rule here is
+    /// asked about, so a junction named <c>scratch</c> that leads back up into the state folder is
+    /// refused like any other link out of where it claims to be.</para>
+    /// </summary>
+    public const string ScratchFolder = "scratch";
+
+    /// <summary>Where the scratch area is, spelled the way a tool call spells it.</summary>
+    public const string ScratchPrefix = ReservedFolder + "/" + ScratchFolder;
 
     /// <summary>
     /// Path comparison for the current OS. Linux is case-sensitive; Windows and macOS are not by
@@ -89,9 +119,7 @@ public static class WorkspaceGuard
             throw new ArgumentException("Path escapes the workspace root.", nameof(relativePath));
 
         if (!allowReserved && TouchesReserved(fullRoot, effective))
-            throw new ArgumentException(
-                $"'{ReservedFolder}' holds the workspace's own state and is not writable by tools.",
-                nameof(relativePath));
+            throw new ReservedPathException(nameof(relativePath));
 
         // The literal path is what the caller opens; the OS follows the same links we just did, so
         // it reaches the destination we vetted. Returning it keeps recorded paths as the user wrote
@@ -113,14 +141,127 @@ public static class WorkspaceGuard
         return full.StartsWith(withSeparator, Comparison);
     }
 
+    /// <summary>
+    /// Whether this path lands in the scratch area, asked of a path already RESOLVED against the
+    /// root - so the answer is about where the write goes, not about how it was spelled.
+    ///
+    /// <para>Public because the artifact stores have to ask it: a scratch write goes straight to
+    /// disk, is not staged, is not journalled and does not appear among the paths a step touched.
+    /// Without that it would still be a change, just a change in a tidier folder - and under
+    /// staging the file would not exist on disk at all until Apply, so a script written there
+    /// could not then be run.</para>
+    /// </summary>
+    public static bool IsScratch(string root, string fullPath)
+    {
+        var fullRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
+
+        if (string.Equals(fullPath, fullRoot, Comparison))
+            return false;
+
+        return IsScratch(Path.GetRelativePath(fullRoot, fullPath)
+            .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+    }
+
+    /// <summary>
+    /// The same question asked of a path as a TOOL spelled it — relative to the root, and possibly
+    /// with separators or redundant segments the caller chose.
+    ///
+    /// <para>For reporting rather than for guarding, which is why it normalises and does not follow
+    /// links: the write it is being asked about has already been through
+    /// <see cref="ResolveInside"/>, so where it landed is settled. False for anything unreadable,
+    /// because a path this cannot make sense of is one that must not be quietly left out of what a
+    /// step is reported to have changed.</para>
+    /// </summary>
+    public static bool IsScratchRelative(string root, string? relativePath)
+    {
+        if (string.IsNullOrWhiteSpace(relativePath))
+            return false;
+
+        try
+        {
+            var fullRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
+            return IsScratch(fullRoot, Path.GetFullPath(Path.Combine(fullRoot, relativePath)));
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// <c>.enactive</c> then <c>scratch</c>, in that order, at the top.
+    ///
+    /// <para>The reserved name is matched case-insensitively wherever it appears, because
+    /// reserving a folder under both spellings is the safe direction. The scratch name is matched
+    /// with <see cref="Comparison"/> instead, because this half GRANTS: on a case-sensitive
+    /// filesystem <c>.enactive/Scratch</c> is a different folder from <c>.enactive/scratch</c>,
+    /// and the safe direction there is to refuse it rather than hand out the state folder's
+    /// neighbour.</para>
+    /// </summary>
+    private static bool IsScratch(string[] segments)
+        => segments.Length >= 2
+           && string.Equals(segments[0], ReservedFolder, StringComparison.OrdinalIgnoreCase)
+           && string.Equals(segments[1], ScratchFolder, Comparison);
+
     /// <summary>Whether any segment of the path below the root is the reserved state folder.</summary>
+    /// <summary>
+    /// Whether this path names the reserved folder ITSELF, rather than something inside it.
+    ///
+    /// <para><b>For one caller and one purpose:</b> <c>list_dir</c>, so that a model can WALK to
+    /// the working area it was told to use. The root listing shows <c>.enactive/</c>, the worker's
+    /// instructions say its own area is <c>.enactive/scratch/</c>, and opening the folder in
+    /// between was refused - the door shown and then shut. Measured twice on 2026-09-21, in two
+    /// live runs of two different requests.</para>
+    ///
+    /// <para>It grants nothing on its own. Everything a listing of this folder may show is already
+    /// reachable; what changes is that it can be found by looking rather than only by knowing.</para>
+    /// </summary>
+    public static bool IsReservedRoot(string root, string? relativePath)
+    {
+        if (string.IsNullOrWhiteSpace(relativePath))
+            return false;
+
+        try
+        {
+            var fullRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
+            var full = Path.TrimEndingDirectorySeparator(
+                Path.GetFullPath(Path.Combine(fullRoot, relativePath!)));
+
+            if (string.Equals(full, fullRoot, Comparison))
+                return false;
+
+            var relative = Path.GetRelativePath(fullRoot, full);
+            var segments = relative.Split(
+                new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
+                StringSplitOptions.RemoveEmptyEntries);
+
+            // Exactly the one segment, matched the way the refusal itself matches it.
+            return segments.Length == 1
+                && string.Equals(segments[0], ReservedFolder, StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private static bool TouchesReserved(string fullRoot, string full)
     {
         if (string.Equals(full, fullRoot, Comparison))
             return false;
 
         var relative = Path.GetRelativePath(fullRoot, full);
-        foreach (var segment in relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
+        var segments = relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+        // The carve-out is asked first and about the whole path, not per segment: once a path is
+        // established as being under .enactive/scratch/, what it is called further down is scratch
+        // too. `..` cannot be used to climb out of it - Path.GetFullPath has already collapsed
+        // every one of those before this is reached, so `.enactive/scratch/../enactive.db` arrives
+        // here as `.enactive/enactive.db` and is refused like anything else in the state folder.
+        if (IsScratch(segments))
+            return false;
+
+        foreach (var segment in segments)
             if (string.Equals(segment, ReservedFolder, StringComparison.OrdinalIgnoreCase))
                 return true;
 
@@ -192,4 +333,35 @@ public static class WorkspaceGuard
 
         return effective;
     }
+}
+
+/// <summary>
+/// The caller asked for a path inside the workspace's own state.
+///
+/// <para><b>Its own type so that READING and WRITING can answer it differently.</b> It used to be
+/// a plain ArgumentException saying <i>"is not writable by tools"</i>, which every tool wrapped
+/// into a failure - so <c>list_dir .enactive</c> was told the folder is not WRITABLE, about a call
+/// that was only looking, and the refusal then held the step open as unfinished work. Measured
+/// twice on 2026-09-21, in two runs of two different requests; in one of them it was one of the
+/// two unresolved calls that failed the run.</para>
+///
+/// <para>A read refused here has ANSWERED - the model asked whether it could look, and was told
+/// no, definitively, with nothing left half-done and nothing to retry. That is the same rule
+/// <see cref="Tools.ToolResults.NotFound"/> already applies to a lookup that finds nothing. A
+/// WRITE refused here is still work that did not happen, so it stays a failure, and it does:
+/// this derives from ArgumentException, which is what every existing handler catches.</para>
+/// </summary>
+public sealed class ReservedPathException(string? parameterName)
+    : ArgumentException(Explanation, parameterName)
+{
+    /// <summary>
+    /// The text a MODEL is shown, without the "(Parameter 'relativePath')" that
+    /// <see cref="ArgumentException"/> appends to its own Message. The parameter name is for a
+    /// developer reading a stack trace; to an agent it is noise in the middle of an instruction.
+    /// </summary>
+    public const string Explanation =
+        "'" + WorkspaceGuard.ReservedFolder + "' is the workspace's own state - its undo journal, "
+        + "approvals and checkpoints - and tools do not go inside it, to read or to write. Your "
+        + "own working area is '" + WorkspaceGuard.ScratchPrefix + "/', which you may list, read "
+        + "and write freely.";
 }

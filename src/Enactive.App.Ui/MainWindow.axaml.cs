@@ -49,7 +49,11 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     private string _model = "qwen2.5-coder";
     private string _globalInstructions = string.Empty;
     private ChatProviderFactory _providerFactory = null!;
-    private readonly IToolRegistry _toolRegistry;
+    /// <summary>
+    /// Rebuilt on Save, not only at startup — see <see cref="BuildToolRegistry"/>. Every use reads
+    /// the field at call time, so replacing it is all that is needed.
+    /// </summary>
+    private IToolRegistry _toolRegistry;
     // Global, app-wide log hub. Default Debug (readable); the log window can drop it to Trace for raw wire.
     // Held separately from the hub so settings can reach it: this is built before any settings are
     // read, and retention is a setting.
@@ -152,12 +156,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     {
         _log = new LogHub(minLevel: LogLevel.Debug, downstream: new ILogSink[] { _logFile });
         _settings = AppSettings.Load();
-        _toolRegistry = new ToolRegistry(new ITool[]
-        {
-            new WriteFileTool(), new EditFileTool(), new ReadFileTool(), new SearchFilesTool(),
-            new ListDirectoryTool(), new CreateDirectoryTool(), new MoveFileTool(), new CopyFileTool(), new DeleteFileTool(),
-            new RunCommandTool(), new RunPowerShellTool(), new GitTool(), new DockerTool()
-        });
+        _toolRegistry = BuildToolRegistry();
 
         // A settings file the app cannot build from must not make the app unlaunchable. Saving is
         // validated now, but a file edited by hand — or written by an older build — can still be
@@ -212,8 +211,11 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         _vm.RunSettingsChanged += SaveRunSettings;
         _vm.AddWorkspaceRequested += () => _ = AddWorkspaceAsync();
         _vm.SettingsRequested += () =>
-            // SettingsWindow reads the live settings and mutates them only when Save is clicked
-            // (Cancel/close leave them untouched), so it gets _settings directly, not a partial copy.
+            // SettingsWindow gets the live settings and CLONES them, so Cancel/close leave these
+            // untouched and Save hands back the clone, which is then written and put in place of
+            // this one. That makes AppSettings.Clone the whole of what survives a visit to this
+            // window: a property missing there is a setting the next Save resets, whether or not
+            // the window has a control for it. Pinned by SettingsSurviveTheEditorTests.
             new SettingsWindow(_settings, workspaceRoot: WorkspaceRootOrNull(),
                 toolNames: _toolRegistry.Definitions.Select(d => d.Name).ToArray(),
                 remoteCheck: CheckRemoteAsync,
@@ -712,6 +714,10 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         try
         {
             await using var mcp = await McpRunTools.ConnectAsync(_toolRegistry, _settings.McpServers, fullPath, _cts.Token);
+
+            // Said once per run, whether or not anything calls them: starting a server is a cost
+            // the run has already paid, and the log had no record of it at all.
+            _log.Info(LogSource.Tool, mcp.Summary());
             IToolRegistry runTools = new LoggingToolRegistry(mcp, _log);
             var runStore = RunStoreFactory.Create(workspace);
             // The same store the recorder folds into, so a run reads back what earlier ones
@@ -724,6 +730,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                 router: BuildRouter(),
                 reviewRetries: _settings.ReviewRetries,
                 successRetries: _settings.SuccessRetries,
+                proposeChecks: _settings.ProposeChecks,
                 numCtx: _settings.NumCtx,
                 disableThinking: _settings.DisableThinking,
                 maxParallelSteps: _settings.MaxParallelSteps,
@@ -926,7 +933,11 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                     var warnCard = CardFor(ev) ?? EnsureCurrentCard();
                     warnCard.AddNote("⚠ " + ev.Summary);
                     warnCard.SetActivity("⚠ " + ev.Summary);
-                    warnCard.SetNeedsAttention();
+
+                    // Opened, not repainted. The card's edge says what the step is DOING, and a
+                    // warning does not stop it doing that: a run with nine advisory notes used to
+                    // sit amber for its whole eleven minutes while working perfectly well.
+                    warnCard.ExpandForAttention();
                     break;
                 case EventKind.ReviewRequested:
                 case EventKind.ReviewPassed:
@@ -956,7 +967,13 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                     if (ev.Kind == EventKind.DecisionRequested)
                     {
                         decisionCard.SetActivity("Waiting for your approval…");
-                        decisionCard.SetNeedsAttention();
+                        decisionCard.SetWaitingForYou();
+                    }
+                    else
+                    {
+                        // Answered: the step is moving again, and the card should stop saying it is
+                        // not. The step's own ending overwrites this either way.
+                        decisionCard.SetRunning();
                     }
                     break;
                 case EventKind.UsageReported:
@@ -1623,6 +1640,12 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     /// </summary>
     private void ApplyWorkspaceDefaults()
     {
+        // Opening a workspace is where its working area comes into being, so that a person can
+        // see '.enactive/scratch/' in their own file manager before any run, and so that the
+        // engine's folder is on the project's .gitignore if the project keeps one. Idempotent,
+        // and never able to fail: a workspace that cannot be prepared is still a workspace.
+        WorkspaceSetup.Prepare(_vm.WorkspacePath.Trim());
+
         var entry = _registry.Find(_vm.WorkspacePath.Trim());
         if (entry is null)
             return;
@@ -1692,12 +1715,24 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         if (reference is null)
             return null;
 
+        // How much of the log can be sent, from the provider that is actually going to read it.
+        // It used to be _settings.NumCtx unconditionally — an OLLAMA setting, applied to whatever
+        // model the Review binding points at. With Review on a cloud model and num_ctx left blank
+        // the analyst assumed 16,000 tokens and sent about a seventh of what a 200,000-token
+        // window would have taken; with num_ctx set for a local model it sent that model's window
+        // to Claude. Neither is a fact about the provider doing the work, and nothing can ask it —
+        // so it is declared per provider, and num_ctx is the fallback only because for Ollama it
+        // IS the window.
+        var declared = _settings.Providers
+            .FirstOrDefault(p => string.Equals(p.Id, reference.ProviderId, StringComparison.Ordinal))
+            ?.ContextWindowTokens;
+
         // promptBodies: false — this prompt CARRIES the log, and the provider decorator would write
         // it straight back into it. One analysis of a 10,429-line run added 4,785 lines; the second
         // then read a log that was half its own previous prompt. See LoggingChatProvider.
         return async (text, ct) => await new LogAnalyst().AnalyseAsync(
             text, _providerFactory.Create(reference.ProviderId, promptBodies: false),
-            reference.Model, _settings.NumCtx, ct);
+            reference.Model, declared ?? _settings.NumCtx, ct);
     }
 
     private void ShowLogWindow()
@@ -2076,7 +2111,14 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         try
         {
             var full = Path.Combine(root, item.RelativePath);
-            ShowViewer(item.RelativePath, File.Exists(full) ? File.ReadAllText(full) : "(file not found)");
+
+            // The PATH goes with the text, because it is what decides how the file is shown -
+            // see ArtifactViewerCatalog. A run's deliverable is often one Markdown document, and
+            // every one of them used to arrive as monospaced source that does not wrap.
+            ViewerWindow.Show(
+                this, item.RelativePath,
+                File.Exists(full) ? File.ReadAllText(full) : "(file not found)",
+                item.RelativePath);
         }
         catch (Exception ex)
         {
@@ -2629,9 +2671,44 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         }
     }
 
+    /// <summary>
+    /// The tools this host offers, built from the CURRENT settings.
+    ///
+    /// <para>It used to be a list inline in the constructor, which made every setting a tool reads
+    /// a restart-only setting. Reported 2026-09-22: an SMTP account filled in and saved, and
+    /// <c>send_email</c> still telling the agent it was unavailable, because the account it holds
+    /// was read once when the window opened. Nothing about that is particular to mail - any tool
+    /// taking configuration would have behaved the same way - so the registry is rebuilt wherever
+    /// the settings are applied, and the pane no longer has to tell anybody to restart.</para>
+    ///
+    /// <para>Safe to swap while the application is running: <c>_toolRegistry</c> is read at the
+    /// point of use, and a run already in flight holds the registry it started with.</para>
+    /// </summary>
+    private IToolRegistry BuildToolRegistry()
+    {
+        var builtInTools = new List<ITool>
+        {
+            new WriteFileTool(), new EditFileTool(), new ReadFileTool(), new SearchFilesTool(),
+            // The three that answer WITHOUT returning file content: a number, a size, a verdict.
+            new CountMatchesTool(), new FileStatsTool(), new CompareFilesTool(),
+            new ListDirectoryTool(), new CreateDirectoryTool(), new MoveFileTool(), new CopyFileTool(), new DeleteFileTool(),
+            new RunCommandTool(), new RunPowerShellTool(), new GitTool(), new DockerTool()
+        };
+
+        // Registered whether or not an account exists - the roles name it, and the two sets have to
+        // agree - and it says so itself when there is nowhere to send.
+        builtInTools.Add(new SendEmailTool(EngineComposition.Mail(_settings)));
+
+        return new ToolRegistry(builtInTools);
+    }
+
     private void ApplySettings()
     {
         _globalInstructions = _settings.GlobalInstructions;
+
+        // Before the early return below: a tool's configuration is not the engine's, and an SMTP
+        // account saved on a machine with no model chosen should still reach the tool.
+        _toolRegistry = BuildToolRegistry();
 
         // Nothing to build an engine out of is a STATE, not an error. A machine where nobody has
         // chosen a model now says so — where it used to be silently configured for a model name

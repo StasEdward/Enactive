@@ -175,6 +175,26 @@ public sealed class StagingArtifactStore : IOwnedArtifactStore
         var full = ResolveInside(relativePath);
         var key = KeyOf(full);
 
+        // The worker's own working area is written STRAIGHT THROUGH, and here that is not a
+        // refinement but the thing that makes it usable at all. Staging holds a proposal and puts
+        // nothing on disk until somebody presses Apply; a helper script staged that way does not
+        // exist for the `run_command` that was written to run it, and the step fails on a file it
+        // has just been told it created. Nor is there anything for a person to approve: a diff of
+        // a throwaway is a question with no useful answer.
+        if (WorkspaceGuard.IsScratch(_root, full))
+        {
+            SweepScratchOnce();
+
+            var directory = Path.GetDirectoryName(full);
+            if (!string.IsNullOrEmpty(directory))
+                Directory.CreateDirectory(directory);
+
+            await AtomicWrite.Replace(full, s => s.WriteAsync(
+                Encoding.UTF8.GetBytes(newContent)).AsTask());
+
+            return new ArtifactRef(Guid.NewGuid(), kind, title, relativePath);
+        }
+
         // The base for the diff and for the conflict check is what a reader would see NOW: an earlier
         // pending proposal for the same path, else the file on disk. Diffing against the disk while a
         // proposal is already outstanding shows a change the user never made.
@@ -323,9 +343,46 @@ public sealed class StagingArtifactStore : IOwnedArtifactStore
     /// alone. The owner comes from the scope, never from a shared "newest" field: that field gave
     /// two interleaved steps the same number, and rejecting the second dropped the first's work.
     /// </summary>
+    /// <summary>
+    /// Where the change list stood when this scope opened. Needed only by
+    /// <see cref="AlsoWrittenByAnother"/>: without it, "another step wrote this while I was open"
+    /// cannot be told from "an earlier step wrote it before I started", and the second is the
+    /// ordinary way a plan builds one document.
+    /// </summary>
+    private readonly Dictionary<int, int> _openedAt = new();
+
     public int NewOwner()
     {
-        lock (_gate) return ++_owners;
+        lock (_gate)
+        {
+            var owner = ++_owners;
+            _openedAt[owner] = _sequence;
+            return owner;
+        }
+    }
+
+    /// <inheritdoc/>
+    public IReadOnlyCollection<string> AlsoWrittenByAnother(int owner)
+    {
+        lock (_gate)
+        {
+            if (!_openedAt.TryGetValue(owner, out var opened))
+                return Array.Empty<string>();
+
+            var mine = _changes
+                .Where(c => c.Scope == owner)
+                .Select(c => c.Key)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            if (mine.Count == 0)
+                return Array.Empty<string>();
+
+            return _changes
+                .Where(c => c.Scope != owner && c.Sequence >= opened && mine.Contains(c.Key))
+                .Select(c => c.Key)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+        }
     }
 
     public IArtifactScope BeginStep() => new ArtifactScope(this, NewOwner());
@@ -335,15 +392,59 @@ public sealed class StagingArtifactStore : IOwnedArtifactStore
     /// <see cref="IArtifactStore.RemoveAsync(string, CancellationToken)"/>. The caller must report
     /// that rather than delete the file itself and leave the staging record lying about the state.
     /// </summary>
+    /// <summary>
+    /// A removal outside any step's scope. It was never overridden here, so it fell through to the
+    /// interface's throwing default - which was right while nothing in this store could be removed
+    /// at all, and wrong the moment the scratch area could: the owned overload below grew a scratch
+    /// case and this one did not see it, so the tool asked, was told it could go ahead, and then
+    /// got the default's exception anyway.
+    /// </summary>
+    public Task RemoveAsync(string relativePath, CancellationToken ct)
+        => RemoveAsync(relativePath, Unowned, ct);
+
     public Task RemoveAsync(string relativePath, int owner, CancellationToken ct)
-        => throw new NotSupportedException("Staged changes cannot express a deletion.");
+    {
+        // The worker's own working area was never staged, so there is no proposal here to be
+        // unable to express: the file is on disk and removing it is just removing it. Without
+        // this, an agent could create a scratch file under staging and then not be allowed to
+        // clear up after itself, which is a strange shape to leave a tool in.
+        var full = ResolveInside(relativePath);
+        if (WorkspaceGuard.IsScratch(_root, full))
+        {
+            if (File.Exists(full))
+                File.Delete(full);
+            return Task.CompletedTask;
+        }
+
+        throw new NotSupportedException("Staged changes cannot express a deletion.");
+    }
 
     /// <summary>
-    /// No. A proposal is a file's next content; there is no way to propose its absence. Said here so
-    /// an operation that needs a removal can decline BEFORE doing the half of itself that works —
-    /// move_file used to write the destination proposal and only then discover this.
+    /// No — for the workspace proper. A proposal is a file's next content; there is no way to
+    /// propose its absence. Said here so an operation that needs a removal can decline BEFORE
+    /// doing the half of itself that works — move_file used to write the destination proposal and
+    /// only then discover this.
+    ///
+    /// <para>It stays false with the scratch exception above in place, and that is deliberate: this
+    /// property is asked WITHOUT a path, so the only honest answer it can give is the one that
+    /// holds for the workspace it is staging. A caller that knows it is looking at the scratch area
+    /// knows more than this property does — see <c>DeleteFileTool</c>, which asks about the path it
+    /// actually has.</para>
     /// </summary>
     public bool CanRemove => false;
+
+    private int _scratchSwept;
+
+    /// <summary>
+    /// Clears what earlier runs left in the scratch area, once per store, before the first write
+    /// that goes there. The same lazy housekeeping <c>DiskArtifactStore</c> does, because a staged
+    /// run writes that folder just as directly as an unstaged one.
+    /// </summary>
+    private void SweepScratchOnce()
+    {
+        if (Interlocked.Exchange(ref _scratchSwept, 1) == 0)
+            ScratchArea.Sweep(_root, DateTimeOffset.UtcNow);
+    }
 
     /// <summary>Every path this owner proposed a change to — the canonical key, not the spelling.</summary>
     public IReadOnlyCollection<string> TouchedBy(int owner)

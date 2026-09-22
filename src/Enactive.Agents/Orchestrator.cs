@@ -53,6 +53,35 @@ public sealed class Orchestrator : IOrchestrator
     /// </summary>
     private const int RunawayCeiling = 250;
 
+    /// <summary>
+    /// How many turns a step works in ONE conversation before it hands over to itself.
+    ///
+    /// <para><b>Why a step should be cut rather than killed.</b> The ceiling above is an execution:
+    /// measured 2026-09-22, a step that had written a 46 KB report over eleven minutes reached 250
+    /// turns, was marked Incomplete, and took the rest of the plan down with it. Nothing about that
+    /// step was wrong; it was doing the work it had been given, and the work was longer than one
+    /// conversation.</para>
+    ///
+    /// <para><b>And the cost of a long conversation is not linear.</b> Every turn re-sends what came
+    /// before it, so a step of 2N turns costs about four times a step of N. The same day, one run
+    /// spent 31.3M prompt tokens across five steps whose per-turn cost climbed 6k → 56k → 113k →
+    /// 161k → 215k, each step carrying everything the ones before it had said.</para>
+    ///
+    /// <para>So at this many turns the step writes down what it has finished and what is left,
+    /// and carries on in a fresh conversation holding its instructions and that handover. It is the
+    /// same step: same journal, same artifacts, same reviewer at the end.</para>
+    /// </summary>
+    private const int TurnsBeforeHandover = 60;
+
+    /// <summary>
+    /// How many times one step may hand over to itself before the backstop takes it.
+    ///
+    /// <para>Four conversations of <see cref="TurnsBeforeHandover"/> turns reach the same 250 that
+    /// ended a step outright before this existed — so nothing that used to finish now stops
+    /// earlier, and what used to die at the ceiling gets three more chances to end properly.</para>
+    /// </summary>
+    private const int MaxHandovers = 3;
+
     private readonly IChatProviderFactory _providers;
     private readonly IWorkerProvider _workers;
     private readonly IToolRegistry _tools;
@@ -103,6 +132,7 @@ public sealed class Orchestrator : IOrchestrator
     private readonly IModelResolver _modelResolver;
     private readonly int _reviewRetries;
     private readonly int _successRetries;
+    private readonly bool _proposeChecks;
     private readonly int _maxParallelSteps;
 
     /// <summary>
@@ -178,6 +208,7 @@ public sealed class Orchestrator : IOrchestrator
         IModelRouter? router = null,
         int reviewRetries = 1,
         int successRetries = 1,
+        bool proposeChecks = true,
         int? numCtx = null,
         bool disableThinking = false,
         int maxParallelSteps = 1,
@@ -220,6 +251,7 @@ public sealed class Orchestrator : IOrchestrator
         // same reason: each attempt is a whole tool loop, paid for before anybody notices a stray
         // number. 0 restores the behaviour this had until 2026-09-08 - check once, and stop.
         _successRetries = Math.Clamp(successRetries, 0, 5);
+        _proposeChecks = proposeChecks;
         // 1 = the original behaviour: one step at a time on one shared conversation.
         _maxParallelSteps = Math.Max(1, maxParallelSteps);
         _evidenceBudget = Math.Max(ExecutionJournal.MinimumBudget, evidenceBudget);
@@ -306,6 +338,16 @@ public sealed class Orchestrator : IOrchestrator
         var scope = new RunScope(
             runId, taskId, budget, artifacts, _writableRoots.For(_workspace.RootPath));
 
+        // The working area is made before the worker is told it has one, and the engine's own
+        // folder is kept out of the person's next commit. A prompt that promises a folder and a
+        // folder that does not exist are a defect, however sensible the laziness was: an agent
+        // looked for it with list_dir, with `dir /b /s` and with Get-ChildItem on three separate
+        // days and was told each time there is no such place.
+        //
+        // Also done when a workspace is OPENED, so the folder is there to be browsed before any
+        // run. Both are idempotent; this one is what covers the console, which opens nothing.
+        WorkspaceSetup.Prepare(_workspace.RootPath);
+
         yield return scope.Event(
             EventKind.IntentReceived,
             $"Intent: {intent.RawText}",
@@ -339,7 +381,21 @@ public sealed class Orchestrator : IOrchestrator
         var plan = resume is not null
             ? PlanOf(resume)
             : await InScopeAsync(runId, taskId, null,
-                () => _planner.PlanAsync(intent.RawText, intent.Context, models.PlanProvider, models.Plan.Model, ct));
+                // The run's own step budget goes to the planner. Without it the planner guessed -
+                // it carried "use 2-4 steps max", which no template wanted and every template
+                // contradicted - and a plan it made too long for the budget does not get trimmed,
+                // it runs until the budget is gone and stops with the work half done.
+                //
+                // And the TURN ceiling with it, for the same reason. A plan is written by something
+                // that cannot see how long a step will run or what it costs while it runs; both are
+                // facts about this engine, and both decide whether the plan survives contact with a
+                // large workspace. Measured 2026-09-22: one step of 250 turns cost 30.6M prompt
+                // tokens and was abandoned at the ceiling with four steps skipped behind it; the
+                // same request in five smaller steps cost 9.2M and finished.
+                () => _planner.PlanAsync(
+                    intent.RawText, intent.Context, models.PlanProvider, models.Plan.Model, ct,
+                    _limits.MaxSteps, _proposeChecks && _successCriteria.Count == 0,
+                    turnCeiling: RunawayCeiling));
 
         if (plan.PromptTokens + plan.CompletionTokens > 0)
             yield return scope.Usage(
@@ -366,6 +422,20 @@ public sealed class Orchestrator : IOrchestrator
                 ChatMessage.System(worker.Instructions),
                 ChatMessage.User(BuildUserPrompt(intent))
             };
+
+        // What each proposed check is actually worth, asked before any of the work - see
+        // BaselineAsync. Replaces the plan's list with the checks that survived, so everything
+        // downstream keeps reading plan.Checks and knows nothing about this.
+        if (plan.Checks.Count > 0)
+        {
+            var (kept, notes) = await InScopeAsync(scope.RunId, scope.TaskId, null,
+                () => BaselineAsync(plan.Checks, scope.TaskId, scope.RunId, intent.Context, ct));
+
+            foreach (var note in notes)
+                yield return scope.Ev(EventKind.ErrorObserved, note);
+
+            plan = plan with { Checks = kept };
+        }
 
         if (plan.Disposition == IntentDisposition.QuickAction)
         {
@@ -565,10 +635,11 @@ public sealed class Orchestrator : IOrchestrator
         var quickOutcome = RunOutcomeOf(new[] { quickResult.Kind });
         var quickReason = quickResult.Reason;
 
-        if (quickOutcome == RunOutcomeKind.Completed)
+        if (quickOutcome is RunOutcomeKind.Completed or RunOutcomeKind.Incomplete)
         {
             var verified = new VerifyResult();
             await foreach (var checkEvent in VerifyAsync(
+                CriteriaFor(plan),
                 intent, scope.TaskId, scope.RunId, models.Worker, models.Provider, models.Model.Model, models.Model.ProviderId,
                 scope.Artifacts, scope.Budget, verified, scope.Criterion,
                 (kind, summary) => scope.Ev(kind, summary), scope.Granted, ct))
@@ -577,8 +648,10 @@ public sealed class Orchestrator : IOrchestrator
             var adjusted = verified.Report.Apply(quickOutcome);
             if (adjusted != quickOutcome)
             {
+                quickReason = adjusted == RunOutcomeKind.Completed
+                    ? verified.Report.Overruling(quickReason)
+                    : verified.Report.Explain();
                 quickOutcome = adjusted;
-                quickReason = verified.Report.Explain();
             }
         }
 
@@ -625,6 +698,54 @@ public sealed class Orchestrator : IOrchestrator
             stepNumbers[builtPlan.Steps[i].Id] = i + 1;
         var maxParallel = _maxParallelSteps;
 
+        // WHETHER A STEP BEGINS WHERE THE LAST ONE LEFT OFF, or with a digest of what it concluded.
+        //
+        // This was `maxParallel == 1`, and that number was answering a question nobody had asked
+        // it. "Can two steps append to one message list?" is about PARALLELISM and only the degree
+        // can answer it. "Should a step carry the previous steps' whole conversation?" is about
+        // memory, and it inherited the degree's answer by accident: the fork was written for
+        // parallel branches, and the sequential path was left alone under "no behaviour change".
+        //
+        // Measured 2026-09-21 on a three-step plan at degree 1, before either step had done
+        // anything of its own:
+        //
+        //     step 2's first prompt   70 messages    40,549 tokens
+        //     step 3's first prompt  251 messages   140,576 tokens
+        //
+        // Step 3 made 41 tool calls and paid 4.85M prompt tokens, nearly all of it re-reading the
+        // other two steps. The run spent 12.4M in total. Nothing was ever dropped, because the
+        // trimming below only applies to a provider that declares a hard window and a cloud one
+        // does not.
+        //
+        // SO IT WAS TRIED, on the same task and the same workspace, and it came out WORSE:
+        //
+        //                          shared        forked
+        //     model calls             130           198
+        //     prompt tokens         12.4M         17.0M
+        //     wall clock          9m 29s       12m 37s
+        //     step 2's first prompt  40,549        4,290
+        //
+        // The fork did exactly what it promised - step 2 began with four messages instead of
+        // seventy - and the run cost 37% more. A step that cannot SEE what the last one read
+        // reads it again, and those reads then pile into its own conversation, which is re-sent
+        // every turn. The saving is taken at the start of a step and repaid with interest inside
+        // it: the forked step 2 made 139 calls against the shared run's 102 across two steps, and
+        // its prompt reached 190,017 against 175,819.
+        //
+        // Carrying the conversation is not waste. It is the cheapest form of memory available -
+        // already written, already cached by the provider - and re-deriving it costs tool calls
+        // whose results are bigger than the conversation they replace.
+        //
+        // CAVEAT, because one run each way is thin: the planner produced three steps the first
+        // time and two the second, so the comparison is not like for like. What the numbers do
+        // support is the mechanism - more calls, a larger peak prompt, a longer run - and that is
+        // the opposite of the effect the change was made to have.
+        //
+        // The journal follows this, not the degree - see runJournal below. That coupling is the
+        // rule already: the reviewer's window has to be the window the answer was drawn from, and
+        // it is why these two lines must always say the same thing.
+        var stepsShareOneConversation = maxParallel == 1;
+
         // Execute by readiness: a step runs only once all its dependencies are Done (a real DAG),
         // not in a fixed linear order. With MaxParallelSteps > 1 the independent branches of the graph
         // run at the same time; every step task writes into one channel so this method stays a single
@@ -648,7 +769,7 @@ public sealed class Orchestrator : IOrchestrator
         // read, said so, and was rejected for it: "the evidence shows it only read the .csproj
         // file". True of the evidence and false of the run. The retry re-read all five inside step 2
         // and passed — having spent the step's only retry on an artefact of this gap.
-        var runJournal = maxParallel == 1 ? new ExecutionJournal(spansSteps: true) : null;
+        var runJournal = stepsShareOneConversation ? new ExecutionJournal(spansSteps: true) : null;
         if (runJournal is not null && resume is { Transcript.Count: > 0 })
             runJournal.NotePriorTranscript();
 
@@ -797,12 +918,12 @@ public sealed class Orchestrator : IOrchestrator
             var depNote = step.DependsOn.Count > 0 ? $" (after {step.DependsOn.Count} dep)" : "";
             Emit(EventKind.StepStarted, $"[{stepNumber}/{total}] {step.Title}{depNote}");
 
-            // Degree 1 keeps the one shared conversation, exactly as before - no behaviour change.
-            // Above that a step gets its own fork, because two steps cannot append to one message list;
-            // it is seeded with the base prompt plus a digest of what earlier steps concluded, rather
-            // than replaying their whole tool transcript.
+            // Its own conversation unless the run is sharing one - see stepsShareOneConversation.
+            // Seeded with the base prompt plus a digest of what earlier steps concluded, rather
+            // than replaying their whole tool transcript. Two steps could never append to one list
+            // anyway, so a parallel run has always taken this path.
             List<ChatMessage> convo;
-            if (maxParallel == 1)
+            if (stepsShareOneConversation)
             {
                 convo = messages;
             }
@@ -1254,14 +1375,43 @@ public sealed class Orchestrator : IOrchestrator
 
         var runReason = ExplainOutcome(outcomes, reasons, cycle, limitReason);
 
-        // The last word, and the only one in the run that is not somebody's opinion. Checked only
-        // when everything else says the work is done: a run that already failed had its outcome
-        // decided by something that actually went wrong, and a build result on top of that would
-        // bury it - besides costing a build to learn nothing.
-        if (runOutcome == RunOutcomeKind.Completed)
+        // The last word, and the only one in the run that is not somebody's opinion.
+        //
+        // Also asked of an INCOMPLETE run, as of 2026-09-21. It used to be asked only of a run
+        // everything else had already called done, which sounded careful and was the opposite: the
+        // one guard that looks at the WORKSPACE ran last and could only tighten, so it was silent
+        // in exactly the cases where the guards that read the TRANSCRIPT are wrong. Measured that
+        // day - a run added the method, wrote the tests, and its own proposed check passed against
+        // the workspace it left behind, while the report said Incomplete over two shell calls that
+        // were never formally closed.
+        //
+        // Failed and Cancelled are still not asked. Those had their outcome decided by something
+        // that actually went wrong, or by the person, and a green build on top would bury it.
+        // Incomplete is the one that means "we could not establish that it finished", and that is
+        // a question, not a verdict. See SuccessReport.Apply.
+        // A step that never RAN is a different kind of Incomplete, and checks may not answer it.
+        //
+        // "Incomplete" was treated as one thing when the promotion shipped earlier today: an
+        // absence of evidence, which a command with an exit code is exactly the cure for. A
+        // SKIPPED step is not that. It is a known absence of work - the plan said three things
+        // were needed, one of them did not finish and two never started - and no check can make
+        // the missing two have happened.
+        //
+        // Measured 2026-09-21 20:57, a regression from that same promotion. Step 1 ended
+        // Incomplete, steps 2 and 3 were skipped behind it, and the run was reported Completed
+        // because "Docs/DRIFT_ollama.md exists and is not empty" passed - against the scaffold
+        // step 1 had written before it stopped. A third of the work, called done, on a check
+        // satisfied by a file's existence. The baseline could not catch it: the file was absent
+        // beforehand, so the check DID fail then and did count as proof. Proof of a write, which
+        // is all it ever claimed.
+        var nothingWasSkipped = !outcomes.Contains(StepOutcomeKind.Skipped);
+
+        if (runOutcome == RunOutcomeKind.Completed
+            || (runOutcome == RunOutcomeKind.Incomplete && nothingWasSkipped))
         {
             var verified = new VerifyResult();
             await foreach (var checkEvent in VerifyAsync(
+                CriteriaFor(plan),
                 intent, scope.TaskId, scope.RunId, models.Worker, models.Provider, models.Model.Model, models.Model.ProviderId,
                 scope.Artifacts, scope.Budget, verified, scope.Criterion,
                 (kind, summary) => scope.Ev(kind, summary), scope.Granted, ct))
@@ -1270,8 +1420,10 @@ public sealed class Orchestrator : IOrchestrator
             var adjusted = verified.Report.Apply(runOutcome);
             if (adjusted != runOutcome)
             {
+                runReason = adjusted == RunOutcomeKind.Completed
+                    ? verified.Report.Overruling(runReason)
+                    : verified.Report.Explain();
                 runOutcome = adjusted;
-                runReason = verified.Report.Explain();
             }
         }
 
@@ -1446,18 +1598,62 @@ public sealed class Orchestrator : IOrchestrator
         /// </summary>
         private readonly Dictionary<string, string> _namedNothing = new(StringComparer.Ordinal);
 
+        /// <summary>
+        /// Calls that NEVER HAPPENED — nothing parsed them, nothing ran them, or a person said no.
+        /// Kept apart from the rest because they leave no residue: there is no half-written file
+        /// and no broken build behind them, only a sentence that went nowhere.
+        /// </summary>
+        private readonly Dictionary<string, string> _neverHappened = new(StringComparer.Ordinal);
+
         private bool _anythingWorked;
 
-        public int Count => _byCall.Count + (_anythingWorked ? 0 : _foundNothing.Count);
+        /// <summary>
+        /// Whether this step CHANGED anything — a successful call that writes, or one that produced
+        /// an artifact. Deliberately stricter than <see cref="_anythingWorked"/>, which a single
+        /// read sets: see <see cref="Forgiven"/>.
+        /// </summary>
+        private bool _anythingChanged;
+
+        /// <summary>
+        /// Calls that never happened, in a step that did its work anyway — and which therefore say
+        /// nothing about whether the work was done.
+        ///
+        /// <para><b>Measured 2026-09-22, twice in half an hour.</b> A step verified five wiki
+        /// pages, wrote its report and gave its final answer — and was marked Incomplete, with four
+        /// dependent steps skipped, because a person had declined to delete a scratch file it did
+        /// not need. Half an hour later another step made 114 successful calls over four and a half
+        /// minutes, rewrote the same report, gave its final answer — and was failed for one
+        /// <c>git</c> call written with a missing pair of quotes, four and a half minutes earlier,
+        /// which it never repeated. Both runs did exactly what was asked and both were thrown
+        /// away.</para>
+        ///
+        /// <para><b>Why "changed" and not "worked".</b> A step that sent a malformed write and then
+        /// read three files has still not written anything, and forgiving it on the strength of a
+        /// read is the exact hole this class exists to close: a step reporting "Done" over an
+        /// action that never happened. A step that WROTE something did the thing steps are for, and
+        /// a call that never ran is then incidental noise — recorded in the journal, shown to the
+        /// reviewer, and not a verdict.</para>
+        ///
+        /// <para>A call that RAN and failed is never here. A build that broke is evidence, and no
+        /// amount of other work makes it not have broken.</para>
+        /// </summary>
+        private IReadOnlyCollection<string> Forgiven
+            => _anythingChanged ? _neverHappened.Keys : Array.Empty<string>();
+
+        public int Count
+            => _byCall.Keys.Count(k => !Forgiven.Contains(k))
+             + (_anythingWorked ? 0 : _foundNothing.Count);
 
         /// <summary>True when the step's whole record is lookups that found nothing.</summary>
         public bool NothingButMisses
             => !_anythingWorked && _byCall.Count == 0 && _foundNothing.Count > 0;
 
         /// <param name="didNotRun">
-        /// The tool could not READ the call and returned before attempting anything — see
-        /// <see cref="ToolResults.Unreadable"/>. Such a call is closed by the same tool succeeding
-        /// afterwards, because there is no residue from it to make good.
+        /// The call was never attempted. Two things set it, and they are the same thing seen from
+        /// two distances: the tool could not READ the call (<see cref="ToolResults.Unreadable"/>),
+        /// or the SHELL would not start the line (<see cref="ToolResults.NeverRan"/>). A sentence
+        /// that did not parse, in the tool or one layer further down. Such a call is closed by the
+        /// same KIND of tool succeeding afterwards, because there is no residue to make good.
         ///
         /// <para>That rule already existed and was written to depend on the tool being one that
         /// writes files, which was never its justification. Reported 2026-08 as
@@ -1465,15 +1661,35 @@ public sealed class Orchestrator : IOrchestrator
         /// <c>git ["status"]</c> that worked, a truthful report, a file written — and a run failed
         /// for two calls that never happened.</para>
         /// </param>
+        /// <summary>
+        /// The operation each open SHELL failure was attempting, where it is one.
+        ///
+        /// <para>The counterpart of <see cref="_fileOf"/>. A failed write is made good by a later
+        /// write to the same FILE, whatever the call looked like; a failed command had no such
+        /// notion and could only be made good by re-running the byte-identical string.</para>
+        /// </summary>
+        private readonly Dictionary<string, string> _shellOf = new(StringComparer.Ordinal);
+
         public void Failed(ToolCall call, string? error, bool didNotRun = false)
         {
             var key = Key(call);
             _byCall[key] = Line(call, error);
 
-            if (FileNamedBy(call) is { } file)
+            // Asked FIRST, because it is the strongest thing known about the call: whatever the
+            // arguments name, nothing was attempted. Naming the file or the operation would put
+            // the call where only doing that same thing again can close it - and there is no
+            // "again", because there was never a first time.
+            if (didNotRun)
+            {
+                _namedNothing[key] = Kind(call.Name);
+                _neverHappened[key] = Kind(call.Name);
+            }
+            else if (FileNamedBy(call) is { } file)
                 _fileOf[key] = file;
-            else if (didNotRun || MutatingTools.Changes(call.Name))
-                _namedNothing[key] = call.Name;
+            else if (ShellOperation.For(call.Name, call.ArgumentsJson) is { } operation)
+                _shellOf[key] = operation;
+            else if (MutatingTools.Changes(call.Name))
+                _namedNothing[key] = Kind(call.Name);
         }
 
         /// <summary>A lookup whose target is not there. An answer — unless the step has nothing else.</summary>
@@ -1511,6 +1727,12 @@ public sealed class Orchestrator : IOrchestrator
         public void Succeeded(ToolCall call, IReadOnlyList<ArtifactRef> produced)
         {
             _anythingWorked = true;
+
+            // A file came out of it, or it is the kind of call that writes one. Either is the step
+            // having DONE something - which is what lets a call that never happened stop counting.
+            if (produced.Count > 0 || MutatingTools.Changes(call.Name))
+                _anythingChanged = true;
+
             Close(Key(call));
 
             foreach (var reference in produced)
@@ -1518,16 +1740,42 @@ public sealed class Orchestrator : IOrchestrator
                                             .Select(p => p.Key).ToArray())
                     Close(open);
 
-            foreach (var open in _namedNothing.Where(p => p.Value == call.Name)
+            // The same operation, run again and working, makes the earlier attempt good - whatever
+            // flags, redirection or pipe it is wearing this time. Measured 2026-09-20: a run wrote
+            // 63 passing tests and was reported Incomplete because its first `dotnet test … 2>&1`
+            // failed for a missing package, and the verification after the fix was spelled
+            // `dotnet test … --nologo 2>&1 | …`. Cause fixed, result proved, different string.
+            if (ShellOperation.For(call.Name, call.ArgumentsJson) is { } operation)
+                foreach (var open in _shellOf.Where(p => p.Value == operation)
+                                             .Select(p => p.Key).ToArray())
+                    Close(open);
+
+            foreach (var open in _namedNothing.Where(p => p.Value == Kind(call.Name))
                                               .Select(p => p.Key).ToArray())
                 Close(open);
         }
 
+        /// <summary>
+        /// What a call has to be repeated AS, for a failure that attempted nothing.
+        ///
+        /// <para>The tool's own name, except that the two shells are one thing. A cmdlet sent to
+        /// <c>run_command</c> is refused by cmd.exe having done nothing at all, and the correct
+        /// second attempt is the same work sent to <c>run_powershell</c> - the model saying it to
+        /// the shell that has the word. Measured 2026-09-20: that is precisely the recovery a run
+        /// made, and the step was failed for it, because "the same tool succeeding afterwards"
+        /// was read as the same tool NAME.</para>
+        ///
+        /// <para>Prefixed so it can never be a tool name itself.</para>
+        /// </summary>
+        private static string Kind(string tool) => ShellTools.IsShell(tool) ? "shell:" : tool;
+
         private void Close(string key)
         {
             _byCall.Remove(key);
+            _neverHappened.Remove(key);
             _foundNothing.Remove(key);
             _fileOf.Remove(key);
+            _shellOf.Remove(key);
             _namedNothing.Remove(key);
         }
 
@@ -1563,7 +1811,12 @@ public sealed class Orchestrator : IOrchestrator
                              StringComparison.OrdinalIgnoreCase);
 
         public string Describe()
-            => string.Join("; ", _anythingWorked ? _byCall.Values : _byCall.Values.Concat(_foundNothing.Values));
+        {
+            var forgiven = Forgiven;
+            var open = _byCall.Where(p => !forgiven.Contains(p.Key)).Select(p => p.Value);
+
+            return string.Join("; ", _anythingWorked ? open : open.Concat(_foundNothing.Values));
+        }
 
         private static string Line(ToolCall call, string? error)
             => $"{call.Name} {Compact(call.ArgumentsJson)} — {error ?? "failed"}";
@@ -1750,7 +2003,7 @@ public sealed class Orchestrator : IOrchestrator
 
             // The claim is CHECKED, not believed: the numbers it names are resolved against the
             // calls that were actually made, in the same order and numbering the evidence used.
-            return (ProofAudit.Check(outcome.Claim, actions), outcome.PromptTokens,
+            return (ProofAudit.Check(outcome.Claim, actions, _workspace.RootPath), outcome.PromptTokens,
                     outcome.CompletionTokens, outcome.CachedPromptTokens);
         }
         catch (OperationCanceledException)
@@ -1888,6 +2141,7 @@ public sealed class Orchestrator : IOrchestrator
     /// alone decide. All this changes is whether the run gets a chance before the verdict.</para>
     /// </summary>
     private async IAsyncEnumerable<WorkEvent> VerifyAsync(
+        IReadOnlyList<SuccessCriterionDefinition> criteria,
         Intent intent, Guid taskId, Guid runId, Worker worker,
         IChatProvider provider, string model, string providerId,
         List<ArtifactRef> artifacts, RunBudget budget, VerifyResult result,
@@ -1899,7 +2153,7 @@ public sealed class Orchestrator : IOrchestrator
         [EnumeratorCancellation] CancellationToken ct)
     {
         var report = await InScopeAsync(runId, taskId, null,
-            () => CheckSuccessAsync(taskId, runId, intent.Context, ct));
+            () => CheckSuccessAsync(criteria, taskId, runId, intent.Context, ct));
 
         foreach (var checkResult in report.Results)
             yield return criterion(checkResult);
@@ -1945,7 +2199,7 @@ public sealed class Orchestrator : IOrchestrator
                 yield return repairEvent;
 
             report = await InScopeAsync(runId, taskId, null,
-                () => CheckSuccessAsync(taskId, runId, intent.Context, ct));
+                () => CheckSuccessAsync(criteria, taskId, runId, intent.Context, ct));
 
             foreach (var checkResult in report.Results)
                 yield return criterion(checkResult);
@@ -1978,10 +2232,138 @@ public sealed class Orchestrator : IOrchestrator
         return sb.ToString();
     }
 
+    /// <summary>
+    /// The checks this run is judged by: the ones it was GIVEN, or failing that the ones the
+    /// planner proposed.
+    ///
+    /// <para><b>Declared criteria win outright, and are not merged with proposed ones.</b> A
+    /// template says what finished work looks like for this job; a plan guesses. Letting a guess
+    /// sit alongside a person's definition would let it hold back a run that met the definition,
+    /// and the person who wrote the template would have no way to see why. A template with
+    /// criteria therefore runs exactly as it did before this existed - the planner is not even
+    /// asked (see the PlanAsync call above).</para>
+    ///
+    /// <para>A RESUMED run has no proposed checks: the plan is read back from the checkpoint,
+    /// which does not carry them. That is the same verification a resumed run has always had, and
+    /// the safe direction - fewer checks, never more.</para>
+    /// </summary>
+    private IReadOnlyList<SuccessCriterionDefinition> CriteriaFor(PlanResult plan)
+        => _successCriteria.Count > 0 ? _successCriteria : plan.Checks;
+
+    /// <summary>
+    /// Runs the PROPOSED checks before any of the work, and decides what each one is worth.
+    ///
+    /// <para><b>A check that already passes proves nothing about this run.</b> Measured
+    /// 2026-09-21: a run was called finished on the strength of "Docs/DRIFT_ollama.md exists and
+    /// is not empty" and "every wiki page is named in it" - both true of a file that had been
+    /// sitting in the workspace since the previous evening. The work was real, but the evidence
+    /// for it was not. Only a check that FAILS now and passes later has shown anything.</para>
+    ///
+    /// <list type="bullet">
+    /// <item><b>Failed now</b> - keep it. This is the proof.</item>
+    /// <item><b>Passed now</b> - keep it, marked <c>AlreadyPassing</c>. It can still catch the
+    /// work BREAKING something, which nothing else in the engine would notice; it just cannot be
+    /// the reason a run is let through.</item>
+    /// <item><b>Could not be evaluated</b> - drop it. The shell has no such word, or the policy
+    /// forbids it, or it is not a command at all. It will never be a verdict, and carrying it to
+    /// the end only to learn that again costs a run its time and says nothing.</item>
+    /// </list>
+    ///
+    /// <para><b>DECLARED criteria are not baselined at all</b>, and are never passed here. A
+    /// person writing a template has said what finished work looks like; whether it happens to be
+    /// true already is not a fact about their definition. A template run is untouched by any of
+    /// this.</para>
+    ///
+    /// <para>It costs a second run of each check. That is the price of the distinction, it is
+    /// paid only by runs that have checks, and the alternative is a green light on evidence that
+    /// establishes nothing.</para>
+    /// </summary>
+    private async Task<(IReadOnlyList<SuccessCriterionDefinition> Kept, IReadOnlyList<string> Notes)>
+        BaselineAsync(
+            IReadOnlyList<SuccessCriterionDefinition> proposed,
+            Guid taskId, Guid runId, WorkContext context, CancellationToken ct)
+    {
+        var toolContext = new ToolContext(
+            TaskId: taskId,
+            RunId: runId,
+            WorkspaceId: _workspace.Id,
+            Context: context,
+            PermissionPolicy: _policy,
+            WorkspaceRoot: _workspace.RootPath,
+            Artifacts: _artifacts,
+            Services: _services);
+
+        SuccessReport report;
+        try
+        {
+            // The run's OWN decision handler, not a substitute that always says no.
+            //
+            // It was NeverAsks, on the reasoning that a question at this moment - about a command
+            // the model invented - and the same question again at the end is two interruptions to
+            // learn one thing. Measured 2026-09-21, first live run: the shell policy asks, the
+            // console answers it with --approve allow, and the substitute answered "no" on its
+            // behalf. BOTH checks came back "the user did not permit this check to run" and were
+            // thrown away. The baseline destroyed the evidence it was added to grade.
+            //
+            // The cost of this is that an attended run is asked once more per check. That is the
+            // honest price: a question somebody can answer is worth more than a check silently
+            // deleted on their behalf.
+            report = await _successEvaluator.EvaluateAsync(
+                proposed, _tools, _permissions, _policy, _decisions, toolContext, taskId, ct);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // The baseline is an improvement to the evidence, never a way for a run to fail. If it
+            // cannot be taken, every check keeps the meaning it would have had before this existed.
+            return (proposed, new[] { $"The checks could not be tried beforehand ({ex.Message}), "
+                                    + "so what each of them proves is not known." });
+        }
+
+        var kept = new List<SuccessCriterionDefinition>();
+        var notes = new List<string>();
+
+        foreach (var result in report.Results)
+        {
+            var criterion = proposed.First(c => c.Name == result.Name && c.Command == result.Command);
+
+            switch (result.Outcome)
+            {
+                case CriterionOutcome.Failed:
+                    kept.Add(criterion);
+                    break;
+
+                case CriterionOutcome.Passed:
+                    kept.Add(criterion with { AlreadyPassing = true });
+                    notes.Add($"The check '{result.Name}' already passes before any work, so it "
+                            + "cannot show this request was carried out. It is kept only to catch "
+                            + "the work breaking it.");
+                    break;
+
+                default:
+                    // Learned nothing, so nothing changes. A baseline that could not be taken is
+                    // an absence of information about the check, not a finding against it - the
+                    // same rule the catch above applies when the whole pass fails. The check
+                    // keeps exactly the meaning it would have had if this had never run; if it
+                    // really cannot run, the end will find that out and Unknown blocks nothing.
+                    kept.Add(criterion);
+                    notes.Add($"The check '{result.Name}' could not be tried before the work, so "
+                            + $"whether it proves anything is not known. {result.Detail}".TrimEnd());
+                    break;
+            }
+        }
+
+        return (kept, notes);
+    }
+
     private async Task<SuccessReport> CheckSuccessAsync(
+        IReadOnlyList<SuccessCriterionDefinition> criteria,
         Guid taskId, Guid runId, WorkContext context, CancellationToken ct)
     {
-        if (_successCriteria.Count == 0)
+        if (criteria.Count == 0)
             return SuccessReport.NothingToCheck;
 
         var toolContext = new ToolContext(
@@ -1995,7 +2377,7 @@ public sealed class Orchestrator : IOrchestrator
             Services: _services);
 
         return await _successEvaluator.EvaluateAsync(
-            _successCriteria, _tools, _permissions, _policy, _decisions, toolContext, taskId, ct);
+            criteria, _tools, _permissions, _policy, _decisions, toolContext, taskId, ct);
     }
 
     /// <summary>Per file, and in total — the same budget the reviewer prompt applies.</summary>
@@ -2010,6 +2392,10 @@ public sealed class Orchestrator : IOrchestrator
         IArtifactScope store, CancellationToken ct)
     {
         var written = new List<WrittenFile>();
+
+        // Which of these the step does not have to itself. The journal has recorded the owner of
+        // every write since the revert needed it; nothing had ever asked the review.
+        var shared = store.SharedWithAnotherStep;
 
         foreach (var path in store.TouchedPaths)
         {
@@ -2037,7 +2423,9 @@ public sealed class Orchestrator : IOrchestrator
                 ? "(this file was removed, or could not be read back)"
                 : content.Length > MaxReviewFileChars ? content[..MaxReviewFileChars] : content;
 
-            written.Add(new WrittenFile(path, shown, content?.Length ?? shown.Length));
+            written.Add(new WrittenFile(
+                path, shown, content?.Length ?? shown.Length,
+                shared.Contains(path, StringComparer.OrdinalIgnoreCase)));
         }
 
         return written;
@@ -2172,6 +2560,13 @@ public sealed class Orchestrator : IOrchestrator
         if (offer.Sentence is { } withheldSentence)
             yield return Ev(EventKind.ContextAssembled, withheldSentence);
 
+        // And the servers the ROLE filtered out before any of that. ToolOffers never sees them -
+        // its candidate list is already role-filtered - so without this they are not withheld, they
+        // are absent, and a run starts a child process per server for tools nobody may call.
+        if (McpReach.Unreached(_tools.Definitions.Select(d => d.Name), name => Allows(worker, name))
+            is { } unreachedSentence)
+            yield return Ev(EventKind.ErrorObserved, unreachedSentence);
+
         // The tool schemas are sent with every request and are not part of the message list, so they
         // have to be counted separately or the estimate is short by a constant few thousand
         // characters - exactly the margin that decides whether the last turn fits.
@@ -2180,8 +2575,51 @@ public sealed class Orchestrator : IOrchestrator
         // Repetition, counted. Not turns - see StallLimit.
         var progress = new StepProgress();
 
+        // How many times this step has already started over with a handover, and how many turns
+        // the CURRENT conversation has taken. The iteration counter keeps counting the whole step,
+        // because the backstop is about the step and not about one of its conversations.
+        var handovers = 0;
+        var turnsHere = 0;
+
         for (var iteration = 1; iteration <= RunawayCeiling; iteration++)
         {
+            // Cut, not killed - see TurnsBeforeHandover. Done at the TOP of a turn, where the
+            // conversation is always in a complete state: the last message is a tool result or an
+            // instruction, never half of a call waiting for its answer.
+            if (turnsHere >= TurnsBeforeHandover && handovers < MaxHandovers)
+            {
+                var carried = await HandoverAsync(provider, model, messages, runBudget, ct);
+
+                if (carried is { Length: > 0 })
+                {
+                    handovers++;
+                    turnsHere = 0;
+
+                    var kept = Preamble(messages);
+                    messages.RemoveRange(kept, messages.Count - kept);
+                    messages.Add(ChatMessage.User(
+                        $"You have been working on this for {iteration - 1} turn(s) and the "
+                        + "conversation was getting long, so it has been started again from your own "
+                        + "notes. This is what you had done:\n\n" + carried
+                        + "\n\nCarry on from there. The files you wrote are still on disk; read one "
+                        + "back if you need what is in it."));
+
+                    yield return Ev(EventKind.ContextTrimmed,
+                        $"This step has run {iteration - 1} turns. Carrying its own notes into a "
+                        + $"fresh conversation and continuing ({handovers} of {MaxHandovers}).");
+                }
+                else
+                {
+                    // It could not say what it had done. Carrying on with the long conversation is
+                    // worse than stopping at the backstop, but it is better than starting the step
+                    // again from nothing - so the handover is simply not taken, and the ceiling
+                    // stays where it was.
+                    handovers = MaxHandovers;
+                }
+            }
+
+            turnsHere++;
+
             var request = new ChatRequest(model, messages, toolDefs, Temperature: 0.2, NumCtx: _numCtx, Think: _think);
 
             // Does this provider apply a hard window to prompt AND generation together? Only Ollama
@@ -2333,7 +2771,11 @@ public sealed class Orchestrator : IOrchestrator
                 recovered = true;
             }
 
-            messages.Add(new ChatMessage(ChatRole.Assistant, replyText, toolCalls));
+            // Remembered in a shorter form than it was sent in: the arguments of a call that has
+            // already been made are a file's contents on their way to disk, and they are re-sent on
+            // every turn after this one. See Transcript.ForHistory - the calls INVOKED below are the
+            // model's own text, untouched.
+            messages.Add(new ChatMessage(ChatRole.Assistant, replyText, Transcript.ForHistory(toolCalls)));
 
             if (toolCalls is null)
             {
@@ -2549,7 +2991,12 @@ public sealed class Orchestrator : IOrchestrator
                         var why = gate == PermissionDecision.Ask
                             ? "the user did not permit this action"
                             : offer.Reason(call.Name) ?? "blocked by the permission policy";
-                        openFailures.Failed(call, why);
+                        // A refusal is a call that NEVER HAPPENED: nobody typed it wrong and
+                        // nothing broke - it was asked about and answered. The person's "no" IS
+                        // the resolution, and the policy's "no" is a door that will not open, which
+                        // the model is told below to walk around. Either way there is no residue,
+                        // so it stops counting once the step has changed something. See Forgiven.
+                        openFailures.Failed(call, why, didNotRun: true);
                         journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson),
                                        ActionOutcome.Refused, why);
 
@@ -2761,6 +3208,18 @@ public sealed class Orchestrator : IOrchestrator
 
                 foreach (var reference in result.Artifacts)
                 {
+                    // The worker's own working area is not an artifact of the run. The stores
+                    // already keep it out of the journal and out of the scope's touched paths, but
+                    // this list is a SECOND record of what was written and it is the one the
+                    // reviewer is handed as "Files changed" - and the one the run's closing line
+                    // and the artifact panel are built from. Filtering in the stores and not here
+                    // is exactly the shape of bug this codebase keeps finding: a rule enforced in
+                    // two of the three places that need it. A code review template whose goal says
+                    // "change nothing except the report" would otherwise be shown a second changed
+                    // file and could fail a step over the agent's own notes.
+                    if (WorkspaceGuard.IsScratchRelative(_workspace.RootPath, reference.RelativePath))
+                        continue;
+
                     lock (artifacts)
                         artifacts.Add(reference);
                     yield return new WorkEvent(
@@ -2810,6 +3269,73 @@ public sealed class Orchestrator : IOrchestrator
             $"This step ran {RunawayCeiling} turns and never finished. It was still doing new things "
             + "each turn, so it is not stuck in a loop — but nothing this long is going to plan. "
             + "Stopping it.");
+    }
+
+    /// <summary>
+    /// What a step hands to itself when its conversation is cut: its own account of what is done
+    /// and what is left, in its own words.
+    ///
+    /// <para>Asked of the model rather than assembled from the journal, because the journal knows
+    /// which calls were made and not what they MEANT — "read Architecture.md" is in the journal;
+    /// "Architecture.md checks out except the tool table" is what the next conversation needs.</para>
+    ///
+    /// <para>One non-streaming call on the conversation as it stands. It is nearly free: the whole
+    /// transcript is already a cache hit by this point, and what it adds is a few hundred tokens of
+    /// question and answer.</para>
+    ///
+    /// <para>Returns null when the model says nothing. The caller then does NOT cut — a step
+    /// continuing from an empty handover would start again from its instructions alone, having
+    /// forgotten everything it learned, which is worse than a long conversation.</para>
+    /// </summary>
+    private static async Task<string?> HandoverAsync(
+        IChatProvider provider, string model, List<ChatMessage> messages, RunBudget runBudget,
+        CancellationToken ct)
+    {
+        var asked = new List<ChatMessage>(messages)
+        {
+            ChatMessage.User(
+                "Before you continue: this conversation is being started over to keep it short, and "
+                + "everything except your instructions will be dropped. Write the note you would "
+                + "want to find. State what you have ALREADY established - findings, file paths, "
+                + "numbers, what you checked and what it said - and what is still to do, in that "
+                + "order. Facts only, no plan for the future beyond the next concrete action. Do "
+                + "not call any tool; just write the note.")
+        };
+
+        try
+        {
+            var completion = await provider.CompleteAsync(
+                new ChatRequest(model, asked, Temperature: 0.0, NumCtx: null, Think: false), ct);
+
+            runBudget.TokensUsed(completion.PromptTokens ?? 0, completion.CompletionTokens ?? 0);
+
+            var note = completion.Message.Content?.Trim();
+            return string.IsNullOrWhiteSpace(note) ? null : note;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            // A provider that failed this one call has not failed the step. The handover is an
+            // economy, and an economy that throws is worse than one that does not happen.
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// How many messages at the front of a conversation are its INSTRUCTIONS - everything before
+    /// the model first spoke. That is what a handover keeps: the system prompt, the request, the
+    /// step it was given, and anything else the engine said before the work began.
+    /// </summary>
+    private static int Preamble(List<ChatMessage> messages)
+    {
+        for (var i = 0; i < messages.Count; i++)
+            if (messages[i].Role == ChatRole.Assistant)
+                return i;
+
+        return messages.Count;
     }
 
     /// <summary>

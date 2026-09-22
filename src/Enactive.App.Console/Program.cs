@@ -243,7 +243,12 @@ logHub.Info(LogSource.System,
     $"Enactive console starting — providers={string.Join(", ", settings.Providers.Select(p => $"{p.Id}:{p.Kind}"))}, "
     + $"model={model}, log dir={FileLogSink.DefaultDirectory()}");
 var artifactStore = new DiskArtifactStore(workspace);
-IToolRegistry toolRegistry = new LoggingToolRegistry(new ToolRegistry(new ITool[]
+// Whether there is an account to send from. The tool is registered either way - the roles name
+// it, and the set they name and the set the host registers have to be the same - and it tells
+// the model in its own description when there is nowhere to send.
+var mailAccount = EngineComposition.Mail(settings);
+
+var builtInTools = new List<ITool>
 {
     new WriteFileTool(),
     new EditFileTool(),
@@ -252,6 +257,11 @@ IToolRegistry toolRegistry = new LoggingToolRegistry(new ToolRegistry(new ITool[
     // register is the same defect as a tool the host registers and no role names, seen from the
     // other side: the model is told about a capability that is not there.
     new SearchFilesTool(),
+    // The three that answer WITHOUT returning file content - how many, how large, same or not -
+    // so a question with a small answer costs a small answer.
+    new CountMatchesTool(),
+    new FileStatsTool(),
+    new CompareFilesTool(),
     new ListDirectoryTool(),
     new CreateDirectoryTool(),
     new MoveFileTool(),
@@ -261,7 +271,11 @@ IToolRegistry toolRegistry = new LoggingToolRegistry(new ToolRegistry(new ITool[
     new RunPowerShellTool(),
     new GitTool(),
     new DockerTool()
-}), logHub);
+};
+
+builtInTools.Add(new SendEmailTool(mailAccount));
+
+IToolRegistry toolRegistry = new LoggingToolRegistry(new ToolRegistry(builtInTools), logHub);
 var contextProvider = new ContextProvider(workspace, new EnvironmentProbe(), memoryStore);
 var workers = workerProvider.All;
 
@@ -514,6 +528,7 @@ var orchestrator = new Orchestrator(
     // way to ask the window. Now there is, and the answer is the setting.
     reviewRetries: settings.ReviewRetries,
     successRetries: settings.SuccessRetries,
+    proposeChecks: settings.ProposeChecks,
     numCtx: settings.NumCtx,
     disableThinking: settings.DisableThinking,
     maxParallelSteps: settings.MaxParallelSteps,

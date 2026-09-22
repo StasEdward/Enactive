@@ -3,6 +3,7 @@ namespace Enactive.Tools;
 using System.Text;
 using System.Text.Json;
 using Enactive.Core.Permissions;
+using Enactive.Core.Context;
 using Enactive.Core.Tools;
 
 /// <summary>
@@ -95,7 +96,16 @@ public sealed class ReadFileTool : ITool
             if (clipped) body = body[..MaxChars] + "\n… (line truncated at " + MaxChars + " characters)";
 
             var more = lastLine < total
-                ? $"\n\n… showing lines {offset}–{lastLine} of {total}. Read on with offset {lastLine + 1}."
+                // The notice used to end at "Read on with offset N" - an instruction to read again,
+                // and the ONLY instruction on offer. A cut answer that names one way forward gets
+                // that way taken: measured 2026-09-12, a model paged the same ten-line region of one
+                // file six times, moving the offset and the limit each round, and the step ran
+                // thirteen minutes past the point it had stopped making progress. Paging is right
+                // when the file is being READ; it is the wrong move when something specific is being
+                // looked for, and the alternative has to be named here, where the temptation is.
+                ? $"\n\n… showing lines {offset}–{lastLine} of {total}. Read on with offset {lastLine + 1}. "
+                  + "If you are looking for something rather than reading this file, search_files or "
+                  + "count_matches will find it without paging."
                 : total > slice.WindowLines ? $"\n\n… showing lines {offset}–{lastLine} of {total}." : "";
 
             return ToolResults.Ok(
@@ -112,6 +122,13 @@ public sealed class ReadFileTool : ITool
                     // reviewer judging from evidence has to be able to tell them apart.
                     ["staged"] = staged is not null
                 });
+        }
+        // A read refused for being the workspace's own state has ANSWERED: the model asked
+        // whether it could look there and was told no, definitively. Nothing is half-done and
+        // there is nothing to retry, so it must not hold the step open. See ReservedPathException.
+        catch (ReservedPathException)
+        {
+            return ToolResults.NotFound(ReservedPathException.Explanation);
         }
         catch (Exception ex)
         {

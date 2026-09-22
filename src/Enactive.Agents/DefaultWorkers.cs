@@ -1,5 +1,6 @@
 namespace Enactive.Agents;
 
+using Enactive.Core.Context;
 using Enactive.Core.Permissions;
 using Enactive.Core.Providers;
 using Enactive.Core.Workers;
@@ -29,21 +30,62 @@ public static class DefaultWorkers
         // pipes, which is a real reason.
         + "- On Windows, prefer the run_powershell tool for anything working with OBJECTS - WMI/CIM "
         + "queries, Get-PSDrive, pipes, Select-Object - and write the script plainly. Quotes are safe in "
-        + "either tool: write the command exactly as you would type it. Do NOT put '| Out-File' or '>' in "
-        + "the script; let the tool return the output to you.\n"
-        + "- To capture a command's output into a file: RUN the command (its stdout/stderr is returned to you in "
-        + "the tool result), then write that exact returned text to the file with write_file. Do NOT redirect with "
-        + "'>' into a file and then describe the output from memory — redirected output is not visible to you.\n"
+        + "either tool: write the command exactly as you would type it.\n"
+        // The working area comes BEFORE the two rules that use it. It was written after them, with
+        // the second saying "the one exception is below" four bullets ahead of the exception and a
+        // blunt "do NOT redirect" in between - a forward reference a model reading in order never
+        // reaches.
+        + "- You have a working area of your own at '" + WorkspaceGuard.ScratchPrefix + "/'. Put things there that "
+        + "are FOR the job but are not the job: a helper script you want to run, a scratch copy, a command's output "
+        + "that was too long to come back in the tool result. It is an ordinary folder - write_file, read_file and "
+        + "the shell all reach it by that path - but nothing in it is part of your work: it is not shown to the "
+        + "reviewer, not included in what you changed, and not undone if the step is rejected. The workspace itself "
+        + "is for the deliverable. Do not leave working files there.\n"
+        + "- READING a command's output: it comes back in the tool result, and that is where to read it. Do not "
+        + "redirect with '>' or '| Out-File' merely to avoid reading it - output you sent to a file and did not "
+        + "open is output you have not seen, and you may not describe it. But the result is CUT at a few thousand "
+        + "characters and SAYS SO when it is: past that point redirecting is the only way to get the whole thing. "
+        + "Send it to '" + WorkspaceGuard.ScratchPrefix + "/', then read_file it, or search_files with \"path\": \""
+        + WorkspaceGuard.ScratchPrefix + "\" to find the error in a long build log without reading it a screenful "
+        + "at a time. REDIRECT WITH THE SHELL YOU ARE IN: in run_command that is '> path' and nothing else - it "
+        + "is cmd.exe, and Set-Content, Select-String, Out-File and every other cmdlet are PowerShell and will "
+        + "fail instantly with 'is not recognized'. Use run_powershell if you want a cmdlet or a pipe.\n"
+        // The old pair of rules here - "write that exact returned text with write_file" and "the
+        // file must contain the OUTPUT" - produced the very thing this rule set exists to stop.
+        // Followed literally on a 500 KB build log they write six thousand characters and the words
+        // "… (truncated)" into a file, and call it the command's output. copy_file exists for
+        // exactly this: it streams bytes and never decodes them, which is why it was added when
+        // read-then-write was found to be truncating large files silently.
+        + "- SAVING a command's output to a file somebody asked for: if the result came back WHOLE, write that "
+        + "exact text with write_file. If the result says it was cut, do NOT write_file it - that produces a "
+        + "fraction of the log in a file that looks complete. Redirect the command into '"
+        + WorkspaceGuard.ScratchPrefix + "/' instead and copy_file it into place, which copies every byte. Either "
+        + "way the file holds the command's OUTPUT, never the command line itself.\n"
         + "- If a command fails (non-zero exit code, or an error in its output), report the real error and fix the "
-        + "cause. Never substitute a plausible-looking placeholder value.\n"
-        + "- When asked to put a command's result/report into a file, the file must contain the command's OUTPUT "
-        + "(the exact text the tool returned under 'command output'), NEVER the command line itself.";
+        + "cause. Never substitute a plausible-looking placeholder value.";
 
     // Verifying a write by reading it back catches a weak local model's fabrication, but it costs an extra
     // round-trip that's wasteful on a strong model — so it's toggled via settings (VerifyWrites) rather than
     // baked into the always-on rules above.
     private const string ReadBackRule =
         "\n- After writing a file that should hold real data, read it back to confirm it contains the real output.";
+
+    /// <summary>
+    /// What to reach for when the answer is small.
+    ///
+    /// <para>Registering a tool is not offering it, and offering it is not making the case for it.
+    /// A model reaches for what it knows, and what every model knows is <c>read_file</c>: measured
+    /// 2026-09-12, a worker with read, search and list spent 114 calls and 88k prompt tokens on an
+    /// audit and wrote nothing, because every question it had could only be answered by reading
+    /// toward the answer. The sentence has to say WHEN to use these, not just that they exist -
+    /// "a number, a list of files, or a yes/no" is the shape of question that must stop costing
+    /// file content.</para>
+    /// </summary>
+    private const string AggregateReads =
+        "When what you need is a number, a list of files or a yes/no, do NOT read toward it: "
+        + "count_matches counts a pattern and names the files holding it, file_stats gives sizes and "
+        + "line counts before you open anything, and compare_files says whether two files are the "
+        + "same. ";
 
     // The role table, defined once. Instructions here are the BASE (pre-augmentation) text.
     //
@@ -72,33 +114,46 @@ public static class DefaultWorkers
             + "commands (run_command) and run "
             + "PowerShell (run_powershell — prefer it on Windows for WMI/CIM, Get-PSDrive, pipes), plus git and "
             + "docker tools for version control and containers. Use the "
+            + AggregateReads
+            + "Use the "
             + "tools to accomplish the request, then reply with a short confirmation of what you actually did.",
-            new[] { "write_file", "edit_file", "read_file", "search_files", "list_dir", "create_directory",
-                    "move_file", "copy_file", "delete_file", "run_command", "run_powershell", "git", "docker" },
+            new[] { "write_file", "edit_file", "read_file", "search_files",
+                    "count_matches", "file_stats", "compare_files", "list_dir", "create_directory",
+                    "move_file", "copy_file", "delete_file", "run_command", "run_powershell", "git", "docker",
+                    // Offered only where an SMTP account is configured - the tool is not
+                    // registered otherwise, so naming it here costs nothing until somebody
+                    // fills the section in.
+                    "send_email" },
             PermissionLevel.Execute),
 
         ("reviewer", "Reviewer",
             "You are a code reviewer and analyst. Investigate the workspace and explain findings. "
             + "Use search_files to locate things by content instead of reading files one by one. "
+            + AggregateReads
             + "You may ONLY read, search and list — you must not modify anything or run "
             + "commands. Report issues, risks and suggestions clearly.",
-            new[] { "read_file", "search_files", "list_dir" },
+            new[] { "read_file", "search_files", "count_matches", "file_stats", "compare_files",
+                    "list_dir" },
             PermissionLevel.Observe),
 
         ("ops", "Ops",
             "You are a DevOps/operations agent. Use the dedicated git and docker tools for version "
             + "control and containers; run_command/run_powershell for other shell (prefer run_powershell "
             + "on Windows for system/WMI queries); read files, search them by content (search_files) and "
-            + "list directories for context. Avoid "
+            + "list directories for context. " + AggregateReads + "Avoid "
             + "editing source files unless explicitly asked. Prefer safe, read-only commands first.",
-            new[] { "read_file", "search_files", "list_dir", "run_command", "run_powershell", "git", "docker" },
+            new[] { "read_file", "search_files", "count_matches", "file_stats", "compare_files",
+                    "list_dir", "run_command", "run_powershell", "git", "docker",
+                    "send_email" },
             PermissionLevel.Execute),
 
         ("writer", "Writer",
             "You are a technical writer. Create and edit documentation and text files, reading "
             + "existing files for context and using search_files to find where something is written. "
+            + AggregateReads
             + "You may also create folders, move files and copy them (copy_file - never read a file and write it back to copy it, which truncates anything large). Do not run shell commands.",
-            new[] { "write_file", "edit_file", "read_file", "search_files", "list_dir",
+            new[] { "write_file", "edit_file", "read_file", "search_files",
+                    "count_matches", "file_stats", "compare_files", "list_dir",
                     "create_directory", "move_file", "copy_file" },
             PermissionLevel.Execute),
     };

@@ -22,7 +22,6 @@ using Enactive.Core.Tools;
 public sealed class SearchFilesTool : ITool
 {
     private const int MaxMatches = 100;
-    private const int MaxFileBytes = 2 * 1024 * 1024;
     private const int MaxLineChars = 240;
     private const int MaxOutputChars = 12000;
 
@@ -30,7 +29,11 @@ public sealed class SearchFilesTool : ITool
         Name: "search_files",
         Description: "Search the workspace for a regular expression and return matching lines with "
                    + "their file and line number. Optionally restrict to file names matching a glob "
-                   + "(e.g. \"*.cs\"). Use this to FIND things instead of reading files one by one.",
+                   + "(e.g. \"*.cs\"). Use this to FIND things instead of reading files one by one. "
+                   + "Build output and your own working area are left out of a whole-workspace "
+                   + "sweep; to search inside one, name it with 'path' (e.g. \"" + WorkspaceGuard.ScratchPrefix
+                   + "\" to search a long command output you saved there). 'path' may name a single "
+                   + "FILE, which searches just that file.",
         JsonSchema: Schema);
 
     public PermissionLevel RequiredLevel => PermissionLevel.Observe;
@@ -74,11 +77,22 @@ public sealed class SearchFilesTool : ITool
 
         string searchRoot;
         try { searchRoot = WorkspacePaths.ResolveInside(ctx.WorkspaceRoot, subPath); }
+        catch (ReservedPathException) { return ToolResults.NotFound(ReservedPathException.Explanation); }
         catch (ArgumentException ex) { return ToolResults.Fail(ex.Message); }
 
-        // NotFound, not Fail: searching somewhere that does not exist is answered by saying so.
-        if (!Directory.Exists(searchRoot))
-            return ToolResults.NotFound($"Not a folder in this workspace: {subPath ?? "."}");
+        // A path that names ONE file is a search of that file, not a mistake.
+        //
+        // Measured 2026-09-20: a run asked for `error|failed|Passed!` in `build_output.txt` and was
+        // told "Not a folder in this workspace: build_output.txt" - about a file sitting in the
+        // workspace root, which it had listed a moment earlier. It then spent a turn on
+        // `for %f in (build_output.txt) do @echo %~zf bytes & findstr /n /i ...` to get what it had
+        // asked for. This is the same defect ListDirectoryTool was given the other half of a day
+        // before: a message that says "wrong path" about a path that is right. Answering is better
+        // than explaining, and searching one named file is a perfectly good question.
+        var one = File.Exists(searchRoot);
+
+        if (!one && !Directory.Exists(searchRoot))
+            return ToolResults.NotFound($"Not a folder or file in this workspace: {subPath ?? "."}");
 
         var output = new StringBuilder();
         var matches = 0;
@@ -94,13 +108,15 @@ public sealed class SearchFilesTool : ITool
 
         try
         {
-            foreach (var file in Enumerate(searchRoot, glob))
+            // A file named outright is searched whatever the glob says: naming it IS the filter,
+            // and the skip list is about where a walk WANDERS, not about what was asked for.
+            foreach (var file in one ? new[] { searchRoot } : WorkspaceScan.Files(searchRoot, glob))
             {
                 ct.ThrowIfCancellationRequested();
 
                 var info = new FileInfo(file);
-                if (info.Length > MaxFileBytes) { skippedLarge++; continue; }
-                if (Binary(file)) { skippedBinary++; continue; }
+                if (info.Length > WorkspaceScan.MaxFileBytes) { skippedLarge++; continue; }
+                if (WorkspaceScan.Binary(file)) { skippedBinary++; continue; }
 
                 scanned++;
                 var hit = false;
@@ -116,7 +132,7 @@ public sealed class SearchFilesTool : ITool
 
                     var shown = line.Trim();
                     if (shown.Length > MaxLineChars) shown = shown[..MaxLineChars] + "…";
-                    output.Append(Relative(ctx.WorkspaceRoot, file)).Append(':').Append(lineNumber)
+                    output.Append(WorkspaceScan.Relative(ctx.WorkspaceRoot, file)).Append(':').Append(lineNumber)
                           .Append(": ").AppendLine(shown);
 
                     if (matches >= MaxMatches || output.Length >= MaxOutputChars) { capped = true; break; }
@@ -172,7 +188,7 @@ public sealed class SearchFilesTool : ITool
 
         var parts = new List<string>(2);
         if (large > 0)
-            parts.Add($"{large} file(s) larger than {MaxFileBytes / (1024 * 1024)} MB");
+            parts.Add($"{large} file(s) larger than {WorkspaceScan.MaxFileBytes / (1024 * 1024)} MB");
         if (binary > 0)
             parts.Add($"{binary} binary file(s)");
 
@@ -191,58 +207,6 @@ public sealed class SearchFilesTool : ITool
             ["skippedTooLarge"] = skippedLarge,
             ["skippedBinary"] = skippedBinary
         };
-
-    /// <summary>
-    /// Files under the search root, skipping the places nobody means to search: the workspace's own
-    /// state folder, and the build and dependency trees that would otherwise supply thousands of
-    /// matches from code the user did not write.
-    /// </summary>
-    private static IEnumerable<string> Enumerate(string root, string? glob)
-    {
-        var options = new EnumerationOptions
-        {
-            RecurseSubdirectories = true,
-            IgnoreInaccessible = true,
-            AttributesToSkip = FileAttributes.ReparsePoint   // a link is followed by nothing here
-        };
-
-        foreach (var file in Directory.EnumerateFiles(root, string.IsNullOrWhiteSpace(glob) ? "*" : glob, options))
-        {
-            if (!Skipped(file))
-                yield return file;
-        }
-    }
-
-    private static readonly string[] SkippedFolders =
-        { WorkspaceGuard.ReservedFolder, "bin", "obj", "node_modules", ".git", ".vs", "dist", "packages" };
-
-    private static bool Skipped(string file)
-    {
-        foreach (var segment in file.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
-            foreach (var skip in SkippedFolders)
-                if (string.Equals(segment, skip, WorkspaceGuard.Comparison))
-                    return true;
-        return false;
-    }
-
-    /// <summary>
-    /// A NUL byte in the first few KB means this is not text. Cheap, and wrong only for files that
-    /// would be unreadable in the output anyway.
-    /// </summary>
-    private static bool Binary(string file)
-    {
-        try
-        {
-            using var stream = File.OpenRead(file);
-            Span<byte> head = stackalloc byte[Math.Min(4096, (int)Math.Max(1, stream.Length))];
-            var read = stream.Read(head);
-            return head[..read].IndexOf((byte)0) >= 0;
-        }
-        catch { return true; }   // unreadable is as good as binary for this purpose
-    }
-
-    private static string Relative(string root, string file)
-        => Path.GetRelativePath(root, file).Replace(Path.DirectorySeparatorChar, '/');
 
     private static string? Text(JsonElement root, string name)
         => root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String

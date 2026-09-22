@@ -1,5 +1,6 @@
 namespace Enactive.Core.Context;
 
+using System.Text.RegularExpressions;
 using Enactive.Core.Tools;
 
 /// <summary>
@@ -69,9 +70,9 @@ public static class ShellGeography
             ? StringComparer.Ordinal
             : StringComparer.OrdinalIgnoreCase);
 
-        foreach (var candidate in Candidates(Tokenize(command!)))
+        foreach (var candidate in Candidates(Tokenize(WithLiteralsResolved(command!)), roots[0]))
         {
-            if (Classify(candidate, roots[0], roots) is not { } write)
+            if (Classify(candidate, roots) is not { } write)
                 continue;
 
             // One path named twice in one command line is one question, not two.
@@ -80,6 +81,57 @@ public static class ShellGeography
         }
 
         return found;
+    }
+
+    /// <summary>
+    /// Variables the script gives a literal value to, substituted into the rest of it.
+    ///
+    /// <para><b>Why.</b> The worker is told to put helper scripts in
+    /// <c>.enactive/scratch/</c>, and the natural PowerShell way to build one is to name the root
+    /// once: <c>$root = ".enactive\scratch\probe"; New-Item -Path "$root\Calc"</c>. Every token
+    /// after that is a variable, so every one of them was reported as a write whose place is
+    /// unknown - and a question about a path that is plainly inside the workspace was put to the
+    /// person on every such command. Measured 2026-09-20: a run did exactly this, the question was
+    /// answered conservatively, and the agent was refused the working area it had been instructed
+    /// to use.</para>
+    ///
+    /// <para><b>What it may claim.</b> Nothing new. This does not decide anything - it makes the
+    /// same guess with more of the command read. A variable it cannot resolve stays unknown and
+    /// still asks; a variable it resolves is then judged like any written-down path, which can
+    /// come out inside OR outside. Substituting wrongly - a name reassigned later, a value built
+    /// from another variable - can hide a write, and that is the same false negative this class
+    /// already documents as expected: the adversary here is a mistaken agent, not a clever one.
+    /// </para>
+    ///
+    /// <para>Only literal assignments, and only from this command. An assignment whose value is
+    /// itself an expression teaches nothing and is left alone.</para>
+    /// </summary>
+    private static string WithLiteralsResolved(string command)
+    {
+        // $name = "literal"  /  $name='literal'  — PowerShell, which is where this bites.
+        var assignments = Regex.Matches(
+            command, @"\$(?<name>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?<q>[""'])(?<value>[^""'$]*)\k<q>",
+            RegexOptions.None, TimeSpan.FromSeconds(1));
+
+        if (assignments.Count == 0)
+            return command;
+
+        var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (Match m in assignments)
+            values[m.Groups["name"].Value] = m.Groups["value"].Value;
+
+        // The assignment itself is not a write, and leaving it in would turn the left-hand side
+        // into a candidate the moment its name is replaced by a path.
+        var text = Regex.Replace(
+            command, @"\$[A-Za-z_][A-Za-z0-9_]*\s*=\s*([""'])[^""'$]*\1\s*;?", " ",
+            RegexOptions.None, TimeSpan.FromSeconds(1));
+
+        foreach (var (name, value) in values)
+            text = Regex.Replace(
+                text, @"\$\{?" + Regex.Escape(name) + @"\}?", value.Replace("$", "$$"),
+                RegexOptions.IgnoreCase, TimeSpan.FromSeconds(1));
+
+        return text;
     }
 
     /// <summary>
@@ -144,7 +196,11 @@ public static class ShellGeography
     }
 
     /// <summary>A token that some part of the command line put in a writing position.</summary>
-    private readonly record struct Candidate(string Token, string Because);
+    /// <param name="Base">
+    /// The directory a RELATIVE token is relative to — the workspace root, unless a <c>cd</c>
+    /// earlier in the same script moved somewhere else. See <see cref="Candidates"/>.
+    /// </param>
+    private readonly record struct Candidate(string Token, string Because, string Base = "");
 
     /// <summary>
     /// Splits the line into commands at <c>|</c>, <c>&amp;&amp;</c>, <c>&amp;</c>, <c>;</c> and
@@ -155,21 +211,68 @@ public static class ShellGeography
     /// COPY is its destination. Reading `type a.txt | Out-File C:\b.txt` as one long argument list
     /// loses both facts.</para>
     /// </summary>
-    private static IEnumerable<Candidate> Candidates(IReadOnlyList<string> tokens)
+    private static IEnumerable<Candidate> Candidates(IReadOnlyList<string> tokens, string workspaceRoot)
     {
+        // Where a relative path currently points. A script that moves and then writes was reading
+        // its own paths against the root, which is how the working area the worker is TOLD to use
+        // came out looking like an escape - see WalksTo.
+        var cwd = workspaceRoot;
+
         var segment = new List<string>();
         foreach (var token in tokens)
         {
             if (IsSeparator(token))
             {
-                foreach (var found in FromOneCommand(segment)) yield return found;
+                foreach (var found in FromOneCommand(segment)) yield return found with { Base = cwd };
+                cwd = WalksTo(segment, cwd) ?? cwd;
                 segment.Clear();
                 continue;
             }
             segment.Add(token);
         }
 
-        foreach (var found in FromOneCommand(segment)) yield return found;
+        foreach (var found in FromOneCommand(segment)) yield return found with { Base = cwd };
+    }
+
+    /// <summary>The verbs that move a shell somewhere else.</summary>
+    private static readonly HashSet<string> Walks =
+        new(StringComparer.OrdinalIgnoreCase) { "cd", "chdir", "sl", "set-location", "pushd", "push-location" };
+
+    /// <summary>
+    /// Where this command leaves the shell, or null when it does not move it or does not say.
+    ///
+    /// <para><b>Measured 2026-09-20.</b> A run wrote
+    /// <c>cd TicTacToe; dotnet test … | Set-Content ..\.enactive\scratch\list_tests.txt</c>. The
+    /// agent's reasoning was right: after the <c>cd</c>, <c>..</c> IS the workspace root, and that
+    /// is exactly where the file landed. This class resolved the token against the root instead,
+    /// made it <c>&lt;root&gt;\..\.enactive\scratch</c> — one level above the workspace — and put
+    /// a question to the person about the working area the worker had been instructed to use.
+    /// Both geography questions ever raised were this, and both were wrong.</para>
+    ///
+    /// <para>The class doc lists "a <c>cd</c> before the interesting part" among the things that
+    /// walk past this untouched, and it does — but it was written expecting a false NEGATIVE.
+    /// Following the <c>cd</c> fixes both directions at once: a script that moves OUTSIDE and then
+    /// writes relatively used to be judged against the root and look innocent, and now does not.
+    /// Like <see cref="WithLiteralsResolved"/>, this decides nothing new; it makes the same guess
+    /// with more of the command read, and a destination it cannot read leaves the guess alone.</para>
+    /// </summary>
+    private static string? WalksTo(IReadOnlyList<string> segment, string cwd)
+    {
+        if (segment.Count < 2 || !Walks.Contains(Unquote(segment[0])))
+            return null;
+
+        var target = Unquote(segment[1]);
+        if (target.Length == 0 || IsFlag(target) || Expands(target))
+            return null;
+
+        try
+        {
+            return Path.IsPathRooted(target) ? Full(target) : Full(Path.Combine(cwd, target));
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return null;
+        }
     }
 
     private static IEnumerable<Candidate> FromOneCommand(IReadOnlyList<string> tokens)
@@ -266,7 +369,7 @@ public static class ShellGeography
     /// Decides whether one candidate token really names somewhere outside, or null when it does
     /// not name a place at all.
     /// </summary>
-    private static OutsideWrite? Classify(Candidate candidate, string workspaceRoot, IReadOnlyList<string> roots)
+    private static OutsideWrite? Classify(Candidate candidate, IReadOnlyList<string> roots)
     {
         var token = Unquote(candidate.Token);
 
@@ -289,7 +392,8 @@ public static class ShellGeography
         {
             full = Path.IsPathRooted(token)
                 ? Full(token)
-                : Path.GetFullPath(Path.Combine(Full(workspaceRoot), token));
+                : Path.GetFullPath(Path.Combine(
+                    candidate.Base.Length > 0 ? Full(candidate.Base) : Full(roots[0]), token));
         }
         catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
         {
@@ -338,6 +442,17 @@ public static class ShellGeography
             if (c is '"' or '\'')
             {
                 quote = c;
+                continue;
+            }
+
+            // A line break ends a command as surely as a semicolon does. It used to be plain
+            // whitespace, so a ten-line script was ONE segment and every positional rule below -
+            // "the first token is a verb", "the last argument of a copy is its destination" - was
+            // being applied across lines that have nothing to do with each other.
+            if (c is '\n')
+            {
+                Flush();
+                tokens.Add("\n");
                 continue;
             }
 
@@ -424,7 +539,7 @@ public static class ShellGeography
 
     // ── Small questions about one token ──────────────────────────────────────
 
-    private static bool IsSeparator(string token) => token is "|" or ";" or "&";
+    private static bool IsSeparator(string token) => token is "|" or ";" or "&" or "\n";
 
     private static string Next(IReadOnlyList<string> tokens, int index)
         => index < tokens.Count && tokens[index] is { } next && next is not (">" or ">>") && !IsSeparator(next)

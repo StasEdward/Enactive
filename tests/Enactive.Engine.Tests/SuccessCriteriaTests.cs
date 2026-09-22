@@ -202,11 +202,19 @@ public sealed class SuccessCriteriaTests
         Assert.Equal(RunOutcomeKind.Failed, report.Apply(RunOutcomeKind.Completed));
     }
 
+    /// <summary>
+    /// A check may never excuse a FAILURE, and never overrides the person.
+    ///
+    /// <para>Something went wrong that is known about, or somebody stopped the run. A green build
+    /// on top of either would bury it. <c>Incomplete</c> used to be in this list and was taken out
+    /// on 2026-09-21 — see <see cref="A_passing_check_answers_an_Incomplete"/> — because it is the
+    /// one outcome that means "we could not establish that it finished", which is a question
+    /// rather than a verdict.</para>
+    /// </summary>
     [Theory]
     [InlineData(RunOutcomeKind.Failed)]
-    [InlineData(RunOutcomeKind.Incomplete)]
     [InlineData(RunOutcomeKind.Cancelled)]
-    public void Checks_can_hold_a_run_back_and_never_promote_one(RunOutcomeKind already)
+    public void Checks_never_excuse_a_failure_or_a_cancellation(RunOutcomeKind already)
     {
         var allGood = new SuccessReport(new[]
         {
@@ -215,6 +223,73 @@ public sealed class SuccessCriteriaTests
 
         Assert.Equal(already, allGood.Apply(already));
     }
+
+    /// <summary>
+    /// Measured 2026-09-21. A run was asked to add a method and make the tests pass. It added the
+    /// method, wrote two tests, and the check its own planner had proposed BEFORE any of the work —
+    /// <c>dotnet test --filter "FullyQualifiedName~Multiply"</c> — passes with exit 0 against the
+    /// workspace the run left behind. It was reported Incomplete over two shell calls that were
+    /// never formally closed.
+    ///
+    /// <para>The proof was written, parsed, carried on the plan and never run, because
+    /// verification only happened on a run the transcript-readers had already called done. So the
+    /// only guard that looks at the workspace was silent in exactly the cases where the ones that
+    /// read the transcript are wrong.</para>
+    /// </summary>
+    [Fact]
+    public void A_passing_check_answers_an_Incomplete()
+    {
+        var report = new SuccessReport(new[]
+        {
+            new CriterionResult("tests pass", "dotnet test", true, CriterionOutcome.Passed, 0, null)
+        });
+
+        Assert.Equal(RunOutcomeKind.Completed, report.Apply(RunOutcomeKind.Incomplete));
+    }
+
+    /// <summary>
+    /// And it says what it overruled. The old reason is real information — two shell calls really
+    /// were left unclosed — and dropping it would be the mirror of the mistake being fixed: one
+    /// judge silently overwriting the other.
+    /// </summary>
+    [Fact]
+    public void Overruling_keeps_what_the_transcript_had_said()
+    {
+        var report = new SuccessReport(new[]
+        {
+            new CriterionResult("tests pass", "dotnet test", true, CriterionOutcome.Passed, 0, null)
+        });
+
+        var why = report.Overruling("unresolved tool call: run_command {\"command\":\"dotnet test\"}");
+
+        Assert.Contains("tests pass", why, StringComparison.Ordinal);
+        Assert.Contains("unresolved tool call", why, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// PROMOTION NEEDS PROOF, not merely the absence of an objection. A proposed check that could
+    /// not be evaluated blocks nothing — that is what makes proposed checks safe to arm — but a
+    /// report made entirely of those has established nothing, and must not turn an Incomplete run
+    /// green.
+    /// </summary>
+    [Fact]
+    public void A_check_that_could_not_run_does_not_answer_anything()
+    {
+        var report = new SuccessReport(new[]
+        {
+            new CriterionResult("tests pass", "dotnet test", true, CriterionOutcome.Unknown, null,
+                                "the shell would not start it", CriterionOrigin.Proposed)
+        });
+
+        Assert.Empty(report.Blocking);
+        Assert.Equal(RunOutcomeKind.Incomplete, report.Apply(RunOutcomeKind.Incomplete));
+    }
+
+    /// <summary>A run with no checks at all is not promoted by having nothing to say.</summary>
+    [Fact]
+    public void An_Incomplete_run_with_no_checks_stays_Incomplete()
+        => Assert.Equal(RunOutcomeKind.Incomplete,
+                        SuccessReport.NothingToCheck.Apply(RunOutcomeKind.Incomplete));
 
     [Fact]
     public void With_nothing_to_check_the_outcome_is_untouched()

@@ -12,20 +12,35 @@
 
         <local:TitleBarView Grid.Row="0" />
 
-        <!-- Everything the app shows as plain text lands here: the environment probe, the
-             project memory digest, a file an artifact wrote, a diff. Read-only, monospaced
-             and never wrapped - these are reports whose columns mean something. -->
+        <!-- Everything the app shows as a document lands here: the environment probe, the project
+             memory digest, a file an artifact wrote, a diff. A file whose type has a renderer gets
+             it; everything else is its own text, read-only, monospaced and never wrapped, because
+             those are reports whose columns mean something. -->
         <DockPanel Grid.Row="1" LastChildFill="True" Margin="12,10,12,12">
 
-            <Grid DockPanel.Dock="Bottom" ColumnDefinitions="*,Auto" Margin="0,10,0,0">
+            <Grid DockPanel.Dock="Bottom" ColumnDefinitions="*,Auto,Auto" Margin="0,10,0,0">
                 <TextBlock Grid.Column="0" x:Name="StatusText" Classes="hint"
                            VerticalAlignment="Center" />
-                <Button Grid.Column="1" x:Name="CopyButton" Content="Copy all" Padding="12,4" />
+
+                <!-- Shown only when there is something to toggle BETWEEN. A renderer that handles
+                     a subset must never be the only way to see a file: whatever it did not
+                     understand is readable here. -->
+                <ToggleButton Grid.Column="1" x:Name="ShowSource" Content="Source"
+                              IsVisible="False" Margin="0,0,8,0"
+                              ToolTip.Tip="Show the file exactly as it is on disk." />
+
+                <Button Grid.Column="2" x:Name="CopyButton" Content="Copy all" Padding="12,4" />
             </Grid>
 
-            <TextBox x:Name="ContentBox" IsReadOnly="True" AcceptsReturn="True"
-                     TextWrapping="NoWrap"
-                     FontFamily="Consolas, Menlo, monospace" FontSize="12" />
+            <Panel>
+                <ScrollViewer x:Name="Rendered" IsVisible="False">
+                    <ContentControl x:Name="Body" Margin="0,0,12,0" />
+                </ScrollViewer>
+
+                <TextBox x:Name="ContentBox" IsReadOnly="True" AcceptsReturn="True"
+                         TextWrapping="NoWrap"
+                         FontFamily="Consolas, Menlo, monospace" FontSize="12" />
+            </Panel>
         </DockPanel>
     </Grid>
 </Window>

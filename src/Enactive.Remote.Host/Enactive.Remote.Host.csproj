@@ -10,7 +10,7 @@
       That is why delivery was built and proven first - none of it depends on the engine, and it is
       the part that has to be right when the network is not.
     -->
-    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="10.0.0" />
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="10.0.12" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.12" />
 
     <!--

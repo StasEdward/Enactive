@@ -96,7 +96,13 @@ public static class ProofAudit
     /// The verdict on a claim, given the calls the step actually made — in the same order and
     /// numbering the evidence used.
     /// </summary>
-    public static ProofVerdict Check(ProofClaim claim, IReadOnlyList<ExecutedAction> shown)
+    /// <param name="workspaceRoot">
+    /// Where the workspace is, so "it changed the workspace" can be answered by the path a call
+    /// touched rather than by the tool's name alone. Null keeps the older, blunter answer: every
+    /// write counts, including one into the worker's own scratch area.
+    /// </param>
+    public static ProofVerdict Check(
+        ProofClaim claim, IReadOnlyList<ExecutedAction> shown, string? workspaceRoot = null)
     {
         switch (claim.Kind)
         {
@@ -138,8 +144,17 @@ public static class ProofAudit
         // answer whatever they say - a write that happened is not undone by pointing at a read.
         if (nothingToDo)
         {
+            // By the PATH, not by the tool's name, when the caller can say where the workspace is.
+            // A step that wrote itself a helper script under .enactive/scratch/ on the way to
+            // finding that nothing needed doing has not changed the project - the stores do not
+            // journal that write, the reviewer is not shown it, and a rejection does not undo it -
+            // and refusing its report over it would be this check calling the agent's own notes
+            // "the workspace". Null root keeps the old answer, which counts every write.
             var changed = shown
-                .Where(a => a.Outcome == ActionOutcome.Succeeded && MutatingTools.Changes(a.Tool))
+                .Where(a => a.Outcome == ActionOutcome.Succeeded)
+                .Where(a => workspaceRoot is null
+                    ? MutatingTools.Changes(a.Tool)
+                    : MutatingTools.ChangedTheWorkspace(a.Tool, a.Arguments, workspaceRoot))
                 .Select(a => a.Tool)
                 .Distinct(StringComparer.Ordinal)
                 .ToArray();

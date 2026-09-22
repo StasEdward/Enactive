@@ -142,12 +142,24 @@ jobs:
         if: success()
         run: dotnet publish src/Enactive.Remote.Gateway/Enactive.Remote.Gateway.csproj --configuration Release --runtime linux-x64 --no-self-contained --output publish
 
+      # Only on a PUSH, and only for a week.
+      #
+      # The deploy timer asks GitHub for the newest green run with `event=push` (§4 of
+      # Docs/REMOTE_OPERATIONS.md), so an artifact from a pull_request run can never be installed by
+      # anything - and once a PR is open, every push produces BOTH runs, so half of everything
+      # uploaded here was unreachable by construction.
+      #
+      # It stopped being free on 2026-09-22: the account's artifact storage filled up (217 live
+      # artifacts, ~1.9 GB) and every build on every branch began failing on the upload, with
+      # "Artifact storage quota has been hit" - a red pipeline that had nothing to do with the code
+      # in it. Thirty days of retention served nobody either: the timer installs the newest green
+      # build within ten minutes, and nothing reads an older one.
       - name: Keep it
-        if: success()
+        if: success() && github.event_name == 'push'
         uses: actions/upload-artifact@v4
         with:
           # The commit is in the name because "which build is on the server" is the first question
           # of every incident, and a file called gateway.zip cannot answer it.
           name: gateway-${{ github.sha }}
           path: publish
-          retention-days: 30
+          retention-days: 7

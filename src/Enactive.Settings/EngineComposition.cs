@@ -3,6 +3,7 @@ namespace Enactive.Settings;
 using Enactive.Agents;
 using Enactive.Core.Orchestration;
 using Enactive.Core.Permissions;
+using Enactive.Core.Mail;
 using Enactive.Core.Providers;
 using Enactive.Core.Tools;
 using Enactive.Core.Workers;
@@ -108,6 +109,31 @@ public static class EngineComposition
             workers.Default.ModelPolicy.Preferred.Model);
     }
 
+    /// <summary>
+    /// The mail account <c>send_email</c> uses, as the tool wants it — or
+    /// <see cref="MailAccount.None"/> when the person has not filled the section in, and then the
+    /// tool is not registered at all.
+    ///
+    /// <para>Here, like <see cref="Descriptors"/>, because a tool takes what it needs as data and
+    /// <c>Enactive.Tools</c> knows nothing about <c>AppSettings</c>. One place turns settings into
+    /// engine parts, and this is it.</para>
+    /// </summary>
+    public static MailAccount Mail(AppSettings settings)
+        => settings.Smtp.Configured
+            ? new MailAccount(
+                settings.Smtp.Host.Trim(),
+                settings.Smtp.Port,
+                settings.Smtp.StartTls,
+                settings.Smtp.User.Trim(),
+                settings.Smtp.Password,
+                settings.Smtp.From.Trim(),
+                settings.Smtp.Recipients
+                    .Select(r => r.Trim())
+                    .Where(r => r.Length > 0)
+                    .ToArray())
+                { SendWithoutAsking = settings.Smtp.SendWithoutAsking }
+            : MailAccount.None;
+
     /// <summary>Every configured endpoint, as the provider factory wants them.</summary>
     public static IReadOnlyList<ProviderDescriptor> Descriptors(AppSettings settings)
         => settings.Providers.Select(p => new ProviderDescriptor(
@@ -118,7 +144,8 @@ public static class EngineComposition
             string.IsNullOrEmpty(p.ApiKey) ? null : p.ApiKey,
             p.Models,
             p.Headers.Count > 0 ? p.Headers : null,
-            p.MaxTokens)).ToList();
+            p.MaxTokens,
+            p.ContextWindowTokens)).ToList();
 
     /// <summary>
     /// The configured team, or the built-in one when a person has never edited it. Global

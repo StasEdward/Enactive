@@ -59,7 +59,10 @@ internal static class RunReplay
 
             case nameof(EventKind.ErrorObserved):
                 card.AddNote("⚠ " + e.Summary);
-                card.SetNeedsAttention();
+                // Opened, not repainted - the same rule the live feed follows. In a replay the
+                // step's final status is already known and would overwrite the colour anyway, so
+                // the only thing an amber edge here could do is disagree with it for a moment.
+                card.ExpandForAttention();
                 break;
 
             // A refused call is neither a tool that ran nor a remark, and it is told apart by the

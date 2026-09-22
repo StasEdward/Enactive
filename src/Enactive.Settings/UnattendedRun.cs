@@ -103,6 +103,10 @@ public static class UnattendedRun
         var tools = await McpRunTools.ConnectAsync(
             environment.BuiltInTools, environment.McpServers, workspace.RootPath, ct);
 
+        // The same line the desktop writes. A scheduled run is the one nobody is watching, which is
+        // where a server that starts and is never used costs the most and shows the least.
+        environment.Log.Info(LogSource.Tool, tools.Summary());
+
         try
         {
             var settings = environment.Settings;
@@ -130,6 +134,7 @@ public static class UnattendedRun
                 router: environment.Router,
                 reviewRetries: settings.ReviewRetries,
                 successRetries: settings.SuccessRetries,
+                proposeChecks: settings.ProposeChecks,
                 numCtx: settings.NumCtx,
                 disableThinking: settings.DisableThinking,
                 maxParallelSteps: settings.MaxParallelSteps,

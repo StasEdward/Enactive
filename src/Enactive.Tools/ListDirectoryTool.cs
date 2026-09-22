@@ -30,6 +30,35 @@ public sealed class ListDirectoryTool : ITool
             return Task.FromResult(ToolResults.Unreadable($"Invalid arguments JSON: {ex.Message}"));
         }
 
+        // The one folder inside the workspace's own state that tools may use is the working area,
+        // and until now the way to it could not be WALKED: the root listing shows '.enactive/', the
+        // worker's instructions say its own area is under it, and opening it was refused. The door
+        // was shown and then shut - measured twice on 2026-09-21, in two live runs, and in one of
+        // them the refused look was one of the two unresolved calls that failed the run.
+        //
+        // So a listing of the state folder answers with the part of it that is the model's: one
+        // entry, and a sentence about the rest. Nothing is granted that was not reachable already -
+        // '.enactive/scratch/' has been listable, readable and writable all along - what changes is
+        // that it can be found by looking instead of only by knowing.
+        if (WorkspaceGuard.IsReservedRoot(ctx.WorkspaceRoot, path))
+        {
+            // The area is made when a run starts (ScratchArea.Ensure), so the ordinary answer is
+            // that it is there. Checked rather than asserted: the first version of this printed
+            // "scratch/" unconditionally, which meant a listing promised a folder that list_dir
+            // itself would then refuse - a defect of exactly the kind this carve-out was added to
+            // remove. A test that wrote a file there first could never have caught it.
+            var area = ScratchArea.PathIn(ctx.WorkspaceRoot);
+            var there = Directory.Exists(area);
+
+            return Task.FromResult(ToolResults.Ok(
+                output: (there ? WorkspaceGuard.ScratchFolder + "/" + Environment.NewLine : "")
+                      + $"(the rest of '{WorkspaceGuard.ReservedFolder}' is the workspace's own "
+                      + "state - its undo journal, approvals and checkpoints - and tools do not go "
+                      + $"in there. '{WorkspaceGuard.ScratchPrefix}/' is yours"
+                      + (there ? "" : ", and writing anything into it will create it") + ".)",
+                metadata: new Dictionary<string, object?> { ["entries"] = there ? 1 : 0 }));
+        }
+
         try
         {
             var full = WorkspacePaths.ResolveInside(ctx.WorkspaceRoot, path);
@@ -62,6 +91,21 @@ public sealed class ListDirectoryTool : ITool
             }
 
             // NotFound, not Fail: a listing of somewhere that is not there has answered the question.
+            //
+            // But say WHICH thing is not there. A path that exists and is a file is not a wrong
+            // path, and "Directory not found" sends the reader looking for a typo instead of at
+            // the request - the same confusion delete_file guards against in the other direction,
+            // where a directory would have been reported as a file that does not exist.
+            //
+            // Seen in a real run, 2026-09-20 16:05: list_dir on TicTacToe.csproj, told "Directory
+            // not found", and the model called it AGAIN on the same path before working out for
+            // itself that it wanted read_file. Two turns and two model calls spent on a message
+            // that described the wrong problem.
+            if (!onDisk && !proposed && File.Exists(full))
+                return Task.FromResult(ToolResults.NotFound(
+                    $"'{path}' is a file, not a directory — it IS there, so this is not a wrong "
+                    + "path. Use read_file to read it, or list_dir on the folder that contains it."));
+
             if (!onDisk && !proposed)
                 return Task.FromResult(ToolResults.NotFound($"Directory not found: {path ?? "."}"));
 
@@ -71,6 +115,13 @@ public sealed class ListDirectoryTool : ITool
             return Task.FromResult(ToolResults.Ok(
                 output: listing,
                 metadata: new Dictionary<string, object?> { ["count"] = entries.Count }));
+        }
+        // A read refused for being the workspace's own state has ANSWERED: the model asked
+        // whether it could look there and was told no, definitively. Nothing is half-done and
+        // there is nothing to retry, so it must not hold the step open. See ReservedPathException.
+        catch (ReservedPathException)
+        {
+            return Task.FromResult(ToolResults.NotFound(ReservedPathException.Explanation));
         }
         catch (Exception ex)
         {

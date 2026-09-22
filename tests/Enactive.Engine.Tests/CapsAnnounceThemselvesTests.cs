@@ -54,7 +54,21 @@ public sealed class CapsAnnounceThemselvesTests
         ["SearchFilesTool.MaxMatches"] = nameof(A_search_that_stops_early_says_it_stopped),
         ["SearchFilesTool.MaxOutputChars"] = nameof(A_search_that_stops_early_says_it_stopped),
         ["SearchFilesTool.MaxLineChars"] = nameof(A_very_long_matching_line_is_shown_cut),
-        ["SearchFilesTool.MaxFileBytes"] = nameof(A_file_too_large_to_search_is_reported_not_skipped_in_silence),
+        // Moved out of SearchFilesTool when count_matches and file_stats had to walk the workspace
+        // the same way. One skip list and one size ceiling for every tool that scans, so a count and
+        // a search can never disagree about which files exist.
+        ["WorkspaceScan.MaxFileBytes"] = nameof(A_file_too_large_to_search_is_reported_not_skipped_in_silence),
+        ["CompareFilesTool.MaxShownChars"] = "A_very_long_differing_line_is_shown_cut",
+        // Not a cap on an ANSWER but on what the transcript remembers of a call already made. It
+        // announces itself the same way - the head, then the exact length - because a remembered
+        // argument that looked whole would have the model believe it wrote 200 characters.
+        ["Transcript.MaxRememberedValueChars"] = "A_file_sized_argument_is_remembered_by_its_head_and_its_length",
+        ["Transcript.RememberedHeadChars"] = "A_file_sized_argument_is_remembered_by_its_head_and_its_length",
+        // A cap on how many FILES are listed, not how many characters. The totals above the list
+        // stay complete - which is the whole difference between this and a search that stops early,
+        // and the reason the notice has to say so rather than just trailing off.
+        ["CountMatchesTool.MaxFilesListed"] = "A_count_over_many_files_lists_some_and_says_the_totals_still_hold",
+        ["FileStatsTool.MaxFilesListed"] = "Stats_over_many_files_list_the_largest_and_say_the_totals_still_hold",
         ["WriteFileTool.ShrinkGuardFloorBytes"] = "The_rule_itself",
         // Caught by this census the day it was written, which is what the census is for: a new
         // constant with "Chars" in its name and nothing driving it past its limit.
@@ -63,7 +77,10 @@ public sealed class CapsAnnounceThemselvesTests
         // The floor under a shared budget: with enough calls each gets very little, and what must
         // never be lost is the LIST of them.
         ["ExecutionJournal.MinOutputChars"] = "A_list_too_long_to_show_says_how_much_is_missing",
-        ["ExecutionJournal.ShortenedNoticeChars"] = "A_shortened_result_says_so_and_says_the_call_happened"
+        ["ExecutionJournal.ShortenedNoticeChars"] = "A_shortened_result_says_so_and_says_the_call_happened",
+        // The digest that replaced the excerpt for logs too large to hold. Its own caps: how much
+        // of one record's message survives, and how many timeline entries it will list.
+        ["LogDigest.MessageChars"] = "A_message_too_long_for_the_digest_is_cut_and_says_so"
     };
 
     /// <summary>
@@ -149,19 +166,40 @@ public sealed class CapsAnnounceThemselvesTests
         }
     }
 
-    private static readonly string[] Vocabulary = { "Chars", "Bytes", "Lines", "Matches" };
+    // "Files" joined the vocabulary with the counting tools, which cap how many FILES they list
+    // rather than how many characters they print - the same class of limit (how much of the answer
+    // is shown) in a unit the census could not see. Widening it was measured rather than assumed:
+    // it surfaced exactly the two new constants, so it costs nothing and closes the hole a
+    // count-shaped cap would otherwise slip through.
+    private static readonly string[] Vocabulary = { "Chars", "Bytes", "Lines", "Matches", "Files" };
 
     // ── one per limit: the code, past the cap, saying so ────────────────────
 
-    /// <summary>ProcessExec.MaxOutputChars — a build log longer than the model is shown.</summary>
+    /// <summary>
+    /// ProcessExec.MaxOutputChars — a build log longer than the model is shown, and the part it
+    /// is shown.
+    ///
+    /// <para>This used to assert only that the word "truncated" appeared, which the head-only cut
+    /// satisfied while throwing away the answer. A program reports its outcome LAST: on 2026-09-20
+    /// a step wrote its tests, ran them, and could not tell whether they had passed, because the
+    /// summary was past the cut. So the assertion is now on what survives.</para>
+    /// </summary>
     [Fact]
     public void Command_output_past_the_cap_says_it_was_truncated()
     {
-        var result = ProcessExec.BuildResult(
-            "Command", 0, string.Join('\n', Enumerable.Range(0, 2_000).Select(i => $"line {i} of a long build")), "");
+        var log = string.Join('\n', Enumerable.Range(0, 2_000).Select(i => $"line {i} of a long build"))
+                + "\nPassed!  - Failed: 0, Passed: 22, Skipped: 0";
+
+        var result = ProcessExec.BuildResult("Command", 0, log, "");
 
         Assert.True(result.Success);
-        Assert.Contains("truncated", result.Output, StringComparison.Ordinal);
+        Assert.Contains("not shown here", result.Output, StringComparison.Ordinal);
+
+        // The verdict is the whole reason a command was run, and it is the last thing printed.
+        Assert.Contains("Passed!  - Failed: 0, Passed: 22", result.Output, StringComparison.Ordinal);
+
+        // And the start, so the model can still tell what it is looking at.
+        Assert.Contains("line 0 of a long build", result.Output, StringComparison.Ordinal);
     }
 
     /// <summary>And not when it fits — a notice on ordinary output would teach the model to distrust all of it.</summary>

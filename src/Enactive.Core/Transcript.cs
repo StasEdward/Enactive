@@ -1,5 +1,6 @@
 namespace Enactive.Core.Chat;
 
+using System.Text.Json;
 using Enactive.Core.Tools;
 
 /// <summary>
@@ -23,6 +24,107 @@ public static class Transcript
 {
     /// <summary>What is left where a tool call's arguments were. Valid JSON, because it is still sent as arguments.</summary>
     public const string ElidedArguments = """{"_elided":"arguments dropped to fit the context window"}""";
+
+    // ── what a tool call is REMEMBERED as ─────────────────────────────────────────────
+
+    /// <summary>A string argument longer than this is remembered by its head and its size.</summary>
+    /// <remarks>
+    /// Measured on the run of 2026-09-22 (21.7M prompt tokens over 197 turns): of the largest
+    /// prompt's 601,560 characters, 177,608 were the ARGUMENTS of tool calls — 93,588 of them
+    /// <c>edit_file</c>'s <c>new_string</c> across 49 calls. Every one of those was re-sent on
+    /// every turn after it, and each had already been applied to a file on disk.
+    /// </remarks>
+    private const int MaxRememberedValueChars = 600;
+
+    /// <summary>How much of such a value is kept, so the model can still recognise its own work.</summary>
+    private const int RememberedHeadChars = 200;
+
+    /// <summary>
+    /// The form a set of tool calls is kept in the transcript — as opposed to the form that is
+    /// INVOKED, which is always the model's own text, untouched.
+    ///
+    /// <para><b>Why this is not <see cref="Elide"/>.</b> Elide is a rescue: it rewrites history
+    /// when the window is nearly full, and rewriting history is expensive in a way that is easy to
+    /// miss — a provider's prompt cache keys on the PREFIX, so changing an old message invalidates
+    /// the cache for everything after it. Measured: capping the window turned 21.7M prompt tokens
+    /// into 7.8M and the cached share from 98% into 59%, which is most of the saving given back.
+    /// This shortens a message ONCE, at the moment it is recorded, and never touches it again — so
+    /// the prefix is stable from the first turn and the cache never notices.</para>
+    ///
+    /// <para><b>Why it is safe to forget.</b> An argument this size is a file's contents on its way
+    /// to disk. By the time this runs the call has been made, the tool result says what happened,
+    /// and the file can be read back — which is what a model does anyway when it wants to be sure.
+    /// The head is kept because "did I write that section already" is answered by the first line,
+    /// and the exact size is kept because it is the one number a model cannot re-derive.</para>
+    ///
+    /// <para>Anything it cannot parse is returned untouched. A call whose arguments this does not
+    /// understand is a call it has no business editing.</para>
+    /// </summary>
+    public static IReadOnlyList<ToolCall>? ForHistory(IReadOnlyList<ToolCall>? calls)
+    {
+        if (calls is not { Count: > 0 })
+            return calls;
+
+        ToolCall[]? shortened = null;
+
+        for (var i = 0; i < calls.Count; i++)
+        {
+            var remembered = ShortenArguments(calls[i].ArgumentsJson);
+            if (ReferenceEquals(remembered, calls[i].ArgumentsJson))
+                continue;
+
+            shortened ??= calls.ToArray();
+            shortened[i] = calls[i] with { ArgumentsJson = remembered };
+        }
+
+        return shortened ?? calls;
+    }
+
+    /// <summary>
+    /// One call's arguments, with every oversized string value replaced by its head and its length.
+    /// Returns the SAME instance when nothing needed shortening, so callers can tell.
+    /// </summary>
+    public static string ShortenArguments(string argumentsJson)
+    {
+        // The overwhelming majority of calls are a path and a pattern. Parsing those would be work
+        // done to discover there is nothing to do.
+        if (string.IsNullOrEmpty(argumentsJson) || argumentsJson.Length <= MaxRememberedValueChars)
+            return argumentsJson;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(argumentsJson);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+                return argumentsJson;
+
+            var shortened = new Dictionary<string, JsonElement>();
+            var changed = false;
+
+            foreach (var property in doc.RootElement.EnumerateObject())
+            {
+                if (property.Value.ValueKind == JsonValueKind.String
+                    && property.Value.GetString() is { } text
+                    && text.Length > MaxRememberedValueChars)
+                {
+                    var head = text[..RememberedHeadChars];
+                    shortened[property.Name] = JsonSerializer.SerializeToElement(
+                        $"{head}… ({text.Length:N0} characters, sent in full; read the file back if "
+                        + "you need the rest)");
+                    changed = true;
+                }
+                else
+                {
+                    shortened[property.Name] = property.Value.Clone();
+                }
+            }
+
+            return changed ? JsonSerializer.Serialize(shortened) : argumentsJson;
+        }
+        catch (JsonException)
+        {
+            return argumentsJson;
+        }
+    }
 
     /// <summary>
     /// Roughly how big this conversation is, in characters. Characters rather than tokens because

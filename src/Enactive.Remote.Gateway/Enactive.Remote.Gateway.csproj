@@ -14,7 +14,7 @@
       MySqlConnector rather than Oracle's MySql.Data: genuinely async rather than sync-over-async,
       and MIT rather than GPL with a linking exception.
     -->
-    <PackageReference Include="MySqlConnector" Version="2.4.0" />
+    <PackageReference Include="MySqlConnector" Version="2.6.2" />
     <ProjectReference Include="..\Enactive.Remote.Contracts\Enactive.Remote.Contracts.csproj" />
   </ItemGroup>
 

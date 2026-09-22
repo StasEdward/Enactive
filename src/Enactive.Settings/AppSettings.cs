@@ -29,6 +29,26 @@ public sealed class ProviderConfig
     /// <summary>Max output tokens for this provider (blank = the provider's built-in default). Anthropic max_tokens.</summary>
     public int? MaxTokens { get; set; }
 
+    /// <summary>
+    /// How large a prompt this provider's models accept, in tokens — the CONTEXT window, not
+    /// <see cref="MaxTokens"/>, which caps the answer.
+    ///
+    /// <para><b>Why it has to be declared.</b> Nothing in this application can find it out.
+    /// <c>IChatProvider.ContextWindow</c> returns null by default and only the Ollama provider
+    /// implements it — by echoing back the <c>num_ctx</c> it was handed, so it is a mirror of the
+    /// request rather than a fact about the model. Every cloud provider answers "I do not know",
+    /// and the callers that need a number then guess one.</para>
+    ///
+    /// <para>What the guess costs: <c>LogAnalyst</c> assumes 16,000 tokens when nobody says, so a
+    /// log analysed by a model with a 200,000-token window was sent about a seventh of what would
+    /// have fitted. Worse, the number it was given came from <c>NumCtx</c> — an OLLAMA setting —
+    /// whichever provider was actually doing the work.</para>
+    ///
+    /// <para>Blank keeps the guess. A number that is wrong in the generous direction costs a
+    /// failed request, which is why nothing infers one from a model's name.</para>
+    /// </summary>
+    public int? ContextWindowTokens { get; set; }
+
     public ProviderConfig Clone() => new()
     {
         Id = Id,
@@ -39,7 +59,76 @@ public sealed class ProviderConfig
         ApiKey = ApiKey,
         Headers = new Dictionary<string, string>(Headers),
         Models = new List<string>(Models),
-        MaxTokens = MaxTokens
+        MaxTokens = MaxTokens,
+        ContextWindowTokens = ContextWindowTokens
+    };
+}
+
+/// <summary>
+/// Where <c>send_email</c> sends from, and the only addresses it may send to.
+///
+/// <para><b>The recipients are settings, not an argument.</b> A model reads whatever it was
+/// pointed at - a log from somebody's server, a file in a repository - and text it reads is not
+/// an instruction, but a tool that mails wherever it is told turns that rule into a promise
+/// instead of a boundary. With <c>--approve allow</c> nobody is watching either. So the address
+/// is chosen by the person once, in this screen, and the tool can refuse anything else by
+/// comparison rather than by judgement.</para>
+///
+/// <para>Adding a second address is a deliberate act and takes a moment. That is the intended
+/// cost: the common case - "mail the report to me" - needs none.</para>
+/// </summary>
+public sealed class SmtpSettings
+{
+    public string Host { get; set; } = string.Empty;
+
+    /// <summary>587 is submission with STARTTLS, which is what most providers want.</summary>
+    public int Port { get; set; } = 587;
+
+    /// <summary>Upgrade the connection with STARTTLS. Off means implicit TLS (port 465) or none.</summary>
+    public bool StartTls { get; set; } = true;
+
+    public string User { get; set; } = string.Empty;
+
+    /// <summary>DPAPI-encrypted password ("dpapi:"-prefixed) — this is what lives on disk.</summary>
+    public string PasswordProtected { get; set; } = string.Empty;
+
+    /// <summary>Plaintext, in memory only; never serialized. Same rule as a provider's API key.</summary>
+    [JsonIgnore] public string Password { get; set; } = string.Empty;
+
+    /// <summary>The From address. Blank falls back to <see cref="User"/>, which is usually right.</summary>
+    public string From { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Every address <c>send_email</c> is allowed to write to. Empty means the tool is not
+    /// offered at all: a mail tool with nowhere to send is a way to be surprised later.
+    /// </summary>
+    public List<string> Recipients { get; set; } = new();
+
+    /// <summary>
+    /// Send without the approval question — off unless a person turns it on.
+    ///
+    /// <para>A run nobody is watching is not offered a tool whose only outcome is a prompt, so
+    /// with this off a scheduled task cannot mail its own report. On, the recipient list above
+    /// carries the whole of the consent: see <c>MailAccount.SendWithoutAsking</c>.</para>
+    /// </summary>
+    public bool SendWithoutAsking { get; set; }
+
+    /// <summary>Whether enough is filled in for the tool to exist at all.</summary>
+    [JsonIgnore]
+    public bool Configured
+        => !string.IsNullOrWhiteSpace(Host) && Recipients.Count > 0;
+
+    public SmtpSettings Clone() => new()
+    {
+        Host = Host,
+        Port = Port,
+        StartTls = StartTls,
+        User = User,
+        PasswordProtected = PasswordProtected,
+        Password = Password,
+        From = From,
+        Recipients = new List<string>(Recipients),
+        SendWithoutAsking = SendWithoutAsking
     };
 }
 
@@ -154,7 +243,7 @@ public enum ShellCommandPolicy
 public sealed partial class AppSettings
 {
     /// <summary>The newest settings.json schema this build writes. See <see cref="SchemaVersion"/>.</summary>
-    public const int CurrentSchemaVersion = 5;
+    public const int CurrentSchemaVersion = 6;
 
     /// <summary>
     /// settings.json schema version. Files written before 2026-09-06 have no such field and read as 1,
@@ -228,6 +317,21 @@ public sealed partial class AppSettings
     // behaviour - check once, and stop. Clamped to 0..5 by the orchestrator.
     public int SuccessRetries { get; set; } = 1;
 
+    // Ask the planner, before any of the work, for commands that would PROVE the request was
+    // carried out - and judge the run by them when it was given no criteria of its own.
+    //
+    // Until 2026-09-21 the one guard that looks at the WORKSPACE instead of the transcript was
+    // reachable only through a template: `successCriteria: spec?.SuccessCriteria` in both hosts,
+    // and spec is a template. Every ad-hoc run was therefore judged on text a model wrote about
+    // its own work. A template's criteria still win outright and the planner is not even asked,
+    // so nothing about a template run changes.
+    //
+    // Safe to leave on: a proposed check can only make a verdict stricter (SuccessReport.Apply
+    // never promotes), and it can only do so by RUNNING and failing - one that the shell would not
+    // start, or that the policy forbids, reports Unknown and holds nothing back, because nobody
+    // asked for it. Turn it off to judge ad-hoc runs the way they were judged before.
+    public bool ProposeChecks { get; set; } = true;
+
     // Put a rejected step's files back to how they were before it ran. Without this the gate stops
     // only the REPORT: the run says Failed while the rejected document stays in the workspace, which
     // is the version someone is most likely to open next. A file changed since the step wrote it is
@@ -271,6 +375,9 @@ public sealed partial class AppSettings
 
     // Whether this computer answers a phone, and how. Off until somebody fills it in.
     public RemoteAccessSettings RemoteAccess { get; set; } = new();
+
+    /// <summary>Where send_email sends from, and the only addresses it may send to.</summary>
+    public SmtpSettings Smtp { get; set; } = new();
 
     // ── Legacy fields (migration source only; superseded by the schema above) ──
     //
@@ -340,6 +447,9 @@ public sealed partial class AppSettings
 
                     if (!string.IsNullOrEmpty(loaded.RemoteAccess.TokenProtected))
                         loaded.RemoteAccess.Token = Secret.Unprotect(loaded.RemoteAccess.TokenProtected);
+
+                    if (!string.IsNullOrEmpty(loaded.Smtp.PasswordProtected))
+                        loaded.Smtp.Password = Secret.Unprotect(loaded.Smtp.PasswordProtected);
 
                     loaded.LoadMcpSecrets();
                     loaded.MigrateIfNeeded();
@@ -421,6 +531,9 @@ public sealed partial class AppSettings
 
             // The device token, same rule: the encrypted form is the only one that reaches disk.
             RemoteAccess.TokenProtected = Secret.Protect(RemoteAccess.Token);
+
+            // And the mail password. [JsonIgnore] on the plaintext is what keeps it off disk.
+            Smtp.PasswordProtected = Secret.Protect(Smtp.Password);
 
             // Legacy key: persist only the encrypted form, blanking the plaintext during serialization.
             AnthropicApiKeyProtected = Secret.Protect(AnthropicApiKey);
@@ -586,7 +699,16 @@ public sealed partial class AppSettings
     private static List<string> NamedOrEmpty(string model)
         => string.IsNullOrWhiteSpace(model) ? new List<string>() : new List<string> { model };
 
-    /// <summary>Deep copy — so an editor can work on a throwaway copy and discard it on Cancel.</summary>
+    /// <summary>
+    /// Deep copy — so an editor can work on a throwaway copy and discard it on Cancel.
+    ///
+    /// <para><b>Every settable property has to be here, and a test now says so.</b> The settings
+    /// window edits a clone and saves THAT object over the file, so a property this method forgets
+    /// is not merely unreadable in the window - it is reset to its default on the next Save from
+    /// any pane. Reported 2026-09-22: the SMTP section was filled in, saved, and came back empty,
+    /// because <c>Smtp</c> was never copied; <c>KeepRuns</c> and <c>ProposeChecks</c> were being
+    /// silently reset the same way, with nobody looking at them to notice.</para>
+    /// </summary>
     public AppSettings Clone() => new()
     {
         // Must be copied: a clone that fell back to 1 would be saved as a v1 file, and the next load
@@ -619,8 +741,11 @@ public sealed partial class AppSettings
         WindowY = WindowY,
         WindowWidth = WindowWidth,
         WindowHeight = WindowHeight,
+        KeepRuns = KeepRuns,
+        ProposeChecks = ProposeChecks,
         Bindings = Bindings.Clone(),
         RemoteAccess = RemoteAccess.Clone(),
+        Smtp = Smtp.Clone(),
         McpServers = McpServers.Select(x => x.Clone()).ToList(),
         Providers = Providers.Select(x => x.Clone()).ToList(),
         Workers = Workers.Select(x => x.Clone()).ToList()
