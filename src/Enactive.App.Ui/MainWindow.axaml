@@ -588,7 +588,7 @@
                             <ItemsControl.DataTemplates>
 
                                 <!-- A file written straight to disk. -->
-                                <DataTemplate DataType="vm:ArtifactItemViewModel">
+                                <DataTemplate DataType="vm:ArtifactItemViewModel" x:DataType="vm:ArtifactItemViewModel">
                                     <Border Background="{DynamicResource Brand.CardFill}" CornerRadius="4"
                                             Padding="10" Margin="0,0,0,6">
                                         <Grid ColumnDefinitions="*,Auto">
@@ -612,7 +612,7 @@
 
                                 <!-- A change waiting for apply or reject, with its diff. Amber down
                                      the edge: it is blocked on a person, not an error. -->
-                                <DataTemplate DataType="vm:StagedChangeViewModel">
+                                <DataTemplate DataType="vm:StagedChangeViewModel" x:DataType="vm:StagedChangeViewModel">
                                     <Border Background="{DynamicResource Brand.CardFill}"
                                             BorderBrush="{DynamicResource Brand.Amber}"
                                             BorderThickness="2,0,0,0" CornerRadius="4"
