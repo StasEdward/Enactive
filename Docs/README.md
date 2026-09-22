@@ -3,12 +3,26 @@
 A desktop environment for AI agents (a "GUI for AI agents"), built on **.NET 10**.
 Site: [enactive.dev](https://enactive.dev). Formerly named *AIClient* — renamed to **Enactive** in 2026-09;
 namespaces, assemblies, env vars and on-disk data folders all use the new name (see *Naming / migration* below).
-See `PLAN.md` (vision) and `PLAN_v2.md` (development spec — its §11 is the honest status: what is built and what is not).
-`TASK_TEMPLATES_PLAN.md` is the saved-task system (complete); `FIX_PLAN.md` is the defect log — every fix since the
-first review, with the log line that exposed it, what was changed, what was deliberately not, and the test that fails
-without it; its §9 tail is the open backlog. `LOGGING.md` documents the global log and the log analysis; `MODELS.md`
-the multi-provider team-of-models design (implemented); `STYLING.md` how the Avalonia/Fluent UI is themed — read it
-before changing anything visual.
+
+## Documents
+
+| | |
+|---|---|
+| `PLAN.md` | The vision |
+| `PLAN_v2.md` | Development spec; **§11 is the honest status** — what is built and what is not |
+| `FIX_PLAN.md` | The defect log: every fix since the first review, each with the log line that exposed it, what changed, what deliberately did not, and the test that fails without it. Its §9 tail is the open backlog |
+| `MODELS.md` | The multi-provider team-of-models design (implemented) |
+| `MCP.md` | MCP servers as tools (implemented 2026-09-06) |
+| `LOGGING.md` | The global log and the log analysis |
+| `STYLING.md` | How the Avalonia/Fluent UI is themed — **read before changing anything visual** |
+| `TASK_TEMPLATES_PLAN.md` | The saved-task system (complete) |
+| `SCHEDULER_PLAN.md` | Schedules: a template that runs at a chosen day and time |
+| `SETTINGS_PLAN.md` | One configuration, two hosts |
+| `REMOTE_DESIGN.md`, `REMOTE_ACCESS_PLAN.md`, `REMOTE_OPERATIONS.md`, `ENACTIVE_REMOTE_PROTOCOL.md` | Remote access — the design, the plan, how to run it, and the wire protocol |
+| `WORKSPACE_SANDBOX_ARCHITECTURE.md`, `SANDBOX_PLAN.md` | The sandbox: the argument, then the plan |
+| `REVERT_INTEGRITY_PLAN.md` | Undo/revert integrity (done 2026-09-08; outcome in `FIX_PLAN.md` §9u) |
+| `SCENARIO_CHECKS.md` | Behaviours a unit test cannot settle, driven from a command line |
+| `Enactive_Code_Review_2026-09-*.md` | The reviews this defect log answers |
 
 The engine turns one intent into real, reviewable, recorded action:
 
@@ -19,31 +33,71 @@ Command -> Intent -> Context(+Environment) -> Planner -> Orchestrator -> Worker(
 
 ## Solution
 
-`Enactive.sln`, **8 projects** (`net10.0`, pinned via `global.json`) plus `tests/Enactive.Engine.Tests` (1798 tests)
-and `tests/Enactive.Mcp.TestServer`. The engine is dependency-light: `Core`/`Providers`/`Agents`/`App.Console`
-use **no external NuGet package the engine itself needs**; only `Workspace` (Microsoft.Data.Sqlite, SQLitePCLRaw,
-MySqlConnector), `Secrets` (ProtectedData), `Tools` (MailKit, for `send_email` — the one tool that leaves the
-machine) and `App.Ui` (Avalonia ×3) pull anything in. `Enactive.Agents` references **only** `Core` — a constant
-both the engine and a tool need (`ToolArguments.ExpectedExitCodes`) lives in `Core.Tools`, not in `Tools`.
+`Enactive.sln`, **12 product projects** (`net10.0`, pinned via `global.json`), plus three on the test side:
+`tests/Enactive.Engine.Tests` (**1913 tests**), `tests/Enactive.Remote.Gateway.Tests` (77, and they need a MySQL
+to run) and `tests/Enactive.Mcp.TestServer`.
+
+The engine is dependency-light: `Core`/`Providers`/`Agents`/`App.Console` use **no external NuGet package the
+engine itself needs**; only `Workspace` (Microsoft.Data.Sqlite, SQLitePCLRaw, MySqlConnector), `Secrets`
+(ProtectedData), `Tools` (MailKit, for `send_email` — the one tool that leaves the machine) and `App.Ui`
+(Avalonia ×3) pull anything in. `Enactive.Agents` references **only** `Core` — a constant both the engine and a
+tool need (`ToolArguments.ExpectedExitCodes`) lives in `Core.Tools`, not in `Tools`.
 
 | Project | Responsibility |
 |---|---|
 | `Enactive.Core` | Domain model + abstractions only (Intent, WorkContext, Environment, Plan/PlanStep (DAG), Worker/ModelPolicy, Decision, Permissions, Memory, Inbox, events, diagnostics, task templates and their resolution, the `ExecutionJournal` a step's evidence is kept in, the built-in templates). No transport/SDK types. |
 | `Enactive.Providers` | `OpenAiCompatibleProvider`, `OllamaNativeProvider` (native `/api/chat` so per-run `num_ctx` works), `AnthropicProvider` (reasoner) behind `ChatProviderFactory`; `LoggingChatProvider` + `WireTap`. |
-| `Enactive.Tools` | `write_file`, `edit_file`, `read_file` (windowed), `search_files`, `list_dir`, `create_directory`, `move_file`, `run_command` (cmd.exe/sh), `run_powershell` (`-EncodedCommand`, no quoting), `git`, `docker`, `copy_file`, `delete_file`, `send_email` (through the SMTP account in settings, and only to an address a person put on the recipient list — it always asks, whatever the policy says, because a sent message cannot be put back); `LoggingToolRegistry`. Every path goes through `WorkspacePaths` (inside the workspace or refused), and `.enactive/` is
-reserved from tools with one carve-out: `.enactive/scratch/` is the worker's own working area — for
-the files that are FOR the job but are not the job, such as a helper script it means to run or a
-command's output too long to come back in the tool result. It is written straight through: never
-staged, never journalled, absent from what the reviewer is shown as the step's changes, and left
-alone by a rejected step's revert. `delete_file` works there even under staging, and `search_files`
-skips it in a whole-workspace sweep but searches it when named with `path`. Entries untouched for
-seven days go on the next run's first write to it (`ScratchArea`), so it cannot grow without limit
-inside the user's project. The workspace proper stays for the deliverable. A command may declare `expectedExitCodes` — the exit codes that ARE its answer (a test runner reporting failures) — before it runs; the declaration is visible in the evidence and judged there. A lookup that finds nothing (`read_file` on a missing path or past the end) returns `ToolResults.NotFound`, an answer rather than a failure. |
+| `Enactive.Tools` | The tools themselves, plus `ProcessExec` and `LoggingToolRegistry`. Every path goes through `WorkspacePaths` — inside the workspace or refused. See **Tools** below. |
 | `Enactive.Workspace` | Run, project-memory and inbox stores, each SQLite/MySQL/JSON behind `RunStoreFactory` / `MemoryStoreFactory` / `InboxStoreFactory`; artifact stores (disk + staging), `EnvironmentProbe`, `ProjectMemory`, `LogHub`/`FileLogSink`. |
 | `Enactive.Agents` | `Orchestrator` (DAG execution, role tool-filtering, permission gating, open-failure and stall guards, optional reasoner plan+review, success criteria), `Planner` (dependency graphs), `DagScheduler`, `Reviewer` (judges the step's own evidence journal, not the transcript), `SuccessEvaluator`, `LogAnalyst` (a model reads an exported log; the log is data, never instructions), `DefaultWorkers`, `BackgroundRunner`, the unattended decision handler. |
 | `Enactive.Secrets` | DPAPI protection for API keys; a key that cannot be protected is not written down. |
-| `Enactive.App.Console` | Console host; sub-commands `timeline`, `inbox`; `--template <id> --workspace <path>` runs a saved task unattended with an exit code a scheduler can read. |
+| `Enactive.App.Console` | Console host; sub-commands `timeline`, `inbox`; `--template <id> --workspace <path>` runs one saved task unattended, and `--due` runs whatever the saved schedules say is owed — both with an exit code a scheduler can read. Nothing in that mode is interactive, and it is enforced rather than assumed (`UnattendedDecisionHandler`). |
+| `Enactive.Settings` | `AppSettings` and its file — the one configuration both hosts read, including the provider list, the worker team, the phase bindings, the SMTP account and the MCP servers (`McpSettings`, `McpRoles`). Referenced by both hosts so neither owns it. |
+| `Enactive.Remote.Contracts` | The wire types remote access is spoken in — shared by the gateway and the host so one side cannot drift from the other. |
+| `Enactive.Remote.Gateway` | The server side of remote access: the panel, the cursor over a run's events, the schema. See `REMOTE_DESIGN.md`. |
+| `Enactive.Remote.Host` | The machine-side agent that a gateway talks to. Remote access is **off** unless it is turned on. |
 | `Enactive.App.Ui` | Avalonia desktop UI: `.axaml` views over view models (`ViewModels/`), with a small hand-written MVVM base in `Mvvm/`, app-wide styling in `Styles/Controls.axaml` and the palette in `Brand.cs`. |
+
+## Tools
+
+Seventeen, registered in one place (`App.Console/Program.cs`) and offered to a run only through its
+role's allowlist. A tool a role names but the host does not register is the same defect as a tool
+the host registers and no role names — seen from the other side.
+
+| Group | Tools |
+|---|---|
+| Write | `write_file`, `edit_file`, `create_directory`, `move_file`, `copy_file`, `delete_file` |
+| Read | `read_file` (windowed), `search_files`, `list_dir` |
+| Answer without the content | `count_matches`, `file_stats`, `compare_files` — how many, how large, same or not, so a question with a small answer costs a small answer |
+| Run | `run_command` (cmd.exe / sh), `run_powershell` (`-EncodedCommand`, so no quoting), `git`, `docker` |
+| Leaves the machine | `send_email` — through the SMTP account in settings, and only to an address a person put on the recipient list. It always asks, whatever the policy says, because a sent message cannot be put back |
+
+MCP servers add more. A server configured in Settings → MCP is connected at startup and its tools
+are offered to the roles that reach it (`McpRoles`); a server nobody reaches is named in the run's
+own events, because a server connected and offered to no one looks exactly like a server that
+works. See `MCP.md`.
+
+**Every path goes through `WorkspacePaths`** — inside the workspace, or refused.
+
+**`.enactive/` is reserved from tools, with one carve-out.** `.enactive/scratch/` is the worker's
+own working area, for the files that are FOR the job but are not the job: a helper script it means
+to run, a command's output too long to come back in a tool result. It is written straight through —
+never staged, never journalled, absent from what the reviewer is shown as the step's changes, and
+left alone when a rejected step is reverted. `delete_file` works there even under staging, and
+`search_files` skips it in a whole-workspace sweep but searches it when named with `path`. Entries
+untouched for seven days go on the next run's first write to it (`ScratchArea`), so it cannot grow
+without limit inside the user's project. The workspace proper stays for the deliverable.
+
+**A command may declare `expectedExitCodes`** — the exit codes that ARE its answer, as for a test
+runner reporting failures — before it runs. The declaration is visible in the evidence and judged
+there.
+
+**Not every non-zero result is a failure**, and the engine says which is which rather than passing
+an exit code upwards. A lookup that finds nothing is an answer (`read_file` past the end of a file,
+a search that matched nothing). So is a call that never happened: a shell refusing a word it does
+not have, `git` refusing its own arguments, a tool name with no tool behind it. These are told
+apart by what the program itself said, and `FIX_PLAN.md` §9ap and §9bj–§9bl are what each one cost
+to learn.
 
 ## UI
 
@@ -52,7 +106,7 @@ touching C#.
 
 | Piece | Where |
 |---|---|
-| Views | `App.axaml`, `MainWindow.axaml`, `SettingsWindow.axaml`, `LogWindow.axaml`, `InboxWindow.axaml`, `ProviderEditWindow.axaml`, `WorkerEditWindow.axaml`, `StepCardView.axaml` |
+| Views | `App.axaml`, `MainWindow.axaml`, `TitleBarView.axaml`, `StepCardView.axaml`, `HintView.axaml`; the windows `Settings`, `Log`, `LogAnalysis`, `Inbox`, `Templates`, `TemplateEdit`, `Schedules`, `ProviderEdit`, `WorkerEdit`, `McpEdit`, `Viewer`, `Prompt`, `Confirm` |
 | View models | `ViewModels/` — one per view, plus the small item models the lists are built from (step entries, artifacts, staged changes, diff lines, decision options) |
 | MVVM base | `Mvvm/` — `ObservableObject` and `RelayCommand`/`AsyncRelayCommand`. No toolkit dependency |
 | Styling | `Styles/Controls.axaml` — the shared classes (`.label`, `.hint`, `.form`, `.actions`, `.primary`, `.multiline`, `.panelHeader`, `.disclosure`) |
@@ -91,8 +145,10 @@ applied **after** `InitializeComponent`, or the XAML's own `Width`/`Height` over
   replaced, in the goal and in each criterion's command. The library generates a launch form from the parameters.
   See `TASK_TEMPLATES_PLAN.md`.
 - **"Done" is not the model's opinion** — three guards decide a step, in this order: a tool call that failed and
-  was never made good ends the step Incomplete (a lookup that found nothing is an answer, not a failure, unless the
-  step did nothing else); three turns that only repeat calls already made end it as stuck — but a successful write
+  was never made good ends the step Incomplete — but only a call that really did fail. A lookup that found nothing
+  is an answer (unless the step did nothing else), and so is a call that never happened at all: a word the shell
+  does not have, arguments `git` will not take, a tool name with no tool behind it. Those are recorded, shown to
+  the reviewer, and not a verdict; three turns that only repeat calls already made end it as stuck — but a successful write
   advances a GENERATION, so re-reading a file and re-running a build after an edit is progress, not repetition, and
   a repair loop is never stopped for repairing; and a reviewer, when bound, judges the step's **evidence journal**
   (every call, its arguments, its outcome, its output — recorded as it happens, so shortening the prompt cannot
@@ -121,6 +177,17 @@ applied **after** `InitializeComponent`, or the XAML's own `Width`/`Height` over
   undoes its own scope's writes; a file another scope has written since, or a file the user has
   edited since, is REPORTED with the reason and left alone. `Docs/FIX_PLAN.md` §9u is what each of
   those clauses cost to learn.
+- **MCP servers as tools** — a server configured in Settings → MCP is connected at startup and its
+  tools join the registry under `mcp__<server>__<tool>` names. Which roles may reach which server is
+  part of the configuration (`McpRoles`), and a server that reaches nobody is said so in the run's
+  events — connected-and-offered-to-no-one is indistinguishable from working, from the outside.
+  See `MCP.md`.
+- **Schedules** — a saved task can be given a day and a time. The console's `--due` asks the saved
+  schedules what is owed and runs it; Windows Task Scheduler, cron or a pipeline step drives that.
+  See `SCHEDULER_PLAN.md`.
+- **Remote access, off by default** — `Enactive.Remote.Host` and `Enactive.Remote.Gateway` let a run
+  be watched and steered from elsewhere over the contracts in `Enactive.Remote.Contracts`. It starts
+  off and says so at startup. See `REMOTE_DESIGN.md` and `REMOTE_OPERATIONS.md`.
 - **Secrets** — the Anthropic API key is DPAPI-encrypted in `settings.json`.
 
 ## Build & run
@@ -153,7 +220,9 @@ dotnet run --project src/Enactive.App.Console -- --template improve-tests --work
 ### Configuration
 
 Env: `ENACTIVE_MODEL`, `ENACTIVE_OLLAMA_URL`, `ENACTIVE_STORE` (sqlite|mysql|json), `ENACTIVE_MYSQL`,
-`ENACTIVE_LOG_LEVEL`, `ENACTIVE_WORKSPACE` (UI). The UI persists endpoint/model/num_ctx/global-instructions/
+`ENACTIVE_LOG_LEVEL`, `ENACTIVE_WORKSPACE` (UI). Remote access reads its own: `ENACTIVE_DATA`,
+`ENACTIVE_REMOTE_DB`, `ENACTIVE_OWNER_KEY`, `ENACTIVE_RETENTION_DAYS`, `ENACTIVE_BEHIND_TUNNEL` —
+see `REMOTE_OPERATIONS.md`. The UI persists endpoint/model/num_ctx/global-instructions/
 the provider list / worker team / phase bindings / toggles to `%APPDATA%/Enactive/settings.json` (API keys encrypted). Per-run data lives in
 `<workspace>/.enactive/` (enactive.db, memory.json, inbox.json, permissions.json).
 
