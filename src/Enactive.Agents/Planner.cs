@@ -97,11 +97,12 @@ public sealed class Planner
     /// </param>
     public async Task<PlanResult> PlanAsync(
         string request, WorkContext context, IChatProvider provider, string model,
-        CancellationToken ct, int? maxSteps = null, bool proposeChecks = false)
+        CancellationToken ct, int? maxSteps = null, bool proposeChecks = false,
+        int? turnCeiling = null)
     {
         var messages = new List<ChatMessage>
         {
-            ChatMessage.System(SystemPromptFor(maxSteps, proposeChecks)),
+            ChatMessage.System(SystemPromptFor(maxSteps, proposeChecks, turnCeiling)),
             ChatMessage.User(Where(context) + request)
         };
 
@@ -421,9 +422,51 @@ public sealed class Planner
     /// get trimmed; it runs until the budget is gone and stops with the work unfinished, and that
     /// is the thing worth avoiding.</para>
     /// </summary>
-    internal static string SystemPromptFor(int? maxSteps, bool proposeChecks = false)
+    /// <summary>
+    /// What a step IS, at the moment it runs — the one thing the planner decides and the one thing
+    /// it was never told.
+    ///
+    /// <para>A step is not a heading. It is a single conversation with the worker model, it carries
+    /// everything said in it so far into every following turn, and it is abandoned outright when it
+    /// runs too long — taking every step that depends on it with it. So the planner is making the
+    /// most expensive decision in a run blind to what it costs.</para>
+    ///
+    /// <para><b>Both halves are arithmetic, not opinion.</b> The cost of a step grows with the
+    /// SQUARE of its turns, because each turn re-sends what came before it: measured 2026-09-22 on
+    /// one request, a single 250-turn step cost 30.6M prompt tokens where the same work in five
+    /// steps of 20–60 turns cost 9.2M, and the average prompt fell from 117k to 64k on the split
+    /// alone. And the size of a step is a fact about the WORKSPACE, not about the request: "for
+    /// every project file" is one step in a repository with three and a dead run in one with three
+    /// hundred — a number the planner cannot see from here.</para>
+    ///
+    /// <para>The ceiling is passed as DATA rather than written into the text, for the same reason
+    /// <paramref name="maxSteps"/> is: a number in a prompt that does not come from the engine is a
+    /// number that goes stale the first time somebody changes it.</para>
+    ///
+    /// <para>This says nothing about which model will run the steps, deliberately. "The model is
+    /// weak, so plan smaller" is a guess about a name, and this codebase already refuses that kind
+    /// of guess elsewhere — a provider's context window is declared, never inferred. What is true
+    /// of every model and every workload is the arithmetic above.</para>
+    /// </summary>
+    /// <param name="turnCeiling">
+    /// How many turns a single step may take before the engine abandons it
+    /// (<c>Orchestrator.RunawayCeiling</c>). Null leaves the paragraph out entirely.
+    /// </param>
+    internal static string SystemPromptFor(int? maxSteps, bool proposeChecks = false, int? turnCeiling = null)
     {
         var prompt = SystemPrompt;
+
+        if (turnCeiling is > 0)
+            prompt += $" HOW BIG A STEP MAY BE: a step runs as ONE conversation with the worker, and "
+                    + "everything said in it is re-sent on every turn of it — so one step of 200 "
+                    + "turns costs several times what two steps of 100 cost, and a step that runs "
+                    + $"past {turnCeiling} turns is ABANDONED, with every step that depends on it "
+                    + "skipped. Give each step a size that is known before it starts. When work "
+                    + "repeats over many items — files, pages, records, tickets — do not write one "
+                    + "step for all of them: say how many at a time and use a step per batch "
+                    + "(\"the first 5 …\", \"the next 5 …\"), which is what the step budget is for. "
+                    + "This is about REPEATED work only: the rule above still holds for one action, "
+                    + "which is never split into stages.";
 
         if (maxSteps is > 0)
             prompt += $" This run may take at most {maxSteps} step(s) in total — a plan longer than that "

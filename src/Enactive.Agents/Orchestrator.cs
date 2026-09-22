@@ -356,9 +356,17 @@ public sealed class Orchestrator : IOrchestrator
                 // it carried "use 2-4 steps max", which no template wanted and every template
                 // contradicted - and a plan it made too long for the budget does not get trimmed,
                 // it runs until the budget is gone and stops with the work half done.
+                //
+                // And the TURN ceiling with it, for the same reason. A plan is written by something
+                // that cannot see how long a step will run or what it costs while it runs; both are
+                // facts about this engine, and both decide whether the plan survives contact with a
+                // large workspace. Measured 2026-09-22: one step of 250 turns cost 30.6M prompt
+                // tokens and was abandoned at the ceiling with four steps skipped behind it; the
+                // same request in five smaller steps cost 9.2M and finished.
                 () => _planner.PlanAsync(
                     intent.RawText, intent.Context, models.PlanProvider, models.Plan.Model, ct,
-                    _limits.MaxSteps, _proposeChecks && _successCriteria.Count == 0));
+                    _limits.MaxSteps, _proposeChecks && _successCriteria.Count == 0,
+                    turnCeiling: RunawayCeiling));
 
         if (plan.PromptTokens + plan.CompletionTokens > 0)
             yield return scope.Usage(
