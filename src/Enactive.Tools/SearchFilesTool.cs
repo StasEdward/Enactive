@@ -22,7 +22,6 @@ using Enactive.Core.Tools;
 public sealed class SearchFilesTool : ITool
 {
     private const int MaxMatches = 100;
-    private const int MaxFileBytes = 2 * 1024 * 1024;
     private const int MaxLineChars = 240;
     private const int MaxOutputChars = 12000;
 
@@ -111,13 +110,13 @@ public sealed class SearchFilesTool : ITool
         {
             // A file named outright is searched whatever the glob says: naming it IS the filter,
             // and the skip list is about where a walk WANDERS, not about what was asked for.
-            foreach (var file in one ? new[] { searchRoot } : Enumerate(searchRoot, glob))
+            foreach (var file in one ? new[] { searchRoot } : WorkspaceScan.Files(searchRoot, glob))
             {
                 ct.ThrowIfCancellationRequested();
 
                 var info = new FileInfo(file);
-                if (info.Length > MaxFileBytes) { skippedLarge++; continue; }
-                if (Binary(file)) { skippedBinary++; continue; }
+                if (info.Length > WorkspaceScan.MaxFileBytes) { skippedLarge++; continue; }
+                if (WorkspaceScan.Binary(file)) { skippedBinary++; continue; }
 
                 scanned++;
                 var hit = false;
@@ -133,7 +132,7 @@ public sealed class SearchFilesTool : ITool
 
                     var shown = line.Trim();
                     if (shown.Length > MaxLineChars) shown = shown[..MaxLineChars] + "…";
-                    output.Append(Relative(ctx.WorkspaceRoot, file)).Append(':').Append(lineNumber)
+                    output.Append(WorkspaceScan.Relative(ctx.WorkspaceRoot, file)).Append(':').Append(lineNumber)
                           .Append(": ").AppendLine(shown);
 
                     if (matches >= MaxMatches || output.Length >= MaxOutputChars) { capped = true; break; }
@@ -189,7 +188,7 @@ public sealed class SearchFilesTool : ITool
 
         var parts = new List<string>(2);
         if (large > 0)
-            parts.Add($"{large} file(s) larger than {MaxFileBytes / (1024 * 1024)} MB");
+            parts.Add($"{large} file(s) larger than {WorkspaceScan.MaxFileBytes / (1024 * 1024)} MB");
         if (binary > 0)
             parts.Add($"{binary} binary file(s)");
 
@@ -208,80 +207,6 @@ public sealed class SearchFilesTool : ITool
             ["skippedTooLarge"] = skippedLarge,
             ["skippedBinary"] = skippedBinary
         };
-
-    /// <summary>
-    /// Files under the search root, skipping the places nobody means to search: the workspace's own
-    /// state folder, and the build and dependency trees that would otherwise supply thousands of
-    /// matches from code the user did not write.
-    /// </summary>
-    private static IEnumerable<string> Enumerate(string root, string? glob)
-    {
-        var options = new EnumerationOptions
-        {
-            RecurseSubdirectories = true,
-            IgnoreInaccessible = true,
-            AttributesToSkip = FileAttributes.ReparsePoint   // a link is followed by nothing here
-        };
-
-        foreach (var file in Directory.EnumerateFiles(root, string.IsNullOrWhiteSpace(glob) ? "*" : glob, options))
-        {
-            if (!Skipped(root, file))
-                yield return file;
-        }
-    }
-
-    private static readonly string[] SkippedFolders =
-        { WorkspaceGuard.ReservedFolder, "bin", "obj", "node_modules", ".git", ".vs", "dist", "packages" };
-
-    /// <summary>
-    /// Whether this file sits in one of the skipped folders, asked of the path BELOW the search
-    /// root rather than of the whole path.
-    ///
-    /// <para>It used to split the absolute path, which made the names above mean two things they
-    /// were never meant to mean:</para>
-    /// <list type="number">
-    /// <item><b>A workspace whose own location contains one of them was unsearchable.</b> A project
-    /// under <c>C:\dev\packages\thing</c> or <c>~/bin/tool</c> matched on a segment of its own
-    /// address, so every file was skipped and every search answered "No matches" - a wrong answer
-    /// stated as a fact, which is the failure the skipped-file counters in this tool exist to
-    /// prevent.</item>
-    /// <item><b>Pointing a search AT a skipped folder could not work.</b> The worker's scratch area
-    /// is under <c>.enactive/</c>, so a search rooted there matched on the root's own segment and
-    /// returned nothing, always. Counting from the root gives the behaviour a person expects from
-    /// every other search tool: the noisy places are left out of a sweep, and looked in when you
-    /// name them. That is the whole of how scratch is reachable - there is no special case for it
-    /// here, and none is wanted.</item>
-    /// </list>
-    /// </summary>
-    private static bool Skipped(string searchRoot, string file)
-    {
-        var relative = Path.GetRelativePath(searchRoot, file);
-
-        foreach (var segment in relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
-            foreach (var skip in SkippedFolders)
-                if (string.Equals(segment, skip, WorkspaceGuard.Comparison))
-                    return true;
-        return false;
-    }
-
-    /// <summary>
-    /// A NUL byte in the first few KB means this is not text. Cheap, and wrong only for files that
-    /// would be unreadable in the output anyway.
-    /// </summary>
-    private static bool Binary(string file)
-    {
-        try
-        {
-            using var stream = File.OpenRead(file);
-            Span<byte> head = stackalloc byte[Math.Min(4096, (int)Math.Max(1, stream.Length))];
-            var read = stream.Read(head);
-            return head[..read].IndexOf((byte)0) >= 0;
-        }
-        catch { return true; }   // unreadable is as good as binary for this purpose
-    }
-
-    private static string Relative(string root, string file)
-        => Path.GetRelativePath(root, file).Replace(Path.DirectorySeparatorChar, '/');
 
     private static string? Text(JsonElement root, string name)
         => root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String

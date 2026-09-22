@@ -23,6 +23,11 @@
 /// which is unjournalled and therefore cannot be reverted when a reviewer rejects the step.</item>
 /// <item><c>read_file</c> → <c>search_files</c>: finding a string is a faster way to do what
 /// reading files one at a time already does.</item>
+/// <item><c>read_file</c> → <c>count_matches</c>, <c>file_stats</c>, <c>compare_files</c>: each
+/// returns LESS than reading would — a number, a size, a verdict — about files the worker may
+/// already open one by one. They are the cheap way to ask a question whose answer is small, and
+/// the reason they belong here rather than in a screen somebody has to find is that a worker which
+/// cannot count has to read, which is what fills a context window with material nobody uses.</item>
 /// <item><c>read_file</c> AND <c>write_file</c> → <c>copy_file</c>: a worker that can read a file
 /// and write another can already make a copy by hand. It just cannot make a WHOLE one - reading
 /// stops at 8000 characters, so the copy comes out partial and looks complete. Both are required:
@@ -57,7 +62,10 @@ public static class WorkerTools
         (["write_file"], "create_directory"),
         (["write_file"], "move_file"),
         (["write_file", "read_file"], "copy_file"),
-        (["read_file"], "search_files")
+        (["read_file"], "search_files"),
+        (["read_file"], "count_matches"),
+        (["read_file"], "file_stats"),
+        (["read_file"], "compare_files")
     ];
 
     /// <summary>

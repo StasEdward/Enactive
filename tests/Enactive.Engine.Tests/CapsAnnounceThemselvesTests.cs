@@ -54,7 +54,16 @@ public sealed class CapsAnnounceThemselvesTests
         ["SearchFilesTool.MaxMatches"] = nameof(A_search_that_stops_early_says_it_stopped),
         ["SearchFilesTool.MaxOutputChars"] = nameof(A_search_that_stops_early_says_it_stopped),
         ["SearchFilesTool.MaxLineChars"] = nameof(A_very_long_matching_line_is_shown_cut),
-        ["SearchFilesTool.MaxFileBytes"] = nameof(A_file_too_large_to_search_is_reported_not_skipped_in_silence),
+        // Moved out of SearchFilesTool when count_matches and file_stats had to walk the workspace
+        // the same way. One skip list and one size ceiling for every tool that scans, so a count and
+        // a search can never disagree about which files exist.
+        ["WorkspaceScan.MaxFileBytes"] = nameof(A_file_too_large_to_search_is_reported_not_skipped_in_silence),
+        ["CompareFilesTool.MaxShownChars"] = "A_very_long_differing_line_is_shown_cut",
+        // A cap on how many FILES are listed, not how many characters. The totals above the list
+        // stay complete - which is the whole difference between this and a search that stops early,
+        // and the reason the notice has to say so rather than just trailing off.
+        ["CountMatchesTool.MaxFilesListed"] = "A_count_over_many_files_lists_some_and_says_the_totals_still_hold",
+        ["FileStatsTool.MaxFilesListed"] = "Stats_over_many_files_list_the_largest_and_say_the_totals_still_hold",
         ["WriteFileTool.ShrinkGuardFloorBytes"] = "The_rule_itself",
         // Caught by this census the day it was written, which is what the census is for: a new
         // constant with "Chars" in its name and nothing driving it past its limit.
@@ -152,7 +161,12 @@ public sealed class CapsAnnounceThemselvesTests
         }
     }
 
-    private static readonly string[] Vocabulary = { "Chars", "Bytes", "Lines", "Matches" };
+    // "Files" joined the vocabulary with the counting tools, which cap how many FILES they list
+    // rather than how many characters they print - the same class of limit (how much of the answer
+    // is shown) in a unit the census could not see. Widening it was measured rather than assumed:
+    // it surfaced exactly the two new constants, so it costs nothing and closes the hole a
+    // count-shaped cap would otherwise slip through.
+    private static readonly string[] Vocabulary = { "Chars", "Bytes", "Lines", "Matches", "Files" };
 
     // ── one per limit: the code, past the cap, saying so ────────────────────
 

@@ -257,6 +257,11 @@ var builtInTools = new List<ITool>
     // register is the same defect as a tool the host registers and no role names, seen from the
     // other side: the model is told about a capability that is not there.
     new SearchFilesTool(),
+    // The three that answer WITHOUT returning file content - how many, how large, same or not -
+    // so a question with a small answer costs a small answer.
+    new CountMatchesTool(),
+    new FileStatsTool(),
+    new CompareFilesTool(),
     new ListDirectoryTool(),
     new CreateDirectoryTool(),
     new MoveFileTool(),

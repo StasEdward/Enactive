@@ -104,7 +104,10 @@ public sealed class SettingsLoadTests : IDisposable
     {
         var settings = AppSettings.Load(Write(AsShipped));
 
-        Assert.Equal(5, settings.SchemaVersion);
+        // Migrated to whatever this build writes: the point of the test is that the file still
+        // LOADS and keeps its meaning, and pinning the number here would turn every schema bump
+        // into a failure about the bump rather than about the file.
+        Assert.Equal(AppSettings.CurrentSchemaVersion, settings.SchemaVersion);
         Assert.Empty(settings.LoadProblems);
         Assert.Equal(2, settings.Providers.Count);
     }

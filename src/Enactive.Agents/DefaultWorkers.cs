@@ -70,6 +70,23 @@ public static class DefaultWorkers
     private const string ReadBackRule =
         "\n- After writing a file that should hold real data, read it back to confirm it contains the real output.";
 
+    /// <summary>
+    /// What to reach for when the answer is small.
+    ///
+    /// <para>Registering a tool is not offering it, and offering it is not making the case for it.
+    /// A model reaches for what it knows, and what every model knows is <c>read_file</c>: measured
+    /// 2026-09-12, a worker with read, search and list spent 114 calls and 88k prompt tokens on an
+    /// audit and wrote nothing, because every question it had could only be answered by reading
+    /// toward the answer. The sentence has to say WHEN to use these, not just that they exist -
+    /// "a number, a list of files, or a yes/no" is the shape of question that must stop costing
+    /// file content.</para>
+    /// </summary>
+    private const string AggregateReads =
+        "When what you need is a number, a list of files or a yes/no, do NOT read toward it: "
+        + "count_matches counts a pattern and names the files holding it, file_stats gives sizes and "
+        + "line counts before you open anything, and compare_files says whether two files are the "
+        + "same. ";
+
     // The role table, defined once. Instructions here are the BASE (pre-augmentation) text.
     //
     // An allowlist here is the ONLY thing that makes a registered tool reachable: the host registers
@@ -97,8 +114,11 @@ public static class DefaultWorkers
             + "commands (run_command) and run "
             + "PowerShell (run_powershell — prefer it on Windows for WMI/CIM, Get-PSDrive, pipes), plus git and "
             + "docker tools for version control and containers. Use the "
+            + AggregateReads
+            + "Use the "
             + "tools to accomplish the request, then reply with a short confirmation of what you actually did.",
-            new[] { "write_file", "edit_file", "read_file", "search_files", "list_dir", "create_directory",
+            new[] { "write_file", "edit_file", "read_file", "search_files",
+                    "count_matches", "file_stats", "compare_files", "list_dir", "create_directory",
                     "move_file", "copy_file", "delete_file", "run_command", "run_powershell", "git", "docker",
                     // Offered only where an SMTP account is configured - the tool is not
                     // registered otherwise, so naming it here costs nothing until somebody
@@ -109,26 +129,31 @@ public static class DefaultWorkers
         ("reviewer", "Reviewer",
             "You are a code reviewer and analyst. Investigate the workspace and explain findings. "
             + "Use search_files to locate things by content instead of reading files one by one. "
+            + AggregateReads
             + "You may ONLY read, search and list — you must not modify anything or run "
             + "commands. Report issues, risks and suggestions clearly.",
-            new[] { "read_file", "search_files", "list_dir" },
+            new[] { "read_file", "search_files", "count_matches", "file_stats", "compare_files",
+                    "list_dir" },
             PermissionLevel.Observe),
 
         ("ops", "Ops",
             "You are a DevOps/operations agent. Use the dedicated git and docker tools for version "
             + "control and containers; run_command/run_powershell for other shell (prefer run_powershell "
             + "on Windows for system/WMI queries); read files, search them by content (search_files) and "
-            + "list directories for context. Avoid "
+            + "list directories for context. " + AggregateReads + "Avoid "
             + "editing source files unless explicitly asked. Prefer safe, read-only commands first.",
-            new[] { "read_file", "search_files", "list_dir", "run_command", "run_powershell", "git", "docker",
+            new[] { "read_file", "search_files", "count_matches", "file_stats", "compare_files",
+                    "list_dir", "run_command", "run_powershell", "git", "docker",
                     "send_email" },
             PermissionLevel.Execute),
 
         ("writer", "Writer",
             "You are a technical writer. Create and edit documentation and text files, reading "
             + "existing files for context and using search_files to find where something is written. "
+            + AggregateReads
             + "You may also create folders, move files and copy them (copy_file - never read a file and write it back to copy it, which truncates anything large). Do not run shell commands.",
-            new[] { "write_file", "edit_file", "read_file", "search_files", "list_dir",
+            new[] { "write_file", "edit_file", "read_file", "search_files",
+                    "count_matches", "file_stats", "compare_files", "list_dir",
                     "create_directory", "move_file", "copy_file" },
             PermissionLevel.Execute),
     };

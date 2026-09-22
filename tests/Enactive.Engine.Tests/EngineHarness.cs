@@ -548,6 +548,7 @@ public sealed class EngineFixture : IDisposable
     public static ITool[] ShippedTools() => new ITool[]
     {
         new WriteFileTool(), new EditFileTool(), new ReadFileTool(), new SearchFilesTool(),
+        new CountMatchesTool(), new FileStatsTool(), new CompareFilesTool(),
         new ListDirectoryTool(), new CreateDirectoryTool(), new MoveFileTool(), new CopyFileTool(), new DeleteFileTool(),
         new RunCommandTool(), new RunPowerShellTool(), new GitTool(), new DockerTool(),
 
