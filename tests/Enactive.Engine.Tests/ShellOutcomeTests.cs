@@ -314,4 +314,47 @@ public sealed class ShellOutcomeTests
         => Assert.Equal(ShellVerdict.NeverRan, ShellOutcome.Of(
             "cd src\nSet-Content out.txt 'x'",
             "'Set-Content' is not recognized as an internal or external command,"));
+    // ── a parse error PowerShell could not point at ──────────────────────────────────
+
+    /// <summary>
+    /// THE ONE FROM 2026-09-22, 20:29. A step made 43 successful edits over seven minutes and was
+    /// failed for this: a quote mark that was never closed. PowerShell reports it with no echoed
+    /// line, because a string that never ends leaves nothing to point at — and the rule that the
+    /// echo has to be ours then read "no echo, so not ours" and called it work that broke.
+    /// </summary>
+    [Fact]
+    public void An_unterminated_string_never_ran()
+    {
+        const string output = """
+            [stderr]
+            The string is missing the terminator: '.
+            + CategoryInfo          : ParserError: (:) [], ParentContainsErrorRecordException
+            + FullyQualifiedErrorId : TerminatorExpectedAtEndOfString
+            """;
+
+        Assert.Equal(
+            ShellVerdict.NeverRan,
+            ShellOutcome.Of("Write-Output '--- Models-and-Phases ---'\nSelect-String -Path Docs/wiki/x.md", output));
+    }
+
+    /// <summary>
+    /// And the boundary that keeps it honest: a parse error from a script FILE says which file, so
+    /// it belongs to something we RAN — a generated script, an Invoke-Expression — and the failure
+    /// is real. Without this line the rule above would forgive every nested script in the world.
+    /// </summary>
+    [Fact]
+    public void A_parse_error_inside_a_script_we_ran_is_a_failure()
+    {
+        const string output = """
+            [stderr]
+            At C:\tmp\generated.ps1:12 char:5
+            + $x = 'oops
+            +      ~~~~~
+            The string is missing the terminator: '.
+            + CategoryInfo          : ParserError: (:) [], ParentContainsErrorRecordException
+            + FullyQualifiedErrorId : TerminatorExpectedAtEndOfString
+            """;
+
+        Assert.Equal(ShellVerdict.Ran, ShellOutcome.Of(@"powershell -File C:\tmp\generated.ps1", output));
+    }
 }

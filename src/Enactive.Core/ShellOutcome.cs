@@ -173,11 +173,24 @@ public static class ShellOutcome
     /// <para><b>What keeps it honest:</b> PowerShell echoes the source line it choked on, and that
     /// line has to be one WE sent. An error echoing anything else came from a generated script or
     /// an <c>Invoke-Expression</c> that we DID run, and that is a failure.</para>
+    /// <para><b>Except when it cannot point at a line at all.</b> Reported 2026-09-22: a step made
+    /// 43 successful edits over seven minutes and was failed for one script ending
+    /// <c>The string is missing the terminator: '.</c> — <c>ParserError</c>,
+    /// <c>TerminatorExpectedAtEndOfString</c>, and NO echo, because a string that never ends leaves
+    /// no single offending line to show. The rule above then read "no echo, so not ours" and called
+    /// it a failure of the work. It was a quote mark.</para>
+    ///
+    /// <para>So an unlocatable parse error counts as ours, and what keeps THAT honest is the absence
+    /// of a file location: a parse error from a script FILE we ran always says which file and which
+    /// line, and one from the text we sent inline does not. Nothing else can have run either way —
+    /// a script is compiled in full before its first statement, which is the argument this whole
+    /// branch rests on.</para>
     /// </summary>
     private static bool CouldNotRead(string command, string output)
     {
         var found = false;
         string? echoed = null;
+        var locatable = Locatable(output);
 
         foreach (var raw in output.Split('\n'))
         {
@@ -185,7 +198,13 @@ public static class ShellOutcome
 
             if (line.Contains("ParserError", StringComparison.Ordinal) || IsNotBound(line))
             {
-                if (echoed is null || !command.Contains(echoed, StringComparison.Ordinal))
+                var ours = echoed is { } text
+                    ? command.Contains(text, StringComparison.Ordinal)
+                    // Nothing to compare against - see the note above. A binding error always has a
+                    // line to echo, so this reaches only a parse error that has none.
+                    : !locatable && line.Contains("ParserError", StringComparison.Ordinal);
+
+                if (!ours)
                     return false;
 
                 found = true;
@@ -197,6 +216,24 @@ public static class ShellOutcome
         }
 
         return found;
+    }
+
+    /// <summary>
+    /// Whether the output says WHERE the error was, in a file. "At C:\tmp\x.ps1:3 char:1" is a
+    /// script we ran; "At line:4 char:12" is the text we sent, and so is no location at all.
+    /// </summary>
+    private static bool Locatable(string output)
+    {
+        foreach (var raw in output.Split('\n'))
+        {
+            var line = raw.Trim();
+
+            if (line.StartsWith("At ", StringComparison.Ordinal)
+                && !line.StartsWith("At line:", StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
     }
 
     private static bool IsNotBound(string line)
