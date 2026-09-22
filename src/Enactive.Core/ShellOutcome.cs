@@ -287,6 +287,103 @@ public static class ShellOutcome
         return text;
     }
 
+    // ── A program that refused its own arguments ──────────────────────────────────────
+
+    /// <summary>
+    /// Whether GIT refused the line rather than doing anything with it — its own "is not a git
+    /// command", or an option it does not have.
+    ///
+    /// <para><b>Why git needs its own sentence.</b> Everything above reads a SHELL refusing a line.
+    /// The git tool starts git directly, with an argument list and no shell, so none of it applies:
+    /// git starts, prints its refusal, and exits 1, which is indistinguishable from a merge
+    /// conflict or a failed push unless somebody reads the words.</para>
+    ///
+    /// <para>Measured three times on 2026-09-22 and each one cost a run:
+    /// <c>["st","--porcelain"]</c> corrected to <c>["status","--porcelain"]</c> a second later;
+    /// <c>{"args": show HEAD:file}</c> whose quotes never parsed; and
+    /// <c>{"args": "[\"status\", \"--short\"]"}</c>, a JSON array encoded as a string, which git
+    /// read as a subcommand called <c>["status",</c>. In each case git did nothing, the step was
+    /// marked Incomplete for it, and everything downstream was skipped.</para>
+    ///
+    /// <para><b>What keeps it honest</b> is the same rule as the shell's: the refused word has to
+    /// be one WE sent. A <c>git log</c> whose OUTPUT contains somebody's commit message about a
+    /// command not existing is a git that ran perfectly.</para>
+    /// </summary>
+    public static bool GitRefusedIt(IReadOnlyList<string> args, string? output)
+    {
+        if (args is null || args.Count == 0 || string.IsNullOrWhiteSpace(output))
+            return false;
+
+        foreach (var raw in output!.Split('\n'))
+        {
+            var line = raw.Trim();
+
+            // git: '<x>' is not a git command. See 'git --help'.
+            var refused = Quoted(line, "is not a git command");
+
+            // error: unknown option `force' / unknown switch `x'
+            refused ??= Quoted(line, "unknown option");
+            refused ??= Quoted(line, "unknown switch");
+
+            // fatal: unrecognized argument: --oopsie - git's third wording for the same thing,
+            // and the only one that does not quote the word it is refusing.
+            refused ??= After(line, "unrecognized argument:");
+
+            if (refused is null)
+                continue;
+
+            // Matched tightly on purpose. A loose test here would read "unknown option 'f'"
+            // against an argument of "-f" and then against every other argument containing an f,
+            // and a false positive costs more than a miss: it tells a step that nothing happened
+            // when git may well have changed the repository.
+            foreach (var arg in args)
+            {
+                var bare = arg.TrimStart('-');
+                if (bare.Length == 0)
+                    continue;
+
+                if (arg.Contains(refused, StringComparison.Ordinal)
+                    || string.Equals(bare, refused.TrimStart('-'), StringComparison.Ordinal))
+                    return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// The word git put in quotes on a line that says <paramref name="phrase"/>. Git uses three
+    /// kinds of quoting for this depending on the message, so all three are read.
+    /// </summary>
+    private static string? Quoted(string line, string phrase)
+    {
+        if (!line.Contains(phrase, StringComparison.Ordinal))
+            return null;
+
+        foreach (var (open, close) in new[] { ('\'', '\''), ('`', '\''), ('"', '"') })
+        {
+            var from = line.IndexOf(open);
+            if (from < 0) continue;
+
+            var to = line.IndexOf(close, from + 1);
+            if (to > from + 1)
+                return line[(from + 1)..to];
+        }
+
+        return null;
+    }
+
+    /// <summary>The rest of the line after <paramref name="phrase"/>, when it says it.</summary>
+    private static string? After(string line, string phrase)
+    {
+        var at = line.IndexOf(phrase, StringComparison.Ordinal);
+        if (at < 0)
+            return null;
+
+        var rest = line[(at + phrase.Length)..].Trim();
+        return rest.Length > 0 ? rest : null;
+    }
+
     // ── Found nothing ────────────────────────────────────────────────────────
 
     /// <summary>
