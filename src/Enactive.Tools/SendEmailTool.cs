@@ -164,9 +164,7 @@ public sealed class SendEmailTool(MailAccount account) : ITool
         {
             using var client = new SmtpClient { Timeout = TimeoutSeconds * 1000 };
 
-            await client.ConnectAsync(
-                account.Host, account.Port,
-                account.StartTls ? SecureSocketOptions.StartTls : SecureSocketOptions.Auto, ct);
+            await client.ConnectAsync(account.Host, account.Port, SocketOptions(account), ct);
 
             // A server that wants no credentials is a real configuration - a relay on a LAN, a
             // local submission agent - and offering it an empty password is how that fails.
@@ -201,6 +199,28 @@ public sealed class SendEmailTool(MailAccount account) : ITool
                 ["attachments"] = files.Count
             });
     }
+
+    /// <summary>
+    /// What "STARTTLS" means, which is what the Settings pane says it means: ON requires the
+    /// upgrade, OFF is implicit TLS on 465 and no TLS anywhere else.
+    ///
+    /// <para>It used to pass <see cref="SecureSocketOptions.Auto"/> when the switch was off, and
+    /// Auto upgrades whenever the server merely ADVERTISES the extension. An internal relay is
+    /// exactly the case that breaks: ours advertises STARTTLS and presents a certificate issued to
+    /// its own LAN name, so a switch the person had turned OFF became a hostname failure - the
+    /// message never left, and nothing in the settings explained why. Measured 2026-09-20 against
+    /// a relay on the local network: <c>Auto</c> fails with "did not match the name given in the server's SSL
+    /// certificate (enactiveapp.lan)", <c>None</c> connects.</para>
+    ///
+    /// <para>This is not a licence to send in the clear: it is the choice the person made, and
+    /// turning the switch on still requires the upgrade or fails.</para>
+    /// </summary>
+    internal static SecureSocketOptions SocketOptions(MailAccount account)
+        => account.StartTls
+            ? SecureSocketOptions.StartTls
+            : account.Port == 465
+                ? SecureSocketOptions.SslOnConnect
+                : SecureSocketOptions.None;
 
     private static string? Text(JsonElement root, string name)
         => root.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String

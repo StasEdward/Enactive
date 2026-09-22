@@ -3,6 +3,7 @@ namespace Enactive.Engine.Tests;
 using Enactive.Core.Mail;
 using Enactive.Core.Permissions;
 using Enactive.Tools;
+using MailKit.Security;
 using Xunit;
 
 /// <summary>
@@ -64,6 +65,30 @@ public sealed class SendEmailTests
         Assert.True(tool.RequiresApproval);
         Assert.Equal(PermissionLevel.Execute, tool.RequiredLevel);
     }
+
+    // ── what the STARTTLS switch is worth ───────────────────────────────────
+
+    /// <summary>
+    /// THE ONE THAT SENT NOTHING. Off is off: the Settings pane's own words are implicit TLS on
+    /// 465 and no TLS otherwise, and the tool passed <c>Auto</c>, which upgrades whenever the
+    /// server merely advertises STARTTLS. A relay with a certificate issued to its own LAN name -
+    /// the shape of every internal relay - then fails on the hostname alone, and no setting the
+    /// person can see accounts for it.
+    /// </summary>
+    [Fact]
+    public void StartTls_off_upgrades_for_nothing_but_implicit_tls()
+    {
+        var plain = Account("me@test") with { StartTls = false, Port = 25 };
+
+        Assert.Equal(SecureSocketOptions.None, SendEmailTool.SocketOptions(plain));
+        Assert.Equal(SecureSocketOptions.SslOnConnect,
+            SendEmailTool.SocketOptions(plain with { Port = 465 }));
+    }
+
+    /// <summary>On, the other way, still REQUIRES the upgrade rather than hoping for one.</summary>
+    [Fact]
+    public void StartTls_on_requires_the_upgrade()
+        => Assert.Equal(SecureSocketOptions.StartTls, SendEmailTool.SocketOptions(Account("me@test")));
 
     // ── nothing configured ──────────────────────────────────────────────────
 
