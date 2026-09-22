@@ -1,4 +1,4 @@
-﻿namespace Enactive.App.Ui.ViewModels;
+namespace Enactive.App.Ui.ViewModels;
 
 using System.Collections.ObjectModel;
 using System.Text;
@@ -52,11 +52,11 @@ internal sealed class StepEntry : ObservableObject
 /// </summary>
 internal sealed class StepCardViewModel : ObservableObject
 {
-    private const string CommandIcon = "$";
-    private const string FileIcon = "▤";
-    private const string ToolIcon = "▸";
-    private const string NoteIcon = "•";
-    private const string RefusedIcon = "⊘";
+    private const string CommandIcon = "⌘";
+    private const string FileIcon = "📄";
+    private const string ToolIcon = "🛠";
+    private const string NoteIcon = "🔔";
+    private const string RefusedIcon = "🛇";
 
     private readonly StringBuilder _noteBuffer = new();
 
@@ -202,7 +202,7 @@ internal sealed class StepCardViewModel : ObservableObject
     {
         FlushPendingNote();
         _toolCount++;
-        AddEntry(ToolIcon, Brand.TextMuted, label, Brand.TextBody, bold: false);
+        AddEntry(ToolIcon, Brand.Info, label, Brand.TextBody, bold: false);
         UpdateSummary();
     }
 
@@ -258,7 +258,7 @@ internal sealed class StepCardViewModel : ObservableObject
         if (flat.Length == 0)
             return;
         _noteCount++;
-        AddEntry(NoteIcon, Brand.TextMuted, flat, Brand.Text, bold: true);
+        AddEntry(NoteIcon, Brand.Warning, flat, Brand.TextBody, bold: true);
     }
 
     private void AddEntry(string icon, IBrush iconBrush, string label, IBrush labelBrush, bool bold)

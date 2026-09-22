@@ -1561,9 +1561,51 @@ public sealed class Orchestrator : IOrchestrator
         /// </summary>
         private readonly Dictionary<string, string> _namedNothing = new(StringComparer.Ordinal);
 
+        /// <summary>
+        /// Calls that NEVER HAPPENED — nothing parsed them, nothing ran them, or a person said no.
+        /// Kept apart from the rest because they leave no residue: there is no half-written file
+        /// and no broken build behind them, only a sentence that went nowhere.
+        /// </summary>
+        private readonly Dictionary<string, string> _neverHappened = new(StringComparer.Ordinal);
+
         private bool _anythingWorked;
 
-        public int Count => _byCall.Count + (_anythingWorked ? 0 : _foundNothing.Count);
+        /// <summary>
+        /// Whether this step CHANGED anything — a successful call that writes, or one that produced
+        /// an artifact. Deliberately stricter than <see cref="_anythingWorked"/>, which a single
+        /// read sets: see <see cref="Forgiven"/>.
+        /// </summary>
+        private bool _anythingChanged;
+
+        /// <summary>
+        /// Calls that never happened, in a step that did its work anyway — and which therefore say
+        /// nothing about whether the work was done.
+        ///
+        /// <para><b>Measured 2026-09-22, twice in half an hour.</b> A step verified five wiki
+        /// pages, wrote its report and gave its final answer — and was marked Incomplete, with four
+        /// dependent steps skipped, because a person had declined to delete a scratch file it did
+        /// not need. Half an hour later another step made 114 successful calls over four and a half
+        /// minutes, rewrote the same report, gave its final answer — and was failed for one
+        /// <c>git</c> call written with a missing pair of quotes, four and a half minutes earlier,
+        /// which it never repeated. Both runs did exactly what was asked and both were thrown
+        /// away.</para>
+        ///
+        /// <para><b>Why "changed" and not "worked".</b> A step that sent a malformed write and then
+        /// read three files has still not written anything, and forgiving it on the strength of a
+        /// read is the exact hole this class exists to close: a step reporting "Done" over an
+        /// action that never happened. A step that WROTE something did the thing steps are for, and
+        /// a call that never ran is then incidental noise — recorded in the journal, shown to the
+        /// reviewer, and not a verdict.</para>
+        ///
+        /// <para>A call that RAN and failed is never here. A build that broke is evidence, and no
+        /// amount of other work makes it not have broken.</para>
+        /// </summary>
+        private IReadOnlyCollection<string> Forgiven
+            => _anythingChanged ? _neverHappened.Keys : Array.Empty<string>();
+
+        public int Count
+            => _byCall.Keys.Count(k => !Forgiven.Contains(k))
+             + (_anythingWorked ? 0 : _foundNothing.Count);
 
         /// <summary>True when the step's whole record is lookups that found nothing.</summary>
         public bool NothingButMisses
@@ -1601,7 +1643,10 @@ public sealed class Orchestrator : IOrchestrator
             // the call where only doing that same thing again can close it - and there is no
             // "again", because there was never a first time.
             if (didNotRun)
+            {
                 _namedNothing[key] = Kind(call.Name);
+                _neverHappened[key] = Kind(call.Name);
+            }
             else if (FileNamedBy(call) is { } file)
                 _fileOf[key] = file;
             else if (ShellOperation.For(call.Name, call.ArgumentsJson) is { } operation)
@@ -1645,6 +1690,12 @@ public sealed class Orchestrator : IOrchestrator
         public void Succeeded(ToolCall call, IReadOnlyList<ArtifactRef> produced)
         {
             _anythingWorked = true;
+
+            // A file came out of it, or it is the kind of call that writes one. Either is the step
+            // having DONE something - which is what lets a call that never happened stop counting.
+            if (produced.Count > 0 || MutatingTools.Changes(call.Name))
+                _anythingChanged = true;
+
             Close(Key(call));
 
             foreach (var reference in produced)
@@ -1684,6 +1735,7 @@ public sealed class Orchestrator : IOrchestrator
         private void Close(string key)
         {
             _byCall.Remove(key);
+            _neverHappened.Remove(key);
             _foundNothing.Remove(key);
             _fileOf.Remove(key);
             _shellOf.Remove(key);
@@ -1722,7 +1774,12 @@ public sealed class Orchestrator : IOrchestrator
                              StringComparison.OrdinalIgnoreCase);
 
         public string Describe()
-            => string.Join("; ", _anythingWorked ? _byCall.Values : _byCall.Values.Concat(_foundNothing.Values));
+        {
+            var forgiven = Forgiven;
+            var open = _byCall.Where(p => !forgiven.Contains(p.Key)).Select(p => p.Value);
+
+            return string.Join("; ", _anythingWorked ? open : open.Concat(_foundNothing.Values));
+        }
 
         private static string Line(ToolCall call, string? error)
             => $"{call.Name} {Compact(call.ArgumentsJson)} — {error ?? "failed"}";
@@ -2854,7 +2911,12 @@ public sealed class Orchestrator : IOrchestrator
                         var why = gate == PermissionDecision.Ask
                             ? "the user did not permit this action"
                             : offer.Reason(call.Name) ?? "blocked by the permission policy";
-                        openFailures.Failed(call, why);
+                        // A refusal is a call that NEVER HAPPENED: nobody typed it wrong and
+                        // nothing broke - it was asked about and answered. The person's "no" IS
+                        // the resolution, and the policy's "no" is a door that will not open, which
+                        // the model is told below to walk around. Either way there is no residue,
+                        // so it stops counting once the step has changed something. See Forgiven.
+                        openFailures.Failed(call, why, didNotRun: true);
                         journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson),
                                        ActionOutcome.Refused, why);
 
