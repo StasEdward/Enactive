@@ -25,3 +25,7 @@ Claude outputs/
 
 # Scratch: probes and throwaway projects, kept out of the tree on purpose
 work/
+
+# Exported run logs dropped into a workspace by the log-reading tasks. The REPORT a run
+# produced is worth keeping; the megabyte of log it was produced from is not.
+Logs/*.log
