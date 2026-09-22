@@ -1670,7 +1670,16 @@ public sealed class Orchestrator : IOrchestrator
         /// </summary>
         private readonly Dictionary<string, string> _shellOf = new(StringComparer.Ordinal);
 
-        public void Failed(ToolCall call, string? error, bool didNotRun = false)
+        /// <param name="asTool">
+        /// The tool this call was REACHING for, when the name it used was not one. A call to
+        /// <c>run-powershell</c> is closed by a <c>run_powershell</c> that works, because that is
+        /// the same work done under the name the engine has - while the report still shows what
+        /// the model actually typed, so the typo stays visible.
+        ///
+        /// <para>Without this the entry is filed under a name nothing can ever match, and the step
+        /// carries it to the end however thoroughly the model corrected itself.</para>
+        /// </param>
+        public void Failed(ToolCall call, string? error, bool didNotRun = false, string? asTool = null)
         {
             var key = Key(call);
             _byCall[key] = Line(call, error);
@@ -1681,8 +1690,8 @@ public sealed class Orchestrator : IOrchestrator
             // "again", because there was never a first time.
             if (didNotRun)
             {
-                _namedNothing[key] = Kind(call.Name);
-                _neverHappened[key] = Kind(call.Name);
+                _namedNothing[key] = Kind(asTool ?? call.Name);
+                _neverHappened[key] = Kind(asTool ?? call.Name);
             }
             else if (FileNamedBy(call) is { } file)
                 _fileOf[key] = file;
@@ -2884,6 +2893,37 @@ public sealed class Orchestrator : IOrchestrator
 
             foreach (var call in toolCalls)
             {
+                // ── Does this tool exist at all? ──
+                //
+                // A name with no tool behind it used to fall through to the role gate below and be
+                // reported as "not available to role 'Developer'" - which is false, and false in
+                // the most expensive direction: told it lacks PERMISSION a model goes looking for
+                // another route, told it has a typo it fixes one character.
+                //
+                // Measured 2026-09-22: deepseek-flash, halfway through writing a PowerShell script
+                // in which every cmdlet is Verb-Noun, hyphenated the tool name too and sent
+                // 'run-powershell' seventeen times while 'run_powershell' sat in the tool list in
+                // front of it. Nothing in this codebase spells it with a hyphen; the model simply
+                // carried PowerShell's own naming into ours.
+                //
+                // Nothing ran, so this is NeverRan's case exactly - a word the engine does not
+                // have, like a cmdlet cmd.exe does not have - and the step is not left holding it.
+                if (!_tools.Definitions.Any(d => string.Equals(d.Name, call.Name, StringComparison.OrdinalIgnoreCase)))
+                {
+                    var nearest = NearestTool(call.Name, worker);
+                    var noSuchTool = $"there is no tool called '{call.Name}'. Nothing ran."
+                        + (nearest is null
+                            ? " Use one of the tools listed for this conversation, spelled exactly as it appears there."
+                            : $" The tool is spelled '{nearest}'. Call it again with that name.");
+
+                    openFailures.Failed(call, noSuchTool, didNotRun: true, asTool: nearest);
+                    journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson),
+                                   ActionOutcome.Refused, noSuchTool);
+                    yield return Decided(call.Name, allowed: false, $"{call.Name}: no such tool");
+                    messages.Add(ChatMessage.Tool(call.Id, "ERROR: " + noSuchTool));
+                    continue;
+                }
+
                 // ── Role gate: is this tool available to the worker's role? ──
                 if (!Allows(worker, call.Name))
                 {
@@ -3449,6 +3489,31 @@ public sealed class Orchestrator : IOrchestrator
     /// Full access is stated explicitly with "*". Settings written before SchemaVersion 2 are migrated
     /// on load (see AppSettings.Migrate), so an old empty list does not silently lose its tools.
     /// </summary>
+    /// <summary>
+    /// The tool this worker actually HAS whose name differs from <paramref name="wrong"/> only in
+    /// separators or case - <c>run-powershell</c> for <c>run_powershell</c>.
+    ///
+    /// <para>Deliberately not fuzzy. Anything looser starts proposing <c>delete_file</c> for
+    /// <c>deleted_files</c>, and a confident wrong name costs more than no name at all: the model
+    /// spends a turn on it and arrives back here. Separators and case are where real typos of a
+    /// name the model can SEE in its own tool list come from.</para>
+    ///
+    /// <para>Searched among the tools this worker is offered, so the suggestion cannot walk the
+    /// model straight into the role gate one turn later.</para>
+    /// </summary>
+    private string? NearestTool(string wrong, Worker worker)
+    {
+        static string Bare(string name)
+            => name.Replace("-", "").Replace("_", "").Replace(".", "");
+
+        var bare = Bare(wrong);
+
+        return _tools.Definitions
+            .Where(d => Allows(worker, d.Name))
+            .Select(d => d.Name)
+            .FirstOrDefault(name => string.Equals(Bare(name), bare, StringComparison.OrdinalIgnoreCase));
+    }
+
     private static bool Allows(Worker worker, string tool)
         => worker.ToolAllowlist.Contains("*")
         || worker.ToolAllowlist.Contains(tool, StringComparer.OrdinalIgnoreCase)
