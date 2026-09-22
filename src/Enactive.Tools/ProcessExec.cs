@@ -248,9 +248,12 @@ internal static class ProcessExec
 
         if (verdict == ShellVerdict.FoundNothing)
             return ToolResults.NotFound(
-                $"{what} looked and found nothing: every error it reported is a path that is not "
-                + "there. Nothing went wrong and there is nothing to retry - if you were guessing "
-                + "at where something lives, guess again or use search_files to find it.",
+                $"{what} looked and came back with nothing: every error it reported is a lookup "
+                + "that got no answer - a path that is not there, a name that is not on the PATH, "
+                + "or a read this account is not allowed. Nothing went wrong and there is nothing "
+                + "to retry. If you were guessing at where something lives, guess again or use "
+                + "search_files. If it needs administrator rights, say so in the result rather "
+                + "than trying again the same way.",
                 output, metadata);
 
         // Said only when nothing was declared: repeating the option to somebody who used it and

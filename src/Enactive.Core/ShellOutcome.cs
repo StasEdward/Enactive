@@ -126,7 +126,11 @@ public static class ShellOutcome
         if (WordItDoesNotHave(command!, output!) || CouldNotRead(command!, output!))
             return ShellVerdict.NeverRan;
 
-        return LookedAndFoundNothing(output!) ? ShellVerdict.FoundNothing : ShellVerdict.Ran;
+        return LookedAndFoundNothing(output!)
+            || NothingOnThePath(output!)
+            || LookedAndWasNotAllowed(output!)
+                ? ShellVerdict.FoundNothing
+                : ShellVerdict.Ran;
     }
 
     // ── Never ran ────────────────────────────────────────────────────────────
@@ -483,6 +487,94 @@ public static class ShellOutcome
         }
 
         return any;
+    }
+
+    /// <summary>
+    /// <c>where</c> saying a name is not on the PATH. Prose, not a structured record, which is why
+    /// the reading above cannot see it.
+    ///
+    /// <para>Measured 2026-09-23 01:17:59, run <c>9fe6aa</c>:
+    /// <c>where smartctl &amp; where nvme &amp; where wmic</c> printed
+    /// <i>INFO: Could not find files for the given pattern(s).</i> three times and exited 1. Asking
+    /// whether a tool is installed before reaching for it is exactly what a careful agent should
+    /// do, and the answer "it is not" ended the run.</para>
+    ///
+    /// <para>One sentence, from one program, and EVERY line has to be it: a <c>where</c> that found
+    /// two names of three prints the paths it found, and those lines are not this.</para>
+    /// </summary>
+    private static bool NothingOnThePath(string output)
+    {
+        var found = false;
+
+        foreach (var raw in output.Split('\n'))
+        {
+            var line = raw.Trim();
+            if (line.Length == 0 || line == "[stderr]")
+                continue;
+
+            if (line.IndexOf("Could not find files for the given pattern", StringComparison.Ordinal) < 0)
+                return false;
+
+            found = true;
+        }
+
+        return found;
+    }
+
+    /// <summary>
+    /// A read the system refused. The call happened and came back with nothing, which is what a
+    /// lookup says when the path is not there: "you get nothing", not "the work broke".
+    ///
+    /// <para>Measured twice on 2026-09-23: <c>Get-PhysicalDisk | Get-StorageReliabilityCounter</c>
+    /// answered <i>PermissionDenied: Access to a CIM resource was not available to the client</i>
+    /// without elevation. Both runs collected what they could by other means, WROTE the limitation
+    /// into the report - "Access denied (non-elevated)" - and were failed for having been told
+    /// no.</para>
+    ///
+    /// <para><b>Two conditions, and the second is what keeps it narrow.</b> Every error record must
+    /// be PermissionDenied, so a script refused one thing and broken on another is still broken.
+    /// And what was refused must be a <c>Get-</c>: PowerShell's verbs are a contract and
+    /// <c>Get-</c> never changes anything, so being denied one is a question left unanswered rather
+    /// than work left half done. A denied <c>Set-</c>, <c>Remove-</c> or <c>Start-</c> stays a
+    /// failure, because there the step wanted something to HAPPEN.</para>
+    ///
+    /// <para>The step-level guard is untouched and is what makes this safe: a step whose whole
+    /// record is lookups that came back empty is still not a success.</para>
+    /// </summary>
+    private static bool LookedAndWasNotAllowed(string output)
+    {
+        var denied = false;
+
+        foreach (var raw in output.Split('\n'))
+        {
+            var line = raw.Trim();
+            if (line.IndexOf("CategoryInfo", StringComparison.Ordinal) < 0)
+                continue;
+
+            if (line.IndexOf("PermissionDenied", StringComparison.Ordinal) < 0)
+                return false;
+
+            denied = true;
+        }
+
+        if (!denied)
+            return false;
+
+        // PowerShell writes the headline as "Cmdlet-Name : message", on one line, whatever the
+        // CategoryInfo line below it does - that one wraps, and the name can be cut in half by it.
+        foreach (var raw in output.Split('\n'))
+        {
+            var line = raw.Trim();
+            var colon = line.IndexOf(" : ", StringComparison.Ordinal);
+            if (colon <= 0)
+                continue;
+
+            var head = line[..colon].Trim();
+            if (head.StartsWith("Get-", StringComparison.OrdinalIgnoreCase) && !head.Contains(' '))
+                return true;
+        }
+
+        return false;
     }
 
     // ── Shared ───────────────────────────────────────────────────────────────
