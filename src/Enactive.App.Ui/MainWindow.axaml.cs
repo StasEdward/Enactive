@@ -219,8 +219,11 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         _vm.RunSettingsChanged += SaveRunSettings;
         _vm.AddWorkspaceRequested += () => _ = AddWorkspaceAsync();
         _vm.SettingsRequested += () =>
-            // SettingsWindow reads the live settings and mutates them only when Save is clicked
-            // (Cancel/close leave them untouched), so it gets _settings directly, not a partial copy.
+            // SettingsWindow gets the live settings and CLONES them, so Cancel/close leave these
+            // untouched and Save hands back the clone, which is then written and put in place of
+            // this one. That makes AppSettings.Clone the whole of what survives a visit to this
+            // window: a property missing there is a setting the next Save resets, whether or not
+            // the window has a control for it. Pinned by SettingsSurviveTheEditorTests.
             new SettingsWindow(_settings, workspaceRoot: WorkspaceRootOrNull(),
                 toolNames: _toolRegistry.Definitions.Select(d => d.Name).ToArray(),
                 remoteCheck: CheckRemoteAsync,

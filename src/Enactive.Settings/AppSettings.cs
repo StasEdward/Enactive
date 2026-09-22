@@ -689,7 +689,16 @@ public sealed partial class AppSettings
     private static List<string> NamedOrEmpty(string model)
         => string.IsNullOrWhiteSpace(model) ? new List<string>() : new List<string> { model };
 
-    /// <summary>Deep copy — so an editor can work on a throwaway copy and discard it on Cancel.</summary>
+    /// <summary>
+    /// Deep copy — so an editor can work on a throwaway copy and discard it on Cancel.
+    ///
+    /// <para><b>Every settable property has to be here, and a test now says so.</b> The settings
+    /// window edits a clone and saves THAT object over the file, so a property this method forgets
+    /// is not merely unreadable in the window - it is reset to its default on the next Save from
+    /// any pane. Reported 2026-09-22: the SMTP section was filled in, saved, and came back empty,
+    /// because <c>Smtp</c> was never copied; <c>KeepRuns</c> and <c>ProposeChecks</c> were being
+    /// silently reset the same way, with nobody looking at them to notice.</para>
+    /// </summary>
     public AppSettings Clone() => new()
     {
         // Must be copied: a clone that fell back to 1 would be saved as a v1 file, and the next load
@@ -722,8 +731,11 @@ public sealed partial class AppSettings
         WindowY = WindowY,
         WindowWidth = WindowWidth,
         WindowHeight = WindowHeight,
+        KeepRuns = KeepRuns,
+        ProposeChecks = ProposeChecks,
         Bindings = Bindings.Clone(),
         RemoteAccess = RemoteAccess.Clone(),
+        Smtp = Smtp.Clone(),
         McpServers = McpServers.Select(x => x.Clone()).ToList(),
         Providers = Providers.Select(x => x.Clone()).ToList(),
         Workers = Workers.Select(x => x.Clone()).ToList()
