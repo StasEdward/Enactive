@@ -933,7 +933,11 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                     var warnCard = CardFor(ev) ?? EnsureCurrentCard();
                     warnCard.AddNote("⚠ " + ev.Summary);
                     warnCard.SetActivity("⚠ " + ev.Summary);
-                    warnCard.SetNeedsAttention();
+
+                    // Opened, not repainted. The card's edge says what the step is DOING, and a
+                    // warning does not stop it doing that: a run with nine advisory notes used to
+                    // sit amber for its whole eleven minutes while working perfectly well.
+                    warnCard.ExpandForAttention();
                     break;
                 case EventKind.ReviewRequested:
                 case EventKind.ReviewPassed:
@@ -963,7 +967,13 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                     if (ev.Kind == EventKind.DecisionRequested)
                     {
                         decisionCard.SetActivity("Waiting for your approval…");
-                        decisionCard.SetNeedsAttention();
+                        decisionCard.SetWaitingForYou();
+                    }
+                    else
+                    {
+                        // Answered: the step is moving again, and the card should stop saying it is
+                        // not. The step's own ending overwrites this either way.
+                        decisionCard.SetRunning();
                     }
                     break;
                 case EventKind.UsageReported:
