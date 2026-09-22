@@ -256,7 +256,7 @@
                     <TextBlock Classes="hint" TextWrapping="Wrap"
                                Text="Sending always asks first, whatever the autonomy level says, and the question names the recipient, the subject and every attachment. A message cannot be recalled." />
                     <TextBlock Classes="hint" TextWrapping="Wrap"
-                               Text="Changes here take effect the next time the application starts." />
+                               Text="Changes here take effect on Save — the next run picks them up." />
                 </StackPanel>
 
                 <StackPanel IsVisible="{Binding IsRemote}" Margin="12" Spacing="6">

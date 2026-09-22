@@ -49,7 +49,11 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     private string _model = "qwen2.5-coder";
     private string _globalInstructions = string.Empty;
     private ChatProviderFactory _providerFactory = null!;
-    private readonly IToolRegistry _toolRegistry;
+    /// <summary>
+    /// Rebuilt on Save, not only at startup — see <see cref="BuildToolRegistry"/>. Every use reads
+    /// the field at call time, so replacing it is all that is needed.
+    /// </summary>
+    private IToolRegistry _toolRegistry;
     // Global, app-wide log hub. Default Debug (readable); the log window can drop it to Trace for raw wire.
     // Held separately from the hub so settings can reach it: this is built before any settings are
     // read, and retention is a setting.
@@ -152,19 +156,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     {
         _log = new LogHub(minLevel: LogLevel.Debug, downstream: new ILogSink[] { _logFile });
         _settings = AppSettings.Load();
-        var builtInTools = new List<ITool>
-        {
-            new WriteFileTool(), new EditFileTool(), new ReadFileTool(), new SearchFilesTool(),
-            new ListDirectoryTool(), new CreateDirectoryTool(), new MoveFileTool(), new CopyFileTool(), new DeleteFileTool(),
-            new RunCommandTool(), new RunPowerShellTool(), new GitTool(), new DockerTool()
-        };
-
-        // Registered whether or not an account exists - the roles name it, and the two sets have
-        // to agree - and it says so itself when there is nowhere to send. Read once, because the
-        // registry is built once: filling in Settings → SMTP takes effect on the next start.
-        builtInTools.Add(new SendEmailTool(EngineComposition.Mail(_settings)));
-
-        _toolRegistry = new ToolRegistry(builtInTools);
+        _toolRegistry = BuildToolRegistry();
 
         // A settings file the app cannot build from must not make the app unlaunchable. Saving is
         // validated now, but a file edited by hand — or written by an older build — can still be
@@ -2665,9 +2657,44 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         }
     }
 
+    /// <summary>
+    /// The tools this host offers, built from the CURRENT settings.
+    ///
+    /// <para>It used to be a list inline in the constructor, which made every setting a tool reads
+    /// a restart-only setting. Reported 2026-09-22: an SMTP account filled in and saved, and
+    /// <c>send_email</c> still telling the agent it was unavailable, because the account it holds
+    /// was read once when the window opened. Nothing about that is particular to mail - any tool
+    /// taking configuration would have behaved the same way - so the registry is rebuilt wherever
+    /// the settings are applied, and the pane no longer has to tell anybody to restart.</para>
+    ///
+    /// <para>Safe to swap while the application is running: <c>_toolRegistry</c> is read at the
+    /// point of use, and a run already in flight holds the registry it started with.</para>
+    /// </summary>
+    private IToolRegistry BuildToolRegistry()
+    {
+        var builtInTools = new List<ITool>
+        {
+            new WriteFileTool(), new EditFileTool(), new ReadFileTool(), new SearchFilesTool(),
+            // The three that answer WITHOUT returning file content: a number, a size, a verdict.
+            new CountMatchesTool(), new FileStatsTool(), new CompareFilesTool(),
+            new ListDirectoryTool(), new CreateDirectoryTool(), new MoveFileTool(), new CopyFileTool(), new DeleteFileTool(),
+            new RunCommandTool(), new RunPowerShellTool(), new GitTool(), new DockerTool()
+        };
+
+        // Registered whether or not an account exists - the roles name it, and the two sets have to
+        // agree - and it says so itself when there is nowhere to send.
+        builtInTools.Add(new SendEmailTool(EngineComposition.Mail(_settings)));
+
+        return new ToolRegistry(builtInTools);
+    }
+
     private void ApplySettings()
     {
         _globalInstructions = _settings.GlobalInstructions;
+
+        // Before the early return below: a tool's configuration is not the engine's, and an SMTP
+        // account saved on a machine with no model chosen should still reach the tool.
+        _toolRegistry = BuildToolRegistry();
 
         // Nothing to build an engine out of is a STATE, not an error. A machine where nobody has
         // chosen a model now says so — where it used to be silently configured for a model name
