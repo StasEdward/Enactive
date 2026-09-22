@@ -53,6 +53,35 @@ public sealed class Orchestrator : IOrchestrator
     /// </summary>
     private const int RunawayCeiling = 250;
 
+    /// <summary>
+    /// How many turns a step works in ONE conversation before it hands over to itself.
+    ///
+    /// <para><b>Why a step should be cut rather than killed.</b> The ceiling above is an execution:
+    /// measured 2026-09-22, a step that had written a 46 KB report over eleven minutes reached 250
+    /// turns, was marked Incomplete, and took the rest of the plan down with it. Nothing about that
+    /// step was wrong; it was doing the work it had been given, and the work was longer than one
+    /// conversation.</para>
+    ///
+    /// <para><b>And the cost of a long conversation is not linear.</b> Every turn re-sends what came
+    /// before it, so a step of 2N turns costs about four times a step of N. The same day, one run
+    /// spent 31.3M prompt tokens across five steps whose per-turn cost climbed 6k → 56k → 113k →
+    /// 161k → 215k, each step carrying everything the ones before it had said.</para>
+    ///
+    /// <para>So at this many turns the step writes down what it has finished and what is left,
+    /// and carries on in a fresh conversation holding its instructions and that handover. It is the
+    /// same step: same journal, same artifacts, same reviewer at the end.</para>
+    /// </summary>
+    private const int TurnsBeforeHandover = 60;
+
+    /// <summary>
+    /// How many times one step may hand over to itself before the backstop takes it.
+    ///
+    /// <para>Four conversations of <see cref="TurnsBeforeHandover"/> turns reach the same 250 that
+    /// ended a step outright before this existed — so nothing that used to finish now stops
+    /// earlier, and what used to die at the ceiling gets three more chances to end properly.</para>
+    /// </summary>
+    private const int MaxHandovers = 3;
+
     private readonly IChatProviderFactory _providers;
     private readonly IWorkerProvider _workers;
     private readonly IToolRegistry _tools;
@@ -2546,8 +2575,51 @@ public sealed class Orchestrator : IOrchestrator
         // Repetition, counted. Not turns - see StallLimit.
         var progress = new StepProgress();
 
+        // How many times this step has already started over with a handover, and how many turns
+        // the CURRENT conversation has taken. The iteration counter keeps counting the whole step,
+        // because the backstop is about the step and not about one of its conversations.
+        var handovers = 0;
+        var turnsHere = 0;
+
         for (var iteration = 1; iteration <= RunawayCeiling; iteration++)
         {
+            // Cut, not killed - see TurnsBeforeHandover. Done at the TOP of a turn, where the
+            // conversation is always in a complete state: the last message is a tool result or an
+            // instruction, never half of a call waiting for its answer.
+            if (turnsHere >= TurnsBeforeHandover && handovers < MaxHandovers)
+            {
+                var carried = await HandoverAsync(provider, model, messages, runBudget, ct);
+
+                if (carried is { Length: > 0 })
+                {
+                    handovers++;
+                    turnsHere = 0;
+
+                    var kept = Preamble(messages);
+                    messages.RemoveRange(kept, messages.Count - kept);
+                    messages.Add(ChatMessage.User(
+                        $"You have been working on this for {iteration - 1} turn(s) and the "
+                        + "conversation was getting long, so it has been started again from your own "
+                        + "notes. This is what you had done:\n\n" + carried
+                        + "\n\nCarry on from there. The files you wrote are still on disk; read one "
+                        + "back if you need what is in it."));
+
+                    yield return Ev(EventKind.ContextTrimmed,
+                        $"This step has run {iteration - 1} turns. Carrying its own notes into a "
+                        + $"fresh conversation and continuing ({handovers} of {MaxHandovers}).");
+                }
+                else
+                {
+                    // It could not say what it had done. Carrying on with the long conversation is
+                    // worse than stopping at the backstop, but it is better than starting the step
+                    // again from nothing - so the handover is simply not taken, and the ceiling
+                    // stays where it was.
+                    handovers = MaxHandovers;
+                }
+            }
+
+            turnsHere++;
+
             var request = new ChatRequest(model, messages, toolDefs, Temperature: 0.2, NumCtx: _numCtx, Think: _think);
 
             // Does this provider apply a hard window to prompt AND generation together? Only Ollama
@@ -3197,6 +3269,73 @@ public sealed class Orchestrator : IOrchestrator
             $"This step ran {RunawayCeiling} turns and never finished. It was still doing new things "
             + "each turn, so it is not stuck in a loop — but nothing this long is going to plan. "
             + "Stopping it.");
+    }
+
+    /// <summary>
+    /// What a step hands to itself when its conversation is cut: its own account of what is done
+    /// and what is left, in its own words.
+    ///
+    /// <para>Asked of the model rather than assembled from the journal, because the journal knows
+    /// which calls were made and not what they MEANT — "read Architecture.md" is in the journal;
+    /// "Architecture.md checks out except the tool table" is what the next conversation needs.</para>
+    ///
+    /// <para>One non-streaming call on the conversation as it stands. It is nearly free: the whole
+    /// transcript is already a cache hit by this point, and what it adds is a few hundred tokens of
+    /// question and answer.</para>
+    ///
+    /// <para>Returns null when the model says nothing. The caller then does NOT cut — a step
+    /// continuing from an empty handover would start again from its instructions alone, having
+    /// forgotten everything it learned, which is worse than a long conversation.</para>
+    /// </summary>
+    private static async Task<string?> HandoverAsync(
+        IChatProvider provider, string model, List<ChatMessage> messages, RunBudget runBudget,
+        CancellationToken ct)
+    {
+        var asked = new List<ChatMessage>(messages)
+        {
+            ChatMessage.User(
+                "Before you continue: this conversation is being started over to keep it short, and "
+                + "everything except your instructions will be dropped. Write the note you would "
+                + "want to find. State what you have ALREADY established - findings, file paths, "
+                + "numbers, what you checked and what it said - and what is still to do, in that "
+                + "order. Facts only, no plan for the future beyond the next concrete action. Do "
+                + "not call any tool; just write the note.")
+        };
+
+        try
+        {
+            var completion = await provider.CompleteAsync(
+                new ChatRequest(model, asked, Temperature: 0.0, NumCtx: null, Think: false), ct);
+
+            runBudget.TokensUsed(completion.PromptTokens ?? 0, completion.CompletionTokens ?? 0);
+
+            var note = completion.Message.Content?.Trim();
+            return string.IsNullOrWhiteSpace(note) ? null : note;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            // A provider that failed this one call has not failed the step. The handover is an
+            // economy, and an economy that throws is worse than one that does not happen.
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// How many messages at the front of a conversation are its INSTRUCTIONS - everything before
+    /// the model first spoke. That is what a handover keeps: the system prompt, the request, the
+    /// step it was given, and anything else the engine said before the work began.
+    /// </summary>
+    private static int Preamble(List<ChatMessage> messages)
+    {
+        for (var i = 0; i < messages.Count; i++)
+            if (messages[i].Role == ChatRole.Assistant)
+                return i;
+
+        return messages.Count;
     }
 
     /// <summary>
