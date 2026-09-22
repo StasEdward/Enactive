@@ -714,6 +714,10 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         try
         {
             await using var mcp = await McpRunTools.ConnectAsync(_toolRegistry, _settings.McpServers, fullPath, _cts.Token);
+
+            // Said once per run, whether or not anything calls them: starting a server is a cost
+            // the run has already paid, and the log had no record of it at all.
+            _log.Info(LogSource.Tool, mcp.Summary());
             IToolRegistry runTools = new LoggingToolRegistry(mcp, _log);
             var runStore = RunStoreFactory.Create(workspace);
             // The same store the recorder folds into, so a run reads back what earlier ones

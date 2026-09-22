@@ -77,6 +77,8 @@
                         <TextBlock Classes="label" Text="MCP servers" />
                         <TextBlock Classes="hint" Text="Connect local programs through stdio or remote servers through HTTP. Enabled servers connect for each new run; running tasks keep their current settings." />
                         <TextBlock Classes="hint" Text="Allow mcp__* under AI · Team to let a worker use these tools. Calls ask for approval by default. External changes are not staged or undone by Enactive." />
+                        <TextBlock Classes="hint" TextWrapping="Wrap" Foreground="{DynamicResource Brand.Danger}"
+                                   IsVisible="{Binding HasMcpReachNote}" Text="{Binding McpReachNote}" />
                     </StackPanel>
                     <StackPanel DockPanel.Dock="Bottom" Classes="actions">
                         <Button Content="Add" Command="{Binding AddMcpCommand}" />

@@ -3,6 +3,7 @@ namespace Enactive.App.Ui.ViewModels;
 using System.Collections.ObjectModel;
 using Avalonia.Media;
 using Enactive.App.Ui.Mvvm;
+using Enactive.Settings;
 using Enactive.Tools.Mcp;
 
 /// <summary>One row of the MCP list, on the same terms as <see cref="ProviderRow"/>.</summary>
@@ -36,6 +37,15 @@ internal sealed partial class SettingsViewModel
     public RelayCommand ShowMcpCommand { get; private set; } = null!;
     public RelayCommand AddMcpCommand { get; private set; } = null!;
     public ObservableCollection<McpServerRow> McpServers { get; } = new();
+
+    /// <summary>
+    /// Said here because here is where somebody can act on it: a server enabled and named by no
+    /// role is started by every run and offered to nobody. The engine says the same thing once a
+    /// run has already paid to start it — see <c>McpReach</c> — which is too late to be advice.
+    /// </summary>
+    public string McpReachNote { get; private set; } = string.Empty;
+
+    public bool HasMcpReachNote => McpReachNote.Length > 0;
     private McpServerRow? _selectedMcp;
     public McpServerRow? SelectedMcp { get => _selectedMcp; set => Set(ref _selectedMcp, value); }
     public event Action<McpServerConfig, Action<McpServerConfig>>? McpEditRequested;
@@ -55,6 +65,14 @@ internal sealed partial class SettingsViewModel
         McpServers.Clear();
         foreach (var config in _working.McpServers)
             McpServers.Add(new(config, () => EditMcp(config, config.Clone()), () => _ = RemoveMcpAsync(config)));
+
+        // Recomputed with the rows, so enabling a server or editing the team is reflected without
+        // a round trip through Save.
+        McpReachNote = McpRoles.Note(
+            _working.Workers,
+            _working.McpServers.Select(c => (c.Id, c.Enabled))) ?? string.Empty;
+        OnPropertyChanged(nameof(McpReachNote));
+        OnPropertyChanged(nameof(HasMcpReachNote));
     }
 
     private void EditMcp(McpServerConfig? previous, McpServerConfig draft)

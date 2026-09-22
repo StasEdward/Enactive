@@ -14,6 +14,9 @@ public sealed class McpConnection : IAsyncDisposable
     private readonly McpServerConfig _config;
     public IReadOnlyList<ITool> Tools { get; }
 
+    /// <summary>Which server this is, for the log line a run writes when it connects.</summary>
+    public string Id => _config.Id;
+
     private McpConnection(McpClient client, McpServerConfig config, IEnumerable<McpClientTool> tools)
     {
         _client = client;

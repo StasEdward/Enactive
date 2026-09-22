@@ -38,6 +38,20 @@ public sealed class McpRunTools : IToolRegistry, IAsyncDisposable
         catch { await result.DisposeAsync(); throw; }
     }
 
+    /// <summary>
+    /// What connected, and how much it brought — for the log line at the call site.
+    ///
+    /// <para>There was none. A server that started fine and a server that was never configured
+    /// looked identical from the log, and the only evidence a run had MCP at all was a tool call
+    /// that came from one. That is the wrong way round: the connection is a fact about the run, and
+    /// the call is a choice the model may never make.</para>
+    /// </summary>
+    public string Summary()
+        => _connections.Count == 0
+            ? "no MCP servers are enabled"
+            : "MCP connected: " + string.Join(", ",
+                _connections.Select(c => $"{c.Id} ({c.Tools.Count} tool(s))"));
+
     public async ValueTask DisposeAsync()
     {
         foreach (var connection in _connections)

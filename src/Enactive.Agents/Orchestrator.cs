@@ -2466,6 +2466,13 @@ public sealed class Orchestrator : IOrchestrator
         if (offer.Sentence is { } withheldSentence)
             yield return Ev(EventKind.ContextAssembled, withheldSentence);
 
+        // And the servers the ROLE filtered out before any of that. ToolOffers never sees them -
+        // its candidate list is already role-filtered - so without this they are not withheld, they
+        // are absent, and a run starts a child process per server for tools nobody may call.
+        if (McpReach.Unreached(_tools.Definitions.Select(d => d.Name), name => Allows(worker, name))
+            is { } unreachedSentence)
+            yield return Ev(EventKind.ErrorObserved, unreachedSentence);
+
         // The tool schemas are sent with every request and are not part of the message list, so they
         // have to be counted separately or the estimate is short by a constant few thousand
         // characters - exactly the margin that decides whether the last turn fits.
