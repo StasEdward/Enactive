@@ -43,6 +43,7 @@ internal static class MarkdownRender
             Margin = new Thickness(0, 10, 0, 10),
             Background = Brand.Line
         },
+        BlockKind.Table => Table(block),
         BlockKind.Bullet => Item(block, "•"),
         BlockKind.Numbered => Item(block, block.Marker ?? "•"),
         _ => Paragraph(block)
@@ -90,6 +91,73 @@ internal static class MarkdownRender
         grid.Children.Add(bullet);
         Grid.SetColumn(text, 1);
         grid.Children.Add(text);
+        return grid;
+    }
+
+    /// <summary>
+    /// A table, as a grid of selectable cells.
+    ///
+    /// <para><b>Star columns, not Auto.</b> A report's table holds sentences - "the tool table omits
+    /// four registered tools" - and Auto columns size to the longest one, which pushes the rest off
+    /// the pane and gives the reader a horizontal scrollbar to fight. Equal shares wrap instead,
+    /// which is the behaviour of every document this is likely to show.</para>
+    ///
+    /// <para>The header is told apart by weight and one rule beneath it rather than by a fill: a
+    /// block of colour at the top of a narrow pane reads as a title bar for whatever is under it.
+    /// Rows are separated by hairlines so a wrapped cell cannot be misread as belonging to the row
+    /// below.</para>
+    /// </summary>
+    private static Control Table(MarkdownBlock block)
+    {
+        var rows = block.Rows ?? Array.Empty<MarkdownRow>();
+        if (rows.Count == 0)
+            return new StackPanel();
+
+        // A ragged row is a real thing in a hand-written table, and it is not worth refusing to
+        // draw one over: the widest row decides, and short rows simply leave space.
+        var columns = rows.Max(r => r.Cells.Count);
+
+        var grid = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions(string.Join(",", Enumerable.Repeat("*", columns))),
+            Margin = new Thickness(0, 4, 0, 10)
+        };
+
+        for (var r = 0; r < rows.Count; r++)
+        {
+            grid.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
+
+            for (var c = 0; c < rows[r].Cells.Count; c++)
+            {
+                var cell = Selectable(new MarkdownBlock(BlockKind.Paragraph, rows[r].Cells[c]));
+                cell.Foreground = r == 0 ? Brand.Text : Brand.TextBody;
+                cell.FontWeight = r == 0 ? FontWeight.SemiBold : FontWeight.Normal;
+                cell.FontSize = 12;
+                cell.Margin = new Thickness(0, 5, 12, 5);
+
+                Grid.SetRow(cell, r);
+                Grid.SetColumn(cell, c);
+                grid.Children.Add(cell);
+            }
+
+            // Under the header, and between rows. Not after the last one: a line with nothing under
+            // it reads as a row that failed to render.
+            if (r < rows.Count - 1)
+            {
+                var line = new Border
+                {
+                    Height = 1,
+                    Background = r == 0 ? Brand.LineStrong : Brand.Line,
+                    VerticalAlignment = VerticalAlignment.Bottom,
+                    Margin = new Thickness(0, 0, 0, 0)
+                };
+                Grid.SetRow(line, r);
+                Grid.SetColumn(line, 0);
+                Grid.SetColumnSpan(line, columns);
+                grid.Children.Add(line);
+            }
+        }
+
         return grid;
     }
 

@@ -9,21 +9,33 @@ public enum SpanStyle { Plain, Bold, Italic, Code }
 public sealed record MarkdownSpan(string Text, SpanStyle Style = SpanStyle.Plain);
 
 /// <summary>What kind of block a line belongs to.</summary>
-public enum BlockKind { Paragraph, Heading, Bullet, Numbered, Code, Rule }
+public enum BlockKind { Paragraph, Heading, Bullet, Numbered, Code, Rule, Table }
 
 /// <summary>
 /// One block of a document.
 /// </summary>
 /// <param name="Level">Heading depth (1-6), or the indent depth of a list item. Zero otherwise.</param>
 /// <param name="Marker">What a numbered item is numbered with, kept verbatim so "3." stays "3.".</param>
+/// <summary>One row of a table: its cells, each of them styled text like anything else.</summary>
+public sealed record MarkdownRow(IReadOnlyList<IReadOnlyList<MarkdownSpan>> Cells)
+{
+    public string PlainText => string.Join(" | ", Cells.Select(c => string.Concat(c.Select(s => s.Text))));
+}
+
 public sealed record MarkdownBlock(
     BlockKind Kind,
     IReadOnlyList<MarkdownSpan> Spans,
     int Level = 0,
-    string? Marker = null)
+    string? Marker = null,
+    IReadOnlyList<MarkdownRow>? Rows = null)
 {
-    /// <summary>The block's text with no styling, for a plain-text fallback and for tests.</summary>
-    public string PlainText => string.Concat(Spans.Select(s => s.Text));
+    /// <summary>
+    /// The block's text with no styling, for a plain-text fallback and for tests. A table reads as
+    /// its rows, one per line, which is what somebody copying it out of a plain-text view wants.
+    /// </summary>
+    public string PlainText => Rows is { Count: > 0 }
+        ? string.Join("\n", Rows.Select(r => r.PlainText))
+        : string.Concat(Spans.Select(s => s.Text));
 }
 
 /// <summary>
@@ -68,8 +80,9 @@ public static class Markdown
             code.Clear();
         }
 
-        foreach (var raw in lines)
+        for (var i = 0; i < lines.Length; i++)
         {
+            var raw = lines[i];
             var line = raw.TrimEnd();
 
             // A fence opens and closes verbatim territory: nothing inside it is markup, which is the
@@ -127,6 +140,14 @@ public static class Markdown
                 continue;
             }
 
+            if (TableAt(lines, i) is var (table, used) && table is not null)
+            {
+                FlushParagraph();
+                blocks.Add(table);
+                i += used - 1;
+                continue;
+            }
+
             paragraph.Add(trimmed);
         }
 
@@ -137,6 +158,73 @@ public static class Markdown
         FlushParagraph();
 
         return blocks;
+    }
+
+    /// <summary>
+    /// A pipe table starting at <paramref name="start"/>, and how many lines it used — or null.
+    ///
+    /// <para><b>The separator row is what makes it a table</b>, and requiring it is the whole of
+    /// the safety here: prose containing a pipe ("run a | b"), a code sample, a line of shell with
+    /// a pipeline — none of them have <c>|---|---|</c> underneath, so none of them is mistaken for
+    /// a table. Without that rule a renderer eats ordinary sentences.</para>
+    ///
+    /// <para>Reported 2026-09-22: a generated report's tables arrived in the viewer as one run-on
+    /// paragraph with the pipes and the dashes still in it, because a table was not a thing this
+    /// parser knew about and every row fell through to <c>paragraph.Add</c>, where consecutive
+    /// lines are joined with a space.</para>
+    ///
+    /// <para>Escaped pipes are not supported, deliberately: <c>\|</c> inside a cell is rare, and the
+    /// alternative — a parser that is clever about escapes — is the kind of cleverness that gets a
+    /// line silently dropped. A stray pipe splits a cell, which is visible and harmless.</para>
+    /// </summary>
+    private static (MarkdownBlock? Table, int Used) TableAt(string[] lines, int start)
+    {
+        if (start + 1 >= lines.Length || !IsRow(lines[start]) || !IsSeparator(lines[start + 1]))
+            return (null, 0);
+
+        var rows = new List<MarkdownRow> { Row(lines[start]) };
+        var used = 2;   // the header and the separator under it
+
+        for (var i = start + 2; i < lines.Length && IsRow(lines[i]); i++, used++)
+            rows.Add(Row(lines[i]));
+
+        return (new MarkdownBlock(BlockKind.Table, Array.Empty<MarkdownSpan>(), Rows: rows), used);
+    }
+
+    private static bool IsRow(string line)
+    {
+        var trimmed = line.Trim();
+        return trimmed.Length > 0 && trimmed.Contains('|');
+    }
+
+    /// <summary>The <c>|---|:--:|</c> line: every cell dashes, with optional alignment colons.</summary>
+    private static bool IsSeparator(string line)
+    {
+        var cells = Cells(line);
+        if (cells.Count == 0)
+            return false;
+
+        foreach (var cell in cells)
+        {
+            var body = cell.Trim().Trim(':');
+            if (body.Length == 0 || body.Any(c => c != '-'))
+                return false;
+        }
+
+        return true;
+    }
+
+    private static MarkdownRow Row(string line)
+        => new(Cells(line).Select(c => Spans(c.Trim())).ToArray());
+
+    /// <summary>A row's cells: the outer pipes are punctuation, not empty columns.</summary>
+    private static List<string> Cells(string line)
+    {
+        var trimmed = line.Trim();
+        if (trimmed.StartsWith('|')) trimmed = trimmed[1..];
+        if (trimmed.EndsWith('|')) trimmed = trimmed[..^1];
+
+        return trimmed.Split('|').ToList();
     }
 
     private static int? HeadingLevel(string line)
