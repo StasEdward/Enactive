@@ -309,6 +309,65 @@ public static class ShellOutcome
     /// be one WE sent. A <c>git log</c> whose OUTPUT contains somebody's commit message about a
     /// command not existing is a git that ran perfectly.</para>
     /// </summary>
+    /// <summary>
+    /// A SEARCH that found nothing — exit 1, not a word printed, from a program whose whole
+    /// convention is exactly that.
+    ///
+    /// <para><b>The measurement.</b> 2026-09-22 23:56:43, one turn, two tool calls 55 milliseconds
+    /// apart, asking the same question of the same folder:</para>
+    ///
+    /// <code>
+    /// search_files {"pattern":"ENACTIVE_OWNER_KEY|…"}  -> "No matches in 1 file(s)."   ok
+    /// run_command  {"command":"findstr /s /i /n …"}     -> exit 1, no output           FAILED
+    /// </code>
+    ///
+    /// <para>The second one ended the run: step 2 Incomplete, steps 3 and 4 skipped. The engine has
+    /// held since 2026-09-20 that a lookup told "not there" is an ANSWER — that is what
+    /// <see cref="ShellVerdict.FoundNothing"/> is for — but that verdict is read out of the error
+    /// TEXT, and a search that matches nothing does not produce any. It says so with its exit
+    /// code and stays silent, which is the one shape the reading could not see.</para>
+    ///
+    /// <para><b>Why exit 1 exactly.</b> Every one of these programs distinguishes the two cases the
+    /// same way: 1 means "no matches", 2 or more means "something went wrong", and trouble is
+    /// always PRINTED — <c>FINDSTR: Cannot open x</c>, <c>grep: x: No such file</c>. So silence
+    /// plus 1 is the only combination that means nothing matched, and any output at all disqualifies
+    /// it. Measured on this host: findstr answers 1 for a missing path too, and prints nothing —
+    /// "looked and found nothing" is the honest reading of that as well.</para>
+    ///
+    /// <para><b>Why the head must be the whole line.</b> In <c>findstr x *.cs | sort</c> the exit
+    /// code belongs to sort, and in <c>grep x f &amp;&amp; build</c> it belongs to whatever ran
+    /// last. A line with plumbing in it is not a search reporting its result, so it is left alone.
+    /// git is deliberately absent: <c>git grep</c> would qualify, but <c>git diff --exit-code</c>
+    /// uses 1 to mean the opposite of nothing found.</para>
+    /// </summary>
+    public static bool SearchFoundNothing(string? command, string? output, int exitCode)
+    {
+        if (exitCode != 1 || !string.IsNullOrWhiteSpace(output) || string.IsNullOrWhiteSpace(command))
+            return false;
+
+        var line = command!.Trim();
+        if (line.IndexOfAny(Separators) >= 0 || line.Contains('>'))
+            return false;
+
+        var head = line.Split([' ', '	'], 2, StringSplitOptions.RemoveEmptyEntries)
+                       .FirstOrDefault();
+        if (string.IsNullOrEmpty(head))
+            return false;
+
+        head = Path.GetFileNameWithoutExtension(head.Trim('\"', '\''));
+
+        return SearchPrograms.Contains(head);
+    }
+
+    /// <summary>
+    /// Programs whose exit code 1 means "no matches" and nothing else. Named one by one rather than
+    /// guessed at: the whole safety of the rule above is that these particular programs are known
+    /// to say "nothing matched" and "something broke" differently.
+    /// </summary>
+    private static readonly HashSet<string> SearchPrograms =
+        new(StringComparer.OrdinalIgnoreCase)
+        { "findstr", "grep", "egrep", "fgrep", "rg", "ripgrep", "ag", "ack" };
+
     public static bool GitRefusedIt(IReadOnlyList<string> args, string? output)
     {
         if (args is null || args.Count == 0 || string.IsNullOrWhiteSpace(output))

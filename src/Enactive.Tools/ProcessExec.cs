@@ -187,6 +187,12 @@ internal static class ProcessExec
         // read as an absence and be called a real failure.
         var verdict = ShellOutcome.Of(commandLine, combined);
 
+        // Asked here, beside the verdict and for the same reason, but of the EXIT CODE rather than
+        // the text: a search that matched nothing prints nothing, so there is no text to read.
+        // Kept out of ShellOutcome.Of because that function is not given the exit code - and giving
+        // it one would let every other verdict start reading it too.
+        var searchMissed = ShellOutcome.SearchFoundNothing(commandLine, combined, exitCode);
+
         // The START and the END, not the first N characters. A program reports its outcome last,
         // so head-only shortening hands the model the part with no answer in it: on 2026-09-20 a
         // step wrote its tests, ran them, and could not tell whether they passed - the summary was
@@ -229,6 +235,17 @@ internal static class ProcessExec
         // Measured 2026-09-20: a run checking the wiki against the source looked for two files
         // where the WIKI says they are, they are elsewhere, and a 662-line report with 21 confirmed
         // contradictions was failed for finding exactly that.
+        // The same sentence as search_files' "No matches", which was answered ok in the very same
+        // turn on 2026-09-22 23:56:43 while this one ended the run. Two ways of asking one question
+        // must not have two different verdicts.
+        if (searchMissed)
+            return ToolResults.NotFound(
+                $"{what} searched and matched nothing. That is an ANSWER, not a failure: the "
+                + "program exited 1 and printed nothing, which is how these tools say "
+                + "\"no matches\" - trouble is always printed. Nothing needs retrying. If you "
+                + "expected matches, the pattern or the path is wrong, so change one of them.",
+                output, metadata);
+
         if (verdict == ShellVerdict.FoundNothing)
             return ToolResults.NotFound(
                 $"{what} looked and found nothing: every error it reported is a path that is not "
