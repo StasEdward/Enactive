@@ -113,6 +113,40 @@ public sealed class ReadingFiveFilesInOneTurnTests
     }
 
     /// <summary>
+    /// A file too long for its share is cut at BOTH ends, and its end is really there.
+    ///
+    /// <para>Raised in review of this tool, 2026-09-24: for a 10,000-line source file an agent
+    /// wants the namespace and declaration at the top and the last members at the bottom. True —
+    /// and the stronger reason is that every other excerpt in this application is the start and
+    /// the end, and a reader who learns that shape and then meets one tool where it does not hold
+    /// will misread it. §9cc is a label that outlived its shape by a day and a reviewer that
+    /// believed the label.</para>
+    ///
+    /// <para>Head-heavy, unlike a command's output: two fifths was argued from "a program reports
+    /// its outcome last", and a file has no outcome.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_long_file_is_shown_at_both_ends()
+    {
+        using var fx = new EngineFixture();
+
+        var middle = new string('m', ReadFilesTool.MaxCharsPerFile * 2);
+        fx.Write("long.cs", "namespace Top;\n" + middle + "\n// the last line");
+
+        var result = await Read(fx, "long.cs");
+
+        Assert.True(result.Success, result.Error);
+        Assert.Contains("namespace Top;", result.Output, StringComparison.Ordinal);
+        Assert.Contains("// the last line", result.Output, StringComparison.Ordinal);
+        Assert.Contains("missing is the MIDDLE", result.Output, StringComparison.Ordinal);
+
+        // Head-heavy: more of the budget went to the top than to the bottom.
+        var marker = result.Output.IndexOf("not shown here", StringComparison.Ordinal);
+        Assert.True(marker > result.Output.Length / 2,
+                    "a file keeps more of its head than its tail - see Shortening.FileHead");
+    }
+
+    /// <summary>
     /// And it reaches a run. A tool the host registers and no role names may as well not exist —
     /// this file's own registry has learnt that six times (§9bt).
     /// </summary>

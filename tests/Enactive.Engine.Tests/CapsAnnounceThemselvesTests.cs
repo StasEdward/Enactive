@@ -217,7 +217,11 @@ public sealed class CapsAnnounceThemselvesTests
                                      System.Text.Json.JsonSerializer.Serialize(new { paths }));
 
         Assert.True(result.Success, result.Error);
-        Assert.Contains("cut after", result.Output, StringComparison.Ordinal);
+
+        // The START and the END, and the label says which - one shape for every excerpt in this
+        // application, which is the property 9cc showed is load-bearing.
+        Assert.Contains("the start and the end", result.Output, StringComparison.Ordinal);
+        Assert.Contains("missing is the MIDDLE", result.Output, StringComparison.Ordinal);
         Assert.Contains("short one", result.Output, StringComparison.Ordinal);
     }
 

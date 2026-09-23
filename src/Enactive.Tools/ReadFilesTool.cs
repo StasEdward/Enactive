@@ -5,6 +5,7 @@ using System.Text.Json;
 using Enactive.Core.Permissions;
 using Enactive.Core.Context;
 using Enactive.Core.Tools;
+using Enactive.Core.Execution;
 
 /// <summary>
 /// Reads several files in ONE call (read-only, Observe level).
@@ -55,8 +56,9 @@ public sealed class ReadFilesTool : ITool
         Description: "Read several UTF-8 text files from the current workspace in ONE call. Paths "
                    + "are relative to the workspace root, at most " + MaxFiles + ". Use this "
                    + "whenever a question touches more than one file - it costs one turn instead of "
-                   + "several. Each file is shown whole up to " + MaxCharsPerFile + " characters and "
-                   + "says so if it was cut; use read_file for a window into one long file.",
+                   + "several. A file longer than " + MaxCharsPerFile + " characters is shown as "
+                   + "its START and its END with the middle marked; use read_file for a window "
+                   + "into the part between them.",
         JsonSchema: Schema);
 
     public PermissionLevel RequiredLevel => PermissionLevel.Observe;
@@ -130,7 +132,22 @@ public sealed class ReadFilesTool : ITool
 
                 var text = await File.ReadAllTextAsync(full, ct);
                 var room = Math.Min(MaxCharsPerFile, budget);
-                var slice = text.Length > room ? text[..room] : text;
+
+                // The START and the END, never just the start. Two reasons, and the second is the
+                // stronger one. A file's top carries its namespace, usings and declaration and its
+                // bottom its last member, so head-only throws away the half that says the file
+                // ENDED - and a model reading a plausible file that simply stops has no way to
+                // tell a cut from a truth. That is 9q's lesson for command output and 9by's for
+                // the reviewer's excerpt.
+                //
+                // And the shape has to be ONE shape everywhere. A reader who learns "an excerpt is
+                // the start and the end" and then meets one tool where it is not will misread it,
+                // which is not hypothetical: 9cc is a label that survived a change of shape by a
+                // day, and the reviewer believed the label over the text in front of it.
+                //
+                // FileHead rather than CommandHead because the reasoning behind two-fifths is about
+                // commands - "a program reports its outcome last" - and a file has no outcome.
+                var slice = Shortening.ToFit(text, room, Shortening.FileHead);
                 budget -= slice.Length;
                 found++;
 
@@ -138,8 +155,9 @@ public sealed class ReadFilesTool : ITool
                   .AppendLine(slice);
 
                 if (slice.Length < text.Length)
-                    sb.AppendLine($"... (cut after {slice.Length} of {text.Length} characters - "
-                                + $"read_file '{relative}' with an offset to see the rest)");
+                    sb.AppendLine($"... (shown: the start and the end, {slice.Length} of "
+                                + $"{text.Length} characters. What is missing is the MIDDLE - "
+                                + $"read_file '{relative}' with an offset to see it.)");
 
                 sb.AppendLine();
             }
