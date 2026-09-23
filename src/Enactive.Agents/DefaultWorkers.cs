@@ -80,12 +80,26 @@ public static class DefaultWorkers
     /// toward the answer. The sentence has to say WHEN to use these, not just that they exist -
     /// "a number, a list of files, or a yes/no" is the shape of question that must stop costing
     /// file content.</para>
+    ///
+    /// <para><b>One word changed, 2026-09-23, and the force kept.</b> An outside review called
+    /// "do NOT read toward it" a rule with no edge, and gave the case that breaks it: <i>"how many
+    /// services implement IHostedService, and which of them start a timer"</i> is answered by
+    /// counting AND then reading, and a flat prohibition tells the model the second half is
+    /// forbidden. True — but the measurement above is a worker that read toward every answer for
+    /// 114 calls, and the same shape turned up again on 2026-09-23 in an audit that read for sixty
+    /// turns and wrote nothing. So the sentence keeps its edge and gains the other half: ask first,
+    /// read when you need what is IN a file.</para>
+    ///
+    /// <para>"A list of files" stays, against the review's advice, and is made precise instead. The
+    /// question it means is "which files contain this", which <c>count_matches</c> answers without
+    /// opening any of them — not "what is in this folder", which is <c>list_dir</c>'s.</para>
     /// </summary>
     private const string AggregateReads =
-        "When what you need is a number, a list of files or a yes/no, do NOT read toward it: "
-        + "count_matches counts a pattern and names the files holding it, file_stats gives sizes and "
-        + "line counts before you open anything, and compare_files says whether two files are the "
-        + "same. ";
+        "When what you need is a number, WHICH FILES contain something, or a yes/no, ask for it "
+        + "rather than reading toward it: count_matches counts a pattern and names the files "
+        + "holding it, file_stats gives sizes and line counts before you open anything, and "
+        + "compare_files says whether two files are the same. Then read a file when you need what "
+        + "is IN it. ";
 
     // The role table, defined once. Instructions here are the BASE (pre-augmentation) text.
     //
@@ -130,8 +144,8 @@ public static class DefaultWorkers
             "You are a code reviewer and analyst. Investigate the workspace and explain findings. "
             + "Use search_files to locate things by content instead of reading files one by one. "
             + AggregateReads
-            + "You may ONLY read, search and list — you must not modify anything or run "
-            + "commands. Report issues, risks and suggestions clearly.",
+            + "Use only the read-only tools you have been given - you must not modify anything "
+            + "or run commands. Report issues, risks and suggestions clearly.",
             new[] { "read_file", "search_files", "count_matches", "file_stats", "compare_files",
                     "list_dir" },
             PermissionLevel.Observe),
@@ -140,8 +154,10 @@ public static class DefaultWorkers
             "You are a DevOps/operations agent. Use the dedicated git and docker tools for version "
             + "control and containers; run_command/run_powershell for other shell (prefer run_powershell "
             + "on Windows for system/WMI queries); read files, search them by content (search_files) and "
-            + "list directories for context. " + AggregateReads + "Avoid "
-            + "editing source files unless explicitly asked. Prefer safe, read-only commands first.",
+            + "list directories for context. " + AggregateReads + "Look before you change "
+            + "anything: prefer safe, read-only commands first. You have no file-editing tool, and "
+            + "writing source files THROUGH a shell is not a way around that - if a request needs "
+            + "source changed, say so rather than doing it with Set-Content.",
             new[] { "read_file", "search_files", "count_matches", "file_stats", "compare_files",
                     "list_dir", "run_command", "run_powershell", "git", "docker",
                     "send_email" },
