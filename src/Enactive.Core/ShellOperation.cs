@@ -35,6 +35,78 @@ using Enactive.Core.Tools;
 /// </summary>
 public static class ShellOperation
 {
+    /// <summary>
+    /// Tools that are handed an ARGUMENT LIST rather than a command line: no shell parses it, so
+    /// a pipe inside one of them is data and not plumbing.
+    ///
+    /// <para><b>Why they needed this at all.</b> Until now <see cref="For"/> answered only for the
+    /// two shells, so a failed <c>git</c> or <c>docker</c> call matched none of the three buckets
+    /// in <c>OpenFailures</c> — it carries no <c>path</c>, it is not a shell, it changes no file we
+    /// track — and landed in <c>_byCall</c> alone, where the ONLY thing that could close it was
+    /// re-sending the byte-identical call. A <c>git push</c> rejected as non-fast-forward, followed
+    /// by a pull and a push that worked, left the step holding the first one for good. §9ap solved
+    /// exactly this for the shells and the same argument applies here.</para>
+    /// </summary>
+    private static readonly HashSet<string> ArgumentTools =
+        new(["git", "docker"], StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The operation an argument list performs: the tool, its subcommand, and its first real
+    /// operand — the same three parts <see cref="Of"/> keeps, for the same reason.
+    ///
+    /// <para><c>git show HEAD:a.md</c> and <c>git show HEAD:b.md</c> stay different things, so a
+    /// successful read of one cannot clear a failed read of the other. <c>git commit -m "x"</c> and
+    /// <c>git commit -m "y"</c> are the same operation, because the flag is dropped and the message
+    /// is the operand — which is right: the second commit is the first one made good.</para>
+    ///
+    /// <para>No plumbing is cut. A shell would split on a pipe; nothing splits an argument list,
+    /// so a <c>|</c> inside a commit message is part of the message and stays in the key.</para>
+    /// </summary>
+    private static string? OfArguments(string tool, JsonElement root)
+    {
+        if (!root.TryGetProperty(ToolArguments.Args, out var value))
+            return null;
+
+        var words = new List<string>();
+
+        switch (value.ValueKind)
+        {
+            case JsonValueKind.Array:
+                foreach (var item in value.EnumerateArray())
+                    if (item.ValueKind == JsonValueKind.String && item.GetString() is { Length: > 0 } one)
+                        words.Add(one);
+                break;
+
+            // A single string is split the way the tool splits it, so the same call written both
+            // ways gives one key. Both shapes reach git; both have to mean the same operation.
+            case JsonValueKind.String:
+                if (value.GetString() is { } line)
+                    words.AddRange(line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+                break;
+
+            default:
+                return null;
+        }
+
+        if (words.Count == 0)
+            return null;
+
+        var parts = new List<string> { tool.ToLowerInvariant() };
+
+        foreach (var word in words)
+        {
+            if (parts.Count >= 3)
+                break;
+
+            if (word.StartsWith('-') || word.StartsWith('/'))
+                continue;
+
+            parts.Add(word.Replace('\\', '/'));
+        }
+
+        return string.Join(' ', parts);
+    }
+
     /// <summary>Where a command line stops being one command: a pipe, a redirect, a separator.</summary>
     private static readonly string[] Plumbing = ["|", "&&", "||", ">>", ">", "<", "&", ";"];
 
@@ -45,7 +117,11 @@ public static class ShellOperation
     /// </summary>
     public static string? For(string tool, string? argumentsJson)
     {
-        if (!ShellTools.IsShell(tool) || string.IsNullOrWhiteSpace(argumentsJson))
+        if (string.IsNullOrWhiteSpace(argumentsJson))
+            return null;
+
+        var argumentList = ArgumentTools.Contains(tool);
+        if (!argumentList && !ShellTools.IsShell(tool))
             return null;
 
         try
@@ -53,6 +129,9 @@ public static class ShellOperation
             using var doc = JsonDocument.Parse(argumentsJson!);
             if (doc.RootElement.ValueKind != JsonValueKind.Object)
                 return null;
+
+            if (argumentList)
+                return OfArguments(tool, doc.RootElement);
 
             var text = Text(doc.RootElement, ToolArguments.Command)
                     ?? Text(doc.RootElement, ToolArguments.Script);

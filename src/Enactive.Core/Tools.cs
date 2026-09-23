@@ -29,6 +29,12 @@ public static class ToolArguments
     /// <summary>The command line <c>run_command</c> is given.</summary>
     public const string Command = "command";
 
+    /// <summary>
+    /// The argument LIST <c>git</c> and <c>docker</c> are given — an array, or one string they
+    /// split themselves. No shell sees it, which is why a pipe inside one element is data.
+    /// </summary>
+    public const string Args = "args";
+
     /// <summary>The script <c>run_powershell</c> is given.</summary>
     public const string Script = "script";
 }
