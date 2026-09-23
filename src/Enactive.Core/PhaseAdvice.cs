@@ -77,7 +77,11 @@ public static class PhaseAdvice
         + "that passes everything looks exactly like a reviewer that is not needed.\n\n"
         + "(none) switches review off entirely — single-agent, faster, cheaper, and the run's "
         + "verdict is then the worker's own opinion of itself. Fine for throwaway work; not for "
-        + "anything scheduled to run while you are asleep.";
+        + "anything scheduled to run while you are asleep.\n\n"
+        + "This is not the \"reviewer\" ROLE under AI · Team. That role is a worker like any other, "
+        + "with read-only tools, for when you want to run a task that only looks. Its own model "
+        + "field applies when a run is started as that role, and has nothing to do with this "
+        + "binding — the reviewer of every step is chosen here, whichever role did the work.";
 
     public const string Light =
         "A local model is fine here. Cheap and dim is the point. 😉\n\n"

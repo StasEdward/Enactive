@@ -2,6 +2,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="using:Enactive.App.Ui"
         xmlns:vm="using:Enactive.App.Ui.ViewModels"
+        xmlns:core="using:Enactive.Core.Guidance"
         x:Class="Enactive.App.Ui.WorkerEditWindow"
         x:DataType="vm:WorkerEditViewModel"
         Title="Team member"
@@ -65,11 +66,24 @@
                 <TextBlock Classes="label" Text="Permission level" />
                 <ComboBox ItemsSource="{Binding Levels}" SelectedItem="{Binding Level}" />
 
-                <TextBlock Classes="label" Text="Model" />
+                <!-- The two fields somebody reaches after seeing the same models offered again
+                     under AI · Phases, and reasonably asking which screen wins. Neither said. The
+                     answer is in Core (RoleAdvice) rather than here, for the reason PhaseAdvice
+                     gives: this project is a WinExe nothing references, so a sentence in a .axaml
+                     is a sentence no test can reach. -->
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <TextBlock Classes="label" Text="Model" />
+                    <local:HintView Text="{x:Static core:RoleAdvice.Model}"
+                                    VerticalAlignment="Center" />
+                </StackPanel>
                 <ComboBox ItemsSource="{Binding Models}" SelectedItem="{Binding Model}"
                           PlaceholderText="pick a model…" />
 
-                <TextBlock Classes="label" Text="Fallback model" />
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <TextBlock Classes="label" Text="Fallback model" />
+                    <local:HintView Text="{x:Static core:RoleAdvice.Fallback}"
+                                    VerticalAlignment="Center" />
+                </StackPanel>
                 <ComboBox ItemsSource="{Binding Fallbacks}" SelectedItem="{Binding Fallback}"
                           PlaceholderText="(none)" />
 
