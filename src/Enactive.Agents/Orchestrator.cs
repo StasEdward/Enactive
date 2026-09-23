@@ -2576,6 +2576,16 @@ public sealed class Orchestrator : IOrchestrator
             is { } unreachedSentence)
             yield return Ev(EventKind.ErrorObserved, unreachedSentence);
 
+        // And the same question of the REGISTRY, asked of the whole team rather than this worker.
+        // A role lacking a tool is usually deliberate - the writer may not run shells - so that is
+        // not worth a word. A tool NO role names has no configuration in which it can ever be used,
+        // and this codebase has now met that five times inside its own registry and twice outside
+        // it, every time by symptom rather than by message. See ToolReach.
+        if (ToolReach.Unnamed(_tools.Definitions.Select(d => d.Name),
+                              _workers.All.Select(w => w.ToolAllowlist))
+            is { } unnamedSentence)
+            yield return Ev(EventKind.ErrorObserved, unnamedSentence);
+
         // The tool schemas are sent with every request and are not part of the message list, so they
         // have to be counted separately or the estimate is short by a constant few thousand
         // characters - exactly the margin that decides whether the last turn fits.
