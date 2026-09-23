@@ -248,12 +248,23 @@ public sealed class Reviewer
               .Append(file.SharedWithAnotherStep ? "  (ALSO WRITTEN BY ANOTHER STEP)" : "")
               .AppendLine(" -----");
 
-            var slice = file.Content.Length > MaxContentCharsPerFile
-                ? file.Content[..MaxContentCharsPerFile]
-                : file.Content;
-
-            if (slice.Length > budget)
-                slice = slice[..Math.Max(0, budget)];
+            // The START and the END, not the first N characters - the same rule as a command's
+            // output, and here for a sharper reason. Measured 2026-09-23 on the run that finished:
+            // a step appends its findings to one growing report, so the work of steps 2, 3 and 4 is
+            // always at the END, and a head-only excerpt showed the reviewer the same opening every
+            // time. Its own notes say so, under a PASS:
+            //
+            //   [2] PASS: "Only the first 8000 characters were shown. They cover the pages 1-3 …"
+            //   [4] PASS: "The excerpt covers pages 1-2 … and ends mid-line"
+            //
+            // Step 4 was reviewing pages 10-12. It passed on an excerpt that could not contain
+            // them, and passed honestly: ContentSystemPrompt tells it to judge only what the
+            // excerpt holds. The reviewer was not wrong; it was shown the wrong 8000 characters.
+            //
+            // This is 9q again ("the verdict was at the end, and shortening kept the beginning"),
+            // which was fixed for command output and never carried across to the file a reviewer
+            // reads.
+            var slice = Shortening.ToFit(file.Content, Math.Min(MaxContentCharsPerFile, Math.Max(0, budget)));
 
             budget -= slice.Length;
             sb.AppendLine(slice);
@@ -579,9 +590,11 @@ public sealed class Reviewer
         + "mojibake, or a truncated line.\n\n"
         + "In notes, name the offending lines so the agent can fix exactly those. Only name something "
         + "you can actually see in the text above; if you cannot point at it, do not report it.\n\n"
-        + "Where an excerpt is marked as such, judge ONLY what it contains. It stops where the excerpt "
-        + "stops, not where the file does: an unclosed tag, bracket or sentence at the very end is the "
-        + "cut, never a defect, and neither is anything you expected to find further down.\n\n"
+        + "Where an excerpt is marked as such, judge ONLY what it contains. An excerpt is the START "
+        + "and the END of the file, with a line between them saying how much is not shown, so a "
+        + "line that breaks off at "
+        + "either cut is the cut and never a defect - and neither is anything you expected to find "
+        + "in the part between them.\n\n"
         + "Do NOT fail for style, tone, formatting, length, or for being incomplete — a short document is "
         + "not a wrong one. Do NOT fail because you would have written it differently. If you are unsure "
         + "whether something exists, do not fail on it: say so in notes and pass. Judge the content, not "
