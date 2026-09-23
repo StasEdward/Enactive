@@ -2614,6 +2614,25 @@ public sealed class Orchestrator : IOrchestrator
                     handovers++;
                     turnsHere = 0;
 
+                    // The stall ledger goes with the conversation it was counting. A handover
+                    // hands the step a note and an empty transcript, and the first thing any model
+                    // does with those is orient itself: does the file I am to append to exist, what
+                    // is in that folder. Those calls are NEW to the conversation and old to the
+                    // ledger, so the step was being stopped for finding its feet.
+                    //
+                    // Measured 2026-09-23 23:36, run 941cc9: sixty turns of real verification, a
+                    // handover carrying a note that names three pages and eight checked claims -
+                    // and seven seconds later "stopped after 3 turns that only repeated earlier
+                    // tool calls: read_file Docs/DRIFT_ollama.md; list_dir Docs". It had just been
+                    // told to carry on from notes; asking where the report was is not a circle.
+                    //
+                    // The guard is not weakened. It still stops a model going round inside ONE
+                    // conversation, which is the shape it was built for (§9k): "a stuck model does
+                    // not stop calling tools - it calls the SAME one, with the same arguments,
+                    // until something else stops it". After a handover there is no same
+                    // conversation to go round in.
+                    progress = new StepProgress();
+
                     var kept = Preamble(messages);
                     messages.RemoveRange(kept, messages.Count - kept);
                     messages.Add(ChatMessage.User(

@@ -55,6 +55,58 @@ public sealed class AStepThatHandsOverToItselfTests
     }
 
     /// <summary>
+    /// A step is not stopped for finding its feet after a handover.
+    ///
+    /// <para><b>Measured 2026-09-23 23:36, run 941cc9.</b> Sixty turns of real verification - 34
+    /// reads and 32 searches across the source - then a handover carrying a note that named three
+    /// wiki pages and eight checked claims. Three turns and seven seconds later: <i>"stopped after
+    /// 3 turns that only repeated earlier tool calls: read_file Docs/DRIFT_ollama.md; list_dir
+    /// Docs"</i>, and the whole plan skipped behind it.</para>
+    ///
+    /// <para>Those three were the model orienting itself in a conversation it had just been
+    /// handed: does the report I am to append to exist, what is in that folder, let me look
+    /// again. New to the conversation and old to a ledger that had outlived it.</para>
+    ///
+    /// <para><b>Why the step has to write nothing.</b> A successful write advances a GENERATION
+    /// (§9r) and every call after it is new again, which hides this entirely. The reported step
+    /// was an AUDIT - it read and searched for sixty turns and wrote not one file - so the ledger
+    /// it carried across the handover was complete and unforgiving.</para>
+    /// </summary>
+    [Fact]
+    public async Task Orienting_itself_after_a_handover_is_not_a_stall()
+    {
+        using var fx = new EngineFixture();
+        fx.Write("source.cs", "class A { }");
+
+        var script = new List<Turn> { Turn.Says(QuickPlan) };
+
+        // The orientation, done once early - exactly as the reported run did before settling in.
+        script.Add(Turn.Calls1("read_file", """{"path":"report.md"}"""));
+        script.Add(Turn.Calls1("list_dir", """{"path":"."}"""));
+
+        // Fifty-eight turns of reading and searching. No writes: an audit changes nothing, and a
+        // write would advance the generation and make every later call new again.
+        for (var i = 0; i < 58; i++)
+            script.Add(Turn.Calls1("search_files",
+                                   $$"""{"pattern":"claim{{i}}","glob":"*.cs"}"""));
+
+        script.Add(Turn.Says(Note));   // the handover asks, and this answers
+
+        // And then the same three moves, in the fresh conversation that cannot see them.
+        script.Add(Turn.Calls1("read_file", """{"path":"report.md"}"""));
+        script.Add(Turn.Calls1("list_dir", """{"path":"."}"""));
+        script.Add(Turn.Calls1("read_file", """{"path":"report.md"}"""));
+        script.Add(Turn.Says("Found my bearings and finished."));
+
+        var events = await fx.RunAsync(
+            fx.Build(new FakeChatProvider(script.ToArray()), EngineFixture.Role("developer")),
+            "audit the claims");
+
+        Assert.DoesNotContain("only repeated earlier tool calls", events.Text(), StringComparison.Ordinal);
+        Assert.False(events.Has(EventKind.TaskFailed), events.Text());
+    }
+
+    /// <summary>
     /// The LAST cut says it is the last — the cheap half of layer 2, and the whole of what that
     /// layer was going to buy.
     ///
