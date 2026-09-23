@@ -2623,9 +2623,30 @@ public sealed class Orchestrator : IOrchestrator
                         + "\n\nCarry on from there. The files you wrote are still on disk; read one "
                         + "back if you need what is in it."));
 
+                    // The last one is said differently, because it is the last WARNING there is.
+                    // After it nothing stands between the step and the backstop, which abandons it
+                    // and skips everything that depends on it - and that is the shape that cost
+                    // 30.6M tokens on 2026-09-22 before anyone knew it was happening.
+                    //
+                    // This is the cheap half of layer 2 ("a step declares what it repeats over").
+                    // Measured 2026-09-23 on one task and two workers: with the workspace census
+                    // in front of it the planner batches by itself, and the steps came out at 31,
+                    // 21, 14 and 12 turns - a fifth of the ceiling. The same plan with a weaker
+                    // worker ran 146, 148 and 88. So the size of a batch is decided by the planner
+                    // and whether it FITS is decided by the model, and the useful thing to build
+                    // was not machinery for resolving sets: it was being told, at the moment it
+                    // happens, that this run is on the second of those two paths.
+                    var lastOne = handovers >= MaxHandovers
+                        ? " That was the last handover: from here the only limit left is the "
+                          + $"{RunawayCeiling}-turn backstop, which abandons this step and skips "
+                          + "every step that depends on it. If the step is repeating work over many "
+                          + "items, it is too big - the plan should say how many at a time."
+                        : "";
+
                     yield return Ev(EventKind.ContextTrimmed,
                         $"This step has run {iteration - 1} turns. Carrying its own notes into a "
-                        + $"fresh conversation and continuing ({handovers} of {MaxHandovers}).");
+                        + $"fresh conversation and continuing ({handovers} of {MaxHandovers})."
+                        + lastOne);
                 }
                 else
                 {
@@ -2633,7 +2654,17 @@ public sealed class Orchestrator : IOrchestrator
                     // worse than stopping at the backstop, but it is better than starting the step
                     // again from nothing - so the handover is simply not taken, and the ceiling
                     // stays where it was.
+                    //
+                    // Said out loud, because it was the quietest branch here: the step keeps going
+                    // with no cut left and nothing had reported that the safety net was gone.
+                    var spent = handovers;
                     handovers = MaxHandovers;
+
+                    yield return Ev(EventKind.ErrorObserved,
+                        $"This step has run {iteration - 1} turns and could not summarise its own "
+                        + $"work, so it was not cut ({spent} of {MaxHandovers} handovers used). It "
+                        + $"carries on in one long conversation until the {RunawayCeiling}-turn "
+                        + "backstop, which abandons it and skips every step that depends on it.");
                 }
             }
 
