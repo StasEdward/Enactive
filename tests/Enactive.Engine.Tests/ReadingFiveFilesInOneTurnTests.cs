@@ -141,8 +141,8 @@ public sealed class ReadingFiveFilesInOneTurnTests
         Assert.Contains("missing is the MIDDLE", result.Output, StringComparison.Ordinal);
 
         // Head-heavy: more of the budget went to the top than to the bottom.
-        var marker = result.Output.IndexOf("not shown here", StringComparison.Ordinal);
-        Assert.True(marker > result.Output.Length / 2,
+        var marker = (result.Output ?? "").IndexOf("not shown here", StringComparison.Ordinal);
+        Assert.True(marker > (result.Output ?? "").Length / 2,
                     "a file keeps more of its head than its tail - see Shortening.FileHead");
     }
 

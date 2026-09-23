@@ -405,6 +405,12 @@ internal static class ProcessExec
         process.ErrorDataReceived += (_, e) => { if (e.Data is null) stderrDone.TrySetResult(); };
 
         process.Start();
+
+        // Closed at once. The pipe exists only so the child gets end-of-file instead of a wait: a
+        // sudo with nowhere to ask says "no tty present" in milliseconds, where an inherited
+        // console had it sitting out the whole timeout.
+        try { process.StandardInput.Close(); } catch { /* the child may have gone already */ }
+
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
 
@@ -453,7 +459,17 @@ internal static class ProcessExec
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
-            CreateNoWindow = true
+            CreateNoWindow = true,
+
+            // Nothing is ever going to type an answer, so say so at the pipe rather than letting a
+            // prompt wait out the timeout. Redirected and closed immediately below: a child that
+            // asks for input reads end-of-file and gives up, which is a fast, readable failure.
+            //
+            // Measured across three runs, 2026-09-23/24: THIRTY-TWO timeouts, and the ones that
+            // can be identified are all the same shape - `wsl -- bash -c "sudo apt-get install …"`
+            // and friends, waiting for a password at a terminal that does not exist. At 60 and 90
+            // seconds apiece that is about half an hour of a run spent waiting for nobody.
+            RedirectStandardInput = true
         };
         foreach (var a in args)
             startInfo.ArgumentList.Add(a);
