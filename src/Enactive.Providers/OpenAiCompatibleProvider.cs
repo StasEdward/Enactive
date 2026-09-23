@@ -48,14 +48,35 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
     public async IAsyncEnumerable<ChatStreamEvent> StreamChatAsync(
         ChatRequest request, [EnumeratorCancellation] CancellationToken ct)
     {
-        using var httpRequest = BuildHttpRequest(request, stream: true);
-        using var response = await _http.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead, ct);
+        // stream_options is asked for unless this endpoint has already refused it. On a 400 the
+        // request is sent again without it, exactly as CompleteAsync does for a schema - so the
+        // worst case is the behaviour this had before the field existed, plus one round trip once
+        // per process. Nothing here can turn a working provider into a failing one.
+        var wantUsage = !NoStreamUsage.ContainsKey(SchemaKey(request));
+
+        var response = await SendAsync(wantUsage);
+
+        if (response.StatusCode == System.Net.HttpStatusCode.BadRequest && wantUsage)
+        {
+            response.Dispose();
+            NoStreamUsage.TryAdd(SchemaKey(request), true);
+            response = await SendAsync(includeUsage: false);
+        }
+
+        using var _ = response;
+
         if (!response.IsSuccessStatusCode)
         {
             var errorBody = await response.Content.ReadAsStringAsync(ct);
             WireTap.Error(_log, _descriptor.Id, (int)response.StatusCode, errorBody);
             throw new HttpRequestException(
                 $"Provider '{_descriptor.Id}' returned {(int)response.StatusCode} {response.StatusCode}: {Truncate(errorBody, 500)}");
+        }
+
+        async Task<HttpResponseMessage> SendAsync(bool includeUsage)
+        {
+            using var message = BuildHttpRequest(request, stream: true, includeUsage: includeUsage);
+            return await _http.SendAsync(message, HttpCompletionOption.ResponseHeadersRead, ct);
         }
 
         await using var stream = await response.Content.ReadAsStreamAsync(ct);
@@ -128,6 +149,15 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> NoStructuredOutput =
         new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// Endpoints that answered <c>stream_options</c> with a 400. The same table and the same
+    /// reasoning as <see cref="NoStructuredOutput"/>: "OpenAI-compatible" is a family, not a
+    /// specification, and a gateway that has never heard of the field may refuse the whole request
+    /// for it. One wasted round trip per process, then never again.
+    /// </summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> NoStreamUsage =
+        new(StringComparer.OrdinalIgnoreCase);
+
     private string SchemaKey(ChatRequest request) => _descriptor.Id + "\0" + request.Model;
 
     /// <summary>The schema as JSON, or null when it is not parseable - a bad schema must not fail a run.</summary>
@@ -137,7 +167,8 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
         catch (JsonException) { return null; }
     }
 
-    private HttpRequestMessage BuildHttpRequest(ChatRequest request, bool stream, bool includeSchema = true)
+    private HttpRequestMessage BuildHttpRequest(
+        ChatRequest request, bool stream, bool includeSchema = true, bool includeUsage = true)
     {
         var payload = new Dictionary<string, object?>
         {
@@ -145,6 +176,21 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
             ["stream"] = stream,
             ["messages"] = request.Messages.Select(ToWire).ToArray()
         };
+
+        // A STREAMED response carries no usage block unless it is asked for. That is the
+        // specification, not an oddity: OpenAI added stream_options.include_usage for exactly this,
+        // and a server that follows it sends nothing without the field.
+        //
+        // Measured 2026-09-23 20:44 - a run whose worker was llama.cpp ran two steps over three and
+        // a half minutes and reported not one token. The only UsageReported events in it came from
+        // the planner and the reviewer, which go NON-streamed and therefore always carry usage, so
+        // the work split showed the run as 100% cloud while the work was happening on this machine.
+        // DeepSeek sends usage in a stream anyway, beyond the spec, which is why this stayed hidden
+        // until a local endpoint was bound to a phase.
+        //
+        // Sent only while streaming, and only until an endpoint refuses it - see NoStreamUsage.
+        if (stream && includeUsage)
+            payload["stream_options"] = new Dictionary<string, object?> { ["include_usage"] = true };
         if (request.Temperature is { } temperature)
             payload["temperature"] = temperature;
         if (request.Tools is { Count: > 0 } tools)

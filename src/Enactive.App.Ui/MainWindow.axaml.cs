@@ -2589,12 +2589,9 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         if (provider is null)
             return ModelWorkSplit.Reach.Unknown;
 
-        var url = provider.BaseUrl ?? string.Empty;
-        return url.Contains("localhost", StringComparison.OrdinalIgnoreCase)
-            || url.Contains("127.0.0.1", StringComparison.Ordinal)
-            || url.Contains("[::1]", StringComparison.Ordinal)
-                ? ModelWorkSplit.Reach.Local
-                : ModelWorkSplit.Reach.Cloud;
+        return Enactive.Settings.ProviderReach.Local(provider.BaseUrl)
+            ? ModelWorkSplit.Reach.Local
+            : ModelWorkSplit.Reach.Cloud;
     }
 
     /// <summary>
