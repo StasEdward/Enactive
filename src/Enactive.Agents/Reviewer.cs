@@ -271,11 +271,22 @@ public sealed class Reviewer
 
             // Against the file's REAL size, not against the string handed to us - which the caller
             // may already have cut to exactly this budget, making the comparison always false.
+            // The label has to describe the slice that was actually taken. It said "the first N
+            // characters" for a day after the slice became head-AND-tail, and the reviewer believed
+            // the label over the text in front of it - its own notes on 2026-09-24 read "Only the
+            // first 8000 of 28893 characters are shown, and they cover pages 1-4. The page 10-12
+            // sections this step reports appending are in the unseen part", while the page 10-12
+            // sections were in the prompt, at the bottom, where the tail had put them.
+            //
+            // A wrong label is worse than the head-only cut it replaced: that one was at least
+            // honest about what it had left out.
             if (slice.Length < file.TotalChars)
                 sb.AppendLine()
-                  .AppendLine($"----- END OF EXCERPT: the {file.RelativePath} above is the first "
-                            + $"{slice.Length} characters of {file.TotalChars}. The rest of the file "
-                            + "was not shown to you and is NOT missing from it. -----");
+                  .AppendLine($"----- END OF EXCERPT: the {file.RelativePath} above is the START and "
+                            + $"the END of the file - {slice.Length} characters of {file.TotalChars}, "
+                            + "with the middle left out and marked where it was cut. What is missing "
+                            + "is the MIDDLE; the end of the file IS above. Nothing here is missing "
+                            + "from the file itself. -----");
 
             if (budget <= 0)
             {

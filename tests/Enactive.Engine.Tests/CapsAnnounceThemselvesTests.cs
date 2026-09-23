@@ -409,6 +409,9 @@ public sealed class CapsAnnounceThemselvesTests
 
         Assert.Contains("END OF EXCERPT", prompt);
         Assert.Contains(page.Length.ToString(), prompt);
-        Assert.Contains("is NOT missing from it", prompt);
+        // Reworded 2026-09-24 with the slice it describes: the excerpt is the start AND the
+        // end now, so "the rest was not shown" became "what is missing is the MIDDLE".
+        Assert.Contains("Nothing here is missing from the file itself", prompt);
+        Assert.Contains("the end of the file IS above", prompt);
     }
 }

@@ -79,6 +79,26 @@ public sealed class TheReviewerSeesTheWorkTests
         => Assert.Contains("characters not shown here; the end follows", Shown(Report(12)),
                             StringComparison.Ordinal);
 
+    /// <summary>
+    /// And the LABEL under it describes the slice that was taken. It went on saying "the first N
+    /// characters" for a day after the slice became head-and-tail, and the reviewer believed the
+    /// label over the text in front of it: on 2026-09-24 it passed step 4 with "the page 10-12
+    /// sections this step reports appending are in the unseen part" - while those sections were in
+    /// the prompt, at the bottom, where the tail had put them.
+    ///
+    /// <para>A wrong label is worse than the head-only cut it replaced. That one was at least
+    /// honest about what it had left out.</para>
+    /// </summary>
+    [Fact]
+    public void The_label_says_which_slice_it_is()
+    {
+        var shown = Shown(Report(12));
+
+        Assert.Contains("START and the END", shown, StringComparison.Ordinal);
+        Assert.Contains("missing is the MIDDLE", shown, StringComparison.Ordinal);
+        Assert.DoesNotContain("above is the first", shown, StringComparison.Ordinal);
+    }
+
     /// <summary>A file that fits is untouched - no marker, no cut, nothing to explain.</summary>
     [Fact]
     public void A_short_file_is_shown_whole()
