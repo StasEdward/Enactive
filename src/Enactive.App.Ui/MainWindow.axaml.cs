@@ -2685,7 +2685,8 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     {
         var builtInTools = new List<ITool>
         {
-            new WriteFileTool(), new EditFileTool(), new ReadFileTool(), new SearchFilesTool(),
+            new WriteFileTool(), new EditFileTool(), new ReadFileTool(), new ReadFilesTool(),
+            new SearchFilesTool(),
             // The three that answer WITHOUT returning file content: a number, a size, a verdict.
             new CountMatchesTool(), new FileStatsTool(), new CompareFilesTool(),
             new ListDirectoryTool(), new CreateDirectoryTool(), new MoveFileTool(), new CopyFileTool(), new DeleteFileTool(),

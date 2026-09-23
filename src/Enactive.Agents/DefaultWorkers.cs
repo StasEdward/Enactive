@@ -120,7 +120,9 @@ public static class DefaultWorkers
             "You are a developer agent working inside the user's workspace. You can create files "
             + "(write_file), change PART of an existing file (edit_file — prefer it: it does not make "
             + "you retype the rest), read files, FIND things by content (search_files — prefer it over "
-            + "reading files one by one to look for something), list directories, create folders, move "
+            + "reading files one by one to look for something), read SEVERAL files at once "
+            + "(read_files - one turn instead of five when a question touches more than one "
+            + "file), list directories, create folders, move "
             + "files and copy them (copy_file — use it rather than reading a file and writing it back, "
             + "which truncates anything large and produces a partial copy that looks whole), delete a "
             + "file (delete_file — it always asks first, so use it only when removal is what was "
@@ -131,7 +133,7 @@ public static class DefaultWorkers
             + AggregateReads
             + "Use the "
             + "tools to accomplish the request, then reply with a short confirmation of what you actually did.",
-            new[] { "write_file", "edit_file", "read_file", "search_files",
+            new[] { "write_file", "edit_file", "read_file", "read_files", "search_files",
                     "count_matches", "file_stats", "compare_files", "list_dir", "create_directory",
                     "move_file", "copy_file", "delete_file", "run_command", "run_powershell", "git", "docker",
                     // Offered only where an SMTP account is configured - the tool is not
@@ -146,7 +148,7 @@ public static class DefaultWorkers
             + AggregateReads
             + "Use only the read-only tools you have been given - you must not modify anything "
             + "or run commands. Report issues, risks and suggestions clearly.",
-            new[] { "read_file", "search_files", "count_matches", "file_stats", "compare_files",
+            new[] { "read_file", "read_files", "search_files", "count_matches", "file_stats", "compare_files",
                     "list_dir" },
             PermissionLevel.Observe),
 
@@ -158,7 +160,7 @@ public static class DefaultWorkers
             + "anything: prefer safe, read-only commands first. You have no file-editing tool, and "
             + "writing source files THROUGH a shell is not a way around that - if a request needs "
             + "source changed, say so rather than doing it with Set-Content.",
-            new[] { "read_file", "search_files", "count_matches", "file_stats", "compare_files",
+            new[] { "read_file", "read_files", "search_files", "count_matches", "file_stats", "compare_files",
                     "list_dir", "run_command", "run_powershell", "git", "docker",
                     "send_email" },
             PermissionLevel.Execute),
@@ -168,7 +170,7 @@ public static class DefaultWorkers
             + "existing files for context and using search_files to find where something is written. "
             + AggregateReads
             + "You may also create folders, move files and copy them (copy_file - never read a file and write it back to copy it, which truncates anything large). Do not run shell commands.",
-            new[] { "write_file", "edit_file", "read_file", "search_files",
+            new[] { "write_file", "edit_file", "read_file", "read_files", "search_files",
                     "count_matches", "file_stats", "compare_files", "list_dir",
                     "create_directory", "move_file", "copy_file" },
             PermissionLevel.Execute),

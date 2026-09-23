@@ -48,6 +48,9 @@ public sealed class CapsAnnounceThemselvesTests
         ["Reviewer.MaxContentCharsTotal"] = nameof(Files_dropped_for_the_review_budget_are_announced),
         ["SuccessEvaluator.MaxDetailChars"] = nameof(A_criterions_output_says_how_much_of_it_is_shown),
         ["ProcessExec.MaxOutputChars"] = nameof(Command_output_past_the_cap_says_it_was_truncated),
+        ["ReadFilesTool.MaxFiles"] = nameof(More_paths_than_read_files_takes_says_how_many),
+        ["ReadFilesTool.MaxCharsPerFile"] = nameof(A_long_file_among_several_is_cut_and_says_so),
+        ["ReadFilesTool.MaxCharsTotal"] = nameof(Files_past_the_read_files_budget_say_they_were_not_read),
         ["RunPowerShellTool.MaxEncodedChars"] = nameof(A_script_too_long_for_a_command_line_is_refused),
         ["ProcessExec.MaxCapturedChars"] = "Captured_output_stops_at_the_ceiling_however_much_is_produced",
         ["ReadFileTool.MaxChars"] = nameof(A_line_too_long_for_the_window_says_where_it_was_cut),
@@ -180,6 +183,68 @@ public sealed class CapsAnnounceThemselvesTests
     private static readonly string[] Vocabulary = { "Chars", "Bytes", "Lines", "Matches", "Files" };
 
     // ── one per limit: the code, past the cap, saying so ────────────────────
+
+    /// <summary>
+    /// ReadFilesTool.MaxFiles — past this the answer is longer than the reading it saved.
+    /// </summary>
+    [Fact]
+    public async Task More_paths_than_read_files_takes_says_how_many()
+    {
+        using var fx = new EngineFixture();
+
+        var paths = Enumerable.Range(1, ReadFilesTool.MaxFiles + 1).Select(i => $"f{i}.md").ToArray();
+
+        var result = await fx.Invoke(new ReadFilesTool(),
+                                     System.Text.Json.JsonSerializer.Serialize(new { paths }));
+
+        Assert.False(result.Success);
+        Assert.Contains(ReadFilesTool.MaxFiles.ToString(), result.Error, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// ReadFilesTool.MaxCharsPerFile — one long file must not crowd out the four that came with
+    /// it, and the cut names read_file as the way to see the rest.
+    /// </summary>
+    [Fact]
+    public async Task A_long_file_among_several_is_cut_and_says_so()
+    {
+        using var fx = new EngineFixture();
+        fx.Write("long.md", new string('x', ReadFilesTool.MaxCharsPerFile + 500));
+        fx.Write("short.md", "short one");
+
+        var paths = new[] { "long.md", "short.md" };
+        var result = await fx.Invoke(new ReadFilesTool(),
+                                     System.Text.Json.JsonSerializer.Serialize(new { paths }));
+
+        Assert.True(result.Success, result.Error);
+        Assert.Contains("cut after", result.Output, StringComparison.Ordinal);
+        Assert.Contains("short one", result.Output, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// ReadFilesTool.MaxCharsTotal — the files past the budget SAY so. Dropped in silence is how a
+    /// model concludes a file is empty.
+    /// </summary>
+    [Fact]
+    public async Task Files_past_the_read_files_budget_say_they_were_not_read()
+    {
+        using var fx = new EngineFixture();
+
+        var many = ReadFilesTool.MaxCharsTotal / ReadFilesTool.MaxCharsPerFile + 2;
+        var paths = new List<string>();
+        for (var i = 1; i <= many; i++)
+        {
+            fx.Write($"big{i}.md", new string('y', ReadFilesTool.MaxCharsPerFile));
+            paths.Add($"big{i}.md");
+        }
+
+        var result = await fx.Invoke(new ReadFilesTool(),
+                                     System.Text.Json.JsonSerializer.Serialize(new { paths = paths.ToArray() }));
+
+        Assert.True(result.Success, result.Error);
+        Assert.Contains("not read:", result.Output, StringComparison.Ordinal);
+        Assert.Contains(ReadFilesTool.MaxCharsTotal.ToString(), result.Output, StringComparison.Ordinal);
+    }
 
     /// <summary>
     /// RunPowerShellTool.MaxEncodedChars — a script that cannot fit on a Windows command line.
