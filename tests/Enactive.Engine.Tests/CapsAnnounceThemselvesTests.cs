@@ -48,6 +48,7 @@ public sealed class CapsAnnounceThemselvesTests
         ["Reviewer.MaxContentCharsTotal"] = nameof(Files_dropped_for_the_review_budget_are_announced),
         ["SuccessEvaluator.MaxDetailChars"] = nameof(A_criterions_output_says_how_much_of_it_is_shown),
         ["ProcessExec.MaxOutputChars"] = nameof(Command_output_past_the_cap_says_it_was_truncated),
+        ["RunPowerShellTool.MaxEncodedChars"] = nameof(A_script_too_long_for_a_command_line_is_refused),
         ["ProcessExec.MaxCapturedChars"] = "Captured_output_stops_at_the_ceiling_however_much_is_produced",
         ["ReadFileTool.MaxChars"] = nameof(A_line_too_long_for_the_window_says_where_it_was_cut),
         ["ReadFileTool.DefaultLines"] = nameof(A_window_says_which_lines_it_is_and_how_to_get_the_rest),
@@ -179,6 +180,29 @@ public sealed class CapsAnnounceThemselvesTests
     private static readonly string[] Vocabulary = { "Chars", "Bytes", "Lines", "Matches", "Files" };
 
     // ── one per limit: the code, past the cap, saying so ────────────────────
+
+    /// <summary>
+    /// RunPowerShellTool.MaxEncodedChars — a script that cannot fit on a Windows command line.
+    ///
+    /// <para>The cap is Windows', not ours: run_powershell sends its script as -EncodedCommand,
+    /// base64 of UTF-16 is about 2.7x the characters, and the line takes roughly 32,000. Crossing
+    /// it got "The filename or extension is too long" — a message about a filename, for a script
+    /// that has none — and the process never started at all (2026-09-24 01:18).</para>
+    /// </summary>
+    [Fact]
+    public async Task A_script_too_long_for_a_command_line_is_refused()
+    {
+        using var fx = new EngineFixture();
+
+        var script = "$c = '" + new string('x', RunPowerShellTool.MaxEncodedChars) + "'";
+
+        var result = await fx.Invoke(new RunPowerShellTool(),
+                                     System.Text.Json.JsonSerializer.Serialize(new { script }));
+
+        Assert.False(result.Success);
+        Assert.True(result.DidNotRun, result.Error);
+        Assert.Contains($"{RunPowerShellTool.MaxEncodedChars:N0}", result.Error, StringComparison.Ordinal);
+    }
 
     /// <summary>
     /// ProcessExec.MaxOutputChars — a build log longer than the model is shown, and the part it

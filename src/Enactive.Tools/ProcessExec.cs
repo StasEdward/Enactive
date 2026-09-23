@@ -473,8 +473,20 @@ internal static class ProcessExec
         }
         catch (Exception ex)
         {
-            // Most commonly: the binary is not installed / not on PATH.
-            return ToolResults.Fail($"Could not run {fileName}: {ex.Message}");
+            // The process never STARTED - the binary is not installed, not on PATH, or the command
+            // line Windows was handed is longer than it accepts. Nothing ran, so this is NeverRan
+            // and not a failure the step has to carry, exactly as a shell refusing a word it does
+            // not have (9ap) or git refusing its own arguments (9bj).
+            //
+            // Measured 2026-09-24 01:18: a step tried to write a 12 KB report through
+            // run_powershell, whose script travels as -EncodedCommand; base64 of UTF-16 is about
+            // 32 KB and Windows answered "The filename or extension is too long". The step was
+            // marked Incomplete for a process that never existed and took three steps with it.
+            return ToolResults.NeverRan(
+                $"{fileName} could not be STARTED, so nothing ran: {ex.Message} "
+                + "This is not work that failed. If the command line was too long, the content "
+                + "belongs in a file rather than in a command: write_file it, or write the script "
+                + "to '" + WorkspaceGuard.ScratchPrefix + "/' and run that path.");
         }
 
         return BuildResult(

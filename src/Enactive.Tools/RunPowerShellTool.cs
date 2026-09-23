@@ -34,6 +34,16 @@ public sealed class RunPowerShellTool : ITool
 
     public PermissionLevel RequiredLevel => PermissionLevel.Execute;
 
+    /// <summary>
+    /// The most base64 a Windows command line will take. Windows' documented limit is 32,767
+    /// characters for the whole line; this leaves room for the executable, the switches and the
+    /// quoting around them.
+    ///
+    /// <para>A limit worth naming rather than discovering: the error Windows returns for crossing
+    /// it is "The filename or extension is too long", which says nothing true about a script.</para>
+    /// </summary>
+    internal const int MaxEncodedChars = 32_000;
+
     public async Task<ToolResult> InvokeAsync(string argumentsJson, ToolContext ctx, CancellationToken ct)
     {
         string? script;
@@ -71,6 +81,24 @@ public sealed class RunPowerShellTool : ITool
 
         // -EncodedCommand takes base64 of the UTF-16LE script text — bypasses ALL cmd/shell quoting.
         var encoded = Convert.ToBase64String(Encoding.Unicode.GetBytes(prepared));
+
+        // And that is what puts a ceiling on how long a script may be. Base64 of UTF-16 is roughly
+        // 2.7x the characters, and Windows takes about 32,000 on a command line - so a script of
+        // twelve thousand characters does not fit, and the answer Windows gives for that is "The
+        // filename or extension is too long", about a script with no filename in it.
+        //
+        // Measured 2026-09-24 01:18: a step blocked from write_file by the shrink guard tried to
+        // write its 12 KB report through a here-string instead, and died on this with a message
+        // that pointed nowhere. Refused here, before the attempt, with the route it should have
+        // taken - a long document is a FILE, not a command line.
+        if (encoded.Length > MaxEncodedChars)
+            return ToolResults.Unreadable(
+                $"This script is too long to run: {script.Length:N0} characters becomes "
+                + $"{encoded.Length:N0} once encoded, and Windows takes about {MaxEncodedChars:N0} "
+                + "on a command line. Nothing ran. If it is long because it CARRIES content - a "
+                + "document in a here-string, a file being written - that content belongs in a "
+                + "file: use write_file, or edit_file to change part of one. If the script itself "
+                + "is long, write it to '" + WorkspaceGuard.ScratchPrefix + "/' and run that path.");
 
         var startInfo = new ProcessStartInfo
         {
