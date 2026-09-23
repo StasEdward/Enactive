@@ -57,8 +57,19 @@ public sealed class FileStatsTool : ITool
         catch (ReservedPathException) { return ToolResults.NotFound(ReservedPathException.Explanation); }
         catch (ArgumentException ex) { return ToolResults.Unreadable(ex.Message); }
 
-        if (!Directory.Exists(scanRoot))
-            return ToolResults.NotFound($"Not a folder in this workspace: {subPath ?? "."}");
+        // A path that names ONE file is a question about that file, not a mistake. search_files
+        // learnt this on 2026-09-20 - "answering is better than explaining, and searching one named
+        // file is a perfectly good question" - and these two, written afterwards, inherited the
+        // older behaviour anyway.
+        //
+        // Measured 2026-09-23 21:13:45: file_stats {"path":"Docs/DRIFT_ollama.md"} on the report the
+        // step had just written, answered "Not a folder in this workspace" about a file that was
+        // there. It cost nothing this time because a miss is an answer, but it is a wrong sentence
+        // about a right path, which is the one thing a message must not be.
+        var one = File.Exists(scanRoot);
+
+        if (!one && !Directory.Exists(scanRoot))
+            return ToolResults.NotFound($"Not a folder or file in this workspace: {subPath ?? "."}");
 
         var rows = new List<(string Path, long Bytes, int? Lines)>();
         long totalBytes = 0;
@@ -68,7 +79,9 @@ public sealed class FileStatsTool : ITool
 
         try
         {
-            foreach (var file in WorkspaceScan.Files(scanRoot, glob))
+            // Naming the file IS the filter, so the glob does not get to exclude it - the
+            // same rule search_files applies, for the same reason.
+            foreach (var file in one ? new[] { scanRoot } : WorkspaceScan.Files(scanRoot, glob))
             {
                 ct.ThrowIfCancellationRequested();
 
