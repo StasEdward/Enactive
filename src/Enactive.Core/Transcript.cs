@@ -36,8 +36,12 @@ public static class Transcript
     /// </remarks>
     private const int MaxRememberedValueChars = 600;
 
-    /// <summary>How much of such a value is kept, so the model can still recognise its own work.</summary>
-    private const int RememberedHeadChars = 200;
+    /// <summary>
+    /// The longest first line quoted back, so the model can still recognise its own work. Longer
+    /// than this and none of it is quoted - see <see cref="ShortenArguments"/> for why a cut one
+    /// is worse than none.
+    /// </summary>
+    private const int MaxFirstLineChars = 120;
 
     /// <summary>
     /// The form a set of tool calls is kept in the transcript — as opposed to the form that is
@@ -54,8 +58,16 @@ public static class Transcript
     /// <para><b>Why it is safe to forget.</b> An argument this size is a file's contents on its way
     /// to disk. By the time this runs the call has been made, the tool result says what happened,
     /// and the file can be read back — which is what a model does anyway when it wants to be sure.
-    /// The head is kept because "did I write that section already" is answered by the first line,
-    /// and the exact size is kept because it is the one number a model cannot re-derive.</para>
+    /// The exact size is kept because it is the one number a model cannot re-derive.</para>
+    ///
+    /// <para><b>What it is replaced WITH matters as much.</b> Until 2026-09-24 the value became its
+    /// first 200 characters and "… (14,188 characters, sent in full; read the file back if you need
+    /// the rest)". A model looking back at its own call saw its report stop mid-word - "## Page:
+    /// O…" - said "The file was truncated. Let me write it in parts", and wrote the whole file
+    /// again. The note in brackets said the opposite, and lost to the text it was attached to: a
+    /// document that visibly stops is read as a document that was cut. So the value is now a note
+    /// and nothing else - bracketed, saying the content was written in full - with the first line
+    /// quoted only when it is short enough to quote whole.</para>
     ///
     /// <para>Anything it cannot parse is returned untouched. A call whose arguments this does not
     /// understand is a call it has no business editing.</para>
@@ -106,10 +118,7 @@ public static class Transcript
                     && property.Value.GetString() is { } text
                     && text.Length > MaxRememberedValueChars)
                 {
-                    var head = text[..RememberedHeadChars];
-                    shortened[property.Name] = JsonSerializer.SerializeToElement(
-                        $"{head}… ({text.Length:N0} characters, sent in full; read the file back if "
-                        + "you need the rest)");
+                    shortened[property.Name] = JsonSerializer.SerializeToElement(Remembered(text));
                     changed = true;
                 }
                 else
@@ -124,6 +133,22 @@ public static class Transcript
         {
             return argumentsJson;
         }
+    }
+
+    /// <summary>
+    /// What a long value is remembered as: a note, not a fragment. See <see cref="ShortenArguments"/>.
+    /// </summary>
+    private static string Remembered(string text)
+    {
+        var end = text.IndexOf('\n');
+        var first = (end < 0 ? text : text[..end]).TrimEnd('\r').Trim();
+
+        var began = first.Length is > 0 and <= MaxFirstLineChars
+            ? $" It began with the line: \"{first}\"."
+            : "";
+
+        return $"[Not repeated here: this call sent all {text.Length:N0} characters, and they were "
+             + $"used in full - nothing was cut.{began} Read the file if you need the content.]";
     }
 
     /// <summary>

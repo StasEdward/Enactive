@@ -25,11 +25,17 @@ public sealed class WhatACallIsRememberedAsTests
     private static ToolCall Call(string name, string argumentsJson) => new("id-1", name, argumentsJson);
 
     /// <summary>
-    /// The shape the measurement pointed at: a large value goes, its head and its size stay, and
-    /// the small values around it are untouched — a path the model needs is not "big".
+    /// The shape the measurement pointed at: a large value goes, its size stays, and the small
+    /// values around it are untouched — a path the model needs is not "big".
+    ///
+    /// <para><b>And what it becomes is a NOTE, not a fragment.</b> Until 2026-09-24 the value was
+    /// kept as its first 200 characters plus "… (14,188 characters, sent in full…)". A model looking
+    /// back at its own write saw its report stop mid-word - "## Page: O…" - said "The file was
+    /// truncated. Let me write it in parts", and wrote the whole 14 KB file again. A document that
+    /// visibly stops is read as a document that was cut, whatever the brackets after it say.</para>
     /// </summary>
     [Fact]
-    public void A_file_sized_argument_is_remembered_by_its_head_and_its_length()
+    public void A_file_sized_argument_is_remembered_as_a_note_not_a_fragment()
     {
         var content = new string('x', 5_000);
         var json = JsonSerializer.Serialize(new { path = "Docs/DRIFT.md", new_string = content });
@@ -40,9 +46,35 @@ public sealed class WhatACallIsRememberedAsTests
         Assert.Equal("Docs/DRIFT.md", doc.RootElement.GetProperty("path").GetString());
 
         var kept = doc.RootElement.GetProperty("new_string").GetString()!;
-        Assert.StartsWith(new string('x', 200), kept, StringComparison.Ordinal);
+
+        // None of the content: no fragment to be mistaken for a cut document.
+        Assert.DoesNotContain("xxxxxxxxxx", kept, StringComparison.Ordinal);
+        Assert.StartsWith("[", kept, StringComparison.Ordinal);
+        Assert.EndsWith("]", kept, StringComparison.Ordinal);
         Assert.Contains("5,000 characters", kept, StringComparison.Ordinal);
+        Assert.Contains("nothing was cut", kept, StringComparison.Ordinal);
         Assert.True(remembered.Length < 600, $"still {remembered.Length} characters");
+    }
+
+    /// <summary>
+    /// "Did I write that section already" is answered by the first line, so a short one is quoted
+    /// back - whole, in quotes, labelled. A long one is not quoted at all: cut, it would be the
+    /// fragment again.
+    /// </summary>
+    [Fact]
+    public void A_short_first_line_is_quoted_whole_and_a_long_one_not_at_all()
+    {
+        var report = "# DRIFT Report - Wiki Pages 1-3\n\n" + new string('y', 5_000);
+        var shortFirst = Transcript.ShortenArguments(JsonSerializer.Serialize(new { path = "r.md", content = report }));
+
+        using (var doc = JsonDocument.Parse(shortFirst))
+            Assert.Contains("\"# DRIFT Report - Wiki Pages 1-3\"",
+                            doc.RootElement.GetProperty("content").GetString(), StringComparison.Ordinal);
+
+        var longFirst = Transcript.ShortenArguments(JsonSerializer.Serialize(new { path = "r.md", content = new string('z', 5_000) }));
+
+        using (var doc = JsonDocument.Parse(longFirst))
+            Assert.DoesNotContain("zzz", doc.RootElement.GetProperty("content").GetString(), StringComparison.Ordinal);
     }
 
     /// <summary>

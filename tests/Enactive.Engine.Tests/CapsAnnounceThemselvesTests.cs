@@ -69,13 +69,13 @@ public sealed class CapsAnnounceThemselvesTests
         // Not a cap on an ANSWER but on what the transcript remembers of a call already made. It
         // announces itself the same way - the head, then the exact length - because a remembered
         // argument that looked whole would have the model believe it wrote 200 characters.
-        ["Transcript.MaxRememberedValueChars"] = "A_file_sized_argument_is_remembered_by_its_head_and_its_length",
+        ["Transcript.MaxRememberedValueChars"] = "A_file_sized_argument_is_remembered_as_a_note_not_a_fragment",
         // The census the planner is sized against. The scan ceiling says when it stopped; the floor
         // below it decides which folders are worth a line, and a folder left out is not a truncated
         // answer - it is one loose file nobody plans against.
         ["WorkspaceCensus.MaxFilesScanned"] = "A_census_that_stopped_counting_says_so",
         ["WorkspaceCensus.MinFiles"] = "A_folder_with_almost_nothing_in_it_gets_no_line",
-        ["Transcript.RememberedHeadChars"] = "A_file_sized_argument_is_remembered_by_its_head_and_its_length",
+        ["Transcript.MaxFirstLineChars"] = "A_short_first_line_is_quoted_whole_and_a_long_one_not_at_all",
         // A cap on how many FILES are listed, not how many characters. The totals above the list
         // stay complete - which is the whole difference between this and a search that stops early,
         // and the reason the notice has to say so rather than just trailing off.
