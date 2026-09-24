@@ -73,6 +73,26 @@ public sealed class HowBigAStepMayBeTests
     }
 
     /// <summary>
+    /// A check the request attaches to every item a step produces stays with the step that produces
+    /// the item, rather than becoming a step of its own.
+    ///
+    /// <para>Measured 2026-09-24, run 4f779e: the request said, of every test, "it must FAIL if the
+    /// behaviour it describes is broken - check that by breaking it temporarily and putting it
+    /// back." The plan made this a separate step from writing the tests. Step 2 wrote 4 tests and
+    /// broke-and-restored the source 17 times confirming them; step 3, "mutation-check new tests",
+    /// then did the SAME 17 breaks again for the same 4 tests - the check was the tests' own work,
+    /// done twice.</para>
+    /// </summary>
+    [Fact]
+    public void A_per_item_check_stays_with_the_step_that_makes_the_item()
+    {
+        var prompt = Planner.SystemPromptFor(maxSteps: null, turnCeiling: 250);
+
+        Assert.Contains("EVERY item a step produces", prompt, StringComparison.Ordinal);
+        Assert.Contains("belongs IN the step that", prompt, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// THE ONE THAT MATTERS: the number reaching the planner is the engine's own, through a real
     /// run. A constant copied into the prompt would pass every test above and still be wrong the
     /// day somebody changes the ceiling.

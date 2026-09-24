@@ -583,7 +583,7 @@ public sealed class Orchestrator : IOrchestrator
                     quick.Writer.TryWrite(scope.Ev(EventKind.ReviewRequested, "reviewing…"));
                     var (review, mode) = await ReviewAsync(
                         plan.Title, messages, journal, evidenceStart, evidenceStart, scope.Artifacts, store,
-                        models.ReviewProvider!, models.ReviewModel, ct, quickChanges, quickBefore);
+                        models.ReviewProvider!, models.ReviewModel, ct, quickChanges, quickBefore, intent.RawText);
 
                     if (review.PromptTokens + review.CompletionTokens > 0)
                         quick.Writer.TryWrite(scope.Usage(
@@ -1164,7 +1164,7 @@ public sealed class Orchestrator : IOrchestrator
 
                 var (review, mode) = await ReviewAsync(
                     step.Title, convo, journal, evidenceStart, stepStart, scope.Artifacts, store,
-                    models.ReviewProvider!, models.ReviewModel, ct, workspaceChanges, beforeStep);
+                    models.ReviewProvider!, models.ReviewModel, ct, workspaceChanges, beforeStep, intent.RawText);
 
                 if (review.PromptTokens + review.CompletionTokens > 0)
                     events.Writer.TryWrite(scope.Usage(
@@ -2155,7 +2155,9 @@ public sealed class Orchestrator : IOrchestrator
         string title, List<ChatMessage> convo, ExecutionJournal journal, int evidenceStart,
         int stepStart, List<ArtifactRef> artifacts, IArtifactScope store,
         IChatProvider reviewProvider, string reviewModel, CancellationToken ct,
-        WorkspaceChanges? changes = null, WorkspaceSnapshot? before = null)
+        WorkspaceChanges? changes = null, WorkspaceSnapshot? before = null,
+        // The user's own request, verbatim - see Reviewer.ReviewAsync's own parameter of this name.
+        string? request = null)
     {
         try
         {
@@ -2222,7 +2224,7 @@ public sealed class Orchestrator : IOrchestrator
 
             var result = await _reviewer.ReviewAsync(
                 title, LastAssistant(convo), evidence, changed, reviewProvider, reviewModel, ct,
-                mode, written);
+                mode, written, request);
 
             return (result, mode);
         }

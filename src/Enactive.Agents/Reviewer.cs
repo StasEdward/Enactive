@@ -115,14 +115,22 @@ public sealed class Reviewer
         string stepTitle, string coderOutput, string executionEvidence, IReadOnlyList<string> artifacts,
         IChatProvider provider, string model, CancellationToken ct,
         ReviewMode mode = ReviewMode.Execution,
-        IReadOnlyList<WrittenFile>? writtenFiles = null)
+        IReadOnlyList<WrittenFile>? writtenFiles = null,
+        // The user's own request, verbatim, when the caller has it. A step's TITLE is the planner's
+        // paraphrase of a piece of this - "Write new tests in existing style" - and a constraint the
+        // request stated explicitly ("run the tests with THAT command and no other", "each test must
+        // FAIL if its behaviour is broken") does not survive being paraphrased into a title. Measured
+        // 2026-09-24, run 4f779e: the request named one exact test command; the step ran 22 different
+        // `dotnet test --filter …` invocations instead, and execution review passed it - it had
+        // nothing to check that instruction against, because nothing here had ever been given it.
+        string? request = null)
     {
         var messages = new List<ChatMessage>
         {
             ChatMessage.System(mode == ReviewMode.Content ? ContentSystemPrompt : ExecutionSystemPrompt),
             ChatMessage.User(mode == ReviewMode.Content
-                ? BuildContentUserPrompt(stepTitle, coderOutput, writtenFiles ?? Array.Empty<WrittenFile>())
-                : BuildExecutionUserPrompt(stepTitle, coderOutput, executionEvidence, artifacts, writtenFiles))
+                ? BuildContentUserPrompt(stepTitle, coderOutput, writtenFiles ?? Array.Empty<WrittenFile>(), request)
+                : BuildExecutionUserPrompt(stepTitle, coderOutput, executionEvidence, artifacts, writtenFiles, request))
         };
 
         var completion = await provider.CompleteAsync(
@@ -198,9 +206,38 @@ public sealed class Reviewer
         }
         """;
 
+    /// <summary>
+    /// Room for the request text in a prompt: generous, because a constraint worth checking can sit
+    /// anywhere in it, but not unbounded - the same reasoning as every other excerpt in this class.
+    /// </summary>
+    private const int MaxRequestChars = 4000;
+
+    /// <summary>
+    /// The user's own request, quoted for the reviewer with the instruction to check it directly -
+    /// not through the step's title, which is the planner's paraphrase of a piece of it. Shared
+    /// between execution and content review because the failure is the same in both: a plan can
+    /// satisfy its own restated goal while missing something the request said outright.
+    /// </summary>
+    private static string RequestBlock(string? request)
+    {
+        if (string.IsNullOrWhiteSpace(request))
+            return "";
+
+        var shown = request.Length <= MaxRequestChars ? request : request[..MaxRequestChars] + "… (cut here)";
+        return "\nThe user's ORIGINAL REQUEST for this run, verbatim - the step's title above is the "
+             + "planner's paraphrase of a PIECE of this, and a specific instruction in it (an exact "
+             + "command to use and no other, a naming or format rule, a check required of EVERY item "
+             + "produced) does not survive being paraphrased into a title:\n"
+             + $"\"{shown}\"\n\n"
+             + "If the request states such an instruction, check the evidence against THAT instruction "
+             + "specifically, in addition to judging the report on its own terms. Only the step's own "
+             + "share of the request is this step's to satisfy - a constraint about the run's LAST step "
+             + "is not a finding against an earlier one.\n";
+    }
+
     internal static string BuildExecutionUserPrompt(
         string stepTitle, string coderOutput, string executionEvidence, IReadOnlyList<string> artifacts,
-        IReadOnlyList<WrittenFile>? changes = null)
+        IReadOnlyList<WrittenFile>? changes = null, string? request = null)
     {
         var files = artifacts.Count == 0 ? "(none)" : string.Join(", ", artifacts);
 
@@ -219,6 +256,7 @@ public sealed class Reviewer
         }
 
         return $"Step: {stepTitle}\n\n"
+             + RequestBlock(request)
              + $"What the coding agent reported:\n{coderOutput}\n\n"
              + $"Tool execution evidence — the ACTUAL commands run and their real stdout/stderr/exit codes "
              + $"(this is the ground truth; the agent's own words above may be wrong or invented):\n{executionEvidence}\n\n"
@@ -236,10 +274,11 @@ public sealed class Reviewer
     }
 
     internal static string BuildContentUserPrompt(
-        string stepTitle, string coderOutput, IReadOnlyList<WrittenFile> writtenFiles)
+        string stepTitle, string coderOutput, IReadOnlyList<WrittenFile> writtenFiles, string? request = null)
     {
         var sb = new StringBuilder();
         sb.Append("Step: ").AppendLine(stepTitle).AppendLine();
+        sb.Append(RequestBlock(request));
         sb.AppendLine("What the coding agent reported:").AppendLine(coderOutput).AppendLine();
 
         if (writtenFiles.Count == 0)

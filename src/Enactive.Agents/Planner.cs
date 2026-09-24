@@ -489,7 +489,19 @@ public sealed class Planner
                     + "later step to write: a final step that writes for all the batches depends on "
                     + "every one of them, and a single batch that fails then loses the work of all. "
                     + "This is about REPEATED work only: the rule above still holds for one action, "
-                    + "which is never split into stages.";
+                    + "which is never split into stages. "
+                    // Measured 2026-09-24, run 4f779e: "write new tests" and "mutation-check new
+                    // tests" were two steps for a request that said, of every test, "it must FAIL if
+                    // the behaviour it describes is broken - check that by breaking it temporarily
+                    // and putting it back". Step 2 wrote 4 tests and broke-and-restored the source
+                    // 17 times confirming them; step 3 then did the SAME 17 breaks again, because
+                    // the check the request attached to each test was not part of the step that
+                    // created it. Same shape as the batch rule above, one level down: the unit the
+                    // request names its requirement about is the unit that requirement stays with.
+                    + "A CHECK the request attaches to EVERY item a step produces - \"each test must fail if its "
+                    + "behaviour is broken\", \"every page must cite its source\" - belongs IN the step that "
+                    + "produces the item, not in a step of its own: a later step re-doing the same check per item "
+                    + "is the item's own work, done twice.";
 
         if (maxSteps is > 0)
             prompt += $" This run may take at most {maxSteps} step(s) in total — a plan longer than that "
