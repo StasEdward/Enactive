@@ -529,6 +529,10 @@ public sealed class Orchestrator : IOrchestrator
                 // retry discards the attempt before it.
                 var evidenceStart = journal.Mark();
 
+                // What the action changed, measured - see WorkspaceChanges and the plan path.
+                using var quickChanges = new WorkspaceChanges(_workspace.RootPath);
+                var quickBefore = await quickChanges.TakeAsync(ct);
+
                 for (var attempt = 1; attempt <= maxQuickAttempts; attempt++)
                 {
                     // A quick action runs no plan steps, so a STEP limit never bites here - but
@@ -576,7 +580,7 @@ public sealed class Orchestrator : IOrchestrator
                     quick.Writer.TryWrite(scope.Ev(EventKind.ReviewRequested, "reviewing…"));
                     var (review, mode) = await ReviewAsync(
                         plan.Title, messages, journal, evidenceStart, evidenceStart, scope.Artifacts, store,
-                        models.ReviewProvider!, models.ReviewModel, ct);
+                        models.ReviewProvider!, models.ReviewModel, ct, quickChanges, quickBefore);
 
                     if (review.PromptTokens + review.CompletionTokens > 0)
                         quick.Writer.TryWrite(scope.Usage(
@@ -799,6 +803,11 @@ public sealed class Orchestrator : IOrchestrator
         // rule already: the reviewer's window has to be the window the answer was drawn from, and
         // it is why these two lines must always say the same thing.
         var stepsShareOneConversation = maxParallel == 1;
+
+        // What each step CHANGED, measured rather than inferred - see WorkspaceChanges. Only when steps
+        // take turns: two running at once share one workspace, and a snapshot cannot tell which of
+        // them changed what. They keep the store's own record, as before.
+        using var workspaceChanges = stepsShareOneConversation ? new WorkspaceChanges(_workspace.RootPath) : null;
 
         // Execute by readiness: a step runs only once all its dependencies are Done (a real DAG),
         // not in a fixed linear order. With MaxParallelSteps > 1 the independent branches of the graph
@@ -1069,6 +1078,10 @@ public sealed class Orchestrator : IOrchestrator
             // the two windows cannot drift apart by being maintained separately.
             var evidenceStart = runJournal is null ? stepStart : 0;
 
+            // The workspace as this step found it. Taken once, before the first attempt: a retry
+            // after a rejection is judged on everything the STEP changed, not on its last attempt.
+            var beforeStep = workspaceChanges is null ? null : await workspaceChanges.TakeAsync(ct);
+
             for (var attempt = 1; attempt <= maxAttempts; attempt++)
             {
                 // Where this attempt's calls begin, so a rejection that discards it can take them
@@ -1130,7 +1143,7 @@ public sealed class Orchestrator : IOrchestrator
 
                 var (review, mode) = await ReviewAsync(
                     step.Title, convo, journal, evidenceStart, stepStart, scope.Artifacts, store,
-                    models.ReviewProvider!, models.ReviewModel, ct);
+                    models.ReviewProvider!, models.ReviewModel, ct, workspaceChanges, beforeStep);
 
                 if (review.PromptTokens + review.CompletionTokens > 0)
                     events.Writer.TryWrite(scope.Usage(
@@ -2115,7 +2128,8 @@ public sealed class Orchestrator : IOrchestrator
     private async Task<(ReviewResult Result, ReviewMode Mode)> ReviewAsync(
         string title, List<ChatMessage> convo, ExecutionJournal journal, int evidenceStart,
         int stepStart, List<ArtifactRef> artifacts, IArtifactScope store,
-        IChatProvider reviewProvider, string reviewModel, CancellationToken ct)
+        IChatProvider reviewProvider, string reviewModel, CancellationToken ct,
+        WorkspaceChanges? changes = null, WorkspaceSnapshot? before = null)
     {
         try
         {
@@ -2143,7 +2157,13 @@ public sealed class Orchestrator : IOrchestrator
             // transcript has to be shortened to fit the window the arguments are gone. Reading the
             // file also means the reviewer judges what is actually on disk rather than what the
             // model said it would put there.
-            var written = await ReadWrittenAsync(store, ct);
+            //
+            // Measured when it can be (WorkspaceChanges): what the step changed, by ANY tool, as a diff.
+            // The store's record is the fallback - it sees only the file tools.
+            var written = (changes is not null && before is not null
+                              ? await MeasuredChangesAsync(changes, before, ct)
+                              : null)
+                          ?? await ReadWrittenAsync(store, ct);
             // From the STEP's own mark, not the evidence window: what kind of work THIS step did is
             // not changed by a build an earlier step ran. The window says what the answer may rest
             // on; this says what the step itself was.
@@ -2506,7 +2526,11 @@ public sealed class Orchestrator : IOrchestrator
             // 414-line page be reviewed as its first 161 lines as though that were the whole thing.
             var shown = content is null
                 ? "(this file was removed, or could not be read back)"
-                : content.Length > MaxReviewFileChars ? content[..MaxReviewFileChars] : content;
+                // The START and the END, as the reviewer shows it: cut here to the head alone, the
+                // reviewer's own head-and-tail had no tail left to take, and a step that APPENDED to
+                // a long file was judged on a part that could not contain what it wrote (run 5e5b51,
+                // 2026-09-24: "the pages 4-6 findings ... fall in the part not shown" - PASS).
+                : content.Length > MaxReviewFileChars ? Shortening.ToFit(content, MaxReviewFileChars) : content;
 
             written.Add(new WrittenFile(
                 path, shown, content?.Length ?? shown.Length,
@@ -2514,6 +2538,72 @@ public sealed class Orchestrator : IOrchestrator
         }
 
         return written;
+    }
+
+    /// <summary>
+    /// What a step changed, as the reviewer is shown it - each file as a diff where one exists, a new
+    /// file whole, a deletion as a deletion. Null when the workspace could not be measured, and the
+    /// caller falls back to the store's record.
+    /// </summary>
+    private async Task<IReadOnlyList<WrittenFile>?> MeasuredChangesAsync(
+        WorkspaceChanges changes, WorkspaceSnapshot before, CancellationToken ct)
+    {
+        if (await changes.TakeAsync(ct) is not { } after
+            || await changes.CompareAsync(before, after, ct) is not { } found)
+            return null;
+
+        var written = new List<WrittenFile>(found.Count);
+        foreach (var change in found)
+        {
+            var (content, heading) = change switch
+            {
+                { Kind: FileChangeKind.Deleted } =>
+                    ("(deleted)", "DELETED by this step."),
+                { Binary: true } =>
+                    ("(a binary file - its contents are not shown)", "CHANGED by this step (binary)."),
+                { Kind: FileChangeKind.Added } =>
+                    (await ReadNowAsync(change.Path, ct), "NEW FILE, created by this step - its whole content:"),
+                { Diff: { } diff } =>
+                    (Hunks(diff),
+                     (change.Kind == FileChangeKind.Renamed ? $"RENAMED from {change.OldPath}, and " : "")
+                     + "CHANGED by this step - a unified diff: '+' lines were added, '-' lines removed, "
+                     + "lines starting with a space are unchanged context:"),
+                _ =>
+                    (await ReadNowAsync(change.Path, ct),
+                     "CHANGED by this step. There is no record of how it was before (the workspace is not "
+                     + "a git repository), so this is how it is NOW:")
+            };
+
+            written.Add(new WrittenFile(change.Path, content, content.Length, Heading: heading));
+        }
+
+        return written;
+    }
+
+    /// <summary>A diff from its first hunk: the "diff --git" and index lines say nothing a reviewer needs.</summary>
+    private static string Hunks(string diff)
+    {
+        var at = diff.IndexOf("@@", StringComparison.Ordinal);
+        return at < 0 ? diff : diff[at..];
+    }
+
+    /// <summary>A file as it is now, or a sentence saying why it cannot be shown.</summary>
+    private async Task<string> ReadNowAsync(string relativePath, CancellationToken ct)
+    {
+        try
+        {
+            var full = WorkspaceGuard.ResolveInside(_workspace.RootPath, relativePath);
+            var info = new FileInfo(full);
+            if (!info.Exists)
+                return "(could not be read back)";
+            if (info.Length > 2_000_000)
+                return $"(a {info.Length:N0}-byte file - too large to show here)";
+            return await File.ReadAllTextAsync(full, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return "(could not be read back)";
+        }
     }
 
     /// <summary>

@@ -63,7 +63,11 @@ public sealed record ReviewResult(
 /// <see cref="Enactive.Core.Artifacts.IArtifactScope.SharedWithAnotherStep"/>.
 /// </param>
 public sealed record WrittenFile(
-    string RelativePath, string Content, int TotalChars, bool SharedWithAnotherStep = false)
+    string RelativePath, string Content, int TotalChars, bool SharedWithAnotherStep = false,
+    // What Content IS, when it is not simply the file: this step's CHANGES as a diff, a new file
+    // whole, a deletion, or the file as it is now with no record of before. Null is the file itself,
+    // which is what every caller meant until what a step changed could be measured (2026-09-24).
+    string? Heading = null)
 {
     public WrittenFile(string relativePath, string content)
         : this(relativePath, content, content.Length) { }
@@ -118,7 +122,7 @@ public sealed class Reviewer
             ChatMessage.System(mode == ReviewMode.Content ? ContentSystemPrompt : ExecutionSystemPrompt),
             ChatMessage.User(mode == ReviewMode.Content
                 ? BuildContentUserPrompt(stepTitle, coderOutput, writtenFiles ?? Array.Empty<WrittenFile>())
-                : BuildExecutionUserPrompt(stepTitle, coderOutput, executionEvidence, artifacts))
+                : BuildExecutionUserPrompt(stepTitle, coderOutput, executionEvidence, artifacts, writtenFiles))
         };
 
         var completion = await provider.CompleteAsync(
@@ -195,15 +199,31 @@ public sealed class Reviewer
         """;
 
     internal static string BuildExecutionUserPrompt(
-        string stepTitle, string coderOutput, string executionEvidence, IReadOnlyList<string> artifacts)
+        string stepTitle, string coderOutput, string executionEvidence, IReadOnlyList<string> artifacts,
+        IReadOnlyList<WrittenFile>? changes = null)
     {
         var files = artifacts.Count == 0 ? "(none)" : string.Join(", ", artifacts);
+
+        // What the step CHANGED, whichever tool changed it. A step that runs commands AND writes -
+        // a disk check that saves a report, an analysis that writes its findings - used to get only
+        // this review, and what it wrote was checked against nothing but the tool arguments, and not
+        // at all when a command wrote it. See WorkspaceChanges.
+        var changed = "";
+        if (changes is { Count: > 0 })
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine().AppendLine("What this step CHANGED in the workspace - made by any tool, commands "
+                                       + "included (this is ground truth for what was written):");
+            AppendFiles(sb, changes);
+            changed = sb.ToString();
+        }
 
         return $"Step: {stepTitle}\n\n"
              + $"What the coding agent reported:\n{coderOutput}\n\n"
              + $"Tool execution evidence — the ACTUAL commands run and their real stdout/stderr/exit codes "
              + $"(this is the ground truth; the agent's own words above may be wrong or invented):\n{executionEvidence}\n\n"
-             + $"Files changed: {files}\n\n"
+             + $"Files changed: {files}\n"
+             + changed + "\n"
              + "Judge ONLY from the evidence, and judge the ANSWER — not which tools it was reached with. "
              + "FAIL if: the report above leans on a command that is not in the evidence (it claims a build "
              + "succeeded, a test passed, a value was printed); a command that DID run failed (non-zero exit "
@@ -235,18 +255,34 @@ public sealed class Reviewer
         // told "exactly what it wrote" answers the question it was asked.
         var shared = writtenFiles.Any(f => f.SharedWithAnotherStep);
 
+        var asChanges = writtenFiles.Any(f => f.Heading is not null);
+
         sb.AppendLine(shared
             ? "This step ran no commands — it produced text. Here is what it wrote, EXCEPT where "
               + "marked: a file marked below was also being written by another step at the same "
               + "time, so what you see is both of them and cannot be told apart."
+            : asChanges
+            ? "This step ran no commands — it produced text. Here is what it CHANGED, file by file:"
             : "This step ran no commands — it produced text. Here is exactly what it wrote:");
 
+        AppendFiles(sb, writtenFiles);
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// The files, each under its own header, within the review budget - one renderer for both
+    /// reviews, so a file reads the same whichever question is being asked of it.
+    /// </summary>
+    private static void AppendFiles(StringBuilder sb, IReadOnlyList<WrittenFile> writtenFiles)
+    {
         var budget = MaxContentCharsTotal;
         foreach (var file in writtenFiles)
         {
             sb.AppendLine().Append("----- ").Append(file.RelativePath)
               .Append(file.SharedWithAnotherStep ? "  (ALSO WRITTEN BY ANOTHER STEP)" : "")
               .AppendLine(" -----");
+            if (file.Heading is { Length: > 0 } heading)
+                sb.AppendLine(heading);
 
             // The START and the END, not the first N characters - the same rule as a command's
             // output, and here for a sharper reason. Measured 2026-09-23 on the run that finished:
@@ -282,8 +318,9 @@ public sealed class Reviewer
             // honest about what it had left out.
             if (slice.Length < file.TotalChars)
                 sb.AppendLine()
-                  .AppendLine($"----- END OF EXCERPT: the {file.RelativePath} above is the START and "
-                            + $"the END of the file - {slice.Length} characters of {file.TotalChars}, "
+                  .AppendLine($"----- END OF EXCERPT: what is shown above for {file.RelativePath} is "
+                            + $"the START and the END of {(file.Heading is null ? "the file" : "it")} - "
+                            + $"{slice.Length} characters of {file.TotalChars}, "
                             + "with the middle left out and marked where it was cut. What is missing "
                             + "is the MIDDLE; the end of the file IS above. Nothing here is missing "
                             + "from the file itself. -----");
@@ -294,8 +331,6 @@ public sealed class Reviewer
                 break;
             }
         }
-
-        return sb.ToString();
     }
 
     /// <summary>
@@ -582,7 +617,12 @@ public sealed class Reviewer
         + "account for. It is a lookup that ran and found nothing: a file that does not exist, an "
         + "offset past the end of one. Asking and being told no is how anything explores a tree it "
         + "has not seen, and the agent is free to say nothing about it. ERROR is the label for a "
-        + "call that went wrong; judge only those.";
+        + "call that went wrong; judge only those.\n\n"
+        + "The evidence may be followed by what this step CHANGED in the workspace, made by any tool - "
+        + "a command included - as diffs, new files or deletions. That is what was actually written: "
+        + "check a saved result, a report or a code change against it and against the command output "
+        + "above. In a diff, '+' lines were added by this step, '-' lines removed, and lines starting "
+        + "with a space are unchanged context.";
 
     // Deliberately narrow. A content reviewer that fails on anything it is merely unsure about blocks
     // every run and gets switched off, so it is told to fail only on a specific, nameable falsehood —
@@ -606,6 +646,10 @@ public sealed class Reviewer
         + "line that breaks off at "
         + "either cut is the cut and never a defect - and neither is anything you expected to find "
         + "in the part between them.\n\n"
+        + "A file may be shown as the CHANGES this step made - a unified diff, where '+' lines were "
+        + "added by this step, '-' lines removed, and lines starting with a space are unchanged "
+        + "context shown for orientation. Judge what the step added or changed; the context is not "
+        + "its work, and parts of the file not shown did not change.\n\n"
         + "Do NOT fail for style, tone, formatting, length, or for being incomplete — a short document is "
         + "not a wrong one. Do NOT fail because you would have written it differently. If you are unsure "
         + "whether something exists, do not fail on it: say so in notes and pass. Judge the content, not "
