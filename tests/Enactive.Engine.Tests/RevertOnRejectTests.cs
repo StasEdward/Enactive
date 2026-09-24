@@ -367,11 +367,16 @@ public sealed class ReviewRetryTests
         Assert.Equal(4, events.OfKind(EventKind.ReviewFailed).Count());
     }
 
-    // The rejected draft is dropped from the transcript before the retry. Keeping it cost tokens
-    // twice over — with num_ctx at 8192 a real run reached 6.7k on the second retry — and anchored
-    // the model on the version it had just been told was wrong.
+    // The rejected draft STAYS in the transcript, because it is the thing to repair.
+    //
+    // It used to be dropped: with num_ctx at 8192 a real run reached 6.7k on the second retry, and
+    // the model was anchored on a version it had been told was wrong. Reversed 2026-09-24 (FIX_PLAN
+    // 9de): the drop took the attempt's READS with it, and a rejected audit step re-read 10 sources
+    // exactly and spent 58.7 s re-establishing them. The window is handled by trims and handover now,
+    // and the retry is told to repair the named points, not to rewrite - so the draft in front of it
+    // is what it should be looking at.
     [Fact]
-    public async Task A_content_retry_does_not_carry_the_rejected_draft_forward()
+    public async Task A_content_retry_keeps_the_draft_it_is_to_repair()
     {
         using var fx = new EngineFixture();
         var worker = new FakeChatProvider(
@@ -390,9 +395,9 @@ public sealed class ReviewRetryTests
 
         await fx.RunAsync(orchestrator, "write a guide");
 
-        // The request that started the second attempt must not still contain the first draft.
+        // The request that started the second attempt still has the first draft in it.
         var retryRequest = worker.Requests[2];
-        Assert.DoesNotContain(
+        Assert.Contains(
             retryRequest.Messages,
             m => m.Content?.Contains("THE REJECTED DRAFT", StringComparison.Ordinal) == true
                  || m.ToolCalls?.Any(c => c.ArgumentsJson.Contains("THE REJECTED DRAFT", StringComparison.Ordinal)) == true);

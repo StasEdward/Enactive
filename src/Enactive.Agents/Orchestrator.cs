@@ -517,7 +517,6 @@ public sealed class Orchestrator : IOrchestrator
                 // evidence used to be read back out of the conversation, which is the model's
                 // working memory and gets shortened when the window fills.
                 var journal = new ExecutionJournal();
-                var conversationStart = messages.Count;
 
                 // The same one-shot fallback the DAG path has: an unreachable model is not the
                 // model doing bad work, so it costs no review attempt.
@@ -630,9 +629,8 @@ public sealed class Orchestrator : IOrchestrator
 
                     if (attempt < maxQuickAttempts)
                     {
-                        // See the DAG path: the evidence window follows the transcript window.
-                        if (RetryAfterReview(messages, conversationStart, mode, review.Notes, "the work"))
-                            evidenceStart = journal.Mark();
+                        // See the DAG path: the attempt stays, in the transcript and in the evidence.
+                        RetryAfterReview(messages, review.Notes, "the work");
                         continue;
                     }
 
@@ -1059,7 +1057,6 @@ public sealed class Orchestrator : IOrchestrator
             // the rest of the run when the conversation is, this step's own when it is not.
             var journal = runJournal ?? new ExecutionJournal();
             var reads = new ReadLedger();
-            var conversationStart = convo.Count;
 
             // Where this STEP's own calls begin. Two different questions are asked of the journal
             // and they need different marks. What kind of work was this step - which decides whether
@@ -1084,10 +1081,6 @@ public sealed class Orchestrator : IOrchestrator
 
             for (var attempt = 1; attempt <= maxAttempts; attempt++)
             {
-                // Where this attempt's calls begin, so a rejection that discards it can take them
-                // out of the evidence exactly as it takes the draft out of the transcript.
-                var attemptStart = journal.Mark();
-
                 try
                 {
                     await foreach (var ev in RunToolLoopAsync(
@@ -1183,8 +1176,7 @@ public sealed class Orchestrator : IOrchestrator
 
                             if (attempt < maxAttempts)
                             {
-                                if (RetryAfterReview(convo, conversationStart, mode, review.Notes, "this step"))
-                                    journal.Discard(attemptStart);
+                                RetryAfterReview(convo, review.Notes, "this step");
                                 continue;
                             }
 
@@ -1215,8 +1207,10 @@ public sealed class Orchestrator : IOrchestrator
                     // the transcript truncated in RetryAfterReview, which is two places keeping one
                     // invariant — and the same invariant was quietly broken between STEPS until
                     // 2026-09-08. Discarding from the journal is what the transcript just did.
-                    if (RetryAfterReview(convo, conversationStart, mode, review.Notes, "this step"))
-                        journal.Discard(attemptStart);
+                    //
+                    // Neither is cut any more: a rejected attempt is REPAIRED, not redone, so the
+                    // transcript keeps it and the evidence keeps it with it. See RetryAfterReview.
+                    RetryAfterReview(convo, review.Notes, "this step");
                     continue;
                 }
 
@@ -3912,38 +3906,36 @@ public sealed class Orchestrator : IOrchestrator
 
 
     /// <summary>
-    /// Prepares the conversation for another attempt after a review rejected the work.
+    /// Prepares the conversation for another attempt after a review rejected the work: a REPAIR of the
+    /// points the reviewer named, from everything already established - not a redo.
     ///
-    /// For a step that only WROTE something, the rejected draft is removed from the transcript
-    /// first. Keeping it costs tokens twice over (the tool call carries the whole file, and so does
-    /// the next prompt) and anchors the model on the version it was just told is wrong — with
-    /// num_ctx at 8192 a second retry was measured at 6.7k tokens, close enough to the ceiling that
-    /// Ollama would have started silently dropping the system prompt, honesty rules included. The
-    /// model rewrites the whole file on every attempt anyway, so nothing is lost.
+    /// <para><b>What it replaced, and why it had to go.</b> For a step that ran no commands the
+    /// rejected attempt used to be cut out of the transcript and the evidence, with "That attempt has
+    /// been discarded. Redo this step from scratch". The reasons were real on 2026-09-06: an 8,192
+    /// window a second attempt nearly filled, and small models whose documents were invented from end
+    /// to end, where starting over was the point. And it rested on one claim - "the model rewrites the
+    /// whole file on every attempt anyway, so nothing is lost" - that is false for a step that
+    /// RESEARCHES: its attempt is mostly reads, and they went out with the draft.</para>
     ///
-    /// For a step that RAN something, the transcript stays: the command output IS the evidence, and
-    /// discarding it would mean re-running commands that have already had their effect.
+    /// <para>Measured 2026-09-24: after a content review rejected an audit step - substantively, some
+    /// claims were confirmed by the documentation itself instead of the code - the step spent another
+    /// 58.7 s of local generation and repeated 10 reads exactly, re-establishing what it had already
+    /// read. The rejection was right; throwing away the sources was not.</para>
+    ///
+    /// <para><b>Why keeping it is safe now.</b> A long transcript is handled by the window guard, the
+    /// deep trim and the handover, not by cutting evidence; and the review judges what the step
+    /// CHANGED (WorkspaceChanges), so an attempt kept in the transcript cannot be mistaken for the
+    /// file. The step's files are NOT reverted between attempts - only after the last one is
+    /// rejected - so the draft is on disk to be corrected in place.</para>
     /// </summary>
-    /// <returns>
-    /// Whether the rejected attempt was DISCARDED from the transcript. The caller needs this to keep
-    /// the evidence window and the transcript window the same length — see the note at the call site.
-    /// </returns>
-    private static bool RetryAfterReview(
-        List<ChatMessage> convo, int conversationStart, ReviewMode mode, string notes, string what)
-    {
-        var discarded = mode == ReviewMode.Content;
-
-        if (discarded && convo.Count > conversationStart)
-            convo.RemoveRange(conversationStart, convo.Count - conversationStart);
-
-        convo.Add(ChatMessage.User(
+    private static void RetryAfterReview(List<ChatMessage> convo, string notes, string what)
+        => convo.Add(ChatMessage.User(
             $"A reviewer rejected the previous attempt with this feedback: {notes}\n"
-            + (discarded
-                ? $"That attempt has been discarded. Redo {what} from scratch, correcting every point above."
-                : $"Please fix the issues and redo {what}.")));
-
-        return discarded;
-    }
+            + $"Repair {what}: fix exactly the points above, and keep everything the review did not question. "
+            + "What you already read and ran above still stands - do not read or run it again unless a point "
+            + "above needs something you have not looked at yet. Files you wrote are still there as you left "
+            + "them: change the passages the points are about with edit_file, rather than writing a whole "
+            + "file again."));
 
     /// <summary>
     /// Puts back what the rejected work produced, and takes it out of the run's artifact list so the
