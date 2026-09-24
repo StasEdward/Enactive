@@ -6,7 +6,7 @@
         x:Class="Enactive.App.Ui.WorkerEditWindow"
         x:DataType="vm:WorkerEditViewModel"
         Title="Team member"
-        Width="640" Height="800"
+        Width="640" Height="900"
         WindowStartupLocation="CenterOwner"
         Background="{DynamicResource Brand.Bg}"
         WindowDecorations="BorderOnly"

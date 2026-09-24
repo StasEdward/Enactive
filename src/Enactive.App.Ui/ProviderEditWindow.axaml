@@ -5,7 +5,7 @@
         x:Class="Enactive.App.Ui.ProviderEditWindow"
         x:DataType="vm:ProviderEditViewModel"
         Title="Provider"
-        Width="620" Height="865"
+        Width="620" Height="1100"
         WindowStartupLocation="CenterOwner"
         Background="{DynamicResource Brand.Bg}"
         WindowDecorations="BorderOnly"

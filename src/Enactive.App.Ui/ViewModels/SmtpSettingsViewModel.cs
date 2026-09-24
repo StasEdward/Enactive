@@ -126,9 +126,9 @@ internal sealed partial class SettingsViewModel
                 : RecipientLines().Count == 0
                     ? "No recipients, so send_email stays unavailable: there is nowhere it may write to."
                     : !MailRoleRules.AnyoneCanSend(_working.Workers)
-                        ? "Nobody may use it yet. send_email is granted where every other tool is "
-                          + "- Settings → Team, open a role, tick send_email - and until some role "
-                          + "names it, no run is offered the tool at all."
+                        ? "Send_email is granted where every other tool is "
+                          + "- Settings → Team, open a role, tick send_email "
+                          + ""
                         : $"{string.Join(", ", _working.Workers.Where(MailRoleRules.CanCarry).Where(MailRoleRules.Carries).Select(w => string.IsNullOrWhiteSpace(w.Role) ? w.Id : w.Role))} "
                           + $"may write to {string.Join(", ", RecipientLines())} and nowhere else.";
 
