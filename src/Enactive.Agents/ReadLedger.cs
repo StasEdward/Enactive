@@ -34,6 +34,11 @@ internal sealed class ReadLedger
     {
         public int Contiguous;   // the highest line reached without a gap from line 1
         public int Total;        // the file's line count, as the read reported it
+
+        // Lines read_file cannot show whole - one line longer than its cap, which it steps OVER
+        // when it says where to read on. Such a line is never "seen", so a file holding one is
+        // never read in full, and the advice for it must not be "read from that line" again.
+        public readonly HashSet<int> TooLong = new();
     }
 
     private readonly Dictionary<string, Coverage> _files =
@@ -71,6 +76,11 @@ internal sealed class ReadLedger
 
         coverage.Total = lines;
 
+        // A cursor that jumps past the line the text was cut in means that line cannot be shown.
+        // read_file says so in the text; this remembers it, so the advice below agrees with it.
+        if (Int(result, "partialLine") is { } partial && Int(result, "nextOffset") is { } next && next > partial)
+            coverage.TooLong.Add(partial);
+
         // A window that starts at or before the first line not yet seen extends the run; one that
         // starts beyond it leaves a hole, and a hole is exactly what makes a rewrite unsafe.
         if (from <= coverage.Contiguous + 1)
@@ -94,6 +104,14 @@ internal sealed class ReadLedger
             return null;   // read in full, in one window or several
 
         var next = coverage.Contiguous + 1;
+
+        // The same cursor read_file gave - except where read_file itself stepped over the line
+        // because it cannot show it. Sending the model back there returns the same cut forever.
+        if (coverage.TooLong.Contains(next))
+            return $"'{path}' has a line ({next}) longer than read_file can show, so this step has not "
+                 + "seen the whole file and a whole-file write would replace what it has not read. "
+                 + "Change it with edit_file, which replaces one exact passage and leaves the rest alone.";
+
         return $"This step has read only lines 1-{coverage.Contiguous} of {coverage.Total} in "
              + $"'{path}', so a whole-file write would replace {coverage.Total - coverage.Contiguous} "
              + "line(s) it has never seen with whatever it happens to produce. That is how a file "

@@ -66,4 +66,71 @@ public sealed class ReadFileSaysWhereItWasCutTests
         Assert.DoesNotContain("cut", result.Output, StringComparison.Ordinal);
         Assert.DoesNotContain("Read on", result.Output, StringComparison.Ordinal);
     }
+
+    // ── one cursor, told the same way to everyone who reads it ─────────────────────
+
+    private static string LongFile() => string.Join("\n", Enumerable.Range(1, 400).Select(i => $"{i:D4} " + new string('x', 92)));
+
+    /// <summary>The number in the text and the number in the metadata are the same number.</summary>
+    [Fact]
+    public async Task The_cursor_in_the_text_is_the_cursor_in_the_metadata()
+    {
+        using var fx = new EngineFixture();
+        fx.Write("long.md", LongFile());
+
+        var result = await fx.Invoke(new ReadFileTool(), """{"path":"long.md"}""");
+
+        Assert.Equal(82, Convert.ToInt32(result.Metadata["nextOffset"]));
+        Assert.Equal(82, Convert.ToInt32(result.Metadata["partialLine"]));
+        Assert.Contains($"Read on with offset {result.Metadata["nextOffset"]}.", result.Output, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// ReadLedger refuses a whole-file write of a file seen only in part, and sends the model to read
+    /// on from the SAME line read_file named - not from a line it believes it has seen.
+    /// </summary>
+    [Fact]
+    public async Task A_refused_rewrite_reads_on_from_the_same_line_read_file_named()
+    {
+        using var fx = new EngineFixture();
+        fx.Write("long.md", LongFile());
+
+        var provider = new FakeChatProvider(
+            Turn.Says("""{"disposition":"quick_action","title":"rewrite it"}"""),
+            Turn.Calls1("read_file", """{"path":"long.md"}""", "r1"),
+            Turn.Calls1("write_file", """{"path":"long.md","content":"short"}""", "w1"),
+            Turn.Says("Done."));
+
+        await fx.RunAsync(fx.Build(provider, EngineFixture.Role("developer")), "rewrite it");
+
+        var said = string.Join("\n", provider.Requests.SelectMany(r => r.Messages).Select(m => m.Content));
+        Assert.Contains("Read on with offset 82.", said, StringComparison.Ordinal);
+        Assert.Contains("read only lines 1-81 of 400", said, StringComparison.Ordinal);
+        Assert.Contains("\"offset\": 82", said, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A line read_file cannot show whole is never "seen", and the refusal does not send the model
+    /// back to read it: that returns the same cut forever. It names edit_file instead.
+    /// </summary>
+    [Fact]
+    public async Task A_line_too_long_to_read_is_not_offered_as_the_place_to_read_on()
+    {
+        using var fx = new EngineFixture();
+        fx.Write("min.js", new string('m', 20_000) + "\nsecond line\n");
+
+        var provider = new FakeChatProvider(
+            Turn.Says("""{"disposition":"quick_action","title":"rewrite it"}"""),
+            Turn.Calls1("read_file", """{"path":"min.js"}""", "r1"),
+            Turn.Calls1("write_file", """{"path":"min.js","content":"rewritten"}""", "w1"),
+            Turn.Says("Done."));
+
+        await fx.RunAsync(fx.Build(provider, EngineFixture.Role("developer")), "rewrite it");
+
+        var said = string.Join("\n", provider.Requests.SelectMany(r => r.Messages).Select(m => m.Content));
+        Assert.Contains("longer than read_file can show", said, StringComparison.Ordinal);
+        Assert.Contains("edit_file", said, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"offset\": 1", said, StringComparison.Ordinal);
+    }
 }
+

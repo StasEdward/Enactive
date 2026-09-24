@@ -154,6 +154,12 @@ public sealed class ReadFileTool : ITool
                     // The last line shown WHOLE. ReadLedger decides from this whether a whole-file
                     // write of this file can be trusted, and a line cut part-way was not seen.
                     ["lastLine"] = fullyShown,
+                    // The cursor, the SAME number the text tells the model to read on from - one
+                    // source for both, so the reader and ReadLedger cannot disagree about it. Null when
+                    // there is nothing further to read.
+                    ["nextOffset"] = clipped || lastLine < total ? (nextOffset <= total ? nextOffset : null) : null,
+                    // The line the shown text ends part-way through, when it was cut.
+                    ["partialLine"] = clipped ? cutLine : null,
                     ["truncated"] = clipped || lastLine < total,
                     // Say which version this is. "Proposed" and "on disk" are different facts, and a
                     // reviewer judging from evidence has to be able to tell them apart.
