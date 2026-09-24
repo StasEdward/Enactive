@@ -3735,6 +3735,8 @@ public sealed class Orchestrator : IOrchestrator
         // is history, not instruction: a past decision is a fact about the project, not an order,
         // and a model that treats "we chose Postgres" as a command to install one has been misled
         // by the framing rather than by the fact.
+
+        /* I temporary block  this code
         if (context.Memory.Count > 0)
         {
             sb.AppendLine();
@@ -3745,7 +3747,7 @@ public sealed class Orchestrator : IOrchestrator
             foreach (var entry in context.Memory)
                 sb.AppendLine($"- [{entry.Kind}] {Gist(entry.Content, 200)}");
         }
-
+        */
         sb.AppendLine();
         sb.AppendLine("## Request (the user's intent)");
         sb.AppendLine(intent.RawText);
