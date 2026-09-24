@@ -52,6 +52,7 @@ public static class EventLogTap
         EventKind.StepStarted => (LogSource.Orchestrator, LogLevel.Info),
         EventKind.StepCompleted => (LogSource.Orchestrator, LogLevel.Info),
         EventKind.AssistantDelta => (LogSource.Llm, LogLevel.Trace),   // per-token — Trace keeps it out of the default view
+        EventKind.GenerationProgress => (LogSource.Llm, LogLevel.Debug),
         EventKind.ToolInvoked => (LogSource.Tool, LogLevel.Debug),
         EventKind.ToolResult => (LogSource.Tool, LogLevel.Debug),
         EventKind.DecisionRequested => (LogSource.Permission, LogLevel.Info),

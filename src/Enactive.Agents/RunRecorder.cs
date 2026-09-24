@@ -264,6 +264,11 @@ public sealed class RunRecorder
 
         foreach (var ev in events)
         {
+            // Progress is for the person watching, not for the record: it says "still writing",
+            // and once the write has arrived that is no longer true of anything.
+            if (ev.Kind == EventKind.GenerationProgress)
+                continue;
+
             // The step number is stamped HERE, while the event still carries it. Nothing downstream
             // can work it out again: replaying by order attributes a tool call to whichever step
             // started last, which is the wrong one as soon as two run at once.

@@ -43,6 +43,7 @@ public sealed class CapsAnnounceThemselvesTests
     /// </summary>
     private static readonly Dictionary<string, string> Covered = new(StringComparer.Ordinal)
     {
+        ["Orchestrator.ProgressEveryChars"] = "A_long_tool_call_says_it_is_still_being_written",
         ["Orchestrator.MaxReviewFileChars"] = nameof(A_files_real_size_reaches_the_reviewer_from_a_real_run),
         ["Reviewer.MaxContentCharsPerFile"] = "An_excerpt_says_so_even_when_the_caller_did_the_cutting",
         ["Reviewer.MaxContentCharsTotal"] = nameof(Files_dropped_for_the_review_budget_are_announced),

@@ -97,6 +97,13 @@ public sealed class Orchestrator : IOrchestrator
     /// </summary>
     private const int TrimsBeforeHandover = 3;
 
+    /// <summary>
+    /// How often a long generation says it is still going: every this many characters of tool-call
+    /// arguments or reasoning. About half a minute of writing on a slow local model, a few seconds
+    /// on a fast one - often enough that nothing looks stuck, rare enough not to flood the card.
+    /// </summary>
+    private const int ProgressEveryChars = 2_000;
+
 
 
     private readonly IChatProviderFactory _providers;
@@ -2940,6 +2947,11 @@ public sealed class Orchestrator : IOrchestrator
             var toolBuilders = new Dictionary<int, ToolCallBuilder>();
             string? finishReason = null;
 
+            // What has arrived that the card does not show, and when it last said so.
+            var argumentChars = 0;
+            var saidAtArguments = 0;
+            var saidAtReasoning = 0;
+
             await foreach (var delta in provider.StreamChatAsync(request, ct))
             {
                 switch (delta)
@@ -2956,6 +2968,14 @@ public sealed class Orchestrator : IOrchestrator
                         if (call.Id is not null) builder.Id = call.Id;
                         if (call.Name is not null) builder.Name = call.Name;
                         if (call.ArgumentsJson is not null) builder.Arguments.Append(call.ArgumentsJson);
+
+                        argumentChars += call.ArgumentsJson?.Length ?? 0;
+                        if (argumentChars - saidAtArguments >= ProgressEveryChars)
+                        {
+                            saidAtArguments = argumentChars;
+                            yield return Ev(EventKind.GenerationProgress,
+                                $"Writing {builder.Name ?? "a tool call"}: {argumentChars:N0} characters so far…");
+                        }
                         break;
 
                     // Kept apart from the content on purpose: it is a draft, not an answer, and it
@@ -2963,6 +2983,12 @@ public sealed class Orchestrator : IOrchestrator
                     // can be diagnosed instead of arriving as an inexplicable silence.
                     case ReasoningDelta reasoning:
                         reasoningBuilder.Append(reasoning.Text);
+                        if (reasoningBuilder.Length - saidAtReasoning >= ProgressEveryChars)
+                        {
+                            saidAtReasoning = reasoningBuilder.Length;
+                            yield return Ev(EventKind.GenerationProgress,
+                                $"Reasoning: {reasoningBuilder.Length:N0} characters so far…");
+                        }
                         break;
 
                     case FinishDelta finish:

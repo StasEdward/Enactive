@@ -905,6 +905,12 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                     _doneSteps++;
                     UpdateProgress();
                     break;
+                // A long generation still arriving - shown on the activity line, replaced in place,
+                // so minutes of writing a big tool call do not look like a hang.
+                case EventKind.GenerationProgress:
+                    (CardFor(ev) ?? EnsureCurrentCard()).SetActivity(ev.Summary);
+                    break;
+
                 case EventKind.AssistantDelta:
                     Live(() => _vm.SetAgent("Coder", Brand.PillCoder));
                     var streamCard = CardFor(ev) ?? EnsureCurrentCard();
