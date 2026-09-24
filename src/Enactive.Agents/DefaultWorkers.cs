@@ -62,7 +62,17 @@ public static class DefaultWorkers
         + WorkspaceGuard.ScratchPrefix + "/' instead and copy_file it into place, which copies every byte. Either "
         + "way the file holds the command's OUTPUT, never the command line itself.\n"
         + "- If a command fails (non-zero exit code, or an error in its output), report the real error and fix the "
-        + "cause. Never substitute a plausible-looking placeholder value.";
+        + "cause. Never substitute a plausible-looking placeholder value.\n"
+        // Measured 2026-09-24: one write_file turn took 72.1 s to GENERATE - 4,709 tokens, a report of
+        // 18,000 characters - and 32 ms to write. The request asked for discrepancies; most of the
+        // report listed the claims that matched, one entry each. What a model writes is the slowest
+        // thing it does on any provider, and a line nobody asked for costs that time for nothing.
+        // Stated for every kind of report - a disk check, a log analysis, a review - not for one task.
+        + "- A report or written result holds what the request asked for. If it asks for problems - "
+        + "discrepancies, failures, errors, risks - write those in full; what you checked and found in order "
+        + "is ONE line with a count (\"41 other claims checked, all match\"), not an entry each, unless the "
+        + "request asks for them. Writing is the slowest thing you do: every line costs time, and a line "
+        + "nobody asked for costs it for nothing.";
 
     // Verifying a write by reading it back catches a weak local model's fabrication, but it costs an extra
     // round-trip that's wasteful on a strong model — so it's toggled via settings (VerifyWrites) rather than
