@@ -59,41 +59,85 @@ public sealed class JsonStoreProcessLockTests : IDisposable
     /// <summary>
     /// The write WAITS. Before the lock it went straight through, read the list somebody else was
     /// half-way through replacing, and wrote its own version over the result.
+    ///
+    /// <para>And the waiting writer is let go and WAITED FOR before the test ends. It used to be left
+    /// running when the test returned, racing the fixture deleting its folder, and whatever it did
+    /// after the handle closed - finish, throw, hang - went unseen
+    /// (Docs/CORE_TESTS_REVIEW_2026-09-24.md #5).</para>
     /// </summary>
     [Fact]
     public async Task A_write_waits_while_another_process_holds_the_file()
     {
         await _inbox.AppendAsync(Item("first"), CancellationToken.None);
 
-        using var foreignHold = HoldAsAnotherProcessWould();
+        var foreignHold = HoldAsAnotherProcessWould();
+        Task? blocked = null;
+        try
+        {
+            blocked = _inbox.AppendAsync(Item("second"), CancellationToken.None);
+            var finishedEarly = await Task.WhenAny(blocked, Task.Delay(TimeSpan.FromMilliseconds(500)));
 
-        var blocked = _inbox.AppendAsync(Item("second"), CancellationToken.None);
-        var finishedEarly = await Task.WhenAny(blocked, Task.Delay(TimeSpan.FromMilliseconds(500)));
+            Assert.NotSame(blocked, finishedEarly);
+        }
+        finally
+        {
+            foreignHold.Dispose();
+            if (blocked is not null)
+                await blocked.WaitAsync(TimeSpan.FromSeconds(20));
+        }
 
-        Assert.NotSame(blocked, finishedEarly);
+        Assert.Equal(2, (await _inbox.LoadAllAsync(CancellationToken.None)).Count);
     }
 
     /// <summary>
-    /// And then it goes through, with BOTH entries. Waiting is only half the requirement: a writer
-    /// that waits and then writes the list it read before waiting has lost the other one anyway.
+    /// And then it goes through, KEEPING what the other process wrote while it waited. Waiting is
+    /// only half the requirement: a writer that read the list before waiting and writes it back after
+    /// has lost the other process's entry anyway.
+    ///
+    /// <para>This used to leave the file as it was during the wait, so a writer that read BEFORE
+    /// taking the lock got exactly the list it needed and passed (Docs/CORE_TESTS_REVIEW_2026-09-24.md
+    /// #2). Now the other process writes an entry while it holds the lock, as a real one does.</para>
     /// </summary>
     [Fact]
-    public async Task The_write_completes_with_both_entries_once_the_other_process_lets_go()
+    public async Task The_write_keeps_what_the_other_process_wrote_while_it_waited()
     {
-        await _inbox.AppendAsync(Item("first"), CancellationToken.None);
+        var first = Item("first");
+        await _inbox.AppendAsync(first, CancellationToken.None);
+
+        // What the other process will have written by the time it lets go: "first" and "third".
+        var elsewhere = Path.Combine(_root, "elsewhere");
+        Directory.CreateDirectory(elsewhere);
+        var theirs = new JsonInboxStore(WorkspaceInfo.For(elsewhere));
+        await theirs.AppendAsync(first, CancellationToken.None);
+        await theirs.AppendAsync(Item("third"), CancellationToken.None);
 
         var foreignHold = HoldAsAnotherProcessWould();
-        var blocked = _inbox.AppendAsync(Item("second"), CancellationToken.None);
+        Task? blocked = null;
+        try
+        {
+            blocked = _inbox.AppendAsync(Item("second"), CancellationToken.None);
 
-        await Task.Delay(200);
-        foreignHold.Dispose();
+            // Time for a writer that reads BEFORE it waits to have read. A correct one reads only
+            // after the lock is its own, so what it ends with does not depend on this delay at all.
+            await Task.Delay(200);
+            Assert.False(blocked.IsCompleted);
 
-        await blocked.WaitAsync(TimeSpan.FromSeconds(20));
+            // The other process's write, made while it holds the lock.
+            File.Copy(Path.Combine(elsewhere, ".enactive", "inbox.json"),
+                      Path.Combine(_root, ".enactive", "inbox.json"), overwrite: true);
+        }
+        finally
+        {
+            foreignHold.Dispose();
+            if (blocked is not null)
+                await blocked.WaitAsync(TimeSpan.FromSeconds(20));
+        }
 
         var items = await _inbox.LoadAllAsync(CancellationToken.None);
-        Assert.Equal(2, items.Count);
+        Assert.Equal(3, items.Count);
         Assert.Contains(items, i => i.Title == "first");
         Assert.Contains(items, i => i.Title == "second");
+        Assert.Contains(items, i => i.Title == "third");
     }
 
     /// <summary>
@@ -131,35 +175,70 @@ public sealed class JsonStoreProcessLockTests : IDisposable
         var store = new ScheduleStore(SchedulesFile);
         store.Save(Schedule("first"));
 
-        using var foreignHold = new FileStream(
+        var foreignHold = new FileStream(
             FileLock.LockPathFor(SchedulesFile), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        Task? blocked = null;
+        try
+        {
+            // Task.Run because this store is synchronous: the wait is a blocked thread, which is what
+            // the app and the runner both do here.
+            blocked = Task.Run(() => store.Save(Schedule("second")));
+            var finishedEarly = await Task.WhenAny(blocked, Task.Delay(TimeSpan.FromMilliseconds(500)));
 
-        // Task.Run because this store is synchronous: the wait is a blocked thread, which is what
-        // the app and the runner both do here.
-        var blocked = Task.Run(() => store.Save(Schedule("second")));
-        var finishedEarly = await Task.WhenAny(blocked, Task.Delay(TimeSpan.FromMilliseconds(500)));
+            Assert.NotSame(blocked, finishedEarly);
+        }
+        finally
+        {
+            // Save takes no token, so the only way to end the wait is to let go - and then the
+            // blocked thread is joined before the fixture deletes the folder it is writing to.
+            foreignHold.Dispose();
+            if (blocked is not null)
+                await blocked.WaitAsync(TimeSpan.FromSeconds(20));
+        }
 
-        Assert.NotSame(blocked, finishedEarly);
+        Assert.Equal(2, store.For(_root).Count);
     }
 
+    /// <summary>
+    /// The schedule another process added - or the LastFiredAt it stamped - while this save waited is
+    /// still there afterwards. See the inbox test above: the other process now WRITES while it holds
+    /// the lock, so a save that read the file before taking the lock loses that write.
+    /// </summary>
     [Fact]
-    public async Task Both_schedules_are_there_once_the_other_process_lets_go()
+    public async Task A_schedule_the_other_process_saved_while_this_one_waited_is_kept()
     {
         var store = new ScheduleStore(SchedulesFile);
         store.Save(Schedule("first"));
 
+        // What the other process will have written by the time it lets go: "first" and "third".
+        var elsewhere = Path.Combine(_root, "elsewhere.json");
+        File.Copy(SchedulesFile, elsewhere);
+        new ScheduleStore(elsewhere).Save(Schedule("third"));
+
         var foreignHold = new FileStream(
             FileLock.LockPathFor(SchedulesFile), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
-        var blocked = Task.Run(() => store.Save(Schedule("second")));
+        Task? blocked = null;
+        try
+        {
+            blocked = Task.Run(() => store.Save(Schedule("second")));
 
-        await Task.Delay(200);
-        foreignHold.Dispose();
+            // Time for a save that reads BEFORE it waits to have read; a correct one does not care.
+            await Task.Delay(200);
+            Assert.False(blocked.IsCompleted);
 
-        await blocked.WaitAsync(TimeSpan.FromSeconds(20));
+            File.Copy(elsewhere, SchedulesFile, overwrite: true);
+        }
+        finally
+        {
+            foreignHold.Dispose();
+            if (blocked is not null)
+                await blocked.WaitAsync(TimeSpan.FromSeconds(20));
+        }
 
         var saved = store.For(_root);
-        Assert.Equal(2, saved.Count);
+        Assert.Equal(3, saved.Count);
         Assert.Contains(saved, s => s.Name == "first");
         Assert.Contains(saved, s => s.Name == "second");
+        Assert.Contains(saved, s => s.Name == "third");
     }
 }

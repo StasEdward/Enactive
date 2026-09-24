@@ -115,20 +115,55 @@ public sealed class ScheduleClockTests
     }
 
     /// <summary>
-    /// The hour that happens twice. On the last Sunday in October 02:00 → 01:00, so 01:30 comes
-    /// round twice; the job runs ONCE, at the earlier of the two.
+    /// The hour that happens twice. On the last Sunday in October the clocks go from 03:00 CEST back
+    /// to 02:00 CET, so 02:30 comes round twice; the job runs ONCE, at the earlier of the two.
     ///
-    /// <para>Asserted on the UTC instant, because both candidates read "01:30" on the wall and only
+    /// <para>Asserted on the UTC instant, because both candidates read "02:30" on the wall and only
     /// the offset tells them apart - a test comparing the wall clock would pass either way.</para>
+    ///
+    /// <para>This test used 01:30 until 2026-09-24, and said in its comment that the clocks go from
+    /// 02:00 to 01:00. They do not: 01:30 happens once, so the ambiguous branch never ran, and a
+    /// deliberate break choosing the LATER offset left it green (Docs/CORE_TESTS_REVIEW_2026-09-24.md
+    /// #1). The time is now checked to be ambiguous before anything is asserted about it.</para>
     /// </summary>
     [Fact]
     public void A_time_that_happens_twice_that_day_runs_at_the_first_of_them()
     {
-        var next = ScheduleClock.Next(
-            With(ScheduleTiming.Daily(new TimeOnly(1, 30), Zone)), Local(2026, 10, 24, 12, 0));
+        Assert.True(ScheduleClock.Zone(Zone)!.IsAmbiguousTime(new DateTime(2026, 10, 25, 2, 30, 0)),
+                    "02:30 on 25 October 2026 must happen twice in this zone, or this test proves nothing");
 
-        // 01:30 CEST (+02:00) is 23:30 UTC the previous day; 01:30 CET (+01:00) is 00:30 UTC.
-        Assert.Equal(new DateTimeOffset(2026, 10, 24, 23, 30, 0, TimeSpan.Zero), next!.Value.ToUniversalTime());
+        var next = ScheduleClock.Next(
+            With(ScheduleTiming.Daily(new TimeOnly(2, 30), Zone)), Local(2026, 10, 24, 12, 0));
+
+        // 02:30 CEST (+02:00) is 00:30 UTC; 02:30 CET (+01:00) is 01:30 UTC.
+        Assert.Equal(new DateTimeOffset(2026, 10, 25, 0, 30, 0, TimeSpan.Zero), next!.Value.ToUniversalTime());
+    }
+
+    /// <summary>After the first of the two, the next one is TOMORROW - the second 02:30 is not another occurrence.</summary>
+    [Fact]
+    public void After_the_first_of_the_two_the_next_is_tomorrow()
+    {
+        var next = ScheduleClock.Next(
+            With(ScheduleTiming.Daily(new TimeOnly(2, 30), Zone)),
+            new DateTimeOffset(2026, 10, 25, 0, 31, 0, TimeSpan.Zero));
+
+        // 26 October, 02:30 CET (+01:00).
+        Assert.Equal(new DateTimeOffset(2026, 10, 26, 1, 30, 0, TimeSpan.Zero), next!.Value.ToUniversalTime());
+    }
+
+    /// <summary>
+    /// Fired at the first 02:30, and asked again at the second: it does not run twice that night.
+    /// </summary>
+    [Fact]
+    public void A_job_fired_at_the_first_of_the_two_is_not_due_at_the_second()
+    {
+        var firedAtTheFirst = new DateTimeOffset(2026, 10, 25, 0, 30, 0, TimeSpan.Zero);
+        var theSecond = new DateTimeOffset(2026, 10, 25, 1, 30, 0, TimeSpan.Zero);
+        var schedule = With(ScheduleTiming.Daily(new TimeOnly(2, 30), Zone)) with { LastFiredAt = firedAtTheFirst };
+
+        var decision = ScheduleTick.Decide(schedule, theSecond);
+
+        Assert.Equal(DueVerdict.NotDue, decision.Verdict);
     }
 
     // ── the ones with no next time ──────────────────────────────────────────

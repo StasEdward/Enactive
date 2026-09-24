@@ -36,8 +36,14 @@ public sealed class WorkspaceChangesTests : IDisposable
         foreach (var a in args) psi.ArgumentList.Add(a);
         using var p = Process.Start(psi)!;
         var output = p.StandardOutput.ReadToEnd();
-        p.StandardError.ReadToEnd();
+        var errors = p.StandardError.ReadToEnd();
         p.WaitForExit();
+
+        // A setup command that failed must fail the test. Ignored, it leaves a fixture that is not
+        // what the test says it is, and an empty answer from a failed read looks exactly like a
+        // clean index (Docs/CORE_TESTS_REVIEW_2026-09-24.md #4).
+        if (p.ExitCode != 0)
+            throw new InvalidOperationException($"git {string.Join(' ', args)} exited {p.ExitCode}: {errors}");
         return output;
     }
 
@@ -131,20 +137,42 @@ public sealed class WorkspaceChangesTests : IDisposable
         Assert.DoesNotContain(found!, c => c.Path.StartsWith(".enactive", StringComparison.Ordinal));
     }
 
-    /// <summary>The person's own staging area is theirs: a snapshot must not stage or unstage anything.</summary>
+    /// <summary>
+    /// The person's own staging area is theirs: a snapshot must not stage or unstage anything.
+    ///
+    /// <para>Started from a staging area that HAS something in it - a change staged, and the same
+    /// file changed again after, so staged and working versions differ. It used to start from an
+    /// empty one, where a snapshot that reset the index to HEAD had nothing to reset, and it did not
+    /// check that either snapshot was taken, so two failed ones passed
+    /// (Docs/CORE_TESTS_REVIEW_2026-09-24.md #4).</para>
+    /// </summary>
     [Fact]
     public async Task The_persons_own_index_is_untouched()
     {
         Repository();
+        File.AppendAllText(Path.Combine(_root, "report.md"), "## Staged\nthe person staged this\n");
+        Git("add", "report.md");
+        File.AppendAllText(Path.Combine(_root, "report.md"), "## Not staged\nand then kept writing\n");
         Write("wip.txt", "the person's own unstaged work\n");
+
+        var staged = Git("diff", "--cached", "--binary");
+        var index = Git("ls-files", "--stage");
+        var head = Git("rev-parse", "HEAD");
         var status = Git("status", "--porcelain");
+        var working = File.ReadAllText(Path.Combine(_root, "report.md"));
+        Assert.Contains("the person staged this", staged, StringComparison.Ordinal);
 
         using var changes = new WorkspaceChanges(_root);
-        await changes.TakeAsync(default);
-        await changes.TakeAsync(default);
+        var first = await changes.TakeAsync(default);
+        var second = await changes.TakeAsync(default);
+        Assert.NotNull(first?.Tree);
+        Assert.NotNull(second?.Tree);
 
+        Assert.Equal(staged, Git("diff", "--cached", "--binary"));
+        Assert.Equal(index, Git("ls-files", "--stage"));
+        Assert.Equal(head, Git("rev-parse", "HEAD"));
         Assert.Equal(status, Git("status", "--porcelain"));
-        Assert.Equal("", Git("diff", "--cached", "--name-only"));
+        Assert.Equal(working, File.ReadAllText(Path.Combine(_root, "report.md")));
     }
 
     [Fact]
