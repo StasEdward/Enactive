@@ -168,7 +168,11 @@ public sealed class Orchestrator : IOrchestrator
         if (folders.Count > 0 && folders.TrueForAll(f => WritableRoots.Refuses(f!) is null))
             options.Add(new DecisionOption("keep", "Keep for this workspace"));
 
-        options.Add(new DecisionOption("deny", "Keep to the workspace"));
+        // "Decline", said plainly. It was "Keep to the workspace", which sat beside "Keep for this
+        // workspace" - the same two words meaning the opposite, one refusing the write and one
+        // allowing it for good. Asked 2026-09-24: "why is there no Decline button?" There was;
+        // nobody could tell which one it was.
+        options.Add(new DecisionOption("deny", "Decline"));
         return options;
     }
     private readonly IModelResolver _modelResolver;
