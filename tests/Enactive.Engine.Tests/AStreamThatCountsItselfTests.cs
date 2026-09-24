@@ -101,8 +101,11 @@ public sealed class AStreamThatCountsItselfTests
             new OpenAiCompatibleProvider(http, Descriptor("local-a", "qwen-a")), "qwen-a");
 
         var sent = Assert.Single(handler.Bodies);
-        Assert.Contains("stream_options", sent, StringComparison.Ordinal);
-        Assert.Contains("include_usage", sent, StringComparison.Ordinal);
+
+        // The value, not the words: include_usage must be the boolean true, inside an object.
+        var options = System.Text.Json.JsonDocument.Parse(sent).RootElement.GetProperty("stream_options");
+        Assert.Equal(System.Text.Json.JsonValueKind.Object, options.ValueKind);
+        Assert.Equal(System.Text.Json.JsonValueKind.True, options.GetProperty("include_usage").ValueKind);
 
         // And the usage-only chunk at the end of the stream is read: it carries no choices, which
         // is exactly the shape a parser keyed on choices would drop on the floor.

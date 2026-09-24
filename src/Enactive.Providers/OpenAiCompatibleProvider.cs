@@ -86,6 +86,7 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
         await using var stream = await response.Content.ReadAsStreamAsync(ct);
         using var reader = new StreamReader(stream);
         var raw = new StringBuilder();
+        var finished = false;
         try
         {
             while (await reader.ReadLineAsync(ct) is { } line)
@@ -98,11 +99,21 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
                 if (data.Length == 0)
                     continue;
                 if (data == "[DONE]")
-                    yield break;
+                {
+                    finished = true;
+                    break;
+                }
 
-                foreach (var evt in ParseStreamChunk(data))
+                foreach (var evt in ParseStreamChunk(data, _descriptor.Id))
+                {
+                    finished |= evt is FinishDelta;
                     yield return evt;
+                }
             }
+
+            // See StreamEnd: an answer with neither a finish_reason nor [DONE] did not finish.
+            if (!finished)
+                throw StreamEnd.Unfinished(_descriptor.Id, "finish_reason and no [DONE]");
         }
         finally
         {
@@ -235,11 +246,14 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
         return httpRequest;
     }
 
-    private static IEnumerable<ChatStreamEvent> ParseStreamChunk(string data)
+    private static IEnumerable<ChatStreamEvent> ParseStreamChunk(string data, string providerId)
     {
         var events = new List<ChatStreamEvent>();
         using var doc = JsonDocument.Parse(data);
         var root = doc.RootElement;
+
+        if (StreamEnd.ErrorIn(providerId, root) is { } error)
+            throw error;
 
         if (root.TryGetProperty("choices", out var choices) && choices.GetArrayLength() > 0)
         {

@@ -57,6 +57,7 @@ public sealed class OllamaNativeProvider : IChatProvider
         await using var stream = await response.Content.ReadAsStreamAsync(ct);
         using var reader = new StreamReader(stream);
         var raw = new StringBuilder();
+        var finished = false;
         try
         {
             while (await reader.ReadLineAsync(ct) is { } line)
@@ -65,9 +66,16 @@ public sealed class OllamaNativeProvider : IChatProvider
                 if (line.Length == 0)
                     continue;
 
-                foreach (var evt in ParseStreamLine(line))
+                foreach (var evt in ParseStreamLine(line, _descriptor.Id))
+                {
+                    finished |= evt is FinishDelta;
                     yield return evt;
+                }
             }
+
+            // See StreamEnd: an answer that stops without "done": true did not finish.
+            if (!finished)
+                throw StreamEnd.Unfinished(_descriptor.Id, "\"done\": true");
         }
         finally
         {
@@ -146,11 +154,14 @@ public sealed class OllamaNativeProvider : IChatProvider
         return root;
     }
 
-    private static IEnumerable<ChatStreamEvent> ParseStreamLine(string line)
+    private static IEnumerable<ChatStreamEvent> ParseStreamLine(string line, string providerId)
     {
         var events = new List<ChatStreamEvent>();
         using var doc = JsonDocument.Parse(line);
         var root = doc.RootElement;
+
+        if (StreamEnd.ErrorIn(providerId, root) is { } error)
+            throw error;
 
         if (root.TryGetProperty("message", out var message))
         {

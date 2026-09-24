@@ -85,13 +85,19 @@ public sealed class ByStepChatProvider : IChatProvider
 
     public async Task<ChatCompletion> CompleteAsync(ChatRequest request, CancellationToken ct)
     {
-        var turn = Next(request);
+        var turn = Next(RequestSnapshot.Of(request));
 
         // A real provider takes time, and two steps that never overlap prove nothing about a
-        // dispatcher meant to overlap them.
-        await Task.Delay(5, ct);
+        // dispatcher meant to overlap them. Leave in a finally: a cancelled delay skipped it.
+        try
+        {
+            await Task.Delay(5, ct);
+        }
+        finally
+        {
+            Leave();
+        }
 
-        Leave();
         return new ChatCompletion(
             new ChatMessage(ChatRole.Assistant, turn.Text, turn.Calls), turn.FinishReason,
             turn.PromptTokens, turn.CompletionTokens, turn.Thinking);
@@ -101,21 +107,31 @@ public sealed class ByStepChatProvider : IChatProvider
         ChatRequest request,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
     {
-        var turn = Next(request);
-        await Task.Delay(5, ct);
+        var turn = Next(RequestSnapshot.Of(request));
 
-        if (turn.Text is { Length: > 0 } text)
-            yield return new TextDelta(text);
+        // Left in a finally: a consumer that stops early - a cancelled step, a stream abandoned by
+        // RunawayReply - disposes the enumerator after a yield, and Leave after the last one never
+        // ran, leaving PeakConcurrency counting a request that had ended.
+        try
+        {
+            await Task.Delay(5, ct);
 
-        if (turn.Calls is { Count: > 0 } calls)
-            for (var i = 0; i < calls.Count; i++)
-                yield return new ToolCallDelta(i, calls[i].Id, calls[i].Name, calls[i].ArgumentsJson);
+            if (turn.Text is { Length: > 0 } text)
+                yield return new TextDelta(text);
 
-        if (turn.PromptTokens is not null || turn.CompletionTokens is not null)
-            yield return new UsageDelta(turn.PromptTokens, turn.CompletionTokens);
+            if (turn.Calls is { Count: > 0 } calls)
+                for (var i = 0; i < calls.Count; i++)
+                    yield return new ToolCallDelta(i, calls[i].Id, calls[i].Name, calls[i].ArgumentsJson);
 
-        yield return new FinishDelta(turn.FinishReason);
-        Leave();
+            if (turn.PromptTokens is not null || turn.CompletionTokens is not null)
+                yield return new UsageDelta(turn.PromptTokens, turn.CompletionTokens);
+
+            yield return new FinishDelta(turn.FinishReason);
+        }
+        finally
+        {
+            Leave();
+        }
     }
 
     private Turn Next(ChatRequest request)

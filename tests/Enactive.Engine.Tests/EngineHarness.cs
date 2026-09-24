@@ -22,6 +22,26 @@ using Enactive.Workspace;
 /// One scripted assistant turn. The engine is driven entirely by what a provider streams back, so a
 /// turn is the unit a test writes: either plain text, or one or more structured tool calls.
 /// </summary>
+/// <summary>
+/// A request as it was SENT - its messages, their tool calls and its tools copied at that moment.
+///
+/// <para>The engine hands a provider its live conversation and goes on appending to it, replacing
+/// messages when it trims and clearing it when it hands over. A fake that kept the request object
+/// kept a VIEW of that list: a check on what the model saw on turn 3 read the conversation as it
+/// stood after the run, with replies from later turns in it and trimmed ones gone. Measured
+/// 2026-09-24 (Docs/PROVIDERS_AGENTS_TOOLS_TESTS_REVIEW_2026-09-24.md #2): a first request sent with
+/// two messages held five by the end of the run, including a reply that did not exist yet.</para>
+/// </summary>
+internal static class RequestSnapshot
+{
+    public static ChatRequest Of(ChatRequest request)
+        => request with
+        {
+            Messages = request.Messages.Select(m => m with { ToolCalls = m.ToolCalls?.ToArray() }).ToArray(),
+            Tools = request.Tools?.ToArray()
+        };
+}
+
 public sealed record Turn(
     string? Text = null, IReadOnlyList<ToolCall>? Calls = null, string? FinishReason = "stop",
     // Tokens this turn reports. Null on both = a provider that does not count, which is a real case
@@ -106,6 +126,7 @@ public sealed class FakeChatProvider : IChatProvider
         ChatRequest request,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
     {
+        request = RequestSnapshot.Of(request);
         Requests.Add(request);
         var turn = Next(request);
 
@@ -128,6 +149,7 @@ public sealed class FakeChatProvider : IChatProvider
 
     public Task<ChatCompletion> CompleteAsync(ChatRequest request, CancellationToken ct)
     {
+        request = RequestSnapshot.Of(request);
         Requests.Add(request);
         var turn = Next(request);
 

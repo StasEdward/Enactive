@@ -141,16 +141,21 @@ public sealed class AHandoverCarriesWhatWasMeasuredTests
                 path = "Prod.cs",
                 content = Production + big.Replace("about to change", "now changed") + "\n",
                 allow_shrink = true   // most lines change; that is the point here, and 9di asks for it said
-            }), "w1").Reporting(prompt: 8_000),
+            }), "w1").Reporting(prompt: 80_000),
             Turn.Says(Note),
             Turn.Says("Done."))
-        { Window = 10_000, HandoverAt = 75 };
+        // A window the carried note FITS in. At 10,000 the note and its 3,000-character diff did not,
+        // the step stopped with "the context window is full", and the resumed message was never
+        // sent - which this test did not notice while it read the engine's live list rather than
+        // the requests as they went out (Docs/PROVIDERS_AGENTS_TOOLS_TESTS_REVIEW_2026-09-24.md #2).
+        { Window = 100_000, HandoverAt = 75 };
 
-        await fx.RunAsync(fx.Build(provider, EngineFixture.Role("developer")), "check the tests catch it");
+        var events = await fx.RunAsync(fx.Build(provider, EngineFixture.Role("developer")), "check the tests catch it");
 
         var resumed = Resumed(provider);
         Assert.Contains("Prod.cs (modified)", resumed, StringComparison.Ordinal);
         Assert.Contains("diff cut here", resumed, StringComparison.Ordinal);
+        Assert.True(events.Has(EventKind.TaskCompleted), events.Text());
     }
 
     /// <summary>Orchestrator.HandoverOutputTailChars - a long output is carried by its END, where results are.</summary>

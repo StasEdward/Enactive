@@ -395,8 +395,12 @@ public sealed class ReviewRetryTests
 
         await fx.RunAsync(orchestrator, "write a guide");
 
-        // The request that started the second attempt still has the first draft in it.
-        var retryRequest = worker.Requests[2];
+        // The request that started the second attempt still has the first draft in it. Found by what
+        // it carries, not by position: Requests[2] was the "Wrote it." turn, and the check passed only
+        // because the fake kept a live view of the conversation that later turns had grown
+        // (Docs/PROVIDERS_AGENTS_TOOLS_TESTS_REVIEW_2026-09-24.md #2).
+        var retryRequest = worker.Requests.First(r => r.Messages.Any(
+            m => m.Content?.Contains("A reviewer rejected", StringComparison.Ordinal) == true));
         Assert.Contains(
             retryRequest.Messages,
             m => m.Content?.Contains("THE REJECTED DRAFT", StringComparison.Ordinal) == true

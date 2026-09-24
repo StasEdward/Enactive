@@ -44,6 +44,10 @@ public sealed class CapsAnnounceThemselvesTests
     private static readonly Dictionary<string, string> Covered = new(StringComparer.Ordinal)
     {
         ["Orchestrator.ProgressEveryChars"] = "A_long_tool_call_says_it_is_still_being_written",
+        // The two halves of ProcessExec's capture ceiling: the first lines and the last ones, with the
+        // middle dropped and said so - driven past both, for stdout and stderr, through to evidence.
+        ["CapturedStream.HeadChars"] = "The_end_of_a_long_output_survives_capture_result_and_evidence",
+        ["CapturedStream.TailChars"] = "The_end_of_a_long_output_survives_capture_result_and_evidence",
         // What a handover carries that the model did not write: a diff cut to fit says so, and a long
         // command output is carried by its end, which is where a test runner puts its result.
         ["Orchestrator.MaxHandoverDiffChars"] = "A_huge_diff_in_a_handover_is_cut_and_says_so",

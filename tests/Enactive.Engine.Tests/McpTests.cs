@@ -49,15 +49,29 @@ public sealed class McpTests
         Assert.True(Exited(pid), "MCP child process survived disposal.");
     }
 
+    /// <summary>
+    /// A call whose answer never came is reported as UNKNOWN, and is not sent again: the first may
+    /// have done its work already. Counted on the server - each call it receives is recorded - and
+    /// not inferred from the error text, which a client that retried and then gave up would also
+    /// produce. The text alone passed with a deliberate second call added after the timeout
+    /// (Docs/PROVIDERS_AGENTS_TOOLS_TESTS_REVIEW_2026-09-24.md #5).
+    /// </summary>
     [Fact]
     public async Task Timeout_reports_unknown_outcome_without_retry()
     {
         using var fx = new EngineFixture();
+        var calls = Path.Combine(fx.Root, "slow-calls.txt");
         await using var connection = await McpConnection.ConnectAsync(Config(timeout: 2), fx.Root, default);
         var slow = connection.Tools.Single(t => t.Definition.Name == McpConnection.ToolName("test", "slow"));
-        var result = await slow.InvokeAsync("{}", Context(fx), default);
+
+        var result = await slow.InvokeAsync(JsonSerializer.Serialize(new { value = calls }), Context(fx), default);
+
         Assert.False(result.Success);
         Assert.Contains("outcome is unknown", result.Error);
+
+        // Room for a retry to reach the server, had one been sent the moment the first timed out.
+        await Task.Delay(TimeSpan.FromSeconds(1.5));
+        Assert.Single(File.ReadAllLines(calls));
     }
 
     [Fact]

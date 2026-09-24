@@ -518,10 +518,24 @@ internal static class ProcessExec
     /// <para>Says so when it happens. Silently keeping the first N characters of a build log and
     /// calling that "the output" is how a model comes to believe a build succeeded because the
     /// errors were off the end.</para>
+    ///
+    /// <para><b>The start AND the end.</b> It kept only the start: past the ceiling every later line
+    /// was dropped, and the last lines of a build or a test run are where its result is. Found
+    /// 2026-09-24 (Docs/PROVIDERS_AGENTS_TOOLS_TESTS_REVIEW_2026-09-24.md #3): 640 lines of test
+    /// output and then "FINAL_TEST_SUMMARY: Failed=3 Passed=22" - the summary was gone before
+    /// BuildResult, whose own head-and-tail could only keep the end of what was left. Now half the
+    /// ceiling holds the first lines and half a moving window of the last ones, and what is dropped
+    /// is the MIDDLE - the same shape every other cut in this application has.</para>
     /// </summary>
     public sealed class CapturedStream
     {
-        private readonly StringBuilder _text = new();
+        private const int HeadChars = MaxCapturedChars / 2;
+        private const int TailChars = MaxCapturedChars - HeadChars;
+
+        private readonly StringBuilder _head = new();
+        private readonly Queue<string> _tail = new();
+        private int _tailChars;
+        private bool _headFull;
         private int _dropped;
 
         public void Add(string? line)
@@ -529,19 +543,36 @@ internal static class ProcessExec
             if (line is null)
                 return;
 
-            if (_text.Length + line.Length + 1 > MaxCapturedChars)
+            if (!_headFull && _head.Length + line.Length + 1 <= HeadChars)
             {
-                _dropped++;
+                _head.AppendLine(line);
                 return;
             }
 
-            _text.AppendLine(line);
+            _headFull = true;
+
+            // One line longer than the whole tail keeps its END, which is where a line says how it came out.
+            if (line.Length + 1 > TailChars)
+                line = "…" + line[^(TailChars - 2)..];
+
+            _tail.Enqueue(line);
+            _tailChars += line.Length + 1;
+            while (_tailChars > TailChars && _tail.Count > 1)
+            {
+                _tailChars -= _tail.Dequeue().Length + 1;
+                _dropped++;
+            }
         }
 
         public override string ToString()
-            => _dropped == 0
-                ? _text.ToString()
-                : _text + $"… ({_dropped} more line(s) produced and dropped — output passed "
-                        + $"{MaxCapturedChars:N0} characters)\n";
+        {
+            var text = new StringBuilder(_head.ToString());
+            if (_dropped > 0)
+                text.Append($"… ({_dropped} line(s) in the middle produced and dropped — output passed "
+                            + $"{MaxCapturedChars:N0} characters; the first and the last lines are kept)\n");
+            foreach (var line in _tail)
+                text.AppendLine(line);
+            return text.ToString();
+        }
     }
 }
