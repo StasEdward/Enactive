@@ -47,6 +47,17 @@ internal sealed class ReadLedger
     /// <summary>The tool whose results this ledger is built from.</summary>
     internal const string ReadTool = "read_file";
 
+    /// <summary>The tool that reads several files at once.</summary>
+    internal const string ReadManyTool = "read_files";
+
+    private Coverage CoverageOf(string path)
+    {
+        var key = Key(path);
+        if (!_files.TryGetValue(key, out var coverage))
+            _files[key] = coverage = new Coverage();
+        return coverage;
+    }
+
     /// <summary>The tool this ledger guards.</summary>
     internal const string WriteTool = "write_file";
 
@@ -57,8 +68,21 @@ internal sealed class ReadLedger
     /// </summary>
     public void Saw(ToolCall call, ToolResult result)
     {
-        if (!string.Equals(call.Name, ReadTool, StringComparison.Ordinal) || !result.Success)
+        if (call.Name is not (ReadTool or ReadManyTool) || !result.Success)
             return;
+
+        // Several files in one read - read_files, or read_file given 'paths'. Each says how much of it
+        // was shown whole; an excerpt counts as none, so a whole-file write of it is refused below.
+        if (Meta(result, "files") is IEnumerable<FileCoverage> many)
+        {
+            foreach (var file in many)
+            {
+                var entry = CoverageOf(file.Path);
+                entry.Total = file.TotalLines;
+                entry.Contiguous = Math.Max(entry.Contiguous, file.LinesShownWhole);
+            }
+            return;
+        }
 
         if (Meta(result, "path") is not string path || string.IsNullOrWhiteSpace(path))
             return;
@@ -111,6 +135,12 @@ internal sealed class ReadLedger
             return $"'{path}' has a line ({next}) longer than read_file can show, so this step has not "
                  + "seen the whole file and a whole-file write would replace what it has not read. "
                  + "Change it with edit_file, which replaces one exact passage and leaves the rest alone.";
+
+        if (coverage.Contiguous == 0)
+            return $"This step has seen '{path}' only as an excerpt, not whole ({coverage.Total} lines), so a "
+                 + "whole-file write would replace the part it has not seen with whatever it happens to produce. "
+                 + "Either use edit_file, which replaces one exact passage and leaves the rest alone, or read it "
+                 + "first: read_file with \"offset\": 1.";
 
         return $"This step has read only lines 1-{coverage.Contiguous} of {coverage.Total} in "
              + $"'{path}', so a whole-file write would replace {coverage.Total - coverage.Contiguous} "

@@ -24,7 +24,8 @@ public sealed class ReadFileTool : ITool
         Name: "read_file",
         Description: "Read a UTF-8 text file from the current workspace. Path is relative to the "
                    + "workspace root. Reads from 'offset' (1-based line, default 1) for 'limit' "
-                   + "lines (default 400); the result says how many lines the file has.",
+                   + "lines (default 400); the result says how many lines the file has. To read SEVERAL "
+                   + "files, pass 'paths' instead: independent reads in one call rather than one call each.",
         JsonSchema: Schema);
 
     public PermissionLevel RequiredLevel => PermissionLevel.Observe;
@@ -33,12 +34,26 @@ public sealed class ReadFileTool : ITool
     {
         string? path;
         int offset, limit;
+        List<string>? several = null;
         try
         {
             using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(argumentsJson) ? "{}" : argumentsJson);
             var root = doc.RootElement;
             path = root.TryGetProperty("path", out var p) && p.ValueKind == JsonValueKind.String
                 ? p.GetString() : null;
+
+            // Several files in one call. Measured 2026-09-24, run 71a546: 87 read_file calls and not
+            // one read_files - the model reaches for this tool, so this tool is where reading several
+            // at once has to be. The answer is read_files' own, budgets and all.
+            if (root.TryGetProperty("paths", out var ps) && ps.ValueKind == JsonValueKind.Array)
+            {
+                several = ps.EnumerateArray()
+                            .Where(e => e.ValueKind == JsonValueKind.String && e.GetString() is { Length: > 0 })
+                            .Select(e => e.GetString()!)
+                            .ToList();
+                if (!string.IsNullOrWhiteSpace(path) && !several.Contains(path))
+                    several.Insert(0, path);
+            }
             offset = Number(root, "offset", 1);
             limit = Number(root, "limit", DefaultLines);
         }
@@ -47,11 +62,15 @@ public sealed class ReadFileTool : ITool
             return ToolResults.Unreadable($"Invalid arguments JSON: {ex.Message}");
         }
 
+        if (several is { Count: > 0 })
+            return await new ReadFilesTool().InvokeAsync(
+                JsonSerializer.Serialize(new { paths = several }), ctx, ct);
+
         if (offset < 1) return ToolResults.Unreadable("'offset' is a 1-based line number, so it starts at 1.");
         if (limit < 1) return ToolResults.Unreadable("'limit' must be at least 1 line.");
 
         if (string.IsNullOrWhiteSpace(path))
-            return ToolResults.Unreadable("'path' is required.");
+            return ToolResults.Unreadable("'path' is required - or 'paths', to read several files at once.");
 
         try
         {
@@ -268,15 +287,18 @@ public sealed class ReadFileTool : ITool
            && value.TryGetInt32(out var parsed)
             ? parsed : fallback;
 
+    /// <summary>How many lines a file has, counted the way this tool counts them: one more than its line breaks.</summary>
+    internal static int LinesIn(string text) => 1 + text.Count(c => c == '\n');
+
     private const string Schema = """
     {
       "type": "object",
       "properties": {
         "path": { "type": "string", "description": "File path relative to the workspace root." },
         "offset": { "type": "integer", "description": "First line to read, 1-based. Default 1." },
-        "limit": { "type": "integer", "description": "How many lines to read. Default 400." }
-      },
-      "required": ["path"]
+        "limit": { "type": "integer", "description": "How many lines to read. Default 400." },
+        "paths": { "type": "array", "items": { "type": "string" }, "description": "Several files to read in ONE call, instead of 'path' - use it whenever the reads do not depend on each other. Each is shown from its start and its end within a shared budget." }
+      }
     }
     """;
 }

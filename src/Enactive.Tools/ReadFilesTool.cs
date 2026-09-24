@@ -111,6 +111,10 @@ public sealed class ReadFilesTool : ITool
         var found = 0;
         var missing = new List<string>();
 
+        // What was shown of each file, for ReadLedger - a whole-file write of a file seen only as an
+        // excerpt is the loss it exists to stop, and this is now a common way to read.
+        var coverage = new List<FileCoverage>();
+
         try
         {
             foreach (var (relative, full) in resolved)
@@ -151,6 +155,9 @@ public sealed class ReadFilesTool : ITool
                 budget -= slice.Length;
                 found++;
 
+                var lines = ReadFileTool.LinesIn(text);
+                coverage.Add(new FileCoverage(relative, lines, slice.Length < text.Length ? 0 : lines));
+
                 sb.AppendLine($"----- {relative} ({text.Length} characters) -----")
                   .AppendLine(slice);
 
@@ -180,7 +187,8 @@ public sealed class ReadFilesTool : ITool
         if (missing.Count > 0)
             sb.AppendLine("----- not there: " + string.Join(", ", missing) + " -----");
 
-        return ToolResults.Ok(sb.ToString().TrimEnd());
+        return ToolResults.Ok(sb.ToString().TrimEnd(),
+            metadata: new Dictionary<string, object?> { ["files"] = coverage });
     }
 
     private const string Schema = """

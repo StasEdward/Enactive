@@ -25,6 +25,18 @@ public sealed class SearchFilesTool : ITool
     private const int MaxLineChars = 240;
     private const int MaxOutputChars = 12000;
 
+    /// <summary>
+    /// Lines shown before and after each match unless the call says otherwise - like grep -C.
+    ///
+    /// <para>Measured 2026-09-24, run 71a546: of 55 searches, 30 were followed at once by a read_file
+    /// of the same place, to see what was around the hit. That is a turn each, and every turn re-sends
+    /// the whole conversation. Two lines either side answer most of those without one.</para>
+    /// </summary>
+    private const int DefaultContextLines = 2;
+
+    /// <summary>The most context a call may ask for; past it the answer is a read, not a search.</summary>
+    private const int MaxContextLines = 10;
+
     public ToolDefinition Definition { get; } = new(
         Name: "search_files",
         Description: "Search the workspace for a regular expression and return matching lines with "
@@ -33,7 +45,8 @@ public sealed class SearchFilesTool : ITool
                    + "Build output and your own working area are left out of a whole-workspace "
                    + "sweep; to search inside one, name it with 'path' (e.g. \"" + WorkspaceGuard.ScratchPrefix
                    + "\" to search a long command output you saved there). 'path' may name a single "
-                   + "FILE, which searches just that file.",
+                   + "FILE, which searches just that file. Each match comes with the lines around it "
+                   + "('context'), so a search usually answers without a read_file after it.",
         JsonSchema: Schema);
 
     public PermissionLevel RequiredLevel => PermissionLevel.Observe;
@@ -42,6 +55,8 @@ public sealed class SearchFilesTool : ITool
     {
         string? pattern, glob, subPath;
         bool ignoreCase;
+        var context = DefaultContextLines;
+        int? contextAsked = null;
         try
         {
             using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(argumentsJson) ? "{}" : argumentsJson);
@@ -51,6 +66,12 @@ public sealed class SearchFilesTool : ITool
             subPath = Text(root, "path");
             ignoreCase = !root.TryGetProperty("ignore_case", out var c)
                          || c.ValueKind != JsonValueKind.False;
+            if (root.TryGetProperty("context", out var cx) && cx.ValueKind == JsonValueKind.Number
+                && cx.TryGetInt32(out var asked))
+            {
+                contextAsked = asked;
+                context = Math.Clamp(asked, 0, MaxContextLines);
+            }
         }
         catch (JsonException ex)
         {
@@ -121,19 +142,34 @@ public sealed class SearchFilesTool : ITool
                 scanned++;
                 var hit = false;
 
-                var lineNumber = 0;
-                foreach (var line in await File.ReadAllLinesAsync(file, ct))
+                var lines = await File.ReadAllLinesAsync(file, ct);
+                var relative = WorkspaceScan.Relative(ctx.WorkspaceRoot, file);
+                var lastShown = -1;   // the last line index already printed for this file
+
+                for (var i = 0; i < lines.Length; i++)
                 {
-                    lineNumber++;
-                    if (!regex.IsMatch(line)) continue;
+                    if (!regex.IsMatch(lines[i])) continue;
 
                     hit = true;
                     matches++;
 
-                    var shown = line.Trim();
-                    if (shown.Length > MaxLineChars) shown = shown[..MaxLineChars] + "…";
-                    output.Append(WorkspaceScan.Relative(ctx.WorkspaceRoot, file)).Append(':').Append(lineNumber)
-                          .Append(": ").AppendLine(shown);
+                    // A match line reads "path:N: text" as it always has; a context line "path-N- text",
+                    // as grep writes it. Blocks that do not touch are separated by "--"; blocks that
+                    // overlap are printed once.
+                    var from = Math.Max(0, i - context);
+                    var to = Math.Min(lines.Length - 1, i + context);
+                    if (context > 0 && lastShown >= 0 && from > lastShown + 1)
+                        output.Append("--\n");
+
+                    for (var k = Math.Max(from, lastShown + 1); k <= to; k++)
+                    {
+                        var marker = k == i || regex.IsMatch(lines[k]) ? ':' : '-';
+                        var shown = lines[k].Trim();
+                        if (shown.Length > MaxLineChars) shown = shown[..MaxLineChars] + "…";
+                        output.Append(relative).Append(marker).Append(k + 1).Append(marker)
+                              .Append(' ').Append(shown).Append('\n');
+                    }
+                    lastShown = Math.Max(lastShown, to);
 
                     if (matches >= MaxMatches || output.Length >= MaxOutputChars) { capped = true; break; }
                 }
@@ -175,7 +211,12 @@ public sealed class SearchFilesTool : ITool
                 metadata: Metadata(0, 0, scanned, capped, skippedLarge, skippedBinary));
 
         if (capped)
-            output.AppendLine($"… stopped at {matches} matches. Narrow the pattern or the glob to see the rest.");
+            output.AppendLine($"… stopped at {matches} matches. Narrow the pattern or the glob to see the rest"
+                            + (context > 0 ? ", or pass \"context\": 0 to list more matches in the same space." : "."));
+
+        if (contextAsked is { } wanted && wanted > MaxContextLines)
+            output.AppendLine($"(context is at most {MaxContextLines} lines either side; {wanted} was asked - "
+                            + "for more, read_file the place.)");
 
         if (skipped.Length > 0)
             output.AppendLine(skipped.TrimStart('\n'));
@@ -232,7 +273,8 @@ public sealed class SearchFilesTool : ITool
         "pattern": { "type": "string", "description": "Regular expression to search for." },
         "glob": { "type": "string", "description": "Optional file-name filter, e.g. \"*.cs\". Default: every text file." },
         "path": { "type": "string", "description": "Optional folder to search, relative to the workspace root. Default: the whole workspace." },
-        "ignore_case": { "type": "boolean", "description": "Case-insensitive. Default true." }
+        "ignore_case": { "type": "boolean", "description": "Case-insensitive. Default true." },
+        "context": { "type": "integer", "description": "Lines shown before and after each match, like grep -C. Default 2 - usually enough to answer without opening the file. 0 lists matching lines only." }
       },
       "required": ["pattern"]
     }

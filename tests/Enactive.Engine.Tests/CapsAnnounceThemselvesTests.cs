@@ -60,6 +60,10 @@ public sealed class CapsAnnounceThemselvesTests
         ["SearchFilesTool.MaxMatches"] = nameof(A_search_that_stops_early_says_it_stopped),
         ["SearchFilesTool.MaxOutputChars"] = nameof(A_search_that_stops_early_says_it_stopped),
         ["SearchFilesTool.MaxLineChars"] = nameof(A_very_long_matching_line_is_shown_cut),
+        // Not a cap on an answer's length but on how much of the file each match brings with it; past
+        // the limit the answer is a read, and a search that was asked for more says so.
+        ["SearchFilesTool.DefaultContextLines"] = "A_match_comes_with_the_lines_around_it",
+        ["SearchFilesTool.MaxContextLines"] = "Context_past_the_limit_is_held_to_it_and_says_so",
         // Moved out of SearchFilesTool when count_matches and file_stats had to walk the workspace
         // the same way. One skip list and one size ceiling for every tool that scans, so a count and
         // a search can never disagree about which files exist.

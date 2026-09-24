@@ -72,7 +72,14 @@ public static class DefaultWorkers
         + "discrepancies, failures, errors, risks - write those in full; what you checked and found in order "
         + "is ONE line with a count (\"41 other claims checked, all match\"), not an entry each, unless the "
         + "request asks for them. Writing is the slowest thing you do: every line costs time, and a line "
-        + "nobody asked for costs it for nothing.";
+        + "nobody asked for costs it for nothing.\n"
+        // Measured 2026-09-24, run 71a546: 113 turns, the prompt growing from 2,368 to 75,323 tokens,
+        // 87 read_file calls and no read_files; and every turn re-sends the whole conversation, so a
+        // turn spent on one small read is the most expensive way there is to read.
+        + "- Reads and searches that do not depend on each other go TOGETHER: read_file takes several "
+        + "'paths' at once, search_files already shows the lines around each match, and one reply can make "
+        + "several tool calls. Every turn re-sends everything so far, so one small read per turn is the "
+        + "most expensive way to read.";
 
     // Verifying a write by reading it back catches a weak local model's fabrication, but it costs an extra
     // round-trip that's wasteful on a strong model — so it's toggled via settings (VerifyWrites) rather than
