@@ -542,12 +542,19 @@ public sealed partial class AppSettings
     [JsonIgnore]
     public string? LastSaveError { get; private set; }
 
-    public bool Save()
+    /// <param name="path">
+    /// A parameter so a test can point this at a fixture, for the same reason <see cref="Load"/>
+    /// takes one: the whole path this method actually runs - packing MCP credentials, encrypting
+    /// every family of secret, blanking the legacy plaintext during serialization, the temp-file
+    /// write and the replace - is exactly what each STEP's own unit test cannot exercise together,
+    /// and until this existed no test ran <c>Save</c> at all rather than risk a real %APPDATA%.
+    /// </param>
+    public bool Save(string? path = null)
     {
         LastSaveError = null;
         try
         {
-            var file = SettingsFile();
+            var file = path ?? SettingsFile();
             SaveMcpSecrets();
             Directory.CreateDirectory(Path.GetDirectoryName(file)!);
 

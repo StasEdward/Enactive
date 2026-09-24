@@ -39,9 +39,11 @@ public sealed class JsonMemoryStore : IMemoryStore
             var (items, readable) = await JsonFileStore.LoadAsync<MemoryEntry>(_path, JsonOpts, ct).ConfigureAwait(false);
 
             // Unparseable is not empty. Overwriting here would replace the file's real contents with
-            // a list built from nothing, so the damaged file is moved aside first and kept.
-            if (!readable)
-                JsonFileStore.QuarantineUnreadable(_path);
+            // a list built from nothing, so the damaged file is moved aside first and kept - and if
+            // it could not be, the save below must not run either, or the corruption it failed to
+            // preserve is simply gone. See JsonFileStore.QuarantineUnreadable.
+            if (!readable && !JsonFileStore.QuarantineUnreadable(_path))
+                return;
 
             items.Add(entry);
             await JsonFileStore.SaveAsync(_path, items, JsonOpts, ct).ConfigureAwait(false);

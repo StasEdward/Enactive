@@ -88,22 +88,36 @@ internal static class JsonFileStore
     }
 
     /// <summary>
-    /// Moves a file that could not be parsed out of the way, once, so the next write has somewhere to
-    /// go and the damaged content is still there to look at. Best-effort by design.
+    /// Moves a file that could not be parsed out of the way, so the next write has somewhere to go
+    /// and the damaged content is still there to look at. Returns whether the current content was
+    /// actually preserved somewhere; the caller must not write a fresh file over it when this is
+    /// false, or the damaged content it could not save is simply gone.
+    ///
+    /// <para><b>Each corruption gets its OWN backup.</b> This used to stop at the first one - "one
+    /// copy is enough; do not overwrite the first failure" - and left it at that whether or not a
+    /// second corruption came after it. Reported 2026-09-24
+    /// (Docs/SECRETS_SETTINGS_WORKSPACE_TESTS_REVIEW_2026-09-24.md #1): a store corrupted, quarantined,
+    /// written fresh, corrupted a SECOND time - `QuarantineUnreadable` saw the first backup already
+    /// there, did nothing, and the caller saved over the second corruption anyway. Whatever was
+    /// recoverable in it is gone, with no trace it ever existed.</para>
     /// </summary>
-    public static void QuarantineUnreadable(string path)
+    public static bool QuarantineUnreadable(string path)
     {
         try
         {
             if (!File.Exists(path))
-                return;
+                return false;   // nothing there to have preserved
 
             var broken = path + ".unreadable";
-            if (File.Exists(broken))
-                return;   // one copy is enough; do not overwrite the first failure
+            for (var n = 2; File.Exists(broken); n++)
+                broken = path + $".unreadable.{n}";
 
             File.Move(path, broken);
+            return true;
         }
-        catch { /* nothing here is worth failing a run over */ }
+        catch
+        {
+            return false;   // nothing here is worth failing a run over, but the caller must know
+        }
     }
 }

@@ -1,5 +1,6 @@
 namespace Enactive.Engine.Tests;
 
+using System.Security.Cryptography;
 using Enactive.Secrets;
 using Xunit;
 
@@ -85,4 +86,16 @@ public sealed class SecretTests
         Assert.Equal(string.Empty, Secret.Unprotect(null));
         Assert.Equal(string.Empty, Secret.Unprotect(""));
     }
+
+    /// <summary>
+    /// CurrentUser, not LocalMachine. Read directly off the constant the production code actually
+    /// uses, not off the source text - a round-trip test cannot tell the two scopes apart on its
+    /// own, since encrypting and decrypting with the SAME (wrong) scope still round-trips within one
+    /// process. Confirmed 2026-09-24 (Docs/SECRETS_SETTINGS_WORKSPACE_TESTS_REVIEW_2026-09-24.md #3):
+    /// a copy of Secret.cs with both DPAPI calls switched to LocalMachine passed all six tests above
+    /// unchanged.
+    /// </summary>
+    [Fact]
+    public void The_scope_is_the_current_user_not_the_whole_machine()
+        => Assert.Equal(DataProtectionScope.CurrentUser, Secret.Scope);
 }

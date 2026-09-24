@@ -79,6 +79,80 @@ public sealed class JsonStoreConcurrencyTests
         Assert.Contains("not the array", await File.ReadAllTextAsync(path + ".unreadable"), StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A SECOND corruption, after the first was already quarantined, gets its OWN backup rather than
+    /// being silently discarded.
+    ///
+    /// <para>Confirmed 2026-09-24 (Docs/SECRETS_SETTINGS_WORKSPACE_TESTS_REVIEW_2026-09-24.md #1):
+    /// <c>QuarantineUnreadable</c> used to stop at the first backup - "one copy is enough" - and the
+    /// caller wrote a fresh file over the second corruption regardless of whether it had actually been
+    /// preserved. Content A: write corrupt, append (quarantines A, writes a fresh store). Content B:
+    /// corrupt the fresh file AGAIN, append once more - B must get its own backup, distinct from A's,
+    /// and the append must still land.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_second_corruption_gets_its_own_backup_not_lost_under_the_first()
+    {
+        using var fx = new EngineFixture();
+        var path = Path.Combine(fx.Root, WorkspaceGuard.ReservedFolder, "inbox.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await File.WriteAllTextAsync(path, "{ CORRUPTION-A, not the array we expect");
+
+        var store = new JsonInboxStore(fx.Workspace);
+        await store.AppendAsync(
+            new InboxItem(Guid.NewGuid(), fx.Workspace.Id, "result", "after A", "s",
+                          Guid.NewGuid(), "unread", DateTimeOffset.UtcNow),
+            CancellationToken.None);
+
+        Assert.True(File.Exists(path + ".unreadable"));
+        Assert.Contains("CORRUPTION-A", await File.ReadAllTextAsync(path + ".unreadable"), StringComparison.Ordinal);
+
+        // Corrupt the now-healthy file a second time.
+        await File.WriteAllTextAsync(path, "{ CORRUPTION-B, a different break entirely");
+
+        await store.AppendAsync(
+            new InboxItem(Guid.NewGuid(), fx.Workspace.Id, "result", "after B", "s",
+                          Guid.NewGuid(), "unread", DateTimeOffset.UtcNow),
+            CancellationToken.None);
+
+        // A's backup is untouched, B got its OWN, and the append after B is not lost either.
+        Assert.Contains("CORRUPTION-A", await File.ReadAllTextAsync(path + ".unreadable"), StringComparison.Ordinal);
+        Assert.True(File.Exists(path + ".unreadable.2"), "the second corruption needs its own backup");
+        Assert.Contains("CORRUPTION-B", await File.ReadAllTextAsync(path + ".unreadable.2"), StringComparison.Ordinal);
+
+        var all = await store.LoadAllAsync(CancellationToken.None);
+        Assert.Single(all);
+        Assert.Equal("after B", all[0].Title);
+    }
+
+    /// <summary>
+    /// THE BOUNDARY. When the damaged content genuinely could not be moved anywhere, the save must
+    /// not run either - overwriting it would be exactly the loss this exists to prevent, just from a
+    /// different cause.
+    /// </summary>
+    [Fact]
+    public async Task When_the_damage_cannot_be_preserved_the_save_does_not_run_either()
+    {
+        using var fx = new EngineFixture();
+        var path = Path.Combine(fx.Root, WorkspaceGuard.ReservedFolder, "inbox.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await File.WriteAllTextAsync(path, "{ CORRUPTION, not the array we expect");
+
+        // Block the ONE backup name a move onto a DIRECTORY path fails, and File.Exists on a
+        // directory reports false - so the guard against overwriting an existing backup does not
+        // see it, and the move itself is what fails.
+        Directory.CreateDirectory(path + ".unreadable");
+
+        var store = new JsonInboxStore(fx.Workspace);
+        await store.AppendAsync(
+            new InboxItem(Guid.NewGuid(), fx.Workspace.Id, "result", "must not land", "s",
+                          Guid.NewGuid(), "unread", DateTimeOffset.UtcNow),
+            CancellationToken.None);
+
+        // The damaged file is exactly as it was - not overwritten with a fresh list that lost it.
+        Assert.Equal("{ CORRUPTION, not the array we expect", await File.ReadAllTextAsync(path));
+    }
+
     [Fact]
     public async Task A_missing_file_is_simply_an_empty_store()
     {

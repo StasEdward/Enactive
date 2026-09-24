@@ -68,9 +68,11 @@ public sealed class JsonInboxStore : IInboxStore
 
             // The file exists but could not be parsed. Writing now would replace whatever is in there
             // with a list built from nothing — so move it aside first and start a fresh one, keeping
-            // the damaged content for anyone who wants to look.
-            if (!readable)
-                JsonFileStore.QuarantineUnreadable(_path);
+            // the damaged content for anyone who wants to look. If it could not be moved aside, do
+            // NOT write over it: an unpreserved corruption a save then overwrote would be gone with
+            // no trace it ever existed - see JsonFileStore.QuarantineUnreadable.
+            if (!readable && !JsonFileStore.QuarantineUnreadable(_path))
+                return;
 
             await JsonFileStore.SaveAsync(_path, change(items), JsonOpts, ct).ConfigureAwait(false);
         }

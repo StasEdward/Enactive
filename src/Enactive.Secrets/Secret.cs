@@ -26,6 +26,20 @@ public static class Secret
     private static readonly byte[] Entropy = Encoding.UTF8.GetBytes("Enactive.settings.v1");
 
     /// <summary>
+    /// Which accounts can decrypt this. CurrentUser, never LocalMachine: LocalMachine derives its key
+    /// from the MACHINE, so any account on this box - not only the one that encrypted it - could
+    /// decrypt it, which is a materially wider blast radius for an API key than "this account".
+    ///
+    /// <para>Named once and used by both <see cref="Protect"/> and <see cref="Unprotect"/>, rather
+    /// than the two calls each spelling out the enum value, SO that a test can hold this one
+    /// guarantee directly instead of reading it off the source text - a round-trip test cannot tell
+    /// the two scopes apart on its own: encrypting and decrypting with the SAME (wrong) scope still
+    /// round-trips within one process, which is exactly why this was not caught by the six existing
+    /// tests before (Docs/SECRETS_SETTINGS_WORKSPACE_TESTS_REVIEW_2026-09-24.md #3).</para>
+    /// </summary>
+    internal const DataProtectionScope Scope = DataProtectionScope.CurrentUser;
+
+    /// <summary>
     /// A "dpapi:"-prefixed base64 ciphertext, or an empty string for an empty input.
     /// </summary>
     /// <exception cref="SecretProtectionException">
@@ -44,7 +58,7 @@ public static class Secret
 
         try
         {
-            var cipher = ProtectedData.Protect(Encoding.UTF8.GetBytes(plaintext), Entropy, DataProtectionScope.CurrentUser);
+            var cipher = ProtectedData.Protect(Encoding.UTF8.GetBytes(plaintext), Entropy, Scope);
             return Prefix + Convert.ToBase64String(cipher);
         }
         catch (Exception ex)
@@ -76,7 +90,7 @@ public static class Secret
         try
         {
             var cipher = Convert.FromBase64String(stored[Prefix.Length..]);
-            var clear = ProtectedData.Unprotect(cipher, Entropy, DataProtectionScope.CurrentUser);
+            var clear = ProtectedData.Unprotect(cipher, Entropy, Scope);
             return Encoding.UTF8.GetString(clear);
         }
         catch
