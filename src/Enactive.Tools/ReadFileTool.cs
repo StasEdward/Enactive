@@ -93,9 +93,43 @@ public sealed class ReadFileTool : ITool
             // it on their own — but now it is one of two limits the caller is told about, not the
             // silent end of the file.
             var clipped = body.Length > MaxChars;
-            if (clipped) body = body[..MaxChars] + "\n… (line truncated at " + MaxChars + " characters)";
 
-            var more = lastLine < total
+            // Where the cut falls, said exactly. It used to say "line truncated at 8000 characters"
+            // whatever was cut - usually the WINDOW, part-way through some line - and the notice below
+            // went on promising "lines 1-400, read on with offset 401", so the lines after the cut
+            // were skipped by anyone who did as told. Measured 2026-09-24, run 71a546: a reviewer
+            // believed the "line" in that sentence, told the step the 8,000 limit was per line, the
+            // step corrected its report to say so, and the next review - reading the code - rejected
+            // the correction. The message was the only thing that was wrong.
+            var cutLine = lastLine;         // the line the shown text ends in
+            var nextOffset = lastLine + 1;  // where reading on continues
+            var fullyShown = lastLine;      // the last line shown whole
+            if (clipped)
+            {
+                var kept = body[..MaxChars];
+                var newlines = kept.Count(ch => ch == '\n');
+                cutLine = offset + newlines;
+
+                if (newlines == 0)
+                {
+                    // One line longer than the whole cap. Reading on "from this line" would return the
+                    // same cut again, so the next read starts after it.
+                    body = kept + "\n… (line " + cutLine + " is longer than " + MaxChars
+                         + " characters on its own, and is cut here. read_file cannot show the rest of it; "
+                         + "search_files or count_matches can look inside it.)";
+                    nextOffset = cutLine + 1;
+                }
+                else
+                {
+                    body = kept + "\n… (this output is cut at " + MaxChars + " characters, part-way "
+                         + "through line " + cutLine + " - the rest of the lines asked for is not shown)";
+                    nextOffset = cutLine;
+                }
+
+                fullyShown = cutLine - 1;
+            }
+
+            var more = clipped || lastLine < total
                 // The notice used to end at "Read on with offset N" - an instruction to read again,
                 // and the ONLY instruction on offer. A cut answer that names one way forward gets
                 // that way taken: measured 2026-09-12, a model paged the same ten-line region of one
@@ -103,7 +137,8 @@ public sealed class ReadFileTool : ITool
                 // thirteen minutes past the point it had stopped making progress. Paging is right
                 // when the file is being READ; it is the wrong move when something specific is being
                 // looked for, and the alternative has to be named here, where the temptation is.
-                ? $"\n\n… showing lines {offset}–{lastLine} of {total}. Read on with offset {lastLine + 1}. "
+                ? $"\n\n… showing lines {offset}–{cutLine}{(clipped ? $" (line {cutLine} only in part)" : "")} of {total}. "
+                  + (nextOffset <= total ? $"Read on with offset {nextOffset}. " : "")
                   + "If you are looking for something rather than reading this file, search_files or "
                   + "count_matches will find it without paging."
                 : total > slice.WindowLines ? $"\n\n… showing lines {offset}–{lastLine} of {total}." : "";
@@ -116,7 +151,9 @@ public sealed class ReadFileTool : ITool
                     ["bytes"] = slice.TotalChars,
                     ["totalLines"] = total,
                     ["firstLine"] = offset,
-                    ["lastLine"] = lastLine,
+                    // The last line shown WHOLE. ReadLedger decides from this whether a whole-file
+                    // write of this file can be trusted, and a line cut part-way was not seen.
+                    ["lastLine"] = fullyShown,
                     ["truncated"] = clipped || lastLine < total,
                     // Say which version this is. "Proposed" and "on disk" are different facts, and a
                     // reviewer judging from evidence has to be able to tell them apart.

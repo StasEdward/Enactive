@@ -339,7 +339,7 @@ public sealed class CapsAnnounceThemselvesTests
             """{"path":"minified.js"}""", Context(fx), CancellationToken.None);
 
         Assert.True(result.Success, result.Error);
-        Assert.Contains("truncated at 8000 characters", result.Output);
+        Assert.Contains("is longer than 8000 characters on its own, and is cut here", result.Output);
         Assert.True((bool)result.Metadata!["truncated"]!);
 
         // And the real size is still reported, so "8000 characters" is never mistaken for the file.
