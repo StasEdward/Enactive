@@ -82,6 +82,21 @@ public sealed class Orchestrator : IOrchestrator
     /// </summary>
     private const int MaxHandovers = 3;
 
+    /// <summary>
+    /// Turns in a row needing the window trimmed before the step is CUT instead.
+    ///
+    /// <para>Three, because one or two is a long tool result passing through and a step recovers
+    /// from that by itself. Three running means the transcript has reached the ceiling and stays
+    /// there: each trim frees a few thousand tokens and the next turns eat them again.</para>
+    ///
+    /// <para>Measured 2026-09-24 03:09 — seven trims, then <i>"the context window filled up: 61121
+    /// of 65536"</i>, on the step's 46th turn. Fourteen turns short of
+    /// <see cref="TurnsBeforeHandover"/>, which would have emptied the window rather than nibbling
+    /// at it. The turn count was always a rough proxy for "this conversation has got long"; a
+    /// window that will not stay under its budget is that same fact, measured.</para>
+    /// </summary>
+    private const int TrimsBeforeHandover = 3;
+
     private readonly IChatProviderFactory _providers;
     private readonly IWorkerProvider _workers;
     private readonly IToolRegistry _tools;
@@ -2600,12 +2615,22 @@ public sealed class Orchestrator : IOrchestrator
         var handovers = 0;
         var turnsHere = 0;
 
+        // Turns in a row that needed the window trimmed. Counted because trimming is a NIBBLE and
+        // a handover is a reset, and nothing connected the two: measured 2026-09-24 03:09, a step
+        // trimmed seven times - each freeing two or three thousand tokens that the next few turns
+        // ate again - and died of a full window on its 46th turn, fourteen short of the handover
+        // that would have emptied it. Trimming repeatedly and staying at the ceiling IS the
+        // condition the turn count was a rough proxy for.
+        var trimmedInARow = 0;
+
         for (var iteration = 1; iteration <= RunawayCeiling; iteration++)
         {
             // Cut, not killed - see TurnsBeforeHandover. Done at the TOP of a turn, where the
             // conversation is always in a complete state: the last message is a tool result or an
             // instruction, never half of a call waiting for its answer.
-            if (turnsHere >= TurnsBeforeHandover && handovers < MaxHandovers)
+            var windowIsThrashing = trimmedInARow >= TrimsBeforeHandover;
+
+            if ((turnsHere >= TurnsBeforeHandover || windowIsThrashing) && handovers < MaxHandovers)
             {
                 var carried = await HandoverAsync(provider, model, messages, runBudget, ct);
 
@@ -2632,6 +2657,7 @@ public sealed class Orchestrator : IOrchestrator
                     // until something else stops it". After a handover there is no same
                     // conversation to go round in.
                     progress = new StepProgress();
+                    trimmedInARow = 0;
 
                     var kept = Preamble(messages);
                     messages.RemoveRange(kept, messages.Count - kept);
@@ -2662,9 +2688,14 @@ public sealed class Orchestrator : IOrchestrator
                           + "items, it is too big - the plan should say how many at a time."
                         : "";
 
+                    var why = windowIsThrashing
+                        ? $"The context window has been trimmed {TrimsBeforeHandover} turns running "
+                          + "and is still full, so trimming is not keeping up"
+                        : $"This step has run {iteration - 1} turns";
+
                     yield return Ev(EventKind.ContextTrimmed,
-                        $"This step has run {iteration - 1} turns. Carrying its own notes into a "
-                        + $"fresh conversation and continuing ({handovers} of {MaxHandovers})."
+                        $"{why}. Carrying its own notes into a fresh conversation and continuing "
+                        + $"({handovers} of {MaxHandovers})."
                         + lastOne);
                 }
                 else
@@ -2705,8 +2736,13 @@ public sealed class Orchestrator : IOrchestrator
                 var budget = window - reserve;
                 var sizeNow = Transcript.Size(messages) + toolsOverhead;
 
+                if (scale.TokensFor(sizeNow) <= budget)
+                    trimmedInARow = 0;
+
                 if (scale.TokensFor(sizeNow) > budget)
                 {
+                    trimmedInARow++;
+
                     var elided = Transcript.Elide(messages, scale.CharsFor(budget) - toolsOverhead);
                     sizeNow = Transcript.Size(messages) + toolsOverhead;
 
