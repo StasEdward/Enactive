@@ -1,5 +1,6 @@
 namespace Enactive.Tools;
 
+using System.IO.Enumeration;
 using Enactive.Core.Context;
 
 /// <summary>
@@ -70,6 +71,18 @@ internal static class WorkspaceScan
         // reads as the scan having crashed halfway rather than as an argument it can fix.
         => Walk(root, FileNamePattern(glob));
 
+    /// <summary>
+    /// The files, with skipped folders cut off BEFORE the walk goes into them.
+    ///
+    /// <para>It used to recurse into everything and drop what was under a skipped folder afterwards,
+    /// one relative path and one split per file. Measured 2026-09-24 on this repository: 13,669 files
+    /// in the tree, 5,205 kept - 3,800 under <c>.git</c>, 3,281 under <c>bin</c>, 1,166 under
+    /// <c>obj</c> were each visited to be thrown away. 115 ms a walk; pruned, 29 ms, same 5,205.</para>
+    ///
+    /// <para>Same meaning as before: a folder is skipped by its name BELOW the scan root, and the
+    /// root itself is never an entry here - so a scan rooted inside a skipped folder still sees it.
+    /// The glob matches file names the way <c>Directory.EnumerateFiles</c> matched them.</para>
+    /// </summary>
     private static IEnumerable<string> Walk(string root, string glob)
     {
         var options = new EnumerationOptions
@@ -78,12 +91,22 @@ internal static class WorkspaceScan
             IgnoreInaccessible = true,
             AttributesToSkip = FileAttributes.ReparsePoint   // a link is followed by nothing here
         };
+        var ignoreCase = WorkspaceGuard.Comparison != StringComparison.Ordinal;
 
-        foreach (var file in Directory.EnumerateFiles(root, glob, options))
+        return new FileSystemEnumerable<string>(root, (ref FileSystemEntry entry) => entry.ToFullPath(), options)
         {
-            if (!Skipped(root, file))
-                yield return file;
-        }
+            ShouldRecursePredicate = (ref FileSystemEntry entry) => !SkippedName(entry.FileName),
+            ShouldIncludePredicate = (ref FileSystemEntry entry) =>
+                !entry.IsDirectory && FileSystemName.MatchesSimpleExpression(glob, entry.FileName, ignoreCase)
+        };
+    }
+
+    private static bool SkippedName(ReadOnlySpan<char> name)
+    {
+        foreach (var skip in SkippedFolders)
+            if (name.Equals(skip, WorkspaceGuard.Comparison))
+                return true;
+        return false;
     }
 
     /// <summary>
@@ -120,6 +143,13 @@ internal static class WorkspaceScan
     /// </summary>
     public static bool Binary(string file)
     {
+        // Known by its name, so not opened at all. Opening is what cost the time: the first search of
+        // a run took 17.5 s on this repository and the second 0.6 s - the difference is the cold open
+        // of about 5,000 files, half of them build output (1,842 .dll, 324 .so, 197 .a, 188 .pdb), and
+        // an executable is exactly what a virus scanner inspects most closely on first open.
+        if (BinaryExtensions.Contains(Path.GetExtension(file)))
+            return true;
+
         try
         {
             using var stream = File.OpenRead(file);
@@ -129,6 +159,19 @@ internal static class WorkspaceScan
         }
         catch { return true; }   // unreadable is as good as binary for this purpose
     }
+
+    /// <summary>
+    /// Formats that are never text. Only the unambiguous ones: anything not listed is still decided by
+    /// looking for a NUL byte, so a text file with an unusual extension is never mistaken for binary.
+    /// </summary>
+    private static readonly HashSet<string> BinaryExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".dll", ".exe", ".so", ".dylib", ".a", ".lib", ".o", ".obj", ".pdb", ".class", ".jar", ".nupkg",
+        ".zip", ".7z", ".gz", ".tgz", ".bz2", ".xz", ".rar", ".cab", ".msi", ".iso",
+        ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".webp", ".tif", ".tiff", ".psd",
+        ".woff", ".woff2", ".ttf", ".otf", ".eot",
+        ".pdf", ".mp3", ".mp4", ".wav", ".avi", ".mov", ".mkv", ".db", ".sqlite"
+    };
 
     public static string Relative(string root, string file)
         => Path.GetRelativePath(root, file).Replace(Path.DirectorySeparatorChar, '/');

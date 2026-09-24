@@ -201,7 +201,43 @@ public sealed class LoggingChatProvider : IChatProvider
     /// at all reads as a call that produced no prompt.
     /// </summary>
     private string Body(ChatRequest request)
-        => _promptBodies ? RenderPrompt(request) : Settings(request) + BodyWithheld;
+        => _promptBodies ? RenderPrompt(request, AlreadyLogged(request)) : Settings(request) + BodyWithheld;
+
+    private readonly object _promptGate = new();
+    private ChatMessage[]? _lastPrompt;
+
+    /// <summary>
+    /// How many of this request's messages are EXACTLY the previous prompt's, from the start - the
+    /// same objects, in the same places. Those were written to the log last time and are not written
+    /// again.
+    ///
+    /// <para>Measured 2026-09-24: a prompt of 171 messages and 499,595 characters rendered 506,334
+    /// characters into the log, and the next turn's prompt was the same 171 messages plus two. About
+    /// 150 MB of log per run, almost all of it repeated; the day's log was 695 MB. A conversation
+    /// only ever appends, so the log only needs what was appended.</para>
+    ///
+    /// <para>By REFERENCE, not by content: a trim or a handover builds new message objects, and then
+    /// the prompt really is different from the last one and is written whole - which is exactly when
+    /// somebody reading the log needs to see it whole.</para>
+    /// </summary>
+    private int AlreadyLogged(ChatRequest request)
+    {
+        lock (_promptGate)
+        {
+            var last = _lastPrompt;
+            var now = request.Messages;
+            _lastPrompt = now.ToArray();
+
+            if (last is null || now.Count < last.Length)
+                return 0;
+
+            for (var i = 0; i < last.Length; i++)
+                if (!ReferenceEquals(now[i], last[i]))
+                    return 0;
+
+            return last.Length;
+        }
+    }
 
     /// <summary>How the call was made — model, sampling, window, tools. Cheap, and true of every
     /// call whether or not its messages can be shown.</summary>
@@ -218,12 +254,17 @@ public sealed class LoggingChatProvider : IChatProvider
         return sb.ToString();
     }
 
-    private static string RenderPrompt(ChatRequest request)
+    private static string RenderPrompt(ChatRequest request, int alreadyLogged = 0)
     {
         var sb = new StringBuilder(Settings(request));
         sb.AppendLine(new string('-', 40));
 
-        foreach (var m in request.Messages)
+        if (alreadyLogged > 0)
+            sb.Append("(messages 1-").Append(alreadyLogged)
+              .AppendLine(" are exactly as in the previous prompt to this provider, and are not repeated here)")
+              .AppendLine();
+
+        foreach (var m in request.Messages.Skip(alreadyLogged))
         {
             sb.Append("### ").AppendLine(m.Role.ToString().ToUpperInvariant());
             if (!string.IsNullOrEmpty(m.Content))
