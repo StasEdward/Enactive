@@ -92,12 +92,22 @@ public sealed class FakeChatProvider : IChatProvider
 
     public int TurnsLeft => _script.Count;
 
+    /// <summary>
+    /// Answers a request by what it ASKS, before the script is consulted - null to fall through.
+    /// For the requests a test cannot place by position: a handover's note is asked for whenever the
+    /// engine decides, and a script that guesses the turn tests the guess.
+    /// </summary>
+    public Func<ChatRequest, Turn?>? Answering { get; set; }
+
+    private Turn Next(ChatRequest request)
+        => Answering?.Invoke(request) ?? (_script.Count > 0 ? _script.Dequeue() : WhenExhausted);
+
     public async IAsyncEnumerable<ChatStreamEvent> StreamChatAsync(
         ChatRequest request,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
     {
         Requests.Add(request);
-        var turn = _script.Count > 0 ? _script.Dequeue() : WhenExhausted;
+        var turn = Next(request);
 
         if (turn.Thinking is { Length: > 0 } reasoning)
             yield return new ReasoningDelta(reasoning);
@@ -119,7 +129,7 @@ public sealed class FakeChatProvider : IChatProvider
     public Task<ChatCompletion> CompleteAsync(ChatRequest request, CancellationToken ct)
     {
         Requests.Add(request);
-        var turn = _script.Count > 0 ? _script.Dequeue() : WhenExhausted;
+        var turn = Next(request);
 
         // The turn's tokens are reported here too, not only on the streaming path. Planning and
         // review are the two phases that go through CompleteAsync, and returning null here made

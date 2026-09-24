@@ -2858,7 +2858,16 @@ public sealed class Orchestrator : IOrchestrator
                 {
                     trimmedInARow++;
 
-                    var elided = Transcript.Elide(messages, scale.CharsFor(budget) - toolsOverhead);
+                    // Cut DEEP, not just under the line. Every trim rewrites the prompt near its
+                    // start, and every provider with a prefix cache - hosted or local - then reads
+                    // the whole prompt again. Cutting to just under the budget guaranteed the next
+                    // trim a few turns later: measured 2026-09-24 15:32-15:35, run a2142be6, three
+                    // trims in three minutes on one step, each followed by a full re-read of about
+                    // 110,000 tokens (~55 s on that machine). One cut to half the window buys many
+                    // turns for the price of a single re-read. Half is a proportion of the stated
+                    // window, not a number about any model; never above the budget itself.
+                    var trimTo = Math.Min(budget, window / 2);
+                    var elided = Transcript.Elide(messages, scale.CharsFor(trimTo) - toolsOverhead);
                     sizeNow = Transcript.Size(messages) + toolsOverhead;
 
                     // What it COST is said with what it bought. Transcript.Elide takes the OLDEST

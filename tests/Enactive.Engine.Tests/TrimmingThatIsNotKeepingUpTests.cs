@@ -44,36 +44,40 @@ public sealed class TrimmingThatIsNotKeepingUpTests
     {
         using var fx = new EngineFixture();
 
-        // DIFFERENT files each turn. Reading one file over and over is a stall, and the stall guard
-        // is right to say so - it fired here on the first attempt at this test. The reported run
-        // made 128 distinct reads and searches, which is real work whose results happen to be big,
-        // and that is the shape the window guard has to survive.
+        // DIFFERENT files each turn - reading one over and over is a stall, and the stall guard is
+        // right to say so.
         //
-        // Each result is a good slice of the budget but not larger than it: a single result bigger
-        // than the whole window is a different failure - trimming with nothing to give - and never
-        // reaches the third consecutive trim this is about.
+        // Since 2026-09-24 a trim cuts to HALF the window rather than to just under the budget
+        // (see TrimmingCutsDeep below), so a window that keeps filling now means each turn brings
+        // back more than a deep cut freed: four files of 4,000 characters per turn, through
+        // read_files. Anything less, and one deep trim holds - which is the point of cutting deep.
         var script = new List<Turn> { Turn.Says(QuickAction) };
+        var file = 0;
 
-        void Read(int i)
+        for (var turn = 0; turn < 12; turn++)
         {
-            fx.Write($"page{i}.md", new string('x', 5_000));
-            script!.Add(Turn.Calls1("read_file", $$"""{"path":"page{{i}}.md"}""", $"c{i}"));
+            var paths = new List<string>();
+            for (var k = 0; k < 4; k++, file++)
+            {
+                fx.Write($"page{file}.md", new string('x', 4_000));
+                paths.Add($"\"page{file}.md\"");
+            }
+            script.Add(Turn.Calls1("read_files", $$"""{"paths":[{{string.Join(",", paths)}}]}""", $"c{turn}"));
         }
-
-        // Five reads fill the window; the third consecutive trim falls on the fifth, and the
-        // handover asks its question there. The fake serves streamed and non-streamed turns from
-        // ONE queue, so the answer has to sit at exactly the position the engine will ask it -
-        // the same bargain AStepThatHandsOverToItselfTests documents.
-        for (var i = 0; i < 5; i++) Read(i);
-        script.Add(Turn.Says("Done: pages 0-4 read. Left: the rest."));
-
-        for (var i = 5; i < 12; i++) Read(i);
         script.Add(Turn.Says("Finished."));
 
-        var events = await fx.RunAsync(
-            fx.Build(new FakeChatProvider(script.ToArray()) { Window = Window },
-                     EngineFixture.Role("developer")),
-            "a long job");
+        // The note is answered whenever the engine asks for it, not at a position this test would
+        // have to predict.
+        var provider = new FakeChatProvider(script.ToArray())
+        {
+            Window = Window,
+            Answering = r => r.Messages.Any(m => (m.Content ?? "").Contains("Before you continue", StringComparison.Ordinal))
+                && r.Messages[^1].Content?.Contains("Before you continue", StringComparison.Ordinal) == true
+                ? Turn.Says("Done: the first pages read. Left: the rest.")
+                : null
+        };
+
+        var events = await fx.RunAsync(fx.Build(provider, EngineFixture.Role("developer")), "a long job");
 
         var text = events.Text();
 
@@ -113,4 +117,42 @@ public sealed class TrimmingThatIsNotKeepingUpTests
         Assert.DoesNotContain("trimming is not keeping up", events.Text(), StringComparison.Ordinal);
         Assert.False(events.Has(EventKind.TaskFailed), events.Text());
     }
+
+    /// <summary>
+    /// ONE trim buys room: it cuts to half the window, not to just under the budget.
+    ///
+    /// <para><b>Measured 2026-09-24 15:32-15:35, run a2142be6.</b> Three trims on one step in three
+    /// minutes, each cutting only to just under the budget and so each followed within a few turns
+    /// by the next - and every trim rewrites the prompt near its start, so every provider with a
+    /// prefix cache reads the whole prompt again: about 110,000 tokens, some 55 seconds each on
+    /// that machine. Nothing here is about that model: a hosted provider pays the same re-read in
+    /// money.</para>
+    /// </summary>
+    [Fact]
+    public async Task One_trim_cuts_to_half_the_window()
+    {
+        using var fx = new EngineFixture();
+        const int big = 32_768;
+
+        var script = new List<Turn> { Turn.Says(QuickAction) };
+        for (var i = 0; i < 40; i++)
+        {
+            fx.Write($"page{i}.md", new string('x', 9_000));
+            script.Add(Turn.Calls1("read_file", $$"""{"path":"page{{i}}.md"}""", $"c{i}"));
+        }
+        script.Add(Turn.Says("Finished."));
+
+        var events = await fx.RunAsync(
+            fx.Build(new FakeChatProvider(script.ToArray()) { Window = big }, EngineFixture.Role("developer")),
+            "a long job");
+
+        var text = events.Text();
+        var announced = System.Text.RegularExpressions.Regex.Match(text, $@"about (\d+) of {big} tokens now");
+        Assert.True(announced.Success, text.Length > 2000 ? text[..2000] : text);
+
+        // Cut to just under the budget, this lands above 28,000; cut deep, at or below 16,384.
+        var left = int.Parse(announced.Groups[1].Value);
+        Assert.True(left <= big / 2, $"the first trim left {left} of {big} - it must cut to half the window");
+    }
 }
+
