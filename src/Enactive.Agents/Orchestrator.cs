@@ -495,6 +495,13 @@ public sealed class Orchestrator : IOrchestrator
         var quick = Channel.CreateUnbounded<WorkEvent>(
             new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
         var quickResult = new ToolLoopResult();
+
+        // What the action changed, measured - see WorkspaceChanges and the plan path. Held for the
+        // whole action rather than inside the attempt loop, because the closing line compares the
+        // end of the action with this same start - see NetChangedAsync.
+        using var quickChanges = new WorkspaceChanges(_workspace.RootPath);
+        var quickBefore = await quickChanges.TakeAsync(ct);
+
         var quickPump = Task.Run(async () =>
         {
             using var _quickScope = LogScope.Begin(scope.RunId, scope.TaskId);
@@ -527,10 +534,6 @@ public sealed class Orchestrator : IOrchestrator
                 // See the same line on the DAG path: the evidence window moves only when a
                 // retry discards the attempt before it.
                 var evidenceStart = journal.Mark();
-
-                // What the action changed, measured - see WorkspaceChanges and the plan path.
-                using var quickChanges = new WorkspaceChanges(_workspace.RootPath);
-                var quickBefore = await quickChanges.TakeAsync(ct);
 
                 for (var attempt = 1; attempt <= maxQuickAttempts; attempt++)
                 {
@@ -685,7 +688,10 @@ public sealed class Orchestrator : IOrchestrator
             }
         }
 
-        yield return scope.Terminal(quickOutcome, quickReason, SummarizeArtifacts);
+        var quickNet = quickOutcome == RunOutcomeKind.Completed
+            ? await NetChangedAsync(quickChanges, quickBefore, ct)
+            : null;
+        yield return scope.Terminal(quickOutcome, quickReason, artifacts => SummarizeArtifacts(artifacts, quickNet));
     }
 
     /// <summary>
@@ -806,6 +812,11 @@ public sealed class Orchestrator : IOrchestrator
         // take turns: two running at once share one workspace, and a snapshot cannot tell which of
         // them changed what. They keep the store's own record, as before.
         using var workspaceChanges = stepsShareOneConversation ? new WorkspaceChanges(_workspace.RootPath) : null;
+
+        // The same measurement for the whole run, for its closing line - see NetChangedAsync. Not
+        // for a resumed run: its start is not where the run began, and a file changed before the
+        // interruption would read as "left as it was".
+        var beforeRun = workspaceChanges is not null && resume is null ? await workspaceChanges.TakeAsync(ct) : null;
 
         // Execute by readiness: a step runs only once all its dependencies are Done (a real DAG),
         // not in a fixed linear order. With MaxParallelSteps > 1 the independent branches of the graph
@@ -1004,9 +1015,24 @@ public sealed class Orchestrator : IOrchestrator
                         + string.Join("\n", doneSoFar.Select(d => "- " + d))));
             }
 
+            // THE WHOLE PLAN, so the step knows where it ends. It used to see only its own title and
+            // "Do only this step" - which cannot be followed by a step that does not know what the
+            // others are. Measured 2026-09-24 21:41, run bc3200, "add tests for the least-covered
+            // behaviour": step 1 of 3 ("run baseline tests and find coverage gaps") also wrote all 27
+            // tests and checked them by mutation; step 2 ("write tests") found nothing left and closed
+            // in two turns; step 3 ("verify tests fail when behaviour broken") ran the mutations again
+            // - 41 turns, 19 edits of production code, a handover and a rejected review for work
+            // already done. The request is in every step's prompt; the plan was not.
             convo.Add(ChatMessage.User(
                 $"Proceed with this step of the plan: {step.Title}\n"
-                + "Do only this step. Use tools as needed. When finished, briefly confirm what you did."));
+                + (total > 1
+                    ? $"This is step {stepNumber} of {total}. The whole plan, so you know where this step ends:\n"
+                      + string.Join("\n", builtPlan.Steps.Select((s, i) =>
+                          $"  {i + 1}. {s.Title}" + (s.Id == step.Id ? "   <- THIS STEP" : "")))
+                      + "\nDo only this step. What the other steps name is theirs: do not do it here, and do "
+                      + "not redo what earlier steps already did - their results are in the workspace."
+                    : "Do only this step.")
+                + " Use tools as needed. When finished, briefly confirm what you did."));
 
             // WHAT A HANDOVER INSIDE THIS STEP MUST START AGAIN FROM: the run's preamble and THIS
             // step's instruction, and no part of any other step.
@@ -1514,7 +1540,10 @@ public sealed class Orchestrator : IOrchestrator
         // checkpoint left behind would offer to redo work that is finished.
         await ForgetCheckpointAsync();
 
-        yield return scope.Terminal(runOutcome, runReason, SummarizeArtifacts);
+        var runNet = runOutcome == RunOutcomeKind.Completed
+            ? await NetChangedAsync(workspaceChanges, beforeRun, ct)
+            : null;
+        yield return scope.Terminal(runOutcome, runReason, artifacts => SummarizeArtifacts(artifacts, runNet));
     }
 
 
@@ -3837,12 +3866,82 @@ public sealed class Orchestrator : IOrchestrator
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .ToArray();
 
-    private static string SummarizeArtifacts(List<ArtifactRef> artifacts)
+    /// <summary>
+    /// The run's closing line: what it CHANGED, as measured from where it started to where it ended -
+    /// not what it wrote along the way.
+    ///
+    /// <para>Measured 2026-09-24 21:49, run bc3200, "add tests": the line said
+    /// <c>2 artifact(s): Tests/MonitorClientAdditionalTests.cs, MonitorClient.cs</c>. The production
+    /// file had been edited 34 times - deliberate breakages to check the tests failed, each put back -
+    /// and ended exactly as it began, in a folder with no git to check it against. The line said the
+    /// run changed production code; finding out it had not took reading the whole log. And one
+    /// breakage left in by a step cut short would have produced the very same line.</para>
+    ///
+    /// <para>So a file written and then restored is named apart, and a file changed by a COMMAND -
+    /// which leaves no write behind - is named too. Without a measurement (a run whose steps ran in
+    /// parallel, a resumed run) the line is the list of writes, as before.</para>
+    /// </summary>
+    private static string SummarizeArtifacts(List<ArtifactRef> artifacts, IReadOnlySet<string>? netChanged = null)
     {
         var files = FilesTouched(artifacts);
-        return files.Length == 0
-            ? "(completed, no files changed)"
-            : $"(completed; {files.Length} artifact(s): {string.Join(", ", files)})";
+        if (netChanged is null)
+            return files.Length == 0
+                ? "(completed, no files changed)"
+                : $"(completed; {files.Length} artifact(s): {string.Join(", ", files)})";
+
+        var changed = files.Where(f => netChanged.Contains(PathKey(f))).ToArray();
+        var restored = files.Where(f => !netChanged.Contains(PathKey(f))).ToArray();
+        var written = files.Select(PathKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var byCommands = netChanged.Where(p => !written.Contains(p)).Order(StringComparer.OrdinalIgnoreCase).ToArray();
+
+        var parts = new List<string>();
+        if (changed.Length > 0)
+            parts.Add($"{changed.Length} artifact(s): {string.Join(", ", changed)}");
+        if (byCommands.Length > 0)
+            parts.Add($"changed by commands: {string.Join(", ", byCommands.Take(ShownByCommands))}"
+                      + (byCommands.Length > ShownByCommands ? $" and {byCommands.Length - ShownByCommands} more" : ""));
+        if (restored.Length > 0)
+            parts.Add($"written and left as it was: {string.Join(", ", restored)}");
+
+        if (parts.Count == 0)
+            return "(completed, no files changed)";
+        return changed.Length == 0 && byCommands.Length == 0
+            ? $"(completed, no files changed; {parts[0]})"
+            : $"(completed; {string.Join("; ", parts)})";
+    }
+
+    /// <summary>How many files changed by commands the closing line names before it counts the rest.</summary>
+    private const int ShownByCommands = 5;
+
+    private static string PathKey(string path) => path.Replace('\\', '/').TrimStart('.', '/');
+
+    /// <summary>
+    /// The files that differ between <paramref name="before"/> and now - the run's NET change, whatever
+    /// happened in between. Null when it cannot be measured, and then nothing is claimed from it.
+    /// </summary>
+    private static async Task<IReadOnlySet<string>?> NetChangedAsync(
+        WorkspaceChanges? changes, WorkspaceSnapshot? before, CancellationToken ct)
+    {
+        if (changes is null || before is null)
+            return null;
+
+        try
+        {
+            if (await changes.TakeAsync(ct) is not { } after
+                || await changes.CompareAsync(before, after, ct) is not { } found)
+                return null;
+
+            var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var change in found)
+            {
+                paths.Add(PathKey(change.Path));
+                if (change.OldPath is { } old)
+                    paths.Add(PathKey(old));
+            }
+            return paths;
+        }
+        catch (OperationCanceledException) { return null; }
+        catch (IOException) { return null; }
     }
 
     private static string LastAssistant(List<ChatMessage> messages)

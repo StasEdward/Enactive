@@ -1,6 +1,7 @@
 namespace Enactive.Core.Artifacts;
 
 using System.Diagnostics;
+using System.Security.Cryptography;
 using System.Text;
 
 /// <summary>
@@ -190,9 +191,22 @@ public sealed class WorkspaceChanges : IDisposable
     private static string Kept(string diff)
         => diff.Length <= MaxDiffCharsKept ? diff : diff[..MaxDiffCharsKept] + "\n… (diff cut here)";
 
-    private IReadOnlyDictionary<string, (long Size, long Ticks)>? Scan()
+    /// <summary>
+    /// Files up to this size are fingerprinted by their CONTENT outside git, not only by size and
+    /// write time - see <see cref="Fingerprint"/>.
+    /// </summary>
+    private const long MaxHashedFileBytes = 1024 * 1024;
+
+    /// <summary>
+    /// How much one snapshot reads to fingerprint files, in all. Past it the rest are known by size and
+    /// write time, as before: a folder of media is not worth reading to say whether it changed.
+    /// </summary>
+    private const long MaxHashedBytesPerSnapshot = 64L * 1024 * 1024;
+
+    private IReadOnlyDictionary<string, (long Size, long Ticks, string? Hash)>? Scan()
     {
-        var files = new Dictionary<string, (long, long)>(StringComparer.OrdinalIgnoreCase);
+        var files = new Dictionary<string, (long, long, string?)>(StringComparer.OrdinalIgnoreCase);
+        var hashed = 0L;
         var pending = new Stack<string>();
         pending.Push(_root);
 
@@ -209,23 +223,49 @@ public sealed class WorkspaceChanges : IDisposable
                     return null;   // too big to call "the workspace" honestly
 
                 var info = new FileInfo(file);
-                files[Path.GetRelativePath(_root, file).Replace('\\', '/')] = (info.Length, info.LastWriteTimeUtc.Ticks);
+                string? hash = null;
+                if (info.Length <= MaxHashedFileBytes && hashed + info.Length <= MaxHashedBytesPerSnapshot)
+                {
+                    hash = Fingerprint(file);
+                    hashed += info.Length;
+                }
+                files[Path.GetRelativePath(_root, file).Replace('\\', '/')] = (info.Length, info.LastWriteTimeUtc.Ticks, hash);
             }
         }
 
         return files;
     }
 
+    /// <summary>
+    /// A file's content, as a hash - or null when it cannot be read, and then size and write time
+    /// decide.
+    ///
+    /// <para>Measured 2026-09-24 21:49, run bc3200, in a folder with no git: a step broke
+    /// <c>MonitorClient.cs</c> on purpose to check its tests failed, and put it back - 34 edits, and
+    /// the file ended byte for byte as it began. By size and write time it had CHANGED, which is the
+    /// one thing it had not done.</para>
+    /// </summary>
+    private static string? Fingerprint(string file)
+    {
+        try
+        {
+            using var stream = File.OpenRead(file);
+            return Convert.ToHexString(SHA256.HashData(stream));
+        }
+        catch (IOException) { return null; }
+        catch (UnauthorizedAccessException) { return null; }
+    }
+
     private static IReadOnlyList<FileChange> CompareScans(
-        IReadOnlyDictionary<string, (long Size, long Ticks)> was,
-        IReadOnlyDictionary<string, (long Size, long Ticks)> now)
+        IReadOnlyDictionary<string, (long Size, long Ticks, string? Hash)> was,
+        IReadOnlyDictionary<string, (long Size, long Ticks, string? Hash)> now)
     {
         var changes = new List<FileChange>();
 
         foreach (var (path, stamp) in now)
             if (!was.TryGetValue(path, out var before))
                 changes.Add(new FileChange(path, FileChangeKind.Added, null, false));
-            else if (before != stamp)
+            else if (Differs(before, stamp))
                 changes.Add(new FileChange(path, FileChangeKind.Modified, null, false));
 
         foreach (var path in was.Keys)
@@ -234,6 +274,12 @@ public sealed class WorkspaceChanges : IDisposable
 
         changes.Sort((a, b) => string.CompareOrdinal(a.Path, b.Path));
         return changes;
+
+        // The content decides when both sides have it; a new write time over the same bytes is a file
+        // written back as it was, not a change.
+        static bool Differs((long Size, long Ticks, string? Hash) before, (long Size, long Ticks, string? Hash) after)
+            => before.Size != after.Size
+               || (before.Hash is { } a && after.Hash is { } b ? a != b : before.Ticks != after.Ticks);
     }
 
     private async Task<(int Exit, string Output)> GitAsync(CancellationToken ct, params string[] args)
@@ -272,8 +318,8 @@ public sealed class WorkspaceChanges : IDisposable
     }
 }
 
-/// <summary>One moment of the workspace: a git tree id, or the size and write time of every file.</summary>
-public sealed record WorkspaceSnapshot(string? Tree, IReadOnlyDictionary<string, (long Size, long Ticks)>? Files);
+/// <summary>One moment of the workspace: a git tree id, or the size, write time and (up to a limit) content hash of every file.</summary>
+public sealed record WorkspaceSnapshot(string? Tree, IReadOnlyDictionary<string, (long Size, long Ticks, string? Hash)>? Files);
 
 public enum FileChangeKind { Added, Modified, Deleted, Renamed }
 
