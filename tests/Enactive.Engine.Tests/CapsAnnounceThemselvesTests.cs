@@ -44,6 +44,10 @@ public sealed class CapsAnnounceThemselvesTests
     private static readonly Dictionary<string, string> Covered = new(StringComparer.Ordinal)
     {
         ["Orchestrator.ProgressEveryChars"] = "A_long_tool_call_says_it_is_still_being_written",
+        // What a handover carries that the model did not write: a diff cut to fit says so, and a long
+        // command output is carried by its end, which is where a test runner puts its result.
+        ["Orchestrator.MaxHandoverDiffChars"] = "A_huge_diff_in_a_handover_is_cut_and_says_so",
+        ["Orchestrator.HandoverOutputTailChars"] = "A_long_command_output_is_carried_by_its_end",
         // What a reply's TEXT may do while it streams. Each stop says what it stopped and why, to the
         // model and in the log; the thresholds below it decide what counts as a loop.
         ["RunawayReply.MaxTextChars"] = "Prose_past_the_limit_is_stopped",

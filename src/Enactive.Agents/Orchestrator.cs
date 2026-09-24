@@ -552,7 +552,8 @@ public sealed class Orchestrator : IOrchestrator
                     {
                         await foreach (var ev in RunToolLoopAsync(
                             scope.TaskId, scope.RunId, activeProvider, activeRef.Model, models.Worker, messages, scope.Artifacts,
-                            intent.Context, store, journal, reads, null, quickResult, scope.Budget, scope.Granted, ct, activeRef.ProviderId))
+                            intent.Context, store, journal, reads, null, quickResult, scope.Budget, scope.Granted, ct, activeRef.ProviderId,
+                            changes: quickChanges, stepStart: quickBefore))
                             quick.Writer.TryWrite(ev);
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException
@@ -1112,7 +1113,7 @@ public sealed class Orchestrator : IOrchestrator
                     await foreach (var ev in RunToolLoopAsync(
                         scope.TaskId, scope.RunId, stepProvider, stepModel, models.Worker, convo, scope.Artifacts,
                         intent.Context, store, journal, reads, stepNumber, stepResult, scope.Budget, scope.Granted, ct, stepRef.ProviderId,
-                        restartFrom))
+                        restartFrom, workspaceChanges, beforeStep))
                         events.Writer.TryWrite(ev);
 
                     outcome = stepResult.Kind;
@@ -2673,7 +2674,11 @@ public sealed class Orchestrator : IOrchestrator
         string? providerId = null,
         // What a handover restarts this step from, when the caller knows better than Preamble() can
         // work out. Only a SHARED conversation needs it; see where it is built in RunPlanAsync.
-        IReadOnlyList<ChatMessage>? restartFrom = null)
+        IReadOnlyList<ChatMessage>? restartFrom = null,
+        // What the workspace looked like when this step began, and the means to compare it with
+        // now - so a handover carries what the step CHANGED as a measurement, and not only as the
+        // model's account of it. See HandoverFactsAsync.
+        WorkspaceChanges? changes = null, WorkspaceSnapshot? stepStart = null)
     {
         // An async iterator cannot return a value, so the caller passes in the slot the loop fills.
         // Without it "how did this end" existed only as English inside an event, and every consumer
@@ -2857,7 +2862,14 @@ public sealed class Orchestrator : IOrchestrator
                     $"{why}. Writing notes to carry into a fresh conversation - this is one long "
                     + "turn, and on a local model it can take a minute or two.");
 
-                var carried = await HandoverAsync(provider, model, messages, runBudget, ct);
+                var carried = await HandoverAsync(
+                    provider, new ChatRequest(model, messages, toolDefs, Temperature: 0.2, NumCtx: _numCtx, Think: _think),
+                    runBudget, ct);
+
+                // What the engine MEASURED, beside what the model remembers. Taken before the
+                // conversation is cleared, because the last command's result is in it.
+                if (carried is { Length: > 0 })
+                    carried += await HandoverFactsAsync(changes, stepStart, messages, ct);
 
                 if (carried is { Length: > 0 })
                 {
@@ -3787,19 +3799,25 @@ public sealed class Orchestrator : IOrchestrator
     /// which calls were made and not what they MEANT — "read Architecture.md" is in the journal;
     /// "Architecture.md checks out except the tool table" is what the next conversation needs.</para>
     ///
-    /// <para>One non-streaming call on the conversation as it stands. It is nearly free: the whole
-    /// transcript is already a cache hit by this point, and what it adds is a few hundred tokens of
-    /// question and answer.</para>
+    /// <para>One non-streaming call on the conversation as it stands - sent as the SAME request the
+    /// step sends, tools and settings included, with one question added at the end. It was sent
+    /// without the tools and with other settings, on the claim that it was "nearly free: the whole
+    /// transcript is already a cache hit". It was not: a chat template writes the tools into the
+    /// system block at the very start, so the prompt differed from its first tokens. Measured
+    /// 2026-09-24 21:47, run bc3200: 46,176 prompt tokens, 0 of them cached, 29 seconds, for a note
+    /// of 602 tokens.</para>
+    ///
+    /// <para>Offered tools, a model may call one instead of writing. That is treated as no note -
+    /// the step is not cut - which is what an empty answer has always meant here.</para>
     ///
     /// <para>Returns null when the model says nothing. The caller then does NOT cut — a step
     /// continuing from an empty handover would start again from its instructions alone, having
     /// forgotten everything it learned, which is worse than a long conversation.</para>
     /// </summary>
     private static async Task<string?> HandoverAsync(
-        IChatProvider provider, string model, List<ChatMessage> messages, RunBudget runBudget,
-        CancellationToken ct)
+        IChatProvider provider, ChatRequest step, RunBudget runBudget, CancellationToken ct)
     {
-        var asked = new List<ChatMessage>(messages)
+        var asked = new List<ChatMessage>(step.Messages)
         {
             ChatMessage.User(
                 "Before you continue: this conversation is being started over to keep it short, and "
@@ -3812,8 +3830,7 @@ public sealed class Orchestrator : IOrchestrator
 
         try
         {
-            var completion = await provider.CompleteAsync(
-                new ChatRequest(model, asked, Temperature: 0.0, NumCtx: null, Think: false), ct);
+            var completion = await provider.CompleteAsync(step with { Messages = asked }, ct);
 
             runBudget.TokensUsed(completion.PromptTokens ?? 0, completion.CompletionTokens ?? 0);
 
@@ -3830,6 +3847,126 @@ public sealed class Orchestrator : IOrchestrator
             // economy, and an economy that throws is worse than one that does not happen.
             return null;
         }
+    }
+
+    /// <summary>How much of the diffs of changed files a handover carries, in all.</summary>
+    private const int MaxHandoverDiffChars = 3_000;
+
+    /// <summary>How much of the last command's output a handover carries - its END, where results are.</summary>
+    private const int HandoverOutputTailChars = 600;
+
+    /// <summary>
+    /// What a handover carries that the model did not write: which files differ from how they were
+    /// when the step began, and what the last command it ran said. Appended to its note under a
+    /// heading that says which of the two to believe.
+    ///
+    /// <para><b>Measured 2026-09-24 21:47, run bc3200.</b> Checking that tests catch a breakage, a
+    /// step made MonitorClient.cs accept HTTP 404, ran the tests - one failed, as intended - and
+    /// was handed over at that moment. Its note said "MonitorClient.cs is currently in its correct,
+    /// unbroken state ... What's still to do: None". The next conversation found a failing test,
+    /// and instead of undoing the breakage it changed the test to expect 404 to succeed. A reviewer
+    /// caught it. A note is a model's memory of its work; what it left on disk is a fact the engine
+    /// can measure, and the two were not put side by side.</para>
+    /// </summary>
+    private static async Task<string> HandoverFactsAsync(
+        WorkspaceChanges? changes, WorkspaceSnapshot? stepStart, List<ChatMessage> messages, CancellationToken ct)
+    {
+        var facts = new StringBuilder();
+
+        try
+        {
+            if (changes is not null && stepStart is not null
+                && await changes.TakeAsync(ct) is { } now
+                && await changes.CompareAsync(stepStart, now, ct) is { } found)
+            {
+                if (found.Count == 0)
+                    facts.Append("- No file in the workspace differs from how it was when this step began.\n");
+                else
+                {
+                    facts.Append($"- Files that differ from how they were when this step began ({found.Count}). ")
+                         .Append("A file you changed only to try something - a deliberate breakage, a temporary ")
+                         .Append("edit - is still changed until you put it back:\n");
+
+                    var room = MaxHandoverDiffChars;
+                    foreach (var change in found.Take(20))
+                    {
+                        facts.Append($"  - {change.Path} ({change.Kind.ToString().ToLowerInvariant()})\n");
+                        if (change.Kind != FileChangeKind.Modified || change.Diff is not { Length: > 0 } diff)
+                            continue;
+
+                        if (room <= 0)
+                        {
+                            facts.Append("    (its diff is not shown: the room for diffs in this note is used up)\n");
+                            continue;
+                        }
+
+                        var shown = diff.Length <= room ? diff : diff[..room] + $"\n… (diff cut here: {diff.Length} characters in all)";
+                        room -= Math.Min(diff.Length, room);
+                        foreach (var line in shown.Split('\n'))
+                            facts.Append("    ").Append(line).Append('\n');
+                    }
+                    if (found.Count > 20)
+                        facts.Append($"  - and {found.Count - 20} more\n");
+                }
+            }
+        }
+        catch (OperationCanceledException) { throw; }
+        catch { /* a fact that cannot be measured is not stated */ }
+
+        if (LastCommand(messages) is { } last)
+        {
+            var output = last.Result.TrimEnd();
+            var firstLine = output.Split('\n', 2)[0].Trim();
+            var tail = output.Length <= HandoverOutputTailChars
+                ? output
+                : "…" + output[^HandoverOutputTailChars..];
+            facts.Append($"- The last command you ran: {last.Command} - {firstLine}. Its output ends:\n");
+            foreach (var line in tail.Split('\n'))
+                facts.Append("    ").Append(line.TrimEnd('\r')).Append('\n');
+        }
+
+        return facts.Length == 0
+            ? ""
+            : "\n\n---\nMEASURED BY THE ENGINE, not written by you - where this and the note above "
+              + "disagree, this is what is true:\n" + facts.ToString().TrimEnd();
+    }
+
+    /// <summary>The command line a shell call ran - its 'command' or 'script' - or its arguments as sent.</summary>
+    private static string CommandText(string argumentsJson)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(argumentsJson);
+            foreach (var name in new[] { "command", "script" })
+                if (doc.RootElement.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String)
+                    return value.GetString() ?? argumentsJson;
+        }
+        catch (JsonException) { }
+        return argumentsJson;
+    }
+
+    /// <summary>The last shell command in the conversation and what it answered, or null.</summary>
+    private static (string Command, string Result)? LastCommand(List<ChatMessage> messages)
+    {
+        for (var i = messages.Count - 1; i >= 0; i--)
+        {
+            if (messages[i].Role != ChatRole.Assistant || messages[i].ToolCalls is not { Count: > 0 } calls)
+                continue;
+
+            for (var c = calls.Count - 1; c >= 0; c--)
+            {
+                var call = calls[c];
+                if (call.Name is not ("run_command" or "run_powershell"))
+                    continue;
+
+                var answer = messages.Skip(i + 1).FirstOrDefault(
+                    m => m.Role == ChatRole.Tool && m.ToolCallId == call.Id);
+                if (answer?.Content is { } content)
+                    return (Compact(CommandText(call.ArgumentsJson)), content);
+            }
+        }
+
+        return null;
     }
 
     /// <summary>
