@@ -44,6 +44,13 @@ public sealed class CapsAnnounceThemselvesTests
     private static readonly Dictionary<string, string> Covered = new(StringComparer.Ordinal)
     {
         ["Orchestrator.ProgressEveryChars"] = "A_long_tool_call_says_it_is_still_being_written",
+        // What a reply's TEXT may do while it streams. Each stop says what it stopped and why, to the
+        // model and in the log; the thresholds below it decide what counts as a loop.
+        ["RunawayReply.MaxTextChars"] = "Prose_past_the_limit_is_stopped",
+        ["RunawayReply.CheckEveryChars"] = "A_passage_coming_round_is_a_loop_and_its_first_pass_is_kept",
+        ["RunawayReply.ShortestLoopChars"] = "A_passage_coming_round_is_a_loop_and_its_first_pass_is_kept",
+        ["RunawayReply.LongestLoopChars"] = "A_paragraph_coming_round_is_a_loop_too",
+        ["RunawayReply.DistinctCharsInALoop"] = "Separators_and_tables_are_not_loops",
         ["WorkspaceChanges.MaxDiffCharsKept"] = "A_huge_diff_is_kept_to_a_limit_and_says_so",
         ["Orchestrator.MaxReviewFileChars"] = nameof(A_files_real_size_reaches_the_reviewer_from_a_real_run),
         ["Reviewer.MaxContentCharsPerFile"] = "An_excerpt_says_so_even_when_the_caller_did_the_cutting",

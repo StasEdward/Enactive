@@ -99,7 +99,7 @@ public sealed class Orchestrator : IOrchestrator
 
     /// <summary>
     /// How often a long generation says it is still going: every this many characters of tool-call
-    /// arguments or reasoning. About half a minute of writing on a slow local model, a few seconds
+    /// arguments, reasoning, or text. About half a minute of writing on a slow local model, a few seconds
     /// on a fast one - often enough that nothing looks stuck, rare enough not to flood the card.
     /// </summary>
     private const int ProgressEveryChars = 2_000;
@@ -2683,6 +2683,10 @@ public sealed class Orchestrator : IOrchestrator
         var repairRequested = false;
         var openFailures = new OpenFailures();
 
+        // Replies stopped for running away (RunawayReply). The first is explained to the model and the
+        // step goes on; a second means the explanation did not take, and the step stops.
+        var runawayStops = 0;
+
         // How this model's prompt tokens relate to transcript characters, measured as the step runs.
         var scale = new TokenScale();
 
@@ -3035,6 +3039,11 @@ public sealed class Orchestrator : IOrchestrator
             var argumentChars = 0;
             var saidAtArguments = 0;
             var saidAtReasoning = 0;
+            var saidAtText = 0;
+
+            // The text of this reply, watched while it streams. See RunawayReply.
+            var runaway = new RunawayReply();
+            RunawayReply.Stop? stopped = null;
 
             await foreach (var delta in provider.StreamChatAsync(request, ct))
             {
@@ -3043,6 +3052,20 @@ public sealed class Orchestrator : IOrchestrator
                     case TextDelta text:
                         contentBuilder.Append(text.Text);
                         yield return Ev(EventKind.AssistantDelta, text.Text);
+
+                        // The card shows the text as it streams, but the LOG saw none of it until the
+                        // reply ended - measured 2026-09-24 19:51, six minutes of a reply with nothing
+                        // in the log to say what it was. Said like the other two, with the line it
+                        // is on, so a long reply can be read from the log while it is still going.
+                        if (contentBuilder.Length - saidAtText >= ProgressEveryChars)
+                        {
+                            saidAtText = contentBuilder.Length;
+                            yield return Ev(EventKind.GenerationProgress,
+                                $"Writing a reply: {contentBuilder.Length:N0} characters so far… {RunawayReply.LastLine(contentBuilder)}");
+                        }
+
+                        if (toolBuilders.Count == 0)
+                            stopped = runaway.After(contentBuilder);
                         break;
 
                     case ToolCallDelta call:
@@ -3097,6 +3120,41 @@ public sealed class Orchestrator : IOrchestrator
                             usage.CachedPromptTokens);
                         break;
                 }
+
+                // Leaving the stream closes the request, and the provider stops generating.
+                if (stopped is not null)
+                    break;
+            }
+
+            // A reply that ran away. Kept as far as it is worth keeping - a loop's first pass, or the
+            // text as written - and explained, so the model can see its own reply stop and why. The
+            // explanation names the likely cause as well as the symptom: prose that "confirms" what
+            // no tool returned is the pattern the measured runaway began with.
+            if (stopped is not null)
+            {
+                runawayStops++;
+                var written = contentBuilder.Length;
+                var kept = contentBuilder.ToString(0, Math.Min(stopped.KeepChars, written));
+                messages.Add(new ChatMessage(ChatRole.Assistant, kept, null));
+
+                yield return Ev(EventKind.ErrorObserved,
+                    $"The model's reply was stopped at {written:N0} characters: {stopped.Reason}.");
+
+                if (runawayStops > 1)
+                {
+                    loopResult.Set(StepOutcomeKind.Incomplete,
+                        $"the model's reply ran away again after being told why the first was stopped: {stopped.Reason}");
+                    yield break;
+                }
+
+                messages.Add(ChatMessage.User(
+                    $"Your reply above was stopped after {written:N0} characters: {stopped.Reason}."
+                    + (stopped.Looped ? " Only its first pass is kept above." : "")
+                    + " Text in a reply is not an action: a check is made by calling a tool, and a fact is "
+                    + "established only by what a tool returned in this conversation. Go on with the step "
+                    + "by calling tools. A long result belongs in a file - write_file or edit_file - not "
+                    + "in the reply."));
+                continue;
             }
 
             // The turn was cut off at the token limit. Record only the partial text (dropping any
