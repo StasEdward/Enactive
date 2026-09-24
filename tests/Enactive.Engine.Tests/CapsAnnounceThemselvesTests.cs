@@ -43,6 +43,8 @@ public sealed class CapsAnnounceThemselvesTests
     /// </summary>
     private static readonly Dictionary<string, string> Covered = new(StringComparer.Ordinal)
     {
+        ["Orchestrator.TokensKeptForAnAnswer"]
+            = "A_trim_leaves_room_for_an_answer_and_says_how_much_is_left",
         ["Orchestrator.MaxReviewFileChars"] = nameof(A_files_real_size_reaches_the_reviewer_from_a_real_run),
         ["Reviewer.MaxContentCharsPerFile"] = "An_excerpt_says_so_even_when_the_caller_did_the_cutting",
         ["Reviewer.MaxContentCharsTotal"] = nameof(Files_dropped_for_the_review_budget_are_announced),
@@ -180,7 +182,12 @@ public sealed class CapsAnnounceThemselvesTests
     // is shown) in a unit the census could not see. Widening it was measured rather than assumed:
     // it surfaced exactly the two new constants, so it costs nothing and closes the hole a
     // count-shaped cap would otherwise slip through.
-    private static readonly string[] Vocabulary = { "Chars", "Bytes", "Lines", "Matches", "Files" };
+    // "Tokens" joined it on 2026-09-24 with TokensKeptForAnAnswer, after a cap measured in
+    // TOKENS went unseen by a census that only knew characters - and the thing it capped was
+    // the model's answer, which is the most expensive place for a silent cut there is. The
+    // plural is deliberate: it catches a ceiling and leaves CharsPerToken, a ratio, alone.
+    private static readonly string[] Vocabulary =
+        { "Chars", "Bytes", "Lines", "Matches", "Files", "Tokens" };
 
     // ── one per limit: the code, past the cap, saying so ────────────────────
 

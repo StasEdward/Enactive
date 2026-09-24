@@ -97,6 +97,33 @@ public sealed class Orchestrator : IOrchestrator
     /// </summary>
     private const int TrimsBeforeHandover = 3;
 
+    /// <summary>
+    /// The most of a context window that is ever held back for the model's answer.
+    ///
+    /// <para><b>Why there is a ceiling at all.</b> The reserve is <c>window / 8</c>, which is right
+    /// in proportion; without a cap it would take 16,384 tokens out of a 131,072 window and grow
+    /// without end on the next model. This is where the proportion stops.</para>
+    ///
+    /// <para><b>Measured 2026-09-24 04:19, run 98325c.</b> The cap used to be 2,048 - chosen when a
+    /// window was 8,192 and it meant a QUARTER. On 131,072 it means 1.5%, so the guard's budget was
+    /// 129,024 and a prompt of 124,297 tokens was, correctly, under it. Nothing trimmed. Five
+    /// minutes later the step died with <c>finish=length</c> at 6,775 output tokens - exactly the
+    /// room left - and the two steps after it were skipped.</para>
+    ///
+    /// <para><b>What it really cost was the remedy, not the tokens.</b> Because the guard never
+    /// fired, <see cref="TrimsBeforeHandover"/> never counted past the one trim at the step
+    /// boundary, and the handover that exists for precisely this - a window that will not stay
+    /// under its budget - sat unused while the model wrote the same twenty lines ten times over at
+    /// 95% occupancy.</para>
+    ///
+    /// <para><b>8,192 is derived.</b> The largest legitimate answer ever measured here is 5,478
+    /// tokens, a report appended with <c>edit_file</c> (see
+    /// <c>AnAnswerCannotBeLongerThanTheRoomLeftTests</c>). A reserve BELOW that guarantees the cut
+    /// it is supposed to prevent. This is that number with room above it, and it changes nothing
+    /// for a window of 16,384 or less, where <c>window / 8</c> is still the binding term.</para>
+    /// </summary>
+    private const int TokensKeptForAnAnswer = 8192;
+
     private readonly IChatProviderFactory _providers;
     private readonly IWorkerProvider _workers;
     private readonly IToolRegistry _tools;
@@ -750,6 +777,26 @@ public sealed class Orchestrator : IOrchestrator
         // Carrying the conversation is not waste. It is the cheapest form of memory available -
         // already written, already cached by the provider - and re-deriving it costs tool calls
         // whose results are bigger than the conversation they replace.
+        //
+        // WHAT CHANGED UNDER IT, 2026-09-24. That comparison was run against a provider with NO
+        // declared window - the note above says so itself: "the trimming below only applies to a
+        // provider that declares a hard window and a cloud one does not". Nothing was ever trimmed
+        // in either arm, so "carry the conversation" cost exactly what it looked like.
+        //
+        // With a local model and a stated window it is not free any more. The inherited transcript
+        // is already over the window, so the FIRST act of a new step is a large trim - measured at
+        // 01:41:09.737 StepStarted, 01:41:09.738 "dropped the contents of 9 earlier tool
+        // message(s)" - and by 9ci a trim rewrites the prompt from just after the system block and
+        // costs the provider's whole prefix cache. On 2026-09-24 the server answered one of those
+        // with "selected slot by LRU" and "making room for prompt cache entry, removing oldest
+        // entry (size = 884.548 MiB)", then re-read 66,000 tokens.
+        //
+        // NOT changed here, for two reasons. The 09-21 numbers still say what happens when a step
+        // cannot see what the last one read, and that mechanism does not care about windows. And
+        // TrimsBeforeHandover (9ch) already covers the bad case without touching the good one: a
+        // boundary trim is the first of three, so a step that settles under the window carries on
+        // sharing, and one that keeps hitting the ceiling is handed over - which preserves what the
+        // last step concluded AS A NOTE, which is the thing sharing was protecting.
         //
         // CAVEAT, because one run each way is thin: the planner produced three steps the first
         // time and two the second, so the comparison is not like for like. What the numbers do
@@ -2732,7 +2779,7 @@ public sealed class Orchestrator : IOrchestrator
                 // happened: 8174 prompt tokens of 8192, and 18 left to answer with.
                 // Never more than half the window: on a small one a fixed floor of 256 would leave
                 // nothing to talk with, and the guard would refuse every request instead of any.
-                var reserve = Math.Min(Math.Clamp(window / 8, 256, 2048), window / 2);
+                var reserve = Math.Min(Math.Clamp(window / 8, 256, TokensKeptForAnAnswer), window / 2);
                 var budget = window - reserve;
                 var sizeNow = Transcript.Size(messages) + toolsOverhead;
 

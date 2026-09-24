@@ -44,11 +44,19 @@ public sealed class NobodyIsGoingToAnswerTests
 
         var took = DateTime.UtcNow - started;
 
-        // The point is the clock. Before stdin was closed this sat until the 60-second timeout.
-        Assert.True(took < TimeSpan.FromSeconds(20),
-                    $"it waited {took.TotalSeconds:N0}s for an answer nobody was going to give");
-
+        // THE REAL ASSERTION. If stdin is open, `set /p` waits for a typist who does not exist and
+        // the command dies at the 60-second timeout saying so. Nothing else produces that word here.
         Assert.DoesNotContain("timed out", result.Error ?? "", StringComparison.OrdinalIgnoreCase);
+
+        // The clock is a second opinion, in case the timeout is ever raised - and it is deliberately
+        // loose. Measured 2026-09-24: with a 35B model saturating the machine, spawning git.exe took
+        // about ten seconds and cmd.exe did not finish inside sixty, so this test reports the host
+        // being overloaded as well as the pipe being open. Forty separates a closed pipe, which
+        // returns in about a hundred milliseconds, from a waiting one, which cannot return before
+        // sixty; between those two numbers there is only the machine.
+        Assert.True(took < TimeSpan.FromSeconds(40),
+                    $"it waited {took.TotalSeconds:N0}s for an answer nobody was going to give "
+                    + "(or the machine was too busy to start a process - check the load)");
     }
 
     /// <summary>
