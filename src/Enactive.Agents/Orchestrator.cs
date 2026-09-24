@@ -693,7 +693,7 @@ public sealed class Orchestrator : IOrchestrator
             ? await NetChangedAsync(quickChanges, quickBefore, ct)
             : null;
         yield return scope.Terminal(quickOutcome, quickReason,
-            artifacts => SummarizeArtifacts(artifacts, quickNet, _artifacts.PendingPaths));
+            artifacts => SummarizeArtifacts(artifacts, quickNet, _artifacts.PendingPaths, _workspace.RootPath));
     }
 
     /// <summary>
@@ -1546,7 +1546,7 @@ public sealed class Orchestrator : IOrchestrator
             ? await NetChangedAsync(workspaceChanges, beforeRun, ct)
             : null;
         yield return scope.Terminal(runOutcome, runReason,
-            artifacts => SummarizeArtifacts(artifacts, runNet, _artifacts.PendingPaths));
+            artifacts => SummarizeArtifacts(artifacts, runNet, _artifacts.PendingPaths, _workspace.RootPath));
     }
 
 
@@ -2872,7 +2872,7 @@ public sealed class Orchestrator : IOrchestrator
                 // conversation is cleared, because the last command's result is in it.
                 if (carried is { Length: > 0 })
                     carried += await HandoverFactsAsync(
-                        changes, stepStart, messages, _artifacts.PendingPaths, store.TouchedPaths, ct);
+                        changes, stepStart, messages, _artifacts.PendingPaths, store.TouchedPaths, _workspace.RootPath, ct);
 
                 if (carried is { Length: > 0 })
                 {
@@ -3428,7 +3428,9 @@ public sealed class Orchestrator : IOrchestrator
                 //
                 // Before permission, because it is not about what the agent may do - it is about
                 // what this write would silently destroy. See ReadLedger.
-                if (reads.Refuse(call, ReadLedger.FileNamedBy(call)) is { } unread)
+                var namedForLedger = ReadLedger.FileNamedBy(call);
+                if (reads.Refuse(call, namedForLedger,
+                        namedForLedger is null || await FileIsThereAsync(namedForLedger, store, ct)) is { } unread)
                 {
                     openFailures.Failed(call, unread);
                     journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson),
@@ -3858,6 +3860,46 @@ public sealed class Orchestrator : IOrchestrator
         }
     }
 
+    /// <summary>
+    /// Whether there is a file at this workspace path now - on disk, or as a proposal a staging
+    /// store holds. When it cannot be said (a path that does not resolve), true: the guards that ask
+    /// then stay as strict as they were, and the tool itself refuses a bad path.
+    /// </summary>
+    private async Task<bool> FileIsThereAsync(string path, IArtifactStore store, CancellationToken ct)
+    {
+        try
+        {
+            if (File.Exists(Path.GetFullPath(Path.Combine(_workspace.RootPath, path))))
+                return true;
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException or UnauthorizedAccessException)
+        {
+            return true;
+        }
+
+        return await store.TryReadPendingAsync(path, ct) is not null;
+    }
+
+    /// <summary>
+    /// Of written paths no snapshot listed: the ones that are on disk now (so were written where the
+    /// snapshots do not look) and the ones that are not (written and then removed - measured by their
+    /// absence at both ends). They were one list, "not measured", and a file created and deleted in
+    /// the same step was named as written somewhere unmeasured (run 9ecf0e, 2026-09-24 23:08).
+    /// </summary>
+    private static (string[] NotMeasured, string[] Removed) OnDiskOrGone(string root, IEnumerable<string> paths)
+    {
+        var notMeasured = new List<string>();
+        var removed = new List<string>();
+        foreach (var path in paths)
+        {
+            bool there;
+            try { there = File.Exists(Path.GetFullPath(Path.Combine(root, path))); }
+            catch { there = true; }   // cannot say: claim nothing about it having gone
+            (there ? notMeasured : removed).Add(path);
+        }
+        return (notMeasured.ToArray(), removed.ToArray());
+    }
+
     /// <summary>How much of the diffs of changed files a handover carries, in all.</summary>
     private const int MaxHandoverDiffChars = 3_000;
 
@@ -3879,7 +3921,7 @@ public sealed class Orchestrator : IOrchestrator
     /// </summary>
     private static async Task<string> HandoverFactsAsync(
         WorkspaceChanges? changes, WorkspaceSnapshot? stepStart, List<ChatMessage> messages,
-        IReadOnlyCollection<string> pending, IReadOnlyCollection<string> touched, CancellationToken ct)
+        IReadOnlyCollection<string> pending, IReadOnlyCollection<string> touched, string root, CancellationToken ct)
     {
         var facts = new StringBuilder();
 
@@ -3937,9 +3979,12 @@ public sealed class Orchestrator : IOrchestrator
                         facts.Append($"  - and {found.Count - 20} more\n");
                 }
 
-                if (unmeasured.Length > 0)
+                var (notMeasured, removed) = OnDiskOrGone(root, unmeasured);
+                if (notMeasured.Length > 0)
                     facts.Append("- Written by you where the engine does not measure (a folder it skips, or a file git ")
-                         .Append($"ignores), so NOT compared above: {string.Join(", ", unmeasured)}\n");
+                         .Append($"ignores), so NOT compared above: {string.Join(", ", notMeasured)}\n");
+                if (removed.Length > 0)
+                    facts.Append($"- Written by you and then removed - not on disk now: {string.Join(", ", removed)}\n");
             }
         }
         catch (OperationCanceledException) { throw; }
@@ -4057,7 +4102,8 @@ public sealed class Orchestrator : IOrchestrator
     /// left as it was", which is the one thing that was not known.</para>
     /// </summary>
     private static string SummarizeArtifacts(
-        List<ArtifactRef> artifacts, NetChanges? net = null, IReadOnlyCollection<string>? pending = null)
+        List<ArtifactRef> artifacts, NetChanges? net = null, IReadOnlyCollection<string>? pending = null,
+        string? root = null)
     {
         var files = FilesTouched(artifacts);
         if (net is null)
@@ -4071,7 +4117,8 @@ public sealed class Orchestrator : IOrchestrator
         var onDisk = files.Where(f => !waiting.Contains(PathKey(f))).ToArray();
         var changed = onDisk.Where(f => net.Changed.Contains(PathKey(f))).ToArray();
         var restored = onDisk.Where(f => !net.Changed.Contains(PathKey(f)) && net.Measured.Contains(PathKey(f))).ToArray();
-        var unmeasured = onDisk.Where(f => !net.Changed.Contains(PathKey(f)) && !net.Measured.Contains(PathKey(f))).ToArray();
+        var unlisted = onDisk.Where(f => !net.Changed.Contains(PathKey(f)) && !net.Measured.Contains(PathKey(f))).ToArray();
+        var (unmeasured, removed) = root is null ? (unlisted, Array.Empty<string>()) : OnDiskOrGone(root, unlisted);
         var written = files.Select(PathKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var byCommands = net.Changed.Where(p => !written.Contains(p)).Order(StringComparer.OrdinalIgnoreCase).ToArray();
 
@@ -4085,6 +4132,8 @@ public sealed class Orchestrator : IOrchestrator
                       + (byCommands.Length > ShownByCommands ? $" and {byCommands.Length - ShownByCommands} more" : ""));
         if (unmeasured.Length > 0)
             parts.Add($"written where the run does not measure, so not compared: {string.Join(", ", unmeasured)}");
+        if (removed.Length > 0)
+            parts.Add($"written and then removed: {string.Join(", ", removed)}");
         if (restored.Length > 0)
             parts.Add($"written and left as it was: {string.Join(", ", restored)}");
 
@@ -4092,8 +4141,9 @@ public sealed class Orchestrator : IOrchestrator
             return "(completed, no files changed)";
 
         // "No files changed" only where that is KNOWN: nothing changed on disk among what was measured,
-        // and nothing written where it was not.
-        if (changed.Length == 0 && byCommands.Length == 0 && unmeasured.Length == 0)
+        // and nothing written where it was not. A file written and removed is not claimed either way:
+        // absent at both ends of what was measured, but it may have stood somewhere unmeasured before.
+        if (changed.Length == 0 && byCommands.Length == 0 && unmeasured.Length == 0 && removed.Length == 0)
             return proposed.Length > 0
                 ? $"(completed, no files changed on disk; {string.Join("; ", parts)})"
                 : $"(completed, no files changed; {string.Join("; ", parts)})";

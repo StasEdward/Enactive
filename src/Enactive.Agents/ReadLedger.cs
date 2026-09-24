@@ -61,6 +61,29 @@ internal sealed class ReadLedger
     /// <summary>The tool this ledger guards.</summary>
     internal const string WriteTool = "write_file";
 
+    /// <summary>The tools that take a file away from its path - and with it, what was read of it.</summary>
+    internal const string DeleteTool = "delete_file";
+    internal const string MoveTool = "move_file";
+
+    private static IEnumerable<string> PathsNamedBy(ToolCall call, params string[] names)
+    {
+        var found = new List<string>();
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(
+                string.IsNullOrWhiteSpace(call.ArgumentsJson) ? "{}" : call.ArgumentsJson);
+            if (doc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Object)
+                return found;
+            foreach (var name in names)
+                if (doc.RootElement.TryGetProperty(name, out var value)
+                    && value.ValueKind == System.Text.Json.JsonValueKind.String
+                    && value.GetString() is { Length: > 0 } path)
+                    found.Add(path);
+        }
+        catch (System.Text.Json.JsonException) { }
+        return found;
+    }
+
     /// <summary>
     /// Records what a successful read covered. Everything it needs is already in the result's
     /// metadata — the tools stay ignorant of each other, and the loop that sees every call and every
@@ -68,6 +91,33 @@ internal sealed class ReadLedger
     /// </summary>
     public void Saw(ToolCall call, ToolResult result)
     {
+        // A file deleted or moved away is not the file that was read. What was read of it describes
+        // content that is gone, and must not stand between the step and a NEW file at that path.
+        // Measured 2026-09-24 23:05-23:08, run 9ecf0e: a step read part of a test file it had just
+        // written, deleted it, generated it again from scratch - 8,010 tokens, two minutes on that
+        // machine - and the write was refused as "read only in part", about a file that no longer
+        // existed.
+        if (result.Success && call.Name is DeleteTool)
+        {
+            foreach (var gone in PathsNamedBy(call, "path"))
+                _files.Remove(Key(gone));
+            return;
+        }
+
+        // A MOVE takes what was read with it: the content at the new path is the content that was
+        // read at the old one, and a file seen in part must not become rewritable by being renamed.
+        if (result.Success && call.Name is MoveTool)
+        {
+            if (PathsNamedBy(call, "from").FirstOrDefault() is { } source
+                && PathsNamedBy(call, "to").FirstOrDefault() is { } target)
+            {
+                _files.Remove(Key(target));
+                if (_files.Remove(Key(source), out var moved))
+                    _files[Key(target)] = moved;
+            }
+            return;
+        }
+
         if (call.Name is not (ReadTool or ReadManyTool) || !result.Success)
             return;
 
@@ -116,10 +166,17 @@ internal sealed class ReadLedger
     /// Why this write must not go ahead, or null when it may. A whole-file write of a file this step
     /// has seen only part of cannot have been derived from the parts it did not see.
     /// </summary>
-    public string? Refuse(ToolCall call, string? path)
+    /// <param name="fileExists">
+    /// Whether there is a file at <paramref name="path"/> now - on disk, or as a staged proposal. A
+    /// write where there is none CREATES a file, and there is nothing it could destroy: a file deleted
+    /// by a command, which no tool call here saw, is covered by this as well as by
+    /// <see cref="Saw"/>'s forgetting.
+    /// </param>
+    public string? Refuse(ToolCall call, string? path, bool fileExists = true)
     {
         if (!string.Equals(call.Name, WriteTool, StringComparison.Ordinal)
-            || string.IsNullOrWhiteSpace(path))
+            || string.IsNullOrWhiteSpace(path)
+            || !fileExists)
             return null;
 
         if (!_files.TryGetValue(Key(path), out var coverage))
