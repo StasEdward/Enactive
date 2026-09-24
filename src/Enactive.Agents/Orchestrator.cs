@@ -2746,10 +2746,28 @@ public sealed class Orchestrator : IOrchestrator
                     var elided = Transcript.Elide(messages, scale.CharsFor(budget) - toolsOverhead);
                     sizeNow = Transcript.Size(messages) + toolsOverhead;
 
+                    // What it COST is said with what it bought. Transcript.Elide takes the OLDEST
+                    // exchanges first - correct, because the recent ones are what the model needs -
+                    // and that rewrites the prompt from just after the system block, which is where
+                    // a prefix cache stops matching.
+                    //
+                    // Measured on the server, 2026-09-24 12:08: two turns served from cache at
+                    // f_sim 0.998, then a trim, and the next turn was "selected slot by LRU" with
+                    // "prompt processing, n_tokens = 49533 … t = 27.04 s". Twenty-seven seconds of
+                    // re-reading to free three thousand tokens, and our own logs could not see it
+                    // because they count tokens and not prefill.
+                    //
+                    // There is no better ORDER - any edit invalidates everything after it - so the
+                    // answer is to trim rarely and hand over instead, which is what
+                    // TrimsBeforeHandover now does. This sentence is so that the cost is legible
+                    // while it is still happening.
                     if (elided > 0)
                         yield return Ev(EventKind.ContextTrimmed,
                             $"Context window nearly full — dropped the contents of {elided} earlier tool "
-                            + $"message(s) to make room (about {scale.TokensFor(sizeNow)} of {window} tokens now).");
+                            + $"message(s) to make room (about {scale.TokensFor(sizeNow)} of {window} tokens now). "
+                            + $"This also costs the provider's prefix cache from that point: the next turn "
+                            + $"re-reads the prompt instead of resuming it. {trimmedInARow} turn(s) running; "
+                            + $"at {TrimsBeforeHandover} the step is handed over instead.");
 
                     // Trimming had nothing left to give and the transcript still does not fit. Stop
                     // here rather than send it: the provider would answer with a fragment, and a
