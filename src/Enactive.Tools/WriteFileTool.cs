@@ -136,6 +136,21 @@ public sealed class WriteFileTool : ITool
                     + "the rest. If the file really is meant to shrink this much, send the same "
                     + "write_file call again with \"allow_shrink\": true.");
 
+            // The same loss without the shrink. Measured 2026-09-24 21:06, run a19a2c: a step told to
+            // APPEND pages 4-6 to a report replaced it with pages 4-6 alone - 10,938 bytes over
+            // 9,696, so the size check above saw a file that grew. Step 1's findings were gone; the
+            // model noticed, went looking in git for a copy the file never had, and retyped them
+            // from its context. What was lost is the file's LINES, so that is what is counted.
+            if (replacing && !append && !allowShrink && previousText is not null
+                && previousBytes >= ShrinkGuardFloorBytes
+                && LinesKept(previousText, text) is var (kept, had) && kept * 2 < had)
+                return ToolResults.Fail(
+                    $"Refusing to replace '{path}': the new content keeps {kept} of the {had} lines already "
+                    + $"there, so most of what the file holds ({previousBytes} bytes) would be gone. If you "
+                    + "meant to ADD to the file, send only the new part with \"append\": true; to change part "
+                    + "of it, use edit_file. If it really is meant to be replaced by different content, send "
+                    + "the same write_file call again with \"allow_shrink\": true.");
+
             var reference = await ctx.Artifacts.CreateAsync(
                 path, ArtifactKind.FileSet, path,
                 async stream =>
@@ -160,7 +175,7 @@ public sealed class WriteFileTool : ITool
                       + "that was already in it is unchanged."
                     : replacing
                     ? (restorable
-                        ? $"REPLACED the existing file '{path}' ({bytes} bytes). Its previous version was kept and can be restored."
+                        ? $"REPLACED the existing file '{path}' ({bytes} bytes). Its previous version was kept and can be restored by the user from the run - there is no tool for it, and git has only what was committed."
                         : $"REPLACED the existing file '{path}' ({bytes} bytes). Its previous version could NOT be backed up and is gone.")
                       + (endingsAdjusted
                           ? " Written with the line endings the file already used, so only the lines "
@@ -214,6 +229,21 @@ public sealed class WriteFileTool : ITool
         => previousBytes >= ShrinkGuardFloorBytes && newBytes * 2 < previousBytes;
 
     /// <summary>
+    /// How many of the file's distinct non-blank lines the new content still has, of how many it
+    /// had. Compared trimmed, so a re-indented line still counts as kept; a rewrite that changes most
+    /// lines is exactly what this is meant to make deliberate.
+    /// </summary>
+    internal static (int Kept, int Had) LinesKept(string previous, string next)
+    {
+        static HashSet<string> Distinct(string text)
+            => text.Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0).ToHashSet(StringComparer.Ordinal);
+
+        var had = Distinct(previous);
+        var now = Distinct(next);
+        return (had.Count(now.Contains), had.Count);
+    }
+
+    /// <summary>
     /// What is there, then what is added - on a line of its own. A report that ends without a line
     /// break would otherwise run its last line straight into the new section's heading.
     /// </summary>
@@ -233,7 +263,7 @@ public sealed class WriteFileTool : ITool
         "path": { "type": "string", "description": "File path relative to the workspace root, e.g. list_files.py" },
         "content": { "type": "string", "description": "The full text content of the file - or, with append, only the text to add at its end." },
         "append": { "type": "boolean", "description": "Set true to ADD content to the end of the file instead of replacing it - send only the new text. Use this to add a section to a report or a log: it does not make you retype what is already there. Creates the file if it does not exist." },
-        "allow_shrink": { "type": "boolean", "description": "Set true only when an existing file is genuinely meant to lose most of its content. Without it a replacement that drops most of a file is refused, because that is nearly always a whole-file rewrite of a file that should have been edited in part." }
+        "allow_shrink": { "type": "boolean", "description": "Set true only when an existing file is genuinely meant to lose most of its content - to shrink, or to be replaced by different text. Without it a replacement that drops most of a file is refused, because that is nearly always a whole-file rewrite of a file that should have been edited in part, or added to with append." }
       },
       "required": ["path", "content"]
     }

@@ -68,6 +68,13 @@ public sealed class GitTool : ITool
                 + "looks like an array.",
                 result.Output);
 
+        // A lookup git answered with "not in that revision" - see ShellOutcome.GitFoundNothing.
+        if (!result.Success && ShellOutcome.GitFoundNothing(result.Error + Environment.NewLine + result.Output))
+            return ToolResults.NotFound(
+                "git answered: that path is not in that revision - it was never committed there. "
+                + "That is the answer, not a failure: there is no copy of it in git to get back.",
+                result.Output);
+
         return result;
     }
 

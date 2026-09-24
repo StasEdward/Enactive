@@ -373,6 +373,37 @@ public static class ShellOutcome
         new(StringComparer.OrdinalIgnoreCase)
         { "findstr", "grep", "egrep", "fgrep", "rg", "ripgrep", "ag", "ack" };
 
+    /// <summary>
+    /// Git ANSWERED a lookup: the path asked for is not in that revision. <c>git show HEAD:x</c> for
+    /// a file that was never committed is a question with an answer - "not there" - exactly like a
+    /// search that matched nothing, and nothing was attempted that could have failed.
+    ///
+    /// <para>Measured 2026-09-24 21:06, run a19a2c: a step looked for an earlier copy of an
+    /// untracked report with <c>git show HEAD:Docs/DRIFT_ollama.md</c>, got "exists on disk, but not
+    /// in 'HEAD'", took another route and finished the work - and was marked Incomplete for an
+    /// "unresolved tool call", with the two steps after it skipped.</para>
+    ///
+    /// <para>Git's own two fixed wordings for it and nothing looser: a false positive would tell a
+    /// step that a real failure was an answer.</para>
+    /// </summary>
+    public static bool GitFoundNothing(string? output)
+    {
+        if (string.IsNullOrWhiteSpace(output))
+            return false;
+
+        foreach (var raw in output!.Split('\n'))
+        {
+            var line = raw.Trim();
+            if (!line.StartsWith("fatal: path '", StringComparison.Ordinal))
+                continue;
+            if (line.Contains("' exists on disk, but not in '", StringComparison.Ordinal)
+                || line.Contains("' does not exist in '", StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
+    }
+
     public static bool GitRefusedIt(IReadOnlyList<string> args, string? output)
     {
         if (args is null || args.Count == 0 || string.IsNullOrWhiteSpace(output))

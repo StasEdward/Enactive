@@ -76,15 +76,16 @@ public sealed class EdgesTheReviewFoundTests
             Turn.Says("""{"disposition":"quick_action","title":"rewrite it"}"""),
             Turn.Calls1("read_file", """{"path":"exact.txt"}""", "r1"),
             Turn.Calls1("read_file", """{"path":"exact.txt","offset":2}""", "r2"),
-            // As long as the original, so the guard against a file shrinking to nothing stays out of it.
-            Turn.Calls1("write_file", "{\"path\":\"exact.txt\",\"content\":\"" + new string('z', 8000) + "\"}", "w1"),
+            // The file's own lines plus one, so the guards against a file losing its content - by
+            // size or by lines - stay out of it: this test is about what ReadLedger counts as read.
+            Turn.Calls1("write_file", "{\"path\":\"exact.txt\",\"content\":\"" + new string('x', 8000) + "\\ny\\nz\"}", "w1"),
             Turn.Says("Done."));
 
         await fx.RunAsync(fx.Build(provider, EngineFixture.Role("developer")), "rewrite it");
 
         var said = string.Join("\n", provider.Requests.SelectMany(r => r.Messages).Select(m => m.Content));
         Assert.DoesNotContain("has read only lines", said, StringComparison.Ordinal);
-        Assert.Equal(new string('z', 8000), fx.Read("exact.txt"));
+        Assert.Equal(new string('x', 8000) + "\ny\nz", fx.Read("exact.txt"));
     }
 
     // ── a long last line ─────────────────────────────────────────────────────
