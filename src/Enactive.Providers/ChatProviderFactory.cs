@@ -24,6 +24,8 @@ public sealed class ChatProviderFactory : IChatProviderFactory
     /// </summary>
     public bool PromptBodies { get; set; } = true;
 
+    public Action<Enactive.Core.Chat.ModelCallMetrics>? MetricsReported { get; set; }
+
     public IChatProvider Create(string providerId) => Create(providerId, PromptBodies);
 
     /// <param name="promptBodies">
@@ -51,6 +53,7 @@ public sealed class ChatProviderFactory : IChatProviderFactory
         provider = new ExplainedChatProvider(provider, descriptor.Id, descriptor.BaseUrl);
 
         // Wrap in the readable-plane decorator when logging is on (raw byte-level dump is inside each provider).
-        return _log is null ? provider : new LoggingChatProvider(provider, _log, descriptor.Id, promptBodies);
+        provider = _log is null ? provider : new LoggingChatProvider(provider, _log, descriptor.Id, promptBodies);
+        return MetricsReported is { } report ? new MeteredChatProvider(provider, descriptor.Id, report) : provider;
     }
 }

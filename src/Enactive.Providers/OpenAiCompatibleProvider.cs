@@ -303,6 +303,7 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
                 events.Add(new UsageDelta(prompt, completion, CachedTokens(usage)));
         }
 
+        if (ProviderTimings.OpenAi(root) is { } timings) events.Add(new TimingDelta(timings));
         return events;
     }
 
@@ -403,7 +404,8 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
         var assistant = new ChatMessage(ChatRole.Assistant, content, toolCalls);
         return new ChatCompletion(assistant, finishReason, promptTokens, completionTokens)
         {
-            CachedPromptTokens = cached
+            CachedPromptTokens = cached,
+            Timings = ProviderTimings.OpenAi(root)
         };
     }
 

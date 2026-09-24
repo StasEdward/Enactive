@@ -202,6 +202,7 @@ public sealed class OllamaNativeProvider : IChatProvider
             int? completion = root.TryGetProperty("eval_count", out var ec) && ec.TryGetInt32(out var ecv) ? ecv : null;
             if (prompt is not null || completion is not null)
                 events.Add(new UsageDelta(prompt, completion));
+            events.Add(new TimingDelta(ProviderTimings.Ollama(root)));
 
             var reason = root.TryGetProperty("done_reason", out var dr) && dr.ValueKind == JsonValueKind.String
                 ? dr.GetString()
@@ -320,7 +321,8 @@ public sealed class OllamaNativeProvider : IChatProvider
             : null;
 
         var assistant = new ChatMessage(ChatRole.Assistant, content, toolCalls);
-        return new ChatCompletion(assistant, finishReason, promptTokens, completionTokens, thinking);
+        return new ChatCompletion(assistant, finishReason, promptTokens, completionTokens, thinking)
+        { Timings = ProviderTimings.Ollama(root) };
     }
 
     private static string Truncate(string value, int max)

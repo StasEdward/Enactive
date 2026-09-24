@@ -2726,7 +2726,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
 
         if (_engineProblem is not null)
         {
-            _vm.ModelLabel = "no model chosen";
+
             _vm.WorkerRoles.Clear();
             return;
         }
@@ -2736,6 +2736,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         // version had drifted onto a different provider kind and a model nobody had installed.
         var engine = EngineComposition.Build(_settings, _http, _log);
         _providerFactory = engine.Providers;
+        _providerFactory.MetricsReported = metrics => Dispatcher.UIThread.Post(() => _vm.Performance.Add(metrics));
         _workerProvider = engine.Workers;
 
         // Applied here rather than at construction because the sink predates the settings. The
@@ -2760,7 +2761,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         }
 
         _model = _workerProvider.Default.ModelPolicy.Preferred.Model;
-        _vm.ModelLabel = $"model: {_model}";
+
     }
 
     /// <summary>

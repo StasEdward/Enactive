@@ -264,7 +264,7 @@
                                Foreground="{DynamicResource Brand.Danger}"
                                Text="This folder is not on disk. Nothing will run here until you pick another one." />
 
-                    <TextBlock Classes="hint" Text="{Binding ModelLabel}" />
+
                     <TextBlock Classes="hint" Text="{Binding EnvironmentSummary}" />
                 </StackPanel>
 
@@ -435,7 +435,7 @@
         <!-- ── Main: the command bar and the run ────────────────────────────── -->
         <DockPanel Grid.Column="2" LastChildFill="True">
 
-            <StackPanel DockPanel.Dock="Top" Margin="16,12,16,10" Spacing="8">
+            <StackPanel DockPanel.Dock="Top" Height="118" Margin="16,12,16,10" Spacing="8">
                 <StackPanel Orientation="Horizontal" Spacing="6">
                     <ItemsControl ItemsSource="{Binding Verbs}">
                         <ItemsControl.ItemsPanel>
@@ -454,7 +454,7 @@
                                Classes="hint" VerticalAlignment="Center" Margin="8,0,0,0" />
                 </StackPanel>
 
-                <DockPanel LastChildFill="True">
+                <DockPanel LastChildFill="True" Height="88">
 
                     <!-- How the next run behaves, beside the box that starts it. It used to be a
                          NEXT RUN panel on the far side of the window: three controls that decide
@@ -492,7 +492,7 @@
                          you pressed is what decides where the run goes - it used to be a checkbox
                          in the panel on the left, so Run did two different things depending on a
                          box ticked ten minutes ago and scrolled out of sight. -->
-                    <StackPanel DockPanel.Dock="Right" Spacing="6" VerticalAlignment="Center"
+                    <StackPanel DockPanel.Dock="Right" Width="156" Spacing="6" VerticalAlignment="Center"
                                 Margin="8,0,0,0">
                         <StackPanel Orientation="Horizontal" Spacing="6">
                             <Button Classes="go" Content="Run" Width="86"
@@ -513,7 +513,8 @@
                              Text="{Binding InputText}"
                              IsEnabled="{Binding IsIdle}"
                              PlaceholderText="What do you want to accomplish?"
-                             AcceptsReturn="True" MinHeight="56" TextWrapping="Wrap" />
+                             AcceptsReturn="True" Height="88" TextWrapping="Wrap"
+                             ScrollViewer.VerticalScrollBarVisibility="Auto" />
                 </DockPanel>
             </StackPanel>
 
@@ -528,10 +529,12 @@
                  place to read what you asked for was the log. The pill states the
                  phase once, here, instead of being repeated down the right column.
             -->
-            <Border DockPanel.Dock="Top" Classes="taskHeader" IsVisible="{Binding HasTask}">
-                <Grid ColumnDefinitions="*,Auto">
-                    <StackPanel Grid.Column="0" Spacing="2" Margin="0,0,12,0">
-                        <TextBlock Text="{Binding TaskTitle}" FontSize="15" FontWeight="SemiBold"
+            <!-- Keep the task slot even before selection. 441 = input's right controls:
+                 8 gap + 156 buttons + 25 separator/margins + 252 role settings. -->
+            <Border DockPanel.Dock="Top" Classes="taskHeader" Height="110" ClipToBounds="True">
+                <Grid ColumnDefinitions="*,441" IsVisible="{Binding HasTask}">
+                    <StackPanel Grid.Column="0" Spacing="2" ClipToBounds="True">
+                        <TextBlock Text="{Binding TaskTitle}" FontSize="15" FontWeight="SemiBold" TextWrapping="NoWrap"
                                    TextTrimming="CharacterEllipsis" />
                         <!-- The request, readable and takeable. It was one line with an
                              ellipsis and the rest on a hover; a hover is not reading, and a
@@ -539,7 +542,7 @@
                              the run underneath does not move when the request is long. -->
                         <TextBox Classes="taskIntent" Text="{Binding TaskIntent}" />
                     </StackPanel>
-                    <Border Grid.Column="1" Classes="pill" Background="{Binding StatusPillBrush}">
+                    <Border Grid.Column="1" Classes="pill" HorizontalAlignment="Right" Background="{Binding StatusPillBrush}">
                         <TextBlock Text="{Binding StatusPhase}"
                                    Foreground="{Binding StatusPillTextBrush}" />
                     </Border>
@@ -551,7 +554,7 @@
                  that writes a dozen files needs the width, and the status needs
                  to stay put while you read them.
             -->
-            <Border DockPanel.Dock="Top" Padding="16,0"
+            <Border DockPanel.Dock="Top" Height="36" Padding="16,0"
                     BorderBrush="{DynamicResource Brand.Line}" BorderThickness="0,0,0,1">
                 <StackPanel Orientation="Horizontal">
                     <Button Classes="tab" Classes.on="{Binding IsExecutionTab}"
@@ -690,7 +693,8 @@
                      Stays put whichever tab is showing, because a decision that
                      needs answering must not be a tab away.
                 -->
-                <ScrollViewer Grid.Column="1" Margin="6,12,16,12"
+                <Grid Grid.Column="1" RowDefinitions="*,Auto" Margin="6,12,16,12">
+                <ScrollViewer Grid.Row="0" Margin="0,0,0,12"
                               HorizontalScrollBarVisibility="Disabled"
                               VerticalScrollBarVisibility="Auto">
                     <StackPanel Spacing="8">
@@ -830,6 +834,39 @@
 
                     </StackPanel>
                 </ScrollViewer>
+                    <Border Grid.Row="1" Background="{DynamicResource Brand.CardFill}" CornerRadius="6" Padding="12">
+                        <StackPanel Spacing="8">
+                            <TextBlock Classes="panelHeader" Text="MODEL PERFORMANCE" Margin="0" />
+                            <TextBlock Classes="hint" Text="This session · completed requests" FontSize="11" />
+                            <TextBlock Classes="hint" Text="Statistics appear after a model responds."
+                                       TextWrapping="Wrap" IsVisible="{Binding !Performance.Rows.Count}" />
+                            <ScrollViewer MaxHeight="420" HorizontalScrollBarVisibility="Disabled">
+                                <ItemsControl ItemsSource="{Binding Performance.Rows}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:ModelPerformanceRow">
+                                            <Border BorderBrush="{DynamicResource Brand.InputFill}" BorderThickness="0,1,0,0"
+                                                    Padding="0,10,0,8" ToolTip.Tip="{Binding Explanation}">
+                                                <StackPanel Spacing="5">
+                                                    <TextBlock Text="{Binding Model}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                                    <TextBlock Classes="hint" Text="{Binding Provider}" FontSize="11" />
+                                                    <Grid ColumnDefinitions="*,Auto">
+                                                        <TextBlock Classes="hint" Text="{Binding SpeedLabel}" VerticalAlignment="Center" />
+                                                        <TextBlock Grid.Column="1" Text="{Binding Speed}" FontSize="11.5" FontWeight="SemiBold" />
+                                                    </Grid>
+                                                    <TextBlock Classes="hint" Text="{Binding Times}" FontSize="11" TextWrapping="Wrap" />
+                                                    <TextBlock Classes="hint" Text="{Binding Tokens}" FontSize="11" TextWrapping="Wrap" />
+                                                    <TextBlock Classes="hint" Text="{Binding Cache}" FontSize="11" TextWrapping="Wrap" />
+                                                    <TextBlock Classes="hint" Text="{Binding First}" FontSize="11" />
+                                                    <TextBlock Classes="hint" Text="{Binding Requests}" FontSize="11" TextWrapping="Wrap" />
+                                                </StackPanel>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </ScrollViewer>
+                        </StackPanel>
+                    </Border>
+                </Grid>
             </Grid>
             </DockPanel>
 
@@ -842,8 +879,9 @@
             -->
             <DockPanel IsVisible="{Binding IsViewingPast}" LastChildFill="True">
 
-                <Border DockPanel.Dock="Top" Classes="taskHeader">
-                    <Grid ColumnDefinitions="Auto,*,Auto">
+                <Border DockPanel.Dock="Top" Classes="taskHeader" Height="110" ClipToBounds="True">
+                    <Grid ColumnDefinitions="*,441">
+                      <Grid Grid.Column="0" ColumnDefinitions="Auto,*" ClipToBounds="True">
                         <Button Grid.Column="0" Content="← Back" FontSize="11" Padding="8,2"
                                 VerticalAlignment="Center"
                                 Command="{Binding BackToLiveCommand}"
@@ -863,34 +901,48 @@
                                        TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
                                        ToolTip.Tip="{Binding PastRun.Meta}" />
                         </StackPanel>
-                        <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8"
-                                    VerticalAlignment="Center">
+                      </Grid>
+                        <!-- The attempt label used to sit BESIDE these buttons, on their left. It
+                             varies in length ("attempt 2 of 3" vs. "attempt 15 of 15") and comes
+                             and goes entirely (absent on a run that was never retried), and an
+                             Auto column sized to its content shifted the buttons left or right
+                             every time it did - the one thing a button's position should not do
+                             while somebody is aiming at it. Fixed-width buttons on their own row,
+                             the label on a second row below where its length changes nothing. -->
+                        <StackPanel Grid.Column="1" Spacing="4" VerticalAlignment="Center" Margin="8,0,0,0">
+                            <Grid ColumnDefinitions="118,8,118,8,*" Height="32">
+                                <!-- Retry repeats THIS run exactly; Run again re-resolves the
+                                     template as it stands now. Both are new attempts at the same
+                                     task. -->
+                                <Button Grid.Column="0" Classes="go" Content="Retry" Width="118" Padding="16,5"
+                                        Command="{Binding PastRun.RetryCommand}"
+                                        IsVisible="{Binding PastRun.CanRetry}"
+                                        ToolTip.Tip="Run this again, exactly as it was" />
+                                <Button Grid.Column="2" Classes="goSoft" Content="Run again" Width="118" Padding="16,5"
+                                        Command="{Binding PastRun.RunAgainCommand}"
+                                        IsVisible="{Binding PastRun.CanRunAgain}"
+                                        ToolTip.Tip="{Binding PastRun.RunAgainTooltip}" />
+
+                                <Border Grid.Column="4" Classes="pill" Width="124" Height="30" HorizontalAlignment="Right" Background="{Binding PastRun.StatusBrush}">
+                                    <TextBlock Text="{Binding PastRun.Status}" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                               Foreground="{Binding PastRun.StatusTextBrush}" />
+                                </Border>
+                            </Grid>
+
                             <!-- Which attempt of its task this is. Absent when it is the only one:
                                  "attempt 1 of 1" is noise on every run that was never retried. -->
-                            <TextBlock Classes="hint" Text="{Binding PastRun.AttemptLabel}"
-                                       FontSize="11" VerticalAlignment="Center"
-                                       IsVisible="{Binding PastRun.HasAttempts}" />
-
-                            <!-- Retry repeats THIS run exactly; Run again re-resolves the template
-                                 as it stands now. Both are new attempts at the same task. -->
-                            <Button Classes="go" Content="Retry" Padding="16,5"
-                                    Command="{Binding PastRun.RetryCommand}"
-                                    IsVisible="{Binding PastRun.CanRetry}"
-                                    ToolTip.Tip="Run this again, exactly as it was" />
-                            <Button Classes="goSoft" Content="Run again" Padding="16,5"
-                                    Command="{Binding PastRun.RunAgainCommand}"
-                                    IsVisible="{Binding PastRun.CanRunAgain}"
-                                    ToolTip.Tip="{Binding PastRun.RunAgainTooltip}" />
-
-                            <Border Classes="pill" Background="{Binding PastRun.StatusBrush}">
-                                <TextBlock Text="{Binding PastRun.Status}"
-                                           Foreground="{Binding PastRun.StatusTextBrush}" />
-                            </Border>
+                            <!-- Keep this row even when the attempt label is hidden, so the
+                                 vertically centred action block always has the same height. -->
+                            <Grid Height="16">
+                                <TextBlock Classes="hint" Text="{Binding PastRun.AttemptLabel}"
+                                           FontSize="11" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                           IsVisible="{Binding PastRun.HasAttempts}" />
+                            </Grid>
                         </StackPanel>
                     </Grid>
                 </Border>
 
-                <Border DockPanel.Dock="Top" Padding="16,0"
+                <Border DockPanel.Dock="Top" Height="36" Padding="16,0"
                         BorderBrush="{DynamicResource Brand.Line}" BorderThickness="0,0,0,1">
                     <StackPanel Orientation="Horizontal">
                         <Button Classes="tab" Classes.on="{Binding PastRun.IsExecutionTab}"

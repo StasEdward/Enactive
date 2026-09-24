@@ -1,4 +1,4 @@
-﻿namespace Enactive.App.Ui.ViewModels;
+namespace Enactive.App.Ui.ViewModels;
 
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
@@ -165,7 +165,7 @@ internal sealed class MainWindowViewModel : ObservableObject
 {
     private string _inputText = string.Empty;
     private string _workspacePath = string.Empty;
-    private string _modelLabel = string.Empty;
+    public ModelPerformance Performance { get; } = new();
     private string _environmentSummary = string.Empty;
     private double _autonomyLevel = 2;
     private string _autonomyLabel = string.Empty;
@@ -304,7 +304,7 @@ internal sealed class MainWindowViewModel : ObservableObject
     public event Action? WorkspacePathChanged;
 
     /// <summary>Which model answered, as one line under the workspace card.</summary>
-    public string ModelLabel { get => _modelLabel; set => Set(ref _modelLabel, value); }
+
 
     /// <summary>What the environment probe found - one line, under the next-run setup.</summary>
     public string EnvironmentSummary { get => _environmentSummary; set => Set(ref _environmentSummary, value); }
