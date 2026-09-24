@@ -714,6 +714,12 @@ public sealed class Orchestrator : IOrchestrator
         List<ChatMessage> messages, [EnumeratorCancellation] CancellationToken ct)
     {
 
+        // The run's own preamble - the worker instructions and the request - taken NOW, before any
+        // step appends "Proceed with this step" to a shared conversation. After step 1 has replied
+        // it can no longer be recovered: Preamble() reads "everything before the first assistant
+        // message", and from then on that includes step 1's instruction.
+        var runPreamble = messages.Take(Preamble(messages)).ToArray();
+
         // ── Task with a DAG plan ──────────────────────────────────────────
         var builtPlan = plan.Plan ?? LinearPlan.FromTitles(new[] { plan.Title });
         var total = builtPlan.Steps.Count;
@@ -1009,6 +1015,27 @@ public sealed class Orchestrator : IOrchestrator
                 $"Proceed with this step of the plan: {step.Title}\n"
                 + "Do only this step. Use tools as needed. When finished, briefly confirm what you did."));
 
+            // WHAT A HANDOVER INSIDE THIS STEP MUST START AGAIN FROM: the run's preamble and THIS
+            // step's instruction, and no part of any other step.
+            //
+            // Measured 2026-09-24 10:29, run 1942b0. Steps share one conversation by default, so
+            // the handover's "keep everything before the first assistant message" kept step 1's
+            // instruction - and all three handovers in that run, in steps 1, 3 and 4, restarted
+            // their step with "Proceed with this step of the plan: Verify wiki pages 1-3". Step 3
+            // was pages 7-9, and its execution review failed on exactly that: "the report says
+            // outright that 'this step was pages 1-3'". Step 4 was pages 10-12; handed its
+            // predecessor's instruction and a note saying that work was already done, it agreed
+            // and closed thirty-one seconds later.
+            //
+            // Nothing was lost that run only because both handovers landed at turn 60, after the
+            // pages had been written to disk. One arriving earlier loses the step's work.
+            //
+            // A FORKED conversation needs none of this - it opens with this step's instruction, so
+            // Preamble() is already exactly right - and null says so rather than computing it twice.
+            var restartFrom = stepsShareOneConversation
+                ? runPreamble.Append(convo[^1]).ToArray()
+                : null;
+
             // Per-step model auto-routing: pick the Execute model for this step's complexity (light for
             // trivial, heavy for complex, the worker's own for normal). Falls back to the base model.
             var stepRef = _router.ResolveExecute(models.Worker, step.Complexity) ?? models.Model;
@@ -1066,7 +1093,8 @@ public sealed class Orchestrator : IOrchestrator
                 {
                     await foreach (var ev in RunToolLoopAsync(
                         scope.TaskId, scope.RunId, stepProvider, stepModel, models.Worker, convo, scope.Artifacts,
-                        intent.Context, store, journal, reads, stepNumber, stepResult, scope.Budget, scope.Granted, ct, stepRef.ProviderId))
+                        intent.Context, store, journal, reads, stepNumber, stepResult, scope.Budget, scope.Granted, ct, stepRef.ProviderId,
+                        restartFrom))
                         events.Writer.TryWrite(ev);
 
                     outcome = stepResult.Kind;
@@ -2543,7 +2571,10 @@ public sealed class Orchestrator : IOrchestrator
         [EnumeratorCancellation] CancellationToken ct,
         // Only for the usage record. The loop is handed a ready provider and a model NAME, which is
         // all it needs to talk; the id is what makes the tokens attributable afterwards.
-        string? providerId = null)
+        string? providerId = null,
+        // What a handover restarts this step from, when the caller knows better than Preamble() can
+        // work out. Only a SHARED conversation needs it; see where it is built in RunPlanAsync.
+        IReadOnlyList<ChatMessage>? restartFrom = null)
     {
         // An async iterator cannot return a value, so the caller passes in the slot the loop fills.
         // Without it "how did this end" existed only as English inside an event, and every consumer
@@ -2706,8 +2737,16 @@ public sealed class Orchestrator : IOrchestrator
                     progress = new StepProgress();
                     trimmedInARow = 0;
 
-                    var kept = Preamble(messages);
-                    messages.RemoveRange(kept, messages.Count - kept);
+                    if (restartFrom is not null)
+                    {
+                        messages.Clear();
+                        messages.AddRange(restartFrom);
+                    }
+                    else
+                    {
+                        var kept = Preamble(messages);
+                        messages.RemoveRange(kept, messages.Count - kept);
+                    }
                     messages.Add(ChatMessage.User(
                         $"You have been working on this for {iteration - 1} turn(s) and the "
                         + "conversation was getting long, so it has been started again from your own "

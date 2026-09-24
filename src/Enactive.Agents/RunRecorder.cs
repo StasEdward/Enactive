@@ -212,6 +212,19 @@ public sealed class RunRecorder
         if (terminal is null)
             return null;
 
+        // A CANCELLATION is that same absence one step later. The run reached a terminal event but
+        // never a conclusion: somebody pressed stop. "the run was stopped before it finished" is a
+        // fact about the person, not about the project - and memory is read into the PROMPT of every
+        // step of every later run, so it is a permanent tax on the window and on the bill.
+        //
+        // Measured 2026-09-24 10:29, run 1942b0. The "What this project has already decided and
+        // done" block in front of every step carried eighteen entries for one prompt, thirteen of
+        // them that sentence, each indistinguishable from the next because the titles truncate to
+        // the same words. Whatever a stopped run changed is on disk and in its own record; what it
+        // DECIDED is nothing.
+        if (string.Equals(record.Status, nameof(RunOutcomeKind.Cancelled), StringComparison.Ordinal))
+            return null;
+
         var reason = WorkEventPayload.OutcomeReasonIn(terminal.Payload);
         var files = record.Artifacts.Count > 0
             ? " Changed: " + string.Join(", ", record.Artifacts.Distinct(StringComparer.OrdinalIgnoreCase).Take(6))
