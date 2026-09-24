@@ -3065,11 +3065,23 @@ public sealed class Orchestrator : IOrchestrator
                 recovered = true;
             }
 
-            // Remembered in a shorter form than it was sent in: the arguments of a call that has
-            // already been made are a file's contents on their way to disk, and they are re-sent on
-            // every turn after this one. See Transcript.ForHistory - the calls INVOKED below are the
-            // model's own text, untouched.
-            messages.Add(new ChatMessage(ChatRole.Assistant, replyText, Transcript.ForHistory(toolCalls)));
+            // Remembered EXACTLY as the model sent it. The model reasons from this transcript, and
+            // it reads what it finds there about itself literally.
+            //
+            // From 2026-09-22 to 2026-09-24 a long argument was recorded shortened, to save prompt
+            // tokens - first as its opening 200 characters and a size, then (9cs) as a bracketed
+            // note saying it had been sent in full. Both misled the same way. With the first, a
+            // model saw its report stop mid-word and wrote it again "in parts". With the second
+            // (run 7deb2ba4, 16:10) it saw `"content":"[Not repeated here: ...]"` in its own call,
+            // said "Wait, that was a placeholder. Let me write the actual report", rewrote a 12 KB
+            // report five times "in smaller chunks", hit the shrink guard, and deleted the file.
+            // A history that differs from what the model did gets "corrected" by the model; no
+            // wording fixes that, so the history is not edited at record time at all.
+            //
+            // Window pressure is still handled - by Transcript.Elide, which drops the arguments and
+            // results of OLD exchanges together and always spares the newest ones. Unchanged history
+            // is what a provider's prefix cache serves, so keeping it costs far less than it looks.
+            messages.Add(new ChatMessage(ChatRole.Assistant, replyText, toolCalls));
 
             if (toolCalls is null)
             {
