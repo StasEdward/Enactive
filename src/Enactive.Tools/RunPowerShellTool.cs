@@ -198,7 +198,8 @@ public sealed class RunPowerShellTool : ITool
       "type": "object",
       "properties": {
         "script": { "type": "string", "description": "The PowerShell script to run. Write it plainly; no shell quote-escaping is needed." },
-        {{ProcessExec.ExpectedExitCodesSchema}}
+        {{ProcessExec.ExpectedExitCodesSchema}},
+        {{ProcessExec.ForceSchema}}
       },
       "required": ["script"]
     }

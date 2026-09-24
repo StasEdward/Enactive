@@ -1997,6 +1997,22 @@ public sealed class Orchestrator : IOrchestrator
         }
     }
 
+    /// <summary>Whether a call asks, itself, to be run despite being an exact repeat - see <see cref="ToolArguments.Force"/>.</summary>
+    private static bool HasForce(ToolCall call)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(call.ArgumentsJson) ? "{}" : call.ArgumentsJson);
+            return doc.RootElement.ValueKind == JsonValueKind.Object
+                && doc.RootElement.TryGetProperty(ToolArguments.Force, out var value)
+                && value.ValueKind == JsonValueKind.True;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
     /// <summary>
     /// Whether a step is still getting somewhere.
     ///
@@ -2025,6 +2041,15 @@ public sealed class Orchestrator : IOrchestrator
         private readonly HashSet<string> _seen = new(StringComparer.Ordinal);
         private readonly List<string> _repeats = new();
 
+        /// <summary>
+        /// Identities that ran to a SUCCESSFUL result at least once - as opposed to <see cref="_seen"/>,
+        /// which only means "attempted". See <see cref="AlreadyRanExactly"/> for why the difference
+        /// matters: a failed call and the same call declaring the failure expected are the SAME
+        /// identity on purpose (<see cref="CallIdentity"/>), and that pairing is a recovery, not a
+        /// repeat - it must stay allowed even though the first attempt is already "seen".
+        /// </summary>
+        private readonly HashSet<string> _succeeded = new(StringComparer.Ordinal);
+
         /// <summary>How many times the workspace has changed under this step.</summary>
         private int _generation;
 
@@ -2036,6 +2061,25 @@ public sealed class Orchestrator : IOrchestrator
         /// here, rather than by each caller deciding what counts as a change.
         /// </summary>
         public void WorkspaceChanged() => _generation++;
+
+        /// <summary>A call's result is in: record it as this identity's outcome for <see cref="AlreadyRanExactly"/>.</summary>
+        public void Resulted(ToolCall call, bool succeeded)
+        {
+            if (succeeded)
+                _succeeded.Add(Identity(call));
+        }
+
+        /// <summary>
+        /// Whether this exact call - same tool, same arguments, nothing this step has WRITTEN since -
+        /// already ran to a SUCCESSFUL result in this step. Only a success counts: a call that FAILED
+        /// and is now being retried with a declaration that makes the same outcome an answer
+        /// (<c>expectedExitCodes</c>) shares its identity with the failure on purpose, and that retry
+        /// is a recovery this must not block.
+        ///
+        /// <para>A peek in the other sense too: it must be read BEFORE this turn's own calls have run,
+        /// since only a call that ALREADY succeeded, before this turn, should count.</para>
+        /// </summary>
+        public bool AlreadyRanExactly(ToolCall call) => _succeeded.Contains(Identity(call));
 
         /// <summary>Records one turn's calls and says whether any of them was new.</summary>
         public bool Advanced(IReadOnlyList<ToolCall> calls)
@@ -3352,6 +3396,16 @@ public sealed class Orchestrator : IOrchestrator
                 yield break; // genuine final answer - no tool calls
             }
 
+            // Which of THIS turn's calls exactly repeat one that already SUCCEEDED in this step, with
+            // nothing WRITTEN since - read before this turn's own calls have run, so only a PRIOR
+            // success counts (see StepProgress.AlreadyRanExactly for why a failed attempt does not).
+            // CommandTools (run_command, run_powershell, git, docker) rather than a set of its own:
+            // the same "spawns a process outside the workspace" question this class already asks
+            // elsewhere. See the gate further down that uses this.
+            var exactRepeats = toolCalls
+                .Where(c => CommandTools.Contains(c.Name) && !HasForce(c) && progress.AlreadyRanExactly(c))
+                .ToHashSet();
+
             // Did this turn do anything the step had not already done? A stuck model does not stop
             // calling tools - it calls the SAME one, with the same arguments, until something else
             // stops it. That is the shape worth detecting, and unlike a turn count it does not grow
@@ -3423,6 +3477,43 @@ public sealed class Orchestrator : IOrchestrator
                     yield return Decided(call.Name, allowed: false,
                         $"{call.Name}: not available to role '{worker.Role}'");
                     messages.Add(ChatMessage.Tool(call.Id, $"ERROR: tool '{call.Name}' is not available to the {worker.Role} role."));
+                    continue;
+                }
+
+                // ── Repeat gate: an exact repeat of a slow command, nothing WRITTEN since ──
+                //
+                // Measured 2026-09-24, run 4f779e: the step ran `dotnet test`, then three read-only
+                // checks (two `git diff`, one `git status`) that themselves showed nothing had
+                // changed, then ran the exact same `dotnet test` again - 1.7s of wall time and a full
+                // test-output-sized reply for no new information. The existing stall guard (below)
+                // already tracks this exact case - a repeated identity at the same generation - and
+                // told the model afterwards that it had made a call it already made; this refuses it
+                // BEFORE spawning the process, for the tools where a repeat is both certain to answer
+                // the same and slow enough to be worth not paying for again.
+                //
+                // Scoped to process-spawning tools only: re-reading a file or re-listing a directory
+                // is already cheap, and the existing annotation already discourages it. NOT a
+                // guarantee - `delete_file` and `copy_file` are not tracked as writes here (see
+                // MutatingTools.Changes), so a step that deletes a file between two identical
+                // commands is not seen as having changed anything, and would be gated too; `force:
+                // true` is the way past that, for whichever side of it turns out to be wrong.
+                if (exactRepeats.Contains(call))
+                {
+                    var already = $"'{call.Name}' already ran with these exact arguments earlier in this step, "
+                                 + "and nothing has been written since - its result cannot have changed. "
+                                 + "Re-running it tells you nothing new; look at what it told you the first "
+                                 + "time. If you have a specific reason to expect a different answer now "
+                                 + "(state outside the workspace, flakiness you are checking for), send it "
+                                 + "again with \"force\": true.";
+
+                    // FoundNothing, not Failed: this call ANSWERED - "you already know this" - the same
+                    // way a lookup on a path that does not exist answered. It must not hold the step
+                    // open on its own; what would is the FIRST call, if that one never succeeded.
+                    openFailures.FoundNothing(call, already);
+                    journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson),
+                                   ActionOutcome.Refused, already);
+                    yield return Decided(call.Name, allowed: false, $"{call.Name}: refused — an exact repeat");
+                    messages.Add(ChatMessage.Tool(call.Id, "ERROR: " + already));
                     continue;
                 }
 
@@ -3690,6 +3781,10 @@ public sealed class Orchestrator : IOrchestrator
                 {
                     result = ToolResults.Fail($"{call.Name} threw: {ex.Message}");
                 }
+
+                // Recorded regardless of the tool: see StepProgress.AlreadyRanExactly for why only a
+                // SUCCESS counts, and only Resulted here (never Failed) needs to know that.
+                progress.Resulted(call, result.Success);
 
                 if (result.Success)
                 {

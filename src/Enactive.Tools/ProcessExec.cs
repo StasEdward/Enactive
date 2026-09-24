@@ -340,6 +340,26 @@ internal static class ProcessExec
         }
         """;
 
+    /// <summary>The argument name. Defined in Core for the same reason as <see cref="ExpectedExitCodes"/> -
+    /// the engine has to read it before this tool ever sees the call.</summary>
+    public const string Force = ToolArguments.Force;
+
+    /// <summary>
+    /// The schema property for re-running an exact repeat on purpose.
+    ///
+    /// <para>Measured 2026-09-24, run 4f779e: a step ran the same `dotnet test` twice with nothing
+    /// written in between - three read-only checks that themselves showed nothing had changed sat
+    /// between the two runs. The engine now refuses an exact repeat of this kind of call before
+    /// spawning the process; this is how a model gets past that refusal when it genuinely has reason
+    /// to expect a different answer.</para>
+    /// </summary>
+    public const string ForceSchema = """
+        "force": {
+          "type": "boolean",
+          "description": "Set true to run this again even though you already ran it with these exact arguments in this step and have written nothing since. Only for when you have a SPECIFIC reason the answer might differ now regardless (something outside the workspace, flakiness you are checking for) - not to get past the refusal on principle, and not needed for a first attempt or one after any edit."
+        }
+        """;
+
     /// <summary>
     /// How long output is still collected after the process itself has gone.
     ///

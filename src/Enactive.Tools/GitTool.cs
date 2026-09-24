@@ -78,7 +78,7 @@ public sealed class GitTool : ITool
         return result;
     }
 
-    private const string Schema = """
+    private static readonly string Schema = $$"""
     {
       "type": "object",
       "properties": {
@@ -86,7 +86,8 @@ public sealed class GitTool : ITool
           "description": "Git arguments without the leading 'git'. An array with ONE ARGUMENT PER ELEMENT ([\"diff\",\"HEAD\"], not [\"diff HEAD\"]), or a single string that is split on spaces.",
           "type": ["array", "string"],
           "items": { "type": "string" }
-        }
+        },
+        {{ProcessExec.ForceSchema}}
       },
       "required": ["args"]
     }

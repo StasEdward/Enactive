@@ -126,7 +126,8 @@ public sealed class RunCommandTool : ITool
       "type": "object",
       "properties": {
         "command": { "type": "string", "description": "The shell command to run in the workspace directory." },
-        {{ProcessExec.ExpectedExitCodesSchema}}
+        {{ProcessExec.ExpectedExitCodesSchema}},
+        {{ProcessExec.ForceSchema}}
       },
       "required": ["command"]
     }

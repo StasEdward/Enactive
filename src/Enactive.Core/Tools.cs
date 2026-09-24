@@ -37,6 +37,14 @@ public static class ToolArguments
 
     /// <summary>The script <c>run_powershell</c> is given.</summary>
     public const string Script = "script";
+
+    /// <summary>
+    /// Set to run a command AGAIN despite the engine's own knowledge that it already ran with these
+    /// exact arguments this step and nothing has been written since - see the repeat gate in
+    /// Orchestrator. Not read by any tool's own logic; it exists only for the engine to see before
+    /// the tool is invoked, the same way <see cref="ExpectedExitCodes"/> is.
+    /// </summary>
+    public const string Force = "force";
 }
 
 /// <summary>
