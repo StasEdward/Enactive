@@ -153,7 +153,10 @@ public static class ShellOutcome
 
             // Every refusal has to be about a command on OUR line. One that is not came from
             // something that ran, and that is a failure however the others are read.
-            if (RefusedName(line, at) is not { } name || !heads.Contains(name))
+            // cmd keeps a quoted name's own double quotes inside its single ones:
+            // '"C:\Program Files\x.exe"' is not recognized ...
+            if (RefusedName(line, at) is not { } name
+                || !(heads.Contains(name) || heads.Contains(name.Trim('"'))))
                 return false;
 
             found = true;
@@ -665,6 +668,21 @@ public static class ShellOutcome
             var words = segment.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
             if (words.Length > 0)
                 heads.Add(words[0].Trim('"', '\'', '(', '`'));
+
+            // A QUOTED head is the whole quoted text, spaces and all - which is the only reason to
+            // quote it. Split on whitespace, `& 'C:\Program Files\x.exe'` has the head
+            // "C:\Program", and the shell's refusal names the full path, so a call that never ran
+            // was counted as work that failed. Measured 2026-09-24 21:29, run 62f721: a model wrote
+            // .enactive/scratch/fix_path.ps1, called it as '.enactive/scratch/fix_ path.ps1', got
+            // "is not recognized", ran the right name a second later and fixed the file - and the
+            // step was left Incomplete for the first call, skipping the nine steps after it.
+            var start = segment.TrimStart().TrimStart('(');
+            if (start.Length > 2 && start[0] is '"' or '\'')
+            {
+                var close = start.IndexOf(start[0], 1);
+                if (close > 1)
+                    heads.Add(start[1..close]);
+            }
         }
 
         return heads;
