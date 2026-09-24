@@ -106,6 +106,9 @@ public sealed class Planner
             ChatMessage.User(Where(context) + request)
         };
 
+        // No ResponseSchema, deliberately - see StructuredOutputTests.The_planner_is_not_given_a_schema
+        // and the note on PlanWithChecksSchema. This was changed on 2026-09-23 and changed straight
+        // back when that test caught it.
         var completion = await provider.CompleteAsync(new ChatRequest(model, messages, Temperature: 0.0), ct);
         var answer = completion.Message.Content ?? "";
 
@@ -185,6 +188,16 @@ public sealed class Planner
         if (context.Environment is { } env)
             lines.AddRange(env.Summary().Split('\n', StringSplitOptions.RemoveEmptyEntries)
                               .Select(l => l.Trim()));
+
+        // The one fact a planner cannot get for itself and cannot size a step without. "Check every
+        // page" is one step for eleven pages and a dead run for three hundred, and until this block
+        // existed nothing in the prompt said which of the two it was looking at. See
+        // WorkspaceCensus for the measurement that put it here.
+        if (context.Inventory.Count > 0)
+        {
+            lines.Add("What is in the workspace (build output not counted):");
+            lines.AddRange(context.Inventory.Select(i => "  " + i));
+        }
 
         if (lines.Count == 0)
             return "";
@@ -465,8 +478,30 @@ public sealed class Planner
                     + "repeats over many items — files, pages, records, tickets — do not write one "
                     + "step for all of them: say how many at a time and use a step per batch "
                     + "(\"the first 5 …\", \"the next 5 …\"), which is what the step budget is for. "
+                    // Measured 2026-09-24, run ae2015: four batch steps verified pages and wrote
+                    // nothing, and a fifth "Write findings" step depended on all four. One batch got
+                    // stuck and was stopped - and the fifth was skipped, so the three batches that
+                    // finished lost their work too. Nothing about that is particular to a model or to
+                    // pages: any plan whose only writing is its last step is as strong as its weakest
+                    // batch.
+                    + "Each batch step SAVES its own results before it finishes - added to the output "
+                    + "the request names, or to a file of its own - rather than leaving them for a "
+                    + "later step to write: a final step that writes for all the batches depends on "
+                    + "every one of them, and a single batch that fails then loses the work of all. "
                     + "This is about REPEATED work only: the rule above still holds for one action, "
-                    + "which is never split into stages.";
+                    + "which is never split into stages. "
+                    // Measured 2026-09-24, run 4f779e: "write new tests" and "mutation-check new
+                    // tests" were two steps for a request that said, of every test, "it must FAIL if
+                    // the behaviour it describes is broken - check that by breaking it temporarily
+                    // and putting it back". Step 2 wrote 4 tests and broke-and-restored the source
+                    // 17 times confirming them; step 3 then did the SAME 17 breaks again, because
+                    // the check the request attached to each test was not part of the step that
+                    // created it. Same shape as the batch rule above, one level down: the unit the
+                    // request names its requirement about is the unit that requirement stays with.
+                    + "A CHECK the request attaches to EVERY item a step produces - \"each test must fail if its "
+                    + "behaviour is broken\", \"every page must cite its source\" - belongs IN the step that "
+                    + "produces the item, not in a step of its own: a later step re-doing the same check per item "
+                    + "is the item's own work, done twice.";
 
         if (maxSteps is > 0)
             prompt += $" This run may take at most {maxSteps} step(s) in total — a plan longer than that "
@@ -495,27 +530,98 @@ public sealed class Planner
     /// turns proposed checks off pays nothing for them — no tokens, and no invitation the engine
     /// will then ignore.</para>
     /// </summary>
+    /// <summary>
+    /// The shape a plan-with-checks would be asked for in — WRITTEN, NOT WIRED UP.
+    ///
+    /// <para>An outside review suggested on 2026-09-23 that this call should stop describing its
+    /// JSON in prose and send a schema instead, the machinery having existed since §9c. It was
+    /// wired up, and <c>StructuredOutputTests.The_planner_is_not_given_a_schema</c> refused it
+    /// within the minute, holding a decision already taken and already argued:</para>
+    ///
+    /// <para><i>"the planner is the one place where the quality of the REASONING matters more than
+    /// the shape of the answer, and constrained decoding on a 12-14B model can eat exactly what we
+    /// go there for. The reviewer has nothing to reason about, which is why it went first. Measure
+    /// before changing this."</i></para>
+    ///
+    /// <para>Which is the whole answer to the suggestion, and it is not an argument about token
+    /// counts: on the machine this runs on, the planner may be a 4B. It is kept here so the
+    /// measurement that comment asks for has something to measure — bind it, run the same request
+    /// fifteen times on each planner, and compare the share of runs that produce provable checks.
+    /// A constant nobody calls is normally debt; this one is an experiment waiting for its
+    /// evidence, and it says so.</para>
+    /// </summary>
+    internal const string PlanWithChecksSchema = """
+        {
+          "type": "object",
+          "properties": {
+            "checks": {
+              "type": "array",
+              "maxItems": 4,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string" },
+                  "command": { "type": "string" }
+                },
+                "required": ["name", "command"],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+        """;
+
+    /// <summary>
+    /// How the planner is asked to say what would PROVE the work — §9au, and reviewed 2026-09-23.
+    ///
+    /// <para><b>Three changes, and the reason each one is not just shortening.</b> An outside
+    /// review called this over-prompted for current frontier models, which is true of them and the
+    /// wrong audience: the planner runs on whatever model the person bound, and on this machine
+    /// that includes a 4B. The parts kept are the ones no model can infer — the JSON shape, the
+    /// cap, which shell runs a check, that only the exit code is read, and that a check is run
+    /// BEFORE the work.</para>
+    ///
+    /// <para><b>1. The Windows sentence was guarding the wrong mistake.</b> It named Unix-isms —
+    /// <c>test</c>, <c>grep</c>, <c>awk</c>, <c>[ ]</c> — while the failure §9au actually records is
+    /// <c>Select-String</c> sent to <c>cmd.exe</c>, which is a PowerShell cmdlet and not a Unix
+    /// command at all. It now names what happened.</para>
+    ///
+    /// <para><b>2. Two rules were each stated twice.</b> "Would fail now and pass after" and the
+    /// paragraph explaining the baseline are one idea and its mechanism; "a command that cannot
+    /// fail proves nothing" and the list of commands that cannot fail are a principle and its
+    /// examples. Merged, with the examples kept: a named list is what a small model obeys, and the
+    /// list is not enforced anywhere in code.</para>
+    ///
+    /// <para><b>3. What a rule COSTS stays.</b> "The run is then failed for your guess" is not
+    /// padding — it is the difference between a rule a model treats as style and one it treats as
+    /// consequence, and §9au records a real run failed for a check against an invented filename.
+    /// </para>
+    ///
+    /// <para>Sent alongside <see cref="ChecksSchema"/>, never instead of it: §9c's rule is that a
+    /// schema may never be the thing correctness rests on, because "OpenAI-compatible" is a family
+    /// rather than a specification and the models most in need of the text are the likeliest to
+    /// ignore the schema.</para>
+    /// </summary>
     private const string ChecksPrompt =
-        " Also return \"checks\": shell commands that would PROVE this request has been carried out, "
-        + "or [] when nothing about it can be proved by running something. Shape: "
-        + "\"checks\":[{\"name\":\"short name\",\"command\":\"...\"}], at most "
-        + "4. EACH ONE IS RUN BY run_command, which is cmd.exe on Windows and /bin/sh elsewhere - "
-        + "the host is named above the request, and a check written for the wrong one of those "
-        + "simply never runs. On Windows that means no test, no grep, no awk, no [ ]: use the "
-        + "program itself (dotnet, git, npm), or findstr, or wrap PowerShell as "
+        " Also return \"checks\": up to 4 shell commands that would PROVE this request has been "
+        + "carried out, or [] when nothing about it can be proved by running something. Shape: "
+        + "\"checks\":[{\"name\":\"short name\",\"command\":\"...\"}]. "
+        + "EACH ONE IS RUN BY run_command, which is cmd.exe on Windows and /bin/sh elsewhere - the "
+        + "host is named above the request, and a check written for the wrong one of those simply "
+        + "never runs. On Windows, cmd.exe has no PowerShell cmdlets (Select-String, Get-Content, "
+        + "Test-Path) and no Unix tools (grep, awk, test, [ ]): use the program itself (dotnet, "
+        + "git, npm), or findstr, or wrap PowerShell explicitly as "
         + "powershell -NoProfile -Command \"...\". "
         + "THE EXIT CODE IS THE WHOLE VERDICT: 0 means done, anything else means not done, and "
-        + "nothing reads the output. Write each one so that it would FAIL right now and PASS once "
-        + "the request is satisfied - that is what makes it worth running, and it is CHECKED: "
-        + "every check is tried BEFORE the work starts, and one that already passes then is "
-        + "recorded as proving nothing about this request. Use the project's own "
-        + "real commands, the ones this workspace actually has. A command that cannot fail proves "
-        + "nothing, so never propose echo, cd, dir, ls, type, cat or exit. CHECK ONLY WHAT THE "
-        + "REQUEST ITSELF NAMES - a file, a command, a target it actually mentions - and NEVER "
-        + "invent a file name: you cannot see this workspace, so a check against a path you made "
-        + "up fails when the work lands under the real name, and the run is then failed for your "
-        + "guess. If the request does not say where the result goes, check something else or "
-        + "return []. [] IS THE RIGHT ANSWER for a question, an explanation, a "
-        + "document, a review, a summary, or anything whose result a person has to read — do not "
-        + "invent a check in order to have one.";
+        + "nothing reads the output. Every check is run BEFORE the work as well as after, so write "
+        + "each one to FAIL now and PASS once the request is satisfied - one that already passes is "
+        + "recorded as proving nothing. That also rules out commands that cannot fail: never "
+        + "propose echo, cd, dir, ls, type, cat or exit. Use the project's own real commands, the "
+        + "ones this workspace actually has. CHECK ONLY WHAT THE REQUEST ITSELF NAMES - a file, a "
+        + "command, a target it actually mentions - and NEVER invent a file name: you cannot see "
+        + "this workspace, so a check against a path you made up fails when the work lands under "
+        + "the real name, and the run is then failed for your guess. If the request does not say "
+        + "where the result goes, check something else or return []. [] IS THE RIGHT ANSWER for a "
+        + "question, an explanation, a document, a review, a summary, or anything whose result a "
+        + "person has to read - do not invent a check in order to have one.";
 }

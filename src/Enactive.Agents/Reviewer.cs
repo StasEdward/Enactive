@@ -63,7 +63,11 @@ public sealed record ReviewResult(
 /// <see cref="Enactive.Core.Artifacts.IArtifactScope.SharedWithAnotherStep"/>.
 /// </param>
 public sealed record WrittenFile(
-    string RelativePath, string Content, int TotalChars, bool SharedWithAnotherStep = false)
+    string RelativePath, string Content, int TotalChars, bool SharedWithAnotherStep = false,
+    // What Content IS, when it is not simply the file: this step's CHANGES as a diff, a new file
+    // whole, a deletion, or the file as it is now with no record of before. Null is the file itself,
+    // which is what every caller meant until what a step changed could be measured (2026-09-24).
+    string? Heading = null)
 {
     public WrittenFile(string relativePath, string content)
         : this(relativePath, content, content.Length) { }
@@ -111,14 +115,22 @@ public sealed class Reviewer
         string stepTitle, string coderOutput, string executionEvidence, IReadOnlyList<string> artifacts,
         IChatProvider provider, string model, CancellationToken ct,
         ReviewMode mode = ReviewMode.Execution,
-        IReadOnlyList<WrittenFile>? writtenFiles = null)
+        IReadOnlyList<WrittenFile>? writtenFiles = null,
+        // The user's own request, verbatim, when the caller has it. A step's TITLE is the planner's
+        // paraphrase of a piece of this - "Write new tests in existing style" - and a constraint the
+        // request stated explicitly ("run the tests with THAT command and no other", "each test must
+        // FAIL if its behaviour is broken") does not survive being paraphrased into a title. Measured
+        // 2026-09-24, run 4f779e: the request named one exact test command; the step ran 22 different
+        // `dotnet test --filter …` invocations instead, and execution review passed it - it had
+        // nothing to check that instruction against, because nothing here had ever been given it.
+        string? request = null)
     {
         var messages = new List<ChatMessage>
         {
             ChatMessage.System(mode == ReviewMode.Content ? ContentSystemPrompt : ExecutionSystemPrompt),
             ChatMessage.User(mode == ReviewMode.Content
-                ? BuildContentUserPrompt(stepTitle, coderOutput, writtenFiles ?? Array.Empty<WrittenFile>())
-                : BuildExecutionUserPrompt(stepTitle, coderOutput, executionEvidence, artifacts))
+                ? BuildContentUserPrompt(stepTitle, coderOutput, writtenFiles ?? Array.Empty<WrittenFile>(), request)
+                : BuildExecutionUserPrompt(stepTitle, coderOutput, executionEvidence, artifacts, writtenFiles, request))
         };
 
         var completion = await provider.CompleteAsync(
@@ -194,16 +206,62 @@ public sealed class Reviewer
         }
         """;
 
+    /// <summary>
+    /// Room for the request text in a prompt: generous, because a constraint worth checking can sit
+    /// anywhere in it, but not unbounded - the same reasoning as every other excerpt in this class.
+    /// </summary>
+    private const int MaxRequestChars = 4000;
+
+    /// <summary>
+    /// The user's own request, quoted for the reviewer with the instruction to check it directly -
+    /// not through the step's title, which is the planner's paraphrase of a piece of it. Shared
+    /// between execution and content review because the failure is the same in both: a plan can
+    /// satisfy its own restated goal while missing something the request said outright.
+    /// </summary>
+    private static string RequestBlock(string? request)
+    {
+        if (string.IsNullOrWhiteSpace(request))
+            return "";
+
+        var shown = request.Length <= MaxRequestChars ? request : request[..MaxRequestChars] + "… (cut here)";
+        return "\nThe user's ORIGINAL REQUEST for this run, verbatim - the step's title above is the "
+             + "planner's paraphrase of a PIECE of this, and a specific instruction in it (an exact "
+             + "command to use and no other, a naming or format rule, a check required of EVERY item "
+             + "produced) does not survive being paraphrased into a title:\n"
+             + $"\"{shown}\"\n\n"
+             + "If the request states such an instruction, check the evidence against THAT instruction "
+             + "specifically, in addition to judging the report on its own terms. Only the step's own "
+             + "share of the request is this step's to satisfy - a constraint about the run's LAST step "
+             + "is not a finding against an earlier one.\n";
+    }
+
     internal static string BuildExecutionUserPrompt(
-        string stepTitle, string coderOutput, string executionEvidence, IReadOnlyList<string> artifacts)
+        string stepTitle, string coderOutput, string executionEvidence, IReadOnlyList<string> artifacts,
+        IReadOnlyList<WrittenFile>? changes = null, string? request = null)
     {
         var files = artifacts.Count == 0 ? "(none)" : string.Join(", ", artifacts);
 
+        // What the step CHANGED, whichever tool changed it. A step that runs commands AND writes -
+        // a disk check that saves a report, an analysis that writes its findings - used to get only
+        // this review, and what it wrote was checked against nothing but the tool arguments, and not
+        // at all when a command wrote it. See WorkspaceChanges.
+        var changed = "";
+        if (changes is { Count: > 0 })
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine().AppendLine("What this step CHANGED in the workspace - made by any tool, commands "
+                                       + "included (this is ground truth for what was written):");
+            AppendFiles(sb, changes);
+            changed = sb.ToString();
+        }
+
         return $"Step: {stepTitle}\n\n"
+             + RequestBlock(request)
              + $"What the coding agent reported:\n{coderOutput}\n\n"
              + $"Tool execution evidence — the ACTUAL commands run and their real stdout/stderr/exit codes "
              + $"(this is the ground truth; the agent's own words above may be wrong or invented):\n{executionEvidence}\n\n"
-             + $"Files changed: {files}\n\n"
+             + $"Files changed: {files}\n"
+             + changed + "\n"
              + "Judge ONLY from the evidence, and judge the ANSWER — not which tools it was reached with. "
              + "FAIL if: the report above leans on a command that is not in the evidence (it claims a build "
              + "succeeded, a test passed, a value was printed); a command that DID run failed (non-zero exit "
@@ -216,10 +274,11 @@ public sealed class Reviewer
     }
 
     internal static string BuildContentUserPrompt(
-        string stepTitle, string coderOutput, IReadOnlyList<WrittenFile> writtenFiles)
+        string stepTitle, string coderOutput, IReadOnlyList<WrittenFile> writtenFiles, string? request = null)
     {
         var sb = new StringBuilder();
         sb.Append("Step: ").AppendLine(stepTitle).AppendLine();
+        sb.Append(RequestBlock(request));
         sb.AppendLine("What the coding agent reported:").AppendLine(coderOutput).AppendLine();
 
         if (writtenFiles.Count == 0)
@@ -235,36 +294,75 @@ public sealed class Reviewer
         // told "exactly what it wrote" answers the question it was asked.
         var shared = writtenFiles.Any(f => f.SharedWithAnotherStep);
 
+        var asChanges = writtenFiles.Any(f => f.Heading is not null);
+
         sb.AppendLine(shared
             ? "This step ran no commands — it produced text. Here is what it wrote, EXCEPT where "
               + "marked: a file marked below was also being written by another step at the same "
               + "time, so what you see is both of them and cannot be told apart."
+            : asChanges
+            ? "This step ran no commands — it produced text. Here is what it CHANGED, file by file:"
             : "This step ran no commands — it produced text. Here is exactly what it wrote:");
 
+        AppendFiles(sb, writtenFiles);
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// The files, each under its own header, within the review budget - one renderer for both
+    /// reviews, so a file reads the same whichever question is being asked of it.
+    /// </summary>
+    private static void AppendFiles(StringBuilder sb, IReadOnlyList<WrittenFile> writtenFiles)
+    {
         var budget = MaxContentCharsTotal;
         foreach (var file in writtenFiles)
         {
             sb.AppendLine().Append("----- ").Append(file.RelativePath)
               .Append(file.SharedWithAnotherStep ? "  (ALSO WRITTEN BY ANOTHER STEP)" : "")
               .AppendLine(" -----");
+            if (file.Heading is { Length: > 0 } heading)
+                sb.AppendLine(heading);
 
-            var slice = file.Content.Length > MaxContentCharsPerFile
-                ? file.Content[..MaxContentCharsPerFile]
-                : file.Content;
-
-            if (slice.Length > budget)
-                slice = slice[..Math.Max(0, budget)];
+            // The START and the END, not the first N characters - the same rule as a command's
+            // output, and here for a sharper reason. Measured 2026-09-23 on the run that finished:
+            // a step appends its findings to one growing report, so the work of steps 2, 3 and 4 is
+            // always at the END, and a head-only excerpt showed the reviewer the same opening every
+            // time. Its own notes say so, under a PASS:
+            //
+            //   [2] PASS: "Only the first 8000 characters were shown. They cover the pages 1-3 …"
+            //   [4] PASS: "The excerpt covers pages 1-2 … and ends mid-line"
+            //
+            // Step 4 was reviewing pages 10-12. It passed on an excerpt that could not contain
+            // them, and passed honestly: ContentSystemPrompt tells it to judge only what the
+            // excerpt holds. The reviewer was not wrong; it was shown the wrong 8000 characters.
+            //
+            // This is 9q again ("the verdict was at the end, and shortening kept the beginning"),
+            // which was fixed for command output and never carried across to the file a reviewer
+            // reads.
+            var slice = Shortening.ToFit(file.Content, Math.Min(MaxContentCharsPerFile, Math.Max(0, budget)));
 
             budget -= slice.Length;
             sb.AppendLine(slice);
 
             // Against the file's REAL size, not against the string handed to us - which the caller
             // may already have cut to exactly this budget, making the comparison always false.
+            // The label has to describe the slice that was actually taken. It said "the first N
+            // characters" for a day after the slice became head-AND-tail, and the reviewer believed
+            // the label over the text in front of it - its own notes on 2026-09-24 read "Only the
+            // first 8000 of 28893 characters are shown, and they cover pages 1-4. The page 10-12
+            // sections this step reports appending are in the unseen part", while the page 10-12
+            // sections were in the prompt, at the bottom, where the tail had put them.
+            //
+            // A wrong label is worse than the head-only cut it replaced: that one was at least
+            // honest about what it had left out.
             if (slice.Length < file.TotalChars)
                 sb.AppendLine()
-                  .AppendLine($"----- END OF EXCERPT: the {file.RelativePath} above is the first "
-                            + $"{slice.Length} characters of {file.TotalChars}. The rest of the file "
-                            + "was not shown to you and is NOT missing from it. -----");
+                  .AppendLine($"----- END OF EXCERPT: what is shown above for {file.RelativePath} is "
+                            + $"the START and the END of {(file.Heading is null ? "the file" : "it")} - "
+                            + $"{slice.Length} characters of {file.TotalChars}, "
+                            + "with the middle left out and marked where it was cut. What is missing "
+                            + "is the MIDDLE; the end of the file IS above. Nothing here is missing "
+                            + "from the file itself. -----");
 
             if (budget <= 0)
             {
@@ -272,8 +370,6 @@ public sealed class Reviewer
                 break;
             }
         }
-
-        return sb.ToString();
     }
 
     /// <summary>
@@ -560,7 +656,12 @@ public sealed class Reviewer
         + "account for. It is a lookup that ran and found nothing: a file that does not exist, an "
         + "offset past the end of one. Asking and being told no is how anything explores a tree it "
         + "has not seen, and the agent is free to say nothing about it. ERROR is the label for a "
-        + "call that went wrong; judge only those.";
+        + "call that went wrong; judge only those.\n\n"
+        + "The evidence may be followed by what this step CHANGED in the workspace, made by any tool - "
+        + "a command included - as diffs, new files or deletions. That is what was actually written: "
+        + "check a saved result, a report or a code change against it and against the command output "
+        + "above. In a diff, '+' lines were added by this step, '-' lines removed, and lines starting "
+        + "with a space are unchanged context.";
 
     // Deliberately narrow. A content reviewer that fails on anything it is merely unsure about blocks
     // every run and gets switched off, so it is told to fail only on a specific, nameable falsehood —
@@ -579,9 +680,15 @@ public sealed class Reviewer
         + "mojibake, or a truncated line.\n\n"
         + "In notes, name the offending lines so the agent can fix exactly those. Only name something "
         + "you can actually see in the text above; if you cannot point at it, do not report it.\n\n"
-        + "Where an excerpt is marked as such, judge ONLY what it contains. It stops where the excerpt "
-        + "stops, not where the file does: an unclosed tag, bracket or sentence at the very end is the "
-        + "cut, never a defect, and neither is anything you expected to find further down.\n\n"
+        + "Where an excerpt is marked as such, judge ONLY what it contains. An excerpt is the START "
+        + "and the END of the file, with a line between them saying how much is not shown, so a "
+        + "line that breaks off at "
+        + "either cut is the cut and never a defect - and neither is anything you expected to find "
+        + "in the part between them.\n\n"
+        + "A file may be shown as the CHANGES this step made - a unified diff, where '+' lines were "
+        + "added by this step, '-' lines removed, and lines starting with a space are unchanged "
+        + "context shown for orientation. Judge what the step added or changed; the context is not "
+        + "its work, and parts of the file not shown did not change.\n\n"
         + "Do NOT fail for style, tone, formatting, length, or for being incomplete — a short document is "
         + "not a wrong one. Do NOT fail because you would have written it differently. If you are unsure "
         + "whether something exists, do not fail on it: say so in notes and pass. Judge the content, not "

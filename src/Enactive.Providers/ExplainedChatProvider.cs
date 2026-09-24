@@ -22,6 +22,10 @@ public sealed class ExplainedChatProvider(IChatProvider inner, string providerId
 {
     public int? ContextWindow(ChatRequest request) => inner.ContextWindow(request);
 
+    public int? AnswerReserve(ChatRequest request) => inner.AnswerReserve(request);
+
+    public int? HandoverAtPercent(ChatRequest request) => inner.HandoverAtPercent(request);
+
     public async IAsyncEnumerable<ChatStreamEvent> StreamChatAsync(
         ChatRequest request, [EnumeratorCancellation] CancellationToken ct)
     {

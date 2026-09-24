@@ -82,6 +82,30 @@ public sealed class Orchestrator : IOrchestrator
     /// </summary>
     private const int MaxHandovers = 3;
 
+    /// <summary>
+    /// Turns in a row needing the window trimmed before the step is CUT instead.
+    ///
+    /// <para>Three, because one or two is a long tool result passing through and a step recovers
+    /// from that by itself. Three running means the transcript has reached the ceiling and stays
+    /// there: each trim frees a few thousand tokens and the next turns eat them again.</para>
+    ///
+    /// <para>Measured 2026-09-24 03:09 — seven trims, then <i>"the context window filled up: 61121
+    /// of 65536"</i>, on the step's 46th turn. Fourteen turns short of
+    /// <see cref="TurnsBeforeHandover"/>, which would have emptied the window rather than nibbling
+    /// at it. The turn count was always a rough proxy for "this conversation has got long"; a
+    /// window that will not stay under its budget is that same fact, measured.</para>
+    /// </summary>
+    private const int TrimsBeforeHandover = 3;
+
+    /// <summary>
+    /// How often a long generation says it is still going: every this many characters of tool-call
+    /// arguments, reasoning, or text. About half a minute of writing on a slow local model, a few seconds
+    /// on a fast one - often enough that nothing looks stuck, rare enough not to flood the card.
+    /// </summary>
+    private const int ProgressEveryChars = 2_000;
+
+
+
     private readonly IChatProviderFactory _providers;
     private readonly IWorkerProvider _workers;
     private readonly IToolRegistry _tools;
@@ -126,7 +150,11 @@ public sealed class Orchestrator : IOrchestrator
         if (folders.Count > 0 && folders.TrueForAll(f => WritableRoots.Refuses(f!) is null))
             options.Add(new DecisionOption("keep", "Keep for this workspace"));
 
-        options.Add(new DecisionOption("deny", "Keep to the workspace"));
+        // "Decline", said plainly. It was "Keep to the workspace", which sat beside "Keep for this
+        // workspace" - the same two words meaning the opposite, one refusing the write and one
+        // allowing it for good. Asked 2026-09-24: "why is there no Decline button?" There was;
+        // nobody could tell which one it was.
+        options.Add(new DecisionOption("deny", "Decline"));
         return options;
     }
     private readonly IModelResolver _modelResolver;
@@ -467,6 +495,13 @@ public sealed class Orchestrator : IOrchestrator
         var quick = Channel.CreateUnbounded<WorkEvent>(
             new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
         var quickResult = new ToolLoopResult();
+
+        // What the action changed, measured - see WorkspaceChanges and the plan path. Held for the
+        // whole action rather than inside the attempt loop, because the closing line compares the
+        // end of the action with this same start - see NetChangedAsync.
+        using var quickChanges = new WorkspaceChanges(_workspace.RootPath);
+        var quickBefore = await quickChanges.TakeAsync(ct);
+
         var quickPump = Task.Run(async () =>
         {
             using var _quickScope = LogScope.Begin(scope.RunId, scope.TaskId);
@@ -489,7 +524,6 @@ public sealed class Orchestrator : IOrchestrator
                 // evidence used to be read back out of the conversation, which is the model's
                 // working memory and gets shortened when the window fills.
                 var journal = new ExecutionJournal();
-                var conversationStart = messages.Count;
 
                 // The same one-shot fallback the DAG path has: an unreachable model is not the
                 // model doing bad work, so it costs no review attempt.
@@ -518,7 +552,8 @@ public sealed class Orchestrator : IOrchestrator
                     {
                         await foreach (var ev in RunToolLoopAsync(
                             scope.TaskId, scope.RunId, activeProvider, activeRef.Model, models.Worker, messages, scope.Artifacts,
-                            intent.Context, store, journal, reads, null, quickResult, scope.Budget, scope.Granted, ct, activeRef.ProviderId))
+                            intent.Context, store, journal, reads, null, quickResult, scope.Budget, scope.Granted, ct, activeRef.ProviderId,
+                            changes: quickChanges, stepStart: quickBefore))
                             quick.Writer.TryWrite(ev);
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException
@@ -548,7 +583,7 @@ public sealed class Orchestrator : IOrchestrator
                     quick.Writer.TryWrite(scope.Ev(EventKind.ReviewRequested, "reviewing…"));
                     var (review, mode) = await ReviewAsync(
                         plan.Title, messages, journal, evidenceStart, evidenceStart, scope.Artifacts, store,
-                        models.ReviewProvider!, models.ReviewModel, ct);
+                        models.ReviewProvider!, models.ReviewModel, ct, quickChanges, quickBefore, intent.RawText);
 
                     if (review.PromptTokens + review.CompletionTokens > 0)
                         quick.Writer.TryWrite(scope.Usage(
@@ -598,9 +633,8 @@ public sealed class Orchestrator : IOrchestrator
 
                     if (attempt < maxQuickAttempts)
                     {
-                        // See the DAG path: the evidence window follows the transcript window.
-                        if (RetryAfterReview(messages, conversationStart, mode, review.Notes, "the work"))
-                            evidenceStart = journal.Mark();
+                        // See the DAG path: the attempt stays, in the transcript and in the evidence.
+                        RetryAfterReview(messages, review.Notes, "the work");
                         continue;
                     }
 
@@ -655,7 +689,11 @@ public sealed class Orchestrator : IOrchestrator
             }
         }
 
-        yield return scope.Terminal(quickOutcome, quickReason, SummarizeArtifacts);
+        var quickNet = quickOutcome == RunOutcomeKind.Completed
+            ? await NetChangedAsync(quickChanges, quickBefore, ct)
+            : null;
+        yield return scope.Terminal(quickOutcome, quickReason,
+            artifacts => SummarizeArtifacts(artifacts, quickNet, _artifacts.PendingPaths, _workspace.RootPath));
     }
 
     /// <summary>
@@ -671,6 +709,12 @@ public sealed class Orchestrator : IOrchestrator
         Intent intent, RunCheckpoint? resume, RunScope scope, RunModels models, PlanResult plan,
         List<ChatMessage> messages, [EnumeratorCancellation] CancellationToken ct)
     {
+
+        // The run's own preamble - the worker instructions and the request - taken NOW, before any
+        // step appends "Proceed with this step" to a shared conversation. After step 1 has replied
+        // it can no longer be recovered: Preamble() reads "everything before the first assistant
+        // message", and from then on that includes step 1's instruction.
+        var runPreamble = messages.Take(Preamble(messages)).ToArray();
 
         // ── Task with a DAG plan ──────────────────────────────────────────
         var builtPlan = plan.Plan ?? LinearPlan.FromTitles(new[] { plan.Title });
@@ -736,6 +780,26 @@ public sealed class Orchestrator : IOrchestrator
         // already written, already cached by the provider - and re-deriving it costs tool calls
         // whose results are bigger than the conversation they replace.
         //
+        // WHAT CHANGED UNDER IT, 2026-09-24. That comparison was run against a provider with NO
+        // declared window - the note above says so itself: "the trimming below only applies to a
+        // provider that declares a hard window and a cloud one does not". Nothing was ever trimmed
+        // in either arm, so "carry the conversation" cost exactly what it looked like.
+        //
+        // With a local model and a stated window it is not free any more. The inherited transcript
+        // is already over the window, so the FIRST act of a new step is a large trim - measured at
+        // 01:41:09.737 StepStarted, 01:41:09.738 "dropped the contents of 9 earlier tool
+        // message(s)" - and by 9ci a trim rewrites the prompt from just after the system block and
+        // costs the provider's whole prefix cache. On 2026-09-24 the server answered one of those
+        // with "selected slot by LRU" and "making room for prompt cache entry, removing oldest
+        // entry (size = 884.548 MiB)", then re-read 66,000 tokens.
+        //
+        // NOT changed here, for two reasons. The 09-21 numbers still say what happens when a step
+        // cannot see what the last one read, and that mechanism does not care about windows. And
+        // TrimsBeforeHandover (9ch) already covers the bad case without touching the good one: a
+        // boundary trim is the first of three, so a step that settles under the window carries on
+        // sharing, and one that keeps hitting the ceiling is handed over - which preserves what the
+        // last step concluded AS A NOTE, which is the thing sharing was protecting.
+        //
         // CAVEAT, because one run each way is thin: the planner produced three steps the first
         // time and two the second, so the comparison is not like for like. What the numbers do
         // support is the mechanism - more calls, a larger peak prompt, a longer run - and that is
@@ -745,6 +809,16 @@ public sealed class Orchestrator : IOrchestrator
         // rule already: the reviewer's window has to be the window the answer was drawn from, and
         // it is why these two lines must always say the same thing.
         var stepsShareOneConversation = maxParallel == 1;
+
+        // What each step CHANGED, measured rather than inferred - see WorkspaceChanges. Only when steps
+        // take turns: two running at once share one workspace, and a snapshot cannot tell which of
+        // them changed what. They keep the store's own record, as before.
+        using var workspaceChanges = stepsShareOneConversation ? new WorkspaceChanges(_workspace.RootPath) : null;
+
+        // The same measurement for the whole run, for its closing line - see NetChangedAsync. Not
+        // for a resumed run: its start is not where the run began, and a file changed before the
+        // interruption would read as "left as it was".
+        var beforeRun = workspaceChanges is not null && resume is null ? await workspaceChanges.TakeAsync(ct) : null;
 
         // Execute by readiness: a step runs only once all its dependencies are Done (a real DAG),
         // not in a fixed linear order. With MaxParallelSteps > 1 the independent branches of the graph
@@ -943,9 +1017,45 @@ public sealed class Orchestrator : IOrchestrator
                         + string.Join("\n", doneSoFar.Select(d => "- " + d))));
             }
 
+            // THE WHOLE PLAN, so the step knows where it ends. It used to see only its own title and
+            // "Do only this step" - which cannot be followed by a step that does not know what the
+            // others are. Measured 2026-09-24 21:41, run bc3200, "add tests for the least-covered
+            // behaviour": step 1 of 3 ("run baseline tests and find coverage gaps") also wrote all 27
+            // tests and checked them by mutation; step 2 ("write tests") found nothing left and closed
+            // in two turns; step 3 ("verify tests fail when behaviour broken") ran the mutations again
+            // - 41 turns, 19 edits of production code, a handover and a rejected review for work
+            // already done. The request is in every step's prompt; the plan was not.
             convo.Add(ChatMessage.User(
                 $"Proceed with this step of the plan: {step.Title}\n"
-                + "Do only this step. Use tools as needed. When finished, briefly confirm what you did."));
+                + (total > 1
+                    ? $"This is step {stepNumber} of {total}. The whole plan, so you know where this step ends:\n"
+                      + string.Join("\n", builtPlan.Steps.Select((s, i) =>
+                          $"  {i + 1}. {s.Title}" + (s.Id == step.Id ? "   <- THIS STEP" : "")))
+                      + "\nDo only this step. What the other steps name is theirs: do not do it here, and do "
+                      + "not redo what earlier steps already did - their results are in the workspace."
+                    : "Do only this step.")
+                + " Use tools as needed. When finished, briefly confirm what you did."));
+
+            // WHAT A HANDOVER INSIDE THIS STEP MUST START AGAIN FROM: the run's preamble and THIS
+            // step's instruction, and no part of any other step.
+            //
+            // Measured 2026-09-24 10:29, run 1942b0. Steps share one conversation by default, so
+            // the handover's "keep everything before the first assistant message" kept step 1's
+            // instruction - and all three handovers in that run, in steps 1, 3 and 4, restarted
+            // their step with "Proceed with this step of the plan: Verify wiki pages 1-3". Step 3
+            // was pages 7-9, and its execution review failed on exactly that: "the report says
+            // outright that 'this step was pages 1-3'". Step 4 was pages 10-12; handed its
+            // predecessor's instruction and a note saying that work was already done, it agreed
+            // and closed thirty-one seconds later.
+            //
+            // Nothing was lost that run only because both handovers landed at turn 60, after the
+            // pages had been written to disk. One arriving earlier loses the step's work.
+            //
+            // A FORKED conversation needs none of this - it opens with this step's instruction, so
+            // Preamble() is already exactly right - and null says so rather than computing it twice.
+            var restartFrom = stepsShareOneConversation
+                ? runPreamble.Append(convo[^1]).ToArray()
+                : null;
 
             // Per-step model auto-routing: pick the Execute model for this step's complexity (light for
             // trivial, heavy for complex, the worker's own for normal). Falls back to the base model.
@@ -975,7 +1085,6 @@ public sealed class Orchestrator : IOrchestrator
             // the rest of the run when the conversation is, this step's own when it is not.
             var journal = runJournal ?? new ExecutionJournal();
             var reads = new ReadLedger();
-            var conversationStart = convo.Count;
 
             // Where this STEP's own calls begin. Two different questions are asked of the journal
             // and they need different marks. What kind of work was this step - which decides whether
@@ -994,17 +1103,18 @@ public sealed class Orchestrator : IOrchestrator
             // the two windows cannot drift apart by being maintained separately.
             var evidenceStart = runJournal is null ? stepStart : 0;
 
+            // The workspace as this step found it. Taken once, before the first attempt: a retry
+            // after a rejection is judged on everything the STEP changed, not on its last attempt.
+            var beforeStep = workspaceChanges is null ? null : await workspaceChanges.TakeAsync(ct);
+
             for (var attempt = 1; attempt <= maxAttempts; attempt++)
             {
-                // Where this attempt's calls begin, so a rejection that discards it can take them
-                // out of the evidence exactly as it takes the draft out of the transcript.
-                var attemptStart = journal.Mark();
-
                 try
                 {
                     await foreach (var ev in RunToolLoopAsync(
                         scope.TaskId, scope.RunId, stepProvider, stepModel, models.Worker, convo, scope.Artifacts,
-                        intent.Context, store, journal, reads, stepNumber, stepResult, scope.Budget, scope.Granted, ct, stepRef.ProviderId))
+                        intent.Context, store, journal, reads, stepNumber, stepResult, scope.Budget, scope.Granted, ct, stepRef.ProviderId,
+                        restartFrom, workspaceChanges, beforeStep))
                         events.Writer.TryWrite(ev);
 
                     outcome = stepResult.Kind;
@@ -1054,7 +1164,7 @@ public sealed class Orchestrator : IOrchestrator
 
                 var (review, mode) = await ReviewAsync(
                     step.Title, convo, journal, evidenceStart, stepStart, scope.Artifacts, store,
-                    models.ReviewProvider!, models.ReviewModel, ct);
+                    models.ReviewProvider!, models.ReviewModel, ct, workspaceChanges, beforeStep, intent.RawText);
 
                 if (review.PromptTokens + review.CompletionTokens > 0)
                     events.Writer.TryWrite(scope.Usage(
@@ -1094,8 +1204,7 @@ public sealed class Orchestrator : IOrchestrator
 
                             if (attempt < maxAttempts)
                             {
-                                if (RetryAfterReview(convo, conversationStart, mode, review.Notes, "this step"))
-                                    journal.Discard(attemptStart);
+                                RetryAfterReview(convo, review.Notes, "this step");
                                 continue;
                             }
 
@@ -1126,8 +1235,10 @@ public sealed class Orchestrator : IOrchestrator
                     // the transcript truncated in RetryAfterReview, which is two places keeping one
                     // invariant — and the same invariant was quietly broken between STEPS until
                     // 2026-09-08. Discarding from the journal is what the transcript just did.
-                    if (RetryAfterReview(convo, conversationStart, mode, review.Notes, "this step"))
-                        journal.Discard(attemptStart);
+                    //
+                    // Neither is cut any more: a rejected attempt is REPAIRED, not redone, so the
+                    // transcript keeps it and the evidence keeps it with it. See RetryAfterReview.
+                    RetryAfterReview(convo, review.Notes, "this step");
                     continue;
                 }
 
@@ -1431,7 +1542,11 @@ public sealed class Orchestrator : IOrchestrator
         // checkpoint left behind would offer to redo work that is finished.
         await ForgetCheckpointAsync();
 
-        yield return scope.Terminal(runOutcome, runReason, SummarizeArtifacts);
+        var runNet = runOutcome == RunOutcomeKind.Completed
+            ? await NetChangedAsync(workspaceChanges, beforeRun, ct)
+            : null;
+        yield return scope.Terminal(runOutcome, runReason,
+            artifacts => SummarizeArtifacts(artifacts, runNet, _artifacts.PendingPaths, _workspace.RootPath));
     }
 
 
@@ -1670,7 +1785,16 @@ public sealed class Orchestrator : IOrchestrator
         /// </summary>
         private readonly Dictionary<string, string> _shellOf = new(StringComparer.Ordinal);
 
-        public void Failed(ToolCall call, string? error, bool didNotRun = false)
+        /// <param name="asTool">
+        /// The tool this call was REACHING for, when the name it used was not one. A call to
+        /// <c>run-powershell</c> is closed by a <c>run_powershell</c> that works, because that is
+        /// the same work done under the name the engine has - while the report still shows what
+        /// the model actually typed, so the typo stays visible.
+        ///
+        /// <para>Without this the entry is filed under a name nothing can ever match, and the step
+        /// carries it to the end however thoroughly the model corrected itself.</para>
+        /// </param>
+        public void Failed(ToolCall call, string? error, bool didNotRun = false, string? asTool = null)
         {
             var key = Key(call);
             _byCall[key] = Line(call, error);
@@ -1681,8 +1805,8 @@ public sealed class Orchestrator : IOrchestrator
             // "again", because there was never a first time.
             if (didNotRun)
             {
-                _namedNothing[key] = Kind(call.Name);
-                _neverHappened[key] = Kind(call.Name);
+                _namedNothing[key] = Kind(asTool ?? call.Name);
+                _neverHappened[key] = Kind(asTool ?? call.Name);
             }
             else if (FileNamedBy(call) is { } file)
                 _fileOf[key] = file;
@@ -1873,6 +1997,22 @@ public sealed class Orchestrator : IOrchestrator
         }
     }
 
+    /// <summary>Whether a call asks, itself, to be run despite being an exact repeat - see <see cref="ToolArguments.Force"/>.</summary>
+    private static bool HasForce(ToolCall call)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(call.ArgumentsJson) ? "{}" : call.ArgumentsJson);
+            return doc.RootElement.ValueKind == JsonValueKind.Object
+                && doc.RootElement.TryGetProperty(ToolArguments.Force, out var value)
+                && value.ValueKind == JsonValueKind.True;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
     /// <summary>
     /// Whether a step is still getting somewhere.
     ///
@@ -1901,6 +2041,15 @@ public sealed class Orchestrator : IOrchestrator
         private readonly HashSet<string> _seen = new(StringComparer.Ordinal);
         private readonly List<string> _repeats = new();
 
+        /// <summary>
+        /// Identities that ran to a SUCCESSFUL result at least once - as opposed to <see cref="_seen"/>,
+        /// which only means "attempted". See <see cref="AlreadyRanExactly"/> for why the difference
+        /// matters: a failed call and the same call declaring the failure expected are the SAME
+        /// identity on purpose (<see cref="CallIdentity"/>), and that pairing is a recovery, not a
+        /// repeat - it must stay allowed even though the first attempt is already "seen".
+        /// </summary>
+        private readonly HashSet<string> _succeeded = new(StringComparer.Ordinal);
+
         /// <summary>How many times the workspace has changed under this step.</summary>
         private int _generation;
 
@@ -1912,6 +2061,25 @@ public sealed class Orchestrator : IOrchestrator
         /// here, rather than by each caller deciding what counts as a change.
         /// </summary>
         public void WorkspaceChanged() => _generation++;
+
+        /// <summary>A call's result is in: record it as this identity's outcome for <see cref="AlreadyRanExactly"/>.</summary>
+        public void Resulted(ToolCall call, bool succeeded)
+        {
+            if (succeeded)
+                _succeeded.Add(Identity(call));
+        }
+
+        /// <summary>
+        /// Whether this exact call - same tool, same arguments, nothing this step has WRITTEN since -
+        /// already ran to a SUCCESSFUL result in this step. Only a success counts: a call that FAILED
+        /// and is now being retried with a declaration that makes the same outcome an answer
+        /// (<c>expectedExitCodes</c>) shares its identity with the failure on purpose, and that retry
+        /// is a recovery this must not block.
+        ///
+        /// <para>A peek in the other sense too: it must be read BEFORE this turn's own calls have run,
+        /// since only a call that ALREADY succeeded, before this turn, should count.</para>
+        /// </summary>
+        public bool AlreadyRanExactly(ToolCall call) => _succeeded.Contains(Identity(call));
 
         /// <summary>Records one turn's calls and says whether any of them was new.</summary>
         public bool Advanced(IReadOnlyList<ToolCall> calls)
@@ -2030,7 +2198,10 @@ public sealed class Orchestrator : IOrchestrator
     private async Task<(ReviewResult Result, ReviewMode Mode)> ReviewAsync(
         string title, List<ChatMessage> convo, ExecutionJournal journal, int evidenceStart,
         int stepStart, List<ArtifactRef> artifacts, IArtifactScope store,
-        IChatProvider reviewProvider, string reviewModel, CancellationToken ct)
+        IChatProvider reviewProvider, string reviewModel, CancellationToken ct,
+        WorkspaceChanges? changes = null, WorkspaceSnapshot? before = null,
+        // The user's own request, verbatim - see Reviewer.ReviewAsync's own parameter of this name.
+        string? request = null)
     {
         try
         {
@@ -2058,7 +2229,13 @@ public sealed class Orchestrator : IOrchestrator
             // transcript has to be shortened to fit the window the arguments are gone. Reading the
             // file also means the reviewer judges what is actually on disk rather than what the
             // model said it would put there.
-            var written = await ReadWrittenAsync(store, ct);
+            //
+            // Measured when it can be (WorkspaceChanges): what the step changed, by ANY tool, as a diff.
+            // The store's record is the fallback - it sees only the file tools.
+            var written = (changes is not null && before is not null
+                              ? await MeasuredChangesAsync(changes, before, ct)
+                              : null)
+                          ?? await ReadWrittenAsync(store, ct);
             // From the STEP's own mark, not the evidence window: what kind of work THIS step did is
             // not changed by a build an earlier step ran. The window says what the answer may rest
             // on; this says what the step itself was.
@@ -2091,7 +2268,7 @@ public sealed class Orchestrator : IOrchestrator
 
             var result = await _reviewer.ReviewAsync(
                 title, LastAssistant(convo), evidence, changed, reviewProvider, reviewModel, ct,
-                mode, written);
+                mode, written, request);
 
             return (result, mode);
         }
@@ -2421,7 +2598,11 @@ public sealed class Orchestrator : IOrchestrator
             // 414-line page be reviewed as its first 161 lines as though that were the whole thing.
             var shown = content is null
                 ? "(this file was removed, or could not be read back)"
-                : content.Length > MaxReviewFileChars ? content[..MaxReviewFileChars] : content;
+                // The START and the END, as the reviewer shows it: cut here to the head alone, the
+                // reviewer's own head-and-tail had no tail left to take, and a step that APPENDED to
+                // a long file was judged on a part that could not contain what it wrote (run 5e5b51,
+                // 2026-09-24: "the pages 4-6 findings ... fall in the part not shown" - PASS).
+                : content.Length > MaxReviewFileChars ? Shortening.ToFit(content, MaxReviewFileChars) : content;
 
             written.Add(new WrittenFile(
                 path, shown, content?.Length ?? shown.Length,
@@ -2429,6 +2610,72 @@ public sealed class Orchestrator : IOrchestrator
         }
 
         return written;
+    }
+
+    /// <summary>
+    /// What a step changed, as the reviewer is shown it - each file as a diff where one exists, a new
+    /// file whole, a deletion as a deletion. Null when the workspace could not be measured, and the
+    /// caller falls back to the store's record.
+    /// </summary>
+    private async Task<IReadOnlyList<WrittenFile>?> MeasuredChangesAsync(
+        WorkspaceChanges changes, WorkspaceSnapshot before, CancellationToken ct)
+    {
+        if (await changes.TakeAsync(ct) is not { } after
+            || await changes.CompareAsync(before, after, ct) is not { } found)
+            return null;
+
+        var written = new List<WrittenFile>(found.Count);
+        foreach (var change in found)
+        {
+            var (content, heading) = change switch
+            {
+                { Kind: FileChangeKind.Deleted } =>
+                    ("(deleted)", "DELETED by this step."),
+                { Binary: true } =>
+                    ("(a binary file - its contents are not shown)", "CHANGED by this step (binary)."),
+                { Kind: FileChangeKind.Added } =>
+                    (await ReadNowAsync(change.Path, ct), "NEW FILE, created by this step - its whole content:"),
+                { Diff: { } diff } =>
+                    (Hunks(diff),
+                     (change.Kind == FileChangeKind.Renamed ? $"RENAMED from {change.OldPath}, and " : "")
+                     + "CHANGED by this step - a unified diff: '+' lines were added, '-' lines removed, "
+                     + "lines starting with a space are unchanged context:"),
+                _ =>
+                    (await ReadNowAsync(change.Path, ct),
+                     "CHANGED by this step. There is no record of how it was before (the workspace is not "
+                     + "a git repository), so this is how it is NOW:")
+            };
+
+            written.Add(new WrittenFile(change.Path, content, content.Length, Heading: heading));
+        }
+
+        return written;
+    }
+
+    /// <summary>A diff from its first hunk: the "diff --git" and index lines say nothing a reviewer needs.</summary>
+    private static string Hunks(string diff)
+    {
+        var at = diff.IndexOf("@@", StringComparison.Ordinal);
+        return at < 0 ? diff : diff[at..];
+    }
+
+    /// <summary>A file as it is now, or a sentence saying why it cannot be shown.</summary>
+    private async Task<string> ReadNowAsync(string relativePath, CancellationToken ct)
+    {
+        try
+        {
+            var full = WorkspaceGuard.ResolveInside(_workspace.RootPath, relativePath);
+            var info = new FileInfo(full);
+            if (!info.Exists)
+                return "(could not be read back)";
+            if (info.Length > 2_000_000)
+                return $"(a {info.Length:N0}-byte file - too large to show here)";
+            return await File.ReadAllTextAsync(full, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return "(could not be read back)";
+        }
     }
 
     /// <summary>
@@ -2472,7 +2719,14 @@ public sealed class Orchestrator : IOrchestrator
         [EnumeratorCancellation] CancellationToken ct,
         // Only for the usage record. The loop is handed a ready provider and a model NAME, which is
         // all it needs to talk; the id is what makes the tokens attributable afterwards.
-        string? providerId = null)
+        string? providerId = null,
+        // What a handover restarts this step from, when the caller knows better than Preamble() can
+        // work out. Only a SHARED conversation needs it; see where it is built in RunPlanAsync.
+        IReadOnlyList<ChatMessage>? restartFrom = null,
+        // What the workspace looked like when this step began, and the means to compare it with
+        // now - so a handover carries what the step CHANGED as a measurement, and not only as the
+        // model's account of it. See HandoverFactsAsync.
+        WorkspaceChanges? changes = null, WorkspaceSnapshot? stepStart = null)
     {
         // An async iterator cannot return a value, so the caller passes in the slot the loop fills.
         // Without it "how did this end" existed only as English inside an event, and every consumer
@@ -2510,6 +2764,10 @@ public sealed class Orchestrator : IOrchestrator
         // the cap a model that keeps explaining itself would burn every iteration on the same nudge.
         var repairRequested = false;
         var openFailures = new OpenFailures();
+
+        // Replies stopped for running away (RunawayReply). The first is explained to the model and the
+        // step goes on; a second means the explanation did not take, and the step stops.
+        var runawayStops = 0;
 
         // How this model's prompt tokens relate to transcript characters, measured as the step runs.
         var scale = new TokenScale();
@@ -2567,6 +2825,16 @@ public sealed class Orchestrator : IOrchestrator
             is { } unreachedSentence)
             yield return Ev(EventKind.ErrorObserved, unreachedSentence);
 
+        // And the same question of the REGISTRY, asked of the whole team rather than this worker.
+        // A role lacking a tool is usually deliberate - the writer may not run shells - so that is
+        // not worth a word. A tool NO role names has no configuration in which it can ever be used,
+        // and this codebase has now met that five times inside its own registry and twice outside
+        // it, every time by symptom rather than by message. See ToolReach.
+        if (ToolReach.Unnamed(_tools.Definitions.Select(d => d.Name),
+                              _workers.All.Select(w => w.ToolAllowlist))
+            is { } unnamedSentence)
+            yield return Ev(EventKind.ErrorObserved, unnamedSentence);
+
         // The tool schemas are sent with every request and are not part of the message list, so they
         // have to be counted separately or the estimate is short by a constant few thousand
         // characters - exactly the margin that decides whether the last turn fits.
@@ -2581,22 +2849,112 @@ public sealed class Orchestrator : IOrchestrator
         var handovers = 0;
         var turnsHere = 0;
 
+        // Turns in a row that needed the window trimmed. Counted because trimming is a NIBBLE and
+        // a handover is a reset, and nothing connected the two: measured 2026-09-24 03:09, a step
+        // trimmed seven times - each freeing two or three thousand tokens that the next few turns
+        // ate again - and died of a full window on its 46th turn, fourteen short of the handover
+        // that would have emptied it. Trimming repeatedly and staying at the ceiling IS the
+        // condition the turn count was a rough proxy for.
+        var trimmedInARow = 0;
+
+        // The window, asked once: it is a property of the provider and the model, not of a turn.
+        var probe = new ChatRequest(model, messages, toolDefs, Temperature: 0.2, NumCtx: _numCtx, Think: _think);
+        var statedWindow = provider.ContextWindow(probe);
+
+        // Handover by how full the window is - a per-provider SETTING, not an engine constant: the
+        // number that suits one model is not a property of the engine (FIX_PLAN 9ct). Unset, the
+        // turn count decides, as it does for a provider with no window at all.
+        var handoverAt = provider.HandoverAtPercent(probe) is int pct and > 0 and < 100 ? pct : (int?)null;
+
+        // The transcript's size when lastPromptTokens was measured, so what has been added since
+        // can be estimated on top of a real count rather than instead of one.
+        var sizeAtLastPrompt = 0;
+
         for (var iteration = 1; iteration <= RunawayCeiling; iteration++)
         {
             // Cut, not killed - see TurnsBeforeHandover. Done at the TOP of a turn, where the
             // conversation is always in a complete state: the last message is a tool result or an
             // instruction, never half of a call waiting for its answer.
-            if (turnsHere >= TurnsBeforeHandover && handovers < MaxHandovers)
+            var windowIsThrashing = trimmedInARow >= TrimsBeforeHandover;
+
+            // How full the conversation is, from the provider's own count of the last prompt plus
+            // an estimate of what has been added since - or unknown, when the provider states no
+            // window or has not reported a prompt in THIS conversation yet. Unknown falls back to
+            // the turn count, which is the only length signal a cloud provider gives.
+            var measured = statedWindow is > 0 && handoverAt is not null && lastPromptTokens is not null;
+            var fullNow = measured
+                ? lastPromptTokens!.Value
+                  + scale.TokensFor(Math.Max(0, Transcript.Size(messages) + toolsOverhead - sizeAtLastPrompt))
+                : 0;
+            var windowIsFilling = measured && turnsHere > 0
+                && fullNow > (long)statedWindow!.Value * handoverAt!.Value / 100;
+            var tooManyTurns = !measured && turnsHere >= TurnsBeforeHandover;
+
+            if ((tooManyTurns || windowIsFilling || windowIsThrashing) && handovers < MaxHandovers)
             {
-                var carried = await HandoverAsync(provider, model, messages, runBudget, ct);
+                var why = windowIsThrashing
+                    ? $"The context window has been trimmed {TrimsBeforeHandover} turns running "
+                      + "and is still full, so trimming is not keeping up"
+                    : windowIsFilling
+                    ? $"The conversation has reached about {fullNow} of the {statedWindow} tokens this "
+                      + $"model was given ({fullNow * 100 / statedWindow!.Value}%), and the rest is "
+                      + "needed to write in"
+                    : $"This step has run {iteration - 1} turns";
+
+                // Said BEFORE the note is written, not after. Writing it is a whole turn - on a
+                // local model measured at 112 seconds, most of it generating a 17,000-character
+                // note - and it is not streamed, so until now the step card showed nothing at all
+                // for two minutes and then announced a handover that was already over. Asked
+                // 2026-09-24: "the model keeps hanging on the window update".
+                yield return Ev(EventKind.ContextTrimmed,
+                    $"{why}. Writing notes to carry into a fresh conversation - this is one long "
+                    + "turn, and on a local model it can take a minute or two.");
+
+                var carried = await HandoverAsync(
+                    provider, new ChatRequest(model, messages, toolDefs, Temperature: 0.2, NumCtx: _numCtx, Think: _think),
+                    runBudget, ct);
+
+                // What the engine MEASURED, beside what the model remembers. Taken before the
+                // conversation is cleared, because the last command's result is in it.
+                if (carried is { Length: > 0 })
+                    carried += await HandoverFactsAsync(
+                        changes, stepStart, messages, _artifacts.PendingPaths, store.TouchedPaths, _workspace.RootPath, ct);
 
                 if (carried is { Length: > 0 })
                 {
                     handovers++;
                     turnsHere = 0;
 
-                    var kept = Preamble(messages);
-                    messages.RemoveRange(kept, messages.Count - kept);
+                    // The stall ledger goes with the conversation it was counting. A handover
+                    // hands the step a note and an empty transcript, and the first thing any model
+                    // does with those is orient itself: does the file I am to append to exist, what
+                    // is in that folder. Those calls are NEW to the conversation and old to the
+                    // ledger, so the step was being stopped for finding its feet.
+                    //
+                    // Measured 2026-09-23 23:36, run 941cc9: sixty turns of real verification, a
+                    // handover carrying a note that names three pages and eight checked claims -
+                    // and seven seconds later "stopped after 3 turns that only repeated earlier
+                    // tool calls: read_file Docs/DRIFT_ollama.md; list_dir Docs". It had just been
+                    // told to carry on from notes; asking where the report was is not a circle.
+                    //
+                    // The guard is not weakened. It still stops a model going round inside ONE
+                    // conversation, which is the shape it was built for (§9k): "a stuck model does
+                    // not stop calling tools - it calls the SAME one, with the same arguments,
+                    // until something else stops it". After a handover there is no same
+                    // conversation to go round in.
+                    progress = new StepProgress();
+                    trimmedInARow = 0;
+
+                    if (restartFrom is not null)
+                    {
+                        messages.Clear();
+                        messages.AddRange(restartFrom);
+                    }
+                    else
+                    {
+                        var kept = Preamble(messages);
+                        messages.RemoveRange(kept, messages.Count - kept);
+                    }
                     messages.Add(ChatMessage.User(
                         $"You have been working on this for {iteration - 1} turn(s) and the "
                         + "conversation was getting long, so it has been started again from your own "
@@ -2604,9 +2962,35 @@ public sealed class Orchestrator : IOrchestrator
                         + "\n\nCarry on from there. The files you wrote are still on disk; read one "
                         + "back if you need what is in it."));
 
+                    // The last one is said differently, because it is the last WARNING there is.
+                    // After it nothing stands between the step and the backstop, which abandons it
+                    // and skips everything that depends on it - and that is the shape that cost
+                    // 30.6M tokens on 2026-09-22 before anyone knew it was happening.
+                    //
+                    // This is the cheap half of layer 2 ("a step declares what it repeats over").
+                    // Measured 2026-09-23 on one task and two workers: with the workspace census
+                    // in front of it the planner batches by itself, and the steps came out at 31,
+                    // 21, 14 and 12 turns - a fifth of the ceiling. The same plan with a weaker
+                    // worker ran 146, 148 and 88. So the size of a batch is decided by the planner
+                    // and whether it FITS is decided by the model, and the useful thing to build
+                    // was not machinery for resolving sets: it was being told, at the moment it
+                    // happens, that this run is on the second of those two paths.
+                    var lastOne = handovers >= MaxHandovers
+                        ? " That was the last handover: from here the only limit left is the "
+                          + $"{RunawayCeiling}-turn backstop, which abandons this step and skips "
+                          + "every step that depends on it. If the step is repeating work over many "
+                          + "items, it is too big - the plan should say how many at a time."
+                        : "";
+
+                    // The measurement was of the conversation just thrown away. Kept, it would read
+                    // the new, short one as still full and hand it over again on its next turn.
+                    lastPromptTokens = null;
+                    sizeAtLastPrompt = 0;
+
                     yield return Ev(EventKind.ContextTrimmed,
-                        $"This step has run {iteration - 1} turns. Carrying its own notes into a "
-                        + $"fresh conversation and continuing ({handovers} of {MaxHandovers}).");
+                        $"{why}. Carrying its own notes into a fresh conversation and continuing "
+                        + $"({handovers} of {MaxHandovers})."
+                        + lastOne);
                 }
                 else
                 {
@@ -2614,7 +2998,17 @@ public sealed class Orchestrator : IOrchestrator
                     // worse than stopping at the backstop, but it is better than starting the step
                     // again from nothing - so the handover is simply not taken, and the ceiling
                     // stays where it was.
+                    //
+                    // Said out loud, because it was the quietest branch here: the step keeps going
+                    // with no cut left and nothing had reported that the safety net was gone.
+                    var spent = handovers;
                     handovers = MaxHandovers;
+
+                    yield return Ev(EventKind.ErrorObserved,
+                        $"{why}, but the step could not summarise its own "
+                        + $"work, so it was not cut ({spent} of {MaxHandovers} handovers used). It "
+                        + $"carries on in one long conversation until the {RunawayCeiling}-turn "
+                        + "backstop, which abandons it and skips every step that depends on it.");
                 }
             }
 
@@ -2632,19 +3026,57 @@ public sealed class Orchestrator : IOrchestrator
                 // happened: 8174 prompt tokens of 8192, and 18 left to answer with.
                 // Never more than half the window: on a small one a fixed floor of 256 would leave
                 // nothing to talk with, and the guard would refuse every request instead of any.
-                var reserve = Math.Min(Math.Clamp(window / 8, 256, 2048), window / 2);
+                // An eighth of the window unless the provider is configured otherwise - a proportion,
+                // not a number fitted to one model. It was capped at 2,048 (1.5% of 131,072: a step
+                // died of it, 9cl), then at 8,192 (an answer of 14,000 tokens did not fit, 9cr); a
+                // fixed ceiling keeps being wrong for the next model. Never more than half.
+                var reserve = Math.Min(
+                    provider.AnswerReserve(request) is int configured and > 0 ? configured : Math.Max(window / 8, 256),
+                    window / 2);
                 var budget = window - reserve;
                 var sizeNow = Transcript.Size(messages) + toolsOverhead;
 
+                if (scale.TokensFor(sizeNow) <= budget)
+                    trimmedInARow = 0;
+
                 if (scale.TokensFor(sizeNow) > budget)
                 {
-                    var elided = Transcript.Elide(messages, scale.CharsFor(budget) - toolsOverhead);
+                    trimmedInARow++;
+
+                    // Cut DEEP, not just under the line. Every trim rewrites the prompt near its
+                    // start, and every provider with a prefix cache - hosted or local - then reads
+                    // the whole prompt again. Cutting to just under the budget guaranteed the next
+                    // trim a few turns later: measured 2026-09-24 15:32-15:35, run a2142be6, three
+                    // trims in three minutes on one step, each followed by a full re-read of about
+                    // 110,000 tokens (~55 s on that machine). One cut to half the window buys many
+                    // turns for the price of a single re-read. Half is a proportion of the stated
+                    // window, not a number about any model; never above the budget itself.
+                    var trimTo = Math.Min(budget, window / 2);
+                    var elided = Transcript.Elide(messages, scale.CharsFor(trimTo) - toolsOverhead);
                     sizeNow = Transcript.Size(messages) + toolsOverhead;
 
+                    // What it COST is said with what it bought. Transcript.Elide takes the OLDEST
+                    // exchanges first - correct, because the recent ones are what the model needs -
+                    // and that rewrites the prompt from just after the system block, which is where
+                    // a prefix cache stops matching.
+                    //
+                    // Measured on the server, 2026-09-24 12:08: two turns served from cache at
+                    // f_sim 0.998, then a trim, and the next turn was "selected slot by LRU" with
+                    // "prompt processing, n_tokens = 49533 … t = 27.04 s". Twenty-seven seconds of
+                    // re-reading to free three thousand tokens, and our own logs could not see it
+                    // because they count tokens and not prefill.
+                    //
+                    // There is no better ORDER - any edit invalidates everything after it - so the
+                    // answer is to trim rarely and hand over instead, which is what
+                    // TrimsBeforeHandover now does. This sentence is so that the cost is legible
+                    // while it is still happening.
                     if (elided > 0)
                         yield return Ev(EventKind.ContextTrimmed,
                             $"Context window nearly full — dropped the contents of {elided} earlier tool "
-                            + $"message(s) to make room (about {scale.TokensFor(sizeNow)} of {window} tokens now).");
+                            + $"message(s) to make room (about {scale.TokensFor(sizeNow)} of {window} tokens now). "
+                            + $"This also costs the provider's prefix cache from that point: the next turn "
+                            + $"re-reads the prompt instead of resuming it. {trimmedInARow} turn(s) running; "
+                            + $"at {TrimsBeforeHandover} the step is handed over instead.");
 
                     // Trimming had nothing left to give and the transcript still does not fit. Stop
                     // here rather than send it: the provider would answer with a fragment, and a
@@ -2661,7 +3093,27 @@ public sealed class Orchestrator : IOrchestrator
                             + ". Raise num_ctx in Settings, or use a model with a larger window.");
                         yield break;
                     }
+
                 }
+            }
+
+            // An answer can be no longer than what is left of the window, so SAY so. Without a
+            // max_tokens the provider will generate until it decides to stop, and a local one has
+            // no billing to make it care: measured 2026-09-24 03:37, a single turn passed 7,296
+            // tokens and was still going two minutes later, with nothing in the engine watching and
+            // nothing in the log to see.
+            //
+            // Derived rather than invented. A constant would either truncate a long write that
+            // would have fitted - the largest real one measured is 5,478 tokens, a report appended
+            // with edit_file - or sit high enough to be no limit at all. What is left of the window
+            // cannot truncate anything that would have succeeded, because anything longer was going
+            // to overflow regardless; it just turns two silent minutes into finish=length, which
+            // the loop below already explains.
+            if (provider.ContextWindow(request) is { } stated && stated > 0)
+            {
+                var room = stated - scale.TokensFor(Transcript.Size(messages) + toolsOverhead);
+                if (room > 0)
+                    request = request with { MaxTokens = request.MaxTokens ?? room };
             }
 
             // Measured against what this request actually is, so the next estimate uses the model's
@@ -2673,6 +3125,16 @@ public sealed class Orchestrator : IOrchestrator
             var toolBuilders = new Dictionary<int, ToolCallBuilder>();
             string? finishReason = null;
 
+            // What has arrived that the card does not show, and when it last said so.
+            var argumentChars = 0;
+            var saidAtArguments = 0;
+            var saidAtReasoning = 0;
+            var saidAtText = 0;
+
+            // The text of this reply, watched while it streams. See RunawayReply.
+            var runaway = new RunawayReply();
+            RunawayReply.Stop? stopped = null;
+
             await foreach (var delta in provider.StreamChatAsync(request, ct))
             {
                 switch (delta)
@@ -2680,6 +3142,20 @@ public sealed class Orchestrator : IOrchestrator
                     case TextDelta text:
                         contentBuilder.Append(text.Text);
                         yield return Ev(EventKind.AssistantDelta, text.Text);
+
+                        // The card shows the text as it streams, but the LOG saw none of it until the
+                        // reply ended - measured 2026-09-24 19:51, six minutes of a reply with nothing
+                        // in the log to say what it was. Said like the other two, with the line it
+                        // is on, so a long reply can be read from the log while it is still going.
+                        if (contentBuilder.Length - saidAtText >= ProgressEveryChars)
+                        {
+                            saidAtText = contentBuilder.Length;
+                            yield return Ev(EventKind.GenerationProgress,
+                                $"Writing a reply: {contentBuilder.Length:N0} characters so far… {RunawayReply.LastLine(contentBuilder)}");
+                        }
+
+                        if (toolBuilders.Count == 0)
+                            stopped = runaway.After(contentBuilder);
                         break;
 
                     case ToolCallDelta call:
@@ -2689,6 +3165,14 @@ public sealed class Orchestrator : IOrchestrator
                         if (call.Id is not null) builder.Id = call.Id;
                         if (call.Name is not null) builder.Name = call.Name;
                         if (call.ArgumentsJson is not null) builder.Arguments.Append(call.ArgumentsJson);
+
+                        argumentChars += call.ArgumentsJson?.Length ?? 0;
+                        if (argumentChars - saidAtArguments >= ProgressEveryChars)
+                        {
+                            saidAtArguments = argumentChars;
+                            yield return Ev(EventKind.GenerationProgress,
+                                $"Writing {builder.Name ?? "a tool call"}: {argumentChars:N0} characters so far…");
+                        }
                         break;
 
                     // Kept apart from the content on purpose: it is a draft, not an answer, and it
@@ -2696,6 +3180,12 @@ public sealed class Orchestrator : IOrchestrator
                     // can be diagnosed instead of arriving as an inexplicable silence.
                     case ReasoningDelta reasoning:
                         reasoningBuilder.Append(reasoning.Text);
+                        if (reasoningBuilder.Length - saidAtReasoning >= ProgressEveryChars)
+                        {
+                            saidAtReasoning = reasoningBuilder.Length;
+                            yield return Ev(EventKind.GenerationProgress,
+                                $"Reasoning: {reasoningBuilder.Length:N0} characters so far…");
+                        }
                         break;
 
                     case FinishDelta finish:
@@ -2712,6 +3202,7 @@ public sealed class Orchestrator : IOrchestrator
                         if (usage.PromptTokens is { } prompted)
                         {
                             lastPromptTokens = prompted;
+                            sizeAtLastPrompt = sizeAtRequest;
                             scale.Observe(sizeAtRequest, prompted);
                         }
                         yield return Usage(
@@ -2719,6 +3210,41 @@ public sealed class Orchestrator : IOrchestrator
                             usage.CachedPromptTokens);
                         break;
                 }
+
+                // Leaving the stream closes the request, and the provider stops generating.
+                if (stopped is not null)
+                    break;
+            }
+
+            // A reply that ran away. Kept as far as it is worth keeping - a loop's first pass, or the
+            // text as written - and explained, so the model can see its own reply stop and why. The
+            // explanation names the likely cause as well as the symptom: prose that "confirms" what
+            // no tool returned is the pattern the measured runaway began with.
+            if (stopped is not null)
+            {
+                runawayStops++;
+                var written = contentBuilder.Length;
+                var kept = contentBuilder.ToString(0, Math.Min(stopped.KeepChars, written));
+                messages.Add(new ChatMessage(ChatRole.Assistant, kept, null));
+
+                yield return Ev(EventKind.ErrorObserved,
+                    $"The model's reply was stopped at {written:N0} characters: {stopped.Reason}.");
+
+                if (runawayStops > 1)
+                {
+                    loopResult.Set(StepOutcomeKind.Incomplete,
+                        $"the model's reply ran away again after being told why the first was stopped: {stopped.Reason}");
+                    yield break;
+                }
+
+                messages.Add(ChatMessage.User(
+                    $"Your reply above was stopped after {written:N0} characters: {stopped.Reason}."
+                    + (stopped.Looped ? " Only its first pass is kept above." : "")
+                    + " Text in a reply is not an action: a check is made by calling a tool, and a fact is "
+                    + "established only by what a tool returned in this conversation. Go on with the step "
+                    + "by calling tools. A long result belongs in a file - write_file or edit_file - not "
+                    + "in the reply."));
+                continue;
             }
 
             // The turn was cut off at the token limit. Record only the partial text (dropping any
@@ -2771,11 +3297,23 @@ public sealed class Orchestrator : IOrchestrator
                 recovered = true;
             }
 
-            // Remembered in a shorter form than it was sent in: the arguments of a call that has
-            // already been made are a file's contents on their way to disk, and they are re-sent on
-            // every turn after this one. See Transcript.ForHistory - the calls INVOKED below are the
-            // model's own text, untouched.
-            messages.Add(new ChatMessage(ChatRole.Assistant, replyText, Transcript.ForHistory(toolCalls)));
+            // Remembered EXACTLY as the model sent it. The model reasons from this transcript, and
+            // it reads what it finds there about itself literally.
+            //
+            // From 2026-09-22 to 2026-09-24 a long argument was recorded shortened, to save prompt
+            // tokens - first as its opening 200 characters and a size, then (9cs) as a bracketed
+            // note saying it had been sent in full. Both misled the same way. With the first, a
+            // model saw its report stop mid-word and wrote it again "in parts". With the second
+            // (run 7deb2ba4, 16:10) it saw `"content":"[Not repeated here: ...]"` in its own call,
+            // said "Wait, that was a placeholder. Let me write the actual report", rewrote a 12 KB
+            // report five times "in smaller chunks", hit the shrink guard, and deleted the file.
+            // A history that differs from what the model did gets "corrected" by the model; no
+            // wording fixes that, so the history is not edited at record time at all.
+            //
+            // Window pressure is still handled - by Transcript.Elide, which drops the arguments and
+            // results of OLD exchanges together and always spares the newest ones. Unchanged history
+            // is what a provider's prefix cache serves, so keeping it costs far less than it looks.
+            messages.Add(new ChatMessage(ChatRole.Assistant, replyText, toolCalls));
 
             if (toolCalls is null)
             {
@@ -2858,6 +3396,16 @@ public sealed class Orchestrator : IOrchestrator
                 yield break; // genuine final answer - no tool calls
             }
 
+            // Which of THIS turn's calls exactly repeat one that already SUCCEEDED in this step, with
+            // nothing WRITTEN since - read before this turn's own calls have run, so only a PRIOR
+            // success counts (see StepProgress.AlreadyRanExactly for why a failed attempt does not).
+            // CommandTools (run_command, run_powershell, git, docker) rather than a set of its own:
+            // the same "spawns a process outside the workspace" question this class already asks
+            // elsewhere. See the gate further down that uses this.
+            var exactRepeats = toolCalls
+                .Where(c => CommandTools.Contains(c.Name) && !HasForce(c) && progress.AlreadyRanExactly(c))
+                .ToHashSet();
+
             // Did this turn do anything the step had not already done? A stuck model does not stop
             // calling tools - it calls the SAME one, with the same arguments, until something else
             // stops it. That is the shape worth detecting, and unlike a turn count it does not grow
@@ -2884,6 +3432,37 @@ public sealed class Orchestrator : IOrchestrator
 
             foreach (var call in toolCalls)
             {
+                // ── Does this tool exist at all? ──
+                //
+                // A name with no tool behind it used to fall through to the role gate below and be
+                // reported as "not available to role 'Developer'" - which is false, and false in
+                // the most expensive direction: told it lacks PERMISSION a model goes looking for
+                // another route, told it has a typo it fixes one character.
+                //
+                // Measured 2026-09-22: deepseek-flash, halfway through writing a PowerShell script
+                // in which every cmdlet is Verb-Noun, hyphenated the tool name too and sent
+                // 'run-powershell' seventeen times while 'run_powershell' sat in the tool list in
+                // front of it. Nothing in this codebase spells it with a hyphen; the model simply
+                // carried PowerShell's own naming into ours.
+                //
+                // Nothing ran, so this is NeverRan's case exactly - a word the engine does not
+                // have, like a cmdlet cmd.exe does not have - and the step is not left holding it.
+                if (!_tools.Definitions.Any(d => string.Equals(d.Name, call.Name, StringComparison.OrdinalIgnoreCase)))
+                {
+                    var nearest = NearestTool(call.Name, worker);
+                    var noSuchTool = $"there is no tool called '{call.Name}'. Nothing ran."
+                        + (nearest is null
+                            ? " Use one of the tools listed for this conversation, spelled exactly as it appears there."
+                            : $" The tool is spelled '{nearest}'. Call it again with that name.");
+
+                    openFailures.Failed(call, noSuchTool, didNotRun: true, asTool: nearest);
+                    journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson),
+                                   ActionOutcome.Refused, noSuchTool);
+                    yield return Decided(call.Name, allowed: false, $"{call.Name}: no such tool");
+                    messages.Add(ChatMessage.Tool(call.Id, "ERROR: " + noSuchTool));
+                    continue;
+                }
+
                 // ── Role gate: is this tool available to the worker's role? ──
                 if (!Allows(worker, call.Name))
                 {
@@ -2901,11 +3480,50 @@ public sealed class Orchestrator : IOrchestrator
                     continue;
                 }
 
+                // ── Repeat gate: an exact repeat of a slow command, nothing WRITTEN since ──
+                //
+                // Measured 2026-09-24, run 4f779e: the step ran `dotnet test`, then three read-only
+                // checks (two `git diff`, one `git status`) that themselves showed nothing had
+                // changed, then ran the exact same `dotnet test` again - 1.7s of wall time and a full
+                // test-output-sized reply for no new information. The existing stall guard (below)
+                // already tracks this exact case - a repeated identity at the same generation - and
+                // told the model afterwards that it had made a call it already made; this refuses it
+                // BEFORE spawning the process, for the tools where a repeat is both certain to answer
+                // the same and slow enough to be worth not paying for again.
+                //
+                // Scoped to process-spawning tools only: re-reading a file or re-listing a directory
+                // is already cheap, and the existing annotation already discourages it. NOT a
+                // guarantee - `delete_file` and `copy_file` are not tracked as writes here (see
+                // MutatingTools.Changes), so a step that deletes a file between two identical
+                // commands is not seen as having changed anything, and would be gated too; `force:
+                // true` is the way past that, for whichever side of it turns out to be wrong.
+                if (exactRepeats.Contains(call))
+                {
+                    var already = $"'{call.Name}' already ran with these exact arguments earlier in this step, "
+                                 + "and nothing has been written since - its result cannot have changed. "
+                                 + "Re-running it tells you nothing new; look at what it told you the first "
+                                 + "time. If you have a specific reason to expect a different answer now "
+                                 + "(state outside the workspace, flakiness you are checking for), send it "
+                                 + "again with \"force\": true.";
+
+                    // FoundNothing, not Failed: this call ANSWERED - "you already know this" - the same
+                    // way a lookup on a path that does not exist answered. It must not hold the step
+                    // open on its own; what would is the FIRST call, if that one never succeeded.
+                    openFailures.FoundNothing(call, already);
+                    journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson),
+                                   ActionOutcome.Refused, already);
+                    yield return Decided(call.Name, allowed: false, $"{call.Name}: refused — an exact repeat");
+                    messages.Add(ChatMessage.Tool(call.Id, "ERROR: " + already));
+                    continue;
+                }
+
                 // ── Read gate: has this step actually SEEN what it is replacing? ──
                 //
                 // Before permission, because it is not about what the agent may do - it is about
                 // what this write would silently destroy. See ReadLedger.
-                if (reads.Refuse(call, ReadLedger.FileNamedBy(call)) is { } unread)
+                var namedForLedger = ReadLedger.FileNamedBy(call);
+                if (reads.Refuse(call, namedForLedger,
+                        namedForLedger is null || await FileIsThereAsync(namedForLedger, store, ct)) is { } unread)
                 {
                     openFailures.Failed(call, unread);
                     journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson),
@@ -3164,6 +3782,10 @@ public sealed class Orchestrator : IOrchestrator
                     result = ToolResults.Fail($"{call.Name} threw: {ex.Message}");
                 }
 
+                // Recorded regardless of the tool: see StepProgress.AlreadyRanExactly for why only a
+                // SUCCESS counts, and only Resulted here (never Failed) needs to know that.
+                progress.Resulted(call, result.Success);
+
                 if (result.Success)
                 {
                     openFailures.Succeeded(call, result.Artifacts);
@@ -3279,19 +3901,25 @@ public sealed class Orchestrator : IOrchestrator
     /// which calls were made and not what they MEANT — "read Architecture.md" is in the journal;
     /// "Architecture.md checks out except the tool table" is what the next conversation needs.</para>
     ///
-    /// <para>One non-streaming call on the conversation as it stands. It is nearly free: the whole
-    /// transcript is already a cache hit by this point, and what it adds is a few hundred tokens of
-    /// question and answer.</para>
+    /// <para>One non-streaming call on the conversation as it stands - sent as the SAME request the
+    /// step sends, tools and settings included, with one question added at the end. It was sent
+    /// without the tools and with other settings, on the claim that it was "nearly free: the whole
+    /// transcript is already a cache hit". It was not: a chat template writes the tools into the
+    /// system block at the very start, so the prompt differed from its first tokens. Measured
+    /// 2026-09-24 21:47, run bc3200: 46,176 prompt tokens, 0 of them cached, 29 seconds, for a note
+    /// of 602 tokens.</para>
+    ///
+    /// <para>Offered tools, a model may call one instead of writing. That is treated as no note -
+    /// the step is not cut - which is what an empty answer has always meant here.</para>
     ///
     /// <para>Returns null when the model says nothing. The caller then does NOT cut — a step
     /// continuing from an empty handover would start again from its instructions alone, having
     /// forgotten everything it learned, which is worse than a long conversation.</para>
     /// </summary>
     private static async Task<string?> HandoverAsync(
-        IChatProvider provider, string model, List<ChatMessage> messages, RunBudget runBudget,
-        CancellationToken ct)
+        IChatProvider provider, ChatRequest step, RunBudget runBudget, CancellationToken ct)
     {
-        var asked = new List<ChatMessage>(messages)
+        var asked = new List<ChatMessage>(step.Messages)
         {
             ChatMessage.User(
                 "Before you continue: this conversation is being started over to keep it short, and "
@@ -3304,10 +3932,15 @@ public sealed class Orchestrator : IOrchestrator
 
         try
         {
-            var completion = await provider.CompleteAsync(
-                new ChatRequest(model, asked, Temperature: 0.0, NumCtx: null, Think: false), ct);
+            var completion = await provider.CompleteAsync(step with { Messages = asked }, ct);
 
             runBudget.TokensUsed(completion.PromptTokens ?? 0, completion.CompletionTokens ?? 0);
+
+            // A reply that CALLS a tool is not a note, whatever text comes with it: the call will not
+            // be run, and "I will read Prod.cs next" carried into the next conversation is an
+            // intention where a record of results should be.
+            if (completion.Message.ToolCalls is { Count: > 0 })
+                return null;
 
             var note = completion.Message.Content?.Trim();
             return string.IsNullOrWhiteSpace(note) ? null : note;
@@ -3322,6 +3955,192 @@ public sealed class Orchestrator : IOrchestrator
             // economy, and an economy that throws is worse than one that does not happen.
             return null;
         }
+    }
+
+    /// <summary>
+    /// Whether there is a file at this workspace path now - on disk, or as a proposal a staging
+    /// store holds. When it cannot be said (a path that does not resolve), true: the guards that ask
+    /// then stay as strict as they were, and the tool itself refuses a bad path.
+    /// </summary>
+    private async Task<bool> FileIsThereAsync(string path, IArtifactStore store, CancellationToken ct)
+    {
+        try
+        {
+            if (File.Exists(Path.GetFullPath(Path.Combine(_workspace.RootPath, path))))
+                return true;
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException or UnauthorizedAccessException)
+        {
+            return true;
+        }
+
+        return await store.TryReadPendingAsync(path, ct) is not null;
+    }
+
+    /// <summary>
+    /// Of written paths no snapshot listed: the ones that are on disk now (so were written where the
+    /// snapshots do not look) and the ones that are not (written and then removed - measured by their
+    /// absence at both ends). They were one list, "not measured", and a file created and deleted in
+    /// the same step was named as written somewhere unmeasured (run 9ecf0e, 2026-09-24 23:08).
+    /// </summary>
+    private static (string[] NotMeasured, string[] Removed) OnDiskOrGone(string root, IEnumerable<string> paths)
+    {
+        var notMeasured = new List<string>();
+        var removed = new List<string>();
+        foreach (var path in paths)
+        {
+            bool there;
+            try { there = File.Exists(Path.GetFullPath(Path.Combine(root, path))); }
+            catch { there = true; }   // cannot say: claim nothing about it having gone
+            (there ? notMeasured : removed).Add(path);
+        }
+        return (notMeasured.ToArray(), removed.ToArray());
+    }
+
+    /// <summary>How much of the diffs of changed files a handover carries, in all.</summary>
+    private const int MaxHandoverDiffChars = 3_000;
+
+    /// <summary>How much of the last command's output a handover carries - its END, where results are.</summary>
+    private const int HandoverOutputTailChars = 600;
+
+    /// <summary>
+    /// What a handover carries that the model did not write: which files differ from how they were
+    /// when the step began, and what the last command it ran said. Appended to its note under a
+    /// heading that says which of the two to believe.
+    ///
+    /// <para><b>Measured 2026-09-24 21:47, run bc3200.</b> Checking that tests catch a breakage, a
+    /// step made MonitorClient.cs accept HTTP 404, ran the tests - one failed, as intended - and
+    /// was handed over at that moment. Its note said "MonitorClient.cs is currently in its correct,
+    /// unbroken state ... What's still to do: None". The next conversation found a failing test,
+    /// and instead of undoing the breakage it changed the test to expect 404 to succeed. A reviewer
+    /// caught it. A note is a model's memory of its work; what it left on disk is a fact the engine
+    /// can measure, and the two were not put side by side.</para>
+    /// </summary>
+    private static async Task<string> HandoverFactsAsync(
+        WorkspaceChanges? changes, WorkspaceSnapshot? stepStart, List<ChatMessage> messages,
+        IReadOnlyCollection<string> pending, IReadOnlyCollection<string> touched, string root, CancellationToken ct)
+    {
+        var facts = new StringBuilder();
+
+        // Staged writes are not on disk, so no snapshot of the disk can see them - said first, and
+        // apart, so "nothing differs" below is never read as "nothing was written".
+        var waiting = pending.Select(PathKey).Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToArray();
+        if (waiting.Length > 0)
+            facts.Append("- Proposed and waiting for the user to apply - NOT on disk yet, so not in the comparison ")
+                 .Append($"below: {string.Join(", ", waiting)}\n");
+
+        try
+        {
+            if (changes is not null && stepStart is not null
+                && await changes.TakeAsync(ct) is { } now
+                && await changes.CompareAsync(stepStart, now, ct) is { } found)
+            {
+                // What the snapshots did not measure is not "unchanged". A file this step wrote in a
+                // folder the engine skips (bin, obj, the engine's own) or one git ignores is named as
+                // such, rather than falling silent under "no file differs".
+                var measured = await changes.PathsAsync(stepStart, ct) is { } was && await changes.PathsAsync(now, ct) is { } isNow
+                    ? was.Concat(isNow).Select(PathKey).ToHashSet(StringComparer.OrdinalIgnoreCase)
+                    : null;
+                var unmeasured = measured is null
+                    ? Array.Empty<string>()
+                    : touched.Select(PathKey).Where(p => !measured.Contains(p) && !waiting.Contains(p, StringComparer.OrdinalIgnoreCase))
+                             .Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToArray();
+
+                if (found.Count == 0)
+                    facts.Append("- No file the engine measures differs from how it was when this step began.\n");
+                else
+                {
+                    facts.Append($"- Files that differ from how they were when this step began ({found.Count}). ")
+                         .Append("A file you changed only to try something - a deliberate breakage, a temporary ")
+                         .Append("edit - is still changed until you put it back:\n");
+
+                    var room = MaxHandoverDiffChars;
+                    foreach (var change in found.Take(20))
+                    {
+                        facts.Append($"  - {change.Path} ({change.Kind.ToString().ToLowerInvariant()})\n");
+                        if (change.Kind != FileChangeKind.Modified || change.Diff is not { Length: > 0 } diff)
+                            continue;
+
+                        if (room <= 0)
+                        {
+                            facts.Append("    (its diff is not shown: the room for diffs in this note is used up)\n");
+                            continue;
+                        }
+
+                        var shown = diff.Length <= room ? diff : diff[..room] + $"\n… (diff cut here: {diff.Length} characters in all)";
+                        room -= Math.Min(diff.Length, room);
+                        foreach (var line in shown.Split('\n'))
+                            facts.Append("    ").Append(line).Append('\n');
+                    }
+                    if (found.Count > 20)
+                        facts.Append($"  - and {found.Count - 20} more\n");
+                }
+
+                var (notMeasured, removed) = OnDiskOrGone(root, unmeasured);
+                if (notMeasured.Length > 0)
+                    facts.Append("- Written by you where the engine does not measure (a folder it skips, or a file git ")
+                         .Append($"ignores), so NOT compared above: {string.Join(", ", notMeasured)}\n");
+                if (removed.Length > 0)
+                    facts.Append($"- Written by you and then removed - not on disk now: {string.Join(", ", removed)}\n");
+            }
+        }
+        catch (OperationCanceledException) { throw; }
+        catch { /* a fact that cannot be measured is not stated */ }
+
+        if (LastCommand(messages) is { } last)
+        {
+            var output = last.Result.TrimEnd();
+            var firstLine = output.Split('\n', 2)[0].Trim();
+            var tail = output.Length <= HandoverOutputTailChars
+                ? output
+                : "…" + output[^HandoverOutputTailChars..];
+            facts.Append($"- The last command you ran: {last.Command} - {firstLine}. Its output ends:\n");
+            foreach (var line in tail.Split('\n'))
+                facts.Append("    ").Append(line.TrimEnd('\r')).Append('\n');
+        }
+
+        return facts.Length == 0
+            ? ""
+            : "\n\n---\nMEASURED BY THE ENGINE, not written by you - where this and the note above "
+              + "disagree, this is what is true:\n" + facts.ToString().TrimEnd();
+    }
+
+    /// <summary>The command line a shell call ran - its 'command' or 'script' - or its arguments as sent.</summary>
+    private static string CommandText(string argumentsJson)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(argumentsJson);
+            foreach (var name in new[] { "command", "script" })
+                if (doc.RootElement.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String)
+                    return value.GetString() ?? argumentsJson;
+        }
+        catch (JsonException) { }
+        return argumentsJson;
+    }
+
+    /// <summary>The last shell command in the conversation and what it answered, or null.</summary>
+    private static (string Command, string Result)? LastCommand(List<ChatMessage> messages)
+    {
+        for (var i = messages.Count - 1; i >= 0; i--)
+        {
+            if (messages[i].Role != ChatRole.Assistant || messages[i].ToolCalls is not { Count: > 0 } calls)
+                continue;
+
+            for (var c = calls.Count - 1; c >= 0; c--)
+            {
+                var call = calls[c];
+                if (call.Name is not ("run_command" or "run_powershell"))
+                    continue;
+
+                var answer = messages.Skip(i + 1).FirstOrDefault(
+                    m => m.Role == ChatRole.Tool && m.ToolCallId == call.Id);
+                if (answer?.Content is { } content)
+                    return (Compact(CommandText(call.ArgumentsJson)), content);
+            }
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -3358,12 +4177,115 @@ public sealed class Orchestrator : IOrchestrator
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .ToArray();
 
-    private static string SummarizeArtifacts(List<ArtifactRef> artifacts)
+    /// <summary>
+    /// The run's closing line: what it CHANGED, as measured from where it started to where it ended -
+    /// not what it wrote along the way.
+    ///
+    /// <para>Measured 2026-09-24 21:49, run bc3200, "add tests": the line said
+    /// <c>2 artifact(s): Tests/MonitorClientAdditionalTests.cs, MonitorClient.cs</c>. The production
+    /// file had been edited 34 times - deliberate breakages to check the tests failed, each put back -
+    /// and ended exactly as it began, in a folder with no git to check it against. The line said the
+    /// run changed production code; finding out it had not took reading the whole log. And one
+    /// breakage left in by a step cut short would have produced the very same line.</para>
+    ///
+    /// <para>So a file written and then restored is named apart, and a file changed by a COMMAND -
+    /// which leaves no write behind - is named too. Without a measurement (a run whose steps ran in
+    /// parallel, a resumed run) the line is the list of writes, as before.</para>
+    ///
+    /// <para><b>Four answers, not two.</b> A written file the comparison does not list is "left as it
+    /// was" only if the comparison MEASURED it. A staged write is not on disk at all - it is a
+    /// proposal waiting to be applied - and a file in a folder the snapshot skips (bin, obj, the
+    /// engine's own) or one git ignores was never looked at. Both were first reported as "written and
+    /// left as it was", which is the one thing that was not known.</para>
+    /// </summary>
+    private static string SummarizeArtifacts(
+        List<ArtifactRef> artifacts, NetChanges? net = null, IReadOnlyCollection<string>? pending = null,
+        string? root = null)
     {
         var files = FilesTouched(artifacts);
-        return files.Length == 0
-            ? "(completed, no files changed)"
-            : $"(completed; {files.Length} artifact(s): {string.Join(", ", files)})";
+        if (net is null)
+            return files.Length == 0
+                ? "(completed, no files changed)"
+                : $"(completed; {files.Length} artifact(s): {string.Join(", ", files)})";
+
+        var waiting = (pending ?? Array.Empty<string>()).Select(PathKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var proposed = files.Where(f => waiting.Contains(PathKey(f))).ToArray();
+        var onDisk = files.Where(f => !waiting.Contains(PathKey(f))).ToArray();
+        var changed = onDisk.Where(f => net.Changed.Contains(PathKey(f))).ToArray();
+        var restored = onDisk.Where(f => !net.Changed.Contains(PathKey(f)) && net.Measured.Contains(PathKey(f))).ToArray();
+        var unlisted = onDisk.Where(f => !net.Changed.Contains(PathKey(f)) && !net.Measured.Contains(PathKey(f))).ToArray();
+        var (unmeasured, removed) = root is null ? (unlisted, Array.Empty<string>()) : OnDiskOrGone(root, unlisted);
+        var written = files.Select(PathKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var byCommands = net.Changed.Where(p => !written.Contains(p)).Order(StringComparer.OrdinalIgnoreCase).ToArray();
+
+        var parts = new List<string>();
+        if (changed.Length > 0)
+            parts.Add($"{changed.Length} artifact(s): {string.Join(", ", changed)}");
+        if (proposed.Length > 0)
+            parts.Add($"proposed, waiting to be applied: {string.Join(", ", proposed)}");
+        if (byCommands.Length > 0)
+            parts.Add($"changed by commands: {string.Join(", ", byCommands.Take(ShownByCommands))}"
+                      + (byCommands.Length > ShownByCommands ? $" and {byCommands.Length - ShownByCommands} more" : ""));
+        if (unmeasured.Length > 0)
+            parts.Add($"written where the run does not measure, so not compared: {string.Join(", ", unmeasured)}");
+        if (removed.Length > 0)
+            parts.Add($"written and then removed: {string.Join(", ", removed)}");
+        if (restored.Length > 0)
+            parts.Add($"written and left as it was: {string.Join(", ", restored)}");
+
+        if (parts.Count == 0)
+            return "(completed, no files changed)";
+
+        // "No files changed" only where that is KNOWN: nothing changed on disk among what was measured,
+        // and nothing written where it was not. A file written and removed is not claimed either way:
+        // absent at both ends of what was measured, but it may have stood somewhere unmeasured before.
+        if (changed.Length == 0 && byCommands.Length == 0 && unmeasured.Length == 0 && removed.Length == 0)
+            return proposed.Length > 0
+                ? $"(completed, no files changed on disk; {string.Join("; ", parts)})"
+                : $"(completed, no files changed; {string.Join("; ", parts)})";
+
+        return $"(completed; {string.Join("; ", parts)})";
+    }
+
+    /// <summary>What a run changed from its start to its end, and which files that measurement covered.</summary>
+    private sealed record NetChanges(IReadOnlySet<string> Changed, IReadOnlySet<string> Measured);
+
+    /// <summary>How many files changed by commands the closing line names before it counts the rest.</summary>
+    private const int ShownByCommands = 5;
+
+    private static string PathKey(string path) => path.Replace('\\', '/').TrimStart('.', '/');
+
+    /// <summary>
+    /// The files that differ between <paramref name="before"/> and now - the run's NET change, whatever
+    /// happened in between. Null when it cannot be measured, and then nothing is claimed from it.
+    /// </summary>
+    private static async Task<NetChanges?> NetChangedAsync(
+        WorkspaceChanges? changes, WorkspaceSnapshot? before, CancellationToken ct)
+    {
+        if (changes is null || before is null)
+            return null;
+
+        try
+        {
+            if (await changes.TakeAsync(ct) is not { } after
+                || await changes.CompareAsync(before, after, ct) is not { } found
+                || await changes.PathsAsync(before, ct) is not { } was
+                || await changes.PathsAsync(after, ct) is not { } isNow)
+                return null;
+
+            var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var change in found)
+            {
+                paths.Add(PathKey(change.Path));
+                if (change.OldPath is { } old)
+                    paths.Add(PathKey(old));
+            }
+            var measured = was.Concat(isNow).Select(PathKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            return new NetChanges(paths, measured);
+        }
+        catch (OperationCanceledException) { return null; }
+        catch (IOException) { return null; }
     }
 
     private static string LastAssistant(List<ChatMessage> messages)
@@ -3410,6 +4332,8 @@ public sealed class Orchestrator : IOrchestrator
         // is history, not instruction: a past decision is a fact about the project, not an order,
         // and a model that treats "we chose Postgres" as a command to install one has been misled
         // by the framing rather than by the fact.
+
+        /* I temporary block  this code
         if (context.Memory.Count > 0)
         {
             sb.AppendLine();
@@ -3420,7 +4344,7 @@ public sealed class Orchestrator : IOrchestrator
             foreach (var entry in context.Memory)
                 sb.AppendLine($"- [{entry.Kind}] {Gist(entry.Content, 200)}");
         }
-
+        */
         sb.AppendLine();
         sb.AppendLine("## Request (the user's intent)");
         sb.AppendLine(intent.RawText);
@@ -3449,6 +4373,31 @@ public sealed class Orchestrator : IOrchestrator
     /// Full access is stated explicitly with "*". Settings written before SchemaVersion 2 are migrated
     /// on load (see AppSettings.Migrate), so an old empty list does not silently lose its tools.
     /// </summary>
+    /// <summary>
+    /// The tool this worker actually HAS whose name differs from <paramref name="wrong"/> only in
+    /// separators or case - <c>run-powershell</c> for <c>run_powershell</c>.
+    ///
+    /// <para>Deliberately not fuzzy. Anything looser starts proposing <c>delete_file</c> for
+    /// <c>deleted_files</c>, and a confident wrong name costs more than no name at all: the model
+    /// spends a turn on it and arrives back here. Separators and case are where real typos of a
+    /// name the model can SEE in its own tool list come from.</para>
+    ///
+    /// <para>Searched among the tools this worker is offered, so the suggestion cannot walk the
+    /// model straight into the role gate one turn later.</para>
+    /// </summary>
+    private string? NearestTool(string wrong, Worker worker)
+    {
+        static string Bare(string name)
+            => name.Replace("-", "").Replace("_", "").Replace(".", "");
+
+        var bare = Bare(wrong);
+
+        return _tools.Definitions
+            .Where(d => Allows(worker, d.Name))
+            .Select(d => d.Name)
+            .FirstOrDefault(name => string.Equals(Bare(name), bare, StringComparison.OrdinalIgnoreCase));
+    }
+
     private static bool Allows(Worker worker, string tool)
         => worker.ToolAllowlist.Contains("*")
         || worker.ToolAllowlist.Contains(tool, StringComparer.OrdinalIgnoreCase)
@@ -3458,38 +4407,36 @@ public sealed class Orchestrator : IOrchestrator
 
 
     /// <summary>
-    /// Prepares the conversation for another attempt after a review rejected the work.
+    /// Prepares the conversation for another attempt after a review rejected the work: a REPAIR of the
+    /// points the reviewer named, from everything already established - not a redo.
     ///
-    /// For a step that only WROTE something, the rejected draft is removed from the transcript
-    /// first. Keeping it costs tokens twice over (the tool call carries the whole file, and so does
-    /// the next prompt) and anchors the model on the version it was just told is wrong — with
-    /// num_ctx at 8192 a second retry was measured at 6.7k tokens, close enough to the ceiling that
-    /// Ollama would have started silently dropping the system prompt, honesty rules included. The
-    /// model rewrites the whole file on every attempt anyway, so nothing is lost.
+    /// <para><b>What it replaced, and why it had to go.</b> For a step that ran no commands the
+    /// rejected attempt used to be cut out of the transcript and the evidence, with "That attempt has
+    /// been discarded. Redo this step from scratch". The reasons were real on 2026-09-06: an 8,192
+    /// window a second attempt nearly filled, and small models whose documents were invented from end
+    /// to end, where starting over was the point. And it rested on one claim - "the model rewrites the
+    /// whole file on every attempt anyway, so nothing is lost" - that is false for a step that
+    /// RESEARCHES: its attempt is mostly reads, and they went out with the draft.</para>
     ///
-    /// For a step that RAN something, the transcript stays: the command output IS the evidence, and
-    /// discarding it would mean re-running commands that have already had their effect.
+    /// <para>Measured 2026-09-24: after a content review rejected an audit step - substantively, some
+    /// claims were confirmed by the documentation itself instead of the code - the step spent another
+    /// 58.7 s of local generation and repeated 10 reads exactly, re-establishing what it had already
+    /// read. The rejection was right; throwing away the sources was not.</para>
+    ///
+    /// <para><b>Why keeping it is safe now.</b> A long transcript is handled by the window guard, the
+    /// deep trim and the handover, not by cutting evidence; and the review judges what the step
+    /// CHANGED (WorkspaceChanges), so an attempt kept in the transcript cannot be mistaken for the
+    /// file. The step's files are NOT reverted between attempts - only after the last one is
+    /// rejected - so the draft is on disk to be corrected in place.</para>
     /// </summary>
-    /// <returns>
-    /// Whether the rejected attempt was DISCARDED from the transcript. The caller needs this to keep
-    /// the evidence window and the transcript window the same length — see the note at the call site.
-    /// </returns>
-    private static bool RetryAfterReview(
-        List<ChatMessage> convo, int conversationStart, ReviewMode mode, string notes, string what)
-    {
-        var discarded = mode == ReviewMode.Content;
-
-        if (discarded && convo.Count > conversationStart)
-            convo.RemoveRange(conversationStart, convo.Count - conversationStart);
-
-        convo.Add(ChatMessage.User(
+    private static void RetryAfterReview(List<ChatMessage> convo, string notes, string what)
+        => convo.Add(ChatMessage.User(
             $"A reviewer rejected the previous attempt with this feedback: {notes}\n"
-            + (discarded
-                ? $"That attempt has been discarded. Redo {what} from scratch, correcting every point above."
-                : $"Please fix the issues and redo {what}.")));
-
-        return discarded;
-    }
+            + $"Repair {what}: fix exactly the points above, and keep everything the review did not question. "
+            + "What you already read and ran above still stands - do not read or run it again unless a point "
+            + "above needs something you have not looked at yet. Files you wrote are still there as you left "
+            + "them: change the passages the points are about with edit_file, rather than writing a whole "
+            + "file again."));
 
     /// <summary>
     /// Puts back what the rejected work produced, and takes it out of the run's artifact list so the

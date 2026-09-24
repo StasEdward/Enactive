@@ -34,6 +34,11 @@ internal sealed class ReadLedger
     {
         public int Contiguous;   // the highest line reached without a gap from line 1
         public int Total;        // the file's line count, as the read reported it
+
+        // Lines read_file cannot show whole - one line longer than its cap, which it steps OVER
+        // when it says where to read on. Such a line is never "seen", so a file holding one is
+        // never read in full, and the advice for it must not be "read from that line" again.
+        public readonly HashSet<int> TooLong = new();
     }
 
     private readonly Dictionary<string, Coverage> _files =
@@ -42,8 +47,42 @@ internal sealed class ReadLedger
     /// <summary>The tool whose results this ledger is built from.</summary>
     internal const string ReadTool = "read_file";
 
+    /// <summary>The tool that reads several files at once.</summary>
+    internal const string ReadManyTool = "read_files";
+
+    private Coverage CoverageOf(string path)
+    {
+        var key = Key(path);
+        if (!_files.TryGetValue(key, out var coverage))
+            _files[key] = coverage = new Coverage();
+        return coverage;
+    }
+
     /// <summary>The tool this ledger guards.</summary>
     internal const string WriteTool = "write_file";
+
+    /// <summary>The tools that take a file away from its path - and with it, what was read of it.</summary>
+    internal const string DeleteTool = "delete_file";
+    internal const string MoveTool = "move_file";
+
+    private static IEnumerable<string> PathsNamedBy(ToolCall call, params string[] names)
+    {
+        var found = new List<string>();
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(
+                string.IsNullOrWhiteSpace(call.ArgumentsJson) ? "{}" : call.ArgumentsJson);
+            if (doc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Object)
+                return found;
+            foreach (var name in names)
+                if (doc.RootElement.TryGetProperty(name, out var value)
+                    && value.ValueKind == System.Text.Json.JsonValueKind.String
+                    && value.GetString() is { Length: > 0 } path)
+                    found.Add(path);
+        }
+        catch (System.Text.Json.JsonException) { }
+        return found;
+    }
 
     /// <summary>
     /// Records what a successful read covered. Everything it needs is already in the result's
@@ -52,8 +91,48 @@ internal sealed class ReadLedger
     /// </summary>
     public void Saw(ToolCall call, ToolResult result)
     {
-        if (!string.Equals(call.Name, ReadTool, StringComparison.Ordinal) || !result.Success)
+        // A file deleted or moved away is not the file that was read. What was read of it describes
+        // content that is gone, and must not stand between the step and a NEW file at that path.
+        // Measured 2026-09-24 23:05-23:08, run 9ecf0e: a step read part of a test file it had just
+        // written, deleted it, generated it again from scratch - 8,010 tokens, two minutes on that
+        // machine - and the write was refused as "read only in part", about a file that no longer
+        // existed.
+        if (result.Success && call.Name is DeleteTool)
+        {
+            foreach (var gone in PathsNamedBy(call, "path"))
+                _files.Remove(Key(gone));
             return;
+        }
+
+        // A MOVE takes what was read with it: the content at the new path is the content that was
+        // read at the old one, and a file seen in part must not become rewritable by being renamed.
+        if (result.Success && call.Name is MoveTool)
+        {
+            if (PathsNamedBy(call, "from").FirstOrDefault() is { } source
+                && PathsNamedBy(call, "to").FirstOrDefault() is { } target)
+            {
+                _files.Remove(Key(target));
+                if (_files.Remove(Key(source), out var moved))
+                    _files[Key(target)] = moved;
+            }
+            return;
+        }
+
+        if (call.Name is not (ReadTool or ReadManyTool) || !result.Success)
+            return;
+
+        // Several files in one read - read_files, or read_file given 'paths'. Each says how much of it
+        // was shown whole; an excerpt counts as none, so a whole-file write of it is refused below.
+        if (Meta(result, "files") is IEnumerable<FileCoverage> many)
+        {
+            foreach (var file in many)
+            {
+                var entry = CoverageOf(file.Path);
+                entry.Total = file.TotalLines;
+                entry.Contiguous = Math.Max(entry.Contiguous, file.LinesShownWhole);
+            }
+            return;
+        }
 
         if (Meta(result, "path") is not string path || string.IsNullOrWhiteSpace(path))
             return;
@@ -71,6 +150,12 @@ internal sealed class ReadLedger
 
         coverage.Total = lines;
 
+        // A line read_file cannot show whole. read_file says so in the text; this remembers it, so the
+        // advice below agrees with it. Named by the tool rather than inferred from a cursor jumping
+        // past the cut: a long LAST line has no cursor after it.
+        if (Int(result, "tooLongLine") is { } tooLong)
+            coverage.TooLong.Add(tooLong);
+
         // A window that starts at or before the first line not yet seen extends the run; one that
         // starts beyond it leaves a hole, and a hole is exactly what makes a rewrite unsafe.
         if (from <= coverage.Contiguous + 1)
@@ -81,10 +166,17 @@ internal sealed class ReadLedger
     /// Why this write must not go ahead, or null when it may. A whole-file write of a file this step
     /// has seen only part of cannot have been derived from the parts it did not see.
     /// </summary>
-    public string? Refuse(ToolCall call, string? path)
+    /// <param name="fileExists">
+    /// Whether there is a file at <paramref name="path"/> now - on disk, or as a staged proposal. A
+    /// write where there is none CREATES a file, and there is nothing it could destroy: a file deleted
+    /// by a command, which no tool call here saw, is covered by this as well as by
+    /// <see cref="Saw"/>'s forgetting.
+    /// </param>
+    public string? Refuse(ToolCall call, string? path, bool fileExists = true)
     {
         if (!string.Equals(call.Name, WriteTool, StringComparison.Ordinal)
-            || string.IsNullOrWhiteSpace(path))
+            || string.IsNullOrWhiteSpace(path)
+            || !fileExists)
             return null;
 
         if (!_files.TryGetValue(Key(path), out var coverage))
@@ -94,6 +186,20 @@ internal sealed class ReadLedger
             return null;   // read in full, in one window or several
 
         var next = coverage.Contiguous + 1;
+
+        // The same cursor read_file gave - except where read_file itself stepped over the line
+        // because it cannot show it. Sending the model back there returns the same cut forever.
+        if (coverage.TooLong.Contains(next))
+            return $"'{path}' has a line ({next}) longer than read_file can show, so this step has not "
+                 + "seen the whole file and a whole-file write would replace what it has not read. "
+                 + "Change it with edit_file, which replaces one exact passage and leaves the rest alone.";
+
+        if (coverage.Contiguous == 0)
+            return $"This step has seen '{path}' only as an excerpt, not whole ({coverage.Total} lines), so a "
+                 + "whole-file write would replace the part it has not seen with whatever it happens to produce. "
+                 + "Either use edit_file, which replaces one exact passage and leaves the rest alone, or read it "
+                 + "first: read_file with \"offset\": 1.";
+
         return $"This step has read only lines 1-{coverage.Contiguous} of {coverage.Total} in "
              + $"'{path}', so a whole-file write would replace {coverage.Total - coverage.Contiguous} "
              + "line(s) it has never seen with whatever it happens to produce. That is how a file "

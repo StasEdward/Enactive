@@ -5,7 +5,7 @@
         x:Class="Enactive.App.Ui.ProviderEditWindow"
         x:DataType="vm:ProviderEditViewModel"
         Title="Provider"
-        Width="620" Height="865"
+        Width="620" Height="1100"
         WindowStartupLocation="CenterOwner"
         Background="{DynamicResource Brand.Bg}"
         WindowDecorations="BorderOnly"
@@ -48,6 +48,14 @@
                 <TextBox Text="{Binding ContextWindowText}"
                          PlaceholderText="blank = assume 16000 — nothing can ask the provider" />
 
+                <TextBlock Classes="label" Text="Tokens kept free for the answer" />
+                <TextBox Text="{Binding AnswerReserveText}"
+                         PlaceholderText="blank = an eighth of the context window" />
+
+                <TextBlock Classes="label" Text="Hand a step over at % of the context window" />
+                <TextBox Text="{Binding HandoverAtText}"
+                         PlaceholderText="blank = after 60 turns, as without a window (e.g. 75 for a local model)" />
+
                 <TextBlock Classes="label" Text="Headers" />
                 <TextBox Classes="multiline" MinHeight="60" Text="{Binding HeadersText}"
                          PlaceholderText="extra headers — one Header-Name: value per line" />
@@ -79,10 +87,17 @@
                                VerticalAlignment="Center" TextWrapping="Wrap" />
                 </StackPanel>
 
+                <!-- "Apply", not "Save", because this button does not write anything: it puts
+                     the change into the Settings window's copy, and that copy reaches the file only
+                     when Settings itself is saved. Reported 2026-09-23 - a tool was ticked here
+                     twice, across two restarts, and lost both times. A button labelled Save that
+                     does not save is the defect; the label was it. -->
                 <StackPanel Classes="actions">
-                    <Button Classes="primary" Content="Save" Command="{Binding SaveCommand}" />
+                    <Button Classes="primary" Content="Apply" Command="{Binding SaveCommand}" />
                     <Button Content="Cancel" Command="{Binding CancelCommand}" />
                 </StackPanel>
+                <TextBlock Classes="hint" TextWrapping="Wrap"
+                           Text="Apply puts this back in the Settings window. It is written to disk when you press Save there - closing Settings without saving discards it." />
 
             </StackPanel>
         </ScrollViewer>

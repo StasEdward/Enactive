@@ -35,13 +35,16 @@ public sealed class AStepThatHandsOverToItselfTests
     /// sit in the script at the position the engine will ask it — after that many working turns.
     /// Null scripts no answer at all, which is the case where the step declines to be cut.</para>
     /// </summary>
-    private static FakeChatProvider Busy(int turns, int? noteAfter = null)
+    private static FakeChatProvider Busy(int turns, params int[] noteAfter)
     {
         var script = new List<Turn> { Turn.Says(QuickPlan) };
 
         for (var i = 0; i < turns; i++)
         {
-            if (i == noteAfter)
+            // A note at EACH handover point, because turnsHere resets after a cut: the second cut
+            // arrives 60 working turns after the first, and a script with only the first note has
+            // the second handover decline rather than happen.
+            if (noteAfter.Contains(i))
                 script.Add(Turn.Says(Note));
 
             script.Add(Turn.Calls1("write_file", $$"""{"path":"note{{i}}.md","content":"step {{i}}"}"""));
@@ -49,6 +52,118 @@ public sealed class AStepThatHandsOverToItselfTests
 
         script.Add(Turn.Says("Finished the long job."));
         return new FakeChatProvider(script.ToArray());
+    }
+
+    /// <summary>
+    /// A step is not stopped for finding its feet after a handover.
+    ///
+    /// <para><b>Measured 2026-09-23 23:36, run 941cc9.</b> Sixty turns of real verification - 34
+    /// reads and 32 searches across the source - then a handover carrying a note that named three
+    /// wiki pages and eight checked claims. Three turns and seven seconds later: <i>"stopped after
+    /// 3 turns that only repeated earlier tool calls: read_file Docs/DRIFT_ollama.md; list_dir
+    /// Docs"</i>, and the whole plan skipped behind it.</para>
+    ///
+    /// <para>Those three were the model orienting itself in a conversation it had just been
+    /// handed: does the report I am to append to exist, what is in that folder, let me look
+    /// again. New to the conversation and old to a ledger that had outlived it.</para>
+    ///
+    /// <para><b>Why the step has to write nothing.</b> A successful write advances a GENERATION
+    /// (§9r) and every call after it is new again, which hides this entirely. The reported step
+    /// was an AUDIT - it read and searched for sixty turns and wrote not one file - so the ledger
+    /// it carried across the handover was complete and unforgiving.</para>
+    /// </summary>
+    [Fact]
+    public async Task Orienting_itself_after_a_handover_is_not_a_stall()
+    {
+        using var fx = new EngineFixture();
+        fx.Write("source.cs", "class A { }");
+
+        var script = new List<Turn> { Turn.Says(QuickPlan) };
+
+        // The orientation, done once early - exactly as the reported run did before settling in.
+        script.Add(Turn.Calls1("read_file", """{"path":"report.md"}"""));
+        script.Add(Turn.Calls1("list_dir", """{"path":"."}"""));
+
+        // Fifty-eight turns of reading and searching. No writes: an audit changes nothing, and a
+        // write would advance the generation and make every later call new again.
+        for (var i = 0; i < 58; i++)
+            script.Add(Turn.Calls1("search_files",
+                                   $$"""{"pattern":"claim{{i}}","glob":"*.cs"}"""));
+
+        script.Add(Turn.Says(Note));   // the handover asks, and this answers
+
+        // And then the same three moves, in the fresh conversation that cannot see them.
+        script.Add(Turn.Calls1("read_file", """{"path":"report.md"}"""));
+        script.Add(Turn.Calls1("list_dir", """{"path":"."}"""));
+        script.Add(Turn.Calls1("read_file", """{"path":"report.md"}"""));
+        script.Add(Turn.Says("Found my bearings and finished."));
+
+        var events = await fx.RunAsync(
+            fx.Build(new FakeChatProvider(script.ToArray()), EngineFixture.Role("developer")),
+            "audit the claims");
+
+        Assert.DoesNotContain("only repeated earlier tool calls", events.Text(), StringComparison.Ordinal);
+        Assert.False(events.Has(EventKind.TaskFailed), events.Text());
+    }
+
+    /// <summary>
+    /// The LAST cut says it is the last — the cheap half of layer 2, and the whole of what that
+    /// layer was going to buy.
+    ///
+    /// <para><b>Why the machinery was not built.</b> Layer 2 was to have a step declare what it
+    /// repeats over, with the engine resolving and freezing the set, sizing batches from a probe and
+    /// breaking the circuit after two failures. Measured 2026-09-23, one task and two workers: with
+    /// the workspace census in front of it the planner batched twelve pages into four steps
+    /// unprompted, and those steps ran 31, 21, 14 and 12 turns — a fifth of the ceiling. The same
+    /// plan with a weaker worker ran 146, 148 and 88. So the census decides the SIZE of a batch and
+    /// the model decides whether it fits, and what was worth building was not a set resolver: it
+    /// was being told, at the moment it happens, that this run is on the second of those two
+    /// paths.</para>
+    ///
+    /// <para>Before this, the third handover read exactly like the first two, and the run that cost
+    /// 30.6M tokens on 2026-09-22 gave no sign until the backstop had already taken it.</para>
+    /// </summary>
+    [Fact]
+    public async Task The_last_handover_says_it_is_the_last()
+    {
+        using var fx = new EngineFixture();
+
+        // Three cuts, so the third is the one with nothing behind it.
+        var agent = Busy(200, 60, 120, 180);
+
+        var events = await fx.RunAsync(fx.Build(agent, EngineFixture.Role("developer")), "a long job");
+
+        var cuts = events.Where(e => e.Kind == EventKind.ContextTrimmed).ToArray();
+
+        Assert.NotEmpty(cuts);
+
+        // The earlier ones stay plain: a warning on every cut is a warning nobody reads.
+        Assert.All(cuts.Take(cuts.Length - 1),
+                   e => Assert.DoesNotContain("last handover", e.Summary, StringComparison.Ordinal));
+
+        var last = cuts[^1];
+        Assert.Contains("last handover", last.Summary, StringComparison.Ordinal);
+        Assert.Contains("250-turn backstop", last.Summary, StringComparison.Ordinal);
+        Assert.Contains("how many at a time", last.Summary, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// And the quietest branch of all: a step that could not summarise its own work is NOT cut, so
+    /// the safety net is gone and nothing used to say so. It carries on in one long conversation,
+    /// which is the right call — starting the step again from nothing is worse — but it is not a
+    /// thing to be silent about.
+    /// </summary>
+    [Fact]
+    public async Task A_step_that_could_not_be_cut_says_the_net_is_gone()
+    {
+        using var fx = new EngineFixture();
+        var agent = Busy(turns: 75);   // no note scripted: the handover is declined
+
+        var events = await fx.RunAsync(fx.Build(agent, EngineFixture.Role("developer")), "a long job");
+
+        Assert.Contains(events, e => e.Kind == EventKind.ErrorObserved
+                                     && e.Summary.Contains("could not summarise", StringComparison.Ordinal)
+                                     && e.Summary.Contains("was not cut", StringComparison.Ordinal));
     }
 
     /// <summary>
@@ -60,7 +175,7 @@ public sealed class AStepThatHandsOverToItselfTests
     public async Task A_step_longer_than_one_conversation_still_finishes()
     {
         using var fx = new EngineFixture();
-        var agent = Busy(turns: 75, noteAfter: 60);
+        var agent = Busy(75, 60);
 
         var events = await fx.RunAsync(fx.Build(agent, EngineFixture.Role("developer")), "a long job");
 
@@ -78,7 +193,7 @@ public sealed class AStepThatHandsOverToItselfTests
     public async Task The_conversation_is_shorter_after_the_handover_than_before_it()
     {
         using var fx = new EngineFixture();
-        var agent = Busy(turns: 75, noteAfter: 60);
+        var agent = Busy(75, 60);
 
         await fx.RunAsync(fx.Build(agent, EngineFixture.Role("developer")), "a long job");
 
@@ -99,7 +214,7 @@ public sealed class AStepThatHandsOverToItselfTests
     public async Task The_new_conversation_keeps_the_instructions_and_carries_the_note()
     {
         using var fx = new EngineFixture();
-        var agent = Busy(turns: 75, noteAfter: 60);
+        var agent = Busy(75, 60);
 
         await fx.RunAsync(fx.Build(agent, EngineFixture.Role("developer")), "a long job");
 
@@ -125,7 +240,11 @@ public sealed class AStepThatHandsOverToItselfTests
 
         var events = await fx.RunAsync(fx.Build(agent, EngineFixture.Role("developer")), "a long job");
 
-        Assert.DoesNotContain(events, e => e.Kind == EventKind.ContextTrimmed);
+        // Not "no ContextTrimmed at all": since 2026-09-24 the handover is announced BEFORE its note
+        // is written (a local model took 112 silent seconds over one), so an attempt that comes back
+        // empty has been announced. What must not appear is the handover itself.
+        Assert.DoesNotContain(events, e => e.Kind == EventKind.ContextTrimmed
+                                           && e.Summary.Contains("Carrying its own notes", StringComparison.Ordinal));
         Assert.Contains(events, e => e.Kind == EventKind.TaskCompleted);
     }
 

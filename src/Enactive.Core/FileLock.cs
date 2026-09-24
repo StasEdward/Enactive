@@ -56,7 +56,19 @@ public static class FileLock
                 if (DateTimeOffset.UtcNow >= deadline)
                     throw Timeout(full);
 
-                Thread.Sleep(PollMs);
+                // A wait the token can end - the same contract TakeAsync keeps with Task.Delay. This
+                // was Thread.Sleep, so a cancelled Take went on waiting up to the whole 30 seconds
+                // and then RETURNED the lock it had been told to stop waiting for (found 2026-09-24,
+                // Docs/CORE_TESTS_REVIEW_2026-09-24.md #3). Throwing inside the try releases the gate.
+                if (ct.CanBeCanceled)
+                {
+                    ct.WaitHandle.WaitOne(PollMs);
+                    ct.ThrowIfCancellationRequested();
+                }
+                else
+                {
+                    Thread.Sleep(PollMs);
+                }
             }
         }
         catch

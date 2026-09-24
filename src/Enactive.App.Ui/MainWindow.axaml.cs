@@ -905,6 +905,12 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                     _doneSteps++;
                     UpdateProgress();
                     break;
+                // A long generation still arriving - shown on the activity line, replaced in place,
+                // so minutes of writing a big tool call do not look like a hang.
+                case EventKind.GenerationProgress:
+                    (CardFor(ev) ?? EnsureCurrentCard()).SetActivity(ev.Summary);
+                    break;
+
                 case EventKind.AssistantDelta:
                     Live(() => _vm.SetAgent("Coder", Brand.PillCoder));
                     var streamCard = CardFor(ev) ?? EnsureCurrentCard();
@@ -991,9 +997,11 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                         AddArtifact(ev);
                     break;
 
-                // The conversation was pruned to fit the model's window. Shown on the step card, not
-                // buried in the log: from here on the model is working with less than it was given,
-                // and that explains behaviour a person would otherwise blame on the model.
+                // The conversation was pruned to fit the model's window, or is being handed over to a
+                // fresh one - announced before the note is written, because writing it is one long
+                // silent turn. Shown on the step card, not buried in the log: from here on the model
+                // is working with less than it was given, and that explains behaviour a person would
+                // otherwise blame on the model - or on a hang.
                 case EventKind.ContextTrimmed:
                     (CardFor(ev) ?? EnsureCurrentCard()).AddNote(ev.Summary);
                     break;
@@ -2589,12 +2597,9 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         if (provider is null)
             return ModelWorkSplit.Reach.Unknown;
 
-        var url = provider.BaseUrl ?? string.Empty;
-        return url.Contains("localhost", StringComparison.OrdinalIgnoreCase)
-            || url.Contains("127.0.0.1", StringComparison.Ordinal)
-            || url.Contains("[::1]", StringComparison.Ordinal)
-                ? ModelWorkSplit.Reach.Local
-                : ModelWorkSplit.Reach.Cloud;
+        return Enactive.Settings.ProviderReach.Local(provider.BaseUrl)
+            ? ModelWorkSplit.Reach.Local
+            : ModelWorkSplit.Reach.Cloud;
     }
 
     /// <summary>
@@ -2688,7 +2693,8 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     {
         var builtInTools = new List<ITool>
         {
-            new WriteFileTool(), new EditFileTool(), new ReadFileTool(), new SearchFilesTool(),
+            new WriteFileTool(), new EditFileTool(), new ReadFileTool(), new ReadFilesTool(),
+            new SearchFilesTool(),
             // The three that answer WITHOUT returning file content: a number, a size, a verdict.
             new CountMatchesTool(), new FileStatsTool(), new CompareFilesTool(),
             new ListDirectoryTool(), new CreateDirectoryTool(), new MoveFileTool(), new CopyFileTool(), new DeleteFileTool(),
@@ -2720,7 +2726,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
 
         if (_engineProblem is not null)
         {
-            _vm.ModelLabel = "no model chosen";
+
             _vm.WorkerRoles.Clear();
             return;
         }
@@ -2730,6 +2736,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         // version had drifted onto a different provider kind and a model nobody had installed.
         var engine = EngineComposition.Build(_settings, _http, _log);
         _providerFactory = engine.Providers;
+        _providerFactory.MetricsReported = metrics => Dispatcher.UIThread.Post(() => _vm.Performance.Add(metrics));
         _workerProvider = engine.Workers;
 
         // Applied here rather than at construction because the sink predates the settings. The
@@ -2754,7 +2761,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         }
 
         _model = _workerProvider.Default.ModelPolicy.Preferred.Model;
-        _vm.ModelLabel = $"model: {_model}";
+
     }
 
     /// <summary>

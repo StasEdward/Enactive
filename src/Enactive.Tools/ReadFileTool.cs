@@ -24,7 +24,8 @@ public sealed class ReadFileTool : ITool
         Name: "read_file",
         Description: "Read a UTF-8 text file from the current workspace. Path is relative to the "
                    + "workspace root. Reads from 'offset' (1-based line, default 1) for 'limit' "
-                   + "lines (default 400); the result says how many lines the file has.",
+                   + "lines (default 400); the result says how many lines the file has. To read SEVERAL "
+                   + "files, pass 'paths' instead: independent reads in one call rather than one call each.",
         JsonSchema: Schema);
 
     public PermissionLevel RequiredLevel => PermissionLevel.Observe;
@@ -33,12 +34,26 @@ public sealed class ReadFileTool : ITool
     {
         string? path;
         int offset, limit;
+        List<string>? several = null;
         try
         {
             using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(argumentsJson) ? "{}" : argumentsJson);
             var root = doc.RootElement;
             path = root.TryGetProperty("path", out var p) && p.ValueKind == JsonValueKind.String
                 ? p.GetString() : null;
+
+            // Several files in one call. Measured 2026-09-24, run 71a546: 87 read_file calls and not
+            // one read_files - the model reaches for this tool, so this tool is where reading several
+            // at once has to be. The answer is read_files' own, budgets and all.
+            if (root.TryGetProperty("paths", out var ps) && ps.ValueKind == JsonValueKind.Array)
+            {
+                several = ps.EnumerateArray()
+                            .Where(e => e.ValueKind == JsonValueKind.String && e.GetString() is { Length: > 0 })
+                            .Select(e => e.GetString()!)
+                            .ToList();
+                if (!string.IsNullOrWhiteSpace(path) && !several.Contains(path))
+                    several.Insert(0, path);
+            }
             offset = Number(root, "offset", 1);
             limit = Number(root, "limit", DefaultLines);
         }
@@ -47,11 +62,15 @@ public sealed class ReadFileTool : ITool
             return ToolResults.Unreadable($"Invalid arguments JSON: {ex.Message}");
         }
 
+        if (several is { Count: > 0 })
+            return await new ReadFilesTool().InvokeAsync(
+                JsonSerializer.Serialize(new { paths = several }), ctx, ct);
+
         if (offset < 1) return ToolResults.Unreadable("'offset' is a 1-based line number, so it starts at 1.");
         if (limit < 1) return ToolResults.Unreadable("'limit' must be at least 1 line.");
 
         if (string.IsNullOrWhiteSpace(path))
-            return ToolResults.Unreadable("'path' is required.");
+            return ToolResults.Unreadable("'path' is required - or 'paths', to read several files at once.");
 
         try
         {
@@ -93,9 +112,65 @@ public sealed class ReadFileTool : ITool
             // it on their own — but now it is one of two limits the caller is told about, not the
             // silent end of the file.
             var clipped = body.Length > MaxChars;
-            if (clipped) body = body[..MaxChars] + "\n… (line truncated at " + MaxChars + " characters)";
 
-            var more = lastLine < total
+            // Where the cut falls, said exactly. It used to say "line truncated at 8000 characters"
+            // whatever was cut - usually the WINDOW, part-way through some line - and the notice below
+            // went on promising "lines 1-400, read on with offset 401", so the lines after the cut
+            // were skipped by anyone who did as told. Measured 2026-09-24, run 71a546: a reviewer
+            // believed the "line" in that sentence, told the step the 8,000 limit was per line, the
+            // step corrected its report to say so, and the next review - reading the code - rejected
+            // the correction. The message was the only thing that was wrong.
+            var cutLine = lastLine;         // the line the shown text ends in
+            var nextOffset = lastLine + 1;  // where reading on continues
+            var fullyShown = lastLine;      // the last line shown whole
+            var midLine = false;            // the cut fell inside a line, not between two
+            int? tooLong = null;            // a line read_file cannot show whole, however it is asked
+            if (clipped)
+            {
+                var kept = body[..MaxChars];
+
+                // A cut that lands ON a line break cut between lines: every line kept is whole. An
+                // 8,000-character line followed by a break was reported "longer than 8000" and
+                // recorded as never seen, and reading on as told left it unreadable for good.
+                var rest = body[MaxChars..];
+                var between = rest.StartsWith('\n') || rest.StartsWith("\r\n", StringComparison.Ordinal) || rest == "\r"
+                              || kept.EndsWith('\n');
+                if (kept.EndsWith('\n'))
+                    kept = kept[..^1];   // the next line had begun with nothing of it shown
+
+                var newlines = kept.Count(ch => ch == '\n');
+                cutLine = offset + newlines;
+
+                if (between)
+                {
+                    body = kept + "\n… (this output is cut at " + MaxChars + " characters, after line "
+                         + cutLine + " - the rest of the lines asked for is not shown)";
+                    nextOffset = cutLine + 1;
+                    fullyShown = cutLine;
+                }
+                else if (newlines == 0)
+                {
+                    // One line longer than the whole cap. Reading on "from this line" would return the
+                    // same cut again, so the next read starts after it.
+                    body = kept + "\n… (line " + cutLine + " is longer than " + MaxChars
+                         + " characters on its own, and is cut here. read_file cannot show the rest of it; "
+                         + "search_files or count_matches can look inside it.)";
+                    nextOffset = cutLine + 1;
+                    fullyShown = cutLine - 1;
+                    midLine = true;
+                    tooLong = cutLine;
+                }
+                else
+                {
+                    body = kept + "\n… (this output is cut at " + MaxChars + " characters, part-way "
+                         + "through line " + cutLine + " - the rest of the lines asked for is not shown)";
+                    nextOffset = cutLine;
+                    fullyShown = cutLine - 1;
+                    midLine = true;
+                }
+            }
+
+            var more = clipped || lastLine < total
                 // The notice used to end at "Read on with offset N" - an instruction to read again,
                 // and the ONLY instruction on offer. A cut answer that names one way forward gets
                 // that way taken: measured 2026-09-12, a model paged the same ten-line region of one
@@ -103,7 +178,8 @@ public sealed class ReadFileTool : ITool
                 // thirteen minutes past the point it had stopped making progress. Paging is right
                 // when the file is being READ; it is the wrong move when something specific is being
                 // looked for, and the alternative has to be named here, where the temptation is.
-                ? $"\n\n… showing lines {offset}–{lastLine} of {total}. Read on with offset {lastLine + 1}. "
+                ? $"\n\n… showing lines {offset}–{cutLine}{(midLine ? $" (line {cutLine} only in part)" : "")} of {total}. "
+                  + (nextOffset <= total ? $"Read on with offset {nextOffset}. " : "")
                   + "If you are looking for something rather than reading this file, search_files or "
                   + "count_matches will find it without paging."
                 : total > slice.WindowLines ? $"\n\n… showing lines {offset}–{lastLine} of {total}." : "";
@@ -116,7 +192,19 @@ public sealed class ReadFileTool : ITool
                     ["bytes"] = slice.TotalChars,
                     ["totalLines"] = total,
                     ["firstLine"] = offset,
-                    ["lastLine"] = lastLine,
+                    // The last line shown WHOLE. ReadLedger decides from this whether a whole-file
+                    // write of this file can be trusted, and a line cut part-way was not seen.
+                    ["lastLine"] = fullyShown,
+                    // The cursor, the SAME number the text tells the model to read on from - one
+                    // source for both, so the reader and ReadLedger cannot disagree about it. Null when
+                    // there is nothing further to read.
+                    ["nextOffset"] = clipped || lastLine < total ? (nextOffset <= total ? nextOffset : null) : null,
+                    // The line the shown text ends part-way through, when it was cut.
+                    ["partialLine"] = midLine ? cutLine : null,
+                    // A line too long to show whole, said outright rather than left to be inferred
+                    // from the cursor: on the file's LAST line there is no cursor to infer it from,
+                    // and the ledger then sent the model back to read the same cut again.
+                    ["tooLongLine"] = tooLong,
                     ["truncated"] = clipped || lastLine < total,
                     // Say which version this is. "Proposed" and "on disk" are different facts, and a
                     // reviewer judging from evidence has to be able to tell them apart.
@@ -130,6 +218,18 @@ public sealed class ReadFileTool : ITool
         {
             return ToolResults.NotFound(ReservedPathException.Explanation);
         }
+        // A path WorkspacePaths would not resolve - it leaves the workspace, or it is not a path.
+        // Nothing was opened, so this is an argument refused rather than an operation that went
+        // wrong, and the difference is the whole of 9bj-9bm. It also fixes the wording: without
+        // this the refusal arrives as "Could not read 'x': …", which reads as a read that failed.
+        //
+        // ArgumentException in this block comes from that resolution; the file system throws
+        // IOException and UnauthorizedAccessException, which fall through to the handler below.
+        catch (ArgumentException ex)
+        {
+            return ToolResults.Unreadable(ex.Message);
+        }
+
         catch (Exception ex)
         {
             return ToolResults.Fail($"Could not read '{path}': {ex.Message}");
@@ -213,15 +313,18 @@ public sealed class ReadFileTool : ITool
            && value.TryGetInt32(out var parsed)
             ? parsed : fallback;
 
+    /// <summary>How many lines a file has, counted the way this tool counts them: one more than its line breaks.</summary>
+    internal static int LinesIn(string text) => 1 + text.Count(c => c == '\n');
+
     private const string Schema = """
     {
       "type": "object",
       "properties": {
         "path": { "type": "string", "description": "File path relative to the workspace root." },
         "offset": { "type": "integer", "description": "First line to read, 1-based. Default 1." },
-        "limit": { "type": "integer", "description": "How many lines to read. Default 400." }
-      },
-      "required": ["path"]
+        "limit": { "type": "integer", "description": "How many lines to read. Default 400." },
+        "paths": { "type": "array", "items": { "type": "string" }, "description": "Several files to read in ONE call, instead of 'path' - use it whenever the reads do not depend on each other. Each is shown from its start and its end within a shared budget." }
+      }
     }
     """;
 }

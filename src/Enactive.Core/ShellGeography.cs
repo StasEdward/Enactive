@@ -70,7 +70,7 @@ public static class ShellGeography
             ? StringComparer.Ordinal
             : StringComparer.OrdinalIgnoreCase);
 
-        foreach (var candidate in Candidates(Tokenize(WithLiteralsResolved(command!)), roots[0]))
+        foreach (var candidate in Candidates(Tokenize(WithLiteralsResolved(WithoutHereStrings(command!))), roots[0]))
         {
             if (Classify(candidate, roots) is not { } write)
                 continue;
@@ -82,6 +82,27 @@ public static class ShellGeography
 
         return found;
     }
+
+    /// <summary>
+    /// PowerShell here-strings with their BODY taken out: <c>@'</c> … <c>'@</c> and <c>@"</c> …
+    /// <c>"@</c>, each closing mark at the start of its own line.
+    ///
+    /// <para><b>Measured 2026-09-24 13:44, run dc9133f8.</b> The worker wrote its report the
+    /// ordinary PowerShell way - <c>$append = @' …forty lines of Markdown… '@</c>, then
+    /// <c>Add-Content -Path "Docs\DRIFT_ollama.md" -Value $append</c> - and the body went through
+    /// the tokenizer as if it were commands. A Markdown table is a row of <c>|</c>, which is a
+    /// pipeline here; <c>-&gt;</c> is a redirection; a cell that starts "Move" is a verb. None of
+    /// it runs. It is the text being written, and reading it as a script can only invent writes.
+    /// </para>
+    ///
+    /// <para>Replaced with a bare word rather than an empty literal, so the variable it was
+    /// assigned to stays UNRESOLVED: if that variable is later used as a path, the question is
+    /// still asked, which is the conservative side of this class.</para>
+    /// </summary>
+    private static string WithoutHereStrings(string command)
+        => Regex.Replace(
+            command, @"@(?<q>['""])[ \t]*\r?\n.*?\r?\n\k<q>@", "@here",
+            RegexOptions.Singleline, TimeSpan.FromSeconds(1));
 
     /// <summary>
     /// Variables the script gives a literal value to, substituted into the rest of it.
@@ -323,6 +344,16 @@ public static class ShellGeography
                 continue;
             }
 
+            // `-Value $append`, `-Encoding utf8`, `-ItemType Directory`. The value belongs to the
+            // flag and is DATA, not a place - but walked as a positional it became one, and under
+            // a verb that writes every argument it became a write to somewhere unknown.
+            if (ValueFlags.Contains(token))
+            {
+                if (Next(tokens, i + 1).Length > 0)
+                    i++;
+                continue;
+            }
+
             if (!IsFlag(token))
                 positional.Add(token);
         }
@@ -347,6 +378,14 @@ public static class ShellGeography
 
         var verb = Verb(positional[0]);
         var args = positional.Skip(1).ToList();
+
+        // Set-Content PATH VALUE: the second positional is what is written, not where. The same
+        // measurement as ValueFlags, written without the flag names.
+        if (ContentVerbs.Contains(verb))
+        {
+            yield return new Candidate(args[0], $"'{positional[0]}'");
+            yield break;
+        }
 
         if (DeleteOrCreateVerbs.Contains(verb))
         {
@@ -523,6 +562,30 @@ public static class ShellGeography
         "del", "erase", "rd", "rmdir", "mkdir", "md", "rm", "touch", "truncate", "unlink",
         "remove-item", "new-item", "set-content", "add-content", "clear-content",
         "out-file", "export-csv", "export-clixml", "tee-object",
+    };
+
+    /// <summary>
+    /// Writing verbs whose FIRST positional argument is the destination and the rest are what is
+    /// written: <c>Set-Content PATH VALUE</c>, <c>Out-File PATH ENCODING</c>.
+    /// </summary>
+    private static readonly HashSet<string> ContentVerbs = new(Same)
+    {
+        "set-content", "add-content", "out-file", "export-csv", "export-clixml", "tee-object",
+    };
+
+    /// <summary>
+    /// Named parameters whose value is data rather than a place. Every one of them is a parameter
+    /// of a verb above that DOES write, which is exactly why reading its value as a path invented a
+    /// write every time the verb was used properly.
+    ///
+    /// <para><b>Measured 2026-09-24, run dc9133f8</b>: four questions in one run, one of them
+    /// unanswered for six minutes, all of them about <c>-Value $content</c> or
+    /// <c>-Value $append</c>. The file each one wrote was <c>Docs\DRIFT_ollama.md</c>.</para>
+    /// </summary>
+    private static readonly HashSet<string> ValueFlags = new(Same)
+    {
+        "-Value", "-InputObject", "-Encoding", "-ItemType", "-Type", "-Delimiter", "-Stream",
+        "-Filter", "-Include", "-Exclude", "-Width",
     };
 
     /// <summary>Verbs written SOURCE ... DESTINATION, where only the last argument is a write.</summary>

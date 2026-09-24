@@ -73,7 +73,10 @@ public sealed record ChatCompletion(
     int? CompletionTokens,
     /// <summary>The model's own deliberation, where the provider returns it separately. See <see cref="ReasoningDelta"/>.</summary>
     string? Thinking = null,
-    int? CachedPromptTokens = null);
+    int? CachedPromptTokens = null)
+{
+    public ModelTimings? Timings { get; init; }
+}
 
 /// <summary>One event out of the streaming pipeline. Adapters map raw SSE to these.</summary>
 public abstract record ChatStreamEvent;

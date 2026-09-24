@@ -47,7 +47,10 @@ public static class EventMapping
     /// <see cref="EventKind.ContextAssembled"/> are about how the work was done rather than what
     /// happened. <see cref="EventKind.IntentReceived"/> is the request the owner just typed.
     /// <see cref="EventKind.TaskCompleted"/> and <see cref="EventKind.TaskFailed"/> are not progress
-    /// at all - they are endings, and <see cref="Ending"/> handles them.</para>
+    /// at all - they are endings, and <see cref="Ending"/> handles them.
+    /// <see cref="EventKind.GenerationProgress"/> is "still writing", several times a minute during a
+    /// long tool call: it replaces the desktop card's activity line in place, and the owner's panel
+    /// has lines, not an activity line - it would be a flood of statements that stop being true.</para>
     ///
     /// <para><see cref="EventKind.DecisionRequested"/> and
     /// <see cref="EventKind.DecisionResolved"/> are absent from both lists on purpose: they become
@@ -66,7 +69,8 @@ public static class EventMapping
         EventKind.DecisionResolved,
         EventKind.ReviewRequested,
         EventKind.TaskCompleted,
-        EventKind.TaskFailed
+        EventKind.TaskFailed,
+        EventKind.GenerationProgress
     ];
 
     /// <summary>Whether this kind is one the owner sees a line for.</summary>

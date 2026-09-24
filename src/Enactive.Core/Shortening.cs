@@ -34,9 +34,23 @@ public static class Shortening
     /// </summary>
     private const int SmallestTail = 40;
 
+    /// <summary>
+    /// The share of the budget spent on the START. Two fifths for a command, because a program
+    /// reports its outcome last and the end is where the answer is.
+    /// </summary>
+    public const double CommandHead = 0.4;
+
+    /// <summary>
+    /// And three fifths for a FILE, because the reasoning above is about commands and does not
+    /// carry: a source file's top holds its namespace, its usings and its declaration, and the
+    /// bottom holds its last member and a row of closing braces. The end is still worth keeping -
+    /// a cut that hides the end hides that there IS one - but it is not where the answer lives.
+    /// </summary>
+    public const double FileHead = 0.6;
+
     /// <summary><paramref name="text"/> unchanged when it fits, else its start and its end.</summary>
-    public static string ToFit(string text, int budget)
-        => text.Length <= budget ? text : HeadAndTail(text, budget);
+    public static string ToFit(string text, int budget, double headShare = CommandHead)
+        => text.Length <= budget ? text : HeadAndTail(text, budget, headShare);
 
     /// <summary>
     /// The start and the end, with the cut marked between them.
@@ -47,13 +61,22 @@ public static class Shortening
     /// can do is stop reading as an absence; the rest of that rule belongs in the instructions of
     /// whoever is reading, where it is said once.</para>
     /// </summary>
-    public static string HeadAndTail(string text, int budget)
+    /// <param name="headShare">
+    /// How much of the budget goes to the START — <see cref="CommandHead"/> or
+    /// <see cref="FileHead"/>. A parameter rather than two functions, because the SHAPE of the cut
+    /// has to stay one shape: a reader who learns "an excerpt is the start and the end" and then
+    /// meets one place where it is not will misread it. That is not a hypothetical — it happened
+    /// on 2026-09-24, when a label describing the old shape survived the new one and a reviewer
+    /// believed the label over the text in front of it (§9cc).
+    /// </param>
+    public static string HeadAndTail(string text, int budget, double headShare = CommandHead)
     {
         if (text.Length <= budget)
             return text;
 
-        // Enough head to recognise WHAT ran; the rest to the end, which is where the answer is.
-        var head = Math.Max(1, budget * 2 / 5);
+        // Enough head to recognise what this IS; the rest to the end, which for a command is where
+        // the answer is and for a file is at least proof that there was an end.
+        var head = Math.Max(1, (int)(budget * Math.Clamp(headShare, 0.1, 0.9)));
         var tail = budget - head;
 
         if (tail < SmallestTail)

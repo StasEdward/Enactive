@@ -33,6 +33,45 @@ public sealed class OutputLimitTests
         Assert.Contains("dropped", text, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// THE WHOLE CHAIN, capture to evidence, with output well past the ceiling: bounded, and the
+    /// verdict at the end still there - for stdout and for stderr.
+    ///
+    /// <para>Found 2026-09-24 (Docs/PROVIDERS_AGENTS_TOOLS_TESTS_REVIEW_2026-09-24.md #3): the capture
+    /// kept only the START, so the last line of a long test run never reached BuildResult, and the
+    /// tests of "the end survives" all began from a string that had not been through the capture.</para>
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void The_end_of_a_long_output_survives_capture_result_and_evidence(bool onStderr)
+    {
+        const string first = "FIRST_LINE_OF_THE_RUN";
+        const string last = "FINAL_TEST_SUMMARY: Failed=3 Passed=22";
+        var stream = new ProcessExec.CapturedStream();
+
+        stream.Add(first);
+        for (var i = 0; i < 2_000; i++)
+            stream.Add($"line {i:D5} " + new string('x', 86));
+        stream.Add(last);
+
+        var captured = stream.ToString();
+        Assert.True(captured.Length < 70_000, $"held {captured.Length} characters");
+        Assert.Contains(first, captured, StringComparison.Ordinal);
+        Assert.Contains(last, captured, StringComparison.Ordinal);
+        Assert.Contains("dropped", captured, StringComparison.Ordinal);
+
+        var result = ProcessExec.BuildResult(
+            "dotnet", 1, onStderr ? "" : captured, onStderr ? captured : "", allowedExitCodes: new[] { 0, 1 });
+        var shown = result.Output ?? result.Error ?? "";
+        Assert.Contains(last, shown, StringComparison.Ordinal);
+
+        var journal = new Enactive.Core.Execution.ExecutionJournal();
+        journal.Record(1, "run_command", """{"command":"dotnet test"}""",
+                       Enactive.Core.Execution.ActionOutcome.Succeeded, shown);
+        Assert.Contains(last, journal.Describe(), StringComparison.Ordinal);
+    }
+
     // Bounded is not the same as lossy for ordinary output: a normal command still comes back whole
     // and unannotated.
     [Fact]

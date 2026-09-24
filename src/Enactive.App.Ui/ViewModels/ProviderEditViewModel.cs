@@ -30,6 +30,8 @@ internal sealed class ProviderEditViewModel : ObservableObject
     private string _apiKey;
     private string _maxTokensText;
     private string _contextWindowText;
+    private string _answerReserveText;
+    private string _handoverAtText;
     private string _headersText;
     private string _modelsText;
     private string _status = string.Empty;
@@ -47,6 +49,8 @@ internal sealed class ProviderEditViewModel : ObservableObject
         _apiKey = config.ApiKey;
         _maxTokensText = config.MaxTokens?.ToString() ?? string.Empty;
         _contextWindowText = config.ContextWindowTokens?.ToString() ?? string.Empty;
+        _answerReserveText = config.AnswerReserveTokens?.ToString() ?? string.Empty;
+        _handoverAtText = config.HandoverAtPercent?.ToString() ?? string.Empty;
         _headersText = ModelFetch.FormatHeaders(config.Headers);
         _modelsText = string.Join("\n", config.Models);
 
@@ -68,6 +72,12 @@ internal sealed class ProviderEditViewModel : ObservableObject
 
     /// <summary>The CONTEXT window, which nothing can discover — see ProviderConfig.ContextWindowTokens.</summary>
     public string ContextWindowText { get => _contextWindowText; set => Set(ref _contextWindowText, value); }
+
+    /// <summary>Tokens kept free for the answer — see ProviderConfig.AnswerReserveTokens.</summary>
+    public string AnswerReserveText { get => _answerReserveText; set => Set(ref _answerReserveText, value); }
+
+    /// <summary>Hand over at this % of the window — see ProviderConfig.HandoverAtPercent.</summary>
+    public string HandoverAtText { get => _handoverAtText; set => Set(ref _handoverAtText, value); }
     public string HeadersText { get => _headersText; set => Set(ref _headersText, value); }
     public string ModelsText { get => _modelsText; set => Set(ref _modelsText, value); }
     public string Status { get => _status; set => Set(ref _status, value); }
@@ -174,6 +184,10 @@ internal sealed class ProviderEditViewModel : ObservableObject
         _config.MaxTokens = int.TryParse(MaxTokensText.Trim(), out var mt) && mt > 0 ? mt : null;
         _config.ContextWindowTokens =
             int.TryParse(ContextWindowText.Trim(), out var cw) && cw > 0 ? cw : null;
+        _config.AnswerReserveTokens =
+            int.TryParse(AnswerReserveText.Trim(), out var ar) && ar > 0 ? ar : null;
+        _config.HandoverAtPercent =
+            int.TryParse(HandoverAtText.Trim().TrimEnd('%'), out var hp) && hp is > 0 and < 100 ? hp : null;
         _config.Headers = ModelFetch.ParseHeaders(HeadersText);
         _config.Models = ModelLines();
         _onSaved();

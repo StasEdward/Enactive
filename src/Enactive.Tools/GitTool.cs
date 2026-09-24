@@ -1,6 +1,7 @@
 namespace Enactive.Tools;
 
 using System.Text.Json;
+using Enactive.Core.Context;
 using Enactive.Core.Permissions;
 using Enactive.Core.Tools;
 
@@ -48,10 +49,36 @@ public sealed class GitTool : ITool
         if (ProcessExec.WrongShapeOfArgs("git", args) is { } wrongShape)
             return ToolResults.Unreadable(wrongShape);
 
-        return await ProcessExec.RunAsync("git", args, ctx.WorkspaceRoot, TimeoutSeconds, ct);
+        var result = await ProcessExec.RunAsync("git", args, ctx.WorkspaceRoot, TimeoutSeconds, ct);
+
+        // Git refusing its own arguments is not work that failed - it is a line git would not
+        // accept, and nothing happened. The shells have said this since 2026-09-20; git could not,
+        // because it is started directly with an argument list and none of a shell's wording
+        // applies to it. Three runs died on that in one day: a mistyped subcommand corrected a
+        // second later, quotes that never parsed, and a JSON array encoded as a string.
+        //
+        // Read here, in the tool, for the reason ToolResults.NeverRan gives: the tool is the one
+        // that knows, because it holds the arguments it sent and is reading git's own fixed wording
+        // about them rather than guessing at an error downstream.
+        if (!result.Success && ShellOutcome.GitRefusedIt(args, result.Error + Environment.NewLine + result.Output))
+            return ToolResults.NeverRan(
+                "git would not accept that: " + (result.Error ?? "").Trim()
+                + " Nothing was run. Send each argument as its own element of 'args' - "
+                + "[\"status\", \"--short\"], not [\"status --short\"] and not a string that "
+                + "looks like an array.",
+                result.Output);
+
+        // A lookup git answered with "not in that revision" - see ShellOutcome.GitFoundNothing.
+        if (!result.Success && ShellOutcome.GitFoundNothing(result.Error + Environment.NewLine + result.Output))
+            return ToolResults.NotFound(
+                "git answered: that path is not in that revision - it was never committed there. "
+                + "That is the answer, not a failure: there is no copy of it in git to get back.",
+                result.Output);
+
+        return result;
     }
 
-    private const string Schema = """
+    private static readonly string Schema = $$"""
     {
       "type": "object",
       "properties": {
@@ -59,7 +86,8 @@ public sealed class GitTool : ITool
           "description": "Git arguments without the leading 'git'. An array with ONE ARGUMENT PER ELEMENT ([\"diff\",\"HEAD\"], not [\"diff HEAD\"]), or a single string that is split on spaces.",
           "type": ["array", "string"],
           "items": { "type": "string" }
-        }
+        },
+        {{ProcessExec.ForceSchema}}
       },
       "required": ["args"]
     }

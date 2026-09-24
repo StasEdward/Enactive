@@ -45,11 +45,30 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
     /// </summary>
     public int? ContextWindow(ChatRequest request) => _descriptor.ContextWindowTokens;
 
+    public int? AnswerReserve(ChatRequest request) => _descriptor.AnswerReserveTokens;
+
+    public int? HandoverAtPercent(ChatRequest request) => _descriptor.HandoverAtPercent;
+
     public async IAsyncEnumerable<ChatStreamEvent> StreamChatAsync(
         ChatRequest request, [EnumeratorCancellation] CancellationToken ct)
     {
-        using var httpRequest = BuildHttpRequest(request, stream: true);
-        using var response = await _http.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead, ct);
+        // stream_options is asked for unless this endpoint has already refused it. On a 400 the
+        // request is sent again without it, exactly as CompleteAsync does for a schema - so the
+        // worst case is the behaviour this had before the field existed, plus one round trip once
+        // per process. Nothing here can turn a working provider into a failing one.
+        var wantUsage = !NoStreamUsage.ContainsKey(SchemaKey(request));
+
+        var response = await SendAsync(wantUsage);
+
+        if (response.StatusCode == System.Net.HttpStatusCode.BadRequest && wantUsage)
+        {
+            response.Dispose();
+            NoStreamUsage.TryAdd(SchemaKey(request), true);
+            response = await SendAsync(includeUsage: false);
+        }
+
+        using var _ = response;
+
         if (!response.IsSuccessStatusCode)
         {
             var errorBody = await response.Content.ReadAsStringAsync(ct);
@@ -58,9 +77,16 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
                 $"Provider '{_descriptor.Id}' returned {(int)response.StatusCode} {response.StatusCode}: {Truncate(errorBody, 500)}");
         }
 
+        async Task<HttpResponseMessage> SendAsync(bool includeUsage)
+        {
+            using var message = BuildHttpRequest(request, stream: true, includeUsage: includeUsage);
+            return await _http.SendAsync(message, HttpCompletionOption.ResponseHeadersRead, ct);
+        }
+
         await using var stream = await response.Content.ReadAsStreamAsync(ct);
         using var reader = new StreamReader(stream);
         var raw = new StringBuilder();
+        var finished = false;
         try
         {
             while (await reader.ReadLineAsync(ct) is { } line)
@@ -73,11 +99,21 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
                 if (data.Length == 0)
                     continue;
                 if (data == "[DONE]")
-                    yield break;
+                {
+                    finished = true;
+                    break;
+                }
 
-                foreach (var evt in ParseStreamChunk(data))
+                foreach (var evt in ParseStreamChunk(data, _descriptor.Id))
+                {
+                    finished |= evt is FinishDelta;
                     yield return evt;
+                }
             }
+
+            // See StreamEnd: an answer with neither a finish_reason nor [DONE] did not finish.
+            if (!finished)
+                throw StreamEnd.Unfinished(_descriptor.Id, "finish_reason and no [DONE]");
         }
         finally
         {
@@ -128,6 +164,15 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> NoStructuredOutput =
         new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// Endpoints that answered <c>stream_options</c> with a 400. The same table and the same
+    /// reasoning as <see cref="NoStructuredOutput"/>: "OpenAI-compatible" is a family, not a
+    /// specification, and a gateway that has never heard of the field may refuse the whole request
+    /// for it. One wasted round trip per process, then never again.
+    /// </summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> NoStreamUsage =
+        new(StringComparer.OrdinalIgnoreCase);
+
     private string SchemaKey(ChatRequest request) => _descriptor.Id + "\0" + request.Model;
 
     /// <summary>The schema as JSON, or null when it is not parseable - a bad schema must not fail a run.</summary>
@@ -137,7 +182,8 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
         catch (JsonException) { return null; }
     }
 
-    private HttpRequestMessage BuildHttpRequest(ChatRequest request, bool stream, bool includeSchema = true)
+    private HttpRequestMessage BuildHttpRequest(
+        ChatRequest request, bool stream, bool includeSchema = true, bool includeUsage = true)
     {
         var payload = new Dictionary<string, object?>
         {
@@ -145,6 +191,21 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
             ["stream"] = stream,
             ["messages"] = request.Messages.Select(ToWire).ToArray()
         };
+
+        // A STREAMED response carries no usage block unless it is asked for. That is the
+        // specification, not an oddity: OpenAI added stream_options.include_usage for exactly this,
+        // and a server that follows it sends nothing without the field.
+        //
+        // Measured 2026-09-23 20:44 - a run whose worker was llama.cpp ran two steps over three and
+        // a half minutes and reported not one token. The only UsageReported events in it came from
+        // the planner and the reviewer, which go NON-streamed and therefore always carry usage, so
+        // the work split showed the run as 100% cloud while the work was happening on this machine.
+        // DeepSeek sends usage in a stream anyway, beyond the spec, which is why this stayed hidden
+        // until a local endpoint was bound to a phase.
+        //
+        // Sent only while streaming, and only until an endpoint refuses it - see NoStreamUsage.
+        if (stream && includeUsage)
+            payload["stream_options"] = new Dictionary<string, object?> { ["include_usage"] = true };
         if (request.Temperature is { } temperature)
             payload["temperature"] = temperature;
         if (request.Tools is { Count: > 0 } tools)
@@ -185,11 +246,14 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
         return httpRequest;
     }
 
-    private static IEnumerable<ChatStreamEvent> ParseStreamChunk(string data)
+    private static IEnumerable<ChatStreamEvent> ParseStreamChunk(string data, string providerId)
     {
         var events = new List<ChatStreamEvent>();
         using var doc = JsonDocument.Parse(data);
         var root = doc.RootElement;
+
+        if (StreamEnd.ErrorIn(providerId, root) is { } error)
+            throw error;
 
         if (root.TryGetProperty("choices", out var choices) && choices.GetArrayLength() > 0)
         {
@@ -239,6 +303,7 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
                 events.Add(new UsageDelta(prompt, completion, CachedTokens(usage)));
         }
 
+        if (ProviderTimings.OpenAi(root) is { } timings) events.Add(new TimingDelta(timings));
         return events;
     }
 
@@ -339,7 +404,8 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
         var assistant = new ChatMessage(ChatRole.Assistant, content, toolCalls);
         return new ChatCompletion(assistant, finishReason, promptTokens, completionTokens)
         {
-            CachedPromptTokens = cached
+            CachedPromptTokens = cached,
+            Timings = ProviderTimings.OpenAi(root)
         };
     }
 

@@ -126,7 +126,12 @@ public static class ShellOutcome
         if (WordItDoesNotHave(command!, output!) || CouldNotRead(command!, output!))
             return ShellVerdict.NeverRan;
 
-        return LookedAndFoundNothing(output!) ? ShellVerdict.FoundNothing : ShellVerdict.Ran;
+        return LookedAndFoundNothing(output!)
+            || NothingOnThePath(output!)
+            || DirListedNothing(command!, output!)
+            || LookedAndWasNotAllowed(output!)
+                ? ShellVerdict.FoundNothing
+                : ShellVerdict.Ran;
     }
 
     // ── Never ran ────────────────────────────────────────────────────────────
@@ -148,7 +153,10 @@ public static class ShellOutcome
 
             // Every refusal has to be about a command on OUR line. One that is not came from
             // something that ran, and that is a failure however the others are read.
-            if (RefusedName(line, at) is not { } name || !heads.Contains(name))
+            // cmd keeps a quoted name's own double quotes inside its single ones:
+            // '"C:\Program Files\x.exe"' is not recognized ...
+            if (RefusedName(line, at) is not { } name
+                || !(heads.Contains(name) || heads.Contains(name.Trim('"'))))
                 return false;
 
             found = true;
@@ -287,6 +295,193 @@ public static class ShellOutcome
         return text;
     }
 
+    // ── A program that refused its own arguments ──────────────────────────────────────
+
+    /// <summary>
+    /// Whether GIT refused the line rather than doing anything with it — its own "is not a git
+    /// command", or an option it does not have.
+    ///
+    /// <para><b>Why git needs its own sentence.</b> Everything above reads a SHELL refusing a line.
+    /// The git tool starts git directly, with an argument list and no shell, so none of it applies:
+    /// git starts, prints its refusal, and exits 1, which is indistinguishable from a merge
+    /// conflict or a failed push unless somebody reads the words.</para>
+    ///
+    /// <para>Measured three times on 2026-09-22 and each one cost a run:
+    /// <c>["st","--porcelain"]</c> corrected to <c>["status","--porcelain"]</c> a second later;
+    /// <c>{"args": show HEAD:file}</c> whose quotes never parsed; and
+    /// <c>{"args": "[\"status\", \"--short\"]"}</c>, a JSON array encoded as a string, which git
+    /// read as a subcommand called <c>["status",</c>. In each case git did nothing, the step was
+    /// marked Incomplete for it, and everything downstream was skipped.</para>
+    ///
+    /// <para><b>What keeps it honest</b> is the same rule as the shell's: the refused word has to
+    /// be one WE sent. A <c>git log</c> whose OUTPUT contains somebody's commit message about a
+    /// command not existing is a git that ran perfectly.</para>
+    /// </summary>
+    /// <summary>
+    /// A SEARCH that found nothing — exit 1, not a word printed, from a program whose whole
+    /// convention is exactly that.
+    ///
+    /// <para><b>The measurement.</b> 2026-09-22 23:56:43, one turn, two tool calls 55 milliseconds
+    /// apart, asking the same question of the same folder:</para>
+    ///
+    /// <code>
+    /// search_files {"pattern":"ENACTIVE_OWNER_KEY|…"}  -> "No matches in 1 file(s)."   ok
+    /// run_command  {"command":"findstr /s /i /n …"}     -> exit 1, no output           FAILED
+    /// </code>
+    ///
+    /// <para>The second one ended the run: step 2 Incomplete, steps 3 and 4 skipped. The engine has
+    /// held since 2026-09-20 that a lookup told "not there" is an ANSWER — that is what
+    /// <see cref="ShellVerdict.FoundNothing"/> is for — but that verdict is read out of the error
+    /// TEXT, and a search that matches nothing does not produce any. It says so with its exit
+    /// code and stays silent, which is the one shape the reading could not see.</para>
+    ///
+    /// <para><b>Why exit 1 exactly.</b> Every one of these programs distinguishes the two cases the
+    /// same way: 1 means "no matches", 2 or more means "something went wrong", and trouble is
+    /// always PRINTED — <c>FINDSTR: Cannot open x</c>, <c>grep: x: No such file</c>. So silence
+    /// plus 1 is the only combination that means nothing matched, and any output at all disqualifies
+    /// it. Measured on this host: findstr answers 1 for a missing path too, and prints nothing —
+    /// "looked and found nothing" is the honest reading of that as well.</para>
+    ///
+    /// <para><b>Why the head must be the whole line.</b> In <c>findstr x *.cs | sort</c> the exit
+    /// code belongs to sort, and in <c>grep x f &amp;&amp; build</c> it belongs to whatever ran
+    /// last. A line with plumbing in it is not a search reporting its result, so it is left alone.
+    /// git is deliberately absent: <c>git grep</c> would qualify, but <c>git diff --exit-code</c>
+    /// uses 1 to mean the opposite of nothing found.</para>
+    /// </summary>
+    public static bool SearchFoundNothing(string? command, string? output, int exitCode)
+    {
+        if (exitCode != 1 || !string.IsNullOrWhiteSpace(output) || string.IsNullOrWhiteSpace(command))
+            return false;
+
+        var line = command!.Trim();
+        if (line.IndexOfAny(Separators) >= 0 || line.Contains('>'))
+            return false;
+
+        var head = line.Split([' ', '	'], 2, StringSplitOptions.RemoveEmptyEntries)
+                       .FirstOrDefault();
+        if (string.IsNullOrEmpty(head))
+            return false;
+
+        head = Path.GetFileNameWithoutExtension(head.Trim('\"', '\''));
+
+        return SearchPrograms.Contains(head);
+    }
+
+    /// <summary>
+    /// Programs whose exit code 1 means "no matches" and nothing else. Named one by one rather than
+    /// guessed at: the whole safety of the rule above is that these particular programs are known
+    /// to say "nothing matched" and "something broke" differently.
+    /// </summary>
+    private static readonly HashSet<string> SearchPrograms =
+        new(StringComparer.OrdinalIgnoreCase)
+        { "findstr", "grep", "egrep", "fgrep", "rg", "ripgrep", "ag", "ack" };
+
+    /// <summary>
+    /// Git ANSWERED a lookup: the path asked for is not in that revision. <c>git show HEAD:x</c> for
+    /// a file that was never committed is a question with an answer - "not there" - exactly like a
+    /// search that matched nothing, and nothing was attempted that could have failed.
+    ///
+    /// <para>Measured 2026-09-24 21:06, run a19a2c: a step looked for an earlier copy of an
+    /// untracked report with <c>git show HEAD:Docs/DRIFT_ollama.md</c>, got "exists on disk, but not
+    /// in 'HEAD'", took another route and finished the work - and was marked Incomplete for an
+    /// "unresolved tool call", with the two steps after it skipped.</para>
+    ///
+    /// <para>Git's own two fixed wordings for it and nothing looser: a false positive would tell a
+    /// step that a real failure was an answer.</para>
+    /// </summary>
+    public static bool GitFoundNothing(string? output)
+    {
+        if (string.IsNullOrWhiteSpace(output))
+            return false;
+
+        foreach (var raw in output!.Split('\n'))
+        {
+            var line = raw.Trim();
+            if (!line.StartsWith("fatal: path '", StringComparison.Ordinal))
+                continue;
+            if (line.Contains("' exists on disk, but not in '", StringComparison.Ordinal)
+                || line.Contains("' does not exist in '", StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
+    }
+
+    public static bool GitRefusedIt(IReadOnlyList<string> args, string? output)
+    {
+        if (args is null || args.Count == 0 || string.IsNullOrWhiteSpace(output))
+            return false;
+
+        foreach (var raw in output!.Split('\n'))
+        {
+            var line = raw.Trim();
+
+            // git: '<x>' is not a git command. See 'git --help'.
+            var refused = Quoted(line, "is not a git command");
+
+            // error: unknown option `force' / unknown switch `x'
+            refused ??= Quoted(line, "unknown option");
+            refused ??= Quoted(line, "unknown switch");
+
+            // fatal: unrecognized argument: --oopsie - git's third wording for the same thing,
+            // and the only one that does not quote the word it is refusing.
+            refused ??= After(line, "unrecognized argument:");
+
+            if (refused is null)
+                continue;
+
+            // Matched tightly on purpose. A loose test here would read "unknown option 'f'"
+            // against an argument of "-f" and then against every other argument containing an f,
+            // and a false positive costs more than a miss: it tells a step that nothing happened
+            // when git may well have changed the repository.
+            foreach (var arg in args)
+            {
+                var bare = arg.TrimStart('-');
+                if (bare.Length == 0)
+                    continue;
+
+                if (arg.Contains(refused, StringComparison.Ordinal)
+                    || string.Equals(bare, refused.TrimStart('-'), StringComparison.Ordinal))
+                    return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// The word git put in quotes on a line that says <paramref name="phrase"/>. Git uses three
+    /// kinds of quoting for this depending on the message, so all three are read.
+    /// </summary>
+    private static string? Quoted(string line, string phrase)
+    {
+        if (!line.Contains(phrase, StringComparison.Ordinal))
+            return null;
+
+        foreach (var (open, close) in new[] { ('\'', '\''), ('`', '\''), ('"', '"') })
+        {
+            var from = line.IndexOf(open);
+            if (from < 0) continue;
+
+            var to = line.IndexOf(close, from + 1);
+            if (to > from + 1)
+                return line[(from + 1)..to];
+        }
+
+        return null;
+    }
+
+    /// <summary>The rest of the line after <paramref name="phrase"/>, when it says it.</summary>
+    private static string? After(string line, string phrase)
+    {
+        var at = line.IndexOf(phrase, StringComparison.Ordinal);
+        if (at < 0)
+            return null;
+
+        var rest = line[(at + phrase.Length)..].Trim();
+        return rest.Length > 0 ? rest : null;
+    }
+
     // ── Found nothing ────────────────────────────────────────────────────────
 
     /// <summary>
@@ -329,6 +524,138 @@ public static class ShellOutcome
         return any;
     }
 
+    /// <summary>
+    /// cmd's <c>dir</c> saying there is nothing there — the same answer
+    /// <see cref="LookedAndFoundNothing"/> already accepts from <c>Get-ChildItem</c>, in cmd's words.
+    ///
+    /// <para><b>Measured 2026-09-24 11:08, run 5f793c.</b> The step's first act was
+    /// <c>dir /b Docs\DRIFT*</c> — does the report exist yet? It did not; the person deletes it
+    /// before every run. cmd answered <c>File Not Found</c> with exit code 1, the call was filed as a
+    /// failure, the step went on to do its work, and two minutes later it was declared INCOMPLETE
+    /// over "unresolved tool call: run_command dir /b Docs\DRIFT*" — and the three steps after it
+    /// were skipped. A question answered "no" was treated as a command that broke.</para>
+    ///
+    /// <para><b>Why the text and not the exit code.</b> <c>dir</c> exits 1 for an invalid switch too
+    /// (<c>Invalid switch - "z".</c>), and that one IS a broken command. So: one command, no plumbing,
+    /// its head is <c>dir</c>, and EVERY line it printed is one of the two ways cmd says nothing is
+    /// there — the pattern matched no file, or the folder it was asked to list does not exist.</para>
+    /// </summary>
+    private static bool DirListedNothing(string command, string output)
+    {
+        var line = command.Trim();
+        if (line.IndexOfAny(Separators) >= 0 || line.Contains('>'))
+            return false;
+
+        var head = line.Split([' ', '	'], 2, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+        if (!string.Equals(head?.Trim('"', '\''), "dir", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var found = false;
+
+        foreach (var raw in output.Split('\n'))
+        {
+            var said = raw.Trim();
+            if (said.Length == 0 || said == "[stderr]")
+                continue;
+
+            if (said is not ("File Not Found" or "The system cannot find the path specified."
+                             or "The system cannot find the file specified."))
+                return false;
+
+            found = true;
+        }
+
+        return found;
+    }
+
+    /// <summary>
+    /// <c>where</c> saying a name is not on the PATH. Prose, not a structured record, which is why
+    /// the reading above cannot see it.
+    ///
+    /// <para>Measured 2026-09-23 01:17:59, run <c>9fe6aa</c>:
+    /// <c>where smartctl &amp; where nvme &amp; where wmic</c> printed
+    /// <i>INFO: Could not find files for the given pattern(s).</i> three times and exited 1. Asking
+    /// whether a tool is installed before reaching for it is exactly what a careful agent should
+    /// do, and the answer "it is not" ended the run.</para>
+    ///
+    /// <para>One sentence, from one program, and EVERY line has to be it: a <c>where</c> that found
+    /// two names of three prints the paths it found, and those lines are not this.</para>
+    /// </summary>
+    private static bool NothingOnThePath(string output)
+    {
+        var found = false;
+
+        foreach (var raw in output.Split('\n'))
+        {
+            var line = raw.Trim();
+            if (line.Length == 0 || line == "[stderr]")
+                continue;
+
+            if (line.IndexOf("Could not find files for the given pattern", StringComparison.Ordinal) < 0)
+                return false;
+
+            found = true;
+        }
+
+        return found;
+    }
+
+    /// <summary>
+    /// A read the system refused. The call happened and came back with nothing, which is what a
+    /// lookup says when the path is not there: "you get nothing", not "the work broke".
+    ///
+    /// <para>Measured twice on 2026-09-23: <c>Get-PhysicalDisk | Get-StorageReliabilityCounter</c>
+    /// answered <i>PermissionDenied: Access to a CIM resource was not available to the client</i>
+    /// without elevation. Both runs collected what they could by other means, WROTE the limitation
+    /// into the report - "Access denied (non-elevated)" - and were failed for having been told
+    /// no.</para>
+    ///
+    /// <para><b>Two conditions, and the second is what keeps it narrow.</b> Every error record must
+    /// be PermissionDenied, so a script refused one thing and broken on another is still broken.
+    /// And what was refused must be a <c>Get-</c>: PowerShell's verbs are a contract and
+    /// <c>Get-</c> never changes anything, so being denied one is a question left unanswered rather
+    /// than work left half done. A denied <c>Set-</c>, <c>Remove-</c> or <c>Start-</c> stays a
+    /// failure, because there the step wanted something to HAPPEN.</para>
+    ///
+    /// <para>The step-level guard is untouched and is what makes this safe: a step whose whole
+    /// record is lookups that came back empty is still not a success.</para>
+    /// </summary>
+    private static bool LookedAndWasNotAllowed(string output)
+    {
+        var denied = false;
+
+        foreach (var raw in output.Split('\n'))
+        {
+            var line = raw.Trim();
+            if (line.IndexOf("CategoryInfo", StringComparison.Ordinal) < 0)
+                continue;
+
+            if (line.IndexOf("PermissionDenied", StringComparison.Ordinal) < 0)
+                return false;
+
+            denied = true;
+        }
+
+        if (!denied)
+            return false;
+
+        // PowerShell writes the headline as "Cmdlet-Name : message", on one line, whatever the
+        // CategoryInfo line below it does - that one wraps, and the name can be cut in half by it.
+        foreach (var raw in output.Split('\n'))
+        {
+            var line = raw.Trim();
+            var colon = line.IndexOf(" : ", StringComparison.Ordinal);
+            if (colon <= 0)
+                continue;
+
+            var head = line[..colon].Trim();
+            if (head.StartsWith("Get-", StringComparison.OrdinalIgnoreCase) && !head.Contains(' '))
+                return true;
+        }
+
+        return false;
+    }
+
     // ── Shared ───────────────────────────────────────────────────────────────
 
     /// <summary>The program each command on the line starts with, lower-cased.</summary>
@@ -341,6 +668,21 @@ public static class ShellOutcome
             var words = segment.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
             if (words.Length > 0)
                 heads.Add(words[0].Trim('"', '\'', '(', '`'));
+
+            // A QUOTED head is the whole quoted text, spaces and all - which is the only reason to
+            // quote it. Split on whitespace, `& 'C:\Program Files\x.exe'` has the head
+            // "C:\Program", and the shell's refusal names the full path, so a call that never ran
+            // was counted as work that failed. Measured 2026-09-24 21:29, run 62f721: a model wrote
+            // .enactive/scratch/fix_path.ps1, called it as '.enactive/scratch/fix_ path.ps1', got
+            // "is not recognized", ran the right name a second later and fixed the file - and the
+            // step was left Incomplete for the first call, skipping the nine steps after it.
+            var start = segment.TrimStart().TrimStart('(');
+            if (start.Length > 2 && start[0] is '"' or '\'')
+            {
+                var close = start.IndexOf(start[0], 1);
+                if (close > 1)
+                    heads.Add(start[1..close]);
+            }
         }
 
         return heads;

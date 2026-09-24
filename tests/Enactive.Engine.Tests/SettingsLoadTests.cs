@@ -268,10 +268,18 @@ public sealed class SettingsLoadTests : IDisposable
     }
 
     /// <summary>ENACTIVE_MODEL is still honoured on a machine with no file — it is somebody saying
-    /// which model to use, which is exactly what was missing.</summary>
+    /// which model to use, which is exactly what was missing.
+    ///
+    /// <para>The <c>finally</c> used to unconditionally CLEAR the variable rather than restore
+    /// whatever it held before this test ran (Docs/SECRETS_SETTINGS_WORKSPACE_TESTS_REVIEW_2026-09-24.md
+    /// #5): on a machine or CI runner where ENACTIVE_MODEL is set process-wide, this test wiped it for
+    /// every reader that ran after it in the same process - and process-wide state is not something a
+    /// method boundary can fence in on its own, so it is restored to what it actually was.</para>
+    /// </summary>
     [Fact]
     public void The_environment_can_still_name_the_model()
     {
+        var original = Environment.GetEnvironmentVariable("ENACTIVE_MODEL");
         Environment.SetEnvironmentVariable("ENACTIVE_MODEL", "llama3.3:70b");
         try
         {
@@ -281,7 +289,7 @@ public sealed class SettingsLoadTests : IDisposable
         }
         finally
         {
-            Environment.SetEnvironmentVariable("ENACTIVE_MODEL", null);
+            Environment.SetEnvironmentVariable("ENACTIVE_MODEL", original);
         }
     }
 

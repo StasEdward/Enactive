@@ -46,7 +46,19 @@ public enum EventKind
     CriterionEvaluated,
 
     TaskCompleted,
-    TaskFailed
+    TaskFailed,
+
+    /// <summary>
+    /// A long generation is still going: how much of a tool call's arguments, or of the model's
+    /// reasoning, has arrived so far. Transient - it updates the step card's activity line, and is
+    /// not kept in the run's record. Added at the END of this enum so no stored value moves.
+    ///
+    /// <para>Measured 2026-09-24, run a2142be6: a single write_file of 6,795 tokens took three
+    /// minutes on a local model, and nothing on the step card moved - text streams to the card,
+    /// tool-call arguments and reasoning did not. Asked the same afternoon: "the model went off
+    /// generating something again". It was writing a 27 KB report.</para>
+    /// </summary>
+    GenerationProgress
 }
 
 /// <summary>

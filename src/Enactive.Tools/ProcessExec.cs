@@ -16,6 +16,20 @@ using Enactive.Core.Tools;
 internal static class ProcessExec
 {
     /// <summary>
+    /// What every process-running tool decodes a child's redirected stdout/stderr as. Told
+    /// explicitly rather than left to <c>Process</c>'s own default, which is the console's encoding
+    /// - an OEM code page on Windows, not UTF-8. Paired with getting the CHILD to actually emit
+    /// UTF-8 (a nested shell's own code page, PowerShell's <c>[Console]::OutputEncoding</c>): one
+    /// side of that pair without the other still mismatches, just differently.
+    ///
+    /// <para>Reported from a real run, 2026-09-25: a report the run had itself written, in plain
+    /// UTF-8 with em dashes, came back through a shell tool with every dash turned to mojibake - the
+    /// model read its own correct file as corrupted and spent the rest of the step trying to repair
+    /// damage that was never there. See ShellOutputEncodingTests.</para>
+    /// </summary>
+    public static readonly Encoding Utf8NoBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+
+    /// <summary>
     /// How much of a command's output reaches the model.
     ///
     /// <para>Doubled from 6,000 on 2026-09-20, with the evidence in hand: a run of
@@ -187,6 +201,12 @@ internal static class ProcessExec
         // read as an absence and be called a real failure.
         var verdict = ShellOutcome.Of(commandLine, combined);
 
+        // Asked here, beside the verdict and for the same reason, but of the EXIT CODE rather than
+        // the text: a search that matched nothing prints nothing, so there is no text to read.
+        // Kept out of ShellOutcome.Of because that function is not given the exit code - and giving
+        // it one would let every other verdict start reading it too.
+        var searchMissed = ShellOutcome.SearchFoundNothing(commandLine, combined, exitCode);
+
         // The START and the END, not the first N characters. A program reports its outcome last,
         // so head-only shortening hands the model the part with no answer in it: on 2026-09-20 a
         // step wrote its tests, ran them, and could not tell whether they passed - the summary was
@@ -229,11 +249,25 @@ internal static class ProcessExec
         // Measured 2026-09-20: a run checking the wiki against the source looked for two files
         // where the WIKI says they are, they are elsewhere, and a 662-line report with 21 confirmed
         // contradictions was failed for finding exactly that.
+        // The same sentence as search_files' "No matches", which was answered ok in the very same
+        // turn on 2026-09-22 23:56:43 while this one ended the run. Two ways of asking one question
+        // must not have two different verdicts.
+        if (searchMissed)
+            return ToolResults.NotFound(
+                $"{what} searched and matched nothing. That is an ANSWER, not a failure: the "
+                + "program exited 1 and printed nothing, which is how these tools say "
+                + "\"no matches\" - trouble is always printed. Nothing needs retrying. If you "
+                + "expected matches, the pattern or the path is wrong, so change one of them.",
+                output, metadata);
+
         if (verdict == ShellVerdict.FoundNothing)
             return ToolResults.NotFound(
-                $"{what} looked and found nothing: every error it reported is a path that is not "
-                + "there. Nothing went wrong and there is nothing to retry - if you were guessing "
-                + "at where something lives, guess again or use search_files to find it.",
+                $"{what} looked and came back with nothing: every error it reported is a lookup "
+                + "that got no answer - a path that is not there, a name that is not on the PATH, "
+                + "or a read this account is not allowed. Nothing went wrong and there is nothing "
+                + "to retry. If you were guessing at where something lives, guess again or use "
+                + "search_files. If it needs administrator rights, say so in the result rather "
+                + "than trying again the same way.",
                 output, metadata);
 
         // Said only when nothing was declared: repeating the option to somebody who used it and
@@ -320,6 +354,26 @@ internal static class ProcessExec
         }
         """;
 
+    /// <summary>The argument name. Defined in Core for the same reason as <see cref="ExpectedExitCodes"/> -
+    /// the engine has to read it before this tool ever sees the call.</summary>
+    public const string Force = ToolArguments.Force;
+
+    /// <summary>
+    /// The schema property for re-running an exact repeat on purpose.
+    ///
+    /// <para>Measured 2026-09-24, run 4f779e: a step ran the same `dotnet test` twice with nothing
+    /// written in between - three read-only checks that themselves showed nothing had changed sat
+    /// between the two runs. The engine now refuses an exact repeat of this kind of call before
+    /// spawning the process; this is how a model gets past that refusal when it genuinely has reason
+    /// to expect a different answer.</para>
+    /// </summary>
+    public const string ForceSchema = """
+        "force": {
+          "type": "boolean",
+          "description": "Set true to run this again even though you already ran it with these exact arguments in this step and have written nothing since. Only for when you have a SPECIFIC reason the answer might differ now regardless (something outside the workspace, flakiness you are checking for) - not to get past the refusal on principle, and not needed for a first attempt or one after any edit."
+        }
+        """;
+
     /// <summary>
     /// How long output is still collected after the process itself has gone.
     ///
@@ -385,6 +439,12 @@ internal static class ProcessExec
         process.ErrorDataReceived += (_, e) => { if (e.Data is null) stderrDone.TrySetResult(); };
 
         process.Start();
+
+        // Closed at once. The pipe exists only so the child gets end-of-file instead of a wait: a
+        // sudo with nowhere to ask says "no tty present" in milliseconds, where an inherited
+        // console had it sitting out the whole timeout.
+        try { process.StandardInput.Close(); } catch { /* the child may have gone already */ }
+
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
 
@@ -433,7 +493,17 @@ internal static class ProcessExec
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
-            CreateNoWindow = true
+            CreateNoWindow = true,
+
+            // Nothing is ever going to type an answer, so say so at the pipe rather than letting a
+            // prompt wait out the timeout. Redirected and closed immediately below: a child that
+            // asks for input reads end-of-file and gives up, which is a fast, readable failure.
+            //
+            // Measured across three runs, 2026-09-23/24: THIRTY-TWO timeouts, and the ones that
+            // can be identified are all the same shape - `wsl -- bash -c "sudo apt-get install …"`
+            // and friends, waiting for a password at a terminal that does not exist. At 60 and 90
+            // seconds apiece that is about half an hour of a run spent waiting for nobody.
+            RedirectStandardInput = true
         };
         foreach (var a in args)
             startInfo.ArgumentList.Add(a);
@@ -453,8 +523,20 @@ internal static class ProcessExec
         }
         catch (Exception ex)
         {
-            // Most commonly: the binary is not installed / not on PATH.
-            return ToolResults.Fail($"Could not run {fileName}: {ex.Message}");
+            // The process never STARTED - the binary is not installed, not on PATH, or the command
+            // line Windows was handed is longer than it accepts. Nothing ran, so this is NeverRan
+            // and not a failure the step has to carry, exactly as a shell refusing a word it does
+            // not have (9ap) or git refusing its own arguments (9bj).
+            //
+            // Measured 2026-09-24 01:18: a step tried to write a 12 KB report through
+            // run_powershell, whose script travels as -EncodedCommand; base64 of UTF-16 is about
+            // 32 KB and Windows answered "The filename or extension is too long". The step was
+            // marked Incomplete for a process that never existed and took three steps with it.
+            return ToolResults.NeverRan(
+                $"{fileName} could not be STARTED, so nothing ran: {ex.Message} "
+                + "This is not work that failed. If the command line was too long, the content "
+                + "belongs in a file rather than in a command: write_file it, or write the script "
+                + "to '" + WorkspaceGuard.ScratchPrefix + "/' and run that path.");
         }
 
         return BuildResult(
@@ -470,10 +552,24 @@ internal static class ProcessExec
     /// <para>Says so when it happens. Silently keeping the first N characters of a build log and
     /// calling that "the output" is how a model comes to believe a build succeeded because the
     /// errors were off the end.</para>
+    ///
+    /// <para><b>The start AND the end.</b> It kept only the start: past the ceiling every later line
+    /// was dropped, and the last lines of a build or a test run are where its result is. Found
+    /// 2026-09-24 (Docs/PROVIDERS_AGENTS_TOOLS_TESTS_REVIEW_2026-09-24.md #3): 640 lines of test
+    /// output and then "FINAL_TEST_SUMMARY: Failed=3 Passed=22" - the summary was gone before
+    /// BuildResult, whose own head-and-tail could only keep the end of what was left. Now half the
+    /// ceiling holds the first lines and half a moving window of the last ones, and what is dropped
+    /// is the MIDDLE - the same shape every other cut in this application has.</para>
     /// </summary>
     public sealed class CapturedStream
     {
-        private readonly StringBuilder _text = new();
+        private const int HeadChars = MaxCapturedChars / 2;
+        private const int TailChars = MaxCapturedChars - HeadChars;
+
+        private readonly StringBuilder _head = new();
+        private readonly Queue<string> _tail = new();
+        private int _tailChars;
+        private bool _headFull;
         private int _dropped;
 
         public void Add(string? line)
@@ -481,19 +577,36 @@ internal static class ProcessExec
             if (line is null)
                 return;
 
-            if (_text.Length + line.Length + 1 > MaxCapturedChars)
+            if (!_headFull && _head.Length + line.Length + 1 <= HeadChars)
             {
-                _dropped++;
+                _head.AppendLine(line);
                 return;
             }
 
-            _text.AppendLine(line);
+            _headFull = true;
+
+            // One line longer than the whole tail keeps its END, which is where a line says how it came out.
+            if (line.Length + 1 > TailChars)
+                line = "…" + line[^(TailChars - 2)..];
+
+            _tail.Enqueue(line);
+            _tailChars += line.Length + 1;
+            while (_tailChars > TailChars && _tail.Count > 1)
+            {
+                _tailChars -= _tail.Dequeue().Length + 1;
+                _dropped++;
+            }
         }
 
         public override string ToString()
-            => _dropped == 0
-                ? _text.ToString()
-                : _text + $"… ({_dropped} more line(s) produced and dropped — output passed "
-                        + $"{MaxCapturedChars:N0} characters)\n";
+        {
+            var text = new StringBuilder(_head.ToString());
+            if (_dropped > 0)
+                text.Append($"… ({_dropped} line(s) in the middle produced and dropped — output passed "
+                            + $"{MaxCapturedChars:N0} characters; the first and the last lines are kept)\n");
+            foreach (var line in _tail)
+                text.AppendLine(line);
+            return text.ToString();
+        }
     }
 }

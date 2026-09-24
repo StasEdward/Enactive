@@ -38,6 +38,11 @@ public sealed class HowBigAStepMayBeTests
 
         // The instruction that follows from it, not just the fact.
         Assert.Contains("a step per batch", prompt, StringComparison.Ordinal);
+
+        // And each batch keeps what it did. Run ae2015, 2026-09-24: four batches wrote nothing and a
+        // fifth step wrote for all of them; one batch stalled, the fifth was skipped, and the work
+        // of the three that finished was lost with it.
+        Assert.Contains("Each batch step SAVES its own results", prompt, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -65,6 +70,26 @@ public sealed class HowBigAStepMayBeTests
 
         Assert.Contains("REPEATED work only", prompt, StringComparison.Ordinal);
         Assert.Contains("never split into stages", prompt, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A check the request attaches to every item a step produces stays with the step that produces
+    /// the item, rather than becoming a step of its own.
+    ///
+    /// <para>Measured 2026-09-24, run 4f779e: the request said, of every test, "it must FAIL if the
+    /// behaviour it describes is broken - check that by breaking it temporarily and putting it
+    /// back." The plan made this a separate step from writing the tests. Step 2 wrote 4 tests and
+    /// broke-and-restored the source 17 times confirming them; step 3, "mutation-check new tests",
+    /// then did the SAME 17 breaks again for the same 4 tests - the check was the tests' own work,
+    /// done twice.</para>
+    /// </summary>
+    [Fact]
+    public void A_per_item_check_stays_with_the_step_that_makes_the_item()
+    {
+        var prompt = Planner.SystemPromptFor(maxSteps: null, turnCeiling: 250);
+
+        Assert.Contains("EVERY item a step produces", prompt, StringComparison.Ordinal);
+        Assert.Contains("belongs IN the step that", prompt, StringComparison.Ordinal);
     }
 
     /// <summary>

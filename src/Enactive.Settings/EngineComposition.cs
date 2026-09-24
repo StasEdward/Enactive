@@ -145,7 +145,9 @@ public static class EngineComposition
             p.Models,
             p.Headers.Count > 0 ? p.Headers : null,
             p.MaxTokens,
-            p.ContextWindowTokens)).ToList();
+            p.ContextWindowTokens,
+            p.AnswerReserveTokens,
+            p.HandoverAtPercent)).ToList();
 
     /// <summary>
     /// The configured team, or the built-in one when a person has never edited it. Global

@@ -48,6 +48,20 @@ public interface ILogSink
     void Log(LogEntry entry);
 }
 
+/// <summary>
+/// A log whose history is read back later - the log window, the export, AI Analyze - and does not
+/// keep everything: it is cleared, and its oldest entries give way to new ones. It can say whether
+/// entries it accepted are still there, so a writer whose entry only makes sense next to an earlier
+/// one (a prompt logged as "the previous prompt, plus these messages") can tell when that earlier one
+/// is gone and write the whole thing again. A log that keeps everything does not implement this.
+/// </summary>
+public interface ILogHistory
+{
+    /// <summary>True when every one of these details - the very strings logged, compared by
+    /// reference - is still in the history.</summary>
+    bool HoldsAll(IReadOnlyCollection<string> details);
+}
+
 /// <summary>A sink that drops everything. The default when no logging is wired up.</summary>
 public sealed class NullLogSink : ILogSink
 {

@@ -22,6 +22,26 @@ using Enactive.Workspace;
 /// One scripted assistant turn. The engine is driven entirely by what a provider streams back, so a
 /// turn is the unit a test writes: either plain text, or one or more structured tool calls.
 /// </summary>
+/// <summary>
+/// A request as it was SENT - its messages, their tool calls and its tools copied at that moment.
+///
+/// <para>The engine hands a provider its live conversation and goes on appending to it, replacing
+/// messages when it trims and clearing it when it hands over. A fake that kept the request object
+/// kept a VIEW of that list: a check on what the model saw on turn 3 read the conversation as it
+/// stood after the run, with replies from later turns in it and trimmed ones gone. Measured
+/// 2026-09-24 (Docs/PROVIDERS_AGENTS_TOOLS_TESTS_REVIEW_2026-09-24.md #2): a first request sent with
+/// two messages held five by the end of the run, including a reply that did not exist yet.</para>
+/// </summary>
+internal static class RequestSnapshot
+{
+    public static ChatRequest Of(ChatRequest request)
+        => request with
+        {
+            Messages = request.Messages.Select(m => m with { ToolCalls = m.ToolCalls?.ToArray() }).ToArray(),
+            Tools = request.Tools?.ToArray()
+        };
+}
+
 public sealed record Turn(
     string? Text = null, IReadOnlyList<ToolCall>? Calls = null, string? FinishReason = "stop",
     // Tokens this turn reports. Null on both = a provider that does not count, which is a real case
@@ -80,14 +100,35 @@ public sealed class FakeChatProvider : IChatProvider
 
     public int? ContextWindow(ChatRequest request) => Window;
 
+    /// <summary>What ProviderConfig.AnswerReserveTokens would say. Null = the engine's default.</summary>
+    public int? Reserve { get; set; }
+
+    /// <summary>What ProviderConfig.HandoverAtPercent would say. Null = hand over by turns.</summary>
+    public int? HandoverAt { get; set; }
+
+    public int? AnswerReserve(ChatRequest request) => Reserve;
+
+    public int? HandoverAtPercent(ChatRequest request) => HandoverAt;
+
     public int TurnsLeft => _script.Count;
+
+    /// <summary>
+    /// Answers a request by what it ASKS, before the script is consulted - null to fall through.
+    /// For the requests a test cannot place by position: a handover's note is asked for whenever the
+    /// engine decides, and a script that guesses the turn tests the guess.
+    /// </summary>
+    public Func<ChatRequest, Turn?>? Answering { get; set; }
+
+    private Turn Next(ChatRequest request)
+        => Answering?.Invoke(request) ?? (_script.Count > 0 ? _script.Dequeue() : WhenExhausted);
 
     public async IAsyncEnumerable<ChatStreamEvent> StreamChatAsync(
         ChatRequest request,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
     {
+        request = RequestSnapshot.Of(request);
         Requests.Add(request);
-        var turn = _script.Count > 0 ? _script.Dequeue() : WhenExhausted;
+        var turn = Next(request);
 
         if (turn.Thinking is { Length: > 0 } reasoning)
             yield return new ReasoningDelta(reasoning);
@@ -108,8 +149,9 @@ public sealed class FakeChatProvider : IChatProvider
 
     public Task<ChatCompletion> CompleteAsync(ChatRequest request, CancellationToken ct)
     {
+        request = RequestSnapshot.Of(request);
         Requests.Add(request);
-        var turn = _script.Count > 0 ? _script.Dequeue() : WhenExhausted;
+        var turn = Next(request);
 
         // The turn's tokens are reported here too, not only on the streaming path. Planning and
         // review are the two phases that go through CompleteAsync, and returning null here made
@@ -369,6 +411,39 @@ public sealed class EngineFixture : IDisposable
         => new("developer", "Developer", "You are a developer.", tools,
                PermissionLevel.Execute, new ModelPolicy(new ModelRef("fake", "fake-model")));
 
+    /// <summary>
+    /// The run's worker, plus every role this build ships, as the TEAM the orchestrator sees.
+    ///
+    /// <para>The worker under test is still the one that runs and still the one the role gate is
+    /// applied with. Only <c>IWorkerProvider.All</c> grows, and in the engine that is read by
+    /// exactly one thing: <c>ToolReach.Unnamed</c>, which asks "does ANY role name this tool".</para>
+    ///
+    /// <para><b>Why the team has to be a team.</b> A fixture worker is usually a stripped-down
+    /// allowlist built to exercise the role gate — <c>WorkerWith("write_file", "read_file")</c> —
+    /// and against a team of one, "no role names send_email" is true of it, which is a fact about
+    /// the fixture and not about the product. Handing the engine the shipped roles alongside is
+    /// what makes the question mean in a test what it means in a run.</para>
+    ///
+    /// <para><c>WorkerWith</c> reuses the id "developer", so a shipped role it displaces is kept
+    /// under a suffixed id. Nothing resolves workers by id here except <c>Get</c>, which is given
+    /// the worker under test, so the suffix is invisible — and dropping the displaced role instead
+    /// would delete an allowlist the real configuration has.</para>
+    /// </summary>
+    private static IWorkerProvider TeamAround(Worker worker)
+    {
+        var team = new List<Worker> { worker };
+        var taken = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { worker.Id };
+
+        foreach (var shipped in DefaultWorkers.Seed(new ModelRef("fake", "fake-model")))
+        {
+            var id = taken.Add(shipped.Id) ? shipped.Id : shipped.Id + "-as-shipped";
+            taken.Add(id);
+            team.Add(shipped with { Id = id });
+        }
+
+        return new StaticWorkerProvider(team, worker.Id);
+    }
+
     /// <summary>A role exactly as this build ships it — allowlist, level and instructions.</summary>
     public static Worker Role(string id)
         => DefaultWorkers.Seed(new ModelRef("fake", "fake-model")).Single(w => w.Id == id);
@@ -404,14 +479,15 @@ public sealed class EngineFixture : IDisposable
         int successRetries = 0,
         IRunCheckpointStore? checkpoints = null,
         RunSettings? settings = null,
-        bool checkSoundness = false)
+        bool checkSoundness = false,
+        IReadOnlyList<Worker>? team = null)
         => Build(
             reviewProvider is null
                 ? new SingleProviderFactory(provider)
                 : new MapProviderFactory(provider, (Verdicts.ProviderId, reviewProvider)),
             worker, policy, artifacts, allowImplicitToolCalls, router, reviewRetries, reviewContent,
             revertRejectedSteps, successCriteria, limits, maxParallelSteps, evidenceBudget, successRetries,
-            decisions, checkpoints, settings, checkSoundness);
+            decisions, checkpoints, settings, checkSoundness, team);
 
     public Orchestrator Build(
         IChatProviderFactory providers,
@@ -445,7 +521,10 @@ public sealed class EngineFixture : IDisposable
         // review provider, so leaving it on would silently add a turn to every review script in the
         // suite - and a test that says nothing about soundness should get the shape it was written
         // for. Same reasoning as successRetries above.
-        bool checkSoundness = false)
+        bool checkSoundness = false,
+        // The whole TEAM, when a test needs to say what it is. Left out, the worker under test is
+        // surrounded by the shipped roles - see TeamAround for why that is the honest default.
+        IReadOnlyList<Worker>? team = null)
     {
         // The set a host registers, not a convenient subset: a role's allowlist can only be
         // exercised against the tools that actually exist, and git/docker were missing here while
@@ -455,7 +534,9 @@ public sealed class EngineFixture : IDisposable
         return new Orchestrator(
             providers,
             new ModelResolver(),
-            new StaticWorkerProvider(worker ?? WorkerWith("write_file", "read_file", "list_dir", "run_command")),
+            team is { Count: > 0 }
+                ? new StaticWorkerProvider(team, (worker ?? team[0]).Id)
+                : TeamAround(worker ?? WorkerWith("write_file", "read_file", "list_dir", "run_command")),
             tools,
             artifacts ?? Artifacts,
             Workspace,
@@ -545,9 +626,17 @@ public sealed class EngineFixture : IDisposable
     /// Every tool a shipping host registers. Kept here so one list serves the whole suite, and so
     /// "a tool nobody can reach" is a question a test can ask.
     /// </summary>
+    /// <summary>
+    /// One shipped tool by the name a model would call it by — so a test can sweep the whole set
+    /// without naming each type, and a tool added to ShippedTools is covered the day it is added.
+    /// </summary>
+    public static ITool ToolNamed(string name)
+        => ShippedTools().Single(t => t.Definition.Name == name);
+
     public static ITool[] ShippedTools() => new ITool[]
     {
-        new WriteFileTool(), new EditFileTool(), new ReadFileTool(), new SearchFilesTool(),
+        new WriteFileTool(), new EditFileTool(), new ReadFileTool(), new ReadFilesTool(),
+        new SearchFilesTool(),
         new CountMatchesTool(), new FileStatsTool(), new CompareFilesTool(),
         new ListDirectoryTool(), new CreateDirectoryTool(), new MoveFileTool(), new CopyFileTool(), new DeleteFileTool(),
         new RunCommandTool(), new RunPowerShellTool(), new GitTool(), new DockerTool(),

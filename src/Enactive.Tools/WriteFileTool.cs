@@ -22,6 +22,7 @@ public sealed class WriteFileTool : ITool
         string? path;
         string? content;
         bool allowShrink;
+        bool append;
         try
         {
             using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(argumentsJson) ? "{}" : argumentsJson);
@@ -29,6 +30,7 @@ public sealed class WriteFileTool : ITool
             path = root.TryGetProperty("path", out var p) && p.ValueKind == JsonValueKind.String ? p.GetString() : null;
             content = root.TryGetProperty("content", out var c) && c.ValueKind == JsonValueKind.String ? c.GetString() : null;
             allowShrink = root.TryGetProperty("allow_shrink", out var a) && a.ValueKind == JsonValueKind.True;
+            append = root.TryGetProperty("append", out var ap) && ap.ValueKind == JsonValueKind.True;
         }
         catch (JsonException ex)
         {
@@ -44,7 +46,7 @@ public sealed class WriteFileTool : ITool
         // mis-merged read+write pair emptied a file: the write arrived carrying the read's
         // arguments, which have no content.) An explicit "" still writes an empty file.
         if (content is null)
-            return ToolResults.Fail(
+            return ToolResults.Unreadable(
                 "'content' is required. To empty a file, pass an empty string explicitly.");
 
         var text = content;
@@ -106,8 +108,17 @@ public sealed class WriteFileTool : ITool
             // survive contact with the caller: a model cannot see a carriage return, so it cannot
             // ask for one either - which makes every conversion here accidental, and the deliberate
             // case indistinguishable from the accident. A shell command converts a file on purpose.
+            // APPEND: the new text goes after what is there. The way to add a section to a report
+            // without retyping the report - see the schema, and FIX_PLAN 9cq for what retyping cost.
+            // The ADDITION takes the file's endings before it is joined on: once joined, the text
+            // already contains the file's own CRLFs and would look converted when it is not.
+            var addedBytes = Encoding.UTF8.GetByteCount(text);
+            var appending = append && replacing && previousText is not null;
+            if (appending)
+                text = Joined(previousText!, LineEndings.RetypedFor(previousText!, text) ?? text);
+
             var endingsAdjusted = false;
-            if (replacing && previousText is not null
+            if (!appending && replacing && previousText is not null
                 && LineEndings.RetypedFor(previousText, text) is { } retyped)
             {
                 text = retyped;
@@ -116,7 +127,7 @@ public sealed class WriteFileTool : ITool
 
             var newBytes = Encoding.UTF8.GetByteCount(text);
 
-            if (replacing && !allowShrink && WouldLoseMostOfTheFile(previousBytes, newBytes))
+            if (replacing && !append && !allowShrink && WouldLoseMostOfTheFile(previousBytes, newBytes))
                 return ToolResults.Fail(
                     $"Refusing to replace '{path}': the new content is {newBytes} bytes against "
                     + $"{previousBytes} already there, so most of the file would be gone. This is "
@@ -124,6 +135,21 @@ public sealed class WriteFileTool : ITool
                     + "use edit_file, which replaces an exact passage and does not make you reproduce "
                     + "the rest. If the file really is meant to shrink this much, send the same "
                     + "write_file call again with \"allow_shrink\": true.");
+
+            // The same loss without the shrink. Measured 2026-09-24 21:06, run a19a2c: a step told to
+            // APPEND pages 4-6 to a report replaced it with pages 4-6 alone - 10,938 bytes over
+            // 9,696, so the size check above saw a file that grew. Step 1's findings were gone; the
+            // model noticed, went looking in git for a copy the file never had, and retyped them
+            // from its context. What was lost is the file's LINES, so that is what is counted.
+            if (replacing && !append && !allowShrink && previousText is not null
+                && previousBytes >= ShrinkGuardFloorBytes
+                && LinesKept(previousText, text) is var (kept, had) && kept * 2 < had)
+                return ToolResults.Fail(
+                    $"Refusing to replace '{path}': the new content keeps {kept} of the {had} lines already "
+                    + $"there, so most of what the file holds ({previousBytes} bytes) would be gone. If you "
+                    + "meant to ADD to the file, send only the new part with \"append\": true; to change part "
+                    + "of it, use edit_file. If it really is meant to be replaced by different content, send "
+                    + "the same write_file call again with \"allow_shrink\": true.");
 
             var reference = await ctx.Artifacts.CreateAsync(
                 path, ArtifactKind.FileSet, path,
@@ -144,9 +170,12 @@ public sealed class WriteFileTool : ITool
             var restorable = replacing && ctx.Artifacts.CanRestore(path);
 
             return ToolResults.Ok(
-                output: replacing
+                output: append && replacing
+                    ? $"APPENDED {addedBytes} bytes to the end of '{path}' (now {bytes} bytes). Everything "
+                      + "that was already in it is unchanged."
+                    : replacing
                     ? (restorable
-                        ? $"REPLACED the existing file '{path}' ({bytes} bytes). Its previous version was kept and can be restored."
+                        ? $"REPLACED the existing file '{path}' ({bytes} bytes). Its previous version was kept and can be restored by the user from the run - there is no tool for it, and git has only what was committed."
                         : $"REPLACED the existing file '{path}' ({bytes} bytes). Its previous version could NOT be backed up and is gone.")
                       + (endingsAdjusted
                           ? " Written with the line endings the file already used, so only the lines "
@@ -158,10 +187,23 @@ public sealed class WriteFileTool : ITool
                 {
                     ["path"] = path,
                     ["bytes"] = bytes,
-                    ["replacedExistingFile"] = replacing,
+                    ["replacedExistingFile"] = replacing && !append,
+                    ["appended"] = append && replacing,
                     ["previousVersionRecoverable"] = restorable
                 });
         }
+        // A path WorkspacePaths would not resolve - it leaves the workspace, or it is not a path.
+        // Nothing was opened, so this is an argument refused rather than an operation that went
+        // wrong, and the difference is the whole of 9bj-9bm. It also fixes the wording: without
+        // this the refusal arrives as "Could not read 'x': …", which reads as a read that failed.
+        //
+        // ArgumentException in this block comes from that resolution; the file system throws
+        // IOException and UnauthorizedAccessException, which fall through to the handler below.
+        catch (ArgumentException ex)
+        {
+            return ToolResults.Unreadable(ex.Message);
+        }
+
         catch (Exception ex)
         {
             return ToolResults.Fail($"Could not write '{path}': {ex.Message}");
@@ -186,6 +228,31 @@ public sealed class WriteFileTool : ITool
     internal static bool WouldLoseMostOfTheFile(long previousBytes, long newBytes)
         => previousBytes >= ShrinkGuardFloorBytes && newBytes * 2 < previousBytes;
 
+    /// <summary>
+    /// How many of the file's distinct non-blank lines the new content still has, of how many it
+    /// had. Compared trimmed, so a re-indented line still counts as kept; a rewrite that changes most
+    /// lines is exactly what this is meant to make deliberate.
+    /// </summary>
+    internal static (int Kept, int Had) LinesKept(string previous, string next)
+    {
+        static HashSet<string> Distinct(string text)
+            => text.Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0).ToHashSet(StringComparer.Ordinal);
+
+        var had = Distinct(previous);
+        var now = Distinct(next);
+        return (had.Count(now.Contains), had.Count);
+    }
+
+    /// <summary>
+    /// What is there, then what is added - on a line of its own. A report that ends without a line
+    /// break would otherwise run its last line straight into the new section's heading.
+    /// </summary>
+    private static string Joined(string previous, string added)
+        => previous.Length == 0 || added.Length == 0
+           || previous.EndsWith('\n') || added.StartsWith('\n') || added.StartsWith("\r\n", StringComparison.Ordinal)
+            ? previous + added
+            : previous + (previous.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n") + added;
+
     /// <summary>Below this, a file is short enough that rewriting it whole is not the risky act.</summary>
     private const int ShrinkGuardFloorBytes = 2_000;
 
@@ -194,8 +261,9 @@ public sealed class WriteFileTool : ITool
       "type": "object",
       "properties": {
         "path": { "type": "string", "description": "File path relative to the workspace root, e.g. list_files.py" },
-        "content": { "type": "string", "description": "The full text content of the file." },
-        "allow_shrink": { "type": "boolean", "description": "Set true only when an existing file is genuinely meant to lose most of its content. Without it a replacement that drops most of a file is refused, because that is nearly always a whole-file rewrite of a file that should have been edited in part." }
+        "content": { "type": "string", "description": "The full text content of the file - or, with append, only the text to add at its end." },
+        "append": { "type": "boolean", "description": "Set true to ADD content to the end of the file instead of replacing it - send only the new text. Use this to add a section to a report or a log: it does not make you retype what is already there. Creates the file if it does not exist." },
+        "allow_shrink": { "type": "boolean", "description": "Set true only when an existing file is genuinely meant to lose most of its content - to shrink, or to be replaced by different text. Without it a replacement that drops most of a file is refused, because that is nearly always a whole-file rewrite of a file that should have been edited in part, or added to with append." }
       },
       "required": ["path", "content"]
     }

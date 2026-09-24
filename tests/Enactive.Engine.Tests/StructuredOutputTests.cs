@@ -2,6 +2,7 @@ namespace Enactive.Engine.Tests;
 
 using System.Net;
 using System.Text;
+using System.Text.Json;
 using Enactive.Agents;
 using Enactive.Core.Chat;
 using Enactive.Core.Events;
@@ -68,6 +69,33 @@ public sealed class StructuredOutputTests
         }
     }
 
+    /// <summary>
+    /// The value at a path in a request body, checked for its KIND at every step.
+    ///
+    /// <para>These tests checked that words were in the body: "response_format" and "json_schema".
+    /// A body that said <c>"response_format":"json_schema"</c> - a string where the API wants an
+    /// object - passed them, and a deliberately broken serializer doing exactly that stayed green
+    /// (Docs/PROVIDERS_AGENTS_TOOLS_TESTS_REVIEW_2026-09-24.md #4). The shape IS the contract here.</para>
+    /// </summary>
+    private static JsonElement At(string body, params string[] path)
+    {
+        var at = JsonDocument.Parse(body).RootElement;
+        foreach (var step in path)
+        {
+            Assert.True(at.ValueKind == JsonValueKind.Object, $"'{step}' is under a {at.ValueKind}, not an object");
+            Assert.True(at.TryGetProperty(step, out at), $"no '{step}' in the request body");
+        }
+        return at;
+    }
+
+    /// <summary>The schema the request asked for, arrived as a schema: an object with its property and its required list.</summary>
+    private static void IsTheSchema(JsonElement schema)
+    {
+        Assert.Equal(JsonValueKind.Object, schema.ValueKind);
+        Assert.Equal(JsonValueKind.Object, schema.GetProperty("properties").GetProperty("verdict").ValueKind);
+        Assert.Contains(schema.GetProperty("required").EnumerateArray(), r => r.GetString() == "verdict");
+    }
+
     private static ProviderDescriptor Descriptor(string id, ProviderKind kind, string model)
         => new(id, id, kind, "https://" + id + ".test", "key", new[] { model });
 
@@ -86,9 +114,9 @@ public sealed class StructuredOutputTests
             CancellationToken.None);
 
         var sent = Assert.Single(handler.Bodies);
-        Assert.Contains("output_config", sent);
-        Assert.Contains("json_schema", sent);
-        Assert.Contains("verdict", sent);
+        Assert.Equal(JsonValueKind.Object, At(sent, "output_config", "format").ValueKind);
+        Assert.Equal("json_schema", At(sent, "output_config", "format", "type").GetString());
+        IsTheSchema(At(sent, "output_config", "format", "schema"));
     }
 
     [Fact]
@@ -105,8 +133,10 @@ public sealed class StructuredOutputTests
             CancellationToken.None);
 
         var sent = Assert.Single(handler.Bodies);
-        Assert.Contains("response_format", sent);
-        Assert.Contains("json_schema", sent);
+        Assert.Equal(JsonValueKind.Object, At(sent, "response_format").ValueKind);
+        Assert.Equal("json_schema", At(sent, "response_format", "type").GetString());
+        Assert.Equal(JsonValueKind.Object, At(sent, "response_format", "json_schema").ValueKind);
+        IsTheSchema(At(sent, "response_format", "json_schema", "schema"));
     }
 
     [Fact]
@@ -126,9 +156,7 @@ public sealed class StructuredOutputTests
 
         // The schema, not "json". format:"json" with no schema is the trap §9c names: a small model
         // then returns valid JSON with invented keys, which is worse than prose because it parses.
-        Assert.Contains("\"format\"", sent);
-        Assert.DoesNotContain("\"format\":\"json\"", sent);
-        Assert.Contains("verdict", sent);
+        IsTheSchema(At(sent, "format"));
     }
 
     /// <summary>No schema asked for, nothing added — the field is opt-in, not a new default.</summary>

@@ -79,10 +79,21 @@ public sealed class CountMatchesTool : ITool
         string searchRoot;
         try { searchRoot = WorkspacePaths.ResolveInside(ctx.WorkspaceRoot, subPath); }
         catch (ReservedPathException) { return ToolResults.NotFound(ReservedPathException.Explanation); }
-        catch (ArgumentException ex) { return ToolResults.Fail(ex.Message); }
+        catch (ArgumentException ex) { return ToolResults.Unreadable(ex.Message); }
 
-        if (!Directory.Exists(searchRoot))
-            return ToolResults.NotFound($"Not a folder in this workspace: {subPath ?? "."}");
+        // A path that names ONE file is a question about that file, not a mistake. search_files
+        // learnt this on 2026-09-20 - "answering is better than explaining, and searching one named
+        // file is a perfectly good question" - and these two, written afterwards, inherited the
+        // older behaviour anyway.
+        //
+        // Measured 2026-09-23 21:13:45: file_stats {"path":"Docs/DRIFT_ollama.md"} on the report the
+        // step had just written, answered "Not a folder in this workspace" about a file that was
+        // there. It cost nothing this time because a miss is an answer, but it is a wrong sentence
+        // about a right path, which is the one thing a message must not be.
+        var one = File.Exists(searchRoot);
+
+        if (!one && !Directory.Exists(searchRoot))
+            return ToolResults.NotFound($"Not a folder or file in this workspace: {subPath ?? "."}");
 
         var perFile = new List<(string Path, int Count, int Lines)>();
         var total = 0;
@@ -93,7 +104,9 @@ public sealed class CountMatchesTool : ITool
 
         try
         {
-            foreach (var file in WorkspaceScan.Files(searchRoot, glob))
+            // Naming the file IS the filter, so the glob does not get to exclude it - the
+            // same rule search_files applies, for the same reason.
+            foreach (var file in one ? new[] { searchRoot } : WorkspaceScan.Files(searchRoot, glob))
             {
                 ct.ThrowIfCancellationRequested();
 
@@ -129,6 +142,19 @@ public sealed class CountMatchesTool : ITool
                 + "Anchor it or make it more specific.");
         }
         catch (OperationCanceledException) { throw; }
+        // An argument the tool REFUSED before it looked at anything - a glob naming a path, a
+        // path outside the workspace. Nothing was searched, so this is a sentence that did not
+        // parse rather than work that went wrong, and Unreadable says so (DidNotRun). It matters
+        // because a search names no file, is not a shell and changes nothing, so an open failure
+        // recorded against it can be closed by NOTHING except repeating the identical bad call.
+        // Measured 2026-09-23 00:15: search_files {"glob":"src/Enactive.Remote.*/*.cs"} was
+        // refused with a perfectly good explanation, the model read the files another way, and
+        // step 2 was marked Incomplete for it with steps 3 and 4 skipped.
+        catch (ArgumentException ex)
+        {
+            return ToolResults.Unreadable(ex.Message);
+        }
+
         catch (Exception ex)
         {
             return ToolResults.Fail($"Count failed: {ex.Message}");

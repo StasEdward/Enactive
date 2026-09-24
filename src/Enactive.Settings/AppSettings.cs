@@ -49,6 +49,30 @@ public sealed class ProviderConfig
     /// </summary>
     public int? ContextWindowTokens { get; set; }
 
+    /// <summary>
+    /// How many tokens of <see cref="ContextWindowTokens"/> to keep free for the model's answer.
+    /// Blank means an eighth of the window, which is a proportion rather than a number fitted to
+    /// one model: the largest single answer measured so far was about 14,000 tokens, a report
+    /// appended in one call, and an eighth of a 131,072 window is 16,384.
+    ///
+    /// <para>Only used when the window is declared. Set it higher for a model known to write long
+    /// answers into a small window; the engine never keeps back more than half the window.</para>
+    /// </summary>
+    public int? AnswerReserveTokens { get; set; }
+
+    /// <summary>
+    /// Hand a step over to a fresh conversation when its prompt reaches this percentage of
+    /// <see cref="ContextWindowTokens"/> - instead of after 60 turns. Blank keeps the turn count.
+    ///
+    /// <para>Measured on one local model, 2026-09-24: 60 turns handed a step over at half the
+    /// window, and a step that filled 89% of it in 40 turns was never handed over and ran out
+    /// mid-answer. 75 fitted that model. It is a setting and not a constant because a number fitted
+    /// to one model is not a property of the engine.</para>
+    ///
+    /// <para>Needs the provider to report prompt tokens; without that it falls back to turns.</para>
+    /// </summary>
+    public int? HandoverAtPercent { get; set; }
+
     public ProviderConfig Clone() => new()
     {
         Id = Id,
@@ -60,7 +84,9 @@ public sealed class ProviderConfig
         Headers = new Dictionary<string, string>(Headers),
         Models = new List<string>(Models),
         MaxTokens = MaxTokens,
-        ContextWindowTokens = ContextWindowTokens
+        ContextWindowTokens = ContextWindowTokens,
+        AnswerReserveTokens = AnswerReserveTokens,
+        HandoverAtPercent = HandoverAtPercent
     };
 }
 
@@ -516,12 +542,19 @@ public sealed partial class AppSettings
     [JsonIgnore]
     public string? LastSaveError { get; private set; }
 
-    public bool Save()
+    /// <param name="path">
+    /// A parameter so a test can point this at a fixture, for the same reason <see cref="Load"/>
+    /// takes one: the whole path this method actually runs - packing MCP credentials, encrypting
+    /// every family of secret, blanking the legacy plaintext during serialization, the temp-file
+    /// write and the replace - is exactly what each STEP's own unit test cannot exercise together,
+    /// and until this existed no test ran <c>Save</c> at all rather than risk a real %APPDATA%.
+    /// </param>
+    public bool Save(string? path = null)
     {
         LastSaveError = null;
         try
         {
-            var file = SettingsFile();
+            var file = path ?? SettingsFile();
             SaveMcpSecrets();
             Directory.CreateDirectory(Path.GetDirectoryName(file)!);
 

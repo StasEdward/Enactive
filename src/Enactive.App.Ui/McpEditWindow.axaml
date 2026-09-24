@@ -1,7 +1,7 @@
 <Window xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="using:Enactive.App.Ui" xmlns:vm="using:Enactive.App.Ui.ViewModels"
         x:Class="Enactive.App.Ui.McpEditWindow" x:DataType="vm:McpEditViewModel"
-        Title="MCP server" Width="740" Height="800" WindowStartupLocation="CenterOwner"
+        Title="MCP server" Width="740" Height="900" WindowStartupLocation="CenterOwner"
         Background="{DynamicResource Brand.Bg}" WindowDecorations="BorderOnly" ExtendClientAreaToDecorationsHint="True">
     <Grid RowDefinitions="Auto,*" Margin="{Binding $parent[Window].OffScreenMargin}">
         <local:TitleBarView />

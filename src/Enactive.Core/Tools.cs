@@ -29,8 +29,22 @@ public static class ToolArguments
     /// <summary>The command line <c>run_command</c> is given.</summary>
     public const string Command = "command";
 
+    /// <summary>
+    /// The argument LIST <c>git</c> and <c>docker</c> are given — an array, or one string they
+    /// split themselves. No shell sees it, which is why a pipe inside one element is data.
+    /// </summary>
+    public const string Args = "args";
+
     /// <summary>The script <c>run_powershell</c> is given.</summary>
     public const string Script = "script";
+
+    /// <summary>
+    /// Set to run a command AGAIN despite the engine's own knowledge that it already ran with these
+    /// exact arguments this step and nothing has been written since - see the repeat gate in
+    /// Orchestrator. Not read by any tool's own logic; it exists only for the engine to see before
+    /// the tool is invoked, the same way <see cref="ExpectedExitCodes"/> is.
+    /// </summary>
+    public const string Force = "force";
 }
 
 /// <summary>

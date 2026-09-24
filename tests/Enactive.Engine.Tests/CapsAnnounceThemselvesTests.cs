@@ -43,17 +43,44 @@ public sealed class CapsAnnounceThemselvesTests
     /// </summary>
     private static readonly Dictionary<string, string> Covered = new(StringComparer.Ordinal)
     {
+        ["Orchestrator.ProgressEveryChars"] = "A_long_tool_call_says_it_is_still_being_written",
+        // The two halves of ProcessExec's capture ceiling: the first lines and the last ones, with the
+        // middle dropped and said so - driven past both, for stdout and stderr, through to evidence.
+        ["CapturedStream.HeadChars"] = "The_end_of_a_long_output_survives_capture_result_and_evidence",
+        ["CapturedStream.TailChars"] = "The_end_of_a_long_output_survives_capture_result_and_evidence",
+        // What a handover carries that the model did not write: a diff cut to fit says so, and a long
+        // command output is carried by its end, which is where a test runner puts its result.
+        ["Orchestrator.MaxHandoverDiffChars"] = "A_huge_diff_in_a_handover_is_cut_and_says_so",
+        ["Orchestrator.HandoverOutputTailChars"] = "A_long_command_output_is_carried_by_its_end",
+        // What a reply's TEXT may do while it streams. Each stop says what it stopped and why, to the
+        // model and in the log; the thresholds below it decide what counts as a loop.
+        ["RunawayReply.MaxTextChars"] = "Prose_past_the_limit_is_stopped",
+        ["RunawayReply.CheckEveryChars"] = "A_passage_coming_round_is_a_loop_and_its_first_pass_is_kept",
+        ["RunawayReply.ShortestLoopChars"] = "A_passage_coming_round_is_a_loop_and_its_first_pass_is_kept",
+        ["RunawayReply.LongestLoopChars"] = "A_paragraph_coming_round_is_a_loop_too",
+        ["RunawayReply.DistinctCharsInALoop"] = "Separators_and_tables_are_not_loops",
+        ["WorkspaceChanges.MaxDiffCharsKept"] = "A_huge_diff_is_kept_to_a_limit_and_says_so",
         ["Orchestrator.MaxReviewFileChars"] = nameof(A_files_real_size_reaches_the_reviewer_from_a_real_run),
         ["Reviewer.MaxContentCharsPerFile"] = "An_excerpt_says_so_even_when_the_caller_did_the_cutting",
         ["Reviewer.MaxContentCharsTotal"] = nameof(Files_dropped_for_the_review_budget_are_announced),
+        // The user's own request, quoted for the reviewer - see TheReviewerSeesTheRequestTests.
+        ["Reviewer.MaxRequestChars"] = "A_huge_request_is_cut_and_says_so",
         ["SuccessEvaluator.MaxDetailChars"] = nameof(A_criterions_output_says_how_much_of_it_is_shown),
         ["ProcessExec.MaxOutputChars"] = nameof(Command_output_past_the_cap_says_it_was_truncated),
+        ["ReadFilesTool.MaxFiles"] = nameof(More_paths_than_read_files_takes_says_how_many),
+        ["ReadFilesTool.MaxCharsPerFile"] = nameof(A_long_file_among_several_is_cut_and_says_so),
+        ["ReadFilesTool.MaxCharsTotal"] = nameof(Files_past_the_read_files_budget_say_they_were_not_read),
+        ["RunPowerShellTool.MaxEncodedChars"] = nameof(A_script_too_long_for_a_command_line_is_refused),
         ["ProcessExec.MaxCapturedChars"] = "Captured_output_stops_at_the_ceiling_however_much_is_produced",
         ["ReadFileTool.MaxChars"] = nameof(A_line_too_long_for_the_window_says_where_it_was_cut),
         ["ReadFileTool.DefaultLines"] = nameof(A_window_says_which_lines_it_is_and_how_to_get_the_rest),
         ["SearchFilesTool.MaxMatches"] = nameof(A_search_that_stops_early_says_it_stopped),
         ["SearchFilesTool.MaxOutputChars"] = nameof(A_search_that_stops_early_says_it_stopped),
         ["SearchFilesTool.MaxLineChars"] = nameof(A_very_long_matching_line_is_shown_cut),
+        // Not a cap on an answer's length but on how much of the file each match brings with it; past
+        // the limit the answer is a read, and a search that was asked for more says so.
+        ["SearchFilesTool.DefaultContextLines"] = "A_match_comes_with_the_lines_around_it",
+        ["SearchFilesTool.MaxContextLines"] = "Context_past_the_limit_is_held_to_it_and_says_so",
         // Moved out of SearchFilesTool when count_matches and file_stats had to walk the workspace
         // the same way. One skip list and one size ceiling for every tool that scans, so a count and
         // a search can never disagree about which files exist.
@@ -62,8 +89,11 @@ public sealed class CapsAnnounceThemselvesTests
         // Not a cap on an ANSWER but on what the transcript remembers of a call already made. It
         // announces itself the same way - the head, then the exact length - because a remembered
         // argument that looked whole would have the model believe it wrote 200 characters.
-        ["Transcript.MaxRememberedValueChars"] = "A_file_sized_argument_is_remembered_by_its_head_and_its_length",
-        ["Transcript.RememberedHeadChars"] = "A_file_sized_argument_is_remembered_by_its_head_and_its_length",
+        // The census the planner is sized against. The scan ceiling says when it stopped; the floor
+        // below it decides which folders are worth a line, and a folder left out is not a truncated
+        // answer - it is one loose file nobody plans against.
+        ["WorkspaceCensus.MaxFilesScanned"] = "A_census_that_stopped_counting_says_so",
+        ["WorkspaceCensus.MinFiles"] = "A_folder_with_almost_nothing_in_it_gets_no_line",
         // A cap on how many FILES are listed, not how many characters. The totals above the list
         // stay complete - which is the whole difference between this and a search that stops early,
         // and the reason the notice has to say so rather than just trailing off.
@@ -171,9 +201,103 @@ public sealed class CapsAnnounceThemselvesTests
     // is shown) in a unit the census could not see. Widening it was measured rather than assumed:
     // it surfaced exactly the two new constants, so it costs nothing and closes the hole a
     // count-shaped cap would otherwise slip through.
-    private static readonly string[] Vocabulary = { "Chars", "Bytes", "Lines", "Matches", "Files" };
+    // "Tokens" joined it on 2026-09-24 with a cap on the answer (now a provider setting), after a cap measured in
+    // TOKENS went unseen by a census that only knew characters - and the thing it capped was
+    // the model's answer, which is the most expensive place for a silent cut there is. The
+    // plural is deliberate: it catches a ceiling and leaves CharsPerToken, a ratio, alone.
+    private static readonly string[] Vocabulary =
+        { "Chars", "Bytes", "Lines", "Matches", "Files", "Tokens" };
 
     // ── one per limit: the code, past the cap, saying so ────────────────────
+
+    /// <summary>
+    /// ReadFilesTool.MaxFiles — past this the answer is longer than the reading it saved.
+    /// </summary>
+    [Fact]
+    public async Task More_paths_than_read_files_takes_says_how_many()
+    {
+        using var fx = new EngineFixture();
+
+        var paths = Enumerable.Range(1, ReadFilesTool.MaxFiles + 1).Select(i => $"f{i}.md").ToArray();
+
+        var result = await fx.Invoke(new ReadFilesTool(),
+                                     System.Text.Json.JsonSerializer.Serialize(new { paths }));
+
+        Assert.False(result.Success);
+        Assert.Contains(ReadFilesTool.MaxFiles.ToString(), result.Error, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// ReadFilesTool.MaxCharsPerFile — one long file must not crowd out the four that came with
+    /// it, and the cut names read_file as the way to see the rest.
+    /// </summary>
+    [Fact]
+    public async Task A_long_file_among_several_is_cut_and_says_so()
+    {
+        using var fx = new EngineFixture();
+        fx.Write("long.md", new string('x', ReadFilesTool.MaxCharsPerFile + 500));
+        fx.Write("short.md", "short one");
+
+        var paths = new[] { "long.md", "short.md" };
+        var result = await fx.Invoke(new ReadFilesTool(),
+                                     System.Text.Json.JsonSerializer.Serialize(new { paths }));
+
+        Assert.True(result.Success, result.Error);
+
+        // The START and the END, and the label says which - one shape for every excerpt in this
+        // application, which is the property 9cc showed is load-bearing.
+        Assert.Contains("the start and the end", result.Output, StringComparison.Ordinal);
+        Assert.Contains("missing is the MIDDLE", result.Output, StringComparison.Ordinal);
+        Assert.Contains("short one", result.Output, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// ReadFilesTool.MaxCharsTotal — the files past the budget SAY so. Dropped in silence is how a
+    /// model concludes a file is empty.
+    /// </summary>
+    [Fact]
+    public async Task Files_past_the_read_files_budget_say_they_were_not_read()
+    {
+        using var fx = new EngineFixture();
+
+        var many = ReadFilesTool.MaxCharsTotal / ReadFilesTool.MaxCharsPerFile + 2;
+        var paths = new List<string>();
+        for (var i = 1; i <= many; i++)
+        {
+            fx.Write($"big{i}.md", new string('y', ReadFilesTool.MaxCharsPerFile));
+            paths.Add($"big{i}.md");
+        }
+
+        var result = await fx.Invoke(new ReadFilesTool(),
+                                     System.Text.Json.JsonSerializer.Serialize(new { paths = paths.ToArray() }));
+
+        Assert.True(result.Success, result.Error);
+        Assert.Contains("not read:", result.Output, StringComparison.Ordinal);
+        Assert.Contains(ReadFilesTool.MaxCharsTotal.ToString(), result.Output, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// RunPowerShellTool.MaxEncodedChars — a script that cannot fit on a Windows command line.
+    ///
+    /// <para>The cap is Windows', not ours: run_powershell sends its script as -EncodedCommand,
+    /// base64 of UTF-16 is about 2.7x the characters, and the line takes roughly 32,000. Crossing
+    /// it got "The filename or extension is too long" — a message about a filename, for a script
+    /// that has none — and the process never started at all (2026-09-24 01:18).</para>
+    /// </summary>
+    [Fact]
+    public async Task A_script_too_long_for_a_command_line_is_refused()
+    {
+        using var fx = new EngineFixture();
+
+        var script = "$c = '" + new string('x', RunPowerShellTool.MaxEncodedChars) + "'";
+
+        var result = await fx.Invoke(new RunPowerShellTool(),
+                                     System.Text.Json.JsonSerializer.Serialize(new { script }));
+
+        Assert.False(result.Success);
+        Assert.True(result.DidNotRun, result.Error);
+        Assert.Contains($"{RunPowerShellTool.MaxEncodedChars:N0}", result.Error, StringComparison.Ordinal);
+    }
 
     /// <summary>
     /// ProcessExec.MaxOutputChars — a build log longer than the model is shown, and the part it
@@ -236,7 +360,7 @@ public sealed class CapsAnnounceThemselvesTests
             """{"path":"minified.js"}""", Context(fx), CancellationToken.None);
 
         Assert.True(result.Success, result.Error);
-        Assert.Contains("truncated at 8000 characters", result.Output);
+        Assert.Contains("is longer than 8000 characters on its own, and is cut here", result.Output);
         Assert.True((bool)result.Metadata!["truncated"]!);
 
         // And the real size is still reported, so "8000 characters" is never mistaken for the file.
@@ -380,6 +504,9 @@ public sealed class CapsAnnounceThemselvesTests
 
         Assert.Contains("END OF EXCERPT", prompt);
         Assert.Contains(page.Length.ToString(), prompt);
-        Assert.Contains("is NOT missing from it", prompt);
+        // Reworded 2026-09-24 with the slice it describes: the excerpt is the start AND the
+        // end now, so "the rest was not shown" became "what is missing is the MIDDLE".
+        Assert.Contains("Nothing here is missing from the file itself", prompt);
+        Assert.Contains("the end of the file IS above", prompt);
     }
 }

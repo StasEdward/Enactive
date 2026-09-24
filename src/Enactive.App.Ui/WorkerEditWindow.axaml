@@ -2,10 +2,11 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="using:Enactive.App.Ui"
         xmlns:vm="using:Enactive.App.Ui.ViewModels"
+        xmlns:core="using:Enactive.Core.Guidance"
         x:Class="Enactive.App.Ui.WorkerEditWindow"
         x:DataType="vm:WorkerEditViewModel"
         Title="Team member"
-        Width="640" Height="800"
+        Width="640" Height="900"
         WindowStartupLocation="CenterOwner"
         Background="{DynamicResource Brand.Bg}"
         WindowDecorations="BorderOnly"
@@ -50,9 +51,14 @@
                     </ItemsControl.ItemsPanel>
                     <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="vm:ToolToggle">
-                            <CheckBox Content="{Binding Name}"
-                                      IsChecked="{Binding IsSelected}"
-                                      Margin="0,0,12,0" />
+                            <!-- The name goes in a TextBlock, not in Content: an underscore in
+                                 CheckBox.Content is an ACCESS KEY marker, so every tool in this
+                                 list was drawn with its underscore eaten - "sendemail",
+                                 "writefile", "runpowershell". They are not what these tools are
+                                 called, and a person looking for send_email did not find it. -->
+                            <CheckBox IsChecked="{Binding IsSelected}" Margin="0,0,12,0">
+                                <TextBlock Text="{Binding Name}" />
+                            </CheckBox>
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
@@ -60,18 +66,38 @@
                 <TextBlock Classes="label" Text="Permission level" />
                 <ComboBox ItemsSource="{Binding Levels}" SelectedItem="{Binding Level}" />
 
-                <TextBlock Classes="label" Text="Model" />
+                <!-- The two fields somebody reaches after seeing the same models offered again
+                     under AI · Phases, and reasonably asking which screen wins. Neither said. The
+                     answer is in Core (RoleAdvice) rather than here, for the reason PhaseAdvice
+                     gives: this project is a WinExe nothing references, so a sentence in a .axaml
+                     is a sentence no test can reach. -->
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <TextBlock Classes="label" Text="Model" />
+                    <local:HintView Text="{x:Static core:RoleAdvice.Model}"
+                                    VerticalAlignment="Center" />
+                </StackPanel>
                 <ComboBox ItemsSource="{Binding Models}" SelectedItem="{Binding Model}"
                           PlaceholderText="pick a model…" />
 
-                <TextBlock Classes="label" Text="Fallback model" />
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <TextBlock Classes="label" Text="Fallback model" />
+                    <local:HintView Text="{x:Static core:RoleAdvice.Fallback}"
+                                    VerticalAlignment="Center" />
+                </StackPanel>
                 <ComboBox ItemsSource="{Binding Fallbacks}" SelectedItem="{Binding Fallback}"
                           PlaceholderText="(none)" />
 
+                <!-- "Apply", not "Save", because this button does not write anything: it puts
+                     the change into the Settings window's copy, and that copy reaches the file only
+                     when Settings itself is saved. Reported 2026-09-23 - a tool was ticked here
+                     twice, across two restarts, and lost both times. A button labelled Save that
+                     does not save is the defect; the label was it. -->
                 <StackPanel Classes="actions">
-                    <Button Classes="primary" Content="Save" Command="{Binding SaveCommand}" />
+                    <Button Classes="primary" Content="Apply" Command="{Binding SaveCommand}" />
                     <Button Content="Cancel" Command="{Binding CancelCommand}" />
                 </StackPanel>
+                <TextBlock Classes="hint" TextWrapping="Wrap"
+                           Text="Apply puts this back in the Settings window. It is written to disk when you press Save there - closing Settings without saving discards it." />
 
             </StackPanel>
         </ScrollViewer>

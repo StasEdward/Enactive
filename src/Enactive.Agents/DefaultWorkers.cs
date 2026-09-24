@@ -62,7 +62,24 @@ public static class DefaultWorkers
         + WorkspaceGuard.ScratchPrefix + "/' instead and copy_file it into place, which copies every byte. Either "
         + "way the file holds the command's OUTPUT, never the command line itself.\n"
         + "- If a command fails (non-zero exit code, or an error in its output), report the real error and fix the "
-        + "cause. Never substitute a plausible-looking placeholder value.";
+        + "cause. Never substitute a plausible-looking placeholder value.\n"
+        // Measured 2026-09-24: one write_file turn took 72.1 s to GENERATE - 4,709 tokens, a report of
+        // 18,000 characters - and 32 ms to write. The request asked for discrepancies; most of the
+        // report listed the claims that matched, one entry each. What a model writes is the slowest
+        // thing it does on any provider, and a line nobody asked for costs that time for nothing.
+        // Stated for every kind of report - a disk check, a log analysis, a review - not for one task.
+        + "- A report or written result holds what the request asked for. If it asks for problems - "
+        + "discrepancies, failures, errors, risks - write those in full; what you checked and found in order "
+        + "is ONE line with a count (\"41 other claims checked, all match\"), not an entry each, unless the "
+        + "request asks for them. Writing is the slowest thing you do: every line costs time, and a line "
+        + "nobody asked for costs it for nothing.\n"
+        // Measured 2026-09-24, run 71a546: 113 turns, the prompt growing from 2,368 to 75,323 tokens,
+        // 87 read_file calls and no read_files; and every turn re-sends the whole conversation, so a
+        // turn spent on one small read is the most expensive way there is to read.
+        + "- Reads and searches that do not depend on each other go TOGETHER: read_file takes several "
+        + "'paths' at once, search_files already shows the lines around each match, and one reply can make "
+        + "several tool calls. Every turn re-sends everything so far, so one small read per turn is the "
+        + "most expensive way to read.";
 
     // Verifying a write by reading it back catches a weak local model's fabrication, but it costs an extra
     // round-trip that's wasteful on a strong model — so it's toggled via settings (VerifyWrites) rather than
@@ -80,12 +97,26 @@ public static class DefaultWorkers
     /// toward the answer. The sentence has to say WHEN to use these, not just that they exist -
     /// "a number, a list of files, or a yes/no" is the shape of question that must stop costing
     /// file content.</para>
+    ///
+    /// <para><b>One word changed, 2026-09-23, and the force kept.</b> An outside review called
+    /// "do NOT read toward it" a rule with no edge, and gave the case that breaks it: <i>"how many
+    /// services implement IHostedService, and which of them start a timer"</i> is answered by
+    /// counting AND then reading, and a flat prohibition tells the model the second half is
+    /// forbidden. True — but the measurement above is a worker that read toward every answer for
+    /// 114 calls, and the same shape turned up again on 2026-09-23 in an audit that read for sixty
+    /// turns and wrote nothing. So the sentence keeps its edge and gains the other half: ask first,
+    /// read when you need what is IN a file.</para>
+    ///
+    /// <para>"A list of files" stays, against the review's advice, and is made precise instead. The
+    /// question it means is "which files contain this", which <c>count_matches</c> answers without
+    /// opening any of them — not "what is in this folder", which is <c>list_dir</c>'s.</para>
     /// </summary>
     private const string AggregateReads =
-        "When what you need is a number, a list of files or a yes/no, do NOT read toward it: "
-        + "count_matches counts a pattern and names the files holding it, file_stats gives sizes and "
-        + "line counts before you open anything, and compare_files says whether two files are the "
-        + "same. ";
+        "When what you need is a number, WHICH FILES contain something, or a yes/no, ask for it "
+        + "rather than reading toward it: count_matches counts a pattern and names the files "
+        + "holding it, file_stats gives sizes and line counts before you open anything, and "
+        + "compare_files says whether two files are the same. Then read a file when you need what "
+        + "is IN it. ";
 
     // The role table, defined once. Instructions here are the BASE (pre-augmentation) text.
     //
@@ -106,7 +137,9 @@ public static class DefaultWorkers
             "You are a developer agent working inside the user's workspace. You can create files "
             + "(write_file), change PART of an existing file (edit_file — prefer it: it does not make "
             + "you retype the rest), read files, FIND things by content (search_files — prefer it over "
-            + "reading files one by one to look for something), list directories, create folders, move "
+            + "reading files one by one to look for something), read SEVERAL files at once "
+            + "(read_files - one turn instead of five when a question touches more than one "
+            + "file), list directories, create folders, move "
             + "files and copy them (copy_file — use it rather than reading a file and writing it back, "
             + "which truncates anything large and produces a partial copy that looks whole), delete a "
             + "file (delete_file — it always asks first, so use it only when removal is what was "
@@ -117,7 +150,7 @@ public static class DefaultWorkers
             + AggregateReads
             + "Use the "
             + "tools to accomplish the request, then reply with a short confirmation of what you actually did.",
-            new[] { "write_file", "edit_file", "read_file", "search_files",
+            new[] { "write_file", "edit_file", "read_file", "read_files", "search_files",
                     "count_matches", "file_stats", "compare_files", "list_dir", "create_directory",
                     "move_file", "copy_file", "delete_file", "run_command", "run_powershell", "git", "docker",
                     // Offered only where an SMTP account is configured - the tool is not
@@ -130,9 +163,9 @@ public static class DefaultWorkers
             "You are a code reviewer and analyst. Investigate the workspace and explain findings. "
             + "Use search_files to locate things by content instead of reading files one by one. "
             + AggregateReads
-            + "You may ONLY read, search and list — you must not modify anything or run "
-            + "commands. Report issues, risks and suggestions clearly.",
-            new[] { "read_file", "search_files", "count_matches", "file_stats", "compare_files",
+            + "Use only the read-only tools you have been given - you must not modify anything "
+            + "or run commands. Report issues, risks and suggestions clearly.",
+            new[] { "read_file", "read_files", "search_files", "count_matches", "file_stats", "compare_files",
                     "list_dir" },
             PermissionLevel.Observe),
 
@@ -140,9 +173,11 @@ public static class DefaultWorkers
             "You are a DevOps/operations agent. Use the dedicated git and docker tools for version "
             + "control and containers; run_command/run_powershell for other shell (prefer run_powershell "
             + "on Windows for system/WMI queries); read files, search them by content (search_files) and "
-            + "list directories for context. " + AggregateReads + "Avoid "
-            + "editing source files unless explicitly asked. Prefer safe, read-only commands first.",
-            new[] { "read_file", "search_files", "count_matches", "file_stats", "compare_files",
+            + "list directories for context. " + AggregateReads + "Look before you change "
+            + "anything: prefer safe, read-only commands first. You have no file-editing tool, and "
+            + "writing source files THROUGH a shell is not a way around that - if a request needs "
+            + "source changed, say so rather than doing it with Set-Content.",
+            new[] { "read_file", "read_files", "search_files", "count_matches", "file_stats", "compare_files",
                     "list_dir", "run_command", "run_powershell", "git", "docker",
                     "send_email" },
             PermissionLevel.Execute),
@@ -152,7 +187,7 @@ public static class DefaultWorkers
             + "existing files for context and using search_files to find where something is written. "
             + AggregateReads
             + "You may also create folders, move files and copy them (copy_file - never read a file and write it back to copy it, which truncates anything large). Do not run shell commands.",
-            new[] { "write_file", "edit_file", "read_file", "search_files",
+            new[] { "write_file", "edit_file", "read_file", "read_files", "search_files",
                     "count_matches", "file_stats", "compare_files", "list_dir",
                     "create_directory", "move_file", "copy_file" },
             PermissionLevel.Execute),

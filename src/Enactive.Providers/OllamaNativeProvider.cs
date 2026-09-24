@@ -37,6 +37,10 @@ public sealed class OllamaNativeProvider : IChatProvider
     /// </summary>
     public int? ContextWindow(ChatRequest request) => request.NumCtx;
 
+    public int? AnswerReserve(ChatRequest request) => _descriptor.AnswerReserveTokens;
+
+    public int? HandoverAtPercent(ChatRequest request) => _descriptor.HandoverAtPercent;
+
     public async IAsyncEnumerable<ChatStreamEvent> StreamChatAsync(
         ChatRequest request, [EnumeratorCancellation] CancellationToken ct)
     {
@@ -53,6 +57,7 @@ public sealed class OllamaNativeProvider : IChatProvider
         await using var stream = await response.Content.ReadAsStreamAsync(ct);
         using var reader = new StreamReader(stream);
         var raw = new StringBuilder();
+        var finished = false;
         try
         {
             while (await reader.ReadLineAsync(ct) is { } line)
@@ -61,9 +66,16 @@ public sealed class OllamaNativeProvider : IChatProvider
                 if (line.Length == 0)
                     continue;
 
-                foreach (var evt in ParseStreamLine(line))
+                foreach (var evt in ParseStreamLine(line, _descriptor.Id))
+                {
+                    finished |= evt is FinishDelta;
                     yield return evt;
+                }
             }
+
+            // See StreamEnd: an answer that stops without "done": true did not finish.
+            if (!finished)
+                throw StreamEnd.Unfinished(_descriptor.Id, "\"done\": true");
         }
         finally
         {
@@ -142,11 +154,14 @@ public sealed class OllamaNativeProvider : IChatProvider
         return root;
     }
 
-    private static IEnumerable<ChatStreamEvent> ParseStreamLine(string line)
+    private static IEnumerable<ChatStreamEvent> ParseStreamLine(string line, string providerId)
     {
         var events = new List<ChatStreamEvent>();
         using var doc = JsonDocument.Parse(line);
         var root = doc.RootElement;
+
+        if (StreamEnd.ErrorIn(providerId, root) is { } error)
+            throw error;
 
         if (root.TryGetProperty("message", out var message))
         {
@@ -187,6 +202,7 @@ public sealed class OllamaNativeProvider : IChatProvider
             int? completion = root.TryGetProperty("eval_count", out var ec) && ec.TryGetInt32(out var ecv) ? ecv : null;
             if (prompt is not null || completion is not null)
                 events.Add(new UsageDelta(prompt, completion));
+            events.Add(new TimingDelta(ProviderTimings.Ollama(root)));
 
             var reason = root.TryGetProperty("done_reason", out var dr) && dr.ValueKind == JsonValueKind.String
                 ? dr.GetString()
@@ -305,7 +321,8 @@ public sealed class OllamaNativeProvider : IChatProvider
             : null;
 
         var assistant = new ChatMessage(ChatRole.Assistant, content, toolCalls);
-        return new ChatCompletion(assistant, finishReason, promptTokens, completionTokens, thinking);
+        return new ChatCompletion(assistant, finishReason, promptTokens, completionTokens, thinking)
+        { Timings = ProviderTimings.Ollama(root) };
     }
 
     private static string Truncate(string value, int max)

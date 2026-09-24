@@ -55,6 +55,18 @@ public static class WorkspaceGuard
     public const string ScratchPrefix = ReservedFolder + "/" + ScratchFolder;
 
     /// <summary>
+    /// The folders nobody means when they talk about a workspace: this application's own state,
+    /// and the build and dependency trees.
+    ///
+    /// <para>Here rather than beside any one walker because several things walk a workspace - the
+    /// search, the counting tools, the census the planner is given - and a count that includes
+    /// <c>bin/</c> beside a search that excludes it disagree about what the workspace IS. Nothing
+    /// downstream can tell which of them is lying, so there is one list.</para>
+    /// </summary>
+    public static readonly string[] SkippedFolders =
+        { ReservedFolder, "bin", "obj", "node_modules", ".git", ".vs", "dist", "packages" };
+
+    /// <summary>
     /// Path comparison for the current OS. Linux is case-sensitive; Windows and macOS are not by
     /// default. Getting this backwards either lets a path escape or refuses a legitimate one.
     /// </summary>

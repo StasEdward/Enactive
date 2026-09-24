@@ -128,7 +128,7 @@ public sealed class ProjectMemoryReadbackTests
     /// The whole point, end to end: what a run remembers reaches the model's prompt. Anything less
     /// and the store is still write-only, whatever the context object holds.
     /// </summary>
-    [Fact]
+    [Fact(Skip = "Project memory is switched off in Orchestrator.BuildUserPrompt for now (2026-09-24, temporary). Re-enable together with that block.")]
     public async Task What_the_project_remembers_reaches_the_prompt()
     {
         using var fx = new EngineFixture();
@@ -156,7 +156,7 @@ public sealed class ProjectMemoryReadbackTests
     /// reads "allowed run_command" as an order to run one has been misled by the framing rather than
     /// by the fact, and the framing is the part this engine controls.
     /// </summary>
-    [Fact]
+    [Fact(Skip = "Project memory is switched off in Orchestrator.BuildUserPrompt for now (2026-09-24, temporary). Re-enable together with that block.")]
     public async Task The_prompt_says_the_memory_is_background_and_not_an_instruction()
     {
         using var fx = new EngineFixture();

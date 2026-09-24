@@ -29,23 +29,26 @@ public sealed class FileStatsTool : ITool
 
     public ToolDefinition Definition { get; } = new(
         Name: "file_stats",
-        Description: "List files with their size in bytes and line count, plus totals — without "
-                   + "returning any file content. Use it to see how big something is BEFORE reading "
-                   + "it, and to count how many files a job covers. Optionally filter by glob "
-                   + "(e.g. \"*.md\") and folder.",
+        Description: "List files with their size, line count and when they last CHANGED, plus "
+                   + "totals - without returning any file content. Use it to see how big "
+                   + "something is BEFORE reading it, to count how many files a job covers, and "
+                   + "to find what has changed since a date. Optionally filter by glob (e.g. "
+                   + "\"*.md\") and folder, and set \"sort\" to \"changed\" for newest first "
+                   + "instead of largest first.",
         JsonSchema: Schema);
 
     public PermissionLevel RequiredLevel => PermissionLevel.Observe;
 
     public async Task<ToolResult> InvokeAsync(string argumentsJson, ToolContext ctx, CancellationToken ct)
     {
-        string? glob, subPath;
+        string? glob, subPath, order;
         try
         {
             using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(argumentsJson) ? "{}" : argumentsJson);
             var root = doc.RootElement;
             glob = Text(root, "glob");
             subPath = Text(root, "path");
+            order = Text(root, "sort");
         }
         catch (JsonException ex)
         {
@@ -55,12 +58,29 @@ public sealed class FileStatsTool : ITool
         string scanRoot;
         try { scanRoot = WorkspacePaths.ResolveInside(ctx.WorkspaceRoot, subPath); }
         catch (ReservedPathException) { return ToolResults.NotFound(ReservedPathException.Explanation); }
-        catch (ArgumentException ex) { return ToolResults.Fail(ex.Message); }
+        catch (ArgumentException ex) { return ToolResults.Unreadable(ex.Message); }
 
-        if (!Directory.Exists(scanRoot))
-            return ToolResults.NotFound($"Not a folder in this workspace: {subPath ?? "."}");
+        // A path that names ONE file is a question about that file, not a mistake. search_files
+        // learnt this on 2026-09-20 - "answering is better than explaining, and searching one named
+        // file is a perfectly good question" - and these two, written afterwards, inherited the
+        // older behaviour anyway.
+        //
+        // Measured 2026-09-23 21:13:45: file_stats {"path":"Docs/DRIFT_ollama.md"} on the report the
+        // step had just written, answered "Not a folder in this workspace" about a file that was
+        // there. It cost nothing this time because a miss is an answer, but it is a wrong sentence
+        // about a right path, which is the one thing a message must not be.
+        // Newest first is what makes "what changed since the wiki was written" answerable at
+        // all: by size, a small file edited an hour ago sits below forty large ones that have
+        // not moved in months, and MaxFilesListed cuts it off before the model sees it. The
+        // default stays "size", because that is what every existing caller asked for.
+        var newestFirst = string.Equals(order, "changed", StringComparison.OrdinalIgnoreCase);
 
-        var rows = new List<(string Path, long Bytes, int? Lines)>();
+        var one = File.Exists(scanRoot);
+
+        if (!one && !Directory.Exists(scanRoot))
+            return ToolResults.NotFound($"Not a folder or file in this workspace: {subPath ?? "."}");
+
+        var rows = new List<(string Path, long Bytes, int? Lines, DateTime Changed)>();
         long totalBytes = 0;
         var totalLines = 0;
         var counted = 0;
@@ -68,7 +88,9 @@ public sealed class FileStatsTool : ITool
 
         try
         {
-            foreach (var file in WorkspaceScan.Files(scanRoot, glob))
+            // Naming the file IS the filter, so the glob does not get to exclude it - the
+            // same rule search_files applies, for the same reason.
+            foreach (var file in one ? new[] { scanRoot } : WorkspaceScan.Files(scanRoot, glob))
             {
                 ct.ThrowIfCancellationRequested();
 
@@ -88,10 +110,19 @@ public sealed class FileStatsTool : ITool
                     uncounted++;
                 }
 
-                rows.Add((WorkspaceScan.Relative(ctx.WorkspaceRoot, file), bytes, lines));
+                rows.Add((WorkspaceScan.Relative(ctx.WorkspaceRoot, file), bytes, lines, info.LastWriteTime));
             }
         }
         catch (OperationCanceledException) { throw; }
+
+        // The glob check, which throws from inside the walk on the first step of the loop. An
+        // argument refused before anything was scanned is a sentence that did not parse, not work
+        // that went wrong - see the note in SearchFilesTool, where this cost a run.
+        catch (ArgumentException ex)
+        {
+            return ToolResults.Unreadable(ex.Message);
+        }
+
         catch (Exception ex)
         {
             return ToolResults.Fail($"Could not stat files: {ex.Message}");
@@ -106,9 +137,13 @@ public sealed class FileStatsTool : ITool
                     : $"No files under {subPath ?? "."}.",
                 metadata: Metadata(0, 0, 0, 0, false));
 
-        rows.Sort((a, b) => b.Bytes != a.Bytes
-            ? b.Bytes.CompareTo(a.Bytes)
-            : string.CompareOrdinal(a.Path, b.Path));
+        rows.Sort((a, b) => newestFirst
+            ? (b.Changed != a.Changed
+                ? b.Changed.CompareTo(a.Changed)
+                : string.CompareOrdinal(a.Path, b.Path))
+            : (b.Bytes != a.Bytes
+                ? b.Bytes.CompareTo(a.Bytes)
+                : string.CompareOrdinal(a.Path, b.Path)));
 
         var listed = Math.Min(rows.Count, MaxFilesListed);
         var output = new StringBuilder();
@@ -117,13 +152,19 @@ public sealed class FileStatsTool : ITool
         if (uncounted > 0)
             output.Append(" (").Append(uncounted).Append(" file(s) not line-counted: binary or over ")
                   .Append(WorkspaceScan.MaxFileBytes / (1024 * 1024)).Append(" MB)");
-        output.AppendLine(". Largest first:");
+        output.AppendLine(newestFirst
+            ? ". Most recently changed first (local time):"
+            : ". Largest first (\"sort\":\"changed\" orders by when they changed instead):");
 
         for (var i = 0; i < listed; i++)
         {
-            var (path, bytes, lines) = rows[i];
+            var (path, bytes, lines, changed) = rows[i];
             output.Append(path).Append("  ").Append(Size(bytes)).Append("  ")
-                  .AppendLine(lines is null ? "— lines" : $"{lines} lines");
+                  .Append(lines is null ? "— lines" : $"{lines} lines")
+                  // yyyy-MM-dd HH:mm, because the question this answers is comparative - "has this
+                  // moved since the page was written" - and a date compares to a date in a document
+                  // without arithmetic. The minutes matter on the day of a run, which writes files.
+                  .Append("  ").AppendLine(changed.ToString("yyyy-MM-dd HH:mm"));
         }
 
         if (listed < rows.Count)
@@ -184,7 +225,8 @@ public sealed class FileStatsTool : ITool
       "type": "object",
       "properties": {
         "glob": { "type": "string", "description": "Optional file-name filter, e.g. \"*.md\". Default: every file." },
-        "path": { "type": "string", "description": "Optional folder, relative to the workspace root. Default: the whole workspace." }
+        "path": { "type": "string", "description": "Optional folder, relative to the workspace root. Default: the whole workspace." },
+        "sort": { "type": "string", "enum": ["size", "changed"], "description": "Order of the listing. Default \"size\" (largest first); \"changed\" is newest first." }
       }
     }
     """;

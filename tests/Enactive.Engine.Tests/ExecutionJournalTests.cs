@@ -126,10 +126,10 @@ public sealed class ExecutionJournalTests
             Turn.Says(QuickPlan),
             Turn.Calls1("run_command", """{"command":"echo MARKER_ONE"}""", "c1"),
             Turn.Calls1("write_file", $$"""{"path":"big.txt","content":"{{bulky}}"}""", "c2"),
-            // The weight has to arrive as tool RESULTS now. A file's contents on their way to disk
-            // are remembered by their head and their size the moment the call is recorded
-            // (Transcript.ForHistory), so a 20,000-character write no longer fills a window - which
-            // is the point of that change and would have made this test pass for the wrong reason.
+            // The weight arrives as tool RESULTS as well as the write's own arguments, so the trim has
+            // plenty of OLD material to drop. (For two days in September 2026 a write's arguments were
+            // shortened as soon as they were recorded; that misled models about their own work and
+            // was withdrawn - see AModelSeesWhatItDidTests.)
             Turn.Calls1("read_file", """{"path":"big.txt"}""", "c3"),
             Turn.Calls1("read_file", """{"path":"big.txt"}""", "c4"),
             Turn.Says("Ran it and wrote it."))
