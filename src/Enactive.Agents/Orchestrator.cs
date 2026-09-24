@@ -2784,7 +2784,27 @@ public sealed class Orchestrator : IOrchestrator
                             + ". Raise num_ctx in Settings, or use a model with a larger window.");
                         yield break;
                     }
+
                 }
+            }
+
+            // An answer can be no longer than what is left of the window, so SAY so. Without a
+            // max_tokens the provider will generate until it decides to stop, and a local one has
+            // no billing to make it care: measured 2026-09-24 03:37, a single turn passed 7,296
+            // tokens and was still going two minutes later, with nothing in the engine watching and
+            // nothing in the log to see.
+            //
+            // Derived rather than invented. A constant would either truncate a long write that
+            // would have fitted - the largest real one measured is 5,478 tokens, a report appended
+            // with edit_file - or sit high enough to be no limit at all. What is left of the window
+            // cannot truncate anything that would have succeeded, because anything longer was going
+            // to overflow regardless; it just turns two silent minutes into finish=length, which
+            // the loop below already explains.
+            if (provider.ContextWindow(request) is { } stated && stated > 0)
+            {
+                var room = stated - scale.TokensFor(Transcript.Size(messages) + toolsOverhead);
+                if (room > 0)
+                    request = request with { MaxTokens = request.MaxTokens ?? room };
             }
 
             // Measured against what this request actually is, so the next estimate uses the model's
