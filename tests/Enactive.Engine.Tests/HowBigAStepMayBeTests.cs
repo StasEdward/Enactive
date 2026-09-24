@@ -38,6 +38,11 @@ public sealed class HowBigAStepMayBeTests
 
         // The instruction that follows from it, not just the fact.
         Assert.Contains("a step per batch", prompt, StringComparison.Ordinal);
+
+        // And each batch keeps what it did. Run ae2015, 2026-09-24: four batches wrote nothing and a
+        // fifth step wrote for all of them; one batch stalled, the fifth was skipped, and the work
+        // of the three that finished was lost with it.
+        Assert.Contains("Each batch step SAVES its own results", prompt, StringComparison.Ordinal);
     }
 
     /// <summary>

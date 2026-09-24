@@ -478,6 +478,16 @@ public sealed class Planner
                     + "repeats over many items — files, pages, records, tickets — do not write one "
                     + "step for all of them: say how many at a time and use a step per batch "
                     + "(\"the first 5 …\", \"the next 5 …\"), which is what the step budget is for. "
+                    // Measured 2026-09-24, run ae2015: four batch steps verified pages and wrote
+                    // nothing, and a fifth "Write findings" step depended on all four. One batch got
+                    // stuck and was stopped - and the fifth was skipped, so the three batches that
+                    // finished lost their work too. Nothing about that is particular to a model or to
+                    // pages: any plan whose only writing is its last step is as strong as its weakest
+                    // batch.
+                    + "Each batch step SAVES its own results before it finishes - added to the output "
+                    + "the request names, or to a file of its own - rather than leaving them for a "
+                    + "later step to write: a final step that writes for all the batches depends on "
+                    + "every one of them, and a single batch that fails then loses the work of all. "
                     + "This is about REPEATED work only: the rule above still holds for one action, "
                     + "which is never split into stages.";
 
