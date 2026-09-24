@@ -35,15 +35,39 @@ public sealed class TheRoomKeptForAnAnswerTests
 {
     private const string QuickAction = """{"disposition":"quick_action","title":"read a lot"}""";
 
-    /// <summary>
-    /// The window this was measured on. The ceiling only BINDS above 65,536, where
-    /// <c>window / 8</c> finally exceeds it — below that the proportion is the smaller term and
-    /// nothing here changes, which is why the existing 8,192-window tests are untouched.
-    /// </summary>
+    /// <summary>The window this was measured on.</summary>
     private const int Window = 131_072;
 
-    /// <summary>What the reserve must be at this window, and so what a trim must trim TO.</summary>
-    private const int Budget = Window - 8_192;
+    /// <summary>
+    /// What the reserve must be at this window, and so what a trim must trim TO: an eighth of the
+    /// window. It was a fixed ceiling twice - 2,048, then 8,192 - and wrong for the next model both
+    /// times (an answer of 14,000 tokens did not fit the second), so it is a proportion now, and a
+    /// per-provider setting for anything else.
+    /// </summary>
+    private const int Budget = Window - Window / 8;
+
+    private static async Task<int> LeftAfterTheFirstTrim(FakeChatProvider provider, EngineFixture fx)
+    {
+        var events = await fx.RunAsync(fx.Build(provider, EngineFixture.Role("developer")), "read a lot");
+        var text = events.Text();
+
+        var announced = Regex.Match(text, $@"about (\d+) of {Window} tokens now");
+        Assert.True(announced.Success,
+                    "a trim must say how much of the window is left after it: " + Excerpt(text));
+
+        return int.Parse(announced.Groups[1].Value);
+    }
+
+    private static Turn[] ManyReads(EngineFixture fx)
+    {
+        var script = new List<Turn> { Turn.Says(QuickAction) };
+        for (var i = 0; i < 70; i++)
+        {
+            fx.Write($"page{i}.md", new string('x', 9_000));
+            script.Add(Turn.Calls1("read_file", $$"""{"path":"page{{i}}.md"}""", $"c{i}"));
+        }
+        return script.ToArray();
+    }
 
     /// <summary>
     /// THE ONE THAT MATTERS. The assertion is on what the trim trims TO, not on when it fires —
@@ -58,32 +82,26 @@ public sealed class TheRoomKeptForAnAnswerTests
     {
         using var fx = new EngineFixture();
 
-        // Distinct files: reading one over and over is a stall, and the stall guard is right to say
-        // so. read_file caps a result at 8,000 characters, so twenty of these is the ~160,000 that
-        // takes a 131,072-token window past either budget - the old one and the new.
-        var script = new List<Turn> { Turn.Says(QuickAction) };
-        for (var i = 0; i < 70; i++)
-        {
-            fx.Write($"page{i}.md", new string('x', 9_000));
-            script.Add(Turn.Calls1("read_file", $$"""{"path":"page{{i}}.md"}""", $"c{i}"));
-        }
+        var left = await LeftAfterTheFirstTrim(new FakeChatProvider(ManyReads(fx)) { Window = Window }, fx);
 
-        var events = await fx.RunAsync(
-            fx.Build(new FakeChatProvider(script.ToArray()) { Window = Window },
-                     EngineFixture.Role("developer")),
-            "read a lot");
-
-        var text = events.Text();
-
-        var announced = Regex.Match(text, $@"about (\d+) of {Window} tokens now");
-        Assert.True(announced.Success,
-                    "a trim must say how much of the window is left after it: " + Excerpt(text));
-
-        var left = int.Parse(announced.Groups[1].Value);
         Assert.True(left <= Budget,
                     $"the trim left {left} of {Window} tokens, so only {Window - left} for the answer - "
-                    + $"it must trim to {Budget} or below, keeping 8192 back. The largest real answer "
-                    + "measured here is 5,478 tokens.");
+                    + $"it must trim to {Budget} or below, keeping an eighth of the window back.");
+    }
+
+    /// <summary>
+    /// A reserve configured for the provider is the one used. A model known to write long answers
+    /// into a small window is the case the setting exists for.
+    /// </summary>
+    [Fact]
+    public async Task A_configured_reserve_is_the_one_kept()
+    {
+        using var fx = new EngineFixture();
+
+        var left = await LeftAfterTheFirstTrim(
+            new FakeChatProvider(ManyReads(fx)) { Window = Window, Reserve = 40_000 }, fx);
+
+        Assert.True(left <= Window - 40_000, $"the trim left {left} of {Window}; 40,000 were to be kept back");
     }
 
     /// <summary>

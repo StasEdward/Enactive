@@ -48,6 +48,14 @@
                 <TextBox Text="{Binding ContextWindowText}"
                          PlaceholderText="blank = assume 16000 — nothing can ask the provider" />
 
+                <TextBlock Classes="label" Text="Tokens kept free for the answer" />
+                <TextBox Text="{Binding AnswerReserveText}"
+                         PlaceholderText="blank = an eighth of the context window" />
+
+                <TextBlock Classes="label" Text="Hand a step over at % of the context window" />
+                <TextBox Text="{Binding HandoverAtText}"
+                         PlaceholderText="blank = after 60 turns, as without a window (e.g. 75 for a local model)" />
+
                 <TextBlock Classes="label" Text="Headers" />
                 <TextBox Classes="multiline" MinHeight="60" Text="{Binding HeadersText}"
                          PlaceholderText="extra headers — one Header-Name: value per line" />

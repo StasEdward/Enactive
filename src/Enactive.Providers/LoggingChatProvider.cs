@@ -53,6 +53,10 @@ public sealed class LoggingChatProvider : IChatProvider
     /// <summary>Whatever the real provider says — a decorator that answered for it would be guessing.</summary>
     public int? ContextWindow(ChatRequest request) => _inner.ContextWindow(request);
 
+    public int? AnswerReserve(ChatRequest request) => _inner.AnswerReserve(request);
+
+    public int? HandoverAtPercent(ChatRequest request) => _inner.HandoverAtPercent(request);
+
     public async IAsyncEnumerable<ChatStreamEvent> StreamChatAsync(
         ChatRequest request, [EnumeratorCancellation] CancellationToken ct)
     {

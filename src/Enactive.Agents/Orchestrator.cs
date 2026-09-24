@@ -97,53 +97,7 @@ public sealed class Orchestrator : IOrchestrator
     /// </summary>
     private const int TrimsBeforeHandover = 3;
 
-    /// <summary>
-    /// For a provider that states its window and reports what each prompt cost: how full the
-    /// conversation may get before the step is handed over. The turn count is not used for such a
-    /// provider at all - the window is the thing a turn count was only ever a proxy for.
-    ///
-    /// <para><b>Measured 2026-09-24, run ed72d64a, a local model with a 131,072 window.</b> Both
-    /// failures of the old rule in one run. Step 1 was handed over for reaching 60 turns at 68K -
-    /// half the window, with a warm cache - and the handover cost 112 seconds: 35 to re-read the
-    /// prompt the note request had just invalidated, the rest writing a 17,000-character note.
-    /// Every 60 turns on that model is about two and a half minutes, so nearly half the step was
-    /// handovers. Step 2 then started at 85K, inherited from step 1, read four pages up to 117K on
-    /// its 40th turn - under the 60-turn rule and under the trim budget - and began appending its
-    /// findings in one edit_file of more than 51,000 characters. The window ran out after 13,772
-    /// tokens and four minutes, and the step and the one after it were lost.</para>
-    ///
-    /// <para><b>Why 75.</b> It leaves a quarter of the window to write in: 32K tokens on 131K,
-    /// more than twice the write that did not fit. Trimming still starts at the window less
-    /// <see cref="TokensKeptForAnAnswer"/>, as the last resort for one enormous tool result.</para>
-    /// </summary>
-    private const int HandoverAtPercentOfWindow = 75;
 
-    /// <summary>
-    /// The most of a context window that is ever held back for the model's answer.
-    ///
-    /// <para><b>Why there is a ceiling at all.</b> The reserve is <c>window / 8</c>, which is right
-    /// in proportion; without a cap it would take 16,384 tokens out of a 131,072 window and grow
-    /// without end on the next model. This is where the proportion stops.</para>
-    ///
-    /// <para><b>Measured 2026-09-24 04:19, run 98325c.</b> The cap used to be 2,048 - chosen when a
-    /// window was 8,192 and it meant a QUARTER. On 131,072 it means 1.5%, so the guard's budget was
-    /// 129,024 and a prompt of 124,297 tokens was, correctly, under it. Nothing trimmed. Five
-    /// minutes later the step died with <c>finish=length</c> at 6,775 output tokens - exactly the
-    /// room left - and the two steps after it were skipped.</para>
-    ///
-    /// <para><b>What it really cost was the remedy, not the tokens.</b> Because the guard never
-    /// fired, <see cref="TrimsBeforeHandover"/> never counted past the one trim at the step
-    /// boundary, and the handover that exists for precisely this - a window that will not stay
-    /// under its budget - sat unused while the model wrote the same twenty lines ten times over at
-    /// 95% occupancy.</para>
-    ///
-    /// <para><b>8,192 is derived.</b> The largest legitimate answer ever measured here is 5,478
-    /// tokens, a report appended with <c>edit_file</c> (see
-    /// <c>AnAnswerCannotBeLongerThanTheRoomLeftTests</c>). A reserve BELOW that guarantees the cut
-    /// it is supposed to prevent. This is that number with room above it, and it changes nothing
-    /// for a window of 16,384 or less, where <c>window / 8</c> is still the binding term.</para>
-    /// </summary>
-    private const int TokensKeptForAnAnswer = 8192;
 
     private readonly IChatProviderFactory _providers;
     private readonly IWorkerProvider _workers;
@@ -2727,8 +2681,13 @@ public sealed class Orchestrator : IOrchestrator
         var trimmedInARow = 0;
 
         // The window, asked once: it is a property of the provider and the model, not of a turn.
-        var statedWindow = provider.ContextWindow(
-            new ChatRequest(model, messages, toolDefs, Temperature: 0.2, NumCtx: _numCtx, Think: _think));
+        var probe = new ChatRequest(model, messages, toolDefs, Temperature: 0.2, NumCtx: _numCtx, Think: _think);
+        var statedWindow = provider.ContextWindow(probe);
+
+        // Handover by how full the window is - a per-provider SETTING, not an engine constant: the
+        // number that suits one model is not a property of the engine (FIX_PLAN 9ct). Unset, the
+        // turn count decides, as it does for a provider with no window at all.
+        var handoverAt = provider.HandoverAtPercent(probe) is int pct and > 0 and < 100 ? pct : (int?)null;
 
         // The transcript's size when lastPromptTokens was measured, so what has been added since
         // can be estimated on top of a real count rather than instead of one.
@@ -2745,13 +2704,13 @@ public sealed class Orchestrator : IOrchestrator
             // an estimate of what has been added since - or unknown, when the provider states no
             // window or has not reported a prompt in THIS conversation yet. Unknown falls back to
             // the turn count, which is the only length signal a cloud provider gives.
-            var measured = statedWindow is > 0 && lastPromptTokens is not null;
+            var measured = statedWindow is > 0 && handoverAt is not null && lastPromptTokens is not null;
             var fullNow = measured
                 ? lastPromptTokens!.Value
                   + scale.TokensFor(Math.Max(0, Transcript.Size(messages) + toolsOverhead - sizeAtLastPrompt))
                 : 0;
             var windowIsFilling = measured && turnsHere > 0
-                && fullNow > (long)statedWindow!.Value * HandoverAtPercentOfWindow / 100;
+                && fullNow > (long)statedWindow!.Value * handoverAt!.Value / 100;
             var tooManyTurns = !measured && turnsHere >= TurnsBeforeHandover;
 
             if ((tooManyTurns || windowIsFilling || windowIsThrashing) && handovers < MaxHandovers)
@@ -2882,7 +2841,13 @@ public sealed class Orchestrator : IOrchestrator
                 // happened: 8174 prompt tokens of 8192, and 18 left to answer with.
                 // Never more than half the window: on a small one a fixed floor of 256 would leave
                 // nothing to talk with, and the guard would refuse every request instead of any.
-                var reserve = Math.Min(Math.Clamp(window / 8, 256, TokensKeptForAnAnswer), window / 2);
+                // An eighth of the window unless the provider is configured otherwise - a proportion,
+                // not a number fitted to one model. It was capped at 2,048 (1.5% of 131,072: a step
+                // died of it, 9cl), then at 8,192 (an answer of 14,000 tokens did not fit, 9cr); a
+                // fixed ceiling keeps being wrong for the next model. Never more than half.
+                var reserve = Math.Min(
+                    provider.AnswerReserve(request) is int configured and > 0 ? configured : Math.Max(window / 8, 256),
+                    window / 2);
                 var budget = window - reserve;
                 var sizeNow = Transcript.Size(messages) + toolsOverhead;
 
@@ -3241,22 +3206,6 @@ public sealed class Orchestrator : IOrchestrator
                     continue;
                 }
 
-                // ── Rewrite gate: the same file written whole again? See ReadLedger.RefuseRewrite.
-                //
-                // Refused as a call that did NOT HAPPEN, not as work that failed: nothing was
-                // attempted, and a refusal left open as a failure would fail the step at the end
-                // for a write it went on to make properly - the shape 9co closed for `dir`.
-                if (reads.RefuseRewrite(call, ReadLedger.FileNamedBy(call)) is { } retyped)
-                {
-                    openFailures.Failed(call, retyped, didNotRun: true);
-                    journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson),
-                                   ActionOutcome.Refused, retyped);
-                    yield return Decided(call.Name, allowed: false,
-                        $"{call.Name}: refused — the same file written whole again");
-                    messages.Add(ChatMessage.Tool(call.Id, "ERROR: " + retyped));
-                    continue;
-                }
-
                 // ── Permission gate: allow / ask / deny ──────────────────────
                 var gate = _permissions.Evaluate(
                     EffectivePolicyFor(worker), call.Name, _tools.RequiredLevelOf(call.Name));
@@ -3599,10 +3548,6 @@ public sealed class Orchestrator : IOrchestrator
                         : "\n\n[This is a call you have already made in this step, and it is being "
                           + "counted as no progress. If you know what to change, change it now; if "
                           + "you are finished, say so.]";
-
-                // Owed before the refusal above, so it is never the first the model hears of it.
-                if (reads.WarnRewrite(call, result) is { } warn)
-                    reply += "\n\n[" + warn + "]";
 
                 messages.Add(ChatMessage.Tool(call.Id, reply));
             }

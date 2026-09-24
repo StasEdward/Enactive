@@ -80,6 +80,16 @@ public sealed class FakeChatProvider : IChatProvider
 
     public int? ContextWindow(ChatRequest request) => Window;
 
+    /// <summary>What ProviderConfig.AnswerReserveTokens would say. Null = the engine's default.</summary>
+    public int? Reserve { get; set; }
+
+    /// <summary>What ProviderConfig.HandoverAtPercent would say. Null = hand over by turns.</summary>
+    public int? HandoverAt { get; set; }
+
+    public int? AnswerReserve(ChatRequest request) => Reserve;
+
+    public int? HandoverAtPercent(ChatRequest request) => HandoverAt;
+
     public int TurnsLeft => _script.Count;
 
     public async IAsyncEnumerable<ChatStreamEvent> StreamChatAsync(

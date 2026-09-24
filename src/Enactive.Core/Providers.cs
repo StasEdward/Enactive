@@ -27,7 +27,11 @@ public sealed record ProviderDescriptor(
     /// <c>ProviderConfig.ContextWindowTokens</c>, which is where the number comes from. Null means
     /// nobody said, and then the engine does not pretend to know.</para>
     /// </summary>
-    int? ContextWindowTokens = null);
+    int? ContextWindowTokens = null,
+    /// <summary>Tokens of the window held back for the answer. See <c>ProviderConfig.AnswerReserveTokens</c>.</summary>
+    int? AnswerReserveTokens = null,
+    /// <summary>How full the window may get before a step is handed over. See <c>ProviderConfig.HandoverAtPercent</c>.</summary>
+    int? HandoverAtPercent = null);
 
 /// <summary>Talks to an LLM. Implementations live in Enactive.Providers (transport stays out of Core).</summary>
 public interface IChatProvider
@@ -50,6 +54,19 @@ public interface IChatProvider
     /// under it, and needs the null to know when not to.</para>
     /// </summary>
     int? ContextWindow(ChatRequest request) => null;
+
+    /// <summary>
+    /// How many tokens of <see cref="ContextWindow"/> to keep free for the answer, when somebody has
+    /// configured it for this provider. Null means the engine's proportional default.
+    /// </summary>
+    int? AnswerReserve(ChatRequest request) => null;
+
+    /// <summary>
+    /// The percentage of <see cref="ContextWindow"/> at which a step is handed over to a fresh
+    /// conversation, when somebody has configured it. Null means handover by turn count, as for a
+    /// provider with no window at all.
+    /// </summary>
+    int? HandoverAtPercent(ChatRequest request) => null;
 }
 
 /// <summary>Builds an <see cref="IChatProvider"/> for a provider id.</summary>

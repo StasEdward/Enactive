@@ -4,8 +4,9 @@ using Enactive.Core.Events;
 using Xunit;
 
 /// <summary>
-/// For a provider that states its window and reports what each prompt cost, the step is handed
-/// over when the conversation fills three quarters of the window - not after sixty turns.
+/// For a provider configured with <c>HandoverAtPercent</c>, that states its window and reports what
+/// each prompt cost, the step is handed over when the conversation fills that share of the window -
+/// not after sixty turns. Unconfigured, the turn count decides, as it always has.
 ///
 /// <para><b>Measured 2026-09-24, run ed72d64a, a local model with a 131,072-token window.</b> The
 /// turn count got it wrong both ways in a single run:</para>
@@ -19,6 +20,10 @@ using Xunit;
 /// <para>The first handover was not needed and cost two minutes; the second was needed and never
 /// came. Sixty turns was always a proxy for "this conversation has got long", and a provider that
 /// states its window and reports its prompt says how long directly.</para>
+///
+/// <para>It is a SETTING, per provider, and off by default. The 75 that fitted the model above is
+/// a number about that model, and an engine meant for any model has no business holding it as a
+/// constant.</para>
 /// </summary>
 public sealed class TheWindowDecidesWhenToHandOverTests
 {
@@ -50,7 +55,7 @@ public sealed class TheWindowDecidesWhenToHandOverTests
             Turn.Says("# Note to self - read pages 1 and 2; pages 3 and 4 are left."),
             Read(fx, 3),
             Read(fx, 4),
-            Turn.Says("All four pages read.")) { Window = 10_000 };
+            Turn.Says("All four pages read.")) { Window = 10_000, HandoverAt = 75 };
 
         var events = await fx.RunAsync(fx.Build(provider, EngineFixture.Role("developer")), "a long job");
 
@@ -84,7 +89,7 @@ public sealed class TheWindowDecidesWhenToHandOverTests
         turns.Add(Turn.Says("All read."));
 
         var events = await fx.RunAsync(
-            fx.Build(new FakeChatProvider(turns.ToArray()) { Window = 1_000_000 }, EngineFixture.Role("developer")),
+            fx.Build(new FakeChatProvider(turns.ToArray()) { Window = 1_000_000, HandoverAt = 75 }, EngineFixture.Role("developer")),
             "a long job");
 
         // Not even ATTEMPTED. Under the turn rule a handover is tried at sixty and, with a tool call
@@ -117,5 +122,31 @@ public sealed class TheWindowDecidesWhenToHandOverTests
             "a long job");
 
         Assert.Equal(1, Count(events, "This step has run 60 turns. Carrying its own notes"));
+    }
+
+    /// <summary>
+    /// THE DEFAULT. A window stated and every prompt reported, but no HandoverAtPercent configured:
+    /// nothing changes from how the engine has always worked - sixty turns.
+    /// </summary>
+    [Fact]
+    public async Task Without_the_setting_the_turn_count_still_decides()
+    {
+        using var fx = new EngineFixture();
+
+        var turns = new List<Turn> { Turn.Says(QuickAction) };
+        for (var i = 0; i < 60; i++)
+            turns.Add(Read(fx, i).Reporting(prompt: 900_000));    // 90% of the window, every turn
+        turns.Add(Turn.Says("# Note to self - sixty pages read."));
+        for (var i = 60; i < 63; i++)
+            turns.Add(Read(fx, i));
+        turns.Add(Turn.Says("All read."));
+
+        var events = await fx.RunAsync(
+            // A large window, so the reported size is the whole story and no trim gets involved.
+            fx.Build(new FakeChatProvider(turns.ToArray()) { Window = 1_000_000 }, EngineFixture.Role("developer")),
+            "a long job");
+
+        Assert.Equal(1, Count(events, "This step has run 60 turns. Carrying its own notes"));
+        Assert.Equal(0, Count(events, "tokens this model was given"));
     }
 }

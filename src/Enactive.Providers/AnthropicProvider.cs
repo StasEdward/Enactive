@@ -51,6 +51,10 @@ public sealed class AnthropicProvider : IChatProvider
     /// </summary>
     public int? ContextWindow(ChatRequest request) => _descriptor.ContextWindowTokens;
 
+    public int? AnswerReserve(ChatRequest request) => _descriptor.AnswerReserveTokens;
+
+    public int? HandoverAtPercent(ChatRequest request) => _descriptor.HandoverAtPercent;
+
     public async IAsyncEnumerable<ChatStreamEvent> StreamChatAsync(
         ChatRequest request, [EnumeratorCancellation] CancellationToken ct)
     {
