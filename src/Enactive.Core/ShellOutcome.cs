@@ -128,6 +128,7 @@ public static class ShellOutcome
 
         return LookedAndFoundNothing(output!)
             || NothingOnThePath(output!)
+            || DirListedNothing(command!, output!)
             || LookedAndWasNotAllowed(output!)
                 ? ShellVerdict.FoundNothing
                 : ShellVerdict.Ran;
@@ -487,6 +488,50 @@ public static class ShellOutcome
         }
 
         return any;
+    }
+
+    /// <summary>
+    /// cmd's <c>dir</c> saying there is nothing there — the same answer
+    /// <see cref="LookedAndFoundNothing"/> already accepts from <c>Get-ChildItem</c>, in cmd's words.
+    ///
+    /// <para><b>Measured 2026-09-24 11:08, run 5f793c.</b> The step's first act was
+    /// <c>dir /b Docs\DRIFT*</c> — does the report exist yet? It did not; the person deletes it
+    /// before every run. cmd answered <c>File Not Found</c> with exit code 1, the call was filed as a
+    /// failure, the step went on to do its work, and two minutes later it was declared INCOMPLETE
+    /// over "unresolved tool call: run_command dir /b Docs\DRIFT*" — and the three steps after it
+    /// were skipped. A question answered "no" was treated as a command that broke.</para>
+    ///
+    /// <para><b>Why the text and not the exit code.</b> <c>dir</c> exits 1 for an invalid switch too
+    /// (<c>Invalid switch - "z".</c>), and that one IS a broken command. So: one command, no plumbing,
+    /// its head is <c>dir</c>, and EVERY line it printed is one of the two ways cmd says nothing is
+    /// there — the pattern matched no file, or the folder it was asked to list does not exist.</para>
+    /// </summary>
+    private static bool DirListedNothing(string command, string output)
+    {
+        var line = command.Trim();
+        if (line.IndexOfAny(Separators) >= 0 || line.Contains('>'))
+            return false;
+
+        var head = line.Split([' ', '	'], 2, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+        if (!string.Equals(head?.Trim('"', '\''), "dir", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var found = false;
+
+        foreach (var raw in output.Split('\n'))
+        {
+            var said = raw.Trim();
+            if (said.Length == 0 || said == "[stderr]")
+                continue;
+
+            if (said is not ("File Not Found" or "The system cannot find the path specified."
+                             or "The system cannot find the file specified."))
+                return false;
+
+            found = true;
+        }
+
+        return found;
     }
 
     /// <summary>
