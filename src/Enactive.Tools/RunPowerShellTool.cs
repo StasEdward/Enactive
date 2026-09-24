@@ -77,7 +77,24 @@ public sealed class RunPowerShellTool : ITool
         // reads failures from. `Get-ChildItem -Recurse` alone put two "Preparing modules for first
         // use" records in front of every answer. Silenced first, so a script that says nothing
         // really says nothing - which is what the exit-code rule below depends on.
-        var prepared = "$ProgressPreference = 'SilentlyContinue'\r\n" + script;
+        //
+        // Two separate mismatches, both real, both needed:
+        //
+        // - READING: a script's own Get-Content (or any cmdlet with an -Encoding parameter) defaults
+        //   to the system's ANSI code page for a file with no BOM - not UTF-8 - so a UTF-8 file with
+        //   any non-ASCII character is misread before the script ever touches it. $PSDefaultParameterValues
+        //   makes UTF-8 the default for every such cmdlet without requiring the model to name it.
+        // - WRITING: Windows PowerShell's own default for a REDIRECTED console is an OEM code page,
+        //   so even correctly-read text is re-encoded wrong on the way out. [Console]::OutputEncoding
+        //   pairs this with ProcessExec.Utf8NoBom on the .NET side of the same pipe.
+        //
+        // Reported from a real run, 2026-09-25: a report this run had itself written (UTF-8, em
+        // dashes) came back through Get-Content looking corrupted, and the model - reading its own
+        // correct file as garbage - spent the rest of the step trying to fix damage that was never
+        // there. See ShellOutputEncodingTests.
+        var prepared = "$PSDefaultParameterValues['*:Encoding'] = 'utf8'\r\n"
+                     + "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8\r\n"
+                     + "$ProgressPreference = 'SilentlyContinue'\r\n" + script;
 
         // -EncodedCommand takes base64 of the UTF-16LE script text — bypasses ALL cmd/shell quoting.
         var encoded = Convert.ToBase64String(Encoding.Unicode.GetBytes(prepared));
@@ -107,7 +124,11 @@ public sealed class RunPowerShellTool : ITool
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
-            CreateNoWindow = true
+            CreateNoWindow = true,
+
+            // Paired with [Console]::OutputEncoding above - see ProcessExec.Utf8NoBom.
+            StandardOutputEncoding = ProcessExec.Utf8NoBom,
+            StandardErrorEncoding = ProcessExec.Utf8NoBom
         };
         startInfo.ArgumentList.Add("-NoProfile");
         startInfo.ArgumentList.Add("-NonInteractive");

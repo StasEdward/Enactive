@@ -16,6 +16,20 @@ using Enactive.Core.Tools;
 internal static class ProcessExec
 {
     /// <summary>
+    /// What every process-running tool decodes a child's redirected stdout/stderr as. Told
+    /// explicitly rather than left to <c>Process</c>'s own default, which is the console's encoding
+    /// - an OEM code page on Windows, not UTF-8. Paired with getting the CHILD to actually emit
+    /// UTF-8 (a nested shell's own code page, PowerShell's <c>[Console]::OutputEncoding</c>): one
+    /// side of that pair without the other still mismatches, just differently.
+    ///
+    /// <para>Reported from a real run, 2026-09-25: a report the run had itself written, in plain
+    /// UTF-8 with em dashes, came back through a shell tool with every dash turned to mojibake - the
+    /// model read its own correct file as corrupted and spent the rest of the step trying to repair
+    /// damage that was never there. See ShellOutputEncodingTests.</para>
+    /// </summary>
+    public static readonly Encoding Utf8NoBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+
+    /// <summary>
     /// How much of a command's output reaches the model.
     ///
     /// <para>Doubled from 6,000 on 2026-09-20, with the evidence in hand: a run of

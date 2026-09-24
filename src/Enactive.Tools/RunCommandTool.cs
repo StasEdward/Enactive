@@ -60,7 +60,16 @@ public sealed class RunCommandTool : ITool
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
-            CreateNoWindow = true
+            CreateNoWindow = true,
+
+            // Told explicitly rather than left to fall back to the console's own encoding, which on
+            // Windows is an OEM code page, not UTF-8. Reported from a real run, 2026-09-25: a report
+            // this very run had written (plain UTF-8, em dashes) came back through `type` and a
+            // nested `powershell -Command` with every em dash turned to mojibake - the model read
+            // its own correct file as "corrupted", and lost the rest of the step trying to fix
+            // damage that was never there. See ShellOutputEncodingTests.
+            StandardOutputEncoding = ProcessExec.Utf8NoBom,
+            StandardErrorEncoding = ProcessExec.Utf8NoBom
         };
         if (OperatingSystem.IsWindows())
         {
@@ -81,7 +90,12 @@ public sealed class RunCommandTool : ITool
             // character if both are quotes and runs everything between them verbatim. Without it
             // the rule is conditional on how many quotes are in the string - which is how a command
             // came to depend on its own punctuation.
-            startInfo.Arguments = $"/s /c \"{command}\"";
+            //
+            // `chcp 65001` first switches THIS cmd session's own code page to UTF-8, so cmd itself
+            // and anything it launches (a nested `powershell -Command`, `findstr`, `type`) write
+            // UTF-8 bytes on the pipe .NET is now told to decode as UTF-8, rather than the two
+            // mismatched re-encodings that produced the mojibake above.
+            startInfo.Arguments = $"/s /c \"chcp 65001>nul & {command}\"";
         }
         else
         {
