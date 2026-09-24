@@ -991,9 +991,11 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                         AddArtifact(ev);
                     break;
 
-                // The conversation was pruned to fit the model's window. Shown on the step card, not
-                // buried in the log: from here on the model is working with less than it was given,
-                // and that explains behaviour a person would otherwise blame on the model.
+                // The conversation was pruned to fit the model's window, or is being handed over to a
+                // fresh one - announced before the note is written, because writing it is one long
+                // silent turn. Shown on the step card, not buried in the log: from here on the model
+                // is working with less than it was given, and that explains behaviour a person would
+                // otherwise blame on the model - or on a hang.
                 case EventKind.ContextTrimmed:
                     (CardFor(ev) ?? EnsureCurrentCard()).AddNote(ev.Summary);
                     break;

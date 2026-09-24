@@ -240,7 +240,11 @@ public sealed class AStepThatHandsOverToItselfTests
 
         var events = await fx.RunAsync(fx.Build(agent, EngineFixture.Role("developer")), "a long job");
 
-        Assert.DoesNotContain(events, e => e.Kind == EventKind.ContextTrimmed);
+        // Not "no ContextTrimmed at all": since 2026-09-24 the handover is announced BEFORE its note
+        // is written (a local model took 112 silent seconds over one), so an attempt that comes back
+        // empty has been announced. What must not appear is the handover itself.
+        Assert.DoesNotContain(events, e => e.Kind == EventKind.ContextTrimmed
+                                           && e.Summary.Contains("Carrying its own notes", StringComparison.Ordinal));
         Assert.Contains(events, e => e.Kind == EventKind.TaskCompleted);
     }
 

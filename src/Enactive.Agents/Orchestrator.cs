@@ -98,6 +98,27 @@ public sealed class Orchestrator : IOrchestrator
     private const int TrimsBeforeHandover = 3;
 
     /// <summary>
+    /// For a provider that states its window and reports what each prompt cost: how full the
+    /// conversation may get before the step is handed over. The turn count is not used for such a
+    /// provider at all - the window is the thing a turn count was only ever a proxy for.
+    ///
+    /// <para><b>Measured 2026-09-24, run ed72d64a, a local model with a 131,072 window.</b> Both
+    /// failures of the old rule in one run. Step 1 was handed over for reaching 60 turns at 68K -
+    /// half the window, with a warm cache - and the handover cost 112 seconds: 35 to re-read the
+    /// prompt the note request had just invalidated, the rest writing a 17,000-character note.
+    /// Every 60 turns on that model is about two and a half minutes, so nearly half the step was
+    /// handovers. Step 2 then started at 85K, inherited from step 1, read four pages up to 117K on
+    /// its 40th turn - under the 60-turn rule and under the trim budget - and began appending its
+    /// findings in one edit_file of more than 51,000 characters. The window ran out after 13,772
+    /// tokens and four minutes, and the step and the one after it were lost.</para>
+    ///
+    /// <para><b>Why 75.</b> It leaves a quarter of the window to write in: 32K tokens on 131K,
+    /// more than twice the write that did not fit. Trimming still starts at the window less
+    /// <see cref="TokensKeptForAnAnswer"/>, as the last resort for one enormous tool result.</para>
+    /// </summary>
+    private const int HandoverAtPercentOfWindow = 75;
+
+    /// <summary>
     /// The most of a context window that is ever held back for the model's answer.
     ///
     /// <para><b>Why there is a ceiling at all.</b> The reserve is <c>window / 8</c>, which is right
@@ -2705,6 +2726,14 @@ public sealed class Orchestrator : IOrchestrator
         // condition the turn count was a rough proxy for.
         var trimmedInARow = 0;
 
+        // The window, asked once: it is a property of the provider and the model, not of a turn.
+        var statedWindow = provider.ContextWindow(
+            new ChatRequest(model, messages, toolDefs, Temperature: 0.2, NumCtx: _numCtx, Think: _think));
+
+        // The transcript's size when lastPromptTokens was measured, so what has been added since
+        // can be estimated on top of a real count rather than instead of one.
+        var sizeAtLastPrompt = 0;
+
         for (var iteration = 1; iteration <= RunawayCeiling; iteration++)
         {
             // Cut, not killed - see TurnsBeforeHandover. Done at the TOP of a turn, where the
@@ -2712,8 +2741,39 @@ public sealed class Orchestrator : IOrchestrator
             // instruction, never half of a call waiting for its answer.
             var windowIsThrashing = trimmedInARow >= TrimsBeforeHandover;
 
-            if ((turnsHere >= TurnsBeforeHandover || windowIsThrashing) && handovers < MaxHandovers)
+            // How full the conversation is, from the provider's own count of the last prompt plus
+            // an estimate of what has been added since - or unknown, when the provider states no
+            // window or has not reported a prompt in THIS conversation yet. Unknown falls back to
+            // the turn count, which is the only length signal a cloud provider gives.
+            var measured = statedWindow is > 0 && lastPromptTokens is not null;
+            var fullNow = measured
+                ? lastPromptTokens!.Value
+                  + scale.TokensFor(Math.Max(0, Transcript.Size(messages) + toolsOverhead - sizeAtLastPrompt))
+                : 0;
+            var windowIsFilling = measured && turnsHere > 0
+                && fullNow > (long)statedWindow!.Value * HandoverAtPercentOfWindow / 100;
+            var tooManyTurns = !measured && turnsHere >= TurnsBeforeHandover;
+
+            if ((tooManyTurns || windowIsFilling || windowIsThrashing) && handovers < MaxHandovers)
             {
+                var why = windowIsThrashing
+                    ? $"The context window has been trimmed {TrimsBeforeHandover} turns running "
+                      + "and is still full, so trimming is not keeping up"
+                    : windowIsFilling
+                    ? $"The conversation has reached about {fullNow} of the {statedWindow} tokens this "
+                      + $"model was given ({fullNow * 100 / statedWindow!.Value}%), and the rest is "
+                      + "needed to write in"
+                    : $"This step has run {iteration - 1} turns";
+
+                // Said BEFORE the note is written, not after. Writing it is a whole turn - on a
+                // local model measured at 112 seconds, most of it generating a 17,000-character
+                // note - and it is not streamed, so until now the step card showed nothing at all
+                // for two minutes and then announced a handover that was already over. Asked
+                // 2026-09-24: "the model keeps hanging on the window update".
+                yield return Ev(EventKind.ContextTrimmed,
+                    $"{why}. Writing notes to carry into a fresh conversation - this is one long "
+                    + "turn, and on a local model it can take a minute or two.");
+
                 var carried = await HandoverAsync(provider, model, messages, runBudget, ct);
 
                 if (carried is { Length: > 0 })
@@ -2778,10 +2838,10 @@ public sealed class Orchestrator : IOrchestrator
                           + "items, it is too big - the plan should say how many at a time."
                         : "";
 
-                    var why = windowIsThrashing
-                        ? $"The context window has been trimmed {TrimsBeforeHandover} turns running "
-                          + "and is still full, so trimming is not keeping up"
-                        : $"This step has run {iteration - 1} turns";
+                    // The measurement was of the conversation just thrown away. Kept, it would read
+                    // the new, short one as still full and hand it over again on its next turn.
+                    lastPromptTokens = null;
+                    sizeAtLastPrompt = 0;
 
                     yield return Ev(EventKind.ContextTrimmed,
                         $"{why}. Carrying its own notes into a fresh conversation and continuing "
@@ -2801,7 +2861,7 @@ public sealed class Orchestrator : IOrchestrator
                     handovers = MaxHandovers;
 
                     yield return Ev(EventKind.ErrorObserved,
-                        $"This step has run {iteration - 1} turns and could not summarise its own "
+                        $"{why}, but the step could not summarise its own "
                         + $"work, so it was not cut ({spent} of {MaxHandovers} handovers used). It "
                         + $"carries on in one long conversation until the {RunawayCeiling}-turn "
                         + "backstop, which abandons it and skips every step that depends on it.");
@@ -2945,6 +3005,7 @@ public sealed class Orchestrator : IOrchestrator
                         if (usage.PromptTokens is { } prompted)
                         {
                             lastPromptTokens = prompted;
+                            sizeAtLastPrompt = sizeAtRequest;
                             scale.Observe(sizeAtRequest, prompted);
                         }
                         yield return Usage(
