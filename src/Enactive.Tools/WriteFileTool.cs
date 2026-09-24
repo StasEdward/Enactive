@@ -22,6 +22,7 @@ public sealed class WriteFileTool : ITool
         string? path;
         string? content;
         bool allowShrink;
+        bool append;
         try
         {
             using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(argumentsJson) ? "{}" : argumentsJson);
@@ -29,6 +30,7 @@ public sealed class WriteFileTool : ITool
             path = root.TryGetProperty("path", out var p) && p.ValueKind == JsonValueKind.String ? p.GetString() : null;
             content = root.TryGetProperty("content", out var c) && c.ValueKind == JsonValueKind.String ? c.GetString() : null;
             allowShrink = root.TryGetProperty("allow_shrink", out var a) && a.ValueKind == JsonValueKind.True;
+            append = root.TryGetProperty("append", out var ap) && ap.ValueKind == JsonValueKind.True;
         }
         catch (JsonException ex)
         {
@@ -106,8 +108,17 @@ public sealed class WriteFileTool : ITool
             // survive contact with the caller: a model cannot see a carriage return, so it cannot
             // ask for one either - which makes every conversion here accidental, and the deliberate
             // case indistinguishable from the accident. A shell command converts a file on purpose.
+            // APPEND: the new text goes after what is there. The way to add a section to a report
+            // without retyping the report - see the schema, and FIX_PLAN 9cq for what retyping cost.
+            // The ADDITION takes the file's endings before it is joined on: once joined, the text
+            // already contains the file's own CRLFs and would look converted when it is not.
+            var addedBytes = Encoding.UTF8.GetByteCount(text);
+            var appending = append && replacing && previousText is not null;
+            if (appending)
+                text = Joined(previousText!, LineEndings.RetypedFor(previousText!, text) ?? text);
+
             var endingsAdjusted = false;
-            if (replacing && previousText is not null
+            if (!appending && replacing && previousText is not null
                 && LineEndings.RetypedFor(previousText, text) is { } retyped)
             {
                 text = retyped;
@@ -116,7 +127,7 @@ public sealed class WriteFileTool : ITool
 
             var newBytes = Encoding.UTF8.GetByteCount(text);
 
-            if (replacing && !allowShrink && WouldLoseMostOfTheFile(previousBytes, newBytes))
+            if (replacing && !append && !allowShrink && WouldLoseMostOfTheFile(previousBytes, newBytes))
                 return ToolResults.Fail(
                     $"Refusing to replace '{path}': the new content is {newBytes} bytes against "
                     + $"{previousBytes} already there, so most of the file would be gone. This is "
@@ -144,7 +155,10 @@ public sealed class WriteFileTool : ITool
             var restorable = replacing && ctx.Artifacts.CanRestore(path);
 
             return ToolResults.Ok(
-                output: replacing
+                output: append && replacing
+                    ? $"APPENDED {addedBytes} bytes to the end of '{path}' (now {bytes} bytes). Everything "
+                      + "that was already in it is unchanged."
+                    : replacing
                     ? (restorable
                         ? $"REPLACED the existing file '{path}' ({bytes} bytes). Its previous version was kept and can be restored."
                         : $"REPLACED the existing file '{path}' ({bytes} bytes). Its previous version could NOT be backed up and is gone.")
@@ -158,7 +172,8 @@ public sealed class WriteFileTool : ITool
                 {
                     ["path"] = path,
                     ["bytes"] = bytes,
-                    ["replacedExistingFile"] = replacing,
+                    ["replacedExistingFile"] = replacing && !append,
+                    ["appended"] = append && replacing,
                     ["previousVersionRecoverable"] = restorable
                 });
         }
@@ -198,6 +213,16 @@ public sealed class WriteFileTool : ITool
     internal static bool WouldLoseMostOfTheFile(long previousBytes, long newBytes)
         => previousBytes >= ShrinkGuardFloorBytes && newBytes * 2 < previousBytes;
 
+    /// <summary>
+    /// What is there, then what is added - on a line of its own. A report that ends without a line
+    /// break would otherwise run its last line straight into the new section's heading.
+    /// </summary>
+    private static string Joined(string previous, string added)
+        => previous.Length == 0 || added.Length == 0
+           || previous.EndsWith('\n') || added.StartsWith('\n') || added.StartsWith("\r\n", StringComparison.Ordinal)
+            ? previous + added
+            : previous + (previous.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n") + added;
+
     /// <summary>Below this, a file is short enough that rewriting it whole is not the risky act.</summary>
     private const int ShrinkGuardFloorBytes = 2_000;
 
@@ -206,7 +231,8 @@ public sealed class WriteFileTool : ITool
       "type": "object",
       "properties": {
         "path": { "type": "string", "description": "File path relative to the workspace root, e.g. list_files.py" },
-        "content": { "type": "string", "description": "The full text content of the file." },
+        "content": { "type": "string", "description": "The full text content of the file - or, with append, only the text to add at its end." },
+        "append": { "type": "boolean", "description": "Set true to ADD content to the end of the file instead of replacing it - send only the new text. Use this to add a section to a report or a log: it does not make you retype what is already there. Creates the file if it does not exist." },
         "allow_shrink": { "type": "boolean", "description": "Set true only when an existing file is genuinely meant to lose most of its content. Without it a replacement that drops most of a file is refused, because that is nearly always a whole-file rewrite of a file that should have been edited in part." }
       },
       "required": ["path", "content"]

@@ -45,6 +45,7 @@ public sealed class CapsAnnounceThemselvesTests
     {
         ["Orchestrator.TokensKeptForAnAnswer"]
             = "A_trim_leaves_room_for_an_answer_and_says_how_much_is_left",
+        ["ReadLedger.RewriteFloorChars"] = "Small_files_rewritten_often_are_not_this_guards_business",
         ["Orchestrator.MaxReviewFileChars"] = nameof(A_files_real_size_reaches_the_reviewer_from_a_real_run),
         ["Reviewer.MaxContentCharsPerFile"] = "An_excerpt_says_so_even_when_the_caller_did_the_cutting",
         ["Reviewer.MaxContentCharsTotal"] = nameof(Files_dropped_for_the_review_budget_are_announced),

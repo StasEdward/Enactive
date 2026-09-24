@@ -3180,6 +3180,22 @@ public sealed class Orchestrator : IOrchestrator
                     continue;
                 }
 
+                // ── Rewrite gate: the same file written whole again? See ReadLedger.RefuseRewrite.
+                //
+                // Refused as a call that did NOT HAPPEN, not as work that failed: nothing was
+                // attempted, and a refusal left open as a failure would fail the step at the end
+                // for a write it went on to make properly - the shape 9co closed for `dir`.
+                if (reads.RefuseRewrite(call, ReadLedger.FileNamedBy(call)) is { } retyped)
+                {
+                    openFailures.Failed(call, retyped, didNotRun: true);
+                    journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson),
+                                   ActionOutcome.Refused, retyped);
+                    yield return Decided(call.Name, allowed: false,
+                        $"{call.Name}: refused — the same file written whole again");
+                    messages.Add(ChatMessage.Tool(call.Id, "ERROR: " + retyped));
+                    continue;
+                }
+
                 // ── Permission gate: allow / ask / deny ──────────────────────
                 var gate = _permissions.Evaluate(
                     EffectivePolicyFor(worker), call.Name, _tools.RequiredLevelOf(call.Name));
@@ -3522,6 +3538,10 @@ public sealed class Orchestrator : IOrchestrator
                         : "\n\n[This is a call you have already made in this step, and it is being "
                           + "counted as no progress. If you know what to change, change it now; if "
                           + "you are finished, say so.]";
+
+                // Owed before the refusal above, so it is never the first the model hears of it.
+                if (reads.WarnRewrite(call, result) is { } warn)
+                    reply += "\n\n[" + warn + "]";
 
                 messages.Add(ChatMessage.Tool(call.Id, reply));
             }
