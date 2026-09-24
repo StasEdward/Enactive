@@ -151,8 +151,18 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
     /// best-effort — a write must not fail because housekeeping did — so the answer has to come from
     /// the file, not from the intention.
     /// </summary>
+    /// <summary>
+    /// Whether the version the LAST write displaced was kept - which is the contract, "the version
+    /// this store displaced". It read the FIRST write of the run until 2026-09-24, which answers a
+    /// different question (was the file there before the run at all), and so a file the run itself
+    /// created was reported as having lost its previous version on every later write: run
+    /// a2142be6, "REPLACED the existing file 'Docs/DRIFT_ollama.md' ... Its previous version could
+    /// NOT be backed up and is gone" - while that very write had backed up step 1's version, and a
+    /// revert of step 2 would have put it back. The reviewer is handed that sentence as ground
+    /// truth.
+    /// </summary>
     public bool CanRestore(string relativePath)
-        => FirstWrite(relativePath) is { ExistedBefore: true, BackupPath: { } backup }
+        => LastWrite(relativePath) is { ExistedBefore: true, BackupPath: { } backup }
            && File.Exists(backup);
 
     /// <summary>The state this path was in before the run first touched it.</summary>
