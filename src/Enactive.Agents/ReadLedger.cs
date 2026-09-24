@@ -100,10 +100,11 @@ internal sealed class ReadLedger
 
         coverage.Total = lines;
 
-        // A cursor that jumps past the line the text was cut in means that line cannot be shown.
-        // read_file says so in the text; this remembers it, so the advice below agrees with it.
-        if (Int(result, "partialLine") is { } partial && Int(result, "nextOffset") is { } next && next > partial)
-            coverage.TooLong.Add(partial);
+        // A line read_file cannot show whole. read_file says so in the text; this remembers it, so the
+        // advice below agrees with it. Named by the tool rather than inferred from a cursor jumping
+        // past the cut: a long LAST line has no cursor after it.
+        if (Int(result, "tooLongLine") is { } tooLong)
+            coverage.TooLong.Add(tooLong);
 
         // A window that starts at or before the first line not yet seen extends the run; one that
         // starts beyond it leaves a hole, and a hole is exactly what makes a rewrite unsafe.

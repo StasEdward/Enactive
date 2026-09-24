@@ -123,13 +123,32 @@ public sealed class ReadFileTool : ITool
             var cutLine = lastLine;         // the line the shown text ends in
             var nextOffset = lastLine + 1;  // where reading on continues
             var fullyShown = lastLine;      // the last line shown whole
+            var midLine = false;            // the cut fell inside a line, not between two
+            int? tooLong = null;            // a line read_file cannot show whole, however it is asked
             if (clipped)
             {
                 var kept = body[..MaxChars];
+
+                // A cut that lands ON a line break cut between lines: every line kept is whole. An
+                // 8,000-character line followed by a break was reported "longer than 8000" and
+                // recorded as never seen, and reading on as told left it unreadable for good.
+                var rest = body[MaxChars..];
+                var between = rest.StartsWith('\n') || rest.StartsWith("\r\n", StringComparison.Ordinal) || rest == "\r"
+                              || kept.EndsWith('\n');
+                if (kept.EndsWith('\n'))
+                    kept = kept[..^1];   // the next line had begun with nothing of it shown
+
                 var newlines = kept.Count(ch => ch == '\n');
                 cutLine = offset + newlines;
 
-                if (newlines == 0)
+                if (between)
+                {
+                    body = kept + "\n… (this output is cut at " + MaxChars + " characters, after line "
+                         + cutLine + " - the rest of the lines asked for is not shown)";
+                    nextOffset = cutLine + 1;
+                    fullyShown = cutLine;
+                }
+                else if (newlines == 0)
                 {
                     // One line longer than the whole cap. Reading on "from this line" would return the
                     // same cut again, so the next read starts after it.
@@ -137,15 +156,18 @@ public sealed class ReadFileTool : ITool
                          + " characters on its own, and is cut here. read_file cannot show the rest of it; "
                          + "search_files or count_matches can look inside it.)";
                     nextOffset = cutLine + 1;
+                    fullyShown = cutLine - 1;
+                    midLine = true;
+                    tooLong = cutLine;
                 }
                 else
                 {
                     body = kept + "\n… (this output is cut at " + MaxChars + " characters, part-way "
                          + "through line " + cutLine + " - the rest of the lines asked for is not shown)";
                     nextOffset = cutLine;
+                    fullyShown = cutLine - 1;
+                    midLine = true;
                 }
-
-                fullyShown = cutLine - 1;
             }
 
             var more = clipped || lastLine < total
@@ -156,7 +178,7 @@ public sealed class ReadFileTool : ITool
                 // thirteen minutes past the point it had stopped making progress. Paging is right
                 // when the file is being READ; it is the wrong move when something specific is being
                 // looked for, and the alternative has to be named here, where the temptation is.
-                ? $"\n\n… showing lines {offset}–{cutLine}{(clipped ? $" (line {cutLine} only in part)" : "")} of {total}. "
+                ? $"\n\n… showing lines {offset}–{cutLine}{(midLine ? $" (line {cutLine} only in part)" : "")} of {total}. "
                   + (nextOffset <= total ? $"Read on with offset {nextOffset}. " : "")
                   + "If you are looking for something rather than reading this file, search_files or "
                   + "count_matches will find it without paging."
@@ -178,7 +200,11 @@ public sealed class ReadFileTool : ITool
                     // there is nothing further to read.
                     ["nextOffset"] = clipped || lastLine < total ? (nextOffset <= total ? nextOffset : null) : null,
                     // The line the shown text ends part-way through, when it was cut.
-                    ["partialLine"] = clipped ? cutLine : null,
+                    ["partialLine"] = midLine ? cutLine : null,
+                    // A line too long to show whole, said outright rather than left to be inferred
+                    // from the cursor: on the file's LAST line there is no cursor to infer it from,
+                    // and the ledger then sent the model back to read the same cut again.
+                    ["tooLongLine"] = tooLong,
                     ["truncated"] = clipped || lastLine < total,
                     // Say which version this is. "Proposed" and "on disk" are different facts, and a
                     // reviewer judging from evidence has to be able to tell them apart.

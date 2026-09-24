@@ -201,10 +201,36 @@ public sealed class LoggingChatProvider : IChatProvider
     /// at all reads as a call that produced no prompt.
     /// </summary>
     private string Body(ChatRequest request)
-        => _promptBodies ? RenderPrompt(request, AlreadyLogged(request)) : Settings(request) + BodyWithheld;
+    {
+        if (!_promptBodies)
+            return Settings(request) + BodyWithheld;
+
+        lock (_promptGate)
+        {
+            var alreadyLogged = AlreadyLogged(request);
+
+            // "Exactly as in the previous prompt" points back at entries the reader must still be
+            // able to find. The log window, the export and AI Analyze read a history that is cleared
+            // and whose oldest entries give way: after a Clear, the delta was all that was left, and
+            // the system prompt and the request could not be recovered from it. When any prompt the
+            // delta leans on - the last whole one and every delta since - is gone, write it whole.
+            if (alreadyLogged > 0 && _log is ILogHistory history && !history.HoldsAll(_sinceWhole))
+                alreadyLogged = 0;
+
+            var body = RenderPrompt(request, alreadyLogged);
+            if (alreadyLogged == 0)
+                _sinceWhole.Clear();
+            _sinceWhole.Add(body);
+            return body;
+        }
+    }
 
     private readonly object _promptGate = new();
     private ChatMessage[]? _lastPrompt;
+
+    /// <summary>The prompt bodies logged since the last one written whole, that one first - the chain
+    /// a reader follows back from a delta. The same string objects that went into the log.</summary>
+    private readonly List<string> _sinceWhole = new();
 
     /// <summary>
     /// How many of this request's messages are EXACTLY the previous prompt's, from the start - the

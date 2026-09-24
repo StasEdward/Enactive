@@ -163,10 +163,14 @@ internal static class WorkspaceScan
     /// <summary>
     /// Formats that are never text. Only the unambiguous ones: anything not listed is still decided by
     /// looking for a NUL byte, so a text file with an unusual extension is never mistaken for binary.
+    ///
+    /// <para>Not <c>.obj</c>: it is a compiler's object file AND a Wavefront 3D model, which is text
+    /// ("v 1 2 3"). Listed, a search of a text model found nothing in it - even named directly. The
+    /// NUL check still tells the two apart, at the cost of one read of a build folder's objects.</para>
     /// </summary>
     private static readonly HashSet<string> BinaryExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
-        ".dll", ".exe", ".so", ".dylib", ".a", ".lib", ".o", ".obj", ".pdb", ".class", ".jar", ".nupkg",
+        ".dll", ".exe", ".so", ".dylib", ".a", ".lib", ".o", ".pdb", ".class", ".jar", ".nupkg",
         ".zip", ".7z", ".gz", ".tgz", ".bz2", ".xz", ".rar", ".cab", ".msi", ".iso",
         ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".webp", ".tif", ".tiff", ".psd",
         ".woff", ".woff2", ".ttf", ".otf", ".eot",

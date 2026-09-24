@@ -10,7 +10,7 @@ using Enactive.Core.Diagnostics;
 /// (e.g. a file) on a single background pump thread so the producer's hot path is never blocked.
 /// One instance per application; it outlives individual runs, which is what makes the log "global".
 /// </summary>
-public sealed class LogHub : ILogSink, IDisposable
+public sealed class LogHub : ILogSink, ILogHistory, IDisposable
 {
     private readonly int _capacity;
     private readonly Queue<LogEntry> _ring;
@@ -72,6 +72,22 @@ public sealed class LogHub : ILogSink, IDisposable
     {
         lock (_gate)
             return _ring.ToArray();
+    }
+
+    /// <inheritdoc />
+    public bool HoldsAll(IReadOnlyCollection<string> details)
+    {
+        if (details.Count == 0)
+            return true;
+
+        var missing = new HashSet<string>(details, ReferenceEqualityComparer.Instance);
+        lock (_gate)
+        {
+            foreach (var entry in _ring)
+                if (entry.Detail is { } detail && missing.Remove(detail) && missing.Count == 0)
+                    return true;
+        }
+        return false;
     }
 
     /// <summary>Clears the in-memory ring (does not touch any file sink).</summary>
