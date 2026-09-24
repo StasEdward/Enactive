@@ -692,7 +692,8 @@ public sealed class Orchestrator : IOrchestrator
         var quickNet = quickOutcome == RunOutcomeKind.Completed
             ? await NetChangedAsync(quickChanges, quickBefore, ct)
             : null;
-        yield return scope.Terminal(quickOutcome, quickReason, artifacts => SummarizeArtifacts(artifacts, quickNet));
+        yield return scope.Terminal(quickOutcome, quickReason,
+            artifacts => SummarizeArtifacts(artifacts, quickNet, _artifacts.PendingPaths));
     }
 
     /// <summary>
@@ -1544,7 +1545,8 @@ public sealed class Orchestrator : IOrchestrator
         var runNet = runOutcome == RunOutcomeKind.Completed
             ? await NetChangedAsync(workspaceChanges, beforeRun, ct)
             : null;
-        yield return scope.Terminal(runOutcome, runReason, artifacts => SummarizeArtifacts(artifacts, runNet));
+        yield return scope.Terminal(runOutcome, runReason,
+            artifacts => SummarizeArtifacts(artifacts, runNet, _artifacts.PendingPaths));
     }
 
 
@@ -2869,7 +2871,8 @@ public sealed class Orchestrator : IOrchestrator
                 // What the engine MEASURED, beside what the model remembers. Taken before the
                 // conversation is cleared, because the last command's result is in it.
                 if (carried is { Length: > 0 })
-                    carried += await HandoverFactsAsync(changes, stepStart, messages, ct);
+                    carried += await HandoverFactsAsync(
+                        changes, stepStart, messages, _artifacts.PendingPaths, store.TouchedPaths, ct);
 
                 if (carried is { Length: > 0 })
                 {
@@ -3834,6 +3837,12 @@ public sealed class Orchestrator : IOrchestrator
 
             runBudget.TokensUsed(completion.PromptTokens ?? 0, completion.CompletionTokens ?? 0);
 
+            // A reply that CALLS a tool is not a note, whatever text comes with it: the call will not
+            // be run, and "I will read Prod.cs next" carried into the next conversation is an
+            // intention where a record of results should be.
+            if (completion.Message.ToolCalls is { Count: > 0 })
+                return null;
+
             var note = completion.Message.Content?.Trim();
             return string.IsNullOrWhiteSpace(note) ? null : note;
         }
@@ -3869,9 +3878,17 @@ public sealed class Orchestrator : IOrchestrator
     /// can measure, and the two were not put side by side.</para>
     /// </summary>
     private static async Task<string> HandoverFactsAsync(
-        WorkspaceChanges? changes, WorkspaceSnapshot? stepStart, List<ChatMessage> messages, CancellationToken ct)
+        WorkspaceChanges? changes, WorkspaceSnapshot? stepStart, List<ChatMessage> messages,
+        IReadOnlyCollection<string> pending, IReadOnlyCollection<string> touched, CancellationToken ct)
     {
         var facts = new StringBuilder();
+
+        // Staged writes are not on disk, so no snapshot of the disk can see them - said first, and
+        // apart, so "nothing differs" below is never read as "nothing was written".
+        var waiting = pending.Select(PathKey).Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToArray();
+        if (waiting.Length > 0)
+            facts.Append("- Proposed and waiting for the user to apply - NOT on disk yet, so not in the comparison ")
+                 .Append($"below: {string.Join(", ", waiting)}\n");
 
         try
         {
@@ -3879,8 +3896,19 @@ public sealed class Orchestrator : IOrchestrator
                 && await changes.TakeAsync(ct) is { } now
                 && await changes.CompareAsync(stepStart, now, ct) is { } found)
             {
+                // What the snapshots did not measure is not "unchanged". A file this step wrote in a
+                // folder the engine skips (bin, obj, the engine's own) or one git ignores is named as
+                // such, rather than falling silent under "no file differs".
+                var measured = await changes.PathsAsync(stepStart, ct) is { } was && await changes.PathsAsync(now, ct) is { } isNow
+                    ? was.Concat(isNow).Select(PathKey).ToHashSet(StringComparer.OrdinalIgnoreCase)
+                    : null;
+                var unmeasured = measured is null
+                    ? Array.Empty<string>()
+                    : touched.Select(PathKey).Where(p => !measured.Contains(p) && !waiting.Contains(p, StringComparer.OrdinalIgnoreCase))
+                             .Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToArray();
+
                 if (found.Count == 0)
-                    facts.Append("- No file in the workspace differs from how it was when this step began.\n");
+                    facts.Append("- No file the engine measures differs from how it was when this step began.\n");
                 else
                 {
                     facts.Append($"- Files that differ from how they were when this step began ({found.Count}). ")
@@ -3908,6 +3936,10 @@ public sealed class Orchestrator : IOrchestrator
                     if (found.Count > 20)
                         facts.Append($"  - and {found.Count - 20} more\n");
                 }
+
+                if (unmeasured.Length > 0)
+                    facts.Append("- Written by you where the engine does not measure (a folder it skips, or a file git ")
+                         .Append($"ignores), so NOT compared above: {string.Join(", ", unmeasured)}\n");
             }
         }
         catch (OperationCanceledException) { throw; }
@@ -4017,35 +4049,60 @@ public sealed class Orchestrator : IOrchestrator
     /// <para>So a file written and then restored is named apart, and a file changed by a COMMAND -
     /// which leaves no write behind - is named too. Without a measurement (a run whose steps ran in
     /// parallel, a resumed run) the line is the list of writes, as before.</para>
+    ///
+    /// <para><b>Four answers, not two.</b> A written file the comparison does not list is "left as it
+    /// was" only if the comparison MEASURED it. A staged write is not on disk at all - it is a
+    /// proposal waiting to be applied - and a file in a folder the snapshot skips (bin, obj, the
+    /// engine's own) or one git ignores was never looked at. Both were first reported as "written and
+    /// left as it was", which is the one thing that was not known.</para>
     /// </summary>
-    private static string SummarizeArtifacts(List<ArtifactRef> artifacts, IReadOnlySet<string>? netChanged = null)
+    private static string SummarizeArtifacts(
+        List<ArtifactRef> artifacts, NetChanges? net = null, IReadOnlyCollection<string>? pending = null)
     {
         var files = FilesTouched(artifacts);
-        if (netChanged is null)
+        if (net is null)
             return files.Length == 0
                 ? "(completed, no files changed)"
                 : $"(completed; {files.Length} artifact(s): {string.Join(", ", files)})";
 
-        var changed = files.Where(f => netChanged.Contains(PathKey(f))).ToArray();
-        var restored = files.Where(f => !netChanged.Contains(PathKey(f))).ToArray();
+        var waiting = (pending ?? Array.Empty<string>()).Select(PathKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var proposed = files.Where(f => waiting.Contains(PathKey(f))).ToArray();
+        var onDisk = files.Where(f => !waiting.Contains(PathKey(f))).ToArray();
+        var changed = onDisk.Where(f => net.Changed.Contains(PathKey(f))).ToArray();
+        var restored = onDisk.Where(f => !net.Changed.Contains(PathKey(f)) && net.Measured.Contains(PathKey(f))).ToArray();
+        var unmeasured = onDisk.Where(f => !net.Changed.Contains(PathKey(f)) && !net.Measured.Contains(PathKey(f))).ToArray();
         var written = files.Select(PathKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var byCommands = netChanged.Where(p => !written.Contains(p)).Order(StringComparer.OrdinalIgnoreCase).ToArray();
+        var byCommands = net.Changed.Where(p => !written.Contains(p)).Order(StringComparer.OrdinalIgnoreCase).ToArray();
 
         var parts = new List<string>();
         if (changed.Length > 0)
             parts.Add($"{changed.Length} artifact(s): {string.Join(", ", changed)}");
+        if (proposed.Length > 0)
+            parts.Add($"proposed, waiting to be applied: {string.Join(", ", proposed)}");
         if (byCommands.Length > 0)
             parts.Add($"changed by commands: {string.Join(", ", byCommands.Take(ShownByCommands))}"
                       + (byCommands.Length > ShownByCommands ? $" and {byCommands.Length - ShownByCommands} more" : ""));
+        if (unmeasured.Length > 0)
+            parts.Add($"written where the run does not measure, so not compared: {string.Join(", ", unmeasured)}");
         if (restored.Length > 0)
             parts.Add($"written and left as it was: {string.Join(", ", restored)}");
 
         if (parts.Count == 0)
             return "(completed, no files changed)";
-        return changed.Length == 0 && byCommands.Length == 0
-            ? $"(completed, no files changed; {parts[0]})"
-            : $"(completed; {string.Join("; ", parts)})";
+
+        // "No files changed" only where that is KNOWN: nothing changed on disk among what was measured,
+        // and nothing written where it was not.
+        if (changed.Length == 0 && byCommands.Length == 0 && unmeasured.Length == 0)
+            return proposed.Length > 0
+                ? $"(completed, no files changed on disk; {string.Join("; ", parts)})"
+                : $"(completed, no files changed; {string.Join("; ", parts)})";
+
+        return $"(completed; {string.Join("; ", parts)})";
     }
+
+    /// <summary>What a run changed from its start to its end, and which files that measurement covered.</summary>
+    private sealed record NetChanges(IReadOnlySet<string> Changed, IReadOnlySet<string> Measured);
 
     /// <summary>How many files changed by commands the closing line names before it counts the rest.</summary>
     private const int ShownByCommands = 5;
@@ -4056,7 +4113,7 @@ public sealed class Orchestrator : IOrchestrator
     /// The files that differ between <paramref name="before"/> and now - the run's NET change, whatever
     /// happened in between. Null when it cannot be measured, and then nothing is claimed from it.
     /// </summary>
-    private static async Task<IReadOnlySet<string>?> NetChangedAsync(
+    private static async Task<NetChanges?> NetChangedAsync(
         WorkspaceChanges? changes, WorkspaceSnapshot? before, CancellationToken ct)
     {
         if (changes is null || before is null)
@@ -4065,7 +4122,9 @@ public sealed class Orchestrator : IOrchestrator
         try
         {
             if (await changes.TakeAsync(ct) is not { } after
-                || await changes.CompareAsync(before, after, ct) is not { } found)
+                || await changes.CompareAsync(before, after, ct) is not { } found
+                || await changes.PathsAsync(before, ct) is not { } was
+                || await changes.PathsAsync(after, ct) is not { } isNow)
                 return null;
 
             var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -4075,7 +4134,8 @@ public sealed class Orchestrator : IOrchestrator
                 if (change.OldPath is { } old)
                     paths.Add(PathKey(old));
             }
-            return paths;
+            var measured = was.Concat(isNow).Select(PathKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            return new NetChanges(paths, measured);
         }
         catch (OperationCanceledException) { return null; }
         catch (IOException) { return null; }

@@ -59,8 +59,18 @@ public sealed class WorkspaceChanges : IDisposable
                 if (!File.Exists(_index) && (await GitAsync(ct, "rev-parse", "--verify", "--quiet", "HEAD")).Exit == 0)
                     await GitAsync(ct, "read-tree", "HEAD");
 
-                var add = await GitAsync(ct, "-c", "core.safecrlf=false", "add", "-A", "--", ".", $":(exclude){Own}");
+                // Everything, then the engine's own folder taken back out - NOT an exclude pathspec.
+                // `add -A -- . ':(exclude).enactive'` exits 1 when .enactive is IGNORED ("The following
+                // paths are ignored by one of your .gitignore files"), because the pathspec names an
+                // ignored path; and the engine itself writes ".enactive/" into the .gitignore of every
+                // folder it opens. Found 2026-09-24: in any such repository every snapshot was null,
+                // so the review's diffs, the run's closing line and the handover's facts all fell back
+                // in silence. Tests missed it because their folders had no .gitignore.
+                var add = await GitAsync(ct, "-c", "core.safecrlf=false", "add", "-A", "--", ".");
                 if (add.Exit != 0)
+                    return null;
+                var own = await GitAsync(ct, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", Own);
+                if (own.Exit != 0)
                     return null;
 
                 var tree = await GitAsync(ct, "write-tree");
@@ -81,6 +91,32 @@ public sealed class WorkspaceChanges : IDisposable
         {
             _gate.Release();
         }
+    }
+
+    /// <summary>
+    /// Every file a snapshot MEASURED, or null when that cannot be said. A path that is not here - in a
+    /// folder the scan skips, a file git ignores, the engine's own folder - was not measured, and a
+    /// comparison that does not list it has said nothing about it: not that it is unchanged.
+    /// </summary>
+    public async Task<IReadOnlySet<string>?> PathsAsync(WorkspaceSnapshot snapshot, CancellationToken ct)
+    {
+        if (snapshot.Files is { } files)
+            return files.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        if (snapshot.Tree is not { } tree)
+            return null;
+
+        await _gate.WaitAsync(ct);
+        try
+        {
+            var listed = await GitAsync(ct, "ls-tree", "-r", "-z", "--name-only", tree);
+            return listed.Exit == 0
+                ? listed.Output.Split('\0', StringSplitOptions.RemoveEmptyEntries).ToHashSet(StringComparer.OrdinalIgnoreCase)
+                : null;
+        }
+        catch (OperationCanceledException) { throw; }
+        catch { return null; }
+        finally { _gate.Release(); }
     }
 
     /// <summary>What changed between two snapshots, or null when they cannot be compared.</summary>

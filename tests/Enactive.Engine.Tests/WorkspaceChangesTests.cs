@@ -60,6 +60,47 @@ public sealed class WorkspaceChangesTests : IDisposable
         Git("commit", "-q", "-m", "start");
     }
 
+    /// <summary>
+    /// A repository whose .gitignore lists the engine's own folder - which the engine writes into
+    /// every folder it opens. `git add -A -- . ':(exclude).enactive'` exits 1 there, and every
+    /// snapshot was null: review diffs, the closing line and handover facts all fell back in silence.
+    /// </summary>
+    [Fact]
+    public async Task A_repository_that_ignores_the_engines_folder_is_still_measured()
+    {
+        Repository();
+        Write(".gitignore", ".enactive/\n");
+        Git("add", "-A");
+        Git("commit", "-q", "-m", "ignore the engine's folder");
+        Write(".enactive/runs.db", "engine state");
+        using var changes = new WorkspaceChanges(_root);
+
+        var before = await changes.TakeAsync(default);
+        Assert.NotNull(before);
+
+        File.AppendAllText(Path.Combine(_root, "report.md"), "appended\n");
+        Write(".enactive/runs.db", "engine state, changed");
+        var after = await changes.TakeAsync(default);
+
+        var change = Assert.Single((await changes.CompareAsync(before!, after!, default))!);
+        Assert.Equal("report.md", change.Path);
+        Assert.Contains("+appended", change.Diff, StringComparison.Ordinal);
+    }
+
+    /// <summary>THE BOUNDARY. A repository that does NOT ignore it still leaves it out.</summary>
+    [Fact]
+    public async Task The_engines_folder_is_left_out_even_when_git_would_take_it()
+    {
+        Repository();
+        using var changes = new WorkspaceChanges(_root);
+
+        var before = await changes.TakeAsync(default);
+        Write(".enactive/runs.db", "engine state");
+        var after = await changes.TakeAsync(default);
+
+        Assert.Empty((await changes.CompareAsync(before!, after!, default))!);
+    }
+
     /// <summary>THE ONE THAT MATTERS: a change no file tool made is seen, as a diff.</summary>
     [Fact]
     public async Task A_change_made_by_a_command_is_seen_as_a_diff()
