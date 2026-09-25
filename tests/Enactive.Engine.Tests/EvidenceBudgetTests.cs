@@ -57,7 +57,7 @@ public sealed class EvidenceBudgetTests
     [Fact]
     public void Every_call_is_listed_however_long_the_first_result_was()
     {
-        var evidence = TheReportedStep().Describe();
+        var evidence = TheReportedStep().Describe().Text;
 
         foreach (var file in new[]
                  {
@@ -74,7 +74,7 @@ public sealed class EvidenceBudgetTests
     [Fact]
     public void The_evidence_still_fits_its_budget()
     {
-        var evidence = TheReportedStep().Describe(maxChars: 3_000);
+        var evidence = TheReportedStep().Describe(maxChars: 3_000).Text;
 
         Assert.True(evidence.Length <= 3_600, $"{evidence.Length} characters");
         Assert.Contains("NotificationService.cs", evidence, StringComparison.Ordinal);
@@ -87,7 +87,7 @@ public sealed class EvidenceBudgetTests
     /// </summary>
     [Fact]
     public void The_number_of_calls_is_a_fact_not_something_to_count()
-        => Assert.Contains("7 tool call(s)", TheReportedStep().Describe(), StringComparison.Ordinal);
+        => Assert.Contains("7 tool call(s)", TheReportedStep().Describe().Text, StringComparison.Ordinal);
 
     /// <summary>
     /// A shortened result says so WHERE IT IS, and says the call happened. Both halves matter: the
@@ -96,7 +96,7 @@ public sealed class EvidenceBudgetTests
     [Fact]
     public void A_shortened_result_says_so_and_says_the_call_happened()
     {
-        var evidence = Journal(("read_file", """{"path":"big.cs"}""", new string('x', 50_000))).Describe();
+        var evidence = Journal(("read_file", """{"path":"big.cs"}""", new string('x', 50_000))).Describe().Text;
 
         // The mark moved into the middle when shortening started keeping the END too — see
         // ResultTailTests. What it has to do is unchanged: say a gap happened, and how big it was.
@@ -127,8 +127,8 @@ public sealed class EvidenceBudgetTests
             ("read_file", """{"path":"b.cs"}""", new string('b', 40_000)),
             ("read_file", """{"path":"c.cs"}""", new string('c', 40_000)));
 
-        Assert.True(journal.Describe(maxChars: budget).Length <= budget,
-                    $"{journal.Describe(maxChars: budget).Length} characters against a budget of {budget}");
+        Assert.True(journal.Describe(maxChars: budget).Text.Length <= budget,
+                    $"{journal.Describe(maxChars: budget).Text.Length} characters against a budget of {budget}");
     }
 
     /// <summary>
@@ -142,8 +142,8 @@ public sealed class EvidenceBudgetTests
             ("read_file", """{"path":"a.cs"}""", new string('a', 40_000)),
             ("read_file", """{"path":"b.cs"}""", new string('b', 40_000)));
 
-        var small = journal.Describe(maxChars: 3_000);
-        var large = journal.Describe(maxChars: 20_000);
+        var small = journal.Describe(maxChars: 3_000).Text;
+        var large = journal.Describe(maxChars: 20_000).Text;
 
         Assert.True(large.Length > small.Length * 3);
         foreach (var evidence in new[] { small, large })
@@ -163,7 +163,7 @@ public sealed class EvidenceBudgetTests
         var evidence = Journal(
             ("read_file", """{"path":"huge.md"}""", new string('H', 100_000)),
             ("read_file", """{"path":"small.cs"}""", "namespace Small; // the whole file"),
-            ("run_command", """{"command":"dotnet build"}""", "Build succeeded. 0 Error(s)")).Describe();
+            ("run_command", """{"command":"dotnet build"}""", "Build succeeded. 0 Error(s)")).Describe().Text;
 
         Assert.Contains("small.cs", evidence, StringComparison.Ordinal);
         Assert.Contains("namespace Small", evidence, StringComparison.Ordinal);
@@ -174,7 +174,7 @@ public sealed class EvidenceBudgetTests
 
     [Fact]
     public void A_step_that_ran_nothing_still_says_exactly_that()
-        => Assert.Equal("(no tools were run in this step)", new ExecutionJournal().Describe());
+        => Assert.Equal("(no tools were run in this step)", new ExecutionJournal().Describe().Text);
 
     /// <summary>A refusal is evidence too, and is never mistaken for a success.</summary>
     [Fact]
@@ -183,7 +183,7 @@ public sealed class EvidenceBudgetTests
         var journal = new ExecutionJournal();
         journal.Record(1, "git", """{"args":["push"]}""", ActionOutcome.Refused, "blocked by the permission policy");
 
-        var evidence = journal.Describe();
+        var evidence = journal.Describe().Text;
 
         Assert.Contains("REFUSED", evidence, StringComparison.Ordinal);
         Assert.Contains("blocked by the permission policy", evidence, StringComparison.Ordinal);
@@ -195,7 +195,7 @@ public sealed class EvidenceBudgetTests
         var journal = new ExecutionJournal();
         journal.Record(1, "run_command", """{"command":"dotnet build"}""", ActionOutcome.Failed, "error CS1002");
 
-        Assert.Contains("ERROR: error CS1002", journal.Describe(), StringComparison.Ordinal);
+        Assert.Contains("ERROR: error CS1002", journal.Describe().Text, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -210,7 +210,7 @@ public sealed class EvidenceBudgetTests
         var mark = journal.Mark();
         journal.Record(1, "read_file", """{"path":"second-attempt.cs"}""", ActionOutcome.Succeeded, "new");
 
-        var evidence = journal.Describe(mark);
+        var evidence = journal.Describe(mark).Text;
 
         Assert.Contains("second-attempt.cs", evidence, StringComparison.Ordinal);
         Assert.DoesNotContain("first-attempt.cs", evidence, StringComparison.Ordinal);
@@ -225,7 +225,7 @@ public sealed class EvidenceBudgetTests
     public void A_call_whose_arguments_are_a_whole_file_is_clipped_and_says_so()
     {
         var evidence = Journal(
-            ("write_file", $$"""{"path":"doc.md","content":"{{new string('c', 20_000)}}"}""", "Created")).Describe();
+            ("write_file", $$"""{"path":"doc.md","content":"{{new string('c', 20_000)}}"}""", "Created")).Describe().Text;
 
         Assert.Contains("characters of arguments", evidence, StringComparison.Ordinal);
         Assert.Contains("doc.md", evidence, StringComparison.Ordinal);
@@ -244,7 +244,7 @@ public sealed class EvidenceBudgetTests
             journal.Record(1, "read_file", $$"""{"path":"file-{{i}}-with-a-long-enough-name.cs"}""",
                            ActionOutcome.Succeeded, "contents");
 
-        var evidence = journal.Describe(maxChars: 1_500);
+        var evidence = journal.Describe(maxChars: 1_500).Text;
 
         Assert.Contains("200 tool call(s)", evidence, StringComparison.Ordinal);
         Assert.Contains("are not shown here", evidence, StringComparison.Ordinal);

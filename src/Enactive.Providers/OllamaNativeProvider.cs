@@ -56,13 +56,14 @@ public sealed class OllamaNativeProvider : IChatProvider
 
         await using var stream = await response.Content.ReadAsStreamAsync(ct);
         using var reader = new StreamReader(stream);
-        var raw = new StringBuilder();
+        var raw = BoundedLogBuffer.Create(_log, LogLevel.Trace);
         var finished = false;
         try
         {
             while (await reader.ReadLineAsync(ct) is { } line)
             {
-                raw.AppendLine(line);
+                if (raw is not null && !_log.IsLoggingEnabled(LogLevel.Trace)) raw = null;
+                raw?.AppendLine(line);
                 if (line.Length == 0)
                     continue;
 
@@ -79,7 +80,8 @@ public sealed class OllamaNativeProvider : IChatProvider
         }
         finally
         {
-            WireTap.Response(_log, _descriptor.Id, (int)response.StatusCode, raw.ToString(), streamed: true);
+            if (raw is not null && _log.IsLoggingEnabled(LogLevel.Trace))
+                WireTap.Response(_log, _descriptor.Id, (int)response.StatusCode, raw.ToString(), streamed: true);
         }
     }
 
@@ -107,11 +109,13 @@ public sealed class OllamaNativeProvider : IChatProvider
             ["stream"] = stream,
             ["messages"] = request.Messages.Select(ToWire).ToArray()
         };
-        if (request.Temperature is { } temperature || request.NumCtx is { } numCtx0)
+        var maxTokens = OutputTokenBudget.Resolve(request, _descriptor);
+        if (request.Temperature is not null || request.NumCtx is not null || maxTokens is not null)
         {
             var options = new Dictionary<string, object?>();
             if (request.Temperature is { } t) options["temperature"] = t;
             if (request.NumCtx is { } nc) options["num_ctx"] = nc;
+            if (maxTokens is { } limit) options["num_predict"] = limit;
             payload["options"] = options;
         }
         if (request.Think is { } think)

@@ -45,14 +45,15 @@ public sealed class AnAnswerCannotBeLongerThanTheRoomLeftTests
 
         Assert.All(asked, r =>
         {
-            Assert.NotNull(r.MaxTokens);
-            Assert.InRange(r.MaxTokens!.Value, 1, 8192);
+            Assert.Null(r.MaxTokens); // The window is a ceiling, not an override of provider preferences.
+            Assert.NotNull(r.OutputTokenLimit);
+            Assert.InRange(r.OutputTokenLimit!.Value, 1, 8192);
         });
 
         // And it SHRINKS as the transcript grows - which is the property that makes it a ceiling on
         // the answer rather than a constant wearing one's clothes.
-        Assert.True(asked[^1].MaxTokens < asked[0].MaxTokens,
-                    $"first {asked[0].MaxTokens}, last {asked[^1].MaxTokens} - the room left must fall "
+        Assert.True(asked[^1].OutputTokenLimit < asked[0].OutputTokenLimit,
+                    $"first {asked[0].OutputTokenLimit}, last {asked[^1].OutputTokenLimit} - the room left must fall "
                     + "as the prompt grows");
     }
 
@@ -72,6 +73,6 @@ public sealed class AnAnswerCannotBeLongerThanTheRoomLeftTests
 
         await fx.RunAsync(fx.Build(provider, EngineFixture.Role("developer")), "write it");
 
-        Assert.All(provider.Requests, r => Assert.Null(r.MaxTokens));
+        Assert.All(provider.Requests, r => Assert.Null(r.OutputTokenLimit));
     }
 }

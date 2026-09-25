@@ -58,8 +58,10 @@ public sealed class ReadFilesTool : ITool
                    + "whenever a question touches more than one file - it costs one turn instead of "
                    + "several. A file longer than " + MaxCharsPerFile + " characters is shown as "
                    + "its START and its END with the middle marked; use read_file for a window "
-                   + "into the part between them.",
-        JsonSchema: Schema);
+                   + "into the part between them. Preview scans at most " + FilePreview.MaxInputChars
+                   + " characters plus one lookahead per file; larger files show a marked prefix "
+                   + "preview with an unknown total line count.",
+        JsonSchema: Schema, WorkspaceEffect: WorkspaceEffect.None);
 
     public PermissionLevel RequiredLevel => PermissionLevel.Observe;
 
@@ -114,12 +116,14 @@ public sealed class ReadFilesTool : ITool
         // What was shown of each file, for ReadLedger - a whole-file write of a file seen only as an
         // excerpt is the loss it exists to stop, and this is now a common way to read.
         var coverage = new List<FileCoverage>();
+        var stagedPaths = new List<string>();
 
         try
         {
             foreach (var (relative, full) in resolved)
             {
-                if (!File.Exists(full))
+                using var source = await WorkspaceReader.OpenAsync(ctx, relative, full, ct);
+                if (source is null)
                 {
                     missing.Add(relative);
                     continue;
@@ -134,8 +138,9 @@ public sealed class ReadFilesTool : ITool
                     continue;
                 }
 
-                var text = await File.ReadAllTextAsync(full, ct);
                 var room = Math.Min(MaxCharsPerFile, budget);
+                var preview = await FilePreview.ReadAsync(source.Reader, room, ct);
+                if (source.Staged) stagedPaths.Add(relative);
 
                 // The START and the END, never just the start. Two reasons, and the second is the
                 // stronger one. A file's top carries its namespace, usings and declaration and its
@@ -151,24 +156,31 @@ public sealed class ReadFilesTool : ITool
                 //
                 // FileHead rather than CommandHead because the reasoning behind two-fifths is about
                 // commands - "a program reports its outcome last" - and a file has no outcome.
-                var slice = Shortening.ToFit(text, room, Shortening.FileHead);
+                var slice = preview.Text;
                 budget -= slice.Length;
                 found++;
 
-                var lines = ReadFileTool.LinesIn(text);
-                coverage.Add(new FileCoverage(relative, lines, slice.Length < text.Length ? 0 : lines));
+                var lines = preview.Lines;
+                coverage.Add(new FileCoverage(relative, lines,
+                    preview.Complete && preview.Characters <= room ? lines : 0, preview.Complete));
 
-                sb.AppendLine($"----- {relative} ({text.Length} characters) -----")
+                sb.AppendLine($"----- {relative} ({(preview.Complete ? "" : "at least ")}{preview.Characters} characters) -----")
                   .AppendLine(slice);
 
-                if (slice.Length < text.Length)
+                if (!preview.Complete)
+                    sb.AppendLine($"... (input scan stopped at the {FilePreview.MaxInputChars} character limit "
+                        + "plus one lookahead character. Only a PREFIX was scanned; the file end and totalLines "
+                        + "are unknown. Use read_file with offset/limit for a specific window; "
+                        + "it scans the file to count exact lines.)");
+                else if (preview.Characters > room)
                     sb.AppendLine($"... (shown: the start and the end, {slice.Length} of "
-                                + $"{text.Length} characters. What is missing is the MIDDLE - "
+                                + $"{preview.Characters} characters. What is missing is the MIDDLE - "
                                 + $"read_file '{relative}' with an offset to see it.)");
 
                 sb.AppendLine();
             }
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
         {
             return ToolResults.Fail($"Could not read the files: {ex.Message}");
@@ -188,7 +200,11 @@ public sealed class ReadFilesTool : ITool
             sb.AppendLine("----- not there: " + string.Join(", ", missing) + " -----");
 
         return ToolResults.Ok(sb.ToString().TrimEnd(),
-            metadata: new Dictionary<string, object?> { ["files"] = coverage });
+            metadata: new Dictionary<string, object?>
+            {
+                ["files"] = coverage,
+                ["stagedPaths"] = stagedPaths
+            });
     }
 
     private const string Schema = """

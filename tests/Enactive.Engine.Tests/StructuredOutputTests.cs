@@ -43,7 +43,7 @@ public sealed class StructuredOutputTests
         private readonly string _refusal;
         private int _seen;
 
-        public Recording(string body, int refuseFirst = 0, string refusal = """{"error":{"message":"unknown field"}}""")
+        public Recording(string body, int refuseFirst = 0, string refusal = """{"error":{"message":"unknown field response_format"}}""")
         {
             _body = body;
             _refuseFirst = refuseFirst;

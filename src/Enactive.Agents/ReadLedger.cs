@@ -34,6 +34,7 @@ internal sealed class ReadLedger
     {
         public int Contiguous;   // the highest line reached without a gap from line 1
         public int Total;        // the file's line count, as the read reported it
+        public bool TotalKnown = true;
 
         // Lines read_file cannot show whole - one line longer than its cap, which it steps OVER
         // when it says where to read on. Such a line is never "seen", so a file holding one is
@@ -129,6 +130,7 @@ internal sealed class ReadLedger
             {
                 var entry = CoverageOf(file.Path);
                 entry.Total = file.TotalLines;
+                entry.TotalKnown = file.TotalLinesKnown;
                 entry.Contiguous = Math.Max(entry.Contiguous, file.LinesShownWhole);
             }
             return;
@@ -149,6 +151,7 @@ internal sealed class ReadLedger
             _files[key] = coverage = new Coverage();
 
         coverage.Total = lines;
+        coverage.TotalKnown = true;
 
         // A line read_file cannot show whole. read_file says so in the text; this remembers it, so the
         // advice below agrees with it. Named by the tool rather than inferred from a cursor jumping
@@ -181,6 +184,11 @@ internal sealed class ReadLedger
 
         if (!_files.TryGetValue(Key(path), out var coverage))
             return null;   // never read here - not this guard's business
+
+        if (!coverage.TotalKnown)
+            return $"This step has seen '{path}' only as an excerpt; its total line count is unknown. "
+                 + "Use edit_file to change an exact passage without replacing unread content, "
+                 + "or read the whole file before a whole-file write.";
 
         if (coverage.Total <= 0 || coverage.Contiguous >= coverage.Total)
             return null;   // read in full, in one window or several

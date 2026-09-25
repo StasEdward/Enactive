@@ -52,19 +52,19 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
     public async IAsyncEnumerable<ChatStreamEvent> StreamChatAsync(
         ChatRequest request, [EnumeratorCancellation] CancellationToken ct)
     {
-        // stream_options is asked for unless this endpoint has already refused it. On a 400 the
-        // request is sent again without it, exactly as CompleteAsync does for a schema - so the
-        // worst case is the behaviour this had before the field existed, plus one round trip once
-        // per process. Nothing here can turn a working provider into a failing one.
-        var wantUsage = !NoStreamUsage.ContainsKey(SchemaKey(request));
-
+        var key = CapabilityKey(request);
+        var wantUsage = !IsDisabled(NoStreamUsage, key);
         var response = await SendAsync(wantUsage);
-
         if (response.StatusCode == System.Net.HttpStatusCode.BadRequest && wantUsage)
         {
-            response.Dispose();
-            NoStreamUsage.TryAdd(SchemaKey(request), true);
-            response = await SendAsync(includeUsage: false);
+            var error = await response.Content.ReadAsStringAsync(ct);
+            if (UnsupportedField(error, "stream_options", "include_usage"))
+            {
+                response.Dispose();
+                response = await SendAsync(includeUsage: false);
+                if (response.IsSuccessStatusCode)
+                    NoStreamUsage[key] = DateTimeOffset.UtcNow.AddMinutes(15);
+            }
         }
 
         using var _ = response;
@@ -85,13 +85,14 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
 
         await using var stream = await response.Content.ReadAsStreamAsync(ct);
         using var reader = new StreamReader(stream);
-        var raw = new StringBuilder();
+        var raw = BoundedLogBuffer.Create(_log, LogLevel.Trace);
         var finished = false;
         try
         {
             while (await reader.ReadLineAsync(ct) is { } line)
             {
-                raw.AppendLine(line);
+                if (raw is not null && !_log.IsLoggingEnabled(LogLevel.Trace)) raw = null;
+                raw?.AppendLine(line);
                 if (line.Length == 0 || !line.StartsWith("data:", StringComparison.Ordinal))
                     continue;
 
@@ -117,25 +118,21 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
         }
         finally
         {
-            WireTap.Response(_log, _descriptor.Id, (int)response.StatusCode, raw.ToString(), streamed: true);
+            if (raw is not null && _log.IsLoggingEnabled(LogLevel.Trace))
+                WireTap.Response(_log, _descriptor.Id, (int)response.StatusCode, raw.ToString(), streamed: true);
         }
     }
 
     public async Task<ChatCompletion> CompleteAsync(ChatRequest request, CancellationToken ct)
     {
-        // A schema is a REQUEST here more than anywhere else: "OpenAI-compatible" is a family rather
-        // than a specification, and an endpoint that does not know response_format may reject the
-        // whole call for it. So: send it, and if the answer is a 400, send the same request again
-        // without it and remember. The cost of being wrong is one round trip; the cost of not
-        // trying is that the field is useless on every gateway that DOES support it.
-        var wanted = request.ResponseSchema is { Length: > 0 } && !NoStructuredOutput.ContainsKey(SchemaKey(request));
-
+        var key = CapabilityKey(request);
+        var wanted = request.ResponseSchema is { Length: > 0 } schema
+            && TryElement(schema) is not null && !IsDisabled(NoStructuredOutput, key);
         var (ok, status, body) = await SendAsync(wanted);
-
-        if (!ok && status == 400 && wanted)
+        if (!ok && status == 400 && wanted && UnsupportedField(body, "response_format", "json_schema"))
         {
-            NoStructuredOutput.TryAdd(SchemaKey(request), true);
             (ok, status, body) = await SendAsync(includeSchema: false);
+            if (ok) NoStructuredOutput[key] = DateTimeOffset.UtcNow.AddMinutes(15);
         }
 
         if (!ok)
@@ -157,23 +154,58 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
         }
     }
 
-    /// <summary>
-    /// Endpoints that answered a schema with a 400, by provider and model. Static and per-process,
-    /// like the Anthropic adapter's cap table: it is a fact about the endpoint, not about one call.
-    /// </summary>
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> NoStructuredOutput =
-        new(StringComparer.OrdinalIgnoreCase);
+    // Successful fallbacks are scoped to the complete configured endpoint and model,
+    // and expire so a server upgraded during a session can regain its capabilities.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, DateTimeOffset>
+        NoStructuredOutput = new(StringComparer.Ordinal), NoStreamUsage = new(StringComparer.Ordinal);
 
-    /// <summary>
-    /// Endpoints that answered <c>stream_options</c> with a 400. The same table and the same
-    /// reasoning as <see cref="NoStructuredOutput"/>: "OpenAI-compatible" is a family, not a
-    /// specification, and a gateway that has never heard of the field may refuse the whole request
-    /// for it. One wasted round trip per process, then never again.
-    /// </summary>
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> NoStreamUsage =
-        new(StringComparer.OrdinalIgnoreCase);
+    private static bool IsDisabled(
+        System.Collections.Concurrent.ConcurrentDictionary<string, DateTimeOffset> cache, string key)
+        => cache.TryGetValue(key, out var until) && until > DateTimeOffset.UtcNow;
 
-    private string SchemaKey(ChatRequest request) => _descriptor.Id + "\0" + request.Model;
+    private string CapabilityKey(ChatRequest request)
+    {
+        // Hash credentials/configuration rather than retaining secrets in cache keys.
+        var configuration = JsonSerializer.Serialize(new
+        {
+            Descriptor = _descriptor,
+            Model = request.Model,
+            Headers = _http.DefaultRequestHeaders.Select(h => new { h.Key, Values = h.Value.ToArray() }).ToArray()
+        });
+        return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(configuration)));
+    }
+
+    private static bool UnsupportedField(string body, params string[] fields)
+    {
+        string message = body;
+        string? param = null, code = null;
+        try
+        {
+            using var json = JsonDocument.Parse(body);
+            var root = json.RootElement;
+            var error = root.ValueKind == JsonValueKind.Object && root.TryGetProperty("error", out var e) ? e : root;
+            if (error.ValueKind == JsonValueKind.Object)
+            {
+                if (error.TryGetProperty("message", out var m) && m.ValueKind == JsonValueKind.String)
+                    message = m.GetString()!;
+                if (error.TryGetProperty("param", out var p) && p.ValueKind == JsonValueKind.String)
+                    param = p.GetString();
+                if (error.TryGetProperty("code", out var c) && c.ValueKind == JsonValueKind.String)
+                    code = c.GetString();
+            }
+        }
+        catch (JsonException) { }
+        foreach (var field in fields)
+        {
+            if (param == field && code is "unsupported_parameter" or "unknown_parameter") return true;
+            var name = System.Text.RegularExpressions.Regex.Escape(field);
+            var pattern = @"\b(?:unknown|unrecognized|unsupported|unexpected)\s+(?:(?:field|parameter|argument)\s*:?\s*)?['""`]?"
+                + name + @"\b|\b" + name + @"['""`]?\s+(?:(?:is|are)\s+)?(?:not supported|unsupported|not allowed|not recognized)\b";
+            if (System.Text.RegularExpressions.Regex.IsMatch(message, pattern,
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase)) return true;
+        }
+        return false;
+    }
 
     /// <summary>The schema as JSON, or null when it is not parseable - a bad schema must not fail a run.</summary>
     private static JsonElement? TryElement(string json)
@@ -215,14 +247,14 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
         // the "Max tokens" field in the provider editor did nothing on this adapter. A provider that
         // caps output low would silently truncate every answer and the setting meant to raise it was
         // never on the wire.
-        if ((request.MaxTokens ?? _descriptor.MaxTokens) is { } maxTokens and > 0)
+        if (OutputTokenBudget.Resolve(request, _descriptor) is { } maxTokens)
             payload["max_tokens"] = maxTokens;
 
         // Structured outputs (FIX_PLAN §9c). "OpenAI-compatible" is a family, not a specification:
         // vLLM and LM Studio take this, and an arbitrary gateway may ignore it or reject the whole
         // request for it. Sent only when the caller asked and this endpoint has not already refused
-        // one, and CompleteAsync retries without it on a 400 - so the worst case is the behaviour
-        // this had yesterday, one wasted round trip.
+        // one. Only an explicit unsupported-field error triggers a fallback; only a successful
+        // fallback is cached.
         if (includeSchema && request.ResponseSchema is { Length: > 0 } schema && TryElement(schema) is { } element)
             payload["response_format"] = new
             {

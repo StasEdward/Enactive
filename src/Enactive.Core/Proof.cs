@@ -66,7 +66,8 @@ public sealed record ProofClaim(ProofClaimKind Kind, IReadOnlyList<int> Calls, s
 public sealed record ProofVerdict(bool Sound, string Reason);
 
 /// <summary>
-/// Checks a proof claim against what the step actually did.
+/// Checks citation visibility and outcomes against the evidence shown to the reviewer.
+/// This structural audit does not establish that the cited output entails the claim's meaning.
 ///
 /// <para><b>The gap this closes.</b> The execution reviewer asks whether a report is TRUE against
 /// the evidence, and a report can be true in every particular while its conclusion follows from
@@ -93,8 +94,8 @@ public sealed record ProofVerdict(bool Sound, string Reason);
 public static class ProofAudit
 {
     /// <summary>
-    /// The verdict on a claim, given the calls the step actually made — in the same order and
-    /// numbering the evidence used.
+    /// The verdict on a claim, given the exact evidence view sent to the reviewer. Hidden actions
+    /// cannot support citations, but still count when checking whether the workspace changed.
     /// </summary>
     /// <param name="workspaceRoot">
     /// Where the workspace is, so "it changed the workspace" can be answered by the path a call
@@ -102,7 +103,7 @@ public static class ProofAudit
     /// write counts, including one into the worker's own scratch area.
     /// </param>
     public static ProofVerdict Check(
-        ProofClaim claim, IReadOnlyList<ExecutedAction> shown, string? workspaceRoot = null)
+        ProofClaim claim, EvidenceView evidence, string? workspaceRoot = null)
     {
         switch (claim.Kind)
         {
@@ -150,7 +151,7 @@ public static class ProofAudit
             // journal that write, the reviewer is not shown it, and a rejection does not undo it -
             // and refusing its report over it would be this check calling the agent's own notes
             // "the workspace". Null root keeps the old answer, which counts every write.
-            var changed = shown
+            var changed = evidence.Actions
                 .Where(a => a.Outcome == ActionOutcome.Succeeded)
                 .Where(a => workspaceRoot is null
                     ? MutatingTools.Changes(a.Tool)
@@ -165,18 +166,24 @@ public static class ProofAudit
                     + string.Join(", ", changed) + "). Whatever it did, it was not nothing");
         }
 
-        var missing = claim.Calls.Where(n => n < 1 || n > shown.Count).ToArray();
+        var missing = claim.Calls.Where(n => n < 1 || n > evidence.Actions.Count).ToArray();
         if (missing.Length > 0)
             return new ProofVerdict(false,
                 $"the proof cites call(s) {string.Join(", ", missing)}, and this step made "
-                + $"{shown.Count}. A call that was never made cannot show anything");
+                + $"{evidence.Actions.Count}. A call that was never made cannot show anything");
+
+        var hidden = claim.Calls.Where(n => !evidence.VisibleActionIds.Contains(n)).ToArray();
+        if (hidden.Length > 0)
+            return new ProofVerdict(false,
+                $"the proof cites call(s) {string.Join(", ", hidden)} that were not shown in the "
+                + "reviewer's evidence. Only visible calls can be cited as proof");
 
         // Every call it points at went wrong. This is the documented case: the conclusion rests on
         // work that did not work, and every sentence about it can still be true.
         //
         // Answered counts as support - "the file is not there" is a result, and a step whose
         // objective was to check that is proven by it. Refused does not: nothing ran.
-        var cited = claim.Calls.Select(n => shown[n - 1]).ToArray();
+        var cited = claim.Calls.Select(n => evidence.Cited(n)!).ToArray();
         if (cited.All(a => a.Outcome is ActionOutcome.Failed or ActionOutcome.Refused))
             return new ProofVerdict(false,
                 "the only call(s) named as proof are " + Describe(cited)

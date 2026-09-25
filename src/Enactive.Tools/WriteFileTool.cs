@@ -1,4 +1,4 @@
-﻿namespace Enactive.Tools;
+namespace Enactive.Tools;
 
 using System.Text;
 using System.Text.Json;
@@ -13,7 +13,7 @@ public sealed class WriteFileTool : ITool
         Name: "write_file",
         Description: "Create or overwrite a text file inside the current workspace. "
                    + "Use a path relative to the workspace root.",
-        JsonSchema: Schema);
+        JsonSchema: Schema, WorkspaceEffect: WorkspaceEffect.Changed);
 
     public PermissionLevel RequiredLevel => PermissionLevel.Execute;
 

@@ -27,7 +27,7 @@ public sealed class MoveFileTool : ITool
         Name: "move_file",
         Description: "Rename or move a file inside the workspace. Both paths are relative to the "
                    + "workspace root. Fails if the destination already exists.",
-        JsonSchema: Schema);
+        JsonSchema: Schema, WorkspaceEffect: WorkspaceEffect.Changed);
 
     public PermissionLevel RequiredLevel => PermissionLevel.Execute;
 

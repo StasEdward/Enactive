@@ -15,7 +15,12 @@ public sealed class LogHub : ILogSink, ILogHistory, IDisposable
     private readonly int _capacity;
     private readonly Queue<LogEntry> _ring;
     private readonly object _gate = new();
-    private readonly Channel<LogEntry> _channel;
+    private readonly Channel<bool> _channel;
+    private readonly Queue<LogEntry> _pending = new();
+    private readonly long _maxPayloadBytes;
+    private long _retainedBytes;
+    private long _pendingBytes;
+    public const long DefaultMaxPayloadBytes = 16 * 1024 * 1024;
     private readonly ILogSink[] _downstream;
     private readonly Task _pump;
     private long _seq;
@@ -26,12 +31,19 @@ public sealed class LogHub : ILogSink, ILogHistory, IDisposable
     public event Action<LogEntry>? Entry;
 
     public LogHub(int capacity = 5000, LogLevel minLevel = LogLevel.Trace, params ILogSink[] downstream)
+        : this(DefaultMaxPayloadBytes, capacity, minLevel, downstream) { }
+
+    /// <summary>Each of history and pending fan-out has its own byte budget, in addition to entry count.</summary>
+    public LogHub(long maxPayloadBytes, int capacity = 5000, LogLevel minLevel = LogLevel.Trace,
+        params ILogSink[] downstream)
     {
+        _maxPayloadBytes = Math.Max(512, maxPayloadBytes);
         _capacity = Math.Max(64, capacity);
         _ring = new Queue<LogEntry>(_capacity);
         _minLevel = minLevel;
         _downstream = downstream ?? Array.Empty<ILogSink>();
-        _channel = Channel.CreateBounded<LogEntry>(new BoundedChannelOptions(Math.Max(1024, _capacity * 2))
+        // The channel carries only wakeups. Payloads live in the byte-bounded queue under _gate.
+        _channel = Channel.CreateBounded<bool>(new BoundedChannelOptions(1)
         {
             SingleReader = true,
             SingleWriter = false,
@@ -50,22 +62,34 @@ public sealed class LogHub : ILogSink, ILogHistory, IDisposable
 
     public void Log(LogEntry raw)
     {
-        if (raw.Level < _minLevel)
+        if (!IsEnabled(raw.Level))
             return;
 
-        var entry = raw with { Seq = Interlocked.Increment(ref _seq) };
+        var limited = LogPayload.Limit(raw, (int)Math.Min(LogPayload.MaxEntryBytes, _maxPayloadBytes));
 
         // Ring is updated synchronously so Snapshot() is always consistent with what was accepted.
         lock (_gate)
         {
+            var entry = limited with { Seq = ++_seq };
+            var bytes = LogPayload.Bytes(entry);
             _ring.Enqueue(entry);
-            while (_ring.Count > _capacity)
-                _ring.Dequeue();
+            _retainedBytes += bytes;
+            while (_ring.Count > _capacity || _retainedBytes > _maxPayloadBytes)
+                _retainedBytes -= LogPayload.Bytes(_ring.Dequeue());
+
+            _pending.Enqueue(entry);
+            _pendingBytes += bytes;
+            while (_pending.Count > _capacity || _pendingBytes > _maxPayloadBytes)
+                _pendingBytes -= LogPayload.Bytes(_pending.Dequeue());
         }
 
         // Fan-out is async and best-effort; a slow subscriber must never stall a producer.
-        _channel.Writer.TryWrite(entry);
+        _channel.Writer.TryWrite(true);
     }
+
+    public bool IsEnabled(LogLevel level) => level >= _minLevel;
+    public long RetainedPayloadBytes { get { lock (_gate) return _retainedBytes; } }
+    public long PendingPayloadBytes { get { lock (_gate) return _pendingBytes; } }
 
     /// <summary>A copy of the current ring buffer, oldest first — the backlog a new window replays.</summary>
     public IReadOnlyList<LogEntry> Snapshot()
@@ -94,15 +118,25 @@ public sealed class LogHub : ILogSink, ILogHistory, IDisposable
     public void Clear()
     {
         lock (_gate)
+        {
             _ring.Clear();
+            _retainedBytes = 0;
+        }
     }
 
     private async Task PumpAsync()
     {
         try
         {
-            await foreach (var entry in _channel.Reader.ReadAllAsync())
+            await foreach (var _ in _channel.Reader.ReadAllAsync())
+            while (true)
             {
+                LogEntry entry;
+                lock (_gate)
+                {
+                    if (!_pending.TryDequeue(out entry!)) break;
+                    _pendingBytes -= LogPayload.Bytes(entry);
+                }
                 var handler = Entry;
                 if (handler is not null)
                 {
@@ -112,7 +146,7 @@ public sealed class LogHub : ILogSink, ILogHistory, IDisposable
 
                 foreach (var sink in _downstream)
                 {
-                    try { sink.Log(entry); }
+                    try { if (sink.IsLoggingEnabled(entry.Level)) sink.Log(entry); }
                     catch { /* keep pumping even if a downstream sink fails */ }
                 }
             }
@@ -139,11 +173,13 @@ public sealed class CompositeLogSink : ILogSink, IDisposable
     private readonly ILogSink[] _sinks;
     public CompositeLogSink(params ILogSink[] sinks) => _sinks = sinks ?? Array.Empty<ILogSink>();
 
+    public bool IsEnabled(LogLevel level) => _sinks.Any(sink => sink.IsLoggingEnabled(level));
+
     public void Log(LogEntry entry)
     {
         foreach (var sink in _sinks)
         {
-            try { sink.Log(entry); }
+            try { if (sink.IsLoggingEnabled(entry.Level)) sink.Log(entry); }
             catch { /* isolate sink failures */ }
         }
     }

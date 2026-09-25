@@ -26,7 +26,7 @@ public sealed class ReadFileTool : ITool
                    + "workspace root. Reads from 'offset' (1-based line, default 1) for 'limit' "
                    + "lines (default 400); the result says how many lines the file has. To read SEVERAL "
                    + "files, pass 'paths' instead: independent reads in one call rather than one call each.",
-        JsonSchema: Schema);
+        JsonSchema: Schema, WorkspaceEffect: WorkspaceEffect.None);
 
     public PermissionLevel RequiredLevel => PermissionLevel.Observe;
 
@@ -79,20 +79,18 @@ public sealed class ReadFileTool : ITool
             // A staged write is content that exists as far as this run is concerned. Reading past it
             // to the disk is what made the instructed write-then-read verification report the OLD
             // file, or none at all, right after the agent had written it.
-            var staged = await ctx.Artifacts.TryReadPendingAsync(path, ct);
+            using var source = await WorkspaceReader.OpenAsync(ctx, path, full, ct);
 
             // NotFound, not Fail: a read that finds nothing there has ANSWERED. Guessing at a path
             // and being told no is how a model explores a tree it has not seen.
-            if (staged is null && !File.Exists(full))
+            if (source is null)
                 return ToolResults.NotFound($"File not found: {path}");
 
             // Only the window is held. This used to read the whole file into a string, split it into
             // an array of every line, and then keep a handful of them - so asking for twenty lines of
             // a two-gigabyte log cost two gigabytes plus the array, to answer with a screenful. A
             // staged write is already a string in memory and is windowed as it stands.
-            var slice = staged is null
-                ? await ReadWindowAsync(full, offset, limit, ct)
-                : Window(staged, offset, limit);
+            var slice = await ReadWindowAsync(source.Reader, offset, limit, ct);
 
             var total = slice.TotalLines;
 
@@ -208,7 +206,7 @@ public sealed class ReadFileTool : ITool
                     ["truncated"] = clipped || lastLine < total,
                     // Say which version this is. "Proposed" and "on disk" are different facts, and a
                     // reviewer judging from evidence has to be able to tell them apart.
-                    ["staged"] = staged is not null
+                    ["staged"] = source.Staged
                 });
         }
         // A read refused for being the workspace's own state has ANSWERED: the model asked
@@ -246,7 +244,7 @@ public sealed class ReadFileTool : ITool
     /// the previous implementation returned, not a tidied version of it.
     /// </summary>
     private static async Task<Slice> ReadWindowAsync(
-        string fullPath, int offset, int limit, CancellationToken ct)
+        TextReader reader, int offset, int limit, CancellationToken ct)
     {
         var last = offset + limit - 1;
         var window = new StringBuilder();
@@ -257,8 +255,6 @@ public sealed class ReadFileTool : ITool
         var totalChars = 0;
         var windowLines = 0;
         var started = false;
-
-        using var reader = new StreamReader(fullPath);
 
         EnterLine(1);
 
@@ -298,14 +294,6 @@ public sealed class ReadFileTool : ITool
             started = true;
             windowLines++;
         }
-    }
-
-    /// <summary>The same window over content already in memory - a staged write.</summary>
-    private static Slice Window(string text, int offset, int limit)
-    {
-        var lines = text.Split('\n');
-        var window = lines.Skip(offset - 1).Take(limit).ToArray();
-        return new Slice(string.Join('\n', window), lines.Length, window.Length, text.Length);
     }
 
     private static int Number(JsonElement root, string name, int fallback)

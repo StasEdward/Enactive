@@ -12,7 +12,7 @@ public sealed class ListDirectoryTool : ITool
         Name: "list_dir",
         Description: "List files and folders in a workspace directory. Path is relative to the workspace root "
                    + "(defaults to '.'). Folders end with '/'.",
-        JsonSchema: Schema);
+        JsonSchema: Schema, WorkspaceEffect: WorkspaceEffect.None);
 
     public PermissionLevel RequiredLevel => PermissionLevel.Observe;
 

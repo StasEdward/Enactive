@@ -1,4 +1,4 @@
-﻿namespace Enactive.Tools;
+namespace Enactive.Tools;
 
 using System.Text.Json;
 using Enactive.Core.Context;
@@ -31,7 +31,7 @@ public sealed class DeleteFileTool : ITool
         Name: "delete_file",
         Description: "Delete a file inside the workspace. The path is relative to the workspace "
                    + "root. Deletes one file, never a directory. Always asks first.",
-        JsonSchema: Schema);
+        JsonSchema: Schema, WorkspaceEffect: WorkspaceEffect.Changed);
 
     public PermissionLevel RequiredLevel => PermissionLevel.Execute;
 

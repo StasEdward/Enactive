@@ -1,4 +1,4 @@
-﻿namespace Enactive.Tools;
+namespace Enactive.Tools;
 
 using System.Text;
 using System.Text.Json;
@@ -32,7 +32,7 @@ public sealed class EditFileTool : ITool
                    + "'old_string' must appear EXACTLY once — include surrounding lines until it is "
                    + "unique. Prefer this over write_file for changing part of a file: it does not "
                    + "make you reproduce the rest, which is where mistakes get introduced.",
-        JsonSchema: Schema);
+        JsonSchema: Schema, WorkspaceEffect: WorkspaceEffect.Changed);
 
     public PermissionLevel RequiredLevel => PermissionLevel.Execute;
 

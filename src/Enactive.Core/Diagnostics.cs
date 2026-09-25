@@ -45,6 +45,8 @@ public sealed record LogEntry(
 /// </summary>
 public interface ILogSink
 {
+    /// <summary>Cheap producer-side check, before constructing expensive payloads.</summary>
+    bool IsEnabled(LogLevel level) => true;
     void Log(LogEntry entry);
 }
 
@@ -67,6 +69,7 @@ public sealed class NullLogSink : ILogSink
 {
     public static readonly NullLogSink Instance = new();
     private NullLogSink() { }
+    public bool IsEnabled(LogLevel level) => false;
     public void Log(LogEntry entry) { }
 }
 
@@ -120,6 +123,12 @@ public static class LogScope
 /// </summary>
 public static class LogSinkExtensions
 {
+    public static bool IsLoggingEnabled(this ILogSink? sink, LogLevel level)
+    {
+        try { return sink?.IsEnabled(level) == true; }
+        catch { return false; } // A broken sink must not break the operation being observed.
+    }
+
     public static void Write(
         this ILogSink? sink,
         LogLevel level,
@@ -128,11 +137,11 @@ public static class LogSinkExtensions
         string? detail = null,
         string? category = null)
     {
-        if (sink is null) return;
+        if (!sink.IsLoggingEnabled(level)) return;
         try
         {
             var run = LogScope.Current;
-            sink.Log(new LogEntry(
+            sink!.Log(new LogEntry(
                 Seq: 0,
                 At: DateTimeOffset.UtcNow,
                 Level: level,

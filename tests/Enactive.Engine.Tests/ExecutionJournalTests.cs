@@ -29,7 +29,7 @@ public sealed class ExecutionJournalTests
 
     [Fact]
     public void An_empty_journal_says_nothing_ran_rather_than_nothing_at_all()
-        => Assert.Equal("(no tools were run in this step)", new ExecutionJournal().Describe());
+        => Assert.Equal("(no tools were run in this step)", new ExecutionJournal().Describe().Text);
 
     [Fact]
     public void A_refusal_is_recorded_as_one_and_not_as_a_failure()
@@ -37,7 +37,7 @@ public sealed class ExecutionJournalTests
         var journal = new ExecutionJournal();
         journal.Record(1, "write_file", """{"path":"a.md"}""", ActionOutcome.Refused, "the user did not permit this action");
 
-        var evidence = journal.Describe();
+        var evidence = journal.Describe().Text;
 
         Assert.Contains("REFUSED", evidence, StringComparison.Ordinal);
         Assert.Contains("did not permit", evidence, StringComparison.Ordinal);
@@ -55,9 +55,9 @@ public sealed class ExecutionJournalTests
         var second = journal.Mark();
         journal.Record(1, "run_command", "{}", ActionOutcome.Succeeded, "SECOND ATTEMPT");
 
-        Assert.Contains("FIRST ATTEMPT", journal.Describe(), StringComparison.Ordinal);
-        Assert.DoesNotContain("FIRST ATTEMPT", journal.Describe(second), StringComparison.Ordinal);
-        Assert.Contains("SECOND ATTEMPT", journal.Describe(second), StringComparison.Ordinal);
+        Assert.Contains("FIRST ATTEMPT", journal.Describe().Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("FIRST ATTEMPT", journal.Describe(second).Text, StringComparison.Ordinal);
+        Assert.Contains("SECOND ATTEMPT", journal.Describe(second).Text, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -72,7 +72,7 @@ public sealed class ExecutionJournalTests
         for (var i = 0; i < 200; i++)
             journal.Record(1, "run_command", "{}", ActionOutcome.Succeeded, new string('x', 200));
 
-        var evidence = journal.Describe(maxChars: 3000);
+        var evidence = journal.Describe(maxChars: 3000).Text;
 
         Assert.True(evidence.Length < 3600, $"{evidence.Length} characters");
         Assert.Contains("200 tool call(s)", evidence, StringComparison.Ordinal);

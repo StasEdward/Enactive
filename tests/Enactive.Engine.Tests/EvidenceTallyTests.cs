@@ -49,7 +49,7 @@ public sealed class EvidenceTallyTests
     [Fact]
     public void The_header_says_how_many_worked_and_how_many_did_not()
     {
-        var evidence = TheReportedStep().Describe();
+        var evidence = TheReportedStep().Describe().Text;
 
         Assert.Contains("5 tool call(s) in this step, oldest first — 4 worked, 1 failed",
                         evidence, StringComparison.Ordinal);
@@ -64,7 +64,7 @@ public sealed class EvidenceTallyTests
             ("read_file", ActionOutcome.Succeeded, "contents"),
             ("run_command", ActionOutcome.Failed, "error CS1002"),
             ("read_file", ActionOutcome.Answered, "offset 800 is past the end."),
-            ("git", ActionOutcome.Refused, "blocked by the permission policy")).Describe();
+            ("git", ActionOutcome.Refused, "blocked by the permission policy")).Describe().Text;
 
         Assert.Contains("5 tool call(s) in this step, oldest first — 2 worked, 1 failed, "
                         + "1 found nothing, 1 were refused", evidence, StringComparison.Ordinal);
@@ -81,7 +81,7 @@ public sealed class EvidenceTallyTests
     {
         var evidence = Journal(
             ("read_file", outcome, "x"), ("read_file", outcome, "y"), ("read_file", outcome, "z"))
-            .Describe();
+            .Describe().Text;
 
         // The count, then straight on to the numbering — no tally between them. The comma is what
         // the header carries where a tally would have gone.
@@ -103,7 +103,7 @@ public sealed class EvidenceTallyTests
                            ActionOutcome.Succeeded, "contents");
         journal.Record(1, "run_command", """{"command":"dotnet build"}""", ActionOutcome.Failed, "error");
 
-        var evidence = journal.Describe(maxChars: 1_500);
+        var evidence = journal.Describe(maxChars: 1_500).Text;
 
         Assert.Contains("200 tool call(s)", evidence, StringComparison.Ordinal);
         Assert.Contains("199 worked, 1 failed", evidence, StringComparison.Ordinal);
@@ -124,7 +124,7 @@ public sealed class EvidenceTallyTests
         var mark = journal.Mark();
         journal.Record(1, "write_file", """{"path":"a.cs"}""", ActionOutcome.Succeeded, "Created");
 
-        var evidence = journal.Describe(mark);
+        var evidence = journal.Describe(mark).Text;
 
         Assert.Contains("1 tool call(s)", evidence, StringComparison.Ordinal);
         Assert.DoesNotContain("failed", evidence, StringComparison.Ordinal);
@@ -132,14 +132,14 @@ public sealed class EvidenceTallyTests
 
     [Fact]
     public void A_step_that_ran_nothing_still_says_exactly_that()
-        => Assert.Equal("(no tools were run in this step)", new ExecutionJournal().Describe());
+        => Assert.Equal("(no tools were run in this step)", new ExecutionJournal().Describe().Text);
 
     /// <summary>The rest of the header survives — it is what stops a shortened result being read
     /// as a missing call.</summary>
     [Fact]
     public void The_shortening_notice_is_still_in_the_header()
         => Assert.Contains("the call it belongs to still happened",
-                           TheReportedStep().Describe(), StringComparison.Ordinal);
+                           TheReportedStep().Describe().Text, StringComparison.Ordinal);
 
     /// <summary>And the evidence still fits its budget with the tally in it.</summary>
     [Fact]
@@ -151,7 +151,7 @@ public sealed class EvidenceTallyTests
                            ActionOutcome.Succeeded, new string('x', 9_000));
         journal.Record(1, "run_command", """{"command":"dotnet build"}""", ActionOutcome.Failed, "error");
 
-        var evidence = journal.Describe(maxChars: 3_000);
+        var evidence = journal.Describe(maxChars: 3_000).Text;
 
         Assert.True(evidence.Length <= 3_600, $"{evidence.Length} characters");
         Assert.Contains("40 worked, 1 failed", evidence, StringComparison.Ordinal);

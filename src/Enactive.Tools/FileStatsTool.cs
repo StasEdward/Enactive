@@ -35,7 +35,7 @@ public sealed class FileStatsTool : ITool
                    + "to find what has changed since a date. Optionally filter by glob (e.g. "
                    + "\"*.md\") and folder, and set \"sort\" to \"changed\" for newest first "
                    + "instead of largest first.",
-        JsonSchema: Schema);
+        JsonSchema: Schema, WorkspaceEffect: WorkspaceEffect.None);
 
     public PermissionLevel RequiredLevel => PermissionLevel.Observe;
 

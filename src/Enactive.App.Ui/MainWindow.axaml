@@ -11,6 +11,10 @@
         WindowDecorations="BorderOnly"
         ExtendClientAreaToDecorationsHint="True">
 
+    <Window.Resources>
+        <GridLength x:Key="CurrentActionPanelHeight">130</GridLength>
+    </Window.Resources>
+
     <!-- OffScreenMargin keeps a MAXIMISED window inside the screen: with the client
          area extended over the decorations, Windows would otherwise push the edges
          a few pixels past the work area. -->
@@ -520,9 +524,13 @@
 
             <!-- The live run and a past one occupy the same space: reading history does
                  not shrink the run you are watching, and a new run brings you back. -->
-            <Panel>
+            <Grid ColumnDefinitions="*,300">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="{StaticResource CurrentActionPanelHeight}" />
+                </Grid.RowDefinitions>
 
-            <DockPanel IsVisible="{Binding IsViewingLive}" LastChildFill="True">
+            <DockPanel Grid.ColumnSpan="2" Grid.RowSpan="2" IsVisible="{Binding IsViewingLive}" LastChildFill="True">
 
             <!-- ── The task ────────────────────────────────────────────────────
                  The command bar clears when a run starts, so without this the only
@@ -567,6 +575,10 @@
             </Border>
 
             <Grid ColumnDefinitions="*,300">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="{StaticResource CurrentActionPanelHeight}" />
+                </Grid.RowDefinitions>
 
                 <Panel Grid.Column="0">
 
@@ -693,7 +705,7 @@
                      Stays put whichever tab is showing, because a decision that
                      needs answering must not be a tab away.
                 -->
-                <Grid Grid.Column="1" RowDefinitions="*,Auto" Margin="6,12,16,12">
+                <Grid Grid.Column="1" Grid.RowSpan="2" RowDefinitions="*,Auto" Margin="6,12,16,12">
                 <ScrollViewer Grid.Row="0" Margin="0,0,0,12"
                               HorizontalScrollBarVisibility="Disabled"
                               VerticalScrollBarVisibility="Auto">
@@ -781,12 +793,6 @@
                             <TextBlock Text="{Binding AgentBadge}"
                                        Foreground="{DynamicResource Brand.Text}" />
                         </Border>
-
-                        <StackPanel Spacing="2">
-                            <TextBlock Classes="hint" Text="Current action" />
-                            <TextBlock Text="{Binding CurrentAction}" TextWrapping="Wrap" FontSize="12"
-                                       Foreground="{DynamicResource Brand.TextBody}" />
-                        </StackPanel>
 
                         <!-- A decision card means the run is BLOCKED waiting on the user -
                              caution, not action - so it is amber, not ember. Ember belongs
@@ -877,7 +883,7 @@
                  kind, summary) and the step number the cards sort by is not
                  recorded; no Log, because the hub only holds this session.
             -->
-            <DockPanel IsVisible="{Binding IsViewingPast}" LastChildFill="True">
+            <DockPanel Grid.ColumnSpan="2" Grid.RowSpan="2" IsVisible="{Binding IsViewingPast}" LastChildFill="True">
 
                 <Border DockPanel.Dock="Top" Classes="taskHeader" Height="110" ClipToBounds="True">
                     <Grid ColumnDefinitions="*,441">
@@ -956,6 +962,10 @@
                 </Border>
 
                 <Grid ColumnDefinitions="*,300">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="{StaticResource CurrentActionPanelHeight}" />
+                    </Grid.RowDefinitions>
 
                     <Panel Grid.Column="0">
 
@@ -1074,7 +1084,7 @@
                     </Panel>
 
                     <!-- The same column the live run has, off what was recorded. -->
-                    <ScrollViewer Grid.Column="1" Margin="6,12,16,12"
+                    <ScrollViewer Grid.Column="1" Grid.RowSpan="2" Margin="6,12,16,12"
                                   HorizontalScrollBarVisibility="Disabled"
                                   VerticalScrollBarVisibility="Auto">
                         <StackPanel Spacing="8">
@@ -1186,7 +1196,25 @@
                 </Grid>
 
             </DockPanel>
-            </Panel>
+
+                <!-- Fixed-height current action panel, below the central run views. -->
+                <Border Grid.Row="1" Grid.Column="0"
+                        Background="{DynamicResource Brand.Bg}"
+                        BorderBrush="{DynamicResource Brand.Line}" BorderThickness="0,1,0,0"
+                        Padding="16,12,10,12">
+                    <Grid RowDefinitions="Auto,*" RowSpacing="8">
+                        <TextBlock Classes="panelHeader" Text="Current action" Margin="0" />
+                        <ScrollViewer Grid.Row="1"
+                                      HorizontalScrollBarVisibility="Disabled"
+                                      VerticalScrollBarVisibility="Auto">
+                            <SelectableTextBlock Text="{Binding CurrentAction}" TextWrapping="Wrap"
+                                                 FontSize="12"
+                                                 Foreground="{DynamicResource Brand.TextBody}" />
+                        </ScrollViewer>
+                    </Grid>
+                </Border>
+
+            </Grid>
 
         </DockPanel>
         </Grid>

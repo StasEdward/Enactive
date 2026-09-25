@@ -17,7 +17,8 @@ public sealed record ProviderDescriptor(
     string? ApiKey,
     IReadOnlyList<string> Models,
     IReadOnlyDictionary<string, string>? Headers = null,
-    // Max output tokens for this provider (Anthropic max_tokens). Null = the provider's built-in default.
+    // Default output budget, used unless ChatRequest.MaxTokens overrides it. Always clamped by the
+    // request's OutputTokenLimit and known model limits. Null = the adapter/server default.
     int? MaxTokens = null,
     /// <summary>
     /// How large a prompt this provider accepts, when somebody has said — the CONTEXT window, not

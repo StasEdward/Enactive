@@ -1,4 +1,4 @@
-﻿namespace Enactive.Tools;
+namespace Enactive.Tools;
 
 using System.Text.Json;
 using Enactive.Core.Artifacts;
@@ -36,7 +36,7 @@ public sealed class CopyFileTool : ITool
                    + "relative to the workspace root. Fails if the destination already exists. "
                    + "Prefer this over reading a file and writing it back: reading is truncated for "
                    + "large files and the copy would silently be partial.",
-        JsonSchema: Schema);
+        JsonSchema: Schema, WorkspaceEffect: WorkspaceEffect.Changed);
 
     public PermissionLevel RequiredLevel => PermissionLevel.Execute;
 

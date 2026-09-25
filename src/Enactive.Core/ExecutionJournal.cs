@@ -1,6 +1,39 @@
 namespace Enactive.Core.Execution;
 
 using System.Text;
+using System.Collections.Frozen;
+
+/// <summary>
+/// One immutable rendering of journal evidence. Citation IDs are one-based positions in this
+/// snapshot's slice, preserved when older actions are omitted. The full slice is retained only
+/// for engine checks, such as whether the workspace changed; it does not make hidden calls citable.
+/// </summary>
+public sealed class EvidenceView
+{
+    internal EvidenceView(string text, ExecutedAction[] actions, IEnumerable<int> visibleActionIds,
+        bool outputsTruncated = false, bool argumentsTruncated = false, bool hasPriorTranscript = false)
+    {
+        Text = text;
+        Actions = Array.AsReadOnly(actions);
+        VisibleActionIds = visibleActionIds.ToFrozenSet();
+        OutputsTruncated = outputsTruncated;
+        ArgumentsTruncated = argumentsTruncated;
+        HasPriorTranscript = hasPriorTranscript;
+    }
+
+    public string Text { get; }
+    public IReadOnlySet<int> VisibleActionIds { get; }
+    public bool ActionsOmitted => VisibleActionIds.Count < Actions.Count;
+    public bool OutputsTruncated { get; }
+    public bool ArgumentsTruncated { get; }
+    public bool HasPriorTranscript { get; }
+    public bool IsTruncated => ActionsOmitted || OutputsTruncated || ArgumentsTruncated;
+    internal IReadOnlyList<ExecutedAction> Actions { get; }
+
+    /// <summary>Resolve only a call whose numbered entry was included in Text.</summary>
+    public ExecutedAction? Cited(int number)
+        => VisibleActionIds.Contains(number) ? Actions[number - 1] : null;
+}
 
 /// <summary>How a tool call ended. Never ran is not the same as ran and failed.</summary>
 public enum ActionOutcome
@@ -193,7 +226,7 @@ public sealed class ExecutionJournal
     /// The evidence, in the shape the reviewer prompt has always been written for: what was asked,
     /// then what came back.
     ///
-    /// <para><b>Every call is listed. Only the OUTPUTS are shortened.</b> This used to build the
+    /// <para>Call lines are retained where the budget allows. This used to build the
     /// whole thing and then cut the tail at 3000 characters, which meant one long result at the
     /// start ate the budget and every call after it vanished — from the evidence, not from the run.
     /// On 2026-09-07 a step listed a directory, read the README, and then read five source files;
@@ -211,14 +244,16 @@ public sealed class ExecutionJournal
     /// of it is shown. If even the call lines do not fit, the newest are kept and the number of
     /// older ones is stated — an evidence list that quietly stops is the whole defect.</para>
     /// </summary>
-    public string Describe(int from = 0, int maxChars = DefaultBudget)
+    public EvidenceView Describe(int from = 0, int maxChars = DefaultBudget)
     {
         ExecutedAction[] slice;
         lock (_gate)
             slice = _actions.Skip(Math.Max(0, from)).ToArray();
+        var resumed = _resumed;
 
         if (slice.Length == 0)
-            return "(no tools were run in this step)";
+            return new EvidenceView("(no tools were run in this step)", slice, Array.Empty<int>(),
+                hasPriorTranscript: resumed);
 
         // The count first, as a fact rather than something to infer by counting arrows. A reviewer
         // that can compare "nine calls" against what it can see can tell a short list from a
@@ -250,7 +285,7 @@ public sealed class ExecutionJournal
                          + "report that draws on an earlier step's work is not inventing it."
                        : "")
                    + (manySteps ? " Each call says which step made it." : "")
-                   + (_resumed
+                   + (resumed
                        ? " This run RESUMED an interrupted one, whose transcript the agent can also "
                          + "see; the calls it made are not in this list. A claim about work done "
                          + "before the interruption is not evidence of fabrication."
@@ -286,14 +321,19 @@ public sealed class ExecutionJournal
         var each = MinOutputChars + Math.Max(0, spare) / kept;
 
         var sb = new StringBuilder(header).AppendLine().Append(note);
+        var outputsTruncated = false;
+        var argumentsTruncated = false;
 
         for (var i = slice.Length - kept; i < slice.Length; i++)
         {
             sb.AppendLine(calls[i]);
-            sb.Append("<- ").AppendLine(Answer(slice[i], each));
+            sb.Append("<- ").AppendLine(Answer(slice[i], each, out var shortened));
+            outputsTruncated |= shortened;
+            argumentsTruncated |= slice[i].Arguments?.Length > MaxArguments;
         }
 
-        return sb.ToString().TrimEnd();
+        return new EvidenceView(sb.ToString().TrimEnd(), slice,
+            Enumerable.Range(dropped + 1, kept), outputsTruncated, argumentsTruncated, resumed);
     }
 
     /// <summary>
@@ -357,19 +397,15 @@ public sealed class ExecutionJournal
     /// </summary>
     private const int ShortenedNoticeChars = 72;
 
-    /// <summary>
-    /// The call itself. Arguments are clipped because write_file carries a whole file.
-    /// </summary>
-    /// <param name="withStep">
-    /// Whether to say which step made it. Only when the slice spans several - one step's evidence
-    /// would be repeating the same number on every line, and the reviewer was told the step already.
-    /// </param>
+    private const int MaxArguments = 300;
+
+    /// <summary>The call itself. Arguments are clipped because write_file carries a whole file.</summary>
+    /// <param name="withStep">Whether to name the step, when the slice spans several steps.</param>
     private static string Call(ExecutedAction action, int number, bool withStep = false)
     {
-        const int maxArguments = 300;
         var arguments = action.Arguments ?? "";
-        if (arguments.Length > maxArguments)
-            arguments = arguments[..maxArguments] + $"… ({arguments.Length:N0} characters of arguments)";
+        if (arguments.Length > MaxArguments)
+            arguments = arguments[..MaxArguments] + $"… ({arguments.Length:N0} characters of arguments)";
 
         var whose = withStep && action.Step is { } step ? $" (step {step})" : "";
         return $"[{number}]{whose} -> {action.Tool} {arguments}";
@@ -399,7 +435,7 @@ public sealed class ExecutionJournal
             return Math.Max(0, _actions.Count - Math.Max(0, from));
     }
 
-    private static string Answer(ExecutedAction action, int budget)
+    private static string Answer(ExecutedAction action, int budget, out bool truncated)
     {
         var text = action.Outcome switch
         {
@@ -411,7 +447,8 @@ public sealed class ExecutionJournal
             _ => action.Output ?? "OK"
         };
 
-        return text.Length <= budget ? text : HeadAndTail(text, budget);
+        truncated = text.Length > budget;
+        return truncated ? HeadAndTail(text, budget) : text;
     }
 
     /// <summary>

@@ -52,7 +52,7 @@ public sealed class SoundnessTests
     {
         var calls = new[] { Action(ActionOutcome.Succeeded, "read_file"), Action(ActionOutcome.Failed) };
 
-        var verdict = ProofAudit.Check(
+        var verdict = EvidenceFixture.Check(
             new ProofClaim(ProofClaimKind.Shown, new[] { 2 }, "the test run shows it"), calls);
 
         Assert.False(verdict.Sound);
@@ -69,7 +69,7 @@ public sealed class SoundnessTests
     {
         var calls = new[] { Action(ActionOutcome.Failed), Action(ActionOutcome.Succeeded) };
 
-        Assert.True(ProofAudit.Check(
+        Assert.True(EvidenceFixture.Check(
             new ProofClaim(ProofClaimKind.Shown, new[] { 1, 2 }, "it passed on the second try"), calls).Sound);
     }
 
@@ -82,7 +82,7 @@ public sealed class SoundnessTests
     {
         var calls = new[] { Action(ActionOutcome.Succeeded) };
 
-        var verdict = ProofAudit.Check(
+        var verdict = EvidenceFixture.Check(
             new ProofClaim(ProofClaimKind.Shown, new[] { 4 }, "call 4 shows it"), calls);
 
         Assert.False(verdict.Sound);
@@ -94,7 +94,7 @@ public sealed class SoundnessTests
     [Fact]
     public void A_proof_that_names_no_call_at_all_does_not_hold()
     {
-        var verdict = ProofAudit.Check(
+        var verdict = EvidenceFixture.Check(
             new ProofClaim(ProofClaimKind.Shown, Array.Empty<int>(), "it clearly worked"),
             new[] { Action(ActionOutcome.Succeeded) });
 
@@ -109,7 +109,7 @@ public sealed class SoundnessTests
     /// </summary>
     [Fact]
     public void A_lookup_that_found_nothing_can_still_prove_something()
-        => Assert.True(ProofAudit.Check(
+        => Assert.True(EvidenceFixture.Check(
             new ProofClaim(ProofClaimKind.Shown, new[] { 1 }, "the file is not there, which was the question"),
             new[] { Action(ActionOutcome.Answered, "read_file") }).Sound);
 
@@ -117,7 +117,7 @@ public sealed class SoundnessTests
     [Fact]
     public void A_proof_resting_on_a_refused_call_does_not_hold()
     {
-        var verdict = ProofAudit.Check(
+        var verdict = EvidenceFixture.Check(
             new ProofClaim(ProofClaimKind.Shown, new[] { 1 }, "the command shows it"),
             new[] { Action(ActionOutcome.Refused) });
 
@@ -134,7 +134,7 @@ public sealed class SoundnessTests
     [Fact]
     public void A_step_no_call_could_settle_is_not_failed_for_it()
     {
-        var verdict = ProofAudit.Check(
+        var verdict = EvidenceFixture.Check(
             new ProofClaim(ProofClaimKind.NotByAnyCall, Array.Empty<int>(), "it read the code and explained it"),
             new[] { Action(ActionOutcome.Succeeded, "read_file") });
 
@@ -146,7 +146,7 @@ public sealed class SoundnessTests
     [Fact]
     public void Not_shown_is_not_sound()
     {
-        var verdict = ProofAudit.Check(
+        var verdict = EvidenceFixture.Check(
             new ProofClaim(ProofClaimKind.NotShown, Array.Empty<int>(), "the test still fails"),
             new[] { Action(ActionOutcome.Succeeded) });
 
@@ -171,7 +171,7 @@ public sealed class SoundnessTests
         journal.Record(1, "run_command", """{"command":"build"}""", ActionOutcome.Succeeded, "ok");
         journal.Record(1, "run_command", """{"command":"test"}""", ActionOutcome.Failed, "1 failed");
 
-        var described = journal.Describe(mark);
+        var described = journal.Describe(mark).Text;
 
         Assert.Contains("[1] -> run_command", described, StringComparison.Ordinal);
         Assert.Contains("[2] -> run_command", described, StringComparison.Ordinal);

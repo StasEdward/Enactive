@@ -2049,24 +2049,30 @@ public sealed class Orchestrator : IOrchestrator
         /// repeat - it must stay allowed even though the first attempt is already "seen".
         /// </summary>
         private readonly HashSet<string> _succeeded = new(StringComparer.Ordinal);
+        private readonly HashSet<string> _novelMutations = new(StringComparer.Ordinal);
+        private HashSet<string> _succeededBeforeTurn = new(StringComparer.Ordinal);
 
-        /// <summary>How many times the workspace has changed under this step.</summary>
+        /// <summary>Keep this batch's results out of repeat decisions until the next model turn.</summary>
+        public void BeginTurn() => _succeededBeforeTurn = new(_succeeded, StringComparer.Ordinal);
+
+        /// <summary>Observation generation for stall detection, advanced only by novel known mutations.</summary>
         private int _generation;
 
         /// <summary>Turns in a row that did nothing new.</summary>
         public int Stalled { get; private set; }
 
-        /// <summary>
-        /// A write landed. Everything observed from here on is observing something else — said once,
-        /// here, rather than by each caller deciding what counts as a change.
-        /// </summary>
-        public void WorkspaceChanged() => _generation++;
-
-        /// <summary>A call's result is in: record it as this identity's outcome for <see cref="AlreadyRanExactly"/>.</summary>
-        public void Resulted(ToolCall call, bool succeeded)
+        /// <summary>Effects invalidate repeat evidence independently of the novelty used by the stall guard.</summary>
+        public void Resulted(ToolCall call, ToolResult result, long? before, long? after)
         {
-            if (succeeded)
-                _succeeded.Add(Identity(call));
+            if (result.Success && result.WorkspaceEffect == WorkspaceEffect.None
+                && before is { } version && after == before)
+                _succeeded.Add(RepeatIdentity(call, version));
+
+            // Unknown shell effects never manufacture progress. Even a known write only opens a
+            // new observation generation once per distinct action, so alternating edits still stall.
+            if (result.Success && result.WorkspaceEffect == WorkspaceEffect.Changed
+                && _novelMutations.Add(CallIdentity.Of(call)))
+                _generation++;
         }
 
         /// <summary>
@@ -2076,10 +2082,15 @@ public sealed class Orchestrator : IOrchestrator
         /// (<c>expectedExitCodes</c>) shares its identity with the failure on purpose, and that retry
         /// is a recovery this must not block.
         ///
-        /// <para>A peek in the other sense too: it must be read BEFORE this turn's own calls have run,
-        /// since only a call that ALREADY succeeded, before this turn, should count.</para>
+        /// <para>Check immediately before each call, using the current workspace generation but only
+        /// successes captured by <see cref="BeginTurn"/>. A write earlier in this batch invalidates
+        /// old observations; a success in this batch only gates calls in later model turns.</para>
         /// </summary>
-        public bool AlreadyRanExactly(ToolCall call) => _succeeded.Contains(Identity(call));
+        public bool AlreadyRanExactly(ToolCall call, long? version)
+            => version is { } current && _succeededBeforeTurn.Contains(RepeatIdentity(call, current));
+
+        private static string RepeatIdentity(ToolCall call, long version)
+            => CallIdentity.Of(call) + "\0#" + version.ToString(CultureInfo.InvariantCulture);
 
         /// <summary>Records one turn's calls and says whether any of them was new.</summary>
         public bool Advanced(IReadOnlyList<ToolCall> calls)
@@ -2114,7 +2125,7 @@ public sealed class Orchestrator : IOrchestrator
         /// state of the workspace it is about to look at.
         /// </summary>
         private string Identity(ToolCall call)
-            => MutatingTools.Changes(call.Name)
+            => MutatingTools.IsFileMutation(call.Name)
                 ? CallIdentity.Of(call)
                 : CallIdentity.Of(call) + "\0#" + _generation.ToString(CultureInfo.InvariantCulture);
 
@@ -2161,17 +2172,17 @@ public sealed class Orchestrator : IOrchestrator
         // WHOLE run made no call. A step that wrote files gets a content review and never arrives
         // here at all. What is left is a unit of work that produced nothing and says it is done,
         // which is the case worth a call.
-        var actions = journal.Actions.Skip(evidenceStart).ToArray();
+        var evidence = journal.Describe(evidenceStart, _evidenceBudget);
 
         try
         {
             var outcome = await _reviewer.ProveAsync(
-                title, LastAssistant(convo), journal.Describe(evidenceStart, _evidenceBudget),
+                title, LastAssistant(convo), evidence.Text,
                 reviewProvider, reviewModel, ct);
 
             // The claim is CHECKED, not believed: the numbers it names are resolved against the
-            // calls that were actually made, in the same order and numbering the evidence used.
-            return (ProofAudit.Check(outcome.Claim, actions, _workspace.RootPath), outcome.PromptTokens,
+            // visible calls in the exact snapshot sent to the reviewer, preserving their numbering.
+            return (ProofAudit.Check(outcome.Claim, evidence, _workspace.RootPath), outcome.PromptTokens,
                     outcome.CompletionTokens, outcome.CachedPromptTokens);
         }
         catch (OperationCanceledException)
@@ -2215,7 +2226,7 @@ public sealed class Orchestrator : IOrchestrator
             // From the journal, not from the transcript. The transcript is the model's working
             // memory: once it has to be shortened to fit the window, the tool results become a stub,
             // and the reviewer was handed less evidence with nothing saying so.
-            var evidence = journal.Describe(evidenceStart, _evidenceBudget);
+            var evidence = journal.Describe(evidenceStart, _evidenceBudget).Text;
 
             // Which question can even be asked about this step? A step that RAN something is judged
             // on whether it ran and succeeded. A step that only WROTE something has no exit code to
@@ -3109,11 +3120,16 @@ public sealed class Orchestrator : IOrchestrator
             // cannot truncate anything that would have succeeded, because anything longer was going
             // to overflow regardless; it just turns two silent minutes into finish=length, which
             // the loop below already explains.
+            // This is a hard ceiling, not the preferred answer budget: adapters must preserve a
+            // smaller provider default and clamp it to this ceiling, never replace it with room.
             if (provider.ContextWindow(request) is { } stated && stated > 0)
             {
                 var room = stated - scale.TokensFor(Transcript.Size(messages) + toolsOverhead);
                 if (room > 0)
-                    request = request with { MaxTokens = request.MaxTokens ?? room };
+                    request = request with
+                    {
+                        OutputTokenLimit = Math.Min(request.OutputTokenLimit ?? room, room)
+                    };
             }
 
             // Measured against what this request actually is, so the next estimate uses the model's
@@ -3396,15 +3412,9 @@ public sealed class Orchestrator : IOrchestrator
                 yield break; // genuine final answer - no tool calls
             }
 
-            // Which of THIS turn's calls exactly repeat one that already SUCCEEDED in this step, with
-            // nothing WRITTEN since - read before this turn's own calls have run, so only a PRIOR
-            // success counts (see StepProgress.AlreadyRanExactly for why a failed attempt does not).
-            // CommandTools (run_command, run_powershell, git, docker) rather than a set of its own:
-            // the same "spawns a process outside the workspace" question this class already asks
-            // elsewhere. See the gate further down that uses this.
-            var exactRepeats = toolCalls
-                .Where(c => CommandTools.Contains(c.Name) && !HasForce(c) && progress.AlreadyRanExactly(c))
-                .ToHashSet();
+            // Freeze prior successes, not repeat decisions: a write in this batch can change the
+            // generation before a later command reaches its gate.
+            progress.BeginTurn();
 
             // Did this turn do anything the step had not already done? A stuck model does not stop
             // calling tools - it calls the SAME one, with the same arguments, until something else
@@ -3480,29 +3490,17 @@ public sealed class Orchestrator : IOrchestrator
                     continue;
                 }
 
-                // ── Repeat gate: an exact repeat of a slow command, nothing WRITTEN since ──
+                // ── Repeat gate: reuse only explicitly known non-mutating results ──
                 //
-                // Measured 2026-09-24, run 4f779e: the step ran `dotnet test`, then three read-only
-                // checks (two `git diff`, one `git status`) that themselves showed nothing had
-                // changed, then ran the exact same `dotnet test` again - 1.7s of wall time and a full
-                // test-output-sized reply for no new information. The existing stall guard (below)
-                // already tracks this exact case - a repeated identity at the same generation - and
-                // told the model afterwards that it had made a call it already made; this refuses it
-                // BEFORE spawning the process, for the tools where a repeat is both certain to answer
-                // the same and slow enough to be worth not paying for again.
-                //
-                // Scoped to process-spawning tools only: re-reading a file or re-listing a directory
-                // is already cheap, and the existing annotation already discourages it. NOT a
-                // guarantee - `delete_file` and `copy_file` are not tracked as writes here (see
-                // MutatingTools.Changes), so a step that deletes a file between two identical
-                // commands is not seen as having changed anything, and would be gated too; `force:
-                // true` is the way past that, for whichever side of it turns out to be wrong.
-                if (exactRepeats.Contains(call))
+                // Only known non-mutating results at the same shared workspace revision are reusable.
+                // Shell/process effects are Unknown unless measured by the tool, so they are never
+                // hard-blocked on a guess that the workspace or external state stayed unchanged.
+                if (CommandTools.Contains(call.Name) && !HasForce(call)
+                    && progress.AlreadyRanExactly(call, _tools.WorkspaceVersion(_workspace.Id)))
                 {
                     var already = $"'{call.Name}' already ran with these exact arguments earlier in this step, "
-                                 + "and nothing has been written since - its result cannot have changed. "
-                                 + "Re-running it tells you nothing new; look at what it told you the first "
-                                 + "time. If you have a specific reason to expect a different answer now "
+                                 + "with no reported workspace effects or intervening tracked changes. "
+                                 + "Its earlier result is available. If you have a reason to check again "
                                  + "(state outside the workspace, flakiness you are checking for), send it "
                                  + "again with \"force\": true.";
 
@@ -3773,6 +3771,7 @@ public sealed class Orchestrator : IOrchestrator
                     Services: _services);
 
                 ToolResult result;
+                var workspaceBefore = _tools.WorkspaceVersion(_workspace.Id);
                 try
                 {
                     result = await _tools.InvokeAsync(call, toolContext, ct);
@@ -3784,17 +3783,10 @@ public sealed class Orchestrator : IOrchestrator
 
                 // Recorded regardless of the tool: see StepProgress.AlreadyRanExactly for why only a
                 // SUCCESS counts, and only Resulted here (never Failed) needs to know that.
-                progress.Resulted(call, result.Success);
+                progress.Resulted(call, result, workspaceBefore, _tools.WorkspaceVersion(_workspace.Id));
 
                 if (result.Success)
-                {
                     openFailures.Succeeded(call, result.Artifacts);
-
-                    // The tree just moved. A read or a build that comes after this is not the one
-                    // that came before it, whatever its arguments say.
-                    if (MutatingTools.Changes(call.Name))
-                        progress.WorkspaceChanged();
-                }
                 else if (result.IsAnswer)
                     openFailures.FoundNothing(call, result.Error);
                 else

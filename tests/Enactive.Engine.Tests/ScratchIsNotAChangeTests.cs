@@ -25,7 +25,7 @@ public sealed class ScratchIsNotAChangeTests
         => new(DateTimeOffset.UtcNow, 1, tool, arguments, ActionOutcome.Succeeded, "ok");
 
     private static ProofVerdict Verdict(params ExecutedAction[] calls)
-        => ProofAudit.Check(
+        => EvidenceFixture.Check(
             new ProofClaim(ProofClaimKind.NothingToDo, new[] { 1 }, "nothing had drifted"),
             calls, Root);
 
@@ -103,7 +103,7 @@ public sealed class ScratchIsNotAChangeTests
     [Fact]
     public void With_no_root_every_write_still_counts()
     {
-        var verdict = ProofAudit.Check(
+        var verdict = EvidenceFixture.Check(
             new ProofClaim(ProofClaimKind.NothingToDo, new[] { 1 }, "nothing had drifted"),
             new[]
             {

@@ -52,7 +52,7 @@ public sealed class AnsweredInEvidenceTests
     [Fact]
     public void An_answer_is_not_written_down_as_an_error()
     {
-        var evidence = TheReportedStep().Describe();
+        var evidence = TheReportedStep().Describe().Text;
 
         Assert.DoesNotContain("ERROR", evidence, StringComparison.Ordinal);
         Assert.Contains("NOTHING THERE", evidence, StringComparison.Ordinal);
@@ -61,13 +61,13 @@ public sealed class AnsweredInEvidenceTests
     /// <summary>And what it found is still there — the line count is the useful part.</summary>
     [Fact]
     public void What_the_lookup_found_is_still_in_the_evidence()
-        => Assert.Contains("has 263 line(s)", TheReportedStep().Describe(), StringComparison.Ordinal);
+        => Assert.Contains("has 263 line(s)", TheReportedStep().Describe().Text, StringComparison.Ordinal);
 
     /// <summary>The call is still listed. This is evidence; nothing disappears from it.</summary>
     [Fact]
     public void The_call_is_still_listed()
     {
-        var evidence = TheReportedStep().Describe();
+        var evidence = TheReportedStep().Describe().Text;
 
         Assert.Contains("3 tool call(s)", evidence, StringComparison.Ordinal);
         Assert.Contains("\"offset\":800", evidence, StringComparison.Ordinal);
@@ -120,7 +120,7 @@ public sealed class AnsweredInEvidenceTests
     public void A_failure_is_still_an_error()
     {
         var evidence = Journal(
-            ("run_command", """{"command":"dotnet build"}""", ActionOutcome.Failed, "error CS1002")).Describe();
+            ("run_command", """{"command":"dotnet build"}""", ActionOutcome.Failed, "error CS1002")).Describe().Text;
 
         Assert.Contains("ERROR: error CS1002", evidence, StringComparison.Ordinal);
         Assert.DoesNotContain("NOTHING THERE", evidence, StringComparison.Ordinal);
@@ -131,7 +131,7 @@ public sealed class AnsweredInEvidenceTests
     public void A_refusal_is_still_a_refusal()
     {
         var evidence = Journal(
-            ("git", """{"args":["push"]}""", ActionOutcome.Refused, "blocked by the permission policy")).Describe();
+            ("git", """{"args":["push"]}""", ActionOutcome.Refused, "blocked by the permission policy")).Describe().Text;
 
         Assert.Contains("REFUSED", evidence, StringComparison.Ordinal);
         Assert.DoesNotContain("NOTHING THERE", evidence, StringComparison.Ordinal);
@@ -142,7 +142,7 @@ public sealed class AnsweredInEvidenceTests
     public void A_success_carries_no_label()
     {
         var evidence = Journal(
-            ("read_file", """{"path":"a.cs"}""", ActionOutcome.Succeeded, "namespace A;")).Describe();
+            ("read_file", """{"path":"a.cs"}""", ActionOutcome.Succeeded, "namespace A;")).Describe().Text;
 
         Assert.Contains("<- namespace A;", evidence, StringComparison.Ordinal);
         Assert.DoesNotContain("NOTHING THERE", evidence, StringComparison.Ordinal);

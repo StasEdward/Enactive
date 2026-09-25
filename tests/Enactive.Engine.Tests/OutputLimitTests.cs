@@ -69,7 +69,7 @@ public sealed class OutputLimitTests
         var journal = new Enactive.Core.Execution.ExecutionJournal();
         journal.Record(1, "run_command", """{"command":"dotnet test"}""",
                        Enactive.Core.Execution.ActionOutcome.Succeeded, shown);
-        Assert.Contains(last, journal.Describe(), StringComparison.Ordinal);
+        Assert.Contains(last, journal.Describe().Text, StringComparison.Ordinal);
     }
 
     // Bounded is not the same as lossy for ordinary output: a normal command still comes back whole

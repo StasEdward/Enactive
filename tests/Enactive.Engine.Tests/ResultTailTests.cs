@@ -48,7 +48,7 @@ public sealed class ResultTailTests
     [Fact]
     public void The_end_of_a_long_result_survives()
     {
-        var evidence = Journal("run_command", TestOutput()).Describe();
+        var evidence = Journal("run_command", TestOutput()).Describe().Text;
 
         Assert.Contains(Summary, evidence, StringComparison.Ordinal);
     }
@@ -57,7 +57,7 @@ public sealed class ResultTailTests
     [Fact]
     public void The_start_survives_too()
     {
-        var evidence = Journal("run_command", TestOutput()).Describe();
+        var evidence = Journal("run_command", TestOutput()).Describe().Text;
 
         Assert.Contains("Determining projects to restore", evidence, StringComparison.Ordinal);
     }
@@ -74,7 +74,7 @@ public sealed class ResultTailTests
     [Fact]
     public void The_cut_is_marked_and_says_how_much_is_missing()
     {
-        var evidence = Journal("run_command", TestOutput()).Describe();
+        var evidence = Journal("run_command", TestOutput()).Describe().Text;
 
         Assert.Contains("characters not shown here", evidence, StringComparison.Ordinal);
         Assert.Contains("the end follows", evidence, StringComparison.Ordinal);
@@ -86,7 +86,7 @@ public sealed class ResultTailTests
     [Fact]
     public void The_header_says_the_end_is_always_there()
     {
-        var evidence = Journal("run_command", TestOutput()).Describe();
+        var evidence = Journal("run_command", TestOutput()).Describe().Text;
 
         Assert.Contains("keeps its START and its END", evidence, StringComparison.Ordinal);
         Assert.Contains("closing summary is always here", evidence, StringComparison.Ordinal);
@@ -99,7 +99,7 @@ public sealed class ResultTailTests
     [InlineData(3_000)]
     [InlineData(6_000)]
     public void The_verdict_survives_at_any_usable_budget(int maxChars)
-        => Assert.Contains(Summary, Journal("run_command", TestOutput()).Describe(maxChars: maxChars),
+        => Assert.Contains(Summary, Journal("run_command", TestOutput()).Describe(maxChars: maxChars).Text,
                            StringComparison.Ordinal);
 
     /// <summary>
@@ -118,7 +118,7 @@ public sealed class ResultTailTests
         journal.Record(1, "run_command", """{"command":"dotnet test"}""",
                        ActionOutcome.Succeeded, TestOutput());
 
-        var evidence = journal.Describe();
+        var evidence = journal.Describe().Text;
 
         Assert.Contains(Summary, evidence, StringComparison.Ordinal);
         Assert.Contains("10 tool call(s)", evidence, StringComparison.Ordinal);
@@ -132,7 +132,7 @@ public sealed class ResultTailTests
         journal.Record(1, "run_command", """{"command":"dotnet build"}""", ActionOutcome.Failed,
                        new string('n', 20_000) + "\nBuild FAILED. 3 Error(s)");
 
-        Assert.Contains("Build FAILED. 3 Error(s)", journal.Describe(), StringComparison.Ordinal);
+        Assert.Contains("Build FAILED. 3 Error(s)", journal.Describe().Text, StringComparison.Ordinal);
     }
 
     // ── what must not change ────────────────────────────────────────────────
@@ -141,7 +141,7 @@ public sealed class ResultTailTests
     [Fact]
     public void A_result_that_fits_is_left_exactly_alone()
     {
-        var evidence = Journal("run_command", "exit code 0\nBuild succeeded.").Describe();
+        var evidence = Journal("run_command", "exit code 0\nBuild succeeded.").Describe().Text;
 
         Assert.Contains("<- exit code 0\nBuild succeeded.", evidence, StringComparison.Ordinal);
         Assert.DoesNotContain("cut from the middle", evidence, StringComparison.Ordinal);
@@ -157,7 +157,7 @@ public sealed class ResultTailTests
         var journal = new ExecutionJournal();
         journal.Record(1, "run_command", """{"command":"x"}""", outcome, new string('y', 20_000));
 
-        Assert.Contains("<- " + label, journal.Describe(), StringComparison.Ordinal);
+        Assert.Contains("<- " + label, journal.Describe().Text, StringComparison.Ordinal);
     }
 
     /// <summary>And the evidence still obeys its budget with two pieces per result instead of one.</summary>
@@ -169,7 +169,7 @@ public sealed class ResultTailTests
             journal.Record(1, "run_command", $$"""{"command":"dotnet test {{i}}"}""",
                            ActionOutcome.Succeeded, TestOutput(40_000));
 
-        var evidence = journal.Describe(maxChars: 3_000);
+        var evidence = journal.Describe(maxChars: 3_000).Text;
 
         Assert.True(evidence.Length <= 3_600, $"{evidence.Length} characters");
     }

@@ -27,6 +27,8 @@ public sealed record ChatRequest(
     IReadOnlyList<ChatMessage> Messages,
     IReadOnlyList<ToolDefinition>? Tools = null,
     double? Temperature = null,
+    // Preferred output budget for this request, overriding the provider's default. The effective
+    // wire limit is clamped by OutputTokenLimit and any known model maximum.
     int? MaxTokens = null,
     // Ollama context window override (options.num_ctx on the wire). Only honored by
     // OllamaNativeProvider - the OpenAI-compatible /v1 endpoint has no such field and
@@ -45,7 +47,10 @@ public sealed record ChatRequest(
     // It never becomes the thing correctness rests on. The caller PARSES AND VALIDATES the answer
     // exactly as it did before; this only makes the unparseable path rarer. An unreachable reviewer
     // does not count as PASS, and a schema the model ignored does not count as a verdict.
-    string? ResponseSchema = null);
+    string? ResponseSchema = null,
+    // Hard output ceiling (for example, the remaining context window). Must be positive when set.
+    // Unlike MaxTokens, this never raises a smaller configured output budget.
+    int? OutputTokenLimit = null);
 
 /// <summary>A completed assistant turn (content and/or tool calls).</summary>
 /// <param name="PromptTokens">

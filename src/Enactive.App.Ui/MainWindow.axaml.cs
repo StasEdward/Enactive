@@ -894,7 +894,6 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                     {
                         doneCard?.SetFailed();
                         doneCard?.SetActivity(stepSays);
-                        doneCard?.ExpandForAttention();
                     }
                     else
                     {
@@ -934,16 +933,11 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                     (CardFor(ev) ?? EnsureCurrentCard()).AppendEntryDetail(ev.Summary);
                     break;
                 case EventKind.ErrorObserved:
-                    // Something needs the user's eyes - a recovered implicit tool call, a stalled
-                    // segment, ... - so this card does not stay collapsed like routine progress does.
+                    // Surface the warning in the activity line without changing disclosure state.
                     var warnCard = CardFor(ev) ?? EnsureCurrentCard();
                     warnCard.AddNote("⚠ " + ev.Summary);
                     warnCard.SetActivity("⚠ " + ev.Summary);
 
-                    // Opened, not repainted. The card's edge says what the step is DOING, and a
-                    // warning does not stop it doing that: a run with nine advisory notes used to
-                    // sit amber for its whole eleven minutes while working perfectly well.
-                    warnCard.ExpandForAttention();
                     break;
                 case EventKind.ReviewRequested:
                 case EventKind.ReviewPassed:

@@ -68,6 +68,7 @@ public sealed class CapsAnnounceThemselvesTests
         ["SuccessEvaluator.MaxDetailChars"] = nameof(A_criterions_output_says_how_much_of_it_is_shown),
         ["ProcessExec.MaxOutputChars"] = nameof(Command_output_past_the_cap_says_it_was_truncated),
         ["ReadFilesTool.MaxFiles"] = nameof(More_paths_than_read_files_takes_says_how_many),
+        ["FilePreview.MaxInputChars"] = nameof(BoundedFilePreviewTests.Large_preview_bounds_allocations_and_announces_the_input_limit),
         ["ReadFilesTool.MaxCharsPerFile"] = nameof(A_long_file_among_several_is_cut_and_says_so),
         ["ReadFilesTool.MaxCharsTotal"] = nameof(Files_past_the_read_files_budget_say_they_were_not_read),
         ["RunPowerShellTool.MaxEncodedChars"] = nameof(A_script_too_long_for_a_command_line_is_refused),
@@ -110,7 +111,8 @@ public sealed class CapsAnnounceThemselvesTests
         ["ExecutionJournal.ShortenedNoticeChars"] = "A_shortened_result_says_so_and_says_the_call_happened",
         // The digest that replaced the excerpt for logs too large to hold. Its own caps: how much
         // of one record's message survives, and how many timeline entries it will list.
-        ["LogDigest.MessageChars"] = "A_message_too_long_for_the_digest_is_cut_and_says_so"
+        ["LogDigest.MessageChars"] = "A_message_too_long_for_the_digest_is_cut_and_says_so",
+        ["LogPayload.MaxEntryBytes"] = nameof(BoundedWireLoggingTests.Wire_capture_is_optional_and_bounded_without_changing_the_answer)
     };
 
     /// <summary>

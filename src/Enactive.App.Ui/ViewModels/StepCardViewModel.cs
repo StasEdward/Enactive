@@ -65,7 +65,6 @@ internal sealed class StepCardViewModel : ObservableObject
     private string _activity = "Waiting…";
     private string _toggleLabel = string.Empty;
     private bool _isExpanded;
-    private bool _userExpanded;   // once the user toggles it, stop overriding their choice
     private StepEntry? _lastEntry;
     private int _toolCount;
     private int _commandCount;
@@ -76,11 +75,7 @@ internal sealed class StepCardViewModel : ObservableObject
     public StepCardViewModel(string title)
     {
         Title = title;
-        ToggleCommand = new RelayCommand(() =>
-        {
-            _userExpanded = true;
-            IsExpanded = !IsExpanded;
-        });
+        ToggleCommand = new RelayCommand(() => IsExpanded = !IsExpanded);
     }
 
     public string Title { get; }
@@ -103,7 +98,7 @@ internal sealed class StepCardViewModel : ObservableObject
     public bool IsExpanded
     {
         get => _isExpanded;
-        set
+        private set
         {
             if (Set(ref _isExpanded, value))
                 // "›" collapsed, "⌄" open - a glyph swap rather than a rotate transform keeps the
@@ -148,23 +143,6 @@ internal sealed class StepCardViewModel : ObservableObject
     public void SetActivity(string text) => Activity = text;
 
     /// <summary>
-    /// Pops the card open so something that needs the user's attention - a recovered implicit tool
-    /// call, an error - is not hidden behind the collapsed default. Only auto-expands once: if the
-    /// user has already collapsed it back by hand, that choice stands.
-    ///
-    /// <para>It EXPANDS and nothing else. It used to also repaint the status amber, which is how a
-    /// failed step came out amber instead of red: the failure path sets the status and THEN asks for
-    /// the card to be opened, so the second call quietly undid the first. A method named for
-    /// expanding had no business deciding what colour the step was, and the bug was invisible in the
-    /// code because both lines read as if they were doing different things.</para>
-    /// </summary>
-    public void ExpandForAttention()
-    {
-        if (!_userExpanded)
-            IsExpanded = true;
-    }
-
-    /// <summary>
     /// The step is BLOCKED on the person: a question has been asked and nothing moves until it is
     /// answered. Amber, not red - the step has not failed, it is waiting.
     ///
@@ -175,12 +153,11 @@ internal sealed class StepCardViewModel : ObservableObject
     /// <para><b>This used to fire on every warning as well</b>, and that is what it looked like: a
     /// run reported nine advisory notes - an MCP server nobody had granted, a check that already
     /// passed - and its card sat amber for the whole eleven minutes it was working. A warning is
-    /// worth READING, which is why the card still opens itself and shows the note; it is not the
+    /// worth READING, and remains available in the card's notes; it is not the
     /// step being stuck, and the edge of a card says what the step is doing.</para>
     /// </summary>
     public void SetWaitingForYou()
     {
-        ExpandForAttention();
         StatusBrush = Brand.Warning;
     }
 

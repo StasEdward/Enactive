@@ -39,7 +39,7 @@ public sealed class CompareFilesTool : ITool
                    + "differ — without returning their contents. Set ignore_whitespace to compare "
                    + "the text with all whitespace collapsed, which answers \"is this the same "
                    + "content, reflowed\". Use it instead of reading both files to judge by eye.",
-        JsonSchema: Schema);
+        JsonSchema: Schema, WorkspaceEffect: WorkspaceEffect.None);
 
     public PermissionLevel RequiredLevel => PermissionLevel.Observe;
 

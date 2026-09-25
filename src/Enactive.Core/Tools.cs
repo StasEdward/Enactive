@@ -5,8 +5,16 @@ using Enactive.Core.Artifacts;
 using Enactive.Core.Context;
 using Enactive.Core.Permissions;
 
-/// <summary>Describes a tool to the model (name + description + JSON Schema for arguments).</summary>
-public sealed record ToolDefinition(string Name, string Description, string JsonSchema);
+/// <summary>
+/// Tool description plus trusted execution metadata. WorkspaceEffect describes successful calls;
+/// None also promises that failure paths do not mutate. Other failures remain Unknown unless the
+/// result reports an explicit effect. Adapters send only name, description and schema to the model.
+/// </summary>
+public sealed record ToolDefinition(string Name, string Description, string JsonSchema,
+    WorkspaceEffect WorkspaceEffect = WorkspaceEffect.Unknown);
+
+/// <summary>Workspace effects, independent of success and of whether the action is novel.</summary>
+public enum WorkspaceEffect { None, Changed, Unknown }
 
 /// <summary>A tool invocation requested by the model.</summary>
 public sealed record ToolCall(string Id, string Name, string ArgumentsJson);
@@ -47,20 +55,8 @@ public static class ToolArguments
     public const string Force = "force";
 }
 
-/// <summary>
-/// The tools that CHANGE the workspace, as opposed to looking at it.
-///
-/// <para>Here rather than beside any one of its users, for the same reason as
-/// <see cref="ToolArguments"/> above: three parts of the engine need this one list and they sit in
-/// different layers. The open-failure tracker uses it (a later file of theirs can close an earlier
-/// failure), the step-progress guard uses it (after one of these lands, everything read afterwards
-/// is being read off a different tree), and <c>ProofAudit</c> uses it to refuse a step that reports
-/// nothing needed doing while one of these succeeded inside it. A name spelled twice is a name that
-/// drifts.</para>
-///
-/// <para>A command is NOT one of these, however much it changes on disk: what a tool did is judged
-/// by what the engine can see it did, and nothing a shell prints says which file it touched.</para>
-/// </summary>
+/// <summary>File-tool classifications for failure recovery, stall identity and project-change audits.
+/// Repeat invalidation uses explicit ToolResult/ToolDefinition effects instead of these name lists.</summary>
 public static class MutatingTools
 {
     private static readonly HashSet<string> Names =
@@ -69,13 +65,15 @@ public static class MutatingTools
     /// <summary>
     /// Whether a call by this name is the KIND of call that writes something.
     ///
-    /// <para>Asked by the stall guard and the open-failure tracker, whose question is "did this
-    /// step get anywhere", and for them the answer is about the name alone: a write into the
+    /// <para>Asked by the open-failure tracker, whose answer is about the name alone: a write into the
     /// worker's own scratch area is still the step doing something it had not done, which is
     /// exactly what those guards are counting. See <see cref="ChangedTheWorkspace"/> for the other
     /// question, which is not this one.</para>
     /// </summary>
     public static bool Changes(string tool) => Names.Contains(tool);
+
+    /// <summary>File mutations have an unversioned identity for stall detection, including copy/delete.</summary>
+    public static bool IsFileMutation(string tool) => ChangedPaths.ContainsKey(tool);
 
     /// <summary>
     /// Every tool that changes the PROJECT, and which of its arguments name the path it changes.
@@ -105,11 +103,8 @@ public static class MutatingTools
     /// rejected step does not undo it. Counting it here would refuse a true "nothing needed doing"
     /// because the agent had written itself a helper script on the way to finding that out.</para>
     ///
-    /// <para><b>And it is a longer list.</b> <see cref="Names"/> predates <c>delete_file</c> and
-    /// <c>copy_file</c>, so a step that removed a file could report that nothing needed doing and
-    /// be believed. Left out of <see cref="Names"/> deliberately rather than by oversight — adding
-    /// them there would change what the stall guard counts as progress, which is a different
-    /// decision and not one this needed.</para>
+    /// <para>The list also supplies <see cref="IsFileMutation"/> for stable stall identities.
+    /// Repeat invalidation is handled separately by tool effects and the shared registry revision.</para>
     ///
     /// <para>Unparseable arguments count as a change. "I could not tell" must not become
     /// "nothing happened" in the one check standing between a step and being believed.</para>
@@ -227,7 +222,8 @@ public sealed record ToolResult(
     IReadOnlyList<ArtifactRef> Artifacts,
     IReadOnlyDictionary<string, object?> Metadata,
     bool IsAnswer = false,
-    bool DidNotRun = false);
+    bool DidNotRun = false,
+    WorkspaceEffect? WorkspaceEffect = null);
 
 /// <summary>Factory helpers for <see cref="ToolResult"/>.</summary>
 public static class ToolResults
@@ -342,6 +338,8 @@ public interface ITool
 /// <summary>Resolves and invokes tools by name.</summary>
 public interface IToolRegistry
 {
+    /// <summary>Shared workspace revision, or null while effects are pending or cannot be tracked.</summary>
+    long? WorkspaceVersion(Guid workspaceId) => null;
     bool RequiresApprovalOf(string toolName) => false;
     IReadOnlyList<ToolDefinition> Definitions { get; }
     PermissionLevel RequiredLevelOf(string toolName);

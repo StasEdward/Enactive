@@ -66,7 +66,7 @@ public sealed class EvidenceWindowTests
     public void Evidence_that_spans_two_steps_says_so_and_names_them()
     {
         var evidence = Journal(spansSteps: true,
-            (1, "read_file"), (1, "list_dir"), (2, "read_file")).Describe();
+            (1, "read_file"), (1, "list_dir"), (2, "read_file")).Describe().Text;
 
         Assert.Contains("3 tool call(s) in this run so far", evidence, StringComparison.Ordinal);
         Assert.Contains("[1] (step 1) -> read_file", evidence, StringComparison.Ordinal);
@@ -90,7 +90,7 @@ public sealed class EvidenceWindowTests
     [Fact]
     public void A_run_wide_window_holding_one_step_does_not_claim_to_span_several()
     {
-        var evidence = Journal(spansSteps: true, (1, "read_file"), (1, "list_dir")).Describe();
+        var evidence = Journal(spansSteps: true, (1, "read_file"), (1, "list_dir")).Describe().Text;
 
         Assert.Contains("in this run so far", evidence, StringComparison.Ordinal);
         Assert.DoesNotContain("span", evidence, StringComparison.OrdinalIgnoreCase);
@@ -104,7 +104,7 @@ public sealed class EvidenceWindowTests
     [Fact]
     public void Evidence_of_one_step_still_says_in_this_step_and_does_not_repeat_the_number()
     {
-        var evidence = Journal((1, "read_file"), (1, "list_dir")).Describe();
+        var evidence = Journal((1, "read_file"), (1, "list_dir")).Describe().Text;
 
         Assert.Contains("2 tool call(s) in this step", evidence, StringComparison.Ordinal);
         Assert.DoesNotContain("(step 1)", evidence, StringComparison.Ordinal);
@@ -123,7 +123,7 @@ public sealed class EvidenceWindowTests
         journal.Record(1, "write_file", """{"path":"draft.md"}""", ActionOutcome.Succeeded, "written");
 
         journal.Discard(attempt);
-        var evidence = journal.Describe();
+        var evidence = journal.Describe().Text;
 
         Assert.Contains("1 tool call(s)", evidence, StringComparison.Ordinal);
         Assert.DoesNotContain("write_file", evidence, StringComparison.Ordinal);
@@ -141,7 +141,7 @@ public sealed class EvidenceWindowTests
         var journal = Journal((1, "read_file"));
         journal.NotePriorTranscript();
 
-        Assert.Contains("RESUMED", journal.Describe(), StringComparison.Ordinal);
+        Assert.Contains("RESUMED", journal.Describe().Text, StringComparison.Ordinal);
     }
 
     // -- through the engine --------------------------------------------------

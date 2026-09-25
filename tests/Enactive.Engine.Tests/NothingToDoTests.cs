@@ -56,7 +56,7 @@ public sealed class NothingToDoTests
     {
         var calls = new[] { Action(ActionOutcome.Succeeded), Action(ActionOutcome.Succeeded) };
 
-        var verdict = ProofAudit.Check(
+        var verdict = EvidenceFixture.Check(
             new ProofClaim(ProofClaimKind.NothingToDo, new[] { 1, 2 },
                            "the README already matches the code"), calls);
 
@@ -72,7 +72,7 @@ public sealed class NothingToDoTests
     [Fact]
     public void Nothing_to_do_that_names_no_call_is_not_believed()
     {
-        var verdict = ProofAudit.Check(
+        var verdict = EvidenceFixture.Check(
             new ProofClaim(ProofClaimKind.NothingToDo, Array.Empty<int>(), "it all looked fine"),
             new[] { Action(ActionOutcome.Succeeded) });
 
@@ -94,7 +94,7 @@ public sealed class NothingToDoTests
             Action(ActionOutcome.Succeeded, "write_file")
         };
 
-        var verdict = ProofAudit.Check(
+        var verdict = EvidenceFixture.Check(
             new ProofClaim(ProofClaimKind.NothingToDo, new[] { 1 }, "nothing had drifted"), calls);
 
         Assert.False(verdict.Sound);
@@ -116,7 +116,7 @@ public sealed class NothingToDoTests
             Action(ActionOutcome.Failed, "write_file")
         };
 
-        Assert.True(ProofAudit.Check(
+        Assert.True(EvidenceFixture.Check(
             new ProofClaim(ProofClaimKind.NothingToDo, new[] { 1 }, "nothing had drifted"),
             calls).Sound);
     }
@@ -125,7 +125,7 @@ public sealed class NothingToDoTests
     [Fact]
     public void Nothing_to_do_citing_a_call_nobody_made_is_not_believed()
     {
-        var verdict = ProofAudit.Check(
+        var verdict = EvidenceFixture.Check(
             new ProofClaim(ProofClaimKind.NothingToDo, new[] { 9 }, "call nine says so"),
             new[] { Action(ActionOutcome.Succeeded) });
 
@@ -142,7 +142,7 @@ public sealed class NothingToDoTests
     {
         var calls = new[] { Action(ActionOutcome.Failed), Action(ActionOutcome.Refused) };
 
-        var verdict = ProofAudit.Check(
+        var verdict = EvidenceFixture.Check(
             new ProofClaim(ProofClaimKind.NothingToDo, new[] { 1, 2 }, "nothing to change"), calls);
 
         Assert.False(verdict.Sound);

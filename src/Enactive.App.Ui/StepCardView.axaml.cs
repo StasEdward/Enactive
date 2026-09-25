@@ -48,7 +48,7 @@ internal sealed partial class StepCardView : UserControl
 
     /// <summary>
     /// When a person opens a card, what they want is where it has got to: its latest entries, at the
-    /// bottom. Only for an opening THEY did - a card the engine opens by itself (a failure, a question)
+    /// bottom. Cards only expand through this gesture or the disclosure button; incoming events
     /// must not pull the page away from whatever is being read.
     ///
     /// <para>Posted rather than done now: the card has its new height only after the next layout pass,

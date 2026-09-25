@@ -1,32 +1,18 @@
 namespace Enactive.Engine.Tests;
 
 using Enactive.Core.Events;
+using Enactive.Core.Tools;
 using Xunit;
 
-/// <summary>
-/// An exact repeat of a slow command - the same tool, the same arguments, nothing WRITTEN since it
-/// last ran in this step - is refused before it is spawned, not run again and only afterwards told it
-/// was pointless.
-///
-/// <para><b>Measured 2026-09-24, run 4f779e.</b> A step ran <c>dotnet test</c>, then three read-only
-/// checks (two <c>git diff</c>, one <c>git status</c>) that themselves showed nothing had changed,
-/// then ran the exact same <c>dotnet test</c> again - 1.7 seconds of wall time and a full test-output
-/// reply for no new information. The existing stall guard already recorded this as "a call you have
-/// already made in this step" and told the model so, AFTER the process had already run to
-/// completion. This stops it before the process starts, for the tools slow enough to be worth not
-/// paying for twice.</para>
-/// </summary>
+/// <summary>Shell effects are unknown: retries run, while the independent stall guard stays bounded.</summary>
 public sealed class AnExactRepeatIsNotRunAgainTests
 {
     private const string QuickAction = """{"disposition":"quick_action","title":"run it"}""";
 
-    private static string Said(FakeChatProvider provider)
-        => string.Join("\n", provider.Requests.SelectMany(r => r.Messages).Select(m => m.Content));
-
     // ── the measured case ────────────────────────────────────────────────────
 
     [Fact]
-    public async Task An_exact_repeat_of_run_command_is_refused_and_not_executed()
+    public async Task An_exact_repeat_of_an_unknown_shell_command_is_executed()
     {
         using var fx = new EngineFixture();
         fx.Write("marker.txt", "");
@@ -39,13 +25,11 @@ public sealed class AnExactRepeatIsNotRunAgainTests
 
         var events = await fx.RunAsync(fx.Build(provider, EngineFixture.Role("developer")), "run it");
 
-        // Executed once, not twice: the marker was appended to exactly once.
+        // Unknown shell effects cannot justify refusing a retry.
         var lines = fx.Read("marker.txt").Split('\n', StringSplitOptions.RemoveEmptyEntries);
-        Assert.Single(lines);
+        Assert.Equal(2, lines.Length);
 
-        Assert.Contains("already ran with these exact arguments", Said(provider), StringComparison.Ordinal);
-        Assert.Contains("\"force\": true", Said(provider), StringComparison.Ordinal);
-        Assert.Contains(events, e => e.Kind == EventKind.DecisionResolved
+        Assert.DoesNotContain(events, e => e.Kind == EventKind.DecisionResolved
                                      && e.Summary.Contains("refused — an exact repeat", StringComparison.Ordinal));
         Assert.True(events.Has(EventKind.TaskCompleted), events.Text());
     }
@@ -89,6 +73,110 @@ public sealed class AnExactRepeatIsNotRunAgainTests
         Assert.Equal(2, lines.Length);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_write_in_the_same_batch_allows_a_repeat_that_observes_the_new_file(bool repeatNextTurn)
+    {
+        using var fx = new EngineFixture();
+        fx.Write("marker.txt", "");
+        const string command = """{"command":"if exist note.txt (type note.txt>>marker.txt) else (echo missing>>marker.txt)"}""";
+        var turns = new List<Turn>
+        {
+            Turn.Says(QuickAction),
+            Turn.Calls1("run_command", command, "c1"),
+            new(Calls: new[]
+            {
+                new ToolCall("w1", "write_file", """{"path":"note.txt","content":"changed\n"}"""),
+                new ToolCall("c2", "run_command", command)
+            })
+        };
+        if (repeatNextTurn)
+            turns.Add(Turn.Calls1("run_command", command, "c3"));
+        turns.Add(Turn.Says("Done."));
+        var provider = new FakeChatProvider(turns.ToArray());
+
+        var events = await fx.RunAsync(fx.Build(provider, EngineFixture.Role("developer")), "run it");
+
+        Assert.Equal(repeatNextTurn ? new[] { "missing", "changed", "changed" } : new[] { "missing", "changed" },
+            fx.Read("marker.txt").Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+        Assert.Equal(0, events.Count(e => e.Kind == EventKind.DecisionResolved
+            && e.Summary.Contains("refused — an exact repeat", StringComparison.Ordinal)));
+        Assert.True(events.Has(EventKind.TaskCompleted), events.Text());
+    }
+
+    [Fact]
+    public async Task An_unknown_shell_repeat_before_a_write_is_allowed()
+    {
+        using var fx = new EngineFixture();
+        fx.Write("marker.txt", "");
+        const string command = """{"command":"echo hit>>marker.txt"}""";
+        var provider = new FakeChatProvider(
+            Turn.Says(QuickAction),
+            Turn.Calls1("run_command", command, "c1"),
+            new Turn(Calls: new[]
+            {
+                new ToolCall("c2", "run_command", command),
+                new ToolCall("w1", "write_file", """{"path":"note.txt","content":"changed"}""")
+            }),
+            Turn.Says("Done."));
+
+        var events = await fx.RunAsync(fx.Build(provider, EngineFixture.Role("developer")), "run it");
+
+        Assert.Equal(2, fx.Read("marker.txt").Split('\n', StringSplitOptions.RemoveEmptyEntries).Length);
+        Assert.Equal("changed", fx.Read("note.txt"));
+        Assert.DoesNotContain(events, e => e.Kind == EventKind.DecisionResolved
+            && e.Summary.Contains("refused — an exact repeat", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task An_unknown_shell_repeat_after_a_failed_write_is_allowed()
+    {
+        using var fx = new EngineFixture();
+        fx.Write("marker.txt", "");
+        const string command = """{"command":"echo hit>>marker.txt"}""";
+        var provider = new FakeChatProvider(
+            Turn.Says(QuickAction),
+            Turn.Calls1("run_command", command, "c1"),
+            new Turn(Calls: new[]
+            {
+                new ToolCall("w1", "write_file", """{"path":"note.txt"}"""),
+                new ToolCall("c2", "run_command", command)
+            }),
+            Turn.Says("Done."));
+
+        var events = await fx.RunAsync(fx.Build(provider, EngineFixture.Role("developer")), "run it");
+
+        Assert.Equal(2, fx.Read("marker.txt").Split('\n', StringSplitOptions.RemoveEmptyEntries).Length);
+        Assert.Contains(events, e => e.Kind == EventKind.ToolResult
+            && e.Summary.Contains("write_file -> failed", StringComparison.Ordinal));
+        Assert.DoesNotContain(events, e => e.Kind == EventKind.DecisionResolved
+            && e.Summary.Contains("refused — an exact repeat", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Successes_in_the_current_batch_do_not_block_calls_in_that_batch()
+    {
+        using var fx = new EngineFixture();
+        fx.Write("marker.txt", "");
+        const string command = """{"command":"echo hit>>marker.txt"}""";
+        var provider = new FakeChatProvider(
+            Turn.Says(QuickAction),
+            new Turn(Calls: new[]
+            {
+                new ToolCall("c1", "run_command", command),
+                new ToolCall("c2", "run_command", command)
+            }),
+            Turn.Says("Done."));
+
+        var events = await fx.RunAsync(fx.Build(provider, EngineFixture.Role("developer")), "run it");
+
+        Assert.Equal(2, fx.Read("marker.txt").Split('\n', StringSplitOptions.RemoveEmptyEntries).Length);
+        Assert.DoesNotContain(events, e => e.Kind == EventKind.DecisionResolved
+            && e.Summary.Contains("refused — an exact repeat", StringComparison.Ordinal));
+        Assert.True(events.Has(EventKind.TaskCompleted), events.Text());
+    }
+
     /// <summary>THE BOUNDARY. A DIFFERENT command in between is not itself blocked - only the literal repeat is.</summary>
     [Fact]
     public async Task A_different_command_in_between_is_not_blocked()
@@ -111,7 +199,7 @@ public sealed class AnExactRepeatIsNotRunAgainTests
 
     /// <summary>run_powershell is covered the same way.</summary>
     [Fact]
-    public async Task An_exact_repeat_of_run_powershell_is_refused()
+    public async Task An_exact_repeat_of_unknown_powershell_is_executed()
     {
         using var fx = new EngineFixture();
         fx.Write("marker.txt", "");
@@ -125,7 +213,7 @@ public sealed class AnExactRepeatIsNotRunAgainTests
         await fx.RunAsync(fx.Build(provider, EngineFixture.Role("developer")), "run it");
 
         var lines = fx.Read("marker.txt").Split('\n', StringSplitOptions.RemoveEmptyEntries);
-        Assert.Single(lines);
+        Assert.Equal(2, lines.Length);
     }
 
     /// <summary>THE BOUNDARY. A read-only file tool is untouched by this gate - only slow, process-spawning tools are.</summary>

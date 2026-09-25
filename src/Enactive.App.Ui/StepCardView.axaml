@@ -15,10 +15,8 @@
         <StackPanel>
 
             <TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextWrapping="Wrap" />
-            <TextBlock Text="{Binding StatusWord}" Foreground="{Binding StatusBrush}"
-                       FontSize="11" Margin="0,2,0,0" />
             <TextBlock Text="{Binding Activity}" FontSize="12"
-                       Foreground="{DynamicResource Brand.TextMuted}"
+                       Foreground="{Binding StatusBrush}"
                        TextWrapping="Wrap" Margin="0,3,0,0" />
 
             <!-- Disclosure: hidden until the step has logged something, and the summary is computed

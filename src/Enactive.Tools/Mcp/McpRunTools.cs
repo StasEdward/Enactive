@@ -11,6 +11,9 @@ public sealed class McpRunTools : IToolRegistry, IAsyncDisposable
     private ToolRegistry _remote = new(Array.Empty<ITool>());
     private McpRunTools(IToolRegistry builtIn) => _builtIn = builtIn;
     public IReadOnlyList<ToolDefinition> Definitions => _builtIn.Definitions.Concat(_remote.Definitions).ToArray();
+    // Both counters are monotonic; either pending/unknown component makes the combined view unknown.
+    public long? WorkspaceVersion(Guid workspaceId)
+        => _builtIn.WorkspaceVersion(workspaceId) + _remote.WorkspaceVersion(workspaceId);
     private bool IsRemote(string name) => name.StartsWith("mcp__", StringComparison.Ordinal);
     public PermissionLevel RequiredLevelOf(string name) => (IsRemote(name) ? _remote : _builtIn).RequiredLevelOf(name);
     public bool RequiresApprovalOf(string name) => (IsRemote(name) ? _remote : _builtIn).RequiresApprovalOf(name);

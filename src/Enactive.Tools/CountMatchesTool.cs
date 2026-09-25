@@ -38,7 +38,7 @@ public sealed class CountMatchesTool : ITool
                    + "number or a list of files — \"how many\", \"does this exist anywhere\", \"which "
                    + "files mention it\" — and search_files only when you need to see the lines "
                    + "themselves.",
-        JsonSchema: Schema);
+        JsonSchema: Schema, WorkspaceEffect: WorkspaceEffect.None);
 
     public PermissionLevel RequiredLevel => PermissionLevel.Observe;
 

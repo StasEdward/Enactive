@@ -274,6 +274,7 @@ public sealed class LoggingChatProvider : IChatProvider
         if (request.Temperature is { } t) sb.Append("  temperature=").Append(t);
         if (request.NumCtx is { } n) sb.Append("  num_ctx=").Append(n);
         if (request.MaxTokens is { } mx) sb.Append("  max_tokens=").Append(mx);
+        if (request.OutputTokenLimit is { } limit) sb.Append("  output_token_limit=").Append(limit);
         sb.AppendLine();
         if (request.Tools is { Count: > 0 } tools)
             sb.Append("tools: ").AppendLine(string.Join(", ", tools.Select(x => x.Name)));

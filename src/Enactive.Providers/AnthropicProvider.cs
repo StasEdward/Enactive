@@ -215,12 +215,11 @@ public sealed class AnthropicProvider : IChatProvider
             return (response.IsSuccessStatusCode, (int)response.StatusCode, responseBody);
         }
 
-        // Output budget: an explicit per-provider override wins; else a cap already discovered for this
-        // model; else a generous default big enough for large documents (self-corrects downward below).
+        // Same preference/ceiling contract as the other adapters. Anthropic requires max_tokens,
+        // so supply its fallback when no preference is set; learned model caps remain hard limits.
         var includeTemperature = true;
-        var maxTokens = _descriptor.MaxTokens
-            ?? request.MaxTokens
-            ?? (ModelCaps.TryGetValue(request.Model, out var known) ? known : DefaultMaxTokens);
+        var maxTokens = OutputTokenBudget.Resolve(request, _descriptor, DefaultMaxTokens,
+            ModelCaps.TryGetValue(request.Model, out var known) ? known : null)!.Value;
 
         // A model already known to refuse the schema is not asked again - one 400 per model, not
         // one per request.

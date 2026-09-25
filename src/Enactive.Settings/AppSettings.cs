@@ -26,7 +26,10 @@ public sealed class ProviderConfig
     public Dictionary<string, string> Headers { get; set; } = new();
     public List<string> Models { get; set; } = new();
 
-    /// <summary>Max output tokens for this provider (blank = the provider's built-in default). Anthropic max_tokens.</summary>
+    /// <summary>
+    /// Default output budget for this provider (blank = adapter/server default). An explicit request
+    /// budget overrides it; the remaining context window and known model caps can only lower it.
+    /// </summary>
     public int? MaxTokens { get; set; }
 
     /// <summary>

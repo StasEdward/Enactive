@@ -349,6 +349,7 @@ public sealed class EngineFixture : IDisposable
     public WorkspaceInfo Workspace { get; }
     public DiskArtifactStore Artifacts { get; }
     public ScriptedDecisionHandler Decisions { get; } = new();
+    public ITool[]? ToolsOverride { get; set; }
 
     /// <summary>
     /// Invokes a tool the way the engine does: a fresh context over this fixture's workspace, with
@@ -529,7 +530,7 @@ public sealed class EngineFixture : IDisposable
         // The set a host registers, not a convenient subset: a role's allowlist can only be
         // exercised against the tools that actually exist, and git/docker were missing here while
         // both shipping hosts register them.
-        var tools = new ToolRegistry(ShippedTools());
+        var tools = new ToolRegistry(ToolsOverride ?? ShippedTools());
 
         return new Orchestrator(
             providers,
