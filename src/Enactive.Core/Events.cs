@@ -171,9 +171,10 @@ public static class WorkEventPayload
     public static string UsagePayload(
         int promptTokens, int completionTokens, int? stepNo,
         string? providerId = null, string? model = null, string? purpose = null,
-        int? cachedPromptTokens = null)
+        int? cachedPromptTokens = null, int? cacheCreationPromptTokens = null)
     {
-        var parts = new List<string>(7);
+        var parts = new List<string>(8);
+        if (cacheCreationPromptTokens is { } created) parts.Add($"\"cacheCreated\":{created}");
         if (stepNo is { } n) parts.Add($"\"step\":{n}");
         parts.Add($"\"in\":{promptTokens}");
         parts.Add($"\"out\":{completionTokens}");
@@ -640,6 +641,14 @@ public static class WorkEventPayload
             return null;
         var m = CachedRegex.Match(ev.PayloadJson);
         return m.Success && int.TryParse(m.Groups[1].Value, out var cached) ? cached : null;
+    }
+
+    /// <summary>Input tokens written to cache, already included in Usage().In; null when unreported.</summary>
+    public static int? CacheCreationTokens(this WorkEvent ev)
+    {
+        if (string.IsNullOrEmpty(ev.PayloadJson)) return null;
+        var match = System.Text.RegularExpressions.Regex.Match(ev.PayloadJson, "\"cacheCreated\"\\s*:\\s*(\\d+)");
+        return match.Success && int.TryParse(match.Groups[1].Value, out var count) ? count : null;
     }
 
     /// <summary>The tokens this event reports, or null when it is not a usage event.</summary>

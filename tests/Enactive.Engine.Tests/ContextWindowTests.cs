@@ -170,7 +170,8 @@ public sealed class ContextWindowTests
     {
         using var fx = new EngineFixture();
 
-        var big = new string('x', 12000);
+        // Leave room for the real tool schemas/preamble; make tool traffic alone exceed it.
+        var big = new string('x', 24000);
 
         var provider = new FakeChatProvider(
             Turn.Says(QuickPlan),
@@ -178,7 +179,7 @@ public sealed class ContextWindowTests
             Turn.Calls1("read_file", """{"path":"one.txt"}""", "c2"),
             Turn.Says("Done."))
         {
-            Window = 2048
+            Window = 4096
         };
 
         var events = await fx.RunAsync(fx.Build(provider), "do the thing");
@@ -241,7 +242,7 @@ public sealed class ContextWindowTests
         var events = await fx.RunAsync(fx.Build(provider), "do the thing");
 
         var stopped = Assert.Single(events.OfKind(EventKind.ErrorObserved));
-        Assert.Contains("max output tokens", stopped.Summary);
+        Assert.Contains("token limit", stopped.Summary);
         Assert.DoesNotContain("num_ctx", stopped.Summary);
     }
 }

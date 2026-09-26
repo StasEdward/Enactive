@@ -36,15 +36,53 @@ internal static class StreamEnd
             _ => error.GetRawText()
         };
 
-        return said is null
-            ? null
-            : new HttpRequestException(
-                $"Provider '{providerId}' reported an error in the middle of its answer: {said}. "
-                + "Nothing it sent before the error is acted on.");
+        if (said is null) return null;
+        if (said.Length > 500) said = said[..500] + "…";
+        var status = Status(error) ?? Status(chunk);
+        return new HttpRequestException(
+            $"Provider '{providerId}' reported an error in the middle of its answer: {said}. "
+            + "Nothing it sent before the error is acted on.", null,
+            status is { } code ? (System.Net.HttpStatusCode)code : null);
+    }
+
+    private static int? Status(JsonElement error)
+    {
+        if (error.ValueKind != JsonValueKind.Object) return null;
+        foreach (var name in new[] { "status", "status_code", "code" })
+            if (error.TryGetProperty(name, out var value))
+            {
+                int code;
+                if ((value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out code)
+                    || value.ValueKind == JsonValueKind.String && int.TryParse(value.GetString(), out code))
+                    && code is >= 400 and <= 599) return code;
+            }
+        // Match protocol identifiers only, never guesses based on a human error message.
+        // Anthropic: https://platform.claude.com/docs/en/api/errors
+        foreach (var name in new[] { "type", "code" })
+            if (error.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String)
+            {
+                int? status = value.GetString() switch
+                {
+                    "invalid_request_error" => 400,
+                    "authentication_error" => 401,
+                    "billing_error" => 402,
+                    "permission_error" => 403,
+                    "not_found_error" => 404,
+                    "request_too_large" => 413,
+                    "rate_limit_error" or "rate_limit_exceeded" => 429,
+                    "api_error" or "server_error" => 500,
+                    "service_unavailable" => 503,
+                    "timeout_error" => 504,
+                    "overloaded_error" => 529,
+                    _ => null
+                };
+                if (status is not null) return status;
+            }
+        return null;
     }
 
     /// <summary>The exception for a stream that stopped without saying it had finished.</summary>
     public static HttpRequestException Unfinished(string providerId, string expected)
-        => new($"Provider '{providerId}' stopped sending before its answer was finished (no {expected}). "
+        => new(HttpRequestError.ResponseEnded, $"Provider '{providerId}' stopped sending before its answer was finished (no {expected}). "
                + "The answer is incomplete, and nothing in it is acted on.");
 }

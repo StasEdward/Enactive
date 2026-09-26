@@ -103,6 +103,7 @@ public sealed class ApprovalStoreTests : IDisposable
     [Theory]
     [InlineData("run_command")]
     [InlineData("run_powershell")]
+    [InlineData("git")]
     [InlineData("RUN_COMMAND")]
     public void A_shell_is_never_remembered(string shell)
     {

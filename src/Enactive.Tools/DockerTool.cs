@@ -20,7 +20,7 @@ public sealed class DockerTool : ITool
                    + "one element is passed through as one argument and docker will not recognise it. "
                    + "More examples: [\"logs\",\"mysql\"], [\"compose\",\"up\",\"-d\"]. A plain string is also "
                    + "accepted and is split on spaces. Do NOT include the leading 'docker'.",
-        JsonSchema: Schema);
+        JsonSchema: Schema, Kind: ToolKind.Command);
 
     public PermissionLevel RequiredLevel => PermissionLevel.Execute;
 

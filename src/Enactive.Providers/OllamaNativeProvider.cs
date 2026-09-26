@@ -32,30 +32,32 @@ public sealed class OllamaNativeProvider : IChatProvider
 
     /// <summary>
     /// num_ctx IS the window: Ollama gives prompt and generation one shared budget, and a prompt
-    /// that fills it leaves the model no room to answer. Null when the request sets none — the
+    /// that fills it leaves the model no room to answer. Null when neither request nor descriptor sets it — the
     /// model then runs with whatever it was loaded with, which this side cannot see.
     /// </summary>
-    public int? ContextWindow(ChatRequest request) => request.NumCtx;
+    public int? ContextWindow(ChatRequest request) => request.NumCtx ?? _descriptor.ContextWindowTokens;
 
     public int? AnswerReserve(ChatRequest request) => _descriptor.AnswerReserveTokens;
 
     public int? HandoverAtPercent(ChatRequest request) => _descriptor.HandoverAtPercent;
+    public int ReasoningAllowance(ChatRequest request) => Math.Clamp(_descriptor.ReasoningTokenAllowance ?? (request.Think == true ? 8192 : 0), 0, 65536);
 
     public async IAsyncEnumerable<ChatStreamEvent> StreamChatAsync(
         ChatRequest request, [EnumeratorCancellation] CancellationToken ct)
     {
         using var httpRequest = BuildHttpRequest(request, stream: true);
-        using var response = await _http.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead, ct);
+        using var response = await ProviderDeadline.HeadersAsync(_http, httpRequest, _descriptor.StreamIdleTimeoutSeconds, ct);
         if (!response.IsSuccessStatusCode)
         {
-            var errorBody = await response.Content.ReadAsStringAsync(ct);
+            var errorBody = await ProviderHttpError.ReadBodyAsync(response, _descriptor.StreamIdleTimeoutSeconds, ct);
             WireTap.Error(_log, _descriptor.Id, (int)response.StatusCode, errorBody);
-            throw new HttpRequestException(
-                $"Provider '{_descriptor.Id}' returned {(int)response.StatusCode} {response.StatusCode}: {Truncate(errorBody, 500)}");
+            throw ProviderHttpError.Create(
+                $"Provider '{_descriptor.Id}' returned {(int)response.StatusCode} {response.StatusCode}: {Truncate(errorBody, 500)}", (int)response.StatusCode, ProviderHttpError.RetryAfter(response));
         }
 
         await using var stream = await response.Content.ReadAsStreamAsync(ct);
-        using var reader = new StreamReader(stream);
+        using var reader = new StreamReader(new IdleTimeoutStream(stream, TimeSpan.FromSeconds(Math.Clamp(_descriptor.StreamIdleTimeoutSeconds, 1, 86400))));
+        var calls = new StreamCallIdentity();
         var raw = BoundedLogBuffer.Create(_log, LogLevel.Trace);
         var finished = false;
         try
@@ -64,10 +66,11 @@ public sealed class OllamaNativeProvider : IChatProvider
             {
                 if (raw is not null && !_log.IsLoggingEnabled(LogLevel.Trace)) raw = null;
                 raw?.AppendLine(line);
+                ProviderResponse.RejectHtml(line, _descriptor, request);
                 if (line.Length == 0)
                     continue;
 
-                foreach (var evt in ParseStreamLine(line, _descriptor.Id))
+                foreach (var evt in ProviderResponse.Parse(() => ParseStreamLine(line, _descriptor.Id, calls), _descriptor, request))
                 {
                     finished |= evt is FinishDelta;
                     yield return evt;
@@ -85,7 +88,11 @@ public sealed class OllamaNativeProvider : IChatProvider
         }
     }
 
-    public async Task<ChatCompletion> CompleteAsync(ChatRequest request, CancellationToken ct)
+    public Task<ChatCompletion> CompleteAsync(ChatRequest request, CancellationToken ct)
+        => ProviderDeadline.RunAsync(_descriptor.CompletionTimeoutSeconds, "completion", ct,
+            token => CompleteCoreAsync(request, token));
+
+    private async Task<ChatCompletion> CompleteCoreAsync(ChatRequest request, CancellationToken ct)
     {
         using var httpRequest = BuildHttpRequest(request, stream: false);
         using var response = await _http.SendAsync(httpRequest, HttpCompletionOption.ResponseContentRead, ct);
@@ -93,12 +100,12 @@ public sealed class OllamaNativeProvider : IChatProvider
         if (!response.IsSuccessStatusCode)
         {
             WireTap.Error(_log, _descriptor.Id, (int)response.StatusCode, body);
-            throw new HttpRequestException(
-                $"Provider '{_descriptor.Id}' returned {(int)response.StatusCode} {response.StatusCode}: {Truncate(body, 500)}");
+            throw ProviderHttpError.Create(
+                $"Provider '{_descriptor.Id}' returned {(int)response.StatusCode} {response.StatusCode}: {Truncate(body, 500)}", (int)response.StatusCode, ProviderHttpError.RetryAfter(response));
         }
 
         WireTap.Response(_log, _descriptor.Id, (int)response.StatusCode, body);
-        return ParseCompletion(body);
+        return ProviderResponse.Parse(() => ParseCompletion(body), _descriptor, request);
     }
 
     private HttpRequestMessage BuildHttpRequest(ChatRequest request, bool stream)
@@ -107,14 +114,17 @@ public sealed class OllamaNativeProvider : IChatProvider
         {
             ["model"] = request.Model,
             ["stream"] = stream,
-            ["messages"] = request.Messages.Select(ToWire).ToArray()
+            ["messages"] = ToWireMessages(request.Messages).ToArray()
         };
+        if (_descriptor.OllamaKeepAliveSeconds is { } keepAlive)
+            payload["keep_alive"] = keepAlive;
         var maxTokens = OutputTokenBudget.Resolve(request, _descriptor);
-        if (request.Temperature is not null || request.NumCtx is not null || maxTokens is not null)
+        var contextWindow = ContextWindow(request);
+        if (request.Temperature is not null || contextWindow is not null || maxTokens is not null)
         {
             var options = new Dictionary<string, object?>();
             if (request.Temperature is { } t) options["temperature"] = t;
-            if (request.NumCtx is { } nc) options["num_ctx"] = nc;
+            if (contextWindow is { } nc) options["num_ctx"] = nc;
             if (maxTokens is { } limit) options["num_predict"] = limit;
             payload["options"] = options;
         }
@@ -132,7 +142,7 @@ public sealed class OllamaNativeProvider : IChatProvider
         if (request.ResponseSchema is { Length: > 0 } schema && TryElement(schema) is { } element)
             payload["format"] = element;
 
-        var url = RootUrl(_descriptor.BaseUrl) + "/api/chat";
+        var url = ProviderEndpoint.Chat(_descriptor, ProviderKind.OllamaNative);
         var json = JsonSerializer.Serialize(payload, JsonOpts);
         WireTap.Request(_log, _descriptor.Id, request.Model, json);
         var httpRequest = new HttpRequestMessage(HttpMethod.Post, url)
@@ -148,17 +158,7 @@ public sealed class OllamaNativeProvider : IChatProvider
         return httpRequest;
     }
 
-    /// <summary>Ollama's native API lives at the server root, not under "/v1" - strip it if present
-    /// so the same "http://localhost:11434/v1" endpoint string works for both providers.</summary>
-    private static string RootUrl(string baseUrl)
-    {
-        var root = baseUrl.TrimEnd('/');
-        if (root.EndsWith("/v1", StringComparison.OrdinalIgnoreCase))
-            root = root[..^3].TrimEnd('/');
-        return root;
-    }
-
-    private static IEnumerable<ChatStreamEvent> ParseStreamLine(string line, string providerId)
+    private static IEnumerable<ChatStreamEvent> ParseStreamLine(string line, string providerId, StreamCallIdentity calls)
     {
         var events = new List<ChatStreamEvent>();
         using var doc = JsonDocument.Parse(line);
@@ -190,12 +190,11 @@ public sealed class OllamaNativeProvider : IChatProvider
                 // Ollama emits each tool call fully formed in one chunk (no incremental argument
                 // streaming like OpenAI's format), so this fires once per call with the complete
                 // arguments already - ToolCallDelta just happens to also support partial chunks.
-                var index = 0;
                 foreach (var tc in toolCalls.EnumerateArray())
                 {
                     var (name, argsJson) = ReadFunction(tc);
+                    var index = calls.Resolve(null, null, name, argsJson);
                     events.Add(new ToolCallDelta(index, Guid.NewGuid().ToString("N"), name, argsJson));
-                    index++;
                 }
             }
         }
@@ -205,7 +204,8 @@ public sealed class OllamaNativeProvider : IChatProvider
             int? prompt = root.TryGetProperty("prompt_eval_count", out var pt) && pt.TryGetInt32(out var ptv) ? ptv : null;
             int? completion = root.TryGetProperty("eval_count", out var ec) && ec.TryGetInt32(out var ecv) ? ecv : null;
             if (prompt is not null || completion is not null)
-                events.Add(new UsageDelta(prompt, completion));
+                events.Add(new UsageDelta(prompt, completion, CachedPrompt(root))
+                { PromptTokensIncludeCache = CachedPrompt(root) is not null });
             events.Add(new TimingDelta(ProviderTimings.Ollama(root)));
 
             var reason = root.TryGetProperty("done_reason", out var dr) && dr.ValueKind == JsonValueKind.String
@@ -229,16 +229,19 @@ public sealed class OllamaNativeProvider : IChatProvider
         // Ollama's native wire sends arguments as a JSON *object*, unlike OpenAI's stringified form -
         // re-serialize it to the string shape the rest of Enactive (ToolCall.ArgumentsJson) expects.
         var argsJson = fn.TryGetProperty("arguments", out var argsEl)
-            ? argsEl.GetRawText()
+            ? argsEl.ValueKind == JsonValueKind.String ? argsEl.GetString() ?? "" : argsEl.GetRawText()
             : "{}";
 
+        using var arguments = JsonDocument.Parse(argsJson);
+        if (arguments.RootElement.ValueKind != JsonValueKind.Object)
+            throw new InvalidDataException("Ollama tool arguments must be a complete JSON object.");
         return (name, argsJson);
     }
 
     /// <summary>The schema as JSON, or null when it is not parseable - a bad schema must not fail a run.</summary>
     private static JsonElement? TryElement(string json)
     {
-        try { return JsonDocument.Parse(json).RootElement.Clone(); }
+        try { return WireJson.Parse(json); }
         catch (JsonException) { return null; }
     }
 
@@ -249,14 +252,31 @@ public sealed class OllamaNativeProvider : IChatProvider
         {
             name = t.Name,
             description = t.Description,
-            parameters = JsonDocument.Parse(t.JsonSchema).RootElement.Clone()
+            parameters = WireJson.Schema(t)
         }
     };
 
-    private static object ToWire(ChatMessage m)
+    private static IEnumerable<object> ToWireMessages(IReadOnlyList<ChatMessage> messages)
+    {
+        var names = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var message in messages)
+        {
+            if (message.Role == ChatRole.Assistant && message.ToolCalls is { } calls)
+                foreach (var call in calls) names[call.Id] = call.Name;
+            string? name = null;
+            if (message.ToolCallId is { } id) names.TryGetValue(id, out name);
+            yield return ToWire(message, name ?? message.Name);
+        }
+    }
+
+    private static object ToWire(ChatMessage m, string? toolName)
     {
         if (m.Role == ChatRole.Tool)
-            return new { role = "tool", content = m.Content ?? "" };
+            {
+            var result = new Dictionary<string, object?> { ["role"] = "tool", ["content"] = m.Content ?? "" };
+            if (!string.IsNullOrWhiteSpace(toolName)) result["tool_name"] = toolName;
+            return result;
+        }
 
         if (m.ToolCalls is { Count: > 0 } calls)
         {
@@ -270,8 +290,7 @@ public sealed class OllamaNativeProvider : IChatProvider
                     {
                         name = tc.Name,
                         // Native Ollama wants the arguments as an object, not a JSON string.
-                        arguments = JsonDocument.Parse(
-                            string.IsNullOrWhiteSpace(tc.ArgumentsJson) ? "{}" : tc.ArgumentsJson).RootElement.Clone()
+                        arguments = WireJson.ArgumentsOf(tc)
                     }
                 }).ToArray()
             };
@@ -326,8 +345,15 @@ public sealed class OllamaNativeProvider : IChatProvider
 
         var assistant = new ChatMessage(ChatRole.Assistant, content, toolCalls);
         return new ChatCompletion(assistant, finishReason, promptTokens, completionTokens, thinking)
-        { Timings = ProviderTimings.Ollama(root) };
+        { Timings = ProviderTimings.Ollama(root), CachedPromptTokens = CachedPrompt(root),
+          PromptTokensIncludeCache = CachedPrompt(root) is not null };
     }
+
+    // Older servers/backends may report only evaluated tokens. Keep usage for accounting,
+    // but calibrate context only when the explicit cache counter establishes the modern contract.
+    private static int? CachedPrompt(JsonElement root)
+        => root.TryGetProperty("prompt_eval_cached_count", out var value) && value.TryGetInt32(out var count)
+            && count >= 0 ? count : null;
 
     private static string Truncate(string value, int max)
         => value.Length <= max ? value : value[..max] + "…";

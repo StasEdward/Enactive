@@ -1,6 +1,7 @@
 namespace Enactive.Engine.Tests;
 
 using Enactive.Core.Artifacts;
+using Enactive.Workspace;
 using Enactive.Core.Events;
 using Xunit;
 
@@ -45,9 +46,9 @@ public sealed class TheRunSaysWhatItChangedTests
             .Messages.Select(m => m.Content));
 
         Assert.Contains("This is step 1 of 3", first, StringComparison.Ordinal);
-        Assert.Contains("1. Alpha finds the gaps   <- THIS STEP", first, StringComparison.Ordinal);
-        Assert.Contains("2. Beta writes the tests", first, StringComparison.Ordinal);
-        Assert.Contains("3. Gamma checks the tests fail when the code is broken", first, StringComparison.Ordinal);
+        Assert.Contains("S1: Alpha finds the gaps", first, StringComparison.Ordinal);
+        Assert.Contains("S2: Beta writes the tests", first, StringComparison.Ordinal);
+        Assert.Contains("S3: Gamma checks the tests fail when the code is broken", first, StringComparison.Ordinal);
         Assert.Contains("What the other steps name is theirs", first, StringComparison.Ordinal);
     }
 

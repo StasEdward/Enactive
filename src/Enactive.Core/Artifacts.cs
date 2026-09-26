@@ -15,15 +15,32 @@ public sealed record Artifact(
     ArtifactRef Ref,
     IReadOnlyList<string> Actions);
 
+/// <summary>Expected bytes before a replacement. Null hash means the path must not exist.</summary>
+public sealed record ArtifactVersion(string? Hash);
+
 /// <summary>
 /// Owns where artifact bytes physically live (disk today; git / cloud / remote later).
 /// UI and agent layers never learn the location.
 /// </summary>
 public interface IArtifactStore
 {
+    bool CanCheckVersion => false;
+    Task<ArtifactRef> CreateCheckedAsync(string path, ArtifactKind kind, string title,
+        Func<Stream, Task> write, ArtifactVersion expected, CancellationToken ct)
+        => throw new NotSupportedException("This store cannot check the base version.");
+
     Task<ArtifactRef> CreateAsync(
         string relativePath, ArtifactKind kind, string title,
         Func<Stream, Task> write, CancellationToken ct);
+
+    /// <summary>Whether this store can journal an append without replacing the original bytes.</summary>
+    bool CanAppend => false;
+
+    /// <summary>Prepare the added bytes against a read-only view of the existing version (null for
+    /// a new file). The store owns both streams; the callback must not modify the existing version.</summary>
+    Task<ArtifactRef> AppendAsync(string relativePath, ArtifactKind kind, string title,
+        Func<Stream?, Stream, Task> writeTail, CancellationToken ct)
+        => throw new NotSupportedException("This store cannot journal an append.");
 
     Task<Stream> OpenAsync(Guid artifactId, CancellationToken ct);
 
@@ -40,6 +57,13 @@ public interface IArtifactStore
     /// </summary>
     Task<string?> TryReadPendingAsync(string relativePath, CancellationToken ct)
         => Task.FromResult<string?>(null);
+
+    /// <summary>Pending bytes, including the encoding preamble. Caller disposes the stream.</summary>
+    async Task<Stream?> TryOpenPendingAsync(string relativePath, CancellationToken ct)
+    {
+        var text = await TryReadPendingAsync(relativePath, ct);
+        return text is null ? null : new MemoryStream(System.Text.Encoding.UTF8.GetBytes(text), writable: false);
+    }
 
     /// <summary>Paths this store is holding uncommitted content for. Empty when it writes straight through.</summary>
     IReadOnlyCollection<string> PendingPaths => Array.Empty<string>();
@@ -156,12 +180,23 @@ public interface IArtifactScope : IArtifactStore
 /// </summary>
 public interface IOwnedArtifactStore : IArtifactStore
 {
+    IReadOnlyCollection<string> PendingBy(int owner)
+        => PendingPaths.Intersect(TouchedBy(owner), StringComparer.OrdinalIgnoreCase).ToArray();
+
+    Task<ArtifactRef> CreateCheckedAsync(string path, ArtifactKind kind, string title,
+        Func<Stream, Task> write, ArtifactVersion expected, int owner, CancellationToken ct)
+        => throw new NotSupportedException("This store cannot check an owned base version.");
+
     /// <summary>A fresh owner id, recorded against the store's current state.</summary>
     int NewOwner();
 
     Task<ArtifactRef> CreateAsync(
         string relativePath, ArtifactKind kind, string title,
         Func<Stream, Task> write, int owner, CancellationToken ct);
+
+    Task<ArtifactRef> AppendAsync(string relativePath, ArtifactKind kind, string title,
+        Func<Stream?, Stream, Task> writeTail, int owner, CancellationToken ct)
+        => throw new NotSupportedException("This store cannot journal an owned append.");
 
     Task RemoveAsync(string relativePath, int owner, CancellationToken ct);
 
@@ -200,6 +235,16 @@ public sealed class ArtifactScope : IArtifactScope
         string relativePath, ArtifactKind kind, string title, Func<Stream, Task> write, CancellationToken ct)
         => _store.CreateAsync(relativePath, kind, title, write, _owner, ct);
 
+    public bool CanCheckVersion => _store.CanCheckVersion;
+    public Task<ArtifactRef> CreateCheckedAsync(string path, ArtifactKind kind, string title,
+        Func<Stream, Task> write, ArtifactVersion expected, CancellationToken ct)
+        => _store.CreateCheckedAsync(path, kind, title, write, expected, _owner, ct);
+
+    public bool CanAppend => _store.CanAppend;
+    public Task<ArtifactRef> AppendAsync(string relativePath, ArtifactKind kind, string title,
+        Func<Stream?, Stream, Task> writeTail, CancellationToken ct)
+        => _store.AppendAsync(relativePath, kind, title, writeTail, _owner, ct);
+
     public Task RemoveAsync(string relativePath, CancellationToken ct)
         => _store.RemoveAsync(relativePath, _owner, ct);
 
@@ -216,7 +261,9 @@ public sealed class ArtifactScope : IArtifactScope
     public Task DeleteAsync(Guid artifactId, CancellationToken ct) => _store.DeleteAsync(artifactId, ct);
     public Task<string?> TryReadPendingAsync(string relativePath, CancellationToken ct)
         => _store.TryReadPendingAsync(relativePath, ct);
-    public IReadOnlyCollection<string> PendingPaths => _store.PendingPaths;
+    public Task<Stream?> TryOpenPendingAsync(string relativePath, CancellationToken ct)
+        => _store.TryOpenPendingAsync(relativePath, ct);
+    public IReadOnlyCollection<string> PendingPaths => _store.PendingBy(_owner);
     public bool CanRestore(string relativePath) => _store.CanRestore(relativePath);
 
     // Steps do not nest, so a scope opened from a scope is a scope on the store beneath it.
@@ -242,12 +289,24 @@ internal sealed class UnownedScope : IArtifactScope
         string relativePath, ArtifactKind kind, string title, Func<Stream, Task> write, CancellationToken ct)
         => _store.CreateAsync(relativePath, kind, title, write, ct);
 
+    public bool CanCheckVersion => _store.CanCheckVersion;
+    public Task<ArtifactRef> CreateCheckedAsync(string path, ArtifactKind kind, string title,
+        Func<Stream, Task> write, ArtifactVersion expected, CancellationToken ct)
+        => _store.CreateCheckedAsync(path, kind, title, write, expected, ct);
+
+    public bool CanAppend => _store.CanAppend;
+    public Task<ArtifactRef> AppendAsync(string relativePath, ArtifactKind kind, string title,
+        Func<Stream?, Stream, Task> writeTail, CancellationToken ct)
+        => _store.AppendAsync(relativePath, kind, title, writeTail, ct);
+
     public Task<Stream> OpenAsync(Guid artifactId, CancellationToken ct) => _store.OpenAsync(artifactId, ct);
     public Task DeleteAsync(Guid artifactId, CancellationToken ct) => _store.DeleteAsync(artifactId, ct);
     public Task RemoveAsync(string relativePath, CancellationToken ct) => _store.RemoveAsync(relativePath, ct);
     public bool CanRemove => _store.CanRemove;
     public Task<string?> TryReadPendingAsync(string relativePath, CancellationToken ct)
         => _store.TryReadPendingAsync(relativePath, ct);
+    public Task<Stream?> TryOpenPendingAsync(string relativePath, CancellationToken ct)
+        => _store.TryOpenPendingAsync(relativePath, ct);
     public IReadOnlyCollection<string> PendingPaths => _store.PendingPaths;
     public bool CanRestore(string relativePath) => _store.CanRestore(relativePath);
     public IArtifactScope BeginStep() => this;

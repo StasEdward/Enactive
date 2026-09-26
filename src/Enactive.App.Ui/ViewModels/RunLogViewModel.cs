@@ -22,6 +22,8 @@ internal sealed class RunLogViewModel : ObservableObject
     private readonly DispatcherTimer _drain;
 
     private Guid? _runId;
+    private sealed record Selection(Guid Id);
+    private Selection? _selection;
     private string _header = "No run yet.";
 
     public RunLogViewModel(LogHub hub)
@@ -36,7 +38,7 @@ internal sealed class RunLogViewModel : ObservableObject
         _hub.Entry += OnEntry;
     }
 
-    public ObservableCollection<LogRow> Rows { get; } = new();
+    public BatchObservableCollection<LogRow> Rows { get; } = new();
 
     public string Header { get => _header; set => Set(ref _header, value); }
 
@@ -50,14 +52,15 @@ internal sealed class RunLogViewModel : ObservableObject
             return;
 
         _runId = runId;
+        Volatile.Write(ref _selection, new Selection(runId));
+        _pending.Clear();
         Rows.Clear();
         Header = "Filtered to run " + runId.ToString("N")[..6];
 
         // The run has usually said a few things before the UI got here, so start from the backlog
         // rather than only from what arrives next.
-        foreach (var entry in _hub.Snapshot())
-            if (entry.RunId == runId)
-                Rows.Add(new LogRow(entry));
+        Rows.ReplaceWith(_hub.Snapshot().Where(entry => entry.RunId == runId)
+            .TakeLast(MaxRetained).Select(entry => new LogRow(entry)));
     }
 
     public void Detach()
@@ -68,7 +71,7 @@ internal sealed class RunLogViewModel : ObservableObject
 
     private void OnEntry(LogEntry entry)
     {
-        if (_runId is { } id && entry.RunId == id)
+        if (Volatile.Read(ref _selection) is { } selection && entry.RunId == selection.Id)
             _pending.Enqueue(entry);
     }
 
@@ -77,11 +80,10 @@ internal sealed class RunLogViewModel : ObservableObject
         if (_pending.IsEmpty)
             return;
 
-        while (_pending.TryDequeue(out var entry))
-            Rows.Add(new LogRow(entry));
-
-        if (Rows.Count > MaxRetained)
-            for (var i = Rows.Count - MaxRetained; i > 0; i--)
-                Rows.RemoveAt(0);
+        var batch = new List<LogRow>();
+        var seen = Rows.Count == 0 ? 0 : Rows[^1].Entry.Seq;
+        for (var n = 0; n < 1000 && _pending.TryDequeue(out var entry); n++)
+            if (entry.RunId == _runId && entry.Seq > seen) batch.Add(new LogRow(entry));
+        Rows.AppendTail(batch, MaxRetained);
     }
 }

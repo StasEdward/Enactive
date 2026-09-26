@@ -21,31 +21,35 @@ public static class ModelFetch
     /// </summary>
     public static Task<List<string>> ForAsync(
         HttpClient http, ProviderKind kind, string baseUrl, string? apiKey,
-        IReadOnlyDictionary<string, string>? headers = null)
+        IReadOnlyDictionary<string, string>? headers = null, CancellationToken ct = default)
         => kind switch
         {
             ProviderKind.Anthropic => AnthropicAsync(
                 http, apiKey ?? string.Empty,
                 headers is not null && headers.TryGetValue("anthropic-workspace-id", out var workspace)
                     ? workspace
-                    : null),
+                    : null, baseUrl, headers, ct),
 
-            ProviderKind.OllamaNative => OllamaAsync(http, baseUrl),
+            ProviderKind.OllamaNative => OllamaAsync(http, baseUrl, apiKey, headers, ct),
 
-            _ => OpenAiCompatibleAsync(http, baseUrl, apiKey, headers)
+            _ => OpenAiCompatibleAsync(http, baseUrl, apiKey, headers, ct)
         };
 
     /// <summary>Ollama's installed models via /api/tags (accepts an OpenAI-style base URL ending in /v1).</summary>
-    public static async Task<List<string>> OllamaAsync(HttpClient http, string baseUrl)
+    public static async Task<List<string>> OllamaAsync(HttpClient http, string baseUrl,
+        string? apiKey = null, IReadOnlyDictionary<string, string>? headers = null, CancellationToken ct = default)
     {
         var root = baseUrl.Trim().TrimEnd('/');
         if (root.EndsWith("/v1", StringComparison.OrdinalIgnoreCase))
             root = root[..^3].TrimEnd('/');
         var url = root + "/api/tags";
 
-        using var response = await http.GetAsync(url);
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        if (!string.IsNullOrWhiteSpace(apiKey)) request.Headers.TryAddWithoutValidation("Authorization", "Bearer " + apiKey);
+        ProviderHeaders.Apply(request, headers);
+        using var response = await http.SendAsync(request, ct);
         response.EnsureSuccessStatusCode();
-        var json = await response.Content.ReadAsStringAsync();
+        var json = await response.Content.ReadAsStringAsync(ct);
 
         var list = new List<string>();
         using var doc = JsonDocument.Parse(json);
@@ -57,17 +61,22 @@ public static class ModelFetch
     }
 
     /// <summary>Anthropic's model catalog via /v1/models.</summary>
-    public static async Task<List<string>> AnthropicAsync(HttpClient http, string apiKey, string? workspaceId)
+    public static async Task<List<string>> AnthropicAsync(HttpClient http, string apiKey, string? workspaceId,
+        string baseUrl = "https://api.anthropic.com", IReadOnlyDictionary<string, string>? headers = null,
+        CancellationToken ct = default)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Get, "https://api.anthropic.com/v1/models?limit=1000");
-        request.Headers.TryAddWithoutValidation("x-api-key", apiKey);
+        var root = baseUrl.Trim().TrimEnd('/');
+        if (!root.EndsWith("/v1", StringComparison.OrdinalIgnoreCase)) root += "/v1";
+        using var request = new HttpRequestMessage(HttpMethod.Get, root + "/models?limit=1000");
+        if (!string.IsNullOrWhiteSpace(apiKey)) request.Headers.TryAddWithoutValidation("x-api-key", apiKey);
         request.Headers.TryAddWithoutValidation("anthropic-version", "2023-06-01");
         if (!string.IsNullOrWhiteSpace(workspaceId))
             request.Headers.TryAddWithoutValidation("anthropic-workspace-id", workspaceId);
 
-        using var response = await http.SendAsync(request);
+        ProviderHeaders.Apply(request, headers);
+        using var response = await http.SendAsync(request, ct);
         response.EnsureSuccessStatusCode();
-        var json = await response.Content.ReadAsStringAsync();
+        var json = await response.Content.ReadAsStringAsync(ct);
 
         return IdsFrom(json);
     }
@@ -82,7 +91,8 @@ public static class ModelFetch
     /// kind the app otherwise supports end to end.</para>
     /// </summary>
     public static async Task<List<string>> OpenAiCompatibleAsync(
-        HttpClient http, string baseUrl, string? apiKey, IReadOnlyDictionary<string, string>? headers = null)
+        HttpClient http, string baseUrl, string? apiKey, IReadOnlyDictionary<string, string>? headers = null,
+        CancellationToken ct = default)
     {
         var root = baseUrl.Trim().TrimEnd('/');
         if (root.Length == 0)
@@ -97,14 +107,12 @@ public static class ModelFetch
 
         // The provider's own headers, because an endpoint that needs one to CHAT needs it to list
         // too — a gateway keyed by an organisation header would otherwise refuse only here.
-        if (headers is not null)
-            foreach (var (key, value) in headers)
-                request.Headers.TryAddWithoutValidation(key, value);
+        ProviderHeaders.Apply(request, headers);
 
-        using var response = await http.SendAsync(request);
+        using var response = await http.SendAsync(request, ct);
         response.EnsureSuccessStatusCode();
 
-        return IdsFrom(await response.Content.ReadAsStringAsync());
+        return IdsFrom(await response.Content.ReadAsStringAsync(ct));
     }
 
     /// <summary>The <c>data[].id</c> shape, shared by Anthropic and every OpenAI-compatible server.</summary>

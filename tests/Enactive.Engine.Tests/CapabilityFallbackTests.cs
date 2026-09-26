@@ -16,6 +16,7 @@ public sealed class CapabilityFallbackTests
     [InlineData(true, "invalid messages")]
     [InlineData(false, "invalid schema in response_format: unsupported property type")]
     [InlineData(true, "unknown field temperature")]
+    [InlineData(false, "response_format validation failed: model is unavailable now")]
     public async Task Unrelated_errors_do_not_retry_or_disable(bool stream, string error)
     {
         using var handler = new Recording(stream, error, 1);
@@ -67,6 +68,37 @@ public sealed class CapabilityFallbackTests
         Assert.Equal(new[] { true, false, false, true }, handler.Present);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Deepseek_unavailable_response_format_retries_and_caches_only_success(bool secondFailure)
+    {
+        using var handler = new Recording(false,
+            "This response_format type is unavailable now (request_id: c169c721-0fff-4c91-b732-a04ccd02486d)",
+            secondFailure ? 2 : 1);
+        using var http = new HttpClient(handler);
+        var provider = new OpenAiCompatibleProvider(http, Descriptor());
+        if (secondFailure) await Assert.ThrowsAsync<HttpRequestException>(() => Call(provider, false));
+        else await Call(provider, false);
+        await Call(provider, false);
+        Assert.Equal(new[] { true, false, secondFailure }, handler.Present);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Changing_default_http_headers_reprobes_on_same_adapter(bool stream)
+    {
+        using var handler = new Recording(stream, Field(stream) + " is not supported", 1);
+        using var http = new HttpClient(handler);
+        var provider = new OpenAiCompatibleProvider(http, Descriptor());
+        await Call(provider, stream);
+        await Call(provider, stream);
+        http.DefaultRequestHeaders.Add("X-Backend", "new-server");
+        await Call(provider, stream);
+        Assert.Equal(new[] { true, false, false, true }, handler.Present);
+    }
+
     private static string Field(bool stream) => stream ? "stream_options" : "response_format";
     private static ProviderDescriptor Descriptor() => new(Guid.NewGuid().ToString(), "test",
         ProviderKind.OpenAiCompatible, "https://example.test/v1", "key", new[] { "model" });
@@ -86,7 +118,8 @@ public sealed class CapabilityFallbackTests
             var fail = Present.Count <= failures;
             return new HttpResponseMessage(fail ? HttpStatusCode.BadRequest : HttpStatusCode.OK)
             {
-                Content = new StringContent(fail ? JsonSerializer.Serialize(new { error = new { message = error } })
+                Content = new StringContent(fail ? JsonSerializer.Serialize(new { error = new {
+                    message = error, type = "invalid_request_error", param = (string?)null, code = "invalid_request_error" } })
                     : stream ? "data: [DONE]\n\n" : """{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}""")
             };
         }

@@ -44,6 +44,16 @@
                 <TextBox Text="{Binding MaxTokensText}"
                          PlaceholderText="blank = auto (adjusts to the model's cap)" />
 
+                <CheckBox IsChecked="{Binding OpenAiReasoningProfile}"
+                          Content="OpenAI reasoning compatibility (developer role, no temperature)" />
+                <TextBlock Classes="label" Text="Ollama native keep alive (seconds)" />
+                <TextBox Text="{Binding OllamaKeepAliveText}" PlaceholderText="blank = server default; 0 = unload; -1 = keep resident" />
+                <TextBlock Classes="label" Text="Stream idle timeout (seconds)" />
+                <TextBox Text="{Binding StreamIdleTimeoutText}" PlaceholderText="300" />
+                <TextBlock Classes="label" Text="Non-streaming timeout (seconds)" />
+                <TextBox Text="{Binding CompletionTimeoutText}" PlaceholderText="900" />
+                <TextBlock Classes="label" Text="Extra generation tokens for reasoning" />
+                <TextBox Text="{Binding ReasoningAllowanceText}" PlaceholderText="blank = profile default; 0 = no extra allowance" />
                 <TextBlock Classes="label" Text="Context window (tokens)" />
                 <TextBox Text="{Binding ContextWindowText}"
                          PlaceholderText="blank = assume 16000 — nothing can ask the provider" />

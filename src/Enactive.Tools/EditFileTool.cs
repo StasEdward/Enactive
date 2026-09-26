@@ -32,7 +32,9 @@ public sealed class EditFileTool : ITool
                    + "'old_string' must appear EXACTLY once — include surrounding lines until it is "
                    + "unique. Prefer this over write_file for changing part of a file: it does not "
                    + "make you reproduce the rest, which is where mistakes get introduced.",
-        JsonSchema: Schema, WorkspaceEffect: WorkspaceEffect.Changed);
+        JsonSchema: Schema, WorkspaceEffect: WorkspaceEffect.Changed,
+        ChangedPathArguments: ["path"],
+        RepairsFileFailures: true, ProgressIdentity: ProgressIdentity.Action, Kind: ToolKind.Write);
 
     public PermissionLevel RequiredLevel => PermissionLevel.Execute;
 
@@ -77,7 +79,9 @@ public sealed class EditFileTool : ITool
             if (staged is null && !File.Exists(full))
                 return ToolResults.Fail($"File not found: {path}. Use write_file to create it.");
 
-            var before = staged ?? await File.ReadAllTextAsync(full, ct);
+            var snapshot = await TextFileEncoding.ReadSnapshotAsync(ctx.Artifacts, path, full, ct);
+            var before = snapshot.Text;
+            if (before is null) return ToolResults.Fail($"File not found: {path}. Use write_file to create it.");
 
             // Match as written first; only if that finds nothing do we consider that the two sides
             // may simply disagree about line endings. See LineEndings.RetypedFor.
@@ -88,7 +92,6 @@ public sealed class EditFileTool : ITool
                 if (retyped is not null && Count(before, retyped) > 0)
                 {
                     oldString = retyped;
-                    newString = LineEndings.RetypedFor(before, newString) ?? newString;
                     occurrences = Count(before, oldString);
                 }
             }
@@ -102,15 +105,19 @@ public sealed class EditFileTool : ITool
                     $"'old_string' appears {occurrences} times in {path}; it has to identify one "
                     + "place. Include more of the surrounding text until it is unique.");
 
+            // An exact match (including a single word) says nothing about the replacement's
+            // newlines. Use the visible file version's endings on both matching paths.
+            newString = LineEndings.RetypedFor(before, newString) ?? newString;
             var index = before.IndexOf(oldString, StringComparison.Ordinal);
             var after = string.Concat(before.AsSpan(0, index), newString, before.AsSpan(index + oldString.Length));
 
-            var reference = await ctx.Artifacts.CreateAsync(
-                path, ArtifactKind.FileSet, path,
-                async stream => await stream.WriteAsync(Encoding.UTF8.GetBytes(after), ct),
-                ct);
+            var encoding = snapshot.Encoding;
+            Func<Stream, Task> write = async stream => await stream.WriteAsync(TextFileEncoding.Encode(after, encoding), ct);
+            var reference = ctx.Artifacts.CanCheckVersion
+                ? await ctx.Artifacts.CreateCheckedAsync(path, ArtifactKind.FileSet, path, write, snapshot.Version, ct)
+                : await ctx.Artifacts.CreateAsync(path, ArtifactKind.FileSet, path, write, ct);
 
-            var delta = Encoding.UTF8.GetByteCount(after) - Encoding.UTF8.GetByteCount(before);
+            var delta = encoding.GetByteCount(after) - encoding.GetByteCount(before);
             var line = LineOf(before, index);
 
             return ToolResults.Ok(
@@ -137,7 +144,7 @@ public sealed class EditFileTool : ITool
             return ToolResults.Unreadable(ex.Message);
         }
 
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             return ToolResults.Fail($"Could not edit '{path}': {ex.Message}");
         }

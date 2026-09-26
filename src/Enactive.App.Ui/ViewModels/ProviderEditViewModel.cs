@@ -1,4 +1,4 @@
-﻿namespace Enactive.App.Ui.ViewModels;
+namespace Enactive.App.Ui.ViewModels;
 
 using System.Collections.ObjectModel;
 using Avalonia.Media;
@@ -29,6 +29,11 @@ internal sealed class ProviderEditViewModel : ObservableObject
     private string _baseUrl;
     private string _apiKey;
     private string _maxTokensText;
+    private string _streamIdleTimeoutText;
+    private string _completionTimeoutText;
+    private string _reasoningAllowanceText;
+    private bool _openAiReasoningProfile;
+    private string _ollamaKeepAliveText;
     private string _contextWindowText;
     private string _answerReserveText;
     private string _handoverAtText;
@@ -48,6 +53,11 @@ internal sealed class ProviderEditViewModel : ObservableObject
         _baseUrl = config.BaseUrl;
         _apiKey = config.ApiKey;
         _maxTokensText = config.MaxTokens?.ToString() ?? string.Empty;
+        _streamIdleTimeoutText = config.StreamIdleTimeoutSeconds.ToString();
+        _completionTimeoutText = config.CompletionTimeoutSeconds.ToString();
+        _reasoningAllowanceText = config.ReasoningTokenAllowance?.ToString() ?? string.Empty;
+        _openAiReasoningProfile = config.OpenAiReasoningProfile;
+        _ollamaKeepAliveText = config.OllamaKeepAliveSeconds?.ToString() ?? string.Empty;
         _contextWindowText = config.ContextWindowTokens?.ToString() ?? string.Empty;
         _answerReserveText = config.AnswerReserveTokens?.ToString() ?? string.Empty;
         _handoverAtText = config.HandoverAtPercent?.ToString() ?? string.Empty;
@@ -69,6 +79,11 @@ internal sealed class ProviderEditViewModel : ObservableObject
     public string BaseUrl { get => _baseUrl; set => Set(ref _baseUrl, value); }
     public string ApiKey { get => _apiKey; set => Set(ref _apiKey, value); }
     public string MaxTokensText { get => _maxTokensText; set => Set(ref _maxTokensText, value); }
+    public string OllamaKeepAliveText { get => _ollamaKeepAliveText; set => Set(ref _ollamaKeepAliveText, value); }
+    public string StreamIdleTimeoutText { get => _streamIdleTimeoutText; set => Set(ref _streamIdleTimeoutText, value); }
+    public string CompletionTimeoutText { get => _completionTimeoutText; set => Set(ref _completionTimeoutText, value); }
+    public string ReasoningAllowanceText { get => _reasoningAllowanceText; set => Set(ref _reasoningAllowanceText, value); }
+    public bool OpenAiReasoningProfile { get => _openAiReasoningProfile; set => Set(ref _openAiReasoningProfile, value); }
 
     /// <summary>The CONTEXT window, which nothing can discover — see ProviderConfig.ContextWindowTokens.</summary>
     public string ContextWindowText { get => _contextWindowText; set => Set(ref _contextWindowText, value); }
@@ -182,6 +197,11 @@ internal sealed class ProviderEditViewModel : ObservableObject
         _config.BaseUrl = BaseUrl.Trim();
         _config.ApiKey = ApiKey.Trim();
         _config.MaxTokens = int.TryParse(MaxTokensText.Trim(), out var mt) && mt > 0 ? mt : null;
+        _config.StreamIdleTimeoutSeconds = int.TryParse(StreamIdleTimeoutText, out var idle) && idle > 0 ? idle : 300;
+        _config.OpenAiReasoningProfile = OpenAiReasoningProfile;
+        _config.CompletionTimeoutSeconds = int.TryParse(CompletionTimeoutText, out var deadline) && deadline > 0 ? Math.Min(deadline, 86400) : 900;
+        _config.ReasoningTokenAllowance = int.TryParse(ReasoningAllowanceText, out var reasoning) && reasoning >= 0 ? Math.Min(reasoning, 65536) : null;
+        _config.OllamaKeepAliveSeconds = int.TryParse(OllamaKeepAliveText, out var keepAlive) ? keepAlive : null;
         _config.ContextWindowTokens =
             int.TryParse(ContextWindowText.Trim(), out var cw) && cw > 0 ? cw : null;
         _config.AnswerReserveTokens =

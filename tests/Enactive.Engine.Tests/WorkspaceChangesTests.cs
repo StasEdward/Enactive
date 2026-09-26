@@ -2,6 +2,7 @@ namespace Enactive.Engine.Tests;
 
 using System.Diagnostics;
 using Enactive.Core.Artifacts;
+using Enactive.Workspace;
 using Xunit;
 
 /// <summary>
@@ -15,6 +16,32 @@ using Xunit;
 /// </summary>
 public sealed class WorkspaceChangesTests : IDisposable
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Names_only_comparison_includes_external_changes_without_patches(bool git)
+    {
+        if (git) Repository();
+        else { Write("report.md", "before\n"); Write("gone.md", "delete me\n"); }
+        using var changes = new WorkspaceChanges(_root);
+        var before = await changes.TakeAsync(default);
+        Assert.NotNull(before);
+        Write("report.md", "after\n");
+        Write("external.txt", "created outside the artifact store\n");
+        File.Delete(Path.Combine(_root, "gone.md"));
+        var after = await changes.TakeAsync(default);
+        Assert.NotNull(after);
+        var names = await changes.ComparePathsAsync(before, after, default);
+        var full = await changes.CompareAsync(before, after, default);
+        Assert.NotNull(names);
+        Assert.NotNull(full);
+        Assert.Equal(full.Select(c => (c.Path, c.Kind, c.OldPath)), names.Select(c => (c.Path, c.Kind, c.OldPath)));
+        Assert.Contains(names, c => c.Path == "external.txt" && c.Kind == FileChangeKind.Added);
+        Assert.Contains(names, c => c.Path == "gone.md" && c.Kind == FileChangeKind.Deleted);
+        Assert.All(names, c => Assert.Null(c.Diff));
+        if (git) Assert.Contains(full, c => c.Diff is not null);
+    }
+
     private readonly string _root = Path.Combine(Path.GetTempPath(), "enactive-changes-" + Guid.NewGuid().ToString("N"));
 
     public WorkspaceChangesTests() => Directory.CreateDirectory(_root);

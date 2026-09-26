@@ -54,6 +54,8 @@ public sealed class RemotePolicyTests
 
         Assert.Equal(PermissionDecision.Deny, Decide("run_powershell", policy));
         Assert.Equal(PermissionDecision.Deny, Decide("run_command", policy));
+        Assert.Equal(PermissionDecision.Deny, Decide("git", policy));
+        Assert.Equal(PermissionDecision.Deny, Decide("docker", policy));
     }
 
     /// <summary>

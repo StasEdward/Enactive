@@ -20,7 +20,7 @@ public sealed partial class AppSettings
                 server.Environment = secrets.Environment;
                 server.Headers = secrets.Headers;
             }
-            catch { server.Enabled = false; server.CredentialsUnavailable = true; }
+            catch { server.CredentialsUnavailable = true; }
         }
     }
 

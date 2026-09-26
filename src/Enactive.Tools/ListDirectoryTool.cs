@@ -8,22 +8,28 @@ using Enactive.Core.Tools;
 /// <summary>Lists the entries of a directory in the workspace (read-only, Observe level).</summary>
 public sealed class ListDirectoryTool : ITool
 {
+    internal const int MaxEntries = 200;
+    internal const int MaxOutputChars = 16_000;
     public ToolDefinition Definition { get; } = new(
         Name: "list_dir",
         Description: "List files and folders in a workspace directory. Path is relative to the workspace root "
-                   + "(defaults to '.'). Folders end with '/'.",
-        JsonSchema: Schema, WorkspaceEffect: WorkspaceEffect.None);
+                   + "(defaults to '.'). Folders end with '/'. Output is bounded; use pattern to narrow large listings.",
+        JsonSchema: Schema, WorkspaceEffect: WorkspaceEffect.None, ParallelRead: true, Kind: ToolKind.Read);
 
     public PermissionLevel RequiredLevel => PermissionLevel.Observe;
 
     public Task<ToolResult> InvokeAsync(string argumentsJson, ToolContext ctx, CancellationToken ct)
     {
         string? path;
+        string pattern;
+        ct.ThrowIfCancellationRequested();
         try
         {
             using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(argumentsJson) ? "{}" : argumentsJson);
             path = doc.RootElement.TryGetProperty("path", out var p) && p.ValueKind == JsonValueKind.String
                 ? p.GetString() : null;
+            pattern = doc.RootElement.TryGetProperty("pattern", out var filter) && filter.ValueKind == JsonValueKind.String
+                ? filter.GetString() ?? "*" : "*";
         }
         catch (JsonException ex)
         {
@@ -65,14 +71,29 @@ public sealed class ListDirectoryTool : ITool
 
             var entries = new List<string>();
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var chars = 0;
+            var truncated = false;
+            bool Add(string name, string display)
+            {
+                if (!System.IO.Enumeration.FileSystemName.MatchesSimpleExpression(pattern, name.TrimEnd('/'),
+                    ignoreCase: OperatingSystem.IsWindows()) || !seen.Add(name)) return true;
+                if (entries.Count >= MaxEntries || chars + display.Length + 1 > MaxOutputChars - 200)
+                {
+                    truncated = true;
+                    return false;
+                }
+                entries.Add(display);
+                chars += display.Length + 1;
+                return true;
+            }
 
             var onDisk = Directory.Exists(full);
             if (onDisk)
                 foreach (var entry in Directory.EnumerateFileSystemEntries(full))
                 {
+                    ct.ThrowIfCancellationRequested();
                     var name = Directory.Exists(entry) ? Path.GetFileName(entry) + "/" : Path.GetFileName(entry);
-                    if (seen.Add(name))
-                        entries.Add(name);
+                    if (!Add(name, name)) break;
                 }
 
             // What the store is holding but has not written. A staged file that is not on disk yet
@@ -82,12 +103,12 @@ public sealed class ListDirectoryTool : ITool
             // step could not look at what it had just proposed, and the root listing showed neither
             // the folder nor anything in it.
             var proposed = false;
-            foreach (var (name, isDirectory) in PendingEntriesIn(ctx, full))
+            foreach (var (name, isDirectory) in PendingEntriesIn(ctx, full, ct))
             {
                 proposed = true;
+                if (truncated) break;
                 var display = isDirectory ? name + "/" : name;
-                if (seen.Add(display))
-                    entries.Add(display + "  (proposed, not yet applied)");
+                if (!Add(display, display + "  (proposed, not yet applied)")) break;
             }
 
             // NotFound, not Fail: a listing of somewhere that is not there has answered the question.
@@ -112,9 +133,10 @@ public sealed class ListDirectoryTool : ITool
             entries.Sort(StringComparer.OrdinalIgnoreCase);
 
             var listing = entries.Count == 0 ? "(empty)" : string.Join("\n", entries);
+            if (truncated) listing += "\n… (listing truncated; count is shown entries, not the directory total. Use pattern or a narrower path.)";
             return Task.FromResult(ToolResults.Ok(
                 output: listing,
-                metadata: new Dictionary<string, object?> { ["count"] = entries.Count }));
+                metadata: new Dictionary<string, object?> { ["count"] = entries.Count, ["listingTruncated"] = truncated }));
         }
         // A read refused for being the workspace's own state has ANSWERED: the model asked
         // whether it could look there and was told no, definitively. Nothing is half-done and
@@ -135,7 +157,7 @@ public sealed class ListDirectoryTool : ITool
             return Task.FromResult(ToolResults.Unreadable(ex.Message));
         }
 
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             return Task.FromResult(ToolResults.Fail($"Could not list '{path ?? "."}': {ex.Message}"));
         }
@@ -147,12 +169,13 @@ public sealed class ListDirectoryTool : ITool
     /// for a store that writes straight through, which is the normal case.
     /// </summary>
     private static IEnumerable<(string Name, bool IsDirectory)> PendingEntriesIn(
-        ToolContext ctx, string fullDirectory)
+        ToolContext ctx, string fullDirectory, CancellationToken ct)
     {
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var relative in ctx.Artifacts.PendingPaths)
         {
+            ct.ThrowIfCancellationRequested();
             string pendingFull;
             try { pendingFull = WorkspacePaths.ResolveInside(ctx.WorkspaceRoot, relative); }
             catch { continue; }
@@ -182,7 +205,8 @@ public sealed class ListDirectoryTool : ITool
     {
       "type": "object",
       "properties": {
-        "path": { "type": "string", "description": "Directory path relative to the workspace root. Defaults to '.'." }
+        "path": { "type": "string", "description": "Directory path relative to the workspace root. Defaults to '.'." },
+        "pattern": { "type": "string", "description": "Optional filename wildcard, e.g. '*.cs' or 'pack*'. Defaults to '*'. Applies to disk and proposed entries." }
       }
     }
     """;

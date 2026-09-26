@@ -43,6 +43,22 @@ public sealed class VerificationLoopTests
     private static int Checks(List<WorkEvent> events)
         => events.Count(e => e.Kind == EventKind.CriterionEvaluated);
 
+    [Fact]
+    public async Task Success_repair_still_respects_the_token_budget()
+    {
+        using var fx = new EngineFixture();
+        var provider = new FakeChatProvider(
+            Turn.Says("""{"disposition":"quick_action","title":"do the thing"}"""),
+            Turn.Says("Done").Reporting(5, 5),
+            Turn.Calls1("write_file", """{"path":"never.txt","content":"no"}"""));
+        var events = await fx.RunAsync(fx.Build(provider, successCriteria: [Always(1)], successRetries: 1,
+            limits: new(MaxTokens: 10)), "do the thing");
+        Assert.Equal(2, provider.Requests.Count);
+        Assert.False(fx.Exists("never.txt"));
+        Assert.Contains(events, e => e.Summary.Contains("no budget left to try to fix"));
+        Assert.NotEqual(RunOutcomeKind.Completed, Terminal(events).Outcome());
+    }
+
     // ── the point of it ─────────────────────────────────────────────────────
 
     /// <summary>
@@ -50,13 +66,17 @@ public sealed class VerificationLoopTests
     /// and fixes it, and the re-check passes — so the run is Completed on the strength of a check,
     /// not of anybody's claim.
     /// </summary>
-    [Fact]
-    public async Task A_run_whose_check_failed_is_given_a_chance_to_fix_it()
+    [Theory]
+    [InlineData(null, false)]
+    [InlineData(1, false)]
+    [InlineData(1, true)]
+    public async Task A_run_whose_check_failed_is_given_a_chance_to_fix_it(int? maxSteps, bool dag)
     {
         using var fx = new EngineFixture();
 
         var provider = new FakeChatProvider(
-            Turn.Says("""{"disposition":"quick_action","title":"do the thing"}"""),
+            Turn.Says(dag ? """{"disposition":"task","title":"do the thing","steps":[{"title":"do the thing","dependsOn":[]}]}"""
+                : """{"disposition":"quick_action","title":"do the thing"}"""),
             Turn.Calls1("write_file", """{"path":"other.txt","content":"not the one"}"""),
             Turn.Says("All done."),
             // The repair attempt: told what failed, it writes the file the check looks for.
@@ -64,7 +84,8 @@ public sealed class VerificationLoopTests
             Turn.Says("Fixed the cause."));
 
         var events = await fx.RunAsync(
-            fx.Build(provider, successCriteria: new[] { ChecksFor("built.txt") }, successRetries: 1),
+            fx.Build(provider, successCriteria: new[] { ChecksFor("built.txt") }, successRetries: 1,
+                limits: new ExecutionLimits(MaxSteps: maxSteps)),
             "do the thing");
 
         Assert.Equal(RunOutcomeKind.Completed, Terminal(events).Outcome());

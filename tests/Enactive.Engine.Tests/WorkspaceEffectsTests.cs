@@ -183,7 +183,7 @@ public sealed class WorkspaceEffectsTests
     private sealed class Observer : ITool
     {
         public List<string> Seen { get; } = new();
-        public ToolDefinition Definition { get; } = new("git", "A controlled workspace observer", "{}", WorkspaceEffect.None);
+        public ToolDefinition Definition { get; } = new("git", "A controlled workspace observer", "{}", WorkspaceEffect.None, Kind: ToolKind.Command);
         public PermissionLevel RequiredLevel => PermissionLevel.Observe;
         public Task<ToolResult> InvokeAsync(string argumentsJson, ToolContext ctx, CancellationToken ct)
         {

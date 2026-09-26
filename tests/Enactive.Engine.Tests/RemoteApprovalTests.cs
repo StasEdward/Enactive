@@ -53,6 +53,86 @@ public sealed class RemoteApprovalTests : IDisposable
     private RemoteDecisionHandler Handler(IDecisionHandler desktop, TimeSpan? timeout = null)
         => new(desktop, _store, _approvals, RunId, timeout ?? TimeSpan.FromSeconds(30));
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Remote_requests_require_a_fresh_desktop_answer_even_in_the_same_workspace(bool bound)
+    {
+        var request = Ask(bind: bound) with { Subject = "write_file" };
+        var remembered = new SessionApprovals();
+        remembered.Remember(request);
+        var desktop = new CheckingDesktop(seen =>
+        {
+            Assert.True(seen.RequiresExplicitAnswer);
+            Assert.Equal(request.Id, seen.Id);
+            Assert.False(remembered.Approves(seen));
+            return Task.FromResult(new DecisionOutcome("deny"));
+        });
+        Assert.Equal("deny", (await Handler(desktop).RequestAsync(request, default)).OptionId);
+        Assert.Empty(_approvals.Pending);
+    }
+
+    [Fact]
+    public async Task Desktop_failure_invalidates_the_remote_question_and_clears_its_waiter()
+    {
+        var desktop = new CheckingDesktop(_ => throw new IOException("UI failed"));
+        await Assert.ThrowsAsync<IOException>(() => Handler(desktop).RequestAsync(Ask(), default));
+        Assert.Empty(_approvals.Pending);
+        var resolution = Assert.Single(Queued(), e => e.Kind == RemoteEventKind.ApprovalResolved).Resolution!;
+        Assert.Equal(ApprovalOutcome.Invalidated, resolution.Outcome);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Remote_answer_waits_for_desktop_cleanup_and_stop_during_cleanup_invalidates_it(bool stop)
+    {
+        using var cancellation = new CancellationTokenSource();
+        var desktop = new CleaningDesktop();
+        var deciding = Handler(desktop).RequestAsync(Ask(), cancellation.Token);
+        var published = Assert.Single(Queued(), e => e.Kind == RemoteEventKind.ApprovalRequested).Request!;
+        Assert.True(_approvals.TryAnswer(published.ApprovalId, published.ActionHash, RemoteDecision.Allow));
+        await desktop.Cleaning.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        try
+        {
+            Assert.False(deciding.IsCompleted);
+            Assert.Empty(_approvals.Pending);
+            if (stop) cancellation.Cancel();
+        }
+        finally { desktop.Cleaned.TrySetResult(); }
+        if (stop) await Assert.ThrowsAnyAsync<OperationCanceledException>(() => deciding);
+        else Assert.Equal("allow", (await deciding).OptionId);
+        var resolved = Assert.Single(Queued(), e => e.Kind == RemoteEventKind.ApprovalResolved).Resolution!;
+        Assert.Equal(stop ? ApprovalOutcome.Invalidated : ApprovalOutcome.Allowed, resolved.Outcome);
+    }
+
+    [Fact]
+    public async Task Precancelled_remote_request_never_publishes_or_asks_desktop()
+    {
+        var desktop = new SilentDesktop();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Handler(desktop)
+            .RequestAsync(Ask(), new CancellationToken(true)));
+        Assert.Empty(Queued());
+        Assert.Empty(_approvals.Pending);
+        Assert.False(desktop.Asked.Task.IsCompleted);
+    }
+
+    private sealed class CleaningDesktop : IDecisionHandler
+    {
+        public TaskCompletionSource Cleaning { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Cleaned { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public async Task<DecisionOutcome> RequestAsync(DecisionRequest request, CancellationToken ct)
+        {
+            try { await Task.Delay(Timeout.Infinite, ct); return new("allow"); }
+            finally { Cleaning.TrySetResult(); await Cleaned.Task; }
+        }
+    }
+
+    private sealed class CheckingDesktop(Func<DecisionRequest, Task<DecisionOutcome>> answer) : IDecisionHandler
+    {
+        public Task<DecisionOutcome> RequestAsync(DecisionRequest request, CancellationToken ct) => answer(request);
+    }
+
     private static DecisionRequest Ask(string tool = "write_file", bool bind = true)
         => new(
             Guid.NewGuid(), $"Approve tool '{tool}'?", "short form",
@@ -147,12 +227,14 @@ public sealed class RemoteApprovalTests : IDisposable
     ///
     /// <para>Shown red by restoring that race: the desktop is asked, and answers.</para>
     /// </summary>
-    [Fact]
-    public async Task A_shell_in_a_remote_run_is_refused_without_asking_anybody()
+    [Theory]
+    [InlineData("run_command")]
+    [InlineData("git")]
+    public async Task A_shell_in_a_remote_run_is_refused_without_asking_anybody(string tool)
     {
         var desktop = new SilentDesktop();
 
-        var outcome = await Handler(desktop).RequestAsync(Ask("run_command"), CancellationToken.None);
+        var outcome = await Handler(desktop).RequestAsync(Ask(tool), CancellationToken.None);
 
         Assert.False(desktop.Asked.Task.IsCompleted, "the desktop was asked about a shell it should never have seen.");
         Assert.Equal("deny", outcome.OptionId);
@@ -163,7 +245,7 @@ public sealed class RemoteApprovalTests : IDisposable
 
         var published = Assert.Single(queued, e => e.Kind == RemoteEventKind.ApprovalRequested).Request!;
         Assert.False(published.RemoteDecidable);
-        Assert.Equal("run_command", published.Tool);
+        Assert.Equal(tool, published.Tool);
 
         // Published AND resolved, in that order. The panel shows what was asked for and that it was
         // refused; a refusal nobody is shown is indistinguishable from a step that never happened.

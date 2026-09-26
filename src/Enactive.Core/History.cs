@@ -71,6 +71,8 @@ public sealed record ModelSpend(
     /// stored before today has to deserialise into one.</para>
     /// </summary>
     public int? CachedPromptTokens { get; init; }
+    /// <summary>Reported input tokens written to cache; a subset of PromptTokens, not an extra cost count.</summary>
+    public int? CacheCreationPromptTokens { get; init; }
 
     /// <summary>
     /// The cached share as a percentage of the prompt, or null when there is nothing to divide.
@@ -112,6 +114,8 @@ public sealed record RunUsage(int PromptTokens, int CompletionTokens)
     /// nothing about the worker's, which is exactly right: there is no number there to add.</para>
     /// </summary>
     public int? CachedPromptTokens { get; init; }
+    /// <summary>Reported input tokens written to cache; a subset of PromptTokens, not an extra cost count.</summary>
+    public int? CacheCreationPromptTokens { get; init; }
 
     /// <summary>The cached share of the prompt, in whole percent, or null when nothing reported one.</summary>
     public int? CachedPercent

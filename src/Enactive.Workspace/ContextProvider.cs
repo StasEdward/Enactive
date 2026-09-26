@@ -113,35 +113,8 @@ public sealed class ContextProvider : IContextProvider
         if (!Directory.Exists(Path.Combine(root, ".git")) && !File.Exists(Path.Combine(root, ".git")))
             return Array.Empty<string>();
 
-        var psi = new System.Diagnostics.ProcessStartInfo("git", "ls-files")
-        {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WorkingDirectory = root
-        };
-
-        using var proc = new System.Diagnostics.Process { StartInfo = psi };
-        if (!proc.Start())
-            return Array.Empty<string>();
-
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeout.CancelAfter(TimeSpan.FromSeconds(2));
-
-        var output = proc.StandardOutput.ReadToEndAsync();
-
-        try { await proc.WaitForExitAsync(timeout.Token); }
-        catch (OperationCanceledException)
-        {
-            try { proc.Kill(entireProcessTree: true); } catch { /* it is going away either way */ }
-            return Array.Empty<string>();
-        }
-
-        if (proc.ExitCode != 0)
-            return Array.Empty<string>();
-
-        return (await output).Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        var (exit, output) = await AutomaticGit.RunAsync(root, ["ls-files"], ct, timeoutMs: 2000);
+        return exit == 0 ? output.Split('\n', StringSplitOptions.RemoveEmptyEntries) : Array.Empty<string>();
     }
 
     private static string? TryReadGitBranch(string root)

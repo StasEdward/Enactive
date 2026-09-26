@@ -45,32 +45,28 @@ public sealed class PowerShellOutcomeTests
             CancellationToken.None);
 
     /// <summary>
-    /// The decisive one. A script that answered its question is not a failed script, whatever
-    /// number the host process returned.
+    /// Silencing the display is not a success signal. A caller intentionally asking about absence
+    /// can declare the expected exit code before execution (PowerShellExitCodeTests).
     /// </summary>
-    [Fact]
-    public async Task A_script_that_reported_no_error_did_not_fail()
+    [WindowsFact]
+    public async Task A_silenced_error_without_an_expected_code_still_fails()
     {
-        if (!OperatingSystem.IsWindows())
-            return;
 
         using var fx = new EngineFixture();
 
         var result = await Run(fx, AsksAboutSomethingAbsent);
 
-        Assert.True(result.Success,
-            "A script whose only fault was a silenced error was reported as a failure: " + result.Error);
+        Assert.False(result.Success);
+        Assert.Equal(1, result.Metadata!["exitCode"]);
     }
 
     /// <summary>
     /// And the other half, which is what stops the fix from being "call everything success": a
     /// script that really failed still fails, and still says why.
     /// </summary>
-    [Fact]
+    [WindowsFact]
     public async Task A_script_that_really_failed_still_fails_and_says_why()
     {
-        if (!OperatingSystem.IsWindows())
-            return;
 
         using var fx = new EngineFixture();
 
@@ -86,11 +82,9 @@ public sealed class PowerShellOutcomeTests
     /// a cause was an XML progress record. Nothing downstream can recover from that, and no wording
     /// of the failure message can make it legible.
     /// </summary>
-    [Fact]
+    [WindowsFact]
     public async Task What_a_script_says_is_text_and_not_serialised_objects()
     {
-        if (!OperatingSystem.IsWindows())
-            return;
 
         using var fx = new EngineFixture();
 

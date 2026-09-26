@@ -1,12 +1,7 @@
 namespace Enactive.Core.Tasks;
 
-using Enactive.Core.Intents;
-
 /// <summary>The orchestrator's routing decision for an intent (PLAN_v2 §2.1).</summary>
 public enum IntentDisposition { QuickAction, Task }
-
-/// <summary>Lifecycle of a task.</summary>
-public enum WorkStatus { New, Understanding, Planning, Executing, WaitingForUser, Completed, Failed, Cancelled }
 
 /// <summary>Status of a single plan step.</summary>
 public enum StepStatus { Pending, Ready, Running, Done, Skipped, Failed }
@@ -23,20 +18,13 @@ public enum StepComplexity { Trivial, Normal, Complex }
 /// </summary>
 public sealed record PlanStep(
     Guid Id, string Title, StepStatus Status, IReadOnlyList<Guid> DependsOn,
-    StepComplexity Complexity = StepComplexity.Normal);
+    StepComplexity Complexity = StepComplexity.Normal)
+{
+    public IReadOnlyList<string>? ObligationIds { get; init; }
+}
 
 /// <summary>A plan is a graph of steps. v1 builds a linear chain via <see cref="LinearPlan"/>.</summary>
 public sealed record Plan(Guid Id, IReadOnlyList<PlanStep> Steps);
-
-/// <summary>A task: the primary unit of multi-step work. Flat, with an optional plan.</summary>
-public sealed record AgentTask(
-    Guid Id,
-    Guid WorkspaceId,
-    string Title,
-    Intent Origin,
-    WorkStatus Status,
-    Plan? Plan,
-    string WorkerId);
 
 /// <summary>The only place that assumes linearity — building a DAG later is isolated here.</summary>
 public static class LinearPlan
@@ -65,13 +53,16 @@ public static class LinearPlan
 /// </summary>
 public sealed record PlanStepSpec(
     string Title, IReadOnlyList<int> DependsOn, StepComplexity Complexity = StepComplexity.Normal,
-    bool DependenciesDeclared = false);
+    bool DependenciesDeclared = false)
+{
+    public IReadOnlyList<string>? ObligationIds { get; init; }
+}
 
 /// <summary>
 /// Builds a real dependency graph from planner specs (index deps → step ids). Only when NO spec says
 /// anything about dependencies does it fall back to a linear chain, so a legacy plain list of titles
 /// behaves exactly as before while an explicit "dependsOn": [] stays independent.
-/// Invalid, self- and duplicate indices are dropped defensively.
+/// Invalid and duplicate indices are dropped defensively. Self-dependencies are preserved for cycle validation.
 /// </summary>
 public static class DagPlan
 {
@@ -88,14 +79,15 @@ public static class DagPlan
             IReadOnlyList<Guid> deps;
             if (graph)
                 deps = specs[i].DependsOn
-                    .Where(d => d >= 0 && d < specs.Count && d != i)
+                    .Where(d => d >= 0 && d < specs.Count)
                     .Distinct()
                     .Select(d => ids[d])
                     .ToArray();
             else
                 deps = i > 0 ? new[] { ids[i - 1] } : Array.Empty<Guid>();
 
-            steps.Add(new PlanStep(ids[i], specs[i].Title, StepStatus.Pending, deps, specs[i].Complexity));
+            steps.Add(new PlanStep(ids[i], specs[i].Title, StepStatus.Pending, deps, specs[i].Complexity)
+                { ObligationIds = specs[i].ObligationIds });
         }
         return new Plan(Guid.NewGuid(), steps);
     }

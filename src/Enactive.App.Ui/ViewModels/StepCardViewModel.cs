@@ -165,7 +165,16 @@ internal sealed class StepCardViewModel : ObservableObject
     /// Buffers a chunk of the assistant's streamed reply. It is never shown verbatim - it is folded
     /// into a single short note the next time a tool runs or the step ends.
     /// </summary>
-    public void AppendAssistantText(string delta) => _noteBuffer.Append(delta);
+    public void AppendAssistantText(string delta)
+    {
+        // The card displays only a 220-character preview; the complete text lives in the run log.
+        foreach (var character in delta)
+        {
+            if (_noteBuffer.Length > 220) break;
+            if (_noteBuffer.Length == 0 && char.IsWhiteSpace(character)) continue;
+            _noteBuffer.Append(character is '\r' or '\n' ? ' ' : character);
+        }
+    }
 
     public void AddCommand(string commandText)
     {

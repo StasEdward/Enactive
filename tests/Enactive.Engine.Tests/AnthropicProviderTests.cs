@@ -2,6 +2,7 @@ namespace Enactive.Engine.Tests;
 
 using System.Net;
 using System.Text;
+using System.Text.Json;
 using Enactive.Core.Chat;
 using Enactive.Core.Providers;
 using Enactive.Providers;
@@ -98,13 +99,38 @@ public sealed class AnthropicProviderTests
     {
         private readonly string _body;
 
-        public CannedHandler(string body) => _body = body;
+        public CannedHandler(string body)
+        {
+            using var doc = JsonDocument.Parse(body);
+            var root = doc.RootElement;
+            var chunks = new List<object> { new { type = "message_start", message = new { usage = root.GetProperty("usage").Clone() } } };
+            var index = 0;
+            // Fixtures now travel through the real SSE path. Tool indices need not start at zero.
+            foreach (var block in root.GetProperty("content").EnumerateArray())
+            {
+                if (block.GetProperty("type").GetString() == "text")
+                {
+                    chunks.Add(new { type = "content_block_start", index = 9, content_block = new { type = "text", text = "" } });
+                    chunks.Add(new { type = "content_block_delta", index = 9, delta = new { type = "text_delta", text = block.GetProperty("text").GetString() } });
+                    chunks.Add(new { type = "content_block_stop", index = 9 });
+                }
+                else
+                {
+                    chunks.Add(new { type = "content_block_start", index, content_block = block.Clone() });
+                    chunks.Add(new { type = "content_block_stop", index });
+                    index++;
+                }
+            }
+            chunks.Add(new { type = "message_delta", delta = new { stop_reason = "tool_use" }, usage = new { output_tokens = 22 } });
+            chunks.Add(new { type = "message_stop" });
+            _body = string.Concat(chunks.Select(c => "data: " + JsonSerializer.Serialize(c) + "\n\n"));
+        }
 
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken cancellationToken)
             => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent(_body, Encoding.UTF8, "application/json")
+                Content = new StringContent(_body, Encoding.UTF8, "text/event-stream")
             });
     }
 }

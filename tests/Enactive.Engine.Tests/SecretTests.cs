@@ -49,11 +49,9 @@ public sealed class SecretTests
         Assert.DoesNotContain(key, stored, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [WindowsFact]
     public void A_protected_secret_comes_back_exactly()
     {
-        if (!OperatingSystem.IsWindows())
-            return;
 
         const string key = "sk-ant-not-a-real-key-строка-0123456789";
 

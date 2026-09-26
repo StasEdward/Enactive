@@ -43,15 +43,15 @@ public sealed class CapsAnnounceThemselvesTests
     /// </summary>
     private static readonly Dictionary<string, string> Covered = new(StringComparer.Ordinal)
     {
-        ["Orchestrator.ProgressEveryChars"] = "A_long_tool_call_says_it_is_still_being_written",
+        ["ModelTurn.ProgressEveryChars"] = "A_long_tool_call_says_it_is_still_being_written",
         // The two halves of ProcessExec's capture ceiling: the first lines and the last ones, with the
         // middle dropped and said so - driven past both, for stdout and stderr, through to evidence.
         ["CapturedStream.HeadChars"] = "The_end_of_a_long_output_survives_capture_result_and_evidence",
         ["CapturedStream.TailChars"] = "The_end_of_a_long_output_survives_capture_result_and_evidence",
         // What a handover carries that the model did not write: a diff cut to fit says so, and a long
         // command output is carried by its end, which is where a test runner puts its result.
-        ["Orchestrator.MaxHandoverDiffChars"] = "A_huge_diff_in_a_handover_is_cut_and_says_so",
-        ["Orchestrator.HandoverOutputTailChars"] = "A_long_command_output_is_carried_by_its_end",
+        ["HandoverEvidence.MaxHandoverDiffChars"] = "A_huge_diff_in_a_handover_is_cut_and_says_so",
+        ["HandoverEvidence.HandoverOutputTailChars"] = "A_long_command_output_is_carried_by_its_end",
         // What a reply's TEXT may do while it streams. Each stop says what it stopped and why, to the
         // model and in the log; the thresholds below it decide what counts as a loop.
         ["RunawayReply.MaxTextChars"] = "Prose_past_the_limit_is_stopped",
@@ -64,7 +64,6 @@ public sealed class CapsAnnounceThemselvesTests
         ["Reviewer.MaxContentCharsPerFile"] = "An_excerpt_says_so_even_when_the_caller_did_the_cutting",
         ["Reviewer.MaxContentCharsTotal"] = nameof(Files_dropped_for_the_review_budget_are_announced),
         // The user's own request, quoted for the reviewer - see TheReviewerSeesTheRequestTests.
-        ["Reviewer.MaxRequestChars"] = "A_huge_request_is_cut_and_says_so",
         ["SuccessEvaluator.MaxDetailChars"] = nameof(A_criterions_output_says_how_much_of_it_is_shown),
         ["ProcessExec.MaxOutputChars"] = nameof(Command_output_past_the_cap_says_it_was_truncated),
         ["ReadFilesTool.MaxFiles"] = nameof(More_paths_than_read_files_takes_says_how_many),
@@ -77,6 +76,7 @@ public sealed class CapsAnnounceThemselvesTests
         ["ReadFileTool.DefaultLines"] = nameof(A_window_says_which_lines_it_is_and_how_to_get_the_rest),
         ["SearchFilesTool.MaxMatches"] = nameof(A_search_that_stops_early_says_it_stopped),
         ["SearchFilesTool.MaxOutputChars"] = nameof(A_search_that_stops_early_says_it_stopped),
+        ["ListDirectoryTool.MaxOutputChars"] = nameof(BoundedFileOperationsTests.Listing_is_bounded_and_pattern_can_reach_omitted_entries),
         ["SearchFilesTool.MaxLineChars"] = nameof(A_very_long_matching_line_is_shown_cut),
         // Not a cap on an answer's length but on how much of the file each match brings with it; past
         // the limit the answer is a read, and a search that was asked for more says so.

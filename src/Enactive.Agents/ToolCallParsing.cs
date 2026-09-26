@@ -15,11 +15,8 @@ using Enactive.Core.Tools;
 /// yields can simply leave.</para>
 ///
 /// <para>The gain is not only the line count. Every one of these could previously be reached only
-/// by running a whole engine: <see cref="NormalizeToolArgs"/>, which exists because small models
-/// concatenate two JSON objects into one call's arguments, had no test of its own that could show
-/// what it does with <c>{"a":1}{"b":2}</c>, and <see cref="TryRecoverImplicitToolCall"/> - the
-/// narrowest, most security-relevant thing in the file - could only be exercised through a scripted
-/// provider. Moving them out made them testable, and they now are.</para>
+/// by running a whole engine. Streamed arguments are preserved verbatim; validation belongs
+/// at the execution boundary and must never rewrite a call into a different action.
 /// </summary>
 internal static class ToolCallParsing
 {
@@ -114,35 +111,10 @@ internal static class ToolCallParsing
             .Select(kv =>
             {
                 var b = kv.Value;
-                var arguments = NormalizeToolArgs(b.Arguments.Length > 0 ? b.Arguments.ToString() : "{}");
+                var arguments = b.Arguments.Length > 0 ? b.Arguments.ToString() : "{}";
                 return new ToolCall(b.Id ?? Guid.NewGuid().ToString("N"), b.Name ?? "", arguments);
             })
             .ToList();
-    }
-
-    /// <summary>
-    /// Small models sometimes concatenate two JSON objects into one tool call's arguments
-    /// (e.g. {"a":1}{"b":2}), which is not valid JSON. Keep only the FIRST value so the call still
-    /// runs instead of failing the whole step; trailing junk is dropped.
-    /// </summary>
-    internal static string NormalizeToolArgs(string raw)
-    {
-        if (string.IsNullOrWhiteSpace(raw))
-            return "{}";
-        try
-        {
-            var reader = new Utf8JsonReader(Encoding.UTF8.GetBytes(raw));
-            if (JsonDocument.TryParseValue(ref reader, out var doc))
-            {
-                using (doc)
-                    return doc.RootElement.GetRawText();
-            }
-        }
-        catch
-        {
-            // fall through — let the tool report the parse error itself
-        }
-        return raw;
     }
 
     /// <summary>

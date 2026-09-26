@@ -2,6 +2,7 @@ namespace Enactive.Engine.Tests;
 
 using Enactive.Core.Chat;
 using Enactive.Core.Events;
+using Enactive.Core.Permissions;
 using Enactive.Core.Templates;
 using Xunit;
 
@@ -32,6 +33,43 @@ public sealed class SuccessCriteriaTests
         Turn.Says("""{"disposition":"quick_action","title":"do the thing"}"""),
         Turn.Calls1("write_file", """{"path":"ok.txt","content":"hello"}"""),
         Turn.Says("All done — everything builds and the tests pass."));
+
+    [Theory]
+    [InlineData(CriterionOrigin.Declared, true, RunOutcomeKind.Incomplete)]
+    [InlineData(CriterionOrigin.Proposed, true, RunOutcomeKind.Completed)]
+    [InlineData(CriterionOrigin.Declared, false, RunOutcomeKind.Completed)]
+    [InlineData(CriterionOrigin.Proposed, false, RunOutcomeKind.Completed)]
+    public async Task Approval_explains_the_actual_effect_of_skipping_a_check(
+        CriterionOrigin origin, bool required, RunOutcomeKind expectedOutcome)
+    {
+        using var fx = new EngineFixture();
+        fx.Decisions.Answer = "deny";
+        var criterion = Criterion("Contents verified", exitCode: 0, required: required)
+            with { Origin = origin };
+        var policy = PermissionPolicy.PermissiveDefault with { AskBefore = new[] { "run_command" } };
+        var events = await fx.RunAsync(fx.Build(ClaimsSuccess(), policy: policy,
+            successCriteria: new[] { criterion }), "do the thing");
+
+        var detail = Assert.Single(fx.Decisions.Requests).FullDetail!;
+        Assert.Contains("NOT CHECKED", detail);
+        if (expectedOutcome == RunOutcomeKind.Incomplete)
+            Assert.Contains("cannot be reported as completed", detail);
+        else
+        {
+            Assert.Contains("does not block completion", detail);
+            Assert.DoesNotContain("cannot be reported as completed", detail);
+        }
+        if (required && origin == CriterionOrigin.Proposed)
+        {
+            Assert.Contains("proposed by the planner", detail);
+            Assert.Contains("If it runs and fails, it blocks completion", detail);
+        }
+        if (!required)
+            Assert.Contains("optional", detail);
+        Assert.Equal("Unknown", Assert.Single(events, e => e.Kind == EventKind.CriterionEvaluated)
+            .CriterionOutcomeName());
+        Assert.Equal(expectedOutcome, Terminal(events).Outcome());
+    }
 
     // ── the point of the whole milestone ────────────────────────────────────
 

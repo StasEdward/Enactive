@@ -109,6 +109,8 @@ public sealed class FakeChatProvider : IChatProvider
     public int? AnswerReserve(ChatRequest request) => Reserve;
 
     public int? HandoverAtPercent(ChatRequest request) => HandoverAt;
+    public int ReasoningTokens { get; set; }
+    public int ReasoningAllowance(ChatRequest request) => ReasoningTokens;
 
     public int TurnsLeft => _script.Count;
 
@@ -214,6 +216,30 @@ public sealed class MapProviderFactory : IChatProviderFactory
 /// <summary>A reviewer script: the verdict shape <see cref="Reviewer"/> parses.</summary>
 public static class Verdicts
 {
+    public static Turn Combined(Turn proof, string scope = "S1", params string[] ids)
+    {
+        var p = System.Text.Json.Nodes.JsonNode.Parse(proof.Text!)!;
+        var claims = new System.Text.Json.Nodes.JsonArray();
+        foreach (var id in ids.Length == 0 ? new[] { "O001" } : ids)
+        {
+            var claim = p.DeepClone().AsObject();
+            if (claim["shown"]!.GetValue<string>() == "nothing-to-do")
+                claim["shown"] = "yes"; // Whole-step no-op proof is separate from requirement evidence.
+            claim["id"] = id;
+            claim["scope"] = scope;
+            var requirement = claim.DeepClone().AsObject();
+            requirement.Remove("id");
+            requirement["requirement"] = "Requirement for " + id;
+            requirement["global"] = false;
+            requirement["prohibitions"] = new System.Text.Json.Nodes.JsonArray();
+            claim["requirements"] = new System.Text.Json.Nodes.JsonArray(requirement);
+            claims.Add(claim);
+        }
+        return Turn.Says(new System.Text.Json.Nodes.JsonObject {
+            ["verdict"] = "pass", ["notes"] = "checked", ["proof"] = p,
+            ["claims"] = claims, ["need_evidence"] = new System.Text.Json.Nodes.JsonArray()
+        }.ToJsonString());
+    }
     public const string ProviderId = "review";
     public const string Model = "reviewer-model";
 
@@ -349,6 +375,11 @@ public sealed class EngineFixture : IDisposable
     public WorkspaceInfo Workspace { get; }
     public DiskArtifactStore Artifacts { get; }
     public ScriptedDecisionHandler Decisions { get; } = new();
+    public GenerationBudgets? GenerationBudgetsOverride { get; set; }
+    public RepairConsultation? RepairConsultationOverride { get; set; }
+
+    public IWorkspaceChangesFactory? WorkspaceChangesOverride { get; set; }
+
     public ITool[]? ToolsOverride { get; set; }
 
     /// <summary>
@@ -532,7 +563,7 @@ public sealed class EngineFixture : IDisposable
         // both shipping hosts register them.
         var tools = new ToolRegistry(ToolsOverride ?? ShippedTools());
 
-        return new Orchestrator(
+        return new Orchestrator(WorkspaceChangesOverride ?? new Enactive.Workspace.WorkspaceChangesFactory(),
             providers,
             new ModelResolver(),
             team is { Count: > 0 }
@@ -546,6 +577,8 @@ public sealed class EngineFixture : IDisposable
             decisions ?? Decisions,
             policy ?? PermissionPolicy.PermissiveDefault,
             new EmptyServices(),
+            generationBudgets: GenerationBudgetsOverride,
+            repairConsultation: RepairConsultationOverride,
             router: router,
             reviewRetries: reviewRetries,
             allowImplicitToolCalls: allowImplicitToolCalls,
@@ -634,19 +667,7 @@ public sealed class EngineFixture : IDisposable
     public static ITool ToolNamed(string name)
         => ShippedTools().Single(t => t.Definition.Name == name);
 
-    public static ITool[] ShippedTools() => new ITool[]
-    {
-        new WriteFileTool(), new EditFileTool(), new ReadFileTool(), new ReadFilesTool(),
-        new SearchFilesTool(),
-        new CountMatchesTool(), new FileStatsTool(), new CompareFilesTool(),
-        new ListDirectoryTool(), new CreateDirectoryTool(), new MoveFileTool(), new CopyFileTool(), new DeleteFileTool(),
-        new RunCommandTool(), new RunPowerShellTool(), new GitTool(), new DockerTool(),
-
-        // With no account: a shipping host registers it either way - the roles name it, and the
-        // two sets have to be the same set - and it says so in its own description. A test that
-        // wants a working one builds its own with a MailAccount.
-        new SendEmailTool(MailAccount.None)
-    };
+    public static ITool[] ShippedTools() => BuiltInTools.Create(MailAccount.None);
 
     public void Dispose()
     {

@@ -178,8 +178,7 @@ public sealed class NothingToDoTests
         };
 
         var reviewer = new FakeChatProvider(
-            Verdicts.Pass("the report matches the evidence"),
-            Verdicts.NothingToDo("the README already matches the code", 1));
+            Verdicts.Combined(Verdicts.NothingToDo("the README already matches the code", 1)));
 
         var events = await fx.RunAsync(
             fx.Build(worker, router: Routers.WithReviewer(), reviewProvider: reviewer,
@@ -220,8 +219,7 @@ public sealed class NothingToDoTests
         };
 
         var reviewer = new FakeChatProvider(
-            Verdicts.Pass("the report matches the evidence"),
-            Verdicts.NothingToDo("it was already right", 1));
+            Verdicts.Combined(Verdicts.NothingToDo("it was already right", 1)));
 
         var events = await fx.RunAsync(
             fx.Build(worker, router: Routers.WithReviewer(), reviewProvider: reviewer,

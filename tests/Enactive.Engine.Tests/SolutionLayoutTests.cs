@@ -45,15 +45,6 @@ public sealed class SolutionLayoutTests
             + "configuration to them: " + string.Join(", ", missing));
     }
 
-    /// <summary>Walks up from the test binaries until the solution file turns up.</summary>
-    private static string RepositoryRoot()
-    {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-
-        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "Enactive.sln")))
-            directory = directory.Parent;
-
-        Assert.True(directory is not null, "Enactive.sln was not found above " + AppContext.BaseDirectory);
-        return directory!.FullName;
-    }
+    /// <summary>Uses the checkout recorded when the tests were built.</summary>
+    private static string RepositoryRoot() => TestRepository.Root;
 }

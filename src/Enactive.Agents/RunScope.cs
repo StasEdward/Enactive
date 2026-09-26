@@ -111,7 +111,7 @@ public sealed class RunScope
     /// where it does not, which is every local runtime and every phase before 2026-09-11.
     /// </param>
     public WorkEvent Usage(string purpose, ModelRef reference, int prompt, int completion,
-                           int? stepNo = null, int? cached = null)
+                           int? stepNo = null, int? cached = null, int? created = null)
     {
         Budget.TokensUsed(prompt, completion);
         return new(Guid.NewGuid(), TaskId, RunId, DateTimeOffset.UtcNow, EventKind.UsageReported,
@@ -119,7 +119,7 @@ public sealed class RunScope
                    + (cached is > 0 ? $" ({cached} cached)" : "")
                    + $" ({reference.ProviderId}/{reference.Model}, {purpose})",
                    WorkEventPayload.UsagePayload(prompt, completion, stepNo,
-                                                 reference.ProviderId, reference.Model, purpose, cached));
+                                                 reference.ProviderId, reference.Model, purpose, cached, created));
     }
 
     /// <summary>

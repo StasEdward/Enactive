@@ -16,6 +16,20 @@ using Xunit;
 /// </summary>
 public sealed class ExecutionLimitTests
 {
+    [Fact]
+    public async Task Parallel_batch_cannot_exceed_the_remaining_step_budget()
+    {
+        using var fx = new EngineFixture();
+        var provider = new FakeChatProvider(Turn.Says("""
+            {"disposition":"task","title":"parallel","steps":[
+            {"title":"one","dependsOn":[]},{"title":"two","dependsOn":[]},
+            {"title":"three","dependsOn":[]},{"title":"four","dependsOn":[]}]}
+            """)) { WhenExhausted = Turn.Says("done") };
+        var events = await fx.RunAsync(fx.Build(provider, maxParallelSteps: 4,
+            limits: new ExecutionLimits(MaxSteps: 2)), "do four things");
+        Assert.Equal(2, StepsThatRan(events));
+        Assert.Equal(RunOutcomeKind.Incomplete, Terminal(events).Outcome());
+    }
     private const string FourStepPlan = """
         {"disposition":"task","title":"four steps",
          "steps":[{"title":"one","dependsOn":[]},{"title":"two","dependsOn":[0]},

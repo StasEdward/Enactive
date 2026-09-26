@@ -72,7 +72,7 @@ public sealed class ShellContainmentTests
     /// gone, the survivor's parent is gone, and a walk of live parents can no longer reach it.
     /// </summary>
     private const string Detach =
-        "@echo off\r\npowershell -NoProfile -Command \"Start-Process -FilePath survivor.cmd -WindowStyle Hidden\"\r\n";
+        "@echo off\r\npowershell -NoProfile -Command \"Start-Process -FilePath .\\survivor.cmd -WindowStyle Hidden\"\r\n";
 
     /// <summary>
     /// Detaches, then goes on running so there is something to cancel.
@@ -84,7 +84,7 @@ public sealed class ShellContainmentTests
     /// cancelled.</para>
     /// </summary>
     private const string DetachThenWait =
-        "@echo off\r\nstart \"\" /b detach.cmd\r\nping -n 30 127.0.0.1 >nul\r\n";
+        "@echo off\r\nstart \"\" /b .\\detach.cmd\r\nping -n 30 127.0.0.1 >nul\r\n";
 
     private static void WriteScripts(EngineFixture fx)
     {
@@ -127,11 +127,9 @@ public sealed class ShellContainmentTests
     /// <para>Before the job object this failed - the run was in the history as cancelled while the
     /// grandchild went on writing into the workspace.</para>
     /// </summary>
-    [Fact]
+    [WindowsFact]
     public async Task A_detached_grandchild_does_not_outlive_a_cancelled_command()
     {
-        if (!OperatingSystem.IsWindows())
-            return;
 
         using var fx = new EngineFixture();
         WriteScripts(fx);
@@ -139,7 +137,7 @@ public sealed class ShellContainmentTests
         using var cts = new CancellationTokenSource();
 
         var run = new RunCommandTool().InvokeAsync(
-            Arguments("launcher.cmd"), fx.ContextFor(), cts.Token);
+            Arguments(".\\launcher.cmd"), fx.ContextFor(), cts.Token);
 
         // Waited FOR, not slept past: the cancellation must arrive while the survivor is genuinely
         // running and orphaned, and this is the only thing that can say it is.
@@ -148,8 +146,7 @@ public sealed class ShellContainmentTests
 
         cts.Cancel();
 
-        var result = await run;
-        Assert.False(result.Success);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run);
 
         Assert.False(await SurvivorAppeared(fx),
             "A process started by a cancelled command wrote to the workspace after the run was over.");
@@ -161,7 +158,7 @@ public sealed class ShellContainmentTests
     /// that did not hand the pipes on would not reproduce it.
     /// </summary>
     private const string LaunchAndReturn =
-        "@echo off\r\nstart \"\" /b survivor.cmd\r\necho launched\r\n";
+        "@echo off\r\nstart \"\" /b .\\survivor.cmd\r\necho launched\r\n";
 
     /// <summary>
     /// The other half, and the one a real task asked for: "find Total Commander and start it".
@@ -188,11 +185,9 @@ public sealed class ShellContainmentTests
     /// <para>The exact inverse of the test above, deliberately. Cancelled: nothing survives.
     /// Finished: what it was asked to start does. Neither one alone is the rule.</para>
     /// </summary>
-    [Fact]
+    [WindowsFact]
     public async Task A_command_that_launches_a_program_returns_at_once_and_leaves_it_running()
     {
-        if (!OperatingSystem.IsWindows())
-            return;
 
         using var fx = new EngineFixture();
         WriteScripts(fx);
@@ -200,7 +195,7 @@ public sealed class ShellContainmentTests
 
         var started = System.Diagnostics.Stopwatch.StartNew();
         var result = await new RunCommandTool().InvokeAsync(
-            Arguments("launch.cmd"), fx.ContextFor(), CancellationToken.None);
+            Arguments(".\\launch.cmd"), fx.ContextFor(), CancellationToken.None);
         started.Stop();
 
         // Well under run_command's own 60s, and far enough under it that a slow machine cannot make
@@ -246,18 +241,16 @@ public sealed class ShellContainmentTests
     /// seconds against a two-second grace. And it is a separate test, because "what survives" and
     /// "what the output admits" are two different claims and a test should fail for one reason.</para>
     /// </summary>
-    [Fact]
+    [WindowsFact]
     public async Task Output_cut_short_by_a_child_still_holding_the_pipe_says_so()
     {
-        if (!OperatingSystem.IsWindows())
-            return;
 
         using var fx = new EngineFixture();
         fx.Write("holds.cmd", HoldsThePipe);
 
         var started = System.Diagnostics.Stopwatch.StartNew();
         var result = await new RunCommandTool().InvokeAsync(
-            Arguments("holds.cmd"), fx.ContextFor(), CancellationToken.None);
+            Arguments(".\\holds.cmd"), fx.ContextFor(), CancellationToken.None);
         started.Stop();
 
         Assert.True(started.Elapsed < TimeSpan.FromSeconds(20),

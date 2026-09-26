@@ -52,14 +52,5 @@ public sealed class OneSettingOnePlaceTests
             File.ReadAllLines(file)
                 .Select(line => line.TrimStart().StartsWith("//", StringComparison.Ordinal) ? "" : line));
 
-    private static string RepositoryRoot()
-    {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-
-        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "Enactive.sln")))
-            directory = directory.Parent;
-
-        Assert.True(directory is not null, "Enactive.sln was not found above " + AppContext.BaseDirectory);
-        return directory!.FullName;
-    }
+    private static string RepositoryRoot() => TestRepository.Root;
 }

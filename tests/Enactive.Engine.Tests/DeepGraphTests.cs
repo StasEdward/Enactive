@@ -16,9 +16,8 @@ using Xunit;
 /// are answered by the same cascade and the same readiness check, and neither had ever been run
 /// against anything with a middle.</para>
 ///
-/// <para>The cycle case is the one the engine detects rather than prevents: nothing stops a planner
-/// emitting <c>A depends on B, B depends on A</c>, and what happens then is a property of the
-/// dispatcher, not of the plan.</para>
+/// <para>A planner may emit a cycle. Preflight validation must reject it before dispatching
+/// even an independent prefix; the scheduler retains its own readiness safeguards.</para>
 /// </summary>
 public sealed class DeepGraphTests
 {
@@ -199,7 +198,7 @@ public sealed class DeepGraphTests
     }
 
     /// <summary>
-    /// The half-and-half case, and the one that matters: two steps run, and the rest of the plan is
+    /// The half-and-half case: two steps could run, and the rest of the plan is
     /// a cycle among themselves.
     ///
     /// <para>The run's outcome is built from its STEPS' outcomes. A step left Pending has none — and
@@ -226,9 +225,9 @@ public sealed class DeepGraphTests
         var events = await fixture.RunAsync(
             fixture.Build(provider, maxParallelSteps: 2), "two steps and a knot");
 
-        // The runnable prefix ran.
-        Assert.Equal(StepOutcomeKind.Succeeded, Card(events, "One").StepOutcome());
-        Assert.Equal(StepOutcomeKind.Succeeded, Card(events, "Two").StepOutcome());
+        // Preflight rejects the entire plan before the runnable prefix can have effects.
+        Assert.Equal(StepOutcomeKind.Skipped, Card(events, "One").StepOutcome());
+        Assert.Equal(StepOutcomeKind.Skipped, Card(events, "Two").StepOutcome());
 
         // The knot did not, and says so — as the plan's own steps, not as silence.
         Assert.Equal(StepOutcomeKind.Skipped, Card(events, "Knot A").StepOutcome());

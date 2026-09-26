@@ -26,6 +26,7 @@ public sealed class ToolRegistry : IToolRegistry
         => _tools = tools.ToDictionary(t => t.Definition.Name, StringComparer.OrdinalIgnoreCase);
 
     public IReadOnlyList<ToolDefinition> Definitions => _tools.Values.Select(t => t.Definition).ToArray();
+    public ToolDefinition? DefinitionOf(string name) => _tools.TryGetValue(name, out var tool) ? tool.Definition : null;
     public bool RequiresApprovalOf(string toolName) => _tools.TryGetValue(toolName, out var tool) && tool.RequiresApproval;
 
     public PermissionLevel RequiredLevelOf(string toolName)
@@ -52,7 +53,13 @@ public sealed class ToolRegistry : IToolRegistry
                     ? tool.Definition.WorkspaceEffect : WorkspaceEffect.Unknown);
             if (!pending && effect != WorkspaceEffect.None)
                 lock (revision) revision.Version++;
-            return result with { WorkspaceEffect = effect };
+            return result with
+            {
+                WorkspaceEffect = effect,
+                ChangedPaths = effect == WorkspaceEffect.Changed
+                    ? (result.ChangedPaths ?? ToolEffects.Paths(tool.Definition, call.ArgumentsJson))?.ToArray()
+                    : null
+            };
         }
         catch
         {

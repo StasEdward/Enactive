@@ -32,7 +32,12 @@ public sealed record ProviderDescriptor(
     /// <summary>Tokens of the window held back for the answer. See <c>ProviderConfig.AnswerReserveTokens</c>.</summary>
     int? AnswerReserveTokens = null,
     /// <summary>How full the window may get before a step is handed over. See <c>ProviderConfig.HandoverAtPercent</c>.</summary>
-    int? HandoverAtPercent = null);
+    int? HandoverAtPercent = null,
+    int StreamIdleTimeoutSeconds = 300,
+    bool OpenAiReasoningProfile = false,
+    int? OllamaKeepAliveSeconds = null,
+    int CompletionTimeoutSeconds = 900,
+    int? ReasoningTokenAllowance = null);
 
 /// <summary>Talks to an LLM. Implementations live in Enactive.Providers (transport stays out of Core).</summary>
 public interface IChatProvider
@@ -68,6 +73,9 @@ public interface IChatProvider
     /// provider with no window at all.
     /// </summary>
     int? HandoverAtPercent(ChatRequest request) => null;
+
+    /// <summary>Additional generation allowance for reasoning; still subject to context and configured output caps.</summary>
+    int ReasoningAllowance(ChatRequest request) => 0;
 }
 
 /// <summary>Builds an <see cref="IChatProvider"/> for a provider id.</summary>

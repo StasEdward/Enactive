@@ -10,12 +10,9 @@ using Enactive.Core.Templates;
 /// shown in an editor and never enforced is worse than no limit, because it is written down
 /// somewhere as a guarantee.</para>
 ///
-/// <para><b>Checked BETWEEN steps, never inside one.</b> That is a real limitation and worth stating
-/// rather than hiding: a single step that runs long or reads an enormous file overshoots, and the
-/// budget notices only when it is asked for the next one. The alternative is cancelling work in
-/// flight, which throws away whatever that step had already done and leaves the workspace in a state
-/// nobody chose. A ceiling that stops the NEXT thing is honest; one that kills the current thing
-/// costs more than it saves.</para>
+/// <para>Checked before dispatching a step and before requesting a new model turn.
+/// An in-flight reply and its complete tool batch finish before the next check; one turn may
+/// overshoot. Step limits apply only to dispatch, never to an already-started step.</para>
 /// </summary>
 public sealed class RunBudget
 {
@@ -57,6 +54,7 @@ public sealed class RunBudget
     public static RunBudget Unlimited() => new(ExecutionLimits.None, DateTimeOffset.UtcNow);
 
     public int StepsRun => Volatile.Read(ref _steps);
+    public int RemainingSteps => _limits.MaxSteps is { } max ? Math.Max(0, max - StepsRun) : int.MaxValue;
     public long TokensSpent => Interlocked.Read(ref _tokens);
 
     /// <summary>Counts a step as started. Called when one is DISPATCHED, not when it finishes.</summary>
@@ -88,6 +86,15 @@ public sealed class RunBudget
             if (_limits.MaxSteps is { } maxSteps && StepsRun >= maxSteps)
                 return $"the run reached its limit of {maxSteps} step(s)";
 
+            return TurnExhausted;
+        }
+    }
+
+    /// <summary>Token/time ceiling at a completed-turn boundary; excludes already-dispatched steps.</summary>
+    public string? TurnExhausted
+    {
+        get
+        {
             if (_limits.MaxTokens is { } maxTokens && TokensSpent >= maxTokens)
                 return $"the run reached its limit of {maxTokens} token(s), having used {TokensSpent}";
 
@@ -101,4 +108,10 @@ public sealed class RunBudget
             return null;
         }
     }
+
+    /// <summary>Check a pending phase's reported usage before it is published/accounted once by its caller.</summary>
+    public string? TurnExhaustedAfter(int prompt, int completion)
+        => _limits.MaxTokens is { } max && TokensSpent + (long)prompt + completion >= max
+            ? $"the run reached its limit of {max} token(s), having used {TokensSpent + (long)prompt + completion}"
+            : TurnExhausted;
 }

@@ -21,11 +21,13 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
     private readonly HttpClient _http;
     private readonly ProviderDescriptor _descriptor;
     private readonly ILogSink? _log;
+    private readonly string _capabilityScope;
 
     public OpenAiCompatibleProvider(HttpClient http, ProviderDescriptor descriptor, ILogSink? log = null)
     {
         _http = http;
-        _descriptor = descriptor;
+        _descriptor = descriptor with { Headers = descriptor.Headers?.ToDictionary(x => x.Key, x => x.Value), Models = descriptor.Models.ToArray() };
+        _capabilityScope = Hash(JsonSerializer.Serialize(_descriptor));
         _log = log;
     }
 
@@ -48,6 +50,7 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
     public int? AnswerReserve(ChatRequest request) => _descriptor.AnswerReserveTokens;
 
     public int? HandoverAtPercent(ChatRequest request) => _descriptor.HandoverAtPercent;
+    public int ReasoningAllowance(ChatRequest request) => Math.Clamp(_descriptor.ReasoningTokenAllowance ?? (_descriptor.OpenAiReasoningProfile ? 8192 : 0), 0, 65536);
 
     public async IAsyncEnumerable<ChatStreamEvent> StreamChatAsync(
         ChatRequest request, [EnumeratorCancellation] CancellationToken ct)
@@ -55,36 +58,43 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
         var key = CapabilityKey(request);
         var wantUsage = !IsDisabled(NoStreamUsage, key);
         var response = await SendAsync(wantUsage);
-        if (response.StatusCode == System.Net.HttpStatusCode.BadRequest && wantUsage)
+        string? cachedError = null;
+        try
         {
-            var error = await response.Content.ReadAsStringAsync(ct);
-            if (UnsupportedField(error, "stream_options", "include_usage"))
+            if (response.StatusCode == System.Net.HttpStatusCode.BadRequest && wantUsage)
             {
-                response.Dispose();
-                response = await SendAsync(includeUsage: false);
-                if (response.IsSuccessStatusCode)
-                    NoStreamUsage[key] = DateTimeOffset.UtcNow.AddMinutes(15);
+                var error = cachedError = await ProviderHttpError.ReadBodyAsync(response, _descriptor.StreamIdleTimeoutSeconds, ct);
+                if (UnsupportedField(error, "stream_options", "include_usage"))
+                {
+                    response.Dispose();
+                    response = await SendAsync(includeUsage: false);
+                    cachedError = null;
+                    if (response.IsSuccessStatusCode)
+                        NoStreamUsage[key] = DateTimeOffset.UtcNow.AddMinutes(15);
+                }
             }
         }
+        catch { response.Dispose(); throw; }
 
         using var _ = response;
 
         if (!response.IsSuccessStatusCode)
         {
-            var errorBody = await response.Content.ReadAsStringAsync(ct);
+            var errorBody = cachedError ?? await ProviderHttpError.ReadBodyAsync(response, _descriptor.StreamIdleTimeoutSeconds, ct);
             WireTap.Error(_log, _descriptor.Id, (int)response.StatusCode, errorBody);
-            throw new HttpRequestException(
-                $"Provider '{_descriptor.Id}' returned {(int)response.StatusCode} {response.StatusCode}: {Truncate(errorBody, 500)}");
+            throw ProviderHttpError.Create(
+                $"Provider '{_descriptor.Id}' returned {(int)response.StatusCode} {response.StatusCode}: {Truncate(errorBody, 500)}", (int)response.StatusCode, ProviderHttpError.RetryAfter(response));
         }
 
         async Task<HttpResponseMessage> SendAsync(bool includeUsage)
         {
             using var message = BuildHttpRequest(request, stream: true, includeUsage: includeUsage);
-            return await _http.SendAsync(message, HttpCompletionOption.ResponseHeadersRead, ct);
+            return await ProviderDeadline.HeadersAsync(_http, message, _descriptor.StreamIdleTimeoutSeconds, ct);
         }
 
         await using var stream = await response.Content.ReadAsStreamAsync(ct);
-        using var reader = new StreamReader(stream);
+        using var reader = new StreamReader(new IdleTimeoutStream(stream, TimeSpan.FromSeconds(Math.Clamp(_descriptor.StreamIdleTimeoutSeconds, 1, 86400))));
+        var calls = new StreamCallIdentity();
         var raw = BoundedLogBuffer.Create(_log, LogLevel.Trace);
         var finished = false;
         try
@@ -93,6 +103,7 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
             {
                 if (raw is not null && !_log.IsLoggingEnabled(LogLevel.Trace)) raw = null;
                 raw?.AppendLine(line);
+                ProviderResponse.RejectHtml(line, _descriptor, request);
                 if (line.Length == 0 || !line.StartsWith("data:", StringComparison.Ordinal))
                     continue;
 
@@ -105,7 +116,7 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
                     break;
                 }
 
-                foreach (var evt in ParseStreamChunk(data, _descriptor.Id))
+                foreach (var evt in ProviderResponse.Parse(() => ParseStreamChunk(data, _descriptor.Id, calls), _descriptor, request))
                 {
                     finished |= evt is FinishDelta;
                     yield return evt;
@@ -123,11 +134,17 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
         }
     }
 
-    public async Task<ChatCompletion> CompleteAsync(ChatRequest request, CancellationToken ct)
+    public Task<ChatCompletion> CompleteAsync(ChatRequest request, CancellationToken ct)
+        => ProviderDeadline.RunAsync(_descriptor.CompletionTimeoutSeconds, "completion", ct,
+            token => CompleteCoreAsync(request, token));
+
+    private async Task<ChatCompletion> CompleteCoreAsync(ChatRequest request, CancellationToken ct)
     {
+        TimeSpan? retryAfter = null;
         var key = CapabilityKey(request);
-        var wanted = request.ResponseSchema is { Length: > 0 } schema
-            && TryElement(schema) is not null && !IsDisabled(NoStructuredOutput, key);
+        var parsedSchema = request.ResponseSchema is { Length: > 0 } schema
+            && !IsDisabled(NoStructuredOutput, key) ? TryElement(schema) : null;
+        var wanted = parsedSchema is not null;
         var (ok, status, body) = await SendAsync(wanted);
         if (!ok && status == 400 && wanted && UnsupportedField(body, "response_format", "json_schema"))
         {
@@ -138,17 +155,18 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
         if (!ok)
         {
             WireTap.Error(_log, _descriptor.Id, status, body);
-            throw new HttpRequestException(
-                $"Provider '{_descriptor.Id}' returned {status}: {Truncate(body, 500)}");
+            throw ProviderHttpError.Create(
+                $"Provider '{_descriptor.Id}' returned {status}: {Truncate(body, 500)}", status, retryAfter);
         }
 
         WireTap.Response(_log, _descriptor.Id, status, body);
-        return ParseCompletion(body);
+        return ProviderResponse.Parse(() => ParseCompletion(body), _descriptor, request);
 
         async Task<(bool Ok, int Status, string Body)> SendAsync(bool includeSchema)
         {
-            using var httpRequest = BuildHttpRequest(request, stream: false, includeSchema);
+            using var httpRequest = BuildHttpRequest(request, stream: false, includeSchema, responseSchema: parsedSchema);
             using var response = await _http.SendAsync(httpRequest, HttpCompletionOption.ResponseContentRead, ct);
+            retryAfter = ProviderHttpError.RetryAfter(response);
             var text = await response.Content.ReadAsStringAsync(ct);
             return (response.IsSuccessStatusCode, (int)response.StatusCode, text);
         }
@@ -165,17 +183,17 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
 
     private string CapabilityKey(ChatRequest request)
     {
-        // Hash credentials/configuration rather than retaining secrets in cache keys.
-        var configuration = JsonSerializer.Serialize(new
-        {
-            Descriptor = _descriptor,
-            Model = request.Model,
-            Headers = _http.DefaultRequestHeaders.Select(h => new { h.Key, Values = h.Value.ToArray() }).ToArray()
-        });
-        return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(configuration)));
+        // Immutable descriptor is hashed once. HttpClient headers remain mutable and must still
+        // participate in the key: changing authentication/routing must trigger a fresh probe.
+        var headers = JsonSerializer.Serialize(_http.DefaultRequestHeaders
+            .Select(h => new { h.Key, Values = h.Value.ToArray() }).ToArray());
+        return _capabilityScope + ":" + request.Model + ":" + Hash(headers);
     }
 
-    private static bool UnsupportedField(string body, params string[] fields)
+    private static string Hash(string value)
+        => Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(value)));
+
+    internal static bool UnsupportedField(string body, params string[] fields)
     {
         string message = body;
         string? param = null, code = null;
@@ -200,7 +218,7 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
             if (param == field && code is "unsupported_parameter" or "unknown_parameter") return true;
             var name = System.Text.RegularExpressions.Regex.Escape(field);
             var pattern = @"\b(?:unknown|unrecognized|unsupported|unexpected)\s+(?:(?:field|parameter|argument)\s*:?\s*)?['""`]?"
-                + name + @"\b|\b" + name + @"['""`]?\s+(?:(?:is|are)\s+)?(?:not supported|unsupported|not allowed|not recognized)\b";
+                + name + @"\b|\b" + name + @"['""`]?\s+(?:type\s+)?(?:(?:is|are)\s+)?(?:not supported|unsupported|not allowed|not recognized|unavailable)\b";
             if (System.Text.RegularExpressions.Regex.IsMatch(message, pattern,
                 System.Text.RegularExpressions.RegexOptions.IgnoreCase)) return true;
         }
@@ -210,12 +228,13 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
     /// <summary>The schema as JSON, or null when it is not parseable - a bad schema must not fail a run.</summary>
     private static JsonElement? TryElement(string json)
     {
-        try { return JsonDocument.Parse(json).RootElement.Clone(); }
+        try { return WireJson.Parse(json); }
         catch (JsonException) { return null; }
     }
 
     private HttpRequestMessage BuildHttpRequest(
-        ChatRequest request, bool stream, bool includeSchema = true, bool includeUsage = true)
+        ChatRequest request, bool stream, bool includeSchema = true, bool includeUsage = true,
+        JsonElement? responseSchema = null)
     {
         var payload = new Dictionary<string, object?>
         {
@@ -238,7 +257,7 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
         // Sent only while streaming, and only until an endpoint refuses it - see NoStreamUsage.
         if (stream && includeUsage)
             payload["stream_options"] = new Dictionary<string, object?> { ["include_usage"] = true };
-        if (request.Temperature is { } temperature)
+        if (!_descriptor.OpenAiReasoningProfile && request.Temperature is { } temperature)
             payload["temperature"] = temperature;
         if (request.Tools is { Count: > 0 } tools)
             payload["tools"] = tools.Select(ToWireTool).ToArray();
@@ -248,21 +267,21 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
         // caps output low would silently truncate every answer and the setting meant to raise it was
         // never on the wire.
         if (OutputTokenBudget.Resolve(request, _descriptor) is { } maxTokens)
-            payload["max_tokens"] = maxTokens;
+            payload[_descriptor.OpenAiReasoningProfile ? "max_completion_tokens" : "max_tokens"] = maxTokens;
 
         // Structured outputs (FIX_PLAN §9c). "OpenAI-compatible" is a family, not a specification:
         // vLLM and LM Studio take this, and an arbitrary gateway may ignore it or reject the whole
         // request for it. Sent only when the caller asked and this endpoint has not already refused
         // one. Only an explicit unsupported-field error triggers a fallback; only a successful
         // fallback is cached.
-        if (includeSchema && request.ResponseSchema is { Length: > 0 } schema && TryElement(schema) is { } element)
+        if (includeSchema && request.ResponseSchema is { Length: > 0 } schema && (responseSchema ?? TryElement(schema)) is { } element)
             payload["response_format"] = new
             {
                 type = "json_schema",
                 json_schema = new { name = "answer", schema = element, strict = false }
             };
 
-        var url = _descriptor.BaseUrl.TrimEnd('/') + "/chat/completions";
+        var url = ProviderEndpoint.Chat(_descriptor, ProviderKind.OpenAiCompatible);
         var json = JsonSerializer.Serialize(payload, JsonOpts);
         WireTap.Request(_log, _descriptor.Id, request.Model, json);
         var httpRequest = new HttpRequestMessage(HttpMethod.Post, url)
@@ -278,7 +297,7 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
         return httpRequest;
     }
 
-    private static IEnumerable<ChatStreamEvent> ParseStreamChunk(string data, string providerId)
+    private static IEnumerable<ChatStreamEvent> ParseStreamChunk(string data, string providerId, StreamCallIdentity calls)
     {
         var events = new List<ChatStreamEvent>();
         using var doc = JsonDocument.Parse(data);
@@ -293,6 +312,8 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
 
             if (choice.TryGetProperty("delta", out var delta))
             {
+                if (Reasoning(delta) is { Length: > 0 } thinking)
+                    events.Add(new ReasoningDelta(thinking));
                 if (delta.TryGetProperty("content", out var content)
                     && content.ValueKind == JsonValueKind.String
                     && content.GetString() is { Length: > 0 } text)
@@ -304,7 +325,7 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
                 {
                     foreach (var tc in toolCalls.EnumerateArray())
                     {
-                        var index = tc.TryGetProperty("index", out var idx) && idx.TryGetInt32(out var i) ? i : 0;
+                        int? wireIndex = tc.TryGetProperty("index", out var idx) && idx.TryGetInt32(out var i) ? i : null;
                         var id = tc.TryGetProperty("id", out var idEl) && idEl.ValueKind == JsonValueKind.String
                             ? idEl.GetString() : null;
 
@@ -318,6 +339,7 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
                                 argumentsPart = argsEl.GetString();
                         }
 
+                        var index = calls.Resolve(wireIndex, id, name, argumentsPart);
                         events.Add(new ToolCallDelta(index, id, name, argumentsPart));
                     }
                 }
@@ -346,11 +368,11 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
         {
             name = t.Name,
             description = t.Description,
-            parameters = JsonDocument.Parse(t.JsonSchema).RootElement.Clone()
+            parameters = WireJson.Schema(t)
         }
     };
 
-    private static object ToWire(ChatMessage m)
+    private object ToWire(ChatMessage m)
     {
         if (m.Role == ChatRole.Tool)
             return new { role = "tool", tool_call_id = m.ToolCallId ?? "", content = m.Content ?? "" };
@@ -370,7 +392,8 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
             };
         }
 
-        return new { role = RoleString(m.Role), content = m.Content ?? "" };
+        return new { role = _descriptor.OpenAiReasoningProfile && m.Role == ChatRole.System
+            ? "developer" : RoleString(m.Role), content = m.Content ?? "" };
     }
 
     private static string RoleString(ChatRole role) => role switch
@@ -434,11 +457,19 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
         }
 
         var assistant = new ChatMessage(ChatRole.Assistant, content, toolCalls);
-        return new ChatCompletion(assistant, finishReason, promptTokens, completionTokens)
+        return new ChatCompletion(assistant, finishReason, promptTokens, completionTokens, Thinking: Reasoning(message))
         {
             CachedPromptTokens = cached,
             Timings = ProviderTimings.OpenAi(root)
         };
+    }
+
+    private static string? Reasoning(JsonElement message)
+    {
+        foreach (var name in new[] { "reasoning_content", "reasoning" })
+            if (message.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
+                && value.GetString() is { Length: > 0 } text) return text;
+        return null;
     }
 
     /// <summary>

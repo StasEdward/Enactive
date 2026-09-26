@@ -1,0 +1,45 @@
+name: gateway integration tests
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        default: ""
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  gateway:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: integration-only-password
+          MYSQL_ROOT_HOST: "%"
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -pintegration-only-password"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=12
+    env:
+      ENACTIVE_REMOTE_DB: "Server=127.0.0.1;Port=3306;User ID=root;Password=integration-only-password;SslMode=None"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - name: Test with an isolated MySQL service
+        run: dotnet test tests/Enactive.Remote.Gateway.Tests/Enactive.Remote.Gateway.Tests.csproj --configuration Release --logger "trx;LogFileName=gateway.trx"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gateway-test-results
+          path: tests/Enactive.Remote.Gateway.Tests/TestResults/*.trx

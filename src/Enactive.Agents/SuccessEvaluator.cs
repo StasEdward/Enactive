@@ -19,9 +19,10 @@ using Enactive.Core.Tools;
 /// command, a missing tool and a process that would not start are all
 /// <see cref="CriterionOutcome.Unknown"/>, which is not a pass and not an accusation.</para>
 /// </summary>
-public sealed class SuccessEvaluator
+public sealed class SuccessEvaluator : ISuccessEvaluator
 {
-    /// <summary>The tool a criterion runs through. Its own required level is asked of the registry.</summary>
+    /// <summary>Legacy built-in identifier; dispatch now uses trusted RunsSuccessChecks metadata.</summary>
+    [Obsolete("Resolve the success-check adapter from ToolDefinition.RunsSuccessChecks.")]
     public const string CommandTool = "run_command";
 
     public async Task<SuccessReport> EvaluateAsync(
@@ -63,40 +64,46 @@ public sealed class SuccessEvaluator
             => new(criterion.Name, criterion.Command, criterion.Required,
                    CriterionOutcome.Unknown, null, why, criterion.Origin, criterion.AlreadyPassing);
 
+        var candidates = tools.Definitions.Where(d => d.Kind == ToolKind.Command && d.RunsSuccessChecks).ToArray();
+        if (candidates.Length != 1)
+            return Unknown("Exactly one tool must declare the success-check command protocol; found " + candidates.Length + ".");
+        var commandTool = candidates[0].Name;
+
         PermissionLevel required;
         try
         {
-            required = tools.RequiredLevelOf(CommandTool);
+            required = tools.RequiredLevelOf(commandTool);
         }
         catch (Exception ex)
         {
-            // No run_command in this registry at all. Not a failure of the work - we simply cannot
+            // The declared adapter cannot be resolved. Not a failure of the work - we simply cannot
             // check it here, and saying so beats reporting a pass nobody verified.
-            return Unknown($"'{CommandTool}' is not available in this workspace: {ex.Message}");
+            return Unknown($"'{commandTool}' is not available in this workspace: {ex.Message}");
         }
 
-        var gate = permissions.Evaluate(policy, CommandTool, required);
+        var gate = permissions.Evaluate(policy, commandTool, required);
 
         if (gate == PermissionDecision.Deny)
             return Unknown(
-                $"the permission policy forbids '{CommandTool}', so this check could not be run.");
+                $"the permission policy forbids '{commandTool}', so this check could not be run.");
 
         if (gate == PermissionDecision.Ask)
         {
-            // Asked, not assumed. Unattended this is where the answer is no - which is the point:
-            // a run nobody is watching must not quietly skip its own checks and finish green.
+            // Declared required checks block completion when skipped; proposed checks do not.
             var request = new DecisionRequest(
                 taskId,
                 $"Run the success check '{criterion.Name}'?",
                 $"Command: {criterion.Command}",
                 new[] { new DecisionOption("allow", "Run it"), new DecisionOption("deny", "Skip") },
                 RecommendedOptionId: "allow",
-                Subject: CommandTool,
+                Subject: commandTool,
                 FullDetail: $"Success criterion '{criterion.Name}' for this run:\n\n{criterion.Command}\n\n"
                           + $"It passes on exit code {criterion.ExpectedExitCode}. "
-                          + (criterion.Required
-                              ? "It is REQUIRED: skipping it means the run cannot be reported as completed."
-                              : "It is optional: skipping it changes nothing."));
+                          + (!criterion.Required
+                              ? "It is optional: skipping it records NOT CHECKED and does not block completion."
+                              : criterion.Origin == CriterionOrigin.Proposed
+                                  ? "It was proposed by the planner: skipping it records NOT CHECKED and does not block completion. If it runs and fails, it blocks completion."
+                                  : "It is REQUIRED: skipping it records NOT CHECKED and means the run cannot be reported as completed."));
 
             DecisionOutcome outcome;
             try
@@ -121,7 +128,7 @@ public sealed class SuccessEvaluator
         {
             var call = new ToolCall(
                 Guid.NewGuid().ToString("N"),
-                CommandTool,
+                commandTool,
                 JsonSerializer.Serialize(new Dictionary<string, string> { ["command"] = criterion.Command }));
 
             result = await tools.InvokeAsync(call, context, ct);

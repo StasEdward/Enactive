@@ -73,6 +73,39 @@ public sealed class AStepThatHandsOverToItselfTests
     /// it carried across the handover was complete and unforgiving.</para>
     /// </summary>
     [Fact]
+    public async Task A_truncated_handover_can_be_retried_without_losing_work()
+    {
+        using var fx = new EngineFixture();
+        var script = new List<Turn> { Turn.Says(QuickPlan) };
+        for (var i = 0; i < 80; i++)
+        {
+            if (i == 60) script.Add(new Turn(Text: "Incomplete notes", FinishReason: "length"));
+            if (i == 70) script.Add(Turn.Says(Note));
+            script.Add(Turn.Calls1("write_file", $$"""{"path":"note{{i}}.md","content":"step {{i}}"}"""));
+        }
+        script.Add(Turn.Says("Finished."));
+        var agent = new FakeChatProvider(script.ToArray());
+        var events = await fx.RunAsync(fx.Build(agent, EngineFixture.Role("developer")), "a long job");
+
+        Assert.Equal(2, agent.Requests.Count(r => r.Purpose == GenerationPurpose.Handover));
+        Assert.Contains(events, e => e.Kind == EventKind.ContextTrimmed);
+        Assert.Contains(events, e => e.Kind == EventKind.TaskCompleted);
+        for (var i = 0; i < 80; i++) Assert.Equal($"step {i}", fx.Read($"note{i}.md"));
+    }
+
+    [Fact]
+    public async Task Handover_uses_its_own_output_budget()
+    {
+        using var fx = new EngineFixture();
+        fx.GenerationBudgetsOverride = new(Handover: 777);
+        var agent = Busy(65, 60);
+        await fx.RunAsync(fx.Build(agent), "do the long job");
+        var handover = Assert.Single(agent.Requests, r => r.Purpose == GenerationPurpose.Handover);
+        Assert.Equal(777, handover.OutputTokenLimit);
+        Assert.NotEmpty(handover.Tools!);
+    }
+
+    [Fact]
     public async Task Orienting_itself_after_a_handover_is_not_a_stall()
     {
         using var fx = new EngineFixture();
@@ -227,24 +260,20 @@ public sealed class AStepThatHandsOverToItselfTests
     }
 
     /// <summary>
-    /// A step that cannot say what it has done is NOT cut. Starting it over from its instructions
-    /// alone, having forgotten everything it learned, is worse than a long conversation — so when
-    /// the note comes back empty the handover is simply not taken and the backstop stays where it
-    /// was.
+    /// A failed summary keeps the transcript for one retry. After two failures, measured engine
+    /// evidence replaces the missing note; the original instructions and backstop remain.
     /// </summary>
     [Fact]
-    public async Task A_step_that_writes_no_note_is_not_cut()
+    public async Task A_step_that_twice_writes_no_note_carries_engine_evidence()
     {
         using var fx = new EngineFixture();
         var agent = Busy(turns: 75);   // nothing scripted where the handover asks
 
         var events = await fx.RunAsync(fx.Build(agent, EngineFixture.Role("developer")), "a long job");
 
-        // Not "no ContextTrimmed at all": since 2026-09-24 the handover is announced BEFORE its note
-        // is written (a local model took 112 silent seconds over one), so an attempt that comes back
-        // empty has been announced. What must not appear is the handover itself.
-        Assert.DoesNotContain(events, e => e.Kind == EventKind.ContextTrimmed
-                                           && e.Summary.Contains("Carrying its own notes", StringComparison.Ordinal));
+        Assert.Contains(events, e => e.Kind == EventKind.ContextTrimmed
+                                    && e.Summary.Contains("Carrying engine evidence", StringComparison.Ordinal));
+        Assert.Equal(2, agent.Requests.Count(r => r.Purpose == GenerationPurpose.Handover));
         Assert.Contains(events, e => e.Kind == EventKind.TaskCompleted);
     }
 

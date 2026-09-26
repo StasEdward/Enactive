@@ -10,6 +10,7 @@ public sealed class MeteredChatProvider(IChatProvider inner, string providerId, 
     public int? ContextWindow(ChatRequest r) => inner.ContextWindow(r);
     public int? AnswerReserve(ChatRequest r) => inner.AnswerReserve(r);
     public int? HandoverAtPercent(ChatRequest r) => inner.HandoverAtPercent(r);
+    public int ReasoningAllowance(ChatRequest request) => inner.ReasoningAllowance(request);
     private void Report(ChatRequest r, int? prompt, int? output, int? cached, double seconds,
         double? first, ModelTimings? timings)
     {

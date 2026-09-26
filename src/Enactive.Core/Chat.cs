@@ -50,7 +50,13 @@ public sealed record ChatRequest(
     string? ResponseSchema = null,
     // Hard output ceiling (for example, the remaining context window). Must be positive when set.
     // Unlike MaxTokens, this never raises a smaller configured output budget.
-    int? OutputTokenLimit = null);
+    int? OutputTokenLimit = null,
+    GenerationPurpose? Purpose = null)
+{
+    /// <summary>Live run budget for transport retry boundaries; never part of the wire request.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public Enactive.Core.Execution.RunBudget? RetryBudget { get; init; }
+}
 
 /// <summary>A completed assistant turn (content and/or tool calls).</summary>
 /// <param name="PromptTokens">
@@ -80,6 +86,10 @@ public sealed record ChatCompletion(
     string? Thinking = null,
     int? CachedPromptTokens = null)
 {
+    /// <summary>Input tokens written to cache; already included in PromptTokens. Null means unreported.</summary>
+    public int? CacheCreationPromptTokens { get; init; }
+    /// <summary>False when input usage may exclude reused KV tokens; unsuitable for context calibration.</summary>
+    public bool PromptTokensIncludeCache { get; init; } = true;
     public ModelTimings? Timings { get; init; }
 }
 
@@ -99,7 +109,13 @@ public sealed record ToolCallDelta(int Index, string? Id, string? Name, string? 
 /// <c>new UsageDelta(a, b)</c> still compiles and still means what it meant: null, "nobody counted".
 /// </param>
 public sealed record UsageDelta(
-    int? PromptTokens, int? CompletionTokens, int? CachedPromptTokens = null) : ChatStreamEvent;
+    int? PromptTokens, int? CompletionTokens, int? CachedPromptTokens = null) : ChatStreamEvent
+{
+    /// <summary>Cache writes, already included in PromptTokens; null when unreported.</summary>
+    public int? CacheCreationPromptTokens { get; init; }
+    /// <summary>Whether input usage can calibrate full context size, including reused KV tokens.</summary>
+    public bool PromptTokensIncludeCache { get; init; } = true;
+}
 
 /// <summary>
 /// Adding up counts that may not have been counted.

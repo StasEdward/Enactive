@@ -150,5 +150,10 @@ public sealed class AHandoverKeepsItsOwnStepTests
         Assert.Contains(rebuilt.Messages,
                         m => m.Content?.Contains("check both sets", StringComparison.Ordinal) == true);
         Assert.Equal(Beta, StepOf(rebuilt));
+        Assert.Single(rebuilt.Messages, m => m.Content?.StartsWith("## Plan scopes") == true);
+        var overview = rebuilt.Messages.Single(m => m.Content?.StartsWith("## Plan scopes") == true).Content!;
+        Assert.Contains("S1: " + Alpha, overview);
+        Assert.Contains("S2: " + Beta, overview);
+        Assert.Contains(rebuilt.Messages, m => m.Content?.Contains("O001: lines 1–1") == true);
     }
 }

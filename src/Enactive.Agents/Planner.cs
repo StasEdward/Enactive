@@ -29,6 +29,10 @@ public sealed record PlanResult(
     /// counted.</para>
     /// </summary>
     public int? CachedPromptTokens { get; init; }
+    public int? CacheCreationPromptTokens { get; init; }
+
+    /// <summary>A bounded planning attempt could not complete; execution must not start.</summary>
+    public string? IncompleteReason { get; init; }
 
     /// <summary>
     /// Commands the planner said would PROVE this request was carried out, written before any of
@@ -98,18 +102,20 @@ public sealed class Planner
     public async Task<PlanResult> PlanAsync(
         string request, WorkContext context, IChatProvider provider, string model,
         CancellationToken ct, int? maxSteps = null, bool proposeChecks = false,
-        int? turnCeiling = null)
+        int? turnCeiling = null, int outputBudget = 4096,
+        Func<int, int, string?>? beforeRetry = null)
     {
         var messages = new List<ChatMessage>
         {
             ChatMessage.System(SystemPromptFor(maxSteps, proposeChecks, turnCeiling)),
-            ChatMessage.User(Where(context) + request)
+            ChatMessage.User(Where(context) + Enactive.Core.Execution.RequestObligations.ExecutionPrompt(request))
         };
 
         // No ResponseSchema, deliberately - see StructuredOutputTests.The_planner_is_not_given_a_schema
-        // and the note on PlanWithChecksSchema. This was changed on 2026-09-23 and changed straight
+        // This was changed on 2026-09-23 and changed straight
         // back when that test caught it.
-        var completion = await provider.CompleteAsync(new ChatRequest(model, messages, Temperature: 0.0), ct);
+        var completion = await provider.CompleteAsync(GenerationAllowance.Fit(new ChatRequest(model, messages, Temperature: 0.0,
+            Purpose: GenerationPurpose.Planning, OutputTokenLimit: Math.Max(1, outputBudget)), provider), ct);
         var answer = completion.Message.Content ?? "";
 
         var prompt = completion.PromptTokens ?? 0;
@@ -119,11 +125,12 @@ public sealed class Planner
         // retry's cache reads to a first call that never mentioned any would turn "nobody counted"
         // into a number, which is the one thing this field exists not to do.
         var cached = completion.CachedPromptTokens;
+        var created = completion.CacheCreationPromptTokens;
 
-        if (Parse(answer, request) is { } plan)
+        if (ReadComplete(completion, request) is { } plan)
             return plan with
             {
-                PromptTokens = prompt, CompletionTokens = output, CachedPromptTokens = cached
+                PromptTokens = prompt, CompletionTokens = output, CachedPromptTokens = cached, CacheCreationPromptTokens = created
             };
 
         // Nothing readable came back. Ask once more, showing what arrived and exactly what shape was
@@ -134,16 +141,31 @@ public sealed class Planner
         messages.Add(new ChatMessage(ChatRole.Assistant, answer, null));
         messages.Add(ChatMessage.User(RepairPrompt));
 
-        var retry = await provider.CompleteAsync(new ChatRequest(model, messages, Temperature: 0.0), ct);
+        if (beforeRetry?.Invoke(prompt, output) is { } spent)
+            return new(IntentDisposition.QuickAction, Truncate(request, 80), null, prompt, output, PlanReadout.Unreadable)
+            { CachedPromptTokens = cached, CacheCreationPromptTokens = created, IncompleteReason = spent };
+
+        ChatCompletion retry;
+        try
+        {
+            retry = await provider.CompleteAsync(GenerationAllowance.Fit(new ChatRequest(model, messages, Temperature: 0.0,
+                Purpose: GenerationPurpose.Planning, OutputTokenLimit: Math.Max(1, outputBudget)), provider), ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return new(IntentDisposition.QuickAction, Truncate(request, 80), null, prompt, output, PlanReadout.Unreadable)
+            { CachedPromptTokens = cached, CacheCreationPromptTokens = created, IncompleteReason = "Planner clarification failed: " + ex.Message };
+        }
 
         prompt += retry.PromptTokens ?? 0;
         output += retry.CompletionTokens ?? 0;
         cached = TokenCounts.Add(cached, retry.CachedPromptTokens);
+        created = TokenCounts.Add(created, retry.CacheCreationPromptTokens);
 
-        if (Parse(retry.Message.Content ?? "", request) is { } retried)
+        if (ReadComplete(retry, request) is { } retried)
             return retried with
             {
-                PromptTokens = prompt, CompletionTokens = output, CachedPromptTokens = cached
+                PromptTokens = prompt, CompletionTokens = output, CachedPromptTokens = cached, CacheCreationPromptTokens = created
             };
 
         // Twice with nothing readable. The request is still acted on - refusing it would be worse
@@ -151,7 +173,55 @@ public sealed class Planner
         // with the result instead of disappearing into a title.
         return new PlanResult(
             IntentDisposition.QuickAction, Truncate(request, 80), null,
-            prompt, output, PlanReadout.Unreadable) { CachedPromptTokens = cached };
+            prompt, output, PlanReadout.Unreadable) { CachedPromptTokens = cached, CacheCreationPromptTokens = created,
+                IncompleteReason = completion.FinishReason is "length" or "max_tokens" || retry.FinishReason is "length" or "max_tokens"
+                    ? "Planner reached its output limit after one clarification; no work was started." : null };
+    }
+
+    private static PlanResult? ReadComplete(ChatCompletion completion, string request)
+        => completion.FinishReason is "length" or "max_tokens" || completion.Message.ToolCalls is { Count: > 0 }
+            ? null : Parse(completion.Message.Content ?? "", request);
+
+    /// <summary>One structural repair attempt. Never falls back to execution of an unplanned action.</summary>
+    internal async Task<PlanResult> ReplanAsync(string request, WorkContext context, PlanResult invalid,
+        string diagnostic, IChatProvider provider, string model, CancellationToken ct,
+        int? maxSteps, bool proposeChecks, int turnCeiling, int outputBudget = 4096)
+    {
+        var steps = invalid.Plan!.Steps;
+        var indices = steps.Select((step, index) => (step.Id, index)).GroupBy(x => x.Id)
+            .ToDictionary(g => g.Key, g => g.First().index);
+        var prior = JsonSerializer.Serialize(new
+        {
+            disposition = "task", title = invalid.Title,
+            steps = steps.Select(s => new
+            {
+                title = s.Title,
+                dependsOn = s.DependsOn.Select(id => indices.TryGetValue(id, out var index) ? index : -1).ToArray(),
+                complexity = s.Complexity.ToString().ToLowerInvariant(),
+                obligations = s.ObligationIds
+            })
+        });
+        ChatMessage[] messages =
+        [
+            ChatMessage.System(SystemPromptFor(maxSteps, proposeChecks, turnCeiling)),
+            ChatMessage.User(Where(context) + Enactive.Core.Execution.RequestObligations.ExecutionPrompt(request)),
+            ChatMessage.Assistant(prior),
+            ChatMessage.User("The entire plan was rejected before execution: " + diagnostic
+                + " No steps ran. Return one complete corrected task DAG as JSON, preserving the original objective. "
+                + "Use valid 0-based dependency indices, no self-dependencies or cycles, and preserve necessary prerequisites. "
+                + "Do not call tools or switch to quick_action. This is the only structural repair attempt.")
+        ];
+        var completion = await provider.CompleteAsync(GenerationAllowance.Fit(new(model, messages, Temperature: 0,
+            Purpose: GenerationPurpose.Planning, OutputTokenLimit: Math.Max(1, outputBudget)), provider), ct);
+        var repaired = completion.FinishReason is "length" or "max_tokens" || completion.Message.ToolCalls is { Count: > 0 }
+            ? null : Parse(completion.Message.Content ?? "", request);
+        if (repaired is not { Disposition: IntentDisposition.Task, Plan.Steps.Count: > 0 })
+            repaired = invalid with { Readout = PlanReadout.Unreadable };
+        return repaired with
+        {
+            PromptTokens = completion.PromptTokens ?? 0, CompletionTokens = completion.CompletionTokens ?? 0,
+            CachedPromptTokens = completion.CachedPromptTokens, CacheCreationPromptTokens = completion.CacheCreationPromptTokens
+        };
     }
 
     /// <summary>
@@ -278,7 +348,17 @@ public sealed class Planner
                                     if (di.ValueKind == JsonValueKind.Number && di.TryGetInt32(out var idx))
                                         deps.Add(idx);
 
-                            specs.Add(new PlanStepSpec(stepTitle!, deps, ParseComplexity(el), declared));
+                            IReadOnlyList<string>? obligationIds = null;
+                            if (el.TryGetProperty("obligations", out var assigned))
+                            {
+                                if (assigned.ValueKind != JsonValueKind.Array || assigned.EnumerateArray().Any(
+                                    id => id.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(id.GetString())))
+                                    return null;
+                                obligationIds = assigned.EnumerateArray().Select(id => id.GetString()!).Distinct(StringComparer.Ordinal).ToArray();
+                                var known = Enactive.Core.Execution.RequestObligations.Create(fallbackTitle).Items.Select(o => o.Id).ToHashSet(StringComparer.Ordinal);
+                                if (obligationIds.Any(id => !known.Contains(id))) return null;
+                            }
+                            specs.Add(new PlanStepSpec(stepTitle!, deps, ParseComplexity(el), declared) { ObligationIds = obligationIds });
                         }
                     }
                 }
@@ -384,43 +464,25 @@ public sealed class Planner
         + "\"steps\":[{\"title\":\"...\",\"dependsOn\":[],\"complexity\":\"normal\"}]}";
 
     private const string SystemPrompt =
-        "You are a planning assistant for a developer agent. Decide whether the request is a single action or "
-        + "genuinely needs several distinct stages. Respond with ONLY a JSON object, no prose and no code fences: "
-        + "{\"disposition\":\"quick_action\" or \"task\",\"title\":\"short title\",\"steps\":[{\"title\":\"...\",\"dependsOn\":[],\"complexity\":\"normal\"}]}. "
-        + "STRONGLY prefer \"quick_action\" with empty steps: one action is a quick_action even when it has parts done "
-        + "together - e.g. 'run script X and save its output to file Y' is ONE quick_action, not multiple steps. "
-        + "For a \"task\", each step is an object with a \"title\" and \"dependsOn\": the 0-based indices of earlier "
-        + "steps that must finish first ([] = can start immediately). Model the REAL dependencies as a graph — steps "
-        + "that do not depend on each other must have independent dependsOn so they are not forced into a chain. "
-        // "Use 2-4 steps max" was here, and it was the wrong quantity to limit - the same mistake
-        // Orchestrator.StallLimit describes having made with a flat cap of 12 turns: "Work is not
-        // the thing to limit; a project with a hundred files needs a hundred turns and no setting
-        // should have to say so." Nothing in FIX_PLAN records an incident that earned the number,
-        // and it contradicted the product outright: every built-in template declares a step budget
-        // of 6 to 12, so none of them could ever reach its own limit. It also worked against the
-        // rest of this prompt - forcing work into four steps makes each one a mixture of trivial
-        // and complex, which must then be routed as complex, so the expensive model does the
-        // trivial parts; and it capped the parallelism the dependsOn graph above exists to express.
-        //
-        // What is left is the rule that was doing the actual work: no ceremonial stages. The real
-        // ceiling is ExecutionLimits.MaxSteps - data, visible in the template editor, enforced by
-        // RunBudget - and it is now told to the planner rather than guessed at (see SystemPromptFor).
-        + "A step is one thing that can succeed or fail on its own: that is the unit a reviewer judges, the unit a "
-        + "rejection undoes, and the unit a model is chosen for. Use as many steps as the work genuinely has, and "
-        + "do not invent stages that only name parts of one action - NEVER split one command into 'do it' / "
-        + "'capture it' / 'save it'. Keep the title under 8 words. "
-        + "For each step also set \"complexity\", which decides WHICH MODEL runs it: \"trivial\" (a rename, one "
-        + "obvious edit, a one-line command) goes to a small fast model, \"normal\" to the standard one, and "
-        + "\"complex\" to a much slower and far more expensive model. \"normal\" IS THE DEFAULT — use it unless the "
-        + "step clearly does not fit. Mark a step \"complex\" when it needs reasoning across several files, a "
-        + "non-obvious algorithm, judgement a competent junior developer would get wrong, OR when its output has to "
-        + "ASSERT EXTERNAL FACTS the model must recall rather than read — exact command syntax and flags, package "
-        + "names, port numbers, configuration keys, API names, version requirements for software that is not in this "
-        + "workspace. A small model cannot tell that it is wrong about those and will invent confident, plausible "
-        + "detail instead. LENGTH IS NOT COMPLEXITY: a long document, boilerplate, formatting, or writing up what a "
-        + "tool actually returned stays \"normal\", however many pages it is, and so does describing files that ARE "
-        + "in this workspace — those can be read instead of recalled. No more than TWO steps in a plan may be "
-        + "\"complex\".";
+        """
+        Plan the request. Respond ONLY with JSON, without prose or fences:
+        {"disposition":"quick_action" or "task","title":"short title","steps":[{"title":"...","dependsOn":[],"complexity":"normal"}]}.
+        Use "quick_action" with empty steps for one cohesive action, including running a command and saving its output.
+        Use "task" for distinct stages that can succeed or fail on their own. Each step must succeed or fail on its own:
+        it is a review, rollback and model-selection boundary. NEVER split one command into do/capture/save stages.
+        Keep titles under 8 words. dependsOn lists 0-based indices of earlier prerequisites; [] means independent.
+        Preserve real dependencies without forcing independent steps into a chain.
+        Each step also has "obligations":["O001",...], using the supplied original-request IDs.
+        Assign each source unit to EVERY step responsible for implementing OR verifying any part of it.
+        For implement-then-test, include the same functional requirement IDs in both steps.
+        Assign global constraints to all steps. Cover every source ID; never invent an ID.
+        This shared map is passed unchanged to workers and reviewers. Assignment is not proof of completion.
+        Complexity selects the model: "trivial" for an obvious edit or simple command; "normal" by default;
+        "complex" for cross-file reasoning, non-obvious algorithms, difficult judgement or external facts
+        (exact API/command syntax, versions/configuration) that cannot be read from this workspace.
+        LENGTH IS NOT COMPLEXITY: boilerplate and reports based on tool results stay normal.
+        No more than TWO steps may be "complex".
+        """;
 
     /// <summary>
     /// The system prompt, plus the run's real step budget when it has one.
@@ -470,38 +532,11 @@ public sealed class Planner
         var prompt = SystemPrompt;
 
         if (turnCeiling is > 0)
-            prompt += $" HOW BIG A STEP MAY BE: a step runs as ONE conversation with the worker, and "
-                    + "everything said in it is re-sent on every turn of it — so one step of 200 "
-                    + "turns costs several times what two steps of 100 cost, and a step that runs "
-                    + $"past {turnCeiling} turns is ABANDONED, with every step that depends on it "
-                    + "skipped. Give each step a size that is known before it starts. When work "
-                    + "repeats over many items — files, pages, records, tickets — do not write one "
-                    + "step for all of them: say how many at a time and use a step per batch "
-                    + "(\"the first 5 …\", \"the next 5 …\"), which is what the step budget is for. "
-                    // Measured 2026-09-24, run ae2015: four batch steps verified pages and wrote
-                    // nothing, and a fifth "Write findings" step depended on all four. One batch got
-                    // stuck and was stopped - and the fifth was skipped, so the three batches that
-                    // finished lost their work too. Nothing about that is particular to a model or to
-                    // pages: any plan whose only writing is its last step is as strong as its weakest
-                    // batch.
-                    + "Each batch step SAVES its own results before it finishes - added to the output "
-                    + "the request names, or to a file of its own - rather than leaving them for a "
-                    + "later step to write: a final step that writes for all the batches depends on "
-                    + "every one of them, and a single batch that fails then loses the work of all. "
-                    + "This is about REPEATED work only: the rule above still holds for one action, "
-                    + "which is never split into stages. "
-                    // Measured 2026-09-24, run 4f779e: "write new tests" and "mutation-check new
-                    // tests" were two steps for a request that said, of every test, "it must FAIL if
-                    // the behaviour it describes is broken - check that by breaking it temporarily
-                    // and putting it back". Step 2 wrote 4 tests and broke-and-restored the source
-                    // 17 times confirming them; step 3 then did the SAME 17 breaks again, because
-                    // the check the request attached to each test was not part of the step that
-                    // created it. Same shape as the batch rule above, one level down: the unit the
-                    // request names its requirement about is the unit that requirement stays with.
-                    + "A CHECK the request attaches to EVERY item a step produces - \"each test must fail if its "
-                    + "behaviour is broken\", \"every page must cite its source\" - belongs IN the step that "
-                    + "produces the item, not in a step of its own: a later step re-doing the same check per item "
-                    + "is the item's own work, done twice.";
+            prompt += $" A step is ONE conversation with growing history. A step running past {turnCeiling} turns is ABANDONED; "
+                    + "dependent steps are skipped. For REPEATED work only, specify bounded batches and use a step per batch. "
+                    + "Each batch step SAVES its own results before finishing, so another batch's failure cannot lose them. "
+                    + "One cohesive action is never split into stages. A requirement attached to EVERY item a step produces "
+                    + "belongs IN the step that produces it (e.g. create each test and verify it detects broken behaviour).";
 
         if (maxSteps is > 0)
             prompt += $" This run may take at most {maxSteps} step(s) in total — a plan longer than that "
@@ -512,64 +547,6 @@ public sealed class Planner
 
         return prompt;
     }
-
-    /// <summary>
-    /// Asking the planner how the work will be PROVED, not just what it is.
-    ///
-    /// <para><b>This is the moment to ask, and the only one.</b> A check written now cannot be
-    /// fitted to the result, because there is no result yet — the planner has seen the request and
-    /// where it runs, and nothing else. Asked afterwards, "did it work" is answered by the same
-    /// model that did the work, which is the thing this engine exists not to rely on.</para>
-    ///
-    /// <para><b>Empty is a real answer and is said twice.</b> Most of what people ask for cannot
-    /// be proved by running something, and a model that feels obliged to produce a check will
-    /// produce <c>echo done</c>. That is worse than nothing: it looks like verification in the run
-    /// report.</para>
-    ///
-    /// <para>Appended rather than written into <see cref="SystemPrompt"/> so that a host which
-    /// turns proposed checks off pays nothing for them — no tokens, and no invitation the engine
-    /// will then ignore.</para>
-    /// </summary>
-    /// <summary>
-    /// The shape a plan-with-checks would be asked for in — WRITTEN, NOT WIRED UP.
-    ///
-    /// <para>An outside review suggested on 2026-09-23 that this call should stop describing its
-    /// JSON in prose and send a schema instead, the machinery having existed since §9c. It was
-    /// wired up, and <c>StructuredOutputTests.The_planner_is_not_given_a_schema</c> refused it
-    /// within the minute, holding a decision already taken and already argued:</para>
-    ///
-    /// <para><i>"the planner is the one place where the quality of the REASONING matters more than
-    /// the shape of the answer, and constrained decoding on a 12-14B model can eat exactly what we
-    /// go there for. The reviewer has nothing to reason about, which is why it went first. Measure
-    /// before changing this."</i></para>
-    ///
-    /// <para>Which is the whole answer to the suggestion, and it is not an argument about token
-    /// counts: on the machine this runs on, the planner may be a 4B. It is kept here so the
-    /// measurement that comment asks for has something to measure — bind it, run the same request
-    /// fifteen times on each planner, and compare the share of runs that produce provable checks.
-    /// A constant nobody calls is normally debt; this one is an experiment waiting for its
-    /// evidence, and it says so.</para>
-    /// </summary>
-    internal const string PlanWithChecksSchema = """
-        {
-          "type": "object",
-          "properties": {
-            "checks": {
-              "type": "array",
-              "maxItems": 4,
-              "items": {
-                "type": "object",
-                "properties": {
-                  "name": { "type": "string" },
-                  "command": { "type": "string" }
-                },
-                "required": ["name", "command"],
-                "additionalProperties": false
-              }
-            }
-          }
-        }
-        """;
 
     /// <summary>
     /// How the planner is asked to say what would PROVE the work — §9au, and reviewed 2026-09-23.
@@ -597,10 +574,8 @@ public sealed class Planner
     /// consequence, and §9au records a real run failed for a check against an invented filename.
     /// </para>
     ///
-    /// <para>Sent alongside <see cref="ChecksSchema"/>, never instead of it: §9c's rule is that a
-    /// schema may never be the thing correctness rests on, because "OpenAI-compatible" is a family
-    /// rather than a specification and the models most in need of the text are the likeliest to
-    /// ignore the schema.</para>
+    /// <para>The shape is carried by this prompt; planning deliberately does not request a
+    /// response schema. Parsed output and checks are still validated in code.</para>
     /// </summary>
     private const string ChecksPrompt =
         " Also return \"checks\": up to 4 shell commands that would PROVE this request has been "

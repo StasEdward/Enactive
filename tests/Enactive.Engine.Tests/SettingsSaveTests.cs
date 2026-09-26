@@ -36,10 +36,9 @@ public sealed class SettingsSaveTests : IDisposable
 
     /// <summary>THE MAIN CASE: every family of secret round-trips through Save then Load, and none
     /// of the plaintext markers ever reaches the file on disk.</summary>
-    [Fact]
+    [WindowsFact]
     public void Every_family_of_secret_round_trips_and_none_of_it_is_written_in_the_clear()
     {
-        if (!OperatingSystem.IsWindows()) return;   // Save encrypts with DPAPI
 
         var settings = new AppSettings
         {
@@ -66,10 +65,9 @@ public sealed class SettingsSaveTests : IDisposable
 
     /// <summary>The plaintext field is restored in memory after Save, not left blank - it is only
     /// SERIALIZATION that must never see it.</summary>
-    [Fact]
+    [WindowsFact]
     public void The_legacy_plaintext_is_still_there_in_memory_after_saving()
     {
-        if (!OperatingSystem.IsWindows()) return;
 
         var settings = new AppSettings { AnthropicApiKey = "MARKER-LEGACY-KEY" };
 
@@ -81,10 +79,9 @@ public sealed class SettingsSaveTests : IDisposable
     /// <summary>An MCP server the app cannot decrypt keeps its ORIGINAL ciphertext exactly - Save
     /// must not re-encrypt an empty Environment/Headers over it and lose what a person cannot
     /// currently read back.</summary>
-    [Fact]
+    [WindowsFact]
     public void An_mcp_servers_unreadable_ciphertext_survives_a_save_untouched()
     {
-        if (!OperatingSystem.IsWindows()) return;
 
         const string originalCiphertext = "dpapi:this-is-not-decryptable-by-this-test";
         var settings = new AppSettings
@@ -102,10 +99,9 @@ public sealed class SettingsSaveTests : IDisposable
     }
 
     /// <summary>An MCP server WITH readable credentials is re-encrypted normally and round-trips.</summary>
-    [Fact]
+    [WindowsFact]
     public void An_mcp_servers_readable_credentials_round_trip()
     {
-        if (!OperatingSystem.IsWindows()) return;
 
         var settings = new AppSettings
         {

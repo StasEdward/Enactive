@@ -25,6 +25,7 @@ public sealed class ExplainedChatProvider(IChatProvider inner, string providerId
     public int? AnswerReserve(ChatRequest request) => inner.AnswerReserve(request);
 
     public int? HandoverAtPercent(ChatRequest request) => inner.HandoverAtPercent(request);
+    public int ReasoningAllowance(ChatRequest request) => inner.ReasoningAllowance(request);
 
     public async IAsyncEnumerable<ChatStreamEvent> StreamChatAsync(
         ChatRequest request, [EnumeratorCancellation] CancellationToken ct)
@@ -97,4 +98,4 @@ public sealed class ExplainedChatProvider(IChatProvider inner, string providerId
 /// a person pressing Stop.</para>
 /// </summary>
 public sealed class ProviderUnreachableException(string message, Exception inner)
-    : HttpRequestException(message, inner);
+    : HttpRequestException(message, inner, (inner as HttpRequestException)?.StatusCode);

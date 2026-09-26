@@ -1,6 +1,9 @@
 namespace Enactive.Core.Execution;
 
+using Enactive.Core.Tools;
+
 using System.Text;
+using System.Text.Json;
 using System.Collections.Frozen;
 
 /// <summary>
@@ -30,9 +33,37 @@ public sealed class EvidenceView
     public bool IsTruncated => ActionsOmitted || OutputsTruncated || ArgumentsTruncated;
     internal IReadOnlyList<ExecutedAction> Actions { get; }
 
+    /// <summary>Whether an ID exists, without exposing evidence that has not been shown.</summary>
+    public bool ContainsAction(int number) => number >= 1 && number <= Actions.Count;
+
     /// <summary>Resolve only a call whose numbered entry was included in Text.</summary>
     public ExecutedAction? Cited(int number)
         => VisibleActionIds.Contains(number) ? Actions[number - 1] : null;
+
+    /// <summary>Addressed evidence retrieval, preserving the original numbering and explicit truncation.</summary>
+    public EvidenceView Expand(IReadOnlyList<int> requested, int budget = 12000)
+    {
+        if (requested.Count > 4 || requested.Any(id => id < 1 || id > Actions.Count))
+            throw new ArgumentException("Request at most four existing evidence IDs.", nameof(requested));
+        var text = new StringBuilder(Text).AppendLine("\nAdditional requested evidence:");
+        var visible = VisibleActionIds.ToHashSet();
+        var room = Math.Max(0, budget);
+        var cut = false;
+        foreach (var id in requested.Distinct())
+        {
+            if (room < 256) break;
+            var action = Actions[id - 1];
+            var entry = JsonSerializer.Serialize(action);
+            cut |= entry.Length > room;
+            var shown = entry.Length <= room ? entry : entry[..(room / 2)]
+                + "\n[evidence excerpt truncated]\n" + entry[^(room / 2)..];
+            text.AppendLine($"Call [{id}] ({action.Outcome}): {shown}");
+            room -= Math.Min(room, entry.Length);
+            visible.Add(id);
+        }
+        return new(text.ToString(), Actions.ToArray(), visible, outputsTruncated: OutputsTruncated || cut,
+            argumentsTruncated: ArgumentsTruncated || cut, hasPriorTranscript: HasPriorTranscript);
+    }
 }
 
 /// <summary>How a tool call ended. Never ran is not the same as ran and failed.</summary>
@@ -71,7 +102,11 @@ public sealed record ExecutedAction(
     string Tool,
     string Arguments,
     ActionOutcome Outcome,
-    string? Output);
+    string? Output,
+    WorkspaceEffect WorkspaceEffect = WorkspaceEffect.Unknown,
+    IReadOnlyList<string>? ChangedPaths = null,
+    int? ExitCode = null,
+    bool FileDeletion = false);
 
 /// <summary>
 /// What a step actually did, written down when it did it.
@@ -125,10 +160,13 @@ public sealed class ExecutionJournal
         lock (_gate) return _actions.Count;
     }
 
-    public void Record(int? step, string tool, string arguments, ActionOutcome outcome, string? output)
+    public void Record(int? step, string tool, string arguments, ActionOutcome outcome, string? output,
+        WorkspaceEffect workspaceEffect = WorkspaceEffect.Unknown, IReadOnlyList<string>? changedPaths = null,
+        int? exitCode = null, bool fileDeletion = false)
     {
         lock (_gate)
-            _actions.Add(new ExecutedAction(DateTimeOffset.UtcNow, step, tool, arguments, outcome, output));
+            _actions.Add(new ExecutedAction(DateTimeOffset.UtcNow, step, tool, arguments, outcome, output,
+                workspaceEffect, changedPaths is null ? null : Array.AsReadOnly(changedPaths.ToArray()), exitCode, fileDeletion));
     }
 
     /// <summary>
@@ -408,27 +446,12 @@ public sealed class ExecutionJournal
             arguments = arguments[..MaxArguments] + $"… ({arguments.Length:N0} characters of arguments)";
 
         var whose = withStep && action.Step is { } step ? $" (step {step})" : "";
-        return $"[{number}]{whose} -> {action.Tool} {arguments}";
+        var facts = (action.ExitCode is { } code ? $" [process exit={code}]" : "")
+            + (action.FileDeletion ? " [file-deletion operation]" : "");
+        return $"[{number}]{whose}{facts} -> {action.Tool} {arguments}";
     }
 
-    /// <summary>
-    /// The action a call number in this slice refers to, or null when the number is not one of them.
-    ///
-    /// <para>The counterpart of the numbering above, and the reason it exists: a reviewer asked to
-    /// point at the call that proves something answers with a number, and the ENGINE resolves it
-    /// against what actually happened. A number nothing answers to is a citation of a call that was
-    /// never made - which is worth knowing about a proof.</para>
-    /// </summary>
-    public ExecutedAction? Cited(int number, int from = 0)
-    {
-        lock (_gate)
-        {
-            var index = Math.Max(0, from) + number - 1;
-            return number >= 1 && index < _actions.Count ? _actions[index] : null;
-        }
-    }
-
-    /// <summary>How many calls a slice has - the range a citation may name.</summary>
+    /// <summary>How many calls a slice has, including those omitted from the evidence view.</summary>
     public int CountFrom(int from = 0)
     {
         lock (_gate)

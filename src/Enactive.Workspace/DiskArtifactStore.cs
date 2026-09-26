@@ -34,7 +34,8 @@ public sealed record FileWriteRecord(
     // spelled several ways in one run ("doc.txt", "./doc.txt", "a/b.txt", "a\b.txt"): keyed by the
     // string, one file became two records, and a revert asked about one spelling could not see the
     // other step's write under the other. Empty only for a record made before this field existed.
-    string Key = "");
+    string Key = "",
+    long? AppendBeforeLength = null);
 
 /// <summary>Why an undo could not be performed, or that it was.</summary>
 public sealed record UndoResult(bool Undone, string? Conflict = null, bool Restored = false)
@@ -113,8 +114,11 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
         _backupRoot = Path.Combine(
             _root, WorkspaceGuard.ReservedFolder, "undo",
             (runId == Guid.Empty ? Guid.NewGuid() : runId).ToString("N"));
+        AppendRecoveryConflicts = AppendIntent.Recover(_root);
     }
 
+    /// <summary>Interrupted appends left untouched because their content no longer matches the intent.</summary>
+    public IReadOnlyList<string> AppendRecoveryConflicts { get; }
     public string Root => _root;
 
     /// <summary>
@@ -162,8 +166,8 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
     /// truth.
     /// </summary>
     public bool CanRestore(string relativePath)
-        => LastWrite(relativePath) is { ExistedBefore: true, BackupPath: { } backup }
-           && File.Exists(backup);
+        => LastWrite(relativePath) is { ExistedBefore: true } write
+           && (write.AppendBeforeLength is not null || write.BackupPath is { } backup && File.Exists(backup));
 
     /// <summary>The state this path was in before the run first touched it.</summary>
     public FileWriteRecord? FirstWrite(string relativePath)
@@ -263,9 +267,20 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
         string relativePath, ArtifactKind kind, string title, Func<Stream, Task> write, CancellationToken ct)
         => CreateAsync(relativePath, kind, title, write, Unowned, ct);
 
-    public async Task<ArtifactRef> CreateAsync(
+    public bool CanCheckVersion => true;
+    public Task<ArtifactRef> CreateCheckedAsync(string path, ArtifactKind kind, string title,
+        Func<Stream, Task> write, ArtifactVersion expected, CancellationToken ct)
+        => CreateCoreAsync(path, kind, title, write, Unowned, ct, expected);
+    public Task<ArtifactRef> CreateCheckedAsync(string path, ArtifactKind kind, string title,
+        Func<Stream, Task> write, ArtifactVersion expected, int owner, CancellationToken ct)
+        => CreateCoreAsync(path, kind, title, write, owner, ct, expected);
+    public Task<ArtifactRef> CreateAsync(string relativePath, ArtifactKind kind, string title,
+        Func<Stream, Task> write, int owner, CancellationToken ct)
+        => CreateCoreAsync(relativePath, kind, title, write, owner, ct);
+
+    private async Task<ArtifactRef> CreateCoreAsync(
         string relativePath, ArtifactKind kind, string title, Func<Stream, Task> write,
-        int owner, CancellationToken ct)
+        int owner, CancellationToken ct, ArtifactVersion? expected = null)
     {
         var fullPath = ResolveInsideRoot(relativePath);
         var key = WorkspaceGuard.KeyFor(_root, fullPath);
@@ -284,9 +299,12 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
         await gate.WaitAsync(ct);
         try
         {
+            if (expected is not null && FileHash.OfFile(fullPath) != expected.Hash)
+                throw new IOException("File changed since it was read; read the current version and retry the edit.");
             var existed = !scratch && File.Exists(fullPath);
             var beforeHash = existed ? FileHash.OfFile(fullPath) : null;
             var backupPath = existed ? BackUp(fullPath) : null;
+            PreserveAppendPrefixes(key, backupPath);
 
             var directory = Path.GetDirectoryName(fullPath);
             if (!string.IsNullOrEmpty(directory))
@@ -319,8 +337,8 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
 
     /// <summary>
     /// Deletes a file and journals the deletion, so a rejected step or an Undo puts it back. The
-    /// backup is taken first and the entry is written before the delete, because after the delete
-    /// neither is knowable — the same reason a write records what it displaced.
+    /// backup is taken first; the journal entry is published only after a successful deletion,
+    /// under the same file gate as writes and rollback.
     /// </summary>
     /// <summary>This store deletes files, and journals the deletion so it can be undone.</summary>
     public bool CanRemove => true;
@@ -354,18 +372,18 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
 
             var beforeHash = FileHash.OfFile(fullPath);
             var backupPath = BackUp(fullPath);
+            PreserveAppendPrefixes(key, backupPath);
 
             if (backupPath is null)
                 throw new IOException(
                     $"Could not keep a copy of '{relativePath}', so removing it could not be undone. "
                     + "Nothing was deleted.");
 
+            File.Delete(fullPath);
             lock (_journalGate)
                 _journal.Add(new FileWriteRecord(
                     relativePath, ExistedBefore: true, beforeHash, backupPath, AfterHash: null, owner,
                     ++_sequence, key));
-
-            File.Delete(fullPath);
         }
         finally
         {
@@ -380,27 +398,34 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
     /// </summary>
     public UndoResult Undo(string relativePath)
     {
-        var first = FirstWrite(relativePath);
-        var last = LastWrite(relativePath);
-        if (first is null || last is null)
-            return UndoResult.Blocked("This run did not write that file.");
+        if (KeyOrNull(relativePath) is not { } lockedKey) return UndoResult.Blocked("Invalid path.");
+        var gate = GateFor(lockedKey);
+        if (!gate.Wait(0)) return UndoResult.Blocked("A write is in progress; retry undo after it finishes.");
+        try
+        {
+            var first = FirstWrite(relativePath);
+            var last = LastWrite(relativePath);
+            if (first is null || last is null)
+                return UndoResult.Blocked("This run did not write that file.");
 
-        var outcome = Restore(relativePath, first, last);
-        if (!outcome.Undone)
+            var outcome = Restore(relativePath, first, last);
+            if (!outcome.Undone)
+                return outcome;
+
+            if (KeyOrNull(relativePath) is { } key)
+                lock (_journalGate)
+                    _journal.RemoveAll(w => SameFile(w.Key, key));
+
             return outcome;
-
-        if (KeyOrNull(relativePath) is { } key)
-            lock (_journalGate)
-                _journal.RemoveAll(w => SameFile(w.Key, key));
-
-        return outcome;
+        }
+        finally { gate.Release(); }
     }
 
     /// <summary>
     /// Puts the named paths back to how they were when <paramref name="owner"/> was created — see
     /// the contract on <see cref="IArtifactScope.RevertAsync"/> for why this exists.
     /// </summary>
-    public Task<RevertReport> RevertOwnedAsync(
+    public async Task<RevertReport> RevertOwnedAsync(
         int owner, IReadOnlyCollection<string> paths, CancellationToken ct)
     {
         var reverted = new List<string>();
@@ -433,70 +458,76 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
                 continue;
             }
 
-            // The state to go back to is the one the FIRST write after the checkpoint displaced; the
-            // file on disk has to still hold what the LAST one left there.
-            FileWriteRecord[] after;
-            lock (_journalGate)
-                after = _journal
-                    .Where(w => w.Sequence > checkpoint && SameFile(w.Key, key))
-                    .ToArray();
-
-            // Nothing on record for a path we were ASKED about. Said out loud rather than skipped:
-            // the caller cannot see the journal, and a silent pass reads as "reverted". Reaching
-            // here means the journal disagrees with whoever supplied the path list.
-            if (after.Length == 0)
+            var gate = GateFor(key);
+            await gate.WaitAsync(ct);
+            try
             {
-                Keep(path, "nothing this step wrote to it is on record");
-                continue;
+                // The state to go back to is the one the FIRST write after the checkpoint displaced; the
+                // file on disk has to still hold what the LAST one left there.
+                FileWriteRecord[] after;
+                lock (_journalGate)
+                    after = _journal
+                        .Where(w => w.Sequence > checkpoint && SameFile(w.Key, key))
+                        .ToArray();
+
+                // Nothing on record for a path we were ASKED about. Said out loud rather than skipped:
+                // the caller cannot see the journal, and a silent pass reads as "reverted". Reaching
+                // here means the journal disagrees with whoever supplied the path list.
+                if (after.Length == 0)
+                {
+                    Keep(path, "nothing this step wrote to it is on record");
+                    continue;
+                }
+
+                // Only OUR entries, and the state to go back to is the one OUR FIRST write displaced -
+                // which may well be a sibling step's accepted content rather than the original file.
+                // Taking the oldest entry after the checkpoint instead would restore the state before
+                // THEIR work too, undoing a step that was never rejected.
+                var mine = after.Where(w => w.Owner == owner).ToArray();
+                if (mine.Length == 0)
+                {
+                    Keep(path, "this step made no write to it that is still on record");
+                    continue;
+                }
+
+                // Somebody else wrote this file after we first touched it. Their step may already have
+                // been accepted, so putting the file back would destroy approved work - it is no longer
+                // ours to speak for. The hash check below cannot catch this: what is on disk matches
+                // whoever wrote last, so it looks untouched.
+                //
+                // The question is whether ANYONE else wrote it after our first write, not whether the
+                // LAST write is ours. A → B → A passed the old check, because the last entry was ours -
+                // and then restoring "the state our first write displaced" threw away B's accepted
+                // content sitting in the middle. A foreign write BEFORE our first one is the documented
+                // case above and is fine: our first write displaced their content, and that is exactly
+                // what goes back.
+                var foreign = after.FirstOrDefault(
+                    w => w.Owner != owner && w.Sequence > mine[0].Sequence);
+                if (foreign is not null)
+                {
+                    Keep(path, "another step wrote it after this one did");
+                    continue;
+                }
+
+                var outcome = Restore(path, mine[0], mine[^1]);
+                if (!outcome.Undone)
+                {
+                    Keep(path, outcome.Conflict ?? "it could not be put back");
+                    continue;
+                }
+
+                reverted.Add(path);
+
+                // Drop only the entries this scope made for this path; everything from before, and every
+                // other path's writes, stay exactly where they were. Other scopes' checkpoints are
+                // counter values and are unaffected by this.
+                lock (_journalGate)
+                    _journal.RemoveAll(w => w.Owner == owner && SameFile(w.Key, key));
             }
-
-            // Only OUR entries, and the state to go back to is the one OUR FIRST write displaced -
-            // which may well be a sibling step's accepted content rather than the original file.
-            // Taking the oldest entry after the checkpoint instead would restore the state before
-            // THEIR work too, undoing a step that was never rejected.
-            var mine = after.Where(w => w.Owner == owner).ToArray();
-            if (mine.Length == 0)
-            {
-                Keep(path, "this step made no write to it that is still on record");
-                continue;
-            }
-
-            // Somebody else wrote this file after we first touched it. Their step may already have
-            // been accepted, so putting the file back would destroy approved work - it is no longer
-            // ours to speak for. The hash check below cannot catch this: what is on disk matches
-            // whoever wrote last, so it looks untouched.
-            //
-            // The question is whether ANYONE else wrote it after our first write, not whether the
-            // LAST write is ours. A → B → A passed the old check, because the last entry was ours -
-            // and then restoring "the state our first write displaced" threw away B's accepted
-            // content sitting in the middle. A foreign write BEFORE our first one is the documented
-            // case above and is fine: our first write displaced their content, and that is exactly
-            // what goes back.
-            var foreign = after.FirstOrDefault(
-                w => w.Owner != owner && w.Sequence > mine[0].Sequence);
-            if (foreign is not null)
-            {
-                Keep(path, "another step wrote it after this one did");
-                continue;
-            }
-
-            var outcome = Restore(path, mine[0], mine[^1]);
-            if (!outcome.Undone)
-            {
-                Keep(path, outcome.Conflict ?? "it could not be put back");
-                continue;
-            }
-
-            reverted.Add(path);
-
-            // Drop only the entries this scope made for this path; everything from before, and every
-            // other path's writes, stay exactly where they were. Other scopes' checkpoints are
-            // counter values and are unaffected by this.
-            lock (_journalGate)
-                _journal.RemoveAll(w => w.Owner == owner && SameFile(w.Key, key));
+            finally { gate.Release(); }
         }
 
-        return Task.FromResult(new RevertReport(reverted, kept, reasons));
+        return new RevertReport(reverted, kept, reasons);
     }
 
     /// <summary>
@@ -529,16 +560,161 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
                 return UndoResult.Deleted;
             }
 
+            if (target.AppendBeforeLength is { } length)
+            {
+                var source = target.BackupPath ?? fullPath;
+                using var prefix = new FileStream(source, FileMode.Open, FileAccess.Read,
+                    FileShare.ReadWrite | FileShare.Delete);
+                if (prefix.Length < length || HashPrefix(prefix, length) != target.BeforeHash)
+                    return UndoResult.Blocked("The original prefix changed; append cannot be undone safely.");
+                if (target.BackupPath is null)
+                {
+                    using var file = new FileStream(fullPath, FileMode.Open, FileAccess.Write, FileShare.Read);
+                    file.SetLength(length);
+                    file.Flush(flushToDisk: true);
+                }
+                else
+                {
+                    prefix.Position = 0;
+                    AtomicWrite.ReplaceFrom(fullPath, prefix, length);
+                }
+                return UndoResult.RestoredPrevious;
+            }
+
             if (target.BackupPath is null || !File.Exists(target.BackupPath))
                 return UndoResult.Blocked("The previous version is no longer available.");
 
-            File.Copy(target.BackupPath, fullPath, overwrite: true);
+            using var backup = new FileStream(target.BackupPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+            AtomicWrite.ReplaceFrom(fullPath, backup);
             return UndoResult.RestoredPrevious;
         }
         catch (Exception ex)
         {
             return UndoResult.Blocked(ex.Message);
         }
+    }
+
+    public bool CanAppend => true;
+
+    public Task<ArtifactRef> AppendAsync(string relativePath, ArtifactKind kind, string title,
+        Func<Stream?, Stream, Task> writeTail, CancellationToken ct)
+        => AppendAsync(relativePath, kind, title, writeTail, Unowned, ct);
+
+    public async Task<ArtifactRef> AppendAsync(string relativePath, ArtifactKind kind, string title,
+        Func<Stream?, Stream, Task> writeTail, int owner, CancellationToken ct)
+    {
+        var full = ResolveInsideRoot(relativePath);
+        var key = WorkspaceGuard.KeyFor(_root, full);
+        if (!File.Exists(full))
+            return await CreateAsync(relativePath, kind, title, async output =>
+            {
+                // New files retain atomic replacement. Another writer may create it before
+                // CreateAsync takes the gate, in which case append to that version instead.
+                await using var input = File.Exists(full)
+                    ? new FileStream(full, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete) : null;
+                if (input is not null) { await input.CopyToAsync(output, ct); input.Position = 0; }
+                await writeTail(input, output);
+            }, owner, ct);
+        var gate = GateFor(key);
+        await gate.WaitAsync(ct);
+        try
+        {
+            var scratch = WorkspaceGuard.IsScratch(_root, full);
+            if (scratch) SweepScratchOnce();
+            Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+            var existed = File.Exists(full);
+            if (!existed)
+            {
+                await AtomicWrite.Replace(full, output => writeTail(null, output));
+                if (!scratch)
+                    lock (_journalGate)
+                        _journal.Add(new FileWriteRecord(relativePath, false, null, null,
+                            FileHash.OfFile(full), owner, ++_sequence, key));
+                var created = Guid.NewGuid();
+                _paths[created] = full;
+                return new ArtifactRef(created, kind, title, relativePath);
+            }
+            var length = 0L;
+            try
+            {
+                // Exclude other writers/deletion for validation, preparation and commit.
+                await using var file = new FileStream(full, existed ? FileMode.Open : FileMode.CreateNew,
+                    FileAccess.ReadWrite, FileShare.Read, 8192, FileOptions.Asynchronous);
+                length = file.Length;
+                var beforeHash = existed ? HashPrefix(file, length, ct) : null;
+                await using var input = existed
+                    ? new FileStream(full, FileMode.Open, FileAccess.Read,
+                        FileShare.ReadWrite, 8192, FileOptions.Asynchronous) : null;
+                using var tail = await StagedContent.CaptureAsync(output => writeTail(input, output), ct);
+                using var intentTail = tail.Open();
+                using var intent = await AppendIntent.PrepareAsync(_backupRoot, relativePath, length,
+                    beforeHash!, intentTail, ct);
+                ct.ThrowIfCancellationRequested();
+                try
+                {
+                    file.Position = length;
+                    await using (var added = tail.Open())
+                        await added.CopyToAsync(file, ct);
+                    await file.FlushAsync(ct);
+                    file.Position = 0;
+                    var afterHash = Convert.ToHexString(
+                        await System.Security.Cryptography.SHA256.HashDataAsync(file, ct));
+                    file.Flush(flushToDisk: true);
+                    intent.Complete();
+                    if (!scratch)
+                        lock (_journalGate)
+                            _journal.Add(new FileWriteRecord(relativePath, existed, beforeHash,
+                                null, afterHash, owner, ++_sequence, key, length));
+                }
+                catch
+                {
+                    file.SetLength(length);
+                    file.Flush(flushToDisk: true);
+                    intent.Complete();
+                    throw;
+                }
+            }
+            catch
+            {
+                if (!existed) File.Delete(full);
+                throw;
+            }
+            var id = Guid.NewGuid();
+            _paths[id] = full;
+            return new ArtifactRef(id, kind, title, relativePath);
+        }
+        finally { gate.Release(); }
+    }
+
+    internal static string HashPrefix(Stream input, long length, CancellationToken ct = default)
+    {
+        input.Position = 0;
+        using var hash = System.Security.Cryptography.IncrementalHash.CreateHash(
+            System.Security.Cryptography.HashAlgorithmName.SHA256);
+        var buffer = new byte[81920];
+        while (length > 0)
+        {
+            ct.ThrowIfCancellationRequested();
+            var count = input.Read(buffer, 0, (int)Math.Min(buffer.Length, length));
+            if (count == 0) throw new EndOfStreamException();
+            hash.AppendData(buffer, 0, count);
+            length -= count;
+        }
+        return Convert.ToHexString(hash.GetHashAndReset());
+    }
+
+    // A later destructive operation must retain the prefixes referenced by append records.
+    private void PreserveAppendPrefixes(string key, string? backup)
+    {
+        lock (_journalGate)
+            for (var i = 0; i < _journal.Count; i++)
+            {
+                var entry = _journal[i];
+                if (!SameFile(entry.Key, key) || !entry.ExistedBefore || entry.AppendBeforeLength is null || entry.BackupPath is not null)
+                    continue;
+                if (backup is null) throw new IOException("Cannot preserve append history before replacing this file.");
+                _journal[i] = entry with { BackupPath = backup };
+            }
     }
 
     public Task<Stream> OpenAsync(Guid artifactId, CancellationToken ct)
@@ -569,8 +745,8 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
             Directory.CreateDirectory(_backupRoot);
             PruneOldBackups();
             var sequence = Interlocked.Increment(ref _backupSequence);
-            var backup = Path.Combine(_backupRoot, $"{sequence:D4}{Path.GetExtension(fullPath)}.bak");
-            File.Copy(fullPath, backup, overwrite: true);
+            var backup = Path.Combine(_backupRoot, $"{sequence:D4}-{Guid.NewGuid():N}{Path.GetExtension(fullPath)}.bak");
+            File.Copy(fullPath, backup, overwrite: false);
             return backup;
         }
         catch
@@ -618,7 +794,14 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
                 .Skip(Keep);
 
             foreach (var directory in stale)
-                try { directory.Delete(recursive: true); } catch { /* in use, or gone already */ }
+                try
+                {
+                    // Interrupted/conflicted appends retain their recovery bytes until resolved.
+                    if ((directory.Attributes & FileAttributes.ReparsePoint) != 0
+                        || directory.EnumerateFiles("*.append.json").Any()) continue;
+                    directory.Delete(recursive: true);
+                }
+                catch { /* in use, or gone already */ }
         }
         catch { /* housekeeping must never break a write */ }
     }

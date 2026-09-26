@@ -56,6 +56,7 @@ public sealed class LoggingChatProvider : IChatProvider
     public int? AnswerReserve(ChatRequest request) => _inner.AnswerReserve(request);
 
     public int? HandoverAtPercent(ChatRequest request) => _inner.HandoverAtPercent(request);
+    public int ReasoningAllowance(ChatRequest request) => _inner.ReasoningAllowance(request);
 
     public async IAsyncEnumerable<ChatStreamEvent> StreamChatAsync(
         ChatRequest request, [EnumeratorCancellation] CancellationToken ct)
@@ -68,7 +69,7 @@ public sealed class LoggingChatProvider : IChatProvider
         var reasoning = new StringBuilder();
         var calls = new SortedDictionary<int, (string? Id, string? Name, StringBuilder Args)>();
         string? finish = null;
-        int? promptTokens = null, completionTokens = null, cachedTokens = null;
+        int? promptTokens = null, completionTokens = null, cachedTokens = null, createdTokens = null;
 
         // What the stream threw, if it threw.
         //
@@ -132,6 +133,7 @@ public sealed class LoggingChatProvider : IChatProvider
                         promptTokens = u.PromptTokens ?? promptTokens;
                         completionTokens = u.CompletionTokens ?? completionTokens;
                         cachedTokens = u.CachedPromptTokens ?? cachedTokens;
+                        createdTokens = u.CacheCreationPromptTokens ?? createdTokens;
                         break;
                     case FinishDelta f:
                         finish = f.Reason;
@@ -151,7 +153,7 @@ public sealed class LoggingChatProvider : IChatProvider
                 _log.Error(LogSource.Llm,
                     $"response ← {_providerId}/{request.Model} FAILED: {thrown.Message}",
                     RenderResponse(text.ToString(), calls, finish, promptTokens, completionTokens,
-                                   cachedTokens, reasoning.ToString())
+                                   cachedTokens, reasoning.ToString(), createdTokens)
                         + Environment.NewLine + new string('-', 40) + Environment.NewLine
                         + thrown,
                     request.Model);
@@ -163,7 +165,7 @@ public sealed class LoggingChatProvider : IChatProvider
                         + (finish is null ? "" : $", finish={finish}")
                         + (completionTokens is { } c ? $", {c} out-tokens" : "") + ")",
                     RenderResponse(text.ToString(), calls, finish, promptTokens, completionTokens,
-                                   cachedTokens, reasoning.ToString()),
+                                   cachedTokens, reasoning.ToString(), createdTokens),
                     request.Model);
         }
     }
@@ -307,7 +309,7 @@ public sealed class LoggingChatProvider : IChatProvider
     private static string RenderResponse(
         string text, SortedDictionary<int, (string? Id, string? Name, StringBuilder Args)> calls,
         string? finish, int? promptTokens, int? completionTokens, int? cachedTokens,
-        string? reasoning = null)
+        string? reasoning = null, int? createdTokens = null)
     {
         var sb = new StringBuilder();
         if (text.Length > 0) sb.AppendLine(text);
@@ -320,6 +322,7 @@ public sealed class LoggingChatProvider : IChatProvider
         if (finish is not null) sb.Append("finish=").Append(finish).Append("  ");
         if (promptTokens is { } p) sb.Append("prompt_tokens=").Append(p).Append("  ");
         if (cachedTokens is { } cache) sb.Append("cached_prompt_tokens=").Append(cache).Append("  ");
+        if (createdTokens is { } created) sb.Append("cache_creation_prompt_tokens=").Append(created).Append("  ");
         if (completionTokens is { } c) sb.Append("completion_tokens=").Append(c);
         return sb.ToString().TrimEnd();
     }
@@ -341,6 +344,8 @@ public sealed class LoggingChatProvider : IChatProvider
         // OpenAiCompatibleProvider.CachedTokens.
         if (completion.CachedPromptTokens is { } cache)
             sb.Append("cached_prompt_tokens=").Append(cache).Append("  ");
+        if (completion.CacheCreationPromptTokens is { } created)
+            sb.Append("cache_creation_prompt_tokens=").Append(created).Append("  ");
         if (completion.CompletionTokens is { } c2) sb.Append("completion_tokens=").Append(c2);
         return sb.ToString().TrimEnd();
     }

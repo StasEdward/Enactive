@@ -38,13 +38,24 @@ public sealed class WorkspaceRegistry
     };
 
     private readonly List<WorkspaceEntry> _entries = new();
+    private readonly object _gate = new();
 
-    private WorkspaceRegistry() { }
+    private readonly CoalescingWriter<WorkspaceEntry[]>? _writer;
+
+    private readonly string _filePath;
+
+    private WorkspaceRegistry(string filePath, bool deferWrites = false)
+    {
+        _filePath = filePath;
+        if (deferWrites) _writer = new CoalescingWriter<WorkspaceEntry[]>(SaveSnapshot, TimeSpan.FromMilliseconds(250));
+    }
+
+    public Task FlushAsync() => _writer?.FlushAsync() ?? Task.CompletedTask;
 
     /// <summary>Most recently opened first - which makes the first entry the one to restore.</summary>
-    public IReadOnlyList<WorkspaceEntry> Entries => _entries;
+    public IReadOnlyList<WorkspaceEntry> Entries { get { lock (_gate) return _entries.ToArray(); } }
 
-    public WorkspaceEntry? LastOpened => _entries.Count > 0 ? _entries[0] : null;
+    public WorkspaceEntry? LastOpened { get { lock (_gate) return _entries.Count > 0 ? _entries[0] : null; } }
 
     public static string FilePath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
@@ -55,20 +66,20 @@ public sealed class WorkspaceRegistry
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "Enactive", "workspaces.txt");
 
-    public static WorkspaceRegistry Load()
+    public static WorkspaceRegistry Load(bool deferWrites = false, string? filePath = null)
     {
-        var registry = new WorkspaceRegistry();
+        var registry = new WorkspaceRegistry(filePath ?? FilePath, deferWrites);
 
         try
         {
-            if (File.Exists(FilePath))
+            if (File.Exists(registry._filePath))
             {
-                var json = File.ReadAllText(FilePath);
+                var json = File.ReadAllText(registry._filePath);
                 var entries = JsonSerializer.Deserialize<List<WorkspaceEntry>>(json, Options);
                 if (entries is not null)
                     registry._entries.AddRange(entries.Where(e => !string.IsNullOrWhiteSpace(e.RootPath)));
             }
-            else
+            else if (filePath is null)
             {
                 registry.ImportLegacy();
             }
@@ -89,21 +100,24 @@ public sealed class WorkspaceRegistry
     /// </summary>
     public WorkspaceEntry Touch(string rootPath)
     {
-        var full = Normalise(rootPath);
-        var existing = Find(full);
+        lock (_gate)
+        {
+            var full = Normalise(rootPath);
+            var existing = Find(full);
 
-        // Everything the entry already knew survives being reopened - the name it was given and how
-        // a run behaves in it. Only the timestamp is news.
-        var entry = existing is null
-            ? new WorkspaceEntry(NameFor(full), full, DateTimeOffset.Now)
-            : existing with { LastOpenedAt = DateTimeOffset.Now };
+            // Everything the entry already knew survives being reopened - the name it was given and how
+            // a run behaves in it. Only the timestamp is news.
+            var entry = existing is null
+                ? new WorkspaceEntry(NameFor(full), full, DateTimeOffset.Now)
+                : existing with { LastOpenedAt = DateTimeOffset.Now };
 
-        if (existing is not null)
-            _entries.Remove(existing);
-        _entries.Insert(0, entry);
+            if (existing is not null)
+                _entries.Remove(existing);
+            _entries.Insert(0, entry);
 
-        Save();
-        return entry;
+            Save();
+            return entry;
+        }
     }
 
     /// <summary>
@@ -112,15 +126,18 @@ public sealed class WorkspaceRegistry
     /// </summary>
     public void Rename(string rootPath, string name)
     {
-        var existing = Find(rootPath);
-        if (existing is null)
-            return;
+        lock (_gate)
+        {
+            var existing = Find(rootPath);
+            if (existing is null)
+                return;
 
-        var trimmed = name.Trim();
-        if (trimmed.Length == 0)
-            trimmed = NameFor(existing.RootPath);
+            var trimmed = name.Trim();
+            if (trimmed.Length == 0)
+                trimmed = NameFor(existing.RootPath);
 
-        Replace(existing, existing with { Name = trimmed });
+            Replace(existing, existing with { Name = trimmed });
+        }
     }
 
     /// <summary>
@@ -129,30 +146,39 @@ public sealed class WorkspaceRegistry
     /// </summary>
     public void SaveSettings(string rootPath, int autonomy, string? workerId, bool stageChanges)
     {
-        var existing = Find(rootPath) ?? Touch(rootPath);
-        Replace(existing, existing with
+        lock (_gate)
         {
-            Autonomy = autonomy,
-            WorkerId = workerId,
-            StageChanges = stageChanges
-        });
+            var existing = Find(rootPath) ?? Touch(rootPath);
+            Replace(existing, existing with
+            {
+                Autonomy = autonomy,
+                WorkerId = workerId,
+                StageChanges = stageChanges
+            });
+        }
     }
 
     /// <summary>Forgets a workspace. The folder and everything in it - including its .enactive
     /// history - is untouched: this list is the app's, the folder is the user's.</summary>
     public void Remove(string rootPath)
     {
-        var existing = Find(Normalise(rootPath));
-        if (existing is null)
-            return;
-        _entries.Remove(existing);
-        Save();
+        lock (_gate)
+        {
+            var existing = Find(Normalise(rootPath));
+            if (existing is null)
+                return;
+            _entries.Remove(existing);
+            Save();
+        }
     }
 
     public WorkspaceEntry? Find(string rootPath)
     {
-        var full = Normalise(rootPath);
-        return _entries.FirstOrDefault(e => PathsEqual(e.RootPath, full));
+        lock (_gate)
+        {
+            var full = Normalise(rootPath);
+            return _entries.FirstOrDefault(e => PathsEqual(e.RootPath, full));
+        }
     }
 
     /// <summary>The folder's own name - "Enactive" out of c:\...\repos\StasEdward\Enactive.</summary>
@@ -217,10 +243,17 @@ public sealed class WorkspaceRegistry
 
     private void Save()
     {
+        var snapshot = _entries.ToArray();
+        if (_writer is not null) _writer.Queue(snapshot);
+        else SaveSnapshot(snapshot);
+    }
+
+    private void SaveSnapshot(WorkspaceEntry[] entries)
+    {
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
-            File.WriteAllText(FilePath, JsonSerializer.Serialize(_entries, Options));
+            Directory.CreateDirectory(Path.GetDirectoryName(_filePath)!);
+            AtomicWrite.Replace(_filePath, JsonSerializer.Serialize(entries, Options));
         }
         catch
         {

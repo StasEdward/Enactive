@@ -50,12 +50,26 @@ public sealed class JsonCheckpointStore : IRunCheckpointStore
 
         Directory.CreateDirectory(_directory);
         var path = PathFor(checkpoint.RunId);
-        var temporary = path + ".tmp";
+        var temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
 
-        await using (var stream = new FileStream(temporary, FileMode.Create, FileAccess.Write, FileShare.None))
-            await JsonSerializer.SerializeAsync(stream, checkpoint, Options, ct);
-
-        File.Move(temporary, path, overwrite: true);
+        try
+        {
+            await using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write,
+                FileShare.None, 4096, FileOptions.Asynchronous))
+            {
+                await JsonSerializer.SerializeAsync(stream, checkpoint, Options, ct);
+                await stream.FlushAsync(ct);
+                stream.Flush(flushToDisk: true);
+            }
+            ct.ThrowIfCancellationRequested();
+            await AtomicWrite.MoveIntoPlaceAsync(temporary, path, ct);
+        }
+        finally
+        {
+            try { File.Delete(temporary); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
     }
 
     public async Task<IReadOnlyList<RunCheckpoint>> LoadAllAsync(CancellationToken ct)
@@ -108,7 +122,7 @@ public sealed class JsonCheckpointStore : IRunCheckpointStore
     {
         try
         {
-            await using var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read);
+            await using var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
             return await JsonSerializer.DeserializeAsync<RunCheckpoint>(stream, Options, ct);
         }
         catch (JsonException)

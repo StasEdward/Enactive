@@ -2,4 +2,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Enactive.Core\Enactive.Core.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Enactive.Engine.Tests" />
+  </ItemGroup>
 </Project>

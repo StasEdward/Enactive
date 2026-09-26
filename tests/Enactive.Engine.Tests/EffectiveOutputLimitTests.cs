@@ -134,6 +134,18 @@ public sealed class EffectiveOutputLimitTests
     private static string Response(ProviderKind kind, bool stream) => kind switch
     {
         ProviderKind.OllamaNative => """{"message":{"role":"assistant","content":"ok"},"done":true}""" + "\n",
+        ProviderKind.Anthropic when stream => """
+            data: {"type":"message_start","message":{"usage":{"input_tokens":1}}}
+
+            data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":"ok"}}
+
+            data: {"type":"content_block_stop","index":0}
+
+            data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}
+
+            data: {"type":"message_stop"}
+
+            """,
         ProviderKind.Anthropic => """{"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn"}""",
         _ when stream => "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
         _ => """{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}"""

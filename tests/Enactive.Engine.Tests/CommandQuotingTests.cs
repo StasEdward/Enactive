@@ -39,11 +39,9 @@ public sealed class CommandQuotingTests
     /// quoting is a bad trade. The shape is the same - an empty quoted token, then a quoted path
     /// with a space - and it is the shape that broke.
     /// </summary>
-    [Fact]
+    [WindowsFact]
     public async Task A_command_with_quotes_reaches_cmd_as_it_was_written()
     {
-        if (!OperatingSystem.IsWindows())
-            return;
 
         using var fx = new EngineFixture();
 
@@ -68,11 +66,9 @@ public sealed class CommandQuotingTests
     /// A quoted argument with a space survives as ONE argument, which is the whole reason anybody
     /// writes the quotes.
     /// </summary>
-    [Fact]
+    [WindowsFact]
     public async Task A_quoted_argument_keeps_its_quotes()
     {
-        if (!OperatingSystem.IsWindows())
-            return;
 
         using var fx = new EngineFixture();
 
@@ -86,11 +82,9 @@ public sealed class CommandQuotingTests
     /// And the ordinary case still works. A fix to quoting that broke every command without quotes
     /// would be a worse bug than the one it replaced.
     /// </summary>
-    [Fact]
+    [WindowsFact]
     public async Task A_command_with_no_quotes_still_works()
     {
-        if (!OperatingSystem.IsWindows())
-            return;
 
         using var fx = new EngineFixture();
 
@@ -104,11 +98,9 @@ public sealed class CommandQuotingTests
     /// Redirection, pipes and &amp; are cmd's own syntax and must keep working - they are most of why
     /// somebody reaches for run_command instead of a file tool.
     /// </summary>
-    [Fact]
+    [WindowsFact]
     public async Task Cmd_syntax_still_works()
     {
-        if (!OperatingSystem.IsWindows())
-            return;
 
         using var fx = new EngineFixture();
 

@@ -42,6 +42,8 @@ public sealed class ByStepChatProvider : IChatProvider
     /// <summary>What a step says when its script runs out.</summary>
     public Turn WhenExhausted { get; set; } = Turn.Says("Done.");
 
+    public Func<ChatRequest, CancellationToken, Task>? BeforeStreamRequest { get; set; }
+
     /// <summary>Every request made, in the order they arrived.</summary>
     public IReadOnlyList<ChatRequest> Requests
     {
@@ -107,6 +109,7 @@ public sealed class ByStepChatProvider : IChatProvider
         ChatRequest request,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
     {
+        if (BeforeStreamRequest is { } before) await before(request, ct);
         var turn = Next(RequestSnapshot.Of(request));
 
         // Left in a finally: a consumer that stops early - a cancelled step, a stream abandoned by

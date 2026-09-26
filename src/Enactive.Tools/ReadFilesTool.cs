@@ -1,11 +1,7 @@
 namespace Enactive.Tools;
 
-using System.Text;
-using System.Text.Json;
 using Enactive.Core.Permissions;
-using Enactive.Core.Context;
 using Enactive.Core.Tools;
-using Enactive.Core.Execution;
 
 /// <summary>
 /// Reads several files in ONE call (read-only, Observe level).
@@ -61,151 +57,12 @@ public sealed class ReadFilesTool : ITool
                    + "into the part between them. Preview scans at most " + FilePreview.MaxInputChars
                    + " characters plus one lookahead per file; larger files show a marked prefix "
                    + "preview with an unknown total line count.",
-        JsonSchema: Schema, WorkspaceEffect: WorkspaceEffect.None);
+        JsonSchema: Schema, WorkspaceEffect: WorkspaceEffect.None, ParallelRead: true, Kind: ToolKind.Read, FileCoverage: FileCoverageBehavior.Read);
 
     public PermissionLevel RequiredLevel => PermissionLevel.Observe;
 
-    public async Task<ToolResult> InvokeAsync(string argumentsJson, ToolContext ctx, CancellationToken ct)
-    {
-        List<string> paths;
-        try
-        {
-            using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(argumentsJson) ? "{}" : argumentsJson);
-
-            if (!doc.RootElement.TryGetProperty("paths", out var value)
-                || value.ValueKind != JsonValueKind.Array)
-                return ToolResults.Unreadable(
-                    "'paths' is required and must be an ARRAY of file paths. For one file, use "
-                    + "read_file.");
-
-            paths = value.EnumerateArray()
-                         .Where(e => e.ValueKind == JsonValueKind.String)
-                         .Select(e => e.GetString()!)
-                         .Where(p => p.Length > 0)
-                         .ToList();
-        }
-        catch (JsonException ex)
-        {
-            return ToolResults.Unreadable($"Invalid arguments JSON: {ex.Message}");
-        }
-
-        if (paths.Count == 0)
-            return ToolResults.Unreadable("'paths' is empty - name at least one file.");
-
-        if (paths.Count > MaxFiles)
-            return ToolResults.Unreadable(
-                $"{paths.Count} paths, and at most {MaxFiles} may be read in one call. Ask for the "
-                + "ones this question actually needs, then ask again for the rest.");
-
-        // Resolved BEFORE anything is opened. One path that leaves the workspace makes the whole
-        // call wrong, and a partial answer over a refused argument is worse than none: the model
-        // would read four files and never learn the fifth was refused rather than empty.
-        var resolved = new List<(string Relative, string Full)>();
-        foreach (var relative in paths)
-        {
-            try { resolved.Add((relative, WorkspacePaths.ResolveInside(ctx.WorkspaceRoot, relative))); }
-            catch (ReservedPathException) { return ToolResults.NotFound(ReservedPathException.Explanation); }
-            catch (ArgumentException ex) { return ToolResults.Unreadable($"'{relative}': {ex.Message}"); }
-        }
-
-        var sb = new StringBuilder();
-        var budget = MaxCharsTotal;
-        var found = 0;
-        var missing = new List<string>();
-
-        // What was shown of each file, for ReadLedger - a whole-file write of a file seen only as an
-        // excerpt is the loss it exists to stop, and this is now a common way to read.
-        var coverage = new List<FileCoverage>();
-        var stagedPaths = new List<string>();
-
-        try
-        {
-            foreach (var (relative, full) in resolved)
-            {
-                using var source = await WorkspaceReader.OpenAsync(ctx, relative, full, ct);
-                if (source is null)
-                {
-                    missing.Add(relative);
-                    continue;
-                }
-
-                if (budget <= 0)
-                {
-                    sb.AppendLine($"----- {relative} -----")
-                      .AppendLine($"(not read: the {MaxCharsTotal} character budget for this call "
-                                + "was used by the files above. Ask for this one on its own.)")
-                      .AppendLine();
-                    continue;
-                }
-
-                var room = Math.Min(MaxCharsPerFile, budget);
-                var preview = await FilePreview.ReadAsync(source.Reader, room, ct);
-                if (source.Staged) stagedPaths.Add(relative);
-
-                // The START and the END, never just the start. Two reasons, and the second is the
-                // stronger one. A file's top carries its namespace, usings and declaration and its
-                // bottom its last member, so head-only throws away the half that says the file
-                // ENDED - and a model reading a plausible file that simply stops has no way to
-                // tell a cut from a truth. That is 9q's lesson for command output and 9by's for
-                // the reviewer's excerpt.
-                //
-                // And the shape has to be ONE shape everywhere. A reader who learns "an excerpt is
-                // the start and the end" and then meets one tool where it is not will misread it,
-                // which is not hypothetical: 9cc is a label that survived a change of shape by a
-                // day, and the reviewer believed the label over the text in front of it.
-                //
-                // FileHead rather than CommandHead because the reasoning behind two-fifths is about
-                // commands - "a program reports its outcome last" - and a file has no outcome.
-                var slice = preview.Text;
-                budget -= slice.Length;
-                found++;
-
-                var lines = preview.Lines;
-                coverage.Add(new FileCoverage(relative, lines,
-                    preview.Complete && preview.Characters <= room ? lines : 0, preview.Complete));
-
-                sb.AppendLine($"----- {relative} ({(preview.Complete ? "" : "at least ")}{preview.Characters} characters) -----")
-                  .AppendLine(slice);
-
-                if (!preview.Complete)
-                    sb.AppendLine($"... (input scan stopped at the {FilePreview.MaxInputChars} character limit "
-                        + "plus one lookahead character. Only a PREFIX was scanned; the file end and totalLines "
-                        + "are unknown. Use read_file with offset/limit for a specific window; "
-                        + "it scans the file to count exact lines.)");
-                else if (preview.Characters > room)
-                    sb.AppendLine($"... (shown: the start and the end, {slice.Length} of "
-                                + $"{preview.Characters} characters. What is missing is the MIDDLE - "
-                                + $"read_file '{relative}' with an offset to see it.)");
-
-                sb.AppendLine();
-            }
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-        catch (Exception ex)
-        {
-            return ToolResults.Fail($"Could not read the files: {ex.Message}");
-        }
-
-        // All of them absent is a lookup that ANSWERED - the rule read_file follows for one missing
-        // path. Some absent and some found is an answer too, and the absent ones are NAMED rather
-        // than passed over: a model that asked for five and got four back would otherwise have to
-        // work out which one it never saw.
-        if (found == 0)
-            return ToolResults.NotFound(
-                "None of these are there: " + string.Join(", ", missing)
-                + ". Nothing went wrong - if you were guessing at where something lives, use "
-                + "search_files or list_dir to find it.");
-
-        if (missing.Count > 0)
-            sb.AppendLine("----- not there: " + string.Join(", ", missing) + " -----");
-
-        return ToolResults.Ok(sb.ToString().TrimEnd(),
-            metadata: new Dictionary<string, object?>
-            {
-                ["files"] = coverage,
-                ["stagedPaths"] = stagedPaths
-            });
-    }
+    public Task<ToolResult> InvokeAsync(string argumentsJson, ToolContext ctx, CancellationToken ct)
+        => FileReadService.InvokeAsync(argumentsJson, ctx, ct, batchOnly: true);
 
     private const string Schema = """
     {

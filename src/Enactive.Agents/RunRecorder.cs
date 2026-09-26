@@ -44,7 +44,8 @@ public sealed class RunRecorder
     public async IAsyncEnumerable<WorkEvent> RecordAsync(
         IAsyncEnumerable<WorkEvent> stream, [EnumeratorCancellation] CancellationToken ct)
     {
-        var events = new List<WorkEvent>();
+        var buffer = new RecordedEventBuffer();
+        var events = buffer.Events;
 
         // Enumerated by hand rather than with `await foreach`, so the MoveNext can sit in a try with
         // a CATCH while the yield sits outside it - an iterator may not yield inside a try that has
@@ -73,16 +74,18 @@ public sealed class RunRecorder
                     // "model 'qwen2.5-coder' not found", and neither the timeline, the report nor
                     // the Inbox said so. A run that cannot say why it stopped is the failure the
                     // whole unattended design exists to prevent.
+                    buffer.Flush();
                     Note(events, ex);
                     throw;
                 }
 
-                events.Add(current);
+                buffer.Add(current);
                 yield return current;
             }
         }
         finally
         {
+            buffer.Flush();
             await source.DisposeAsync().ConfigureAwait(false);
 
             if (events.Count > 0)
@@ -254,7 +257,7 @@ public sealed class RunRecorder
         // Nullable and starting at null, unlike the two above: zero here would be a claim that
         // nothing was served from a cache, and for a run against a local model the truth is that
         // nobody counted. See ModelSpend.CachedPromptTokens.
-        int? cachedTokens = null;
+        int? cachedTokens = null, createdTokens = null;
 
         // What each model was asked to do, and what it cost. Keyed by phase AND model because one
         // model can serve two phases and two models can serve one - a run with ExecuteLight bound
@@ -322,6 +325,7 @@ public sealed class RunRecorder
                     // a run where nothing reports one must come out as null - not as a zero saying
                     // the caching achieved nothing.
                     cachedTokens = TokenCounts.Add(cachedTokens, ev.CachedTokens());
+                    createdTokens = TokenCounts.Add(createdTokens, ev.CacheCreationTokens());
                     Spent(spend, ev, used.In, used.Out, ev.CachedTokens());
                     break;
                 // The terminal event carries a typed outcome now, so the history stores what the
@@ -357,7 +361,7 @@ public sealed class RunRecorder
                     // before the usage payload carried one are exactly that case, and an empty list
                     // would read as "this run spent nothing anywhere".
                     ByModel = spend.Count > 0 ? spend.Values.ToList() : null,
-                    CachedPromptTokens = cachedTokens
+                    CachedPromptTokens = cachedTokens, CacheCreationPromptTokens = createdTokens
                 }
                 : null,
             spec);
@@ -391,11 +395,12 @@ public sealed class RunRecorder
                 // One turn in a step reporting a cache read and the next not reporting one is a
                 // provider that answered once - the row says what it was told, and stays null only
                 // while nothing has told it anything.
-                CachedPromptTokens = TokenCounts.Add(running.CachedPromptTokens, cached)
+                CachedPromptTokens = TokenCounts.Add(running.CachedPromptTokens, cached),
+                CacheCreationPromptTokens = TokenCounts.Add(running.CacheCreationPromptTokens, ev.CacheCreationTokens())
             }
             : new ModelSpend(purpose, provider, name, prompt, completion, Calls: 1)
             {
-                CachedPromptTokens = cached
+                CachedPromptTokens = cached, CacheCreationPromptTokens = ev.CacheCreationTokens()
             };
     }
 

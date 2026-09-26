@@ -53,14 +53,5 @@ public sealed class EveryTemplateSaysItsTypeTests
     private static int Line(string text, int index)
         => text.Take(index).Count(c => c == '\n') + 1;
 
-    private static string RepositoryRoot()
-    {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-
-        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "Enactive.sln")))
-            directory = directory.Parent;
-
-        Assert.True(directory is not null, "Enactive.sln was not found above " + AppContext.BaseDirectory);
-        return directory!.FullName;
-    }
+    private static string RepositoryRoot() => TestRepository.Root;
 }

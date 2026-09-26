@@ -76,6 +76,46 @@ public sealed class LineEndingTests
 
     // ── edit_file ───────────────────────────────────────────────────────────
 
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(false, false, true)]
+    [InlineData(false, true, false)]
+    [InlineData(false, true, true)]
+    [InlineData(true, false, false)]
+    [InlineData(true, false, true)]
+    [InlineData(true, true, false)]
+    [InlineData(true, true, true)]
+    public async Task Exact_match_still_normalises_replacement_endings(bool crlf, bool staged, bool multiline)
+    {
+        using var fx = new EngineFixture();
+        var ending = crlf ? "\r\n" : "\n";
+        var opposite = crlf ? "\n" : "\r\n";
+        var before = $"prefix{ending}old{ending}tail{ending}suffix{ending}";
+        var proposals = new Enactive.Workspace.StagingArtifactStore(fx.Root);
+        IArtifactStore store = staged ? proposals.BeginStep() : fx.Artifacts;
+        // Pending content deliberately has different endings from the underlying disk.
+        fx.Write("doc.txt", staged ? $"disk{opposite}" : before);
+        if (staged)
+            await store.CreateAsync("doc.txt", ArtifactKind.FileSet, "text/plain",
+                async stream => await stream.WriteAsync(System.Text.Encoding.UTF8.GetBytes(before)), default);
+        var result = await fx.Invoke(new EditFileTool(), System.Text.Json.JsonSerializer.Serialize(new
+        {
+            path = "doc.txt",
+            old_string = multiline ? $"old{ending}tail" : "old",
+            new_string = $"new{opposite}extra"
+        }), store);
+        Assert.True(result.Success, result.Error);
+        var expected = $"prefix{ending}new{ending}extra{ending}"
+            + (multiline ? "" : $"tail{ending}") + $"suffix{ending}";
+        if (staged)
+        {
+            Assert.Equal(expected, await store.TryReadPendingAsync("doc.txt", default));
+            Assert.Equal($"disk{opposite}", fx.Read("doc.txt"));
+            foreach (var change in proposals.Changes) Assert.True(proposals.Apply(change.Id).Applied);
+        }
+        Assert.Equal(System.Text.Encoding.UTF8.GetBytes(expected), File.ReadAllBytes(fx.PathOf("doc.txt")));
+    }
+
     /// <summary>
     /// The reported defect, as a theory rather than as two hand-written cases: a passage typed with
     /// LFs matches either file, and the splice takes the endings the file already had.

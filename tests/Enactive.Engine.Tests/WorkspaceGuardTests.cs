@@ -188,7 +188,7 @@ public sealed class WorkspaceGuardTests
     /// A directory junction on Windows (no elevation needed, unlike a symlink without Developer
     /// Mode) and a symlink elsewhere. Returns false when the OS refuses.
     /// </summary>
-    private static bool TryLinkDirectory(string link, string target)
+    internal static bool TryLinkDirectory(string link, string target)
     {
         try
         {

@@ -29,6 +29,31 @@ using Xunit;
 /// </summary>
 public sealed class ResumeTests
 {
+    [Fact]
+    public async Task Requirement_assignments_survive_checkpoint_and_are_used_by_resumed_review()
+    {
+        using var fx = new EngineFixture();
+        var store = new RecordingCheckpointStore();
+        var worker = new FakeChatProvider(
+            Turn.Says("""{"disposition":"task","title":"Implement and verify","steps":[{"title":"Implement","dependsOn":[],"obligations":["O001"]},{"title":"Verify","dependsOn":[0],"obligations":["O001"]}]}"""),
+            Turn.Calls1("write_file", """{"path":"result.txt","content":"correct"}"""), Turn.Says("done"),
+            Turn.Calls1("read_file", """{"path":"result.txt"}"""), Turn.Says("verified"));
+        await fx.RunAsync(fx.Build(worker, checkpoints: store), "Implement and verify result.txt");
+        var checkpoint = System.Text.Json.JsonSerializer.Deserialize<RunCheckpoint>(
+            System.Text.Json.JsonSerializer.Serialize(store.After(1)))!;
+        Assert.All(checkpoint.Steps, step => Assert.Equal(new[] { "O001" }, step.ObligationIds));
+
+        var resumed = new FakeChatProvider(Turn.Calls1("read_file", """{"path":"result.txt"}"""), Turn.Says("verified"));
+        var reviewer = new FakeChatProvider(Verdicts.Combined(Verdicts.Shown("Verified prior implementation", 1), "S1"));
+        var events = await fx.ResumeAsync(fx.Build(resumed, checkpoints: store, router: Routers.WithReviewer(),
+            reviewProvider: reviewer, checkSoundness: true, reviewContent: false, reviewRetries: 0), checkpoint);
+        Assert.Equal(RunOutcomeKind.Completed, events.Last().Outcome());
+        Assert.Single(reviewer.Requests);
+        const string map = "\"O001\":[\"S1\",\"S2\"]";
+        Assert.Contains(map, string.Join("\n", reviewer.Requests[0].Messages.Select(m => m.Content)));
+        Assert.Contains(map, string.Join("\n", resumed.Requests[0].Messages.Select(m => m.Content)));
+    }
+
     private const string ThreeStepPlan = """
         {"disposition":"task","title":"three steps",
          "steps":[{"title":"first","dependsOn":[]},{"title":"second","dependsOn":[0]},
@@ -218,6 +243,12 @@ public sealed class ResumeTests
         var resumed = new RecordingCheckpointStore();
         var again = new FakeChatProvider() { WhenExhausted = Turn.Says("step done") };
         var events = await fx.ResumeAsync(fx.Build(again, checkpoints: resumed), afterOne);
+        Assert.All(again.Requests, request =>
+        {
+            Assert.Single(request.Messages, m => m.Content?.StartsWith("## Plan scopes") == true);
+            Assert.Single(request.Messages, m => m.Content?.Contains("Original request (verbatim):") == true);
+        });
+
 
         var ran = StepsThatRan(events);
         Assert.Equal(2, ran.Length);

@@ -217,6 +217,7 @@ public sealed class PromptCachingTests
             """);
 
         Assert.Equal(200550, completion.PromptTokens);
+        Assert.Equal(500, completion.CacheCreationPromptTokens);
         Assert.Equal(12, completion.CompletionTokens);
     }
 

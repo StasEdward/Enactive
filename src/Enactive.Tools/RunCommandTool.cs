@@ -20,7 +20,7 @@ public sealed class RunCommandTool : ITool
                    + "in 'expectedExitCodes' before running - do that when the exit code is part of the answer "
                    + "you want (a test runner reporting failing tests), never to excuse a command that was "
                    + "supposed to succeed.",
-        JsonSchema: Schema);
+        JsonSchema: Schema, Kind: ToolKind.Command, RunsSuccessChecks: true);
 
     public PermissionLevel RequiredLevel => PermissionLevel.Execute;
 
@@ -58,6 +58,7 @@ public sealed class RunCommandTool : ITool
         {
             WorkingDirectory = ctx.WorkspaceRoot,
             RedirectStandardOutput = true,
+            RedirectStandardInput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true,
@@ -122,17 +123,24 @@ public sealed class RunCommandTool : ITool
             // it. A command that finishes normally leaves what it started running - `start "" app`
             // is a thing people ask a shell to do. See ProcessJob for both halves of that.
             outcome = await ProcessExec.RunContainedAsync(process, TimeoutSeconds, ct);
+            ct.ThrowIfCancellationRequested();
             if (!outcome.Completed)
                 return ToolResults.Fail($"Command timed out after {TimeoutSeconds}s or was cancelled.");
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             return ToolResults.Fail($"Could not run command: {ex.Message}");
         }
 
-        return ProcessExec.BuildResult(
+        var result = ProcessExec.BuildResult(
             "Command", process.ExitCode, stdout.ToString(), stderr.ToString(), expected,
             declarable: true, outputCutShort: outcome.OutputCutShort, commandLine: command);
+        if (result.DidNotRun && OperatingSystem.IsWindows()
+            && Environment.GetEnvironmentVariable("NoDefaultCurrentDirectoryInExePath") is not null)
+            result = result with { Error = result.Error + " Windows current-directory executable lookup is disabled "
+                + "by NoDefaultCurrentDirectoryInExePath. If this is a workspace script, use an explicit "
+                + @"relative path such as .\script.cmd (quote it if it contains spaces)." };
+        return result;
     }
 
     private static readonly string Schema = $$"""

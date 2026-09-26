@@ -14,6 +14,7 @@ public sealed class McpRunTools : IToolRegistry, IAsyncDisposable
     // Both counters are monotonic; either pending/unknown component makes the combined view unknown.
     public long? WorkspaceVersion(Guid workspaceId)
         => _builtIn.WorkspaceVersion(workspaceId) + _remote.WorkspaceVersion(workspaceId);
+    public ToolDefinition? DefinitionOf(string name) => (IsRemote(name) ? _remote : _builtIn).DefinitionOf(name);
     private bool IsRemote(string name) => name.StartsWith("mcp__", StringComparison.Ordinal);
     public PermissionLevel RequiredLevelOf(string name) => (IsRemote(name) ? _remote : _builtIn).RequiredLevelOf(name);
     public bool RequiresApprovalOf(string name) => (IsRemote(name) ? _remote : _builtIn).RequiresApprovalOf(name);
@@ -26,7 +27,7 @@ public sealed class McpRunTools : IToolRegistry, IAsyncDisposable
         var result = new McpRunTools(builtIn);
         try
         {
-            var enabled = configs.Where(c => c.Enabled).Select(c => c.Clone()).ToArray();
+            var enabled = configs.Where(c => c.Enabled && !c.CredentialsUnavailable).Select(c => c.Clone()).ToArray();
             if (enabled.GroupBy(c => c.Id, StringComparer.OrdinalIgnoreCase).Any(g => g.Count() > 1))
                 throw new InvalidOperationException("MCP server IDs must be unique.");
             foreach (var config in enabled)

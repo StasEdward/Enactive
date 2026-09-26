@@ -142,7 +142,8 @@ public static class RunReport
             ? $"{u.Total} ({u.PromptTokens} in, {u.CompletionTokens} out; "
               + (u.CachedPercent is { } pct
                   ? $"{pct}% of the prompt from cache"
-                  : "cache not reported by this provider") + ")"
+                  : "cache not reported by this provider")
+              + (u.CacheCreationPromptTokens is { } created ? $"; {created} input tokens written to cache" : "") + ")"
             : "not reported")}");
 
         if (record.Decisions.Count > 0)

@@ -86,6 +86,10 @@ public static class ProviderTrouble
 
             // A timeout from HttpClient arrives as a cancellation that nobody requested. A run the
             // person stopped is a different thing entirely and must not be reported as this.
+            TimeoutException =>
+                $"{who} exceeded its configured provider deadline{at}. Check CompletionTimeoutSeconds "
+                + "for non-streaming requests or StreamIdleTimeoutSeconds for streams.",
+
             TaskCanceledException { InnerException: TimeoutException } =>
                 $"{who} did not answer in time{at}. A local model that is loading for the first "
                 + "time can exceed the request timeout; a second attempt often succeeds.",

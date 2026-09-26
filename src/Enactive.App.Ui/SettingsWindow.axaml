@@ -381,6 +381,24 @@
                             </StackPanel>
                             <TextBox Text="{Binding NumCtxText}"
                                      PlaceholderText="e.g. 8192 — blank uses whatever the model already has loaded" />
+                            <TextBlock Text="Generation budgets (output tokens)" Margin="0,12,0,4" />
+                            <TextBlock Text="Provider limits and remaining context may lower these ceilings." TextWrapping="Wrap" />
+                            <TextBlock Text="Planner" />
+                            <TextBox Text="{Binding GenerationPlannerText}" />
+                            <TextBlock Text="Short action" />
+                            <TextBox Text="{Binding GenerationActionText}" />
+                            <TextBlock Text="File-write continuation" />
+                            <TextBox Text="{Binding GenerationFileWriteText}" />
+                            <TextBlock Text="Final-answer continuation" />
+                            <TextBox Text="{Binding GenerationFinalAnswerText}" />
+                            <TextBlock Text="Handover note" />
+                            <TextBox Text="{Binding GenerationHandoverText}" />
+                            <TextBlock Text="Repair consultant (optional)" Margin="0,12,0,4" />
+                            <TextBlock Text="Sends the goal, current diff and error to the chosen model for advice, once per step attempt. The worker stays unchanged." TextWrapping="Wrap" />
+                            <TextBox Text="{Binding RepairModelText}" PlaceholderText="provider-id/model — blank disables consultation" />
+                            <TextBlock Text="Distinct failed repairs before advice: 0 = off, minimum 2. Choose from observed runs; no calibrated default." TextWrapping="Wrap" />
+                            <TextBox Text="{Binding RepairThresholdText}" />
+
 
                             <StackPanel Orientation="Horizontal" Spacing="6">
                                 <TextBlock Classes="label" Text="Global instructions" />

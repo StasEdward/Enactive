@@ -1,5 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
+    <InternalsVisibleTo Include="Enactive.Engine.Tests" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\Enactive.Core\Enactive.Core.csproj" />
   </ItemGroup>
   <ItemGroup>

@@ -47,7 +47,7 @@ public sealed class SearchFilesTool : ITool
                    + "\" to search a long command output you saved there). 'path' may name a single "
                    + "FILE, which searches just that file. Each match comes with the lines around it "
                    + "('context'), so a search usually answers without a read_file after it.",
-        JsonSchema: Schema, WorkspaceEffect: WorkspaceEffect.None);
+        JsonSchema: Schema, WorkspaceEffect: WorkspaceEffect.None, ParallelRead: true, Kind: ToolKind.Read);
 
     public PermissionLevel RequiredLevel => PermissionLevel.Observe;
 

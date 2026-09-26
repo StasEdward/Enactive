@@ -45,11 +45,15 @@ internal sealed class ReadLedger
     private readonly Dictionary<string, Coverage> _files =
         new(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>The tool whose results this ledger is built from.</summary>
-    internal const string ReadTool = "read_file";
-
-    /// <summary>The tool that reads several files at once.</summary>
-    internal const string ReadManyTool = "read_files";
+    /// <summary>Full file text was discarded; retain the guard, but require fresh coverage.</summary>
+    public void ForgetDiscardedReads()
+    {
+        foreach (var coverage in _files.Values)
+        {
+            coverage.Contiguous = 0;
+            coverage.TooLong.Clear();
+        }
+    }
 
     private Coverage CoverageOf(string path)
     {
@@ -58,13 +62,6 @@ internal sealed class ReadLedger
             _files[key] = coverage = new Coverage();
         return coverage;
     }
-
-    /// <summary>The tool this ledger guards.</summary>
-    internal const string WriteTool = "write_file";
-
-    /// <summary>The tools that take a file away from its path - and with it, what was read of it.</summary>
-    internal const string DeleteTool = "delete_file";
-    internal const string MoveTool = "move_file";
 
     private static IEnumerable<string> PathsNamedBy(ToolCall call, params string[] names)
     {
@@ -90,7 +87,7 @@ internal sealed class ReadLedger
     /// metadata — the tools stay ignorant of each other, and the loop that sees every call and every
     /// result is the one place that can put the two together.
     /// </summary>
-    public void Saw(ToolCall call, ToolResult result)
+    public void Saw(ToolCall call, ToolResult result, ToolDefinition? definition)
     {
         // A file deleted or moved away is not the file that was read. What was read of it describes
         // content that is gone, and must not stand between the step and a NEW file at that path.
@@ -98,7 +95,7 @@ internal sealed class ReadLedger
         // written, deleted it, generated it again from scratch - 8,010 tokens, two minutes on that
         // machine - and the write was refused as "read only in part", about a file that no longer
         // existed.
-        if (result.Success && call.Name is DeleteTool)
+        if (result.Success && definition?.FileCoverage == FileCoverageBehavior.Delete)
         {
             foreach (var gone in PathsNamedBy(call, "path"))
                 _files.Remove(Key(gone));
@@ -107,7 +104,7 @@ internal sealed class ReadLedger
 
         // A MOVE takes what was read with it: the content at the new path is the content that was
         // read at the old one, and a file seen in part must not become rewritable by being renamed.
-        if (result.Success && call.Name is MoveTool)
+        if (result.Success && definition?.FileCoverage == FileCoverageBehavior.Move)
         {
             if (PathsNamedBy(call, "from").FirstOrDefault() is { } source
                 && PathsNamedBy(call, "to").FirstOrDefault() is { } target)
@@ -119,7 +116,7 @@ internal sealed class ReadLedger
             return;
         }
 
-        if (call.Name is not (ReadTool or ReadManyTool) || !result.Success)
+        if (definition?.FileCoverage != FileCoverageBehavior.Read || !result.Success)
             return;
 
         // Several files in one read - read_files, or read_file given 'paths'. Each says how much of it
@@ -175,9 +172,9 @@ internal sealed class ReadLedger
     /// by a command, which no tool call here saw, is covered by this as well as by
     /// <see cref="Saw"/>'s forgetting.
     /// </param>
-    public string? Refuse(ToolCall call, string? path, bool fileExists = true)
+    public string? Refuse(ToolCall call, string? path, ToolDefinition? definition, bool fileExists = true)
     {
-        if (!string.Equals(call.Name, WriteTool, StringComparison.Ordinal)
+        if (definition?.FileCoverage != FileCoverageBehavior.Replace
             || string.IsNullOrWhiteSpace(path)
             || !fileExists)
             return null;

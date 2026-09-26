@@ -205,19 +205,13 @@ public sealed class SyncOverAsyncTests : IDisposable
             + "synchronous path synchronously instead.");
     }
 
-    /// <summary>The .cs files of one project, by file name, or empty when the tree is not there.</summary>
+    /// <summary>The .cs files of one project, by file name, requiring the source checkout to be available.</summary>
     private static Dictionary<string, string> Sources(string project)
     {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-
-        while (directory is not null && !Directory.Exists(Path.Combine(directory.FullName, "src", project)))
-            directory = directory.Parent;
-
-        if (directory is null)
-            return new Dictionary<string, string>();
+        var root = TestRepository.Root;
 
         return Directory
-            .GetFiles(Path.Combine(directory.FullName, "src", project), "*.cs", SearchOption.AllDirectories)
+            .GetFiles(Path.Combine(root, "src", project), "*.cs", SearchOption.AllDirectories)
             .Where(f => !f.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}")
                         && !f.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}"))
             .ToDictionary(f => Path.GetFileName(f)!, f => f);

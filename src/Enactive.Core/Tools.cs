@@ -9,12 +9,35 @@ using Enactive.Core.Permissions;
 /// Tool description plus trusted execution metadata. WorkspaceEffect describes successful calls;
 /// None also promises that failure paths do not mutate. Other failures remain Unknown unless the
 /// result reports an explicit effect. Adapters send only name, description and schema to the model.
+/// ChangedPathArguments identifies destinations for project/scratch scope, not execution success.
+/// RepairsFileFailures and ProgressIdentity are separate recovery and stall policies.
+/// ParallelRead explicitly promises concurrent read safety, including with the same tool instance;
+/// it is honoured only with None effects, Observe permission and no required approval.
+/// RunsSuccessChecks opts into command:string input and exitCode metadata; it is not permission.
 /// </summary>
 public sealed record ToolDefinition(string Name, string Description, string JsonSchema,
-    WorkspaceEffect WorkspaceEffect = WorkspaceEffect.Unknown);
+    WorkspaceEffect WorkspaceEffect = WorkspaceEffect.Unknown,
+    IReadOnlyList<string>? ChangedPathArguments = null,
+    bool RepairsFileFailures = false,
+    ProgressIdentity ProgressIdentity = ProgressIdentity.Observation,
+    bool ParallelRead = false,
+    ToolKind Kind = ToolKind.Unknown,
+    FileCoverageBehavior FileCoverage = FileCoverageBehavior.None,
+    bool RunsSuccessChecks = false);
+
+/// <summary>Trusted host classification; never inferred from a name or from model/MCP text.
+/// Unknown keeps conservative review. Kind grants no permissions or concurrency guarantees.</summary>
+public enum ToolKind { Unknown, Read, Write, Relocate, Command }
+
+/// <summary>Opt-in coverage protocol: Read returns FileCoverage/line metadata; Replace uses path;
+/// Delete forgets path; Move transfers from to to. Independent of workspace effects.</summary>
+public enum FileCoverageBehavior { None, Read, Replace, Delete, Move }
 
 /// <summary>Workspace effects, independent of success and of whether the action is novel.</summary>
 public enum WorkspaceEffect { None, Changed, Unknown }
+
+/// <summary>Stall identity policy, not evidence that the workspace changed.</summary>
+public enum ProgressIdentity { Observation, Action }
 
 /// <summary>A tool invocation requested by the model.</summary>
 public sealed record ToolCall(string Id, string Name, string ArgumentsJson);
@@ -48,96 +71,39 @@ public static class ToolArguments
 
     /// <summary>
     /// Set to run a command AGAIN despite the engine's own knowledge that it already ran with these
-    /// exact arguments this step and nothing has been written since - see the repeat gate in
+    /// exact arguments this step at the same tracked workspace version - see the repeat gate in
     /// Orchestrator. Not read by any tool's own logic; it exists only for the engine to see before
     /// the tool is invoked, the same way <see cref="ExpectedExitCodes"/> is.
     /// </summary>
     public const string Force = "force";
 }
 
-/// <summary>File-tool classifications for failure recovery, stall identity and project-change audits.
-/// Repeat invalidation uses explicit ToolResult/ToolDefinition effects instead of these name lists.</summary>
-public static class MutatingTools
+/// <summary>Resolves declared path effects; contains no tool-name classifications or mutable state.</summary>
+public static class ToolEffects
 {
-    private static readonly HashSet<string> Names =
-        new(StringComparer.Ordinal) { "write_file", "edit_file", "move_file", "create_directory" };
-
-    /// <summary>
-    /// Whether a call by this name is the KIND of call that writes something.
-    ///
-    /// <para>Asked by the open-failure tracker, whose answer is about the name alone: a write into the
-    /// worker's own scratch area is still the step doing something it had not done, which is
-    /// exactly what those guards are counting. See <see cref="ChangedTheWorkspace"/> for the other
-    /// question, which is not this one.</para>
-    /// </summary>
-    public static bool Changes(string tool) => Names.Contains(tool);
-
-    /// <summary>File mutations have an unversioned identity for stall detection, including copy/delete.</summary>
-    public static bool IsFileMutation(string tool) => ChangedPaths.ContainsKey(tool);
-
-    /// <summary>
-    /// Every tool that changes the PROJECT, and which of its arguments name the path it changes.
-    ///
-    /// <para><c>copy_file</c> lists only its destination: the source is read, not changed.
-    /// <c>move_file</c> lists both, because the file disappears from one place as well as
-    /// appearing at the other.</para>
-    /// </summary>
-    private static readonly Dictionary<string, string[]> ChangedPaths = new(StringComparer.Ordinal)
+    public static IReadOnlyList<string>? Paths(ToolDefinition definition, string? arguments)
     {
-        ["write_file"] = new[] { "path" },
-        ["edit_file"] = new[] { "path" },
-        ["create_directory"] = new[] { "path" },
-        ["delete_file"] = new[] { "path" },
-        ["move_file"] = new[] { "from", "to" },
-        ["copy_file"] = new[] { "to" }
-    };
-
-    /// <summary>
-    /// Whether THIS call changed the user's project — the question <c>ProofAudit</c> asks before it
-    /// will believe a step that reports there was nothing to do.
-    ///
-    /// <para><b>Why this is not <see cref="Changes(string)"/>.</b> That one answers by name, and
-    /// two different questions were sharing it. A write into
-    /// <c>.enactive/scratch/</c> is progress — the stall guard should count it — and it is NOT a
-    /// change to the project: the stores do not journal it, the reviewer is not shown it, and a
-    /// rejected step does not undo it. Counting it here would refuse a true "nothing needed doing"
-    /// because the agent had written itself a helper script on the way to finding that out.</para>
-    ///
-    /// <para>The list also supplies <see cref="IsFileMutation"/> for stable stall identities.
-    /// Repeat invalidation is handled separately by tool effects and the shared registry revision.</para>
-    ///
-    /// <para>Unparseable arguments count as a change. "I could not tell" must not become
-    /// "nothing happened" in the one check standing between a step and being believed.</para>
-    /// </summary>
-    public static bool ChangedTheWorkspace(string tool, string? argumentsJson, string workspaceRoot)
-    {
-        if (!ChangedPaths.TryGetValue(tool, out var names))
-            return false;
-
+        if (definition.ChangedPathArguments is not { Count: > 0 } names) return null;
         try
         {
-            using var doc = JsonDocument.Parse(
-                string.IsNullOrWhiteSpace(argumentsJson) ? "{}" : argumentsJson);
-
+            using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(arguments) ? "{}" : arguments);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object) return null;
+            var paths = new List<string>();
             foreach (var name in names)
             {
                 if (!doc.RootElement.TryGetProperty(name, out var value)
-                    || value.ValueKind != JsonValueKind.String)
-                {
-                    return true;   // a path this cannot read is a path it cannot clear
-                }
-
-                if (!WorkspaceGuard.IsScratchRelative(workspaceRoot, value.GetString()))
-                    return true;
+                    || value.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(value.GetString()))
+                    return null;
+                paths.Add(value.GetString()!);
             }
-
-            return false;
+            return paths.AsReadOnly();
         }
-        catch (JsonException)
-        {
-            return true;
-        }
+        catch (JsonException) { return null; }
     }
+
+    public static bool ChangesProject(WorkspaceEffect effect, IReadOnlyList<string>? paths, string? root)
+        => effect == WorkspaceEffect.Changed && (root is null || paths is null || paths.Count == 0
+            || paths.Any(path => !WorkspaceGuard.IsScratchRelative(root, path)));
 }
 
 /// <summary>
@@ -163,9 +129,10 @@ public static class MutatingTools
 /// execution on the machine, forever, from one click - and it was offered by the same button as
 /// <c>read_file</c>. See <c>ApprovalStore</c>.</para>
 ///
-/// <para>Not <c>git</c> or <c>docker</c>: those take an argument array for one named program, which
-/// is a smaller thing to approve. <c>docker run</c> can mount anything and is a real hole in that
-/// reasoning; it is written down rather than half-closed.</para>
+/// <para><c>git</c> also grants command execution: aliases, hooks, filters and helpers can run
+/// external programs, and arguments/configuration can select another workspace. ArgumentList
+/// prevents shell quoting injection, not these git capabilities. It therefore receives
+/// the same approval lifetime and remote restrictions. Docker remains a separate policy issue.</para>
 /// </summary>
 public static class ShellTools
 {
@@ -179,11 +146,11 @@ public static class ShellTools
     /// line to the machine. Adding a third shell tool would have had to be remembered in all three,
     /// and the one that was forgotten would have been the one that refuses.</para>
     /// </summary>
-    public static readonly IReadOnlyList<string> All = ["run_command", "run_powershell"];
+    public static readonly IReadOnlyList<string> All = ["run_command", "run_powershell", "git", "docker"];
 
     private static readonly HashSet<string> Names = new(All, StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>Whether a call by this name hands a command line to the operating system.</summary>
+    /// <summary>Whether a tool grants general command execution, directly or through git helpers/hooks.</summary>
     public static bool IsShell(string tool) => Names.Contains(tool);
 
     /// <summary>
@@ -223,7 +190,8 @@ public sealed record ToolResult(
     IReadOnlyDictionary<string, object?> Metadata,
     bool IsAnswer = false,
     bool DidNotRun = false,
-    WorkspaceEffect? WorkspaceEffect = null);
+    WorkspaceEffect? WorkspaceEffect = null,
+    IReadOnlyList<string>? ChangedPaths = null);
 
 /// <summary>Factory helpers for <see cref="ToolResult"/>.</summary>
 public static class ToolResults
@@ -342,6 +310,9 @@ public interface IToolRegistry
     long? WorkspaceVersion(Guid workspaceId) => null;
     bool RequiresApprovalOf(string toolName) => false;
     IReadOnlyList<ToolDefinition> Definitions { get; }
+
+    ToolDefinition? DefinitionOf(string name) => Definitions.FirstOrDefault(
+        d => string.Equals(d.Name, name, StringComparison.OrdinalIgnoreCase));
     PermissionLevel RequiredLevelOf(string toolName);
     Task<ToolResult> InvokeAsync(ToolCall call, ToolContext ctx, CancellationToken ct);
 }

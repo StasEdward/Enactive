@@ -171,7 +171,8 @@ public sealed class SoundnessTests
         journal.Record(1, "run_command", """{"command":"build"}""", ActionOutcome.Succeeded, "ok");
         journal.Record(1, "run_command", """{"command":"test"}""", ActionOutcome.Failed, "1 failed");
 
-        var described = journal.Describe(mark).Text;
+        var evidence = journal.Describe(mark);
+        var described = evidence.Text;
 
         Assert.Contains("[1] -> run_command", described, StringComparison.Ordinal);
         Assert.Contains("[2] -> run_command", described, StringComparison.Ordinal);
@@ -180,10 +181,10 @@ public sealed class SoundnessTests
 
         // And the numbers resolve back to the same calls the reviewer was shown.
         Assert.Equal(2, journal.CountFrom(mark));
-        Assert.Equal(ActionOutcome.Succeeded, journal.Cited(1, mark)!.Outcome);
-        Assert.Equal(ActionOutcome.Failed, journal.Cited(2, mark)!.Outcome);
-        Assert.Null(journal.Cited(3, mark));
-        Assert.Null(journal.Cited(0, mark));
+        Assert.Equal(ActionOutcome.Succeeded, evidence.Cited(1)!.Outcome);
+        Assert.Equal(ActionOutcome.Failed, evidence.Cited(2)!.Outcome);
+        Assert.Null(evidence.Cited(3));
+        Assert.Null(evidence.Cited(0));
     }
 
     // ── reading the answer ──────────────────────────────────────────────────
@@ -231,7 +232,7 @@ public sealed class SoundnessTests
         {
             WhenExhausted = Turn.Says("I targeted the failing test.")
         };
-        var reviewer = new FakeChatProvider(Verdicts.Pass("every fact checks out"), Verdicts.NotShown());
+        var reviewer = new FakeChatProvider(Verdicts.Combined(Verdicts.NotShown()));
 
         var events = await fx.RunAsync(
             fx.Build(worker, router: Routers.WithReviewer(), reviewProvider: reviewer,
@@ -253,7 +254,7 @@ public sealed class SoundnessTests
         {
             WhenExhausted = Turn.Says("the tests pass now")
         };
-        var reviewer = new FakeChatProvider(Verdicts.Pass(), Verdicts.Shown("the test run succeeded", 1));
+        var reviewer = new FakeChatProvider(Verdicts.Combined(Verdicts.Shown("the test run succeeded", 1)));
 
         var events = await fx.RunAsync(
             fx.Build(worker, router: Routers.WithReviewer(), reviewProvider: reviewer,
@@ -280,7 +281,8 @@ public sealed class SoundnessTests
             WhenExhausted = Turn.Says("done")
         };
         // One call was made. The proof points at a ninth.
-        var reviewer = new FakeChatProvider(Verdicts.Pass(), Verdicts.Shown("call nine shows it", 9));
+        var bad = Verdicts.Combined(Verdicts.Shown("call nine shows it", 9));
+        var reviewer = new FakeChatProvider(bad, bad);
 
         var events = await fx.RunAsync(
             fx.Build(worker, router: Routers.WithReviewer(), reviewProvider: reviewer,
@@ -288,7 +290,11 @@ public sealed class SoundnessTests
             "make the failing test pass");
 
         Assert.NotEqual(RunOutcomeKind.Completed, events.Last().Outcome());
-        Assert.Contains(Failures(events), s => s.Contains("cites call(s) 9", StringComparison.Ordinal));
+        Assert.Equal(RunOutcomeKind.Incomplete, events.Last().Outcome());
+        Assert.Contains(events, e => e.Kind == EventKind.ErrorObserved
+            && e.Summary.Contains("call 9 does not exist", StringComparison.Ordinal));
+        Assert.Empty(Failures(events));
+        Assert.Equal(2, reviewer.Requests.Count);
     }
 
     /// <summary>
@@ -313,8 +319,7 @@ public sealed class SoundnessTests
             WhenExhausted = Turn.Says("having read it, here is the analysis")
         };
         var reviewer = new FakeChatProvider(
-            Verdicts.Pass("nothing to check"),
-            Verdicts.NotByAnyCall("this step's work was reading and reasoning"));
+            Verdicts.Combined(Verdicts.NotByAnyCall("this step's work was reading and reasoning")));
 
         var events = await fx.RunAsync(
             fx.Build(worker, router: Routers.WithReviewer(), reviewProvider: reviewer,
@@ -322,7 +327,7 @@ public sealed class SoundnessTests
             "analyse the code");
 
         Assert.Equal(RunOutcomeKind.Completed, events.Last().Outcome());
-        Assert.Equal(2, reviewer.Requests.Count);
+        Assert.Single(reviewer.Requests);
         Assert.Contains(events, e => e.Kind == EventKind.ReviewPassed
                                      && e.Summary.Contains("no tool call could settle", StringComparison.Ordinal));
     }
@@ -346,8 +351,7 @@ public sealed class SoundnessTests
             WhenExhausted = Turn.Says("It was already correct, so I changed nothing.")
         };
         var reviewer = new FakeChatProvider(
-            Verdicts.Pass("it did not claim to have run anything"),
-            Verdicts.NothingToDo("it was already correct"));
+            Verdicts.Combined(Verdicts.NothingToDo("it was already correct")));
 
         var events = await fx.RunAsync(
             fx.Build(worker, router: Routers.WithReviewer(), reviewProvider: reviewer,
@@ -355,7 +359,10 @@ public sealed class SoundnessTests
             "fix it if it is broken");
 
         Assert.NotEqual(RunOutcomeKind.Completed, events.Last().Outcome());
-        Assert.Contains(Failures(events), s => s.Contains("named no call that looked", StringComparison.Ordinal));
+        Assert.Equal(RunOutcomeKind.Incomplete, events.Last().Outcome());
+        Assert.Empty(Failures(events));
+        Assert.Equal(2, reviewer.Requests.Count);
+        Assert.Contains("requires evidence IDs", reviewer.Requests[1].Messages.Last().Content!);
     }
 
     /// <summary>
@@ -401,8 +408,8 @@ public sealed class SoundnessTests
             WhenExhausted = Turn.Says("now it passes")
         };
         var reviewer = new FakeChatProvider(
-            Verdicts.Pass(), Verdicts.NotShown("the test named in the report is still failing"),
-            Verdicts.Pass(), Verdicts.Shown("it passes now", 1));
+            Verdicts.Combined(Verdicts.NotShown("the test named in the report is still failing")),
+            Verdicts.Combined(Verdicts.Shown("it passes now", 1)));
 
         var events = await fx.RunAsync(
             fx.Build(worker, router: Routers.WithReviewer(), reviewProvider: reviewer,
@@ -432,8 +439,8 @@ public sealed class SoundnessTests
         {
             WhenExhausted = Turn.Says("done")
         };
-        // The verdict, then two replies with nothing in them — the re-ask and its answer.
-        var reviewer = new FakeChatProvider(Verdicts.Pass(), Turn.Says("sure"), Turn.Says("looks fine to me"));
+        // A verdict without proof triggers one clarification, then fails closed.
+        var reviewer = new FakeChatProvider(Verdicts.Pass(), Turn.Says("looks fine to me"));
 
         var events = await fx.RunAsync(
             fx.Build(worker, router: Routers.WithReviewer(), reviewProvider: reviewer,
@@ -441,6 +448,8 @@ public sealed class SoundnessTests
             "make the failing test pass");
 
         Assert.NotEqual(RunOutcomeKind.Completed, events.Last().Outcome());
-        Assert.Contains(Failures(events), s => s.Contains("did not answer", StringComparison.Ordinal));
+        Assert.Contains(events, e => e.Kind == EventKind.ErrorObserved
+            && e.Summary.Contains("expected a combined JSON object", StringComparison.Ordinal));
+        Assert.Equal(2, reviewer.Requests.Count);
     }
 }

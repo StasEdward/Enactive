@@ -11,6 +11,9 @@ on:
     branches: ["**"]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: windows-latest
@@ -20,7 +23,7 @@ jobs:
 
       - uses: actions/setup-dotnet@v4
         with:
-          # Matches Directory.Build.props (net10.0). A global.json, if one is added, wins over this.
+          # Stable SDK constrained by global.json to the .NET 10 feature bands.
           dotnet-version: "10.0.x"
 
       - name: Restore
@@ -30,7 +33,19 @@ jobs:
         run: dotnet build Enactive.sln --no-restore --configuration Release
 
       - name: Test
-        run: dotnet test tests/Enactive.Engine.Tests/Enactive.Engine.Tests.csproj --no-build --configuration Release --verbosity normal
+        run: dotnet test tests/Enactive.Engine.Tests/Enactive.Engine.Tests.csproj --no-build --configuration Release --verbosity normal --logger "trx;LogFileName=engine.trx" --results-directory TestResults
+
+      - name: Test with external artifacts
+        shell: pwsh
+        run: dotnet test tests/Enactive.Engine.Tests/Enactive.Engine.Tests.csproj --configuration Release --artifacts-path "$env:RUNNER_TEMP/enactive-artifacts" --logger "trx;LogFileName=engine-external.trx" --results-directory TestResults
+
+      - name: Keep engine test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: engine-test-results
+          path: TestResults/*.trx
+          retention-days: 7
 
   # The wiki's HTML is generated from Docs/wiki and COMMITTED, because the site is static files
   # served by GitHub Pages and nothing builds them on the way out. That arrangement has one failure
@@ -97,6 +112,7 @@ jobs:
         image: mysql:8.0
         env:
           MYSQL_ROOT_PASSWORD: enactive-dev
+          MYSQL_ROOT_HOST: "%"
           MYSQL_DATABASE: enactive_remote
         ports:
           - "3306:3306"
@@ -121,9 +137,17 @@ jobs:
       # mysql client being present on the runner image, which is not something this repository
       # gets to promise.
       - name: Test the gateway
-        run: dotnet test tests/Enactive.Remote.Gateway.Tests/Enactive.Remote.Gateway.Tests.csproj --configuration Release --verbosity normal
+        run: dotnet test tests/Enactive.Remote.Gateway.Tests/Enactive.Remote.Gateway.Tests.csproj --configuration Release --verbosity normal --logger "trx;LogFileName=gateway.trx" --results-directory TestResults
         env:
           ENACTIVE_REMOTE_DB: "Server=127.0.0.1;Port=3306;User ID=root;Password=enactive-dev;Database=enactive_remote;"
+
+      - name: Keep gateway test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gateway-test-results
+          path: TestResults/*.trx
+          retention-days: 7
 
       # Built here and PULLED from here: the server is on a private address, so nothing in this
       # pipeline can reach it. enactive-deploy.timer asks the API for the newest run of this

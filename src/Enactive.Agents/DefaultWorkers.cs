@@ -16,70 +16,32 @@ public static class DefaultWorkers
 {
     public const string DefaultId = "developer";
 
-    // Applied to every role at build time — the failure mode we guard against is a small model inventing
-    // command output or a "result" it never actually obtained, and hiding a failed command.
+    // Common evidence/reporting contract. Operational guidance is added only for relevant tools.
     public const string HonestyRules =
         "\n\nImportant rules:\n"
-        + "- Never invent or guess command output, file contents, numbers or results. Only state values you "
-        + "actually obtained from a tool call during this run.\n"
-        // "do NOT fight cmd quoting" used to be here, and it was advice about a BUG in this
-        // application rather than about shells: run_command passed the command with the C runtime's
-        // escaping, which cmd does not speak, so every quote came out as \". That is fixed (see
-        // RunCommandTool), and telling the model to avoid quotes would now be teaching it to work
-        // around something that no longer happens. The reason to prefer PowerShell is objects and
-        // pipes, which is a real reason.
-        + "- On Windows, prefer the run_powershell tool for anything working with OBJECTS - WMI/CIM "
-        + "queries, Get-PSDrive, pipes, Select-Object - and write the script plainly. Quotes are safe in "
-        + "either tool: write the command exactly as you would type it.\n"
-        // The working area comes BEFORE the two rules that use it. It was written after them, with
-        // the second saying "the one exception is below" four bullets ahead of the exception and a
-        // blunt "do NOT redirect" in between - a forward reference a model reading in order never
-        // reaches.
-        + "- You have a working area of your own at '" + WorkspaceGuard.ScratchPrefix + "/'. Put things there that "
-        + "are FOR the job but are not the job: a helper script you want to run, a scratch copy, a command's output "
-        + "that was too long to come back in the tool result. It is an ordinary folder - write_file, read_file and "
-        + "the shell all reach it by that path - but nothing in it is part of your work: it is not shown to the "
-        + "reviewer, not included in what you changed, and not undone if the step is rejected. The workspace itself "
-        + "is for the deliverable. Do not leave working files there.\n"
-        + "- READING a command's output: it comes back in the tool result, and that is where to read it. Do not "
-        + "redirect with '>' or '| Out-File' merely to avoid reading it - output you sent to a file and did not "
-        + "open is output you have not seen, and you may not describe it. But the result is CUT at a few thousand "
-        + "characters and SAYS SO when it is: past that point redirecting is the only way to get the whole thing. "
-        + "Send it to '" + WorkspaceGuard.ScratchPrefix + "/', then read_file it, or search_files with \"path\": \""
-        + WorkspaceGuard.ScratchPrefix + "\" to find the error in a long build log without reading it a screenful "
-        + "at a time. REDIRECT WITH THE SHELL YOU ARE IN: in run_command that is '> path' and nothing else - it "
-        + "is cmd.exe, and Set-Content, Select-String, Out-File and every other cmdlet are PowerShell and will "
-        + "fail instantly with 'is not recognized'. Use run_powershell if you want a cmdlet or a pipe.\n"
-        // The old pair of rules here - "write that exact returned text with write_file" and "the
-        // file must contain the OUTPUT" - produced the very thing this rule set exists to stop.
-        // Followed literally on a 500 KB build log they write six thousand characters and the words
-        // "… (truncated)" into a file, and call it the command's output. copy_file exists for
-        // exactly this: it streams bytes and never decodes them, which is why it was added when
-        // read-then-write was found to be truncating large files silently.
-        + "- SAVING a command's output to a file somebody asked for: if the result came back WHOLE, write that "
-        + "exact text with write_file. If the result says it was cut, do NOT write_file it - that produces a "
-        + "fraction of the log in a file that looks complete. Redirect the command into '"
-        + WorkspaceGuard.ScratchPrefix + "/' instead and copy_file it into place, which copies every byte. Either "
-        + "way the file holds the command's OUTPUT, never the command line itself.\n"
-        + "- If a command fails (non-zero exit code, or an error in its output), report the real error and fix the "
-        + "cause. Never substitute a plausible-looking placeholder value.\n"
-        // Measured 2026-09-24: one write_file turn took 72.1 s to GENERATE - 4,709 tokens, a report of
-        // 18,000 characters - and 32 ms to write. The request asked for discrepancies; most of the
-        // report listed the claims that matched, one entry each. What a model writes is the slowest
-        // thing it does on any provider, and a line nobody asked for costs that time for nothing.
-        // Stated for every kind of report - a disk check, a log analysis, a review - not for one task.
-        + "- A report or written result holds what the request asked for. If it asks for problems - "
-        + "discrepancies, failures, errors, risks - write those in full; what you checked and found in order "
-        + "is ONE line with a count (\"41 other claims checked, all match\"), not an entry each, unless the "
-        + "request asks for them. Writing is the slowest thing you do: every line costs time, and a line "
-        + "nobody asked for costs it for nothing.\n"
-        // Measured 2026-09-24, run 71a546: 113 turns, the prompt growing from 2,368 to 75,323 tokens,
-        // 87 read_file calls and no read_files; and every turn re-sends the whole conversation, so a
-        // turn spent on one small read is the most expensive way there is to read.
-        + "- Reads and searches that do not depend on each other go TOGETHER: read_file takes several "
-        + "'paths' at once, search_files already shows the lines around each match, and one reply can make "
-        + "several tool calls. Every turn re-sends everything so far, so one small read per turn is the "
-        + "most expensive way to read.";
+        + "- Never invent command output, file contents, numbers or results. Report observed evidence; "
+        + "state uncertainty and real errors instead of substituting placeholder values.\n"
+        + "- A report or written result holds what the request asked for. When asked for problems, "
+        + "describe them; passing findings are ONE line with a count unless requested individually.";
+
+    private const string BatchReads =
+        "\n- Reads and searches that do not depend on each other go TOGETHER: read_file accepts "
+        + "'paths'; search_files includes surrounding lines; one reply can make several independent calls.";
+
+    private const string ScratchRules =
+        "\n- Put helper scripts, temporary copies and long command logs in '" + WorkspaceGuard.ScratchPrefix
+        + "/'. Scratch files are excluded from review, workspace changes and rollback. "
+        + "Keep deliverables in the workspace, not in scratch.";
+
+    private const string CommandRules =
+        "\n- Read command results before describing them. If output is truncated, capture the full log "
+        + "in scratch and inspect the relevant parts; never present a truncated excerpt as a complete log. "
+        + "Report and resolve unexpected failures; an expected test failure is evidence, not a reason to hide it.";
+
+    private const string SaveOutputRules =
+        "\n- To save requested command output, write_file the exact result only if it is complete. "
+        + "Otherwise capture the full output in scratch and copy_file it into place. Save the output, "
+        + "never the command line or a shortened preview.";
 
     // Verifying a write by reading it back catches a weak local model's fabrication, but it costs an extra
     // round-trip that's wasteful on a strong model — so it's toggled via settings (VerifyWrites) rather than
@@ -193,10 +155,31 @@ public static class DefaultWorkers
             PermissionLevel.Execute),
     };
 
-    /// <summary>Appends the shared honesty rules and (optionally) global instructions to a role's base text.</summary>
-    public static string Augment(string baseInstructions, string? globalInstructions = null, bool verifyWrites = true)
+    /// <summary>
+    /// Adds evidence rules and guidance for the worker's built-in tools, without altering saved instructions.
+    /// A null allowlist retains the legacy all-tools augmentation for existing callers.
+    /// Tool names here select API-specific advice only; they do not grant permissions or classify effects.
+    /// </summary>
+    public static string Augment(string baseInstructions, string? globalInstructions = null,
+        bool verifyWrites = true, IReadOnlyList<string>? tools = null)
     {
-        var full = baseInstructions + HonestyRules + (verifyWrites ? ReadBackRule : string.Empty);
+        var available = tools is null ? null : WorkerTools.WithImplied(tools);
+        bool Has(string name) => available is null || available.Contains("*")
+            || available.Contains(name, StringComparer.OrdinalIgnoreCase);
+        var reads = Has("read_file") || Has("read_files");
+        var writes = Has("write_file") || Has("edit_file");
+        var commands = Has("run_command") || Has("run_powershell") || Has("git") || Has("docker");
+
+        var full = baseInstructions + HonestyRules;
+        if (Has("read_file")) full += BatchReads;
+        if (writes || commands) full += ScratchRules;
+        if (commands) full += CommandRules;
+        if (Has("run_powershell"))
+            full += "\n- On Windows, prefer run_powershell for WMI/CIM, objects and pipelines.";
+        if (Has("run_command"))
+            full += "\n- On Windows, run_command uses cmd.exe: redirect with '> path'; PowerShell cmdlets need run_powershell.";
+        if (commands && Has("write_file") && Has("copy_file")) full += SaveOutputRules;
+        if (verifyWrites && writes && reads) full += ReadBackRule;
         return string.IsNullOrWhiteSpace(globalInstructions)
             ? full
             : full + "\n\n## Global instructions (apply to every run)\n" + globalInstructions;
@@ -216,7 +199,7 @@ public static class DefaultWorkers
     {
         var policy = new ModelPolicy(coder);
         return Roles
-            .Select(r => new Worker(r.Id, r.Role, Augment(r.Instructions, globalInstructions, verifyWrites), r.Tools, r.Level, policy))
+            .Select(r => new Worker(r.Id, r.Role, Augment(r.Instructions, globalInstructions, verifyWrites, r.Tools), r.Tools, r.Level, policy))
             .ToArray();
     }
 }

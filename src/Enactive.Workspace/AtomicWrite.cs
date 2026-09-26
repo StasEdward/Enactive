@@ -41,6 +41,10 @@ public static class AtomicWrite
     /// A synchronous caller gets a synchronous implementation.</para>
     /// </summary>
     public static void Replace(string fullPath, string content)
+        => Replace(fullPath, Encoding.UTF8.GetBytes(content));
+
+    /// <summary>Replaces arbitrary bytes without decoding or changing their encoding.</summary>
+    public static void Replace(string fullPath, ReadOnlySpan<byte> content)
     {
         var temp = ReserveTemp(fullPath, out var stream);
 
@@ -48,8 +52,7 @@ public static class AtomicWrite
         {
             using (stream)
             {
-                var bytes = Encoding.UTF8.GetBytes(content);
-                stream.Write(bytes, 0, bytes.Length);
+                stream.Write(content);
             }
 
             MoveIntoPlace(temp, fullPath);
@@ -57,6 +60,37 @@ public static class AtomicWrite
         catch
         {
             try { if (File.Exists(temp)) File.Delete(temp); } catch { /* nothing left to try */ }
+            throw;
+        }
+    }
+
+    /// <summary>Atomically replace from a stream without materialising its bytes.</summary>
+    public static void ReplaceFrom(string fullPath, Stream input, long? length = null)
+    {
+        var temp = ReserveTemp(fullPath, out var stream);
+        try
+        {
+            using (stream)
+            {
+                if (length is null) input.CopyTo(stream);
+                else
+                {
+                    var remaining = length.Value;
+                    var buffer = new byte[81920];
+                    while (remaining > 0)
+                    {
+                        var count = input.Read(buffer, 0, (int)Math.Min(buffer.Length, remaining));
+                        if (count == 0) throw new EndOfStreamException();
+                        stream.Write(buffer, 0, count);
+                        remaining -= count;
+                    }
+                }
+            }
+            MoveIntoPlace(temp, fullPath);
+        }
+        catch
+        {
+            try { File.Delete(temp); } catch { }
             throw;
         }
     }
@@ -131,10 +165,11 @@ public static class AtomicWrite
     }
 
     /// <inheritdoc cref="MoveIntoPlace"/>
-    private static async Task MoveIntoPlaceAsync(string temp, string fullPath)
+    internal static async Task MoveIntoPlaceAsync(string temp, string fullPath, CancellationToken ct = default)
     {
         for (var attempt = 0; ; attempt++)
         {
+            ct.ThrowIfCancellationRequested();
             try
             {
                 File.Move(temp, fullPath, overwrite: true);
@@ -142,7 +177,7 @@ public static class AtomicWrite
             }
             catch (Exception error) when (IsTransient(error) && attempt < MoveAttempts)
             {
-                await Task.Delay(BackoffMs(attempt)).ConfigureAwait(false);
+                await Task.Delay(BackoffMs(attempt), ct).ConfigureAwait(false);
             }
         }
     }

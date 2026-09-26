@@ -116,9 +116,9 @@ public sealed class EnvironmentProbe : IEnvironmentProbe
 
     private static async Task<bool?> ProbeGitDirtyAsync(string root, CancellationToken ct)
     {
-        var (ok, output) = await RunAsync("git", $"-C \"{root}\" status --porcelain", null, GitTimeoutMs, null, ct)
+        var (exit, output) = await AutomaticGit.RunAsync(root, ["status", "--porcelain", "--ignore-submodules=all"], ct, GitTimeoutMs)
             .ConfigureAwait(false);
-        return ok ? output.Trim().Length > 0 : (bool?)null;
+        return exit == 0 ? output.Trim().Length > 0 : (bool?)null;
     }
 
     // ── Docker ───────────────────────────────────────────────────────────────────

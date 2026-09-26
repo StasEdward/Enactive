@@ -47,9 +47,9 @@ public sealed class ChatProviderFactory : IChatProviderFactory
             _ => throw new NotSupportedException($"Provider kind '{descriptor.Kind}' is not supported yet.")
         };
 
-        // Explained ALWAYS, and innermost, so the sentence is on the exception before anything else
-        // sees it - including the logging decorator, which writes the message it is given. Turning
-        // the log off must not make the errors worse.
+        // Retry the transport before explaining the terminal error. Explanation is independent
+        // of logging, so turning logging off cannot make the diagnostic worse.
+        provider = new ResilientChatProvider(provider, _log);
         provider = new ExplainedChatProvider(provider, descriptor.Id, descriptor.BaseUrl);
 
         // Wrap in the readable-plane decorator when logging is on (raw byte-level dump is inside each provider).

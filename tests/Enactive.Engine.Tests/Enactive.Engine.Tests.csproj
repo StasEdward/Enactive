@@ -8,6 +8,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <AssemblyMetadata Include="TestRepositoryRoot" Value="$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)/../..'))" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="coverlet.collector" Version="10.0.1">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
@@ -23,6 +27,13 @@
 
   <ItemGroup>
     <Compile Include="../../src/Enactive.App.Ui/ViewModels/ModelPerformance.cs" Link="Ui/ModelPerformance.cs" />
+    <Compile Include="../../src/Enactive.App.Ui/RunEventPump.cs" Link="Ui/RunEventPump.cs" />
+    <Compile Include="../../src/Enactive.App.Ui/RemoteAccessService.cs" Link="Ui/RemoteAccessService.cs" />
+    <Compile Include="../../src/Enactive.App.Ui/ForegroundRunSlot.cs" Link="Ui/ForegroundRunSlot.cs" />
+    <Compile Include="../../src/Enactive.App.Ui/BackgroundRunGroup.cs" Link="Ui/BackgroundRunGroup.cs" />
+    <Compile Include="../../src/Enactive.App.Ui/DecisionCompletion.cs" Link="Ui/DecisionCompletion.cs" />
+    <Compile Include="../../src/Enactive.App.Ui/BatchObservableCollection.cs" Link="Ui/BatchObservableCollection.cs" />
+    <Compile Include="../../src/Enactive.App.Ui/LogFilter.cs" Link="Ui/LogFilter.cs" />
     <Using Include="Xunit" />
   </ItemGroup>
 

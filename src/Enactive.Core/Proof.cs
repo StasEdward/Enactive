@@ -49,7 +49,11 @@ public enum ProofClaimKind
     /// - named calls, resolved by number - plus one thing only the engine can see: a step that
     /// changed the workspace did not find nothing to do.</para>
     /// </summary>
-    NothingToDo
+    NothingToDo,
+
+    /// <summary>A requested negative test produced a nonzero process exit. The command remains
+    /// failed; the reviewer must explain why this particular failure was the requested evidence.</summary>
+    ExpectedFailure
 }
 
 /// <summary>
@@ -98,9 +102,8 @@ public static class ProofAudit
     /// cannot support citations, but still count when checking whether the workspace changed.
     /// </summary>
     /// <param name="workspaceRoot">
-    /// Where the workspace is, so "it changed the workspace" can be answered by the path a call
-    /// touched rather than by the tool's name alone. Null keeps the older, blunter answer: every
-    /// write counts, including one into the worker's own scratch area.
+    /// Where the workspace is, so recorded changed paths can distinguish project changes from scratch.
+    /// With no root, every explicit Changed effect counts, including scratch writes.
     /// </param>
     public static ProofVerdict Check(
         ProofClaim claim, EvidenceView evidence, string? workspaceRoot = null)
@@ -145,17 +148,15 @@ public static class ProofAudit
         // answer whatever they say - a write that happened is not undone by pointing at a read.
         if (nothingToDo)
         {
-            // By the PATH, not by the tool's name, when the caller can say where the workspace is.
+            // Use effects recorded by the registry, including explicit changes from failed calls.
+            // Unknown effects are not proof that a change happened.
             // A step that wrote itself a helper script under .enactive/scratch/ on the way to
             // finding that nothing needed doing has not changed the project - the stores do not
             // journal that write, the reviewer is not shown it, and a rejection does not undo it -
             // and refusing its report over it would be this check calling the agent's own notes
             // "the workspace". Null root keeps the old answer, which counts every write.
             var changed = evidence.Actions
-                .Where(a => a.Outcome == ActionOutcome.Succeeded)
-                .Where(a => workspaceRoot is null
-                    ? MutatingTools.Changes(a.Tool)
-                    : MutatingTools.ChangedTheWorkspace(a.Tool, a.Arguments, workspaceRoot))
+                .Where(a => ToolEffects.ChangesProject(a.WorkspaceEffect, a.ChangedPaths, workspaceRoot))
                 .Select(a => a.Tool)
                 .Distinct(StringComparer.Ordinal)
                 .ToArray();
@@ -184,6 +185,11 @@ public static class ProofAudit
         // Answered counts as support - "the file is not there" is a result, and a step whose
         // objective was to check that is proven by it. Refused does not: nothing ran.
         var cited = claim.Calls.Select(n => evidence.Cited(n)!).ToArray();
+        if (claim.Kind == ProofClaimKind.ExpectedFailure)
+            return cited.All(a => a.Outcome != ActionOutcome.Refused && a.ExitCode is { } code && code != 0)
+                ? new(true, "expected nonzero exit observed in " + Numbers(claim.Calls) + ": " + claim.What)
+                : new(false, "expected-failure requires a recorded nonzero process exit for every cited call; "
+                    + "a refusal, timeout, missing exit code or successful test does not establish a negative test");
         if (cited.All(a => a.Outcome is ActionOutcome.Failed or ActionOutcome.Refused))
             return new ProofVerdict(false,
                 "the only call(s) named as proof are " + Describe(cited)

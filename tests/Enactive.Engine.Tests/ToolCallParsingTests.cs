@@ -17,42 +17,17 @@ public sealed class ToolCallParsingTests
 {
     private static ToolDefinition Tool(string name, string schema) => new(name, name, schema);
 
-    // ── NormalizeToolArgs ───────────────────────────────────────────────────
-
-    /// <summary>
-    /// The reason this function exists: small models concatenate two JSON objects into one call's
-    /// arguments. Keep the FIRST value so the call still runs; drop the trailing junk.
-    /// </summary>
-    [Fact]
-    public void Two_json_objects_run_together_keep_the_first()
-    {
-        Assert.Equal("""{"a":1}""", ToolCallParsing.NormalizeToolArgs("""{"a":1}{"b":2}"""));
-    }
-
     [Theory]
-    [InlineData("", "{}")]
-    [InlineData("   ", "{}")]
-    [InlineData(null, "{}")]
-    public void Nothing_at_all_is_an_empty_object(string? raw, string expected)
-        => Assert.Equal(expected, ToolCallParsing.NormalizeToolArgs(raw!));
-
-    /// <summary>
-    /// Unparseable arguments come back UNCHANGED rather than as "{}". The tool reports the real
-    /// error itself; turning the mistake into a valid empty object would run the call with no
-    /// arguments and report success.
-    /// </summary>
-    [Fact]
-    public void Arguments_that_are_not_json_are_handed_on_as_they_are()
+    [InlineData("{\"a\":1}{\"b\":2}")]
+    [InlineData("{\"path\":\"unfinished")]
+    [InlineData("{ \"a\" : 1 }")]
+    public void Streamed_arguments_survive_without_repair_or_shortening(string raw)
     {
-        const string broken = """{"path": "a.txt", """;
-        Assert.Equal(broken, ToolCallParsing.NormalizeToolArgs(broken));
-    }
-
-    [Fact]
-    public void Valid_arguments_survive_intact()
-    {
-        var normalised = ToolCallParsing.NormalizeToolArgs("""{ "path" : "a.txt" , "n" : 2 }""");
-        Assert.Equal("""{ "path" : "a.txt" , "n" : 2 }""".Replace(" ", ""), normalised.Replace(" ", ""));
+        var calls = ToolCallParsing.BuildToolCalls(new Dictionary<int, ToolCallParsing.ToolCallBuilder>
+        {
+            [0] = Builder("id", "write_file", raw)
+        });
+        Assert.Equal(raw, Assert.Single(calls!).ArgumentsJson);
     }
 
     // ── TryRecoverImplicitToolCall ──────────────────────────────────────────

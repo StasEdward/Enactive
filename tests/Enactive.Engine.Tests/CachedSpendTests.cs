@@ -2,6 +2,7 @@ namespace Enactive.Engine.Tests;
 
 using Enactive.Agents;
 using Enactive.Core.Chat;
+using Enactive.Core.Providers;
 using Enactive.Core.Events;
 using Enactive.Core.History;
 using Xunit;
@@ -64,6 +65,55 @@ public sealed class CachedSpendTests
                 await Task.Yield();
                 yield return e;
             }
+        }
+    }
+
+    [Theory]
+    [InlineData(null, null, null)]
+    [InlineData(0, null, 0)]
+    [InlineData(200, 300, 500)]
+    public async Task Cache_creation_survives_events_and_history_without_double_counting(int? first, int? second, int? expected)
+    {
+        WorkEvent Created(int? count) => Spend("execute", "anthropic", "model", 1000, 10, 100) with
+        {
+            PayloadJson = WorkEventPayload.UsagePayload(1000, 10, null, "anthropic", "model", "execute", 100, count)
+        };
+        var record = await RecordOf(Created(first), Created(second));
+        Assert.Equal(expected, record!.Usage!.CacheCreationPromptTokens);
+        Assert.Equal(expected, Assert.Single(record.Usage.ByModel!).CacheCreationPromptTokens);
+        Assert.Equal(2000, record.Usage.PromptTokens);
+        Assert.Equal(200, record.Usage.CachedPromptTokens);
+        var json = System.Text.Json.JsonSerializer.Serialize(record.Usage);
+        Assert.Equal(expected, System.Text.Json.JsonSerializer.Deserialize<RunUsage>(json)!.CacheCreationPromptTokens);
+        Assert.Null(System.Text.Json.JsonSerializer.Deserialize<RunUsage>("{\"PromptTokens\":3,\"CompletionTokens\":2}")!.CacheCreationPromptTokens);
+    }
+
+    [Fact]
+    public async Task Planner_worker_and_review_retries_publish_cache_creation()
+    {
+        using var fx = new EngineFixture();
+        var worker = new CreationProvider(new FakeChatProvider(
+            Turn.Says("invalid plan"),
+            Turn.Says("""{"disposition":"quick_action","title":"answer"}"""),
+            Turn.Says("The answer is 42.")));
+        var reviewer = new CreationProvider(new FakeChatProvider(Turn.Says("invalid verdict"), Verdicts.Pass()));
+        var events = await fx.RunAsync(fx.Build(worker, router: Routers.WithReviewer(), reviewProvider: reviewer), "Explain the answer");
+        var record = await RecordOf(events.ToArray());
+        Assert.Equal(14, record!.Usage!.ByModel!.Single(m => m.Purpose == "plan").CacheCreationPromptTokens);
+        Assert.Equal(7, record.Usage.ByModel!.Single(m => m.Purpose == "execute").CacheCreationPromptTokens);
+        Assert.Equal(14, record.Usage.ByModel!.Single(m => m.Purpose == "review").CacheCreationPromptTokens);
+        Assert.Equal(35, record.Usage.CacheCreationPromptTokens);
+    }
+
+    private sealed class CreationProvider(FakeChatProvider inner) : IChatProvider
+    {
+        public async Task<ChatCompletion> CompleteAsync(ChatRequest request, CancellationToken ct)
+            => (await inner.CompleteAsync(request, ct)) with { PromptTokens = 100, CompletionTokens = 5, CacheCreationPromptTokens = 7 };
+        public async IAsyncEnumerable<ChatStreamEvent> StreamChatAsync(ChatRequest request,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
+        {
+            await foreach (var ev in inner.StreamChatAsync(request, ct)) yield return ev;
+            yield return new UsageDelta(100, 5) { CacheCreationPromptTokens = 7 };
         }
     }
 

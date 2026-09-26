@@ -52,7 +52,8 @@ public static class SettingsAdvice
         + "list of call numbers, and the engine looks them up rather than believing them — a call "
         + "that was never made, or one that failed, does not prove anything. A step whose work was "
         + "reading, analysing or writing has nothing to cite and is never held to it.\n\n"
-        + "Needs a Review model; costs one more reviewer call per step that ran something.";
+        + "Needs a Review model. Verdict and proof normally share one response; a second call is used "
+        + "only for clarification or additional evidence. Citation checks do not themselves prove semantic coverage.";
 
     public const string RevertRejectedSteps =
         "When the reviewer rejects a step for good, undo what it wrote. Otherwise the run says "
@@ -84,9 +85,9 @@ public static class SettingsAdvice
         + "Raise it for work that reads a lot; it is paid on every review call.";
 
     public const string ShellCommands =
-        "run_command and run_powershell hand a command line to the operating system. The workspace "
-        + "is where it starts and nothing more: every other tool asks for one named action against "
-        + "a path this app resolves and checks, a shell can cd anywhere the account can reach.\n\n"
+        "Controls run_command, run_powershell and git. Git can also execute external programs through "
+        + "aliases, hooks and helpers. The workspace is their starting directory, not a boundary; "
+        + "they can access other locations available to your account. Remote runs cannot use these tools.\n\n"
         + "Decided here rather than by the autonomy slider, so raising that for the file tools does "
         + "not raise it for command execution. An approval for a shell is never remembered beyond "
         + "the session.";

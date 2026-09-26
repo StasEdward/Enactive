@@ -39,7 +39,7 @@ public sealed class CompareFilesTool : ITool
                    + "differ — without returning their contents. Set ignore_whitespace to compare "
                    + "the text with all whitespace collapsed, which answers \"is this the same "
                    + "content, reflowed\". Use it instead of reading both files to judge by eye.",
-        JsonSchema: Schema, WorkspaceEffect: WorkspaceEffect.None);
+        JsonSchema: Schema, WorkspaceEffect: WorkspaceEffect.None, Kind: ToolKind.Read);
 
     public PermissionLevel RequiredLevel => PermissionLevel.Observe;
 
@@ -189,23 +189,27 @@ public sealed class CompareFilesTool : ITool
         try { full = WorkspacePaths.ResolveInside(ctx.WorkspaceRoot, path); }
         catch (ArgumentException ex) { return new Loaded(null, ToolResults.Unreadable(ex.Message)); }
 
-        var staged = await ctx.Artifacts.TryReadPendingAsync(path!, ct);
-        if (staged is not null)
-            return new Loaded(staged, null);
-
-        if (!File.Exists(full))
-            return new Loaded(null, ToolResults.NotFound($"File not found: {path}"));
-
-        var size = new FileInfo(full).Length;
-        if (size > WorkspaceScan.MaxFileBytes)
-            return new Loaded(null, ToolResults.Fail(
-                $"'{path}' is {size / (1024 * 1024)} MB, over the "
-                + $"{WorkspaceScan.MaxFileBytes / (1024 * 1024)} MB comparison limit. "
-                + "Compare a smaller part with read_file, or count what you are looking for with "
-                + "count_matches."));
-
-        try { return new Loaded(await File.ReadAllTextAsync(full, ct), null); }
-        catch (Exception ex) { return new Loaded(null, ToolResults.Fail($"Could not read '{path}': {ex.Message}")); }
+        try
+        {
+            await using var stream = await ctx.Artifacts.TryOpenPendingAsync(path!, ct)
+                ?? new FileStream(full, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete,
+                    4096, FileOptions.Asynchronous);
+            if (!stream.CanSeek || stream.Length > WorkspaceScan.MaxFileBytes)
+                return new(null, ToolResults.Fail($"'{path}' exceeds the {WorkspaceScan.MaxFileBytes / (1024 * 1024)} MB comparison limit or is not seekable."));
+            var encoding = await TextFileEncoding.Detect(stream, ct);
+            stream.Position = encoding.GetPreamble().Length;
+            using var reader = new StreamReader(stream, encoding, detectEncodingFromByteOrderMarks: false, leaveOpen: true);
+            var text = await reader.ReadToEndAsync(ct);
+            if (text.Contains('\0'))
+                return new(null, ToolResults.Unreadable($"'{path}' contains NUL characters; binary or BOM-less UTF-16/32 is not supported. Use Unicode with a BOM or UTF-8."));
+            return new(text, null);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (FileNotFoundException) { return new(null, ToolResults.NotFound($"File not found: {path}")); }
+        catch (DirectoryNotFoundException) { return new(null, ToolResults.NotFound($"File not found: {path}")); }
+        catch (DecoderFallbackException)
+        { return new(null, ToolResults.Unreadable($"'{path}' is not valid Unicode text. Use UTF-8 or UTF-16/32 with a BOM; comparison was not performed.")); }
+        catch (Exception ex) { return new(null, ToolResults.Fail($"Could not read '{path}': {ex.Message}")); }
     }
 
     private static string[] Lines(string text) => text.Split('\n');

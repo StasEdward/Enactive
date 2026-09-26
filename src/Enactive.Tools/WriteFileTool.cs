@@ -12,8 +12,11 @@ public sealed class WriteFileTool : ITool
     public ToolDefinition Definition { get; } = new(
         Name: "write_file",
         Description: "Create or overwrite a text file inside the current workspace. "
-                   + "Use a path relative to the workspace root.",
-        JsonSchema: Schema, WorkspaceEffect: WorkspaceEffect.Changed);
+                   + "Use a path relative to the workspace root. For large files, use small independent "
+                   + "writes followed by append:true or edit_file calls. Each call must contain complete JSON arguments.",
+        JsonSchema: Schema, WorkspaceEffect: WorkspaceEffect.Changed,
+        ChangedPathArguments: ["path"],
+        RepairsFileFailures: true, ProgressIdentity: ProgressIdentity.Action, Kind: ToolKind.Write, FileCoverage: FileCoverageBehavior.Replace);
 
     public PermissionLevel RequiredLevel => PermissionLevel.Execute;
 
@@ -53,79 +56,26 @@ public sealed class WriteFileTool : ITool
 
         try
         {
+            if (append) return await AppendAsync(path, content, ctx, ct);
             // Whether this REPLACES something has to be settled before the write, and it belongs in
             // the result: "Created X" for a file that already existed is a false statement, and it is
             // the exact statement the reviewer is handed as ground truth. A staged proposal counts as
             // existing content — that is what the next read would return.
-            bool replacing;
-            long previousBytes = 0;
-
-            // The text that is there now, when there is any. Needed for two things: how big it is,
-            // and which line endings it uses.
-            string? previousText = null;
-            try
-            {
-                // A staged proposal counts as the existing content - that is what the next read
-                // would return - so it is what a replacement is measured against too.
-                var pending = await ctx.Artifacts.TryReadPendingAsync(path, ct);
-                if (pending is not null)
-                {
-                    replacing = true;
-                    previousText = pending;
-                    previousBytes = Encoding.UTF8.GetByteCount(pending);
-                }
-                else
-                {
-                    var existing = WorkspacePaths.ResolveInside(ctx.WorkspaceRoot, path);
-                    replacing = File.Exists(existing);
-                    if (replacing)
-                    {
-                        previousBytes = new FileInfo(existing).Length;
-                        previousText = await File.ReadAllTextAsync(existing, ct);
-                    }
-                }
-            }
-            catch
-            {
-                // A path the guard refuses fails properly in CreateAsync below, with its own message.
-                replacing = false;
-                previousBytes = 0;
-                previousText = null;
-            }
-
-            // A REPLACEMENT is written in the endings the file already uses - the same rule
-            // edit_file has followed since a user found it unusable on Windows, and for the same
-            // reason: a carriage return is invisible in what read_file returns, so a model cannot
-            // send one and every whole-file rewrite of a CRLF document silently converted it. Every
-            // line then shows as changed and a repository with autocrlf churns, for an edit meant to
-            // touch one line.
-            //
-            // A NEW file keeps exactly what it was given: there are no endings to be consistent
-            // with, and the caller's choice is the only one there is.
-            //
-            // This was carried as open in FIX_PLAN §9b, pinned by a test, on the argument that
-            // write_file is also how endings get changed deliberately. That argument does not
-            // survive contact with the caller: a model cannot see a carriage return, so it cannot
-            // ask for one either - which makes every conversion here accidental, and the deliberate
-            // case indistinguishable from the accident. A shell command converts a file on purpose.
-            // APPEND: the new text goes after what is there. The way to add a section to a report
-            // without retyping the report - see the schema, and FIX_PLAN 9cq for what retyping cost.
-            // The ADDITION takes the file's endings before it is joined on: once joined, the text
-            // already contains the file's own CRLFs and would look converted when it is not.
-            var addedBytes = Encoding.UTF8.GetByteCount(text);
-            var appending = append && replacing && previousText is not null;
-            if (appending)
-                text = Joined(previousText!, LineEndings.RetypedFor(previousText!, text) ?? text);
-
+            var snapshot = await TextFileEncoding.ReadSnapshotAsync(ctx.Artifacts, path,
+                WorkspacePaths.ResolveInside(ctx.WorkspaceRoot, path), ct);
+            var previousText = snapshot.Text;
+            var replacing = previousText is not null;
+            var encoding = snapshot.Encoding;
+            long previousBytes = previousText is null ? 0 : encoding.GetPreamble().Length + encoding.GetByteCount(previousText);
             var endingsAdjusted = false;
-            if (!appending && replacing && previousText is not null
+            if (replacing && previousText is not null
                 && LineEndings.RetypedFor(previousText, text) is { } retyped)
             {
                 text = retyped;
                 endingsAdjusted = true;
             }
 
-            var newBytes = Encoding.UTF8.GetByteCount(text);
+            var newBytes = encoding.GetPreamble().Length + encoding.GetByteCount(text);
 
             if (replacing && !append && !allowShrink && WouldLoseMostOfTheFile(previousBytes, newBytes))
                 return ToolResults.Fail(
@@ -151,14 +101,10 @@ public sealed class WriteFileTool : ITool
                     + "of it, use edit_file. If it really is meant to be replaced by different content, send "
                     + "the same write_file call again with \"allow_shrink\": true.");
 
-            var reference = await ctx.Artifacts.CreateAsync(
-                path, ArtifactKind.FileSet, path,
-                async stream =>
-                {
-                    var bytes = Encoding.UTF8.GetBytes(text);
-                    await stream.WriteAsync(bytes, ct);
-                },
-                ct);
+            Func<Stream, Task> write = async stream => await stream.WriteAsync(TextFileEncoding.Encode(text, encoding), ct);
+            var reference = ctx.Artifacts.CanCheckVersion
+                ? await ctx.Artifacts.CreateCheckedAsync(path, ArtifactKind.FileSet, path, write, snapshot.Version, ct)
+                : await ctx.Artifacts.CreateAsync(path, ArtifactKind.FileSet, path, write, ct);
 
             // Bytes, not "chars": the two differ the moment the content is not ASCII, and the result
             // line and the metadata disagreeing by four is a puzzle nobody should have to solve.
@@ -170,10 +116,7 @@ public sealed class WriteFileTool : ITool
             var restorable = replacing && ctx.Artifacts.CanRestore(path);
 
             return ToolResults.Ok(
-                output: append && replacing
-                    ? $"APPENDED {addedBytes} bytes to the end of '{path}' (now {bytes} bytes). Everything "
-                      + "that was already in it is unchanged."
-                    : replacing
+                output: replacing
                     ? (restorable
                         ? $"REPLACED the existing file '{path}' ({bytes} bytes). Its previous version was kept and can be restored by the user from the run - there is no tool for it, and git has only what was committed."
                         : $"REPLACED the existing file '{path}' ({bytes} bytes). Its previous version could NOT be backed up and is gone.")
@@ -204,7 +147,7 @@ public sealed class WriteFileTool : ITool
             return ToolResults.Unreadable(ex.Message);
         }
 
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             return ToolResults.Fail($"Could not write '{path}': {ex.Message}");
         }
@@ -247,11 +190,82 @@ public sealed class WriteFileTool : ITool
     /// What is there, then what is added - on a line of its own. A report that ends without a line
     /// break would otherwise run its last line straight into the new section's heading.
     /// </summary>
-    private static string Joined(string previous, string added)
-        => previous.Length == 0 || added.Length == 0
-           || previous.EndsWith('\n') || added.StartsWith('\n') || added.StartsWith("\r\n", StringComparison.Ordinal)
-            ? previous + added
-            : previous + (previous.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n") + added;
+    private static async Task<ToolResult> AppendAsync(string path, string added, ToolContext ctx, CancellationToken ct)
+    {
+        var full = WorkspacePaths.ResolveInside(ctx.WorkspaceRoot, path);
+        bool existed = false;
+        long bytes = 0, addedBytes = 0;
+        var direct = ctx.Artifacts.CanAppend;
+        async Task WriteTail(Stream? existing, Stream output)
+        {
+            await using var input = direct ? existing : await ctx.Artifacts.TryOpenPendingAsync(path, ct)
+                ?? (File.Exists(full) ? new FileStream(full, FileMode.Open, FileAccess.Read,
+                    FileShare.Read | FileShare.Delete, 8192, FileOptions.Asynchronous | FileOptions.SequentialScan) : null);
+            existed = input is not null;
+            var encoding = input is null ? new UTF8Encoding(false, true) : await TextFileEncoding.Detect(input, ct);
+            var crlf = false;
+            char last = '\0';
+            var hasText = false;
+            if (input is not null)
+            {
+                if (!input.CanSeek) throw new NotSupportedException("Appending requires a seekable artifact stream.");
+                input.Position = encoding.GetPreamble().Length;
+                // Validate strictly and detect endings with bounded memory, including CRLF across
+                // buffer boundaries. No ReadLine: one log line can itself be hundreds of MB.
+                using (var reader = new StreamReader(input, encoding, false, 8192, leaveOpen: true))
+                {
+                    var buffer = new char[8192];
+                    int count;
+                    while ((count = await reader.ReadAsync(buffer.AsMemory(), ct)) != 0)
+                        for (var i = 0; i < count; i++)
+                        {
+                            crlf |= last == '\r' && buffer[i] == '\n';
+                            last = buffer[i];
+                            hasText = true;
+                        }
+                }
+                bytes = input.Length;
+                input.Position = 0;
+                if (!direct) await input.CopyToAsync(output, 81920, ct);
+            }
+            else
+            {
+                var preamble = encoding.GetPreamble();
+                await output.WriteAsync(preamble, ct);
+                bytes = preamble.Length;
+            }
+            var text = existed ? LineEndings.RetypedFor(crlf ? "\r\n" : "\n", added) ?? added : added;
+            if (hasText && text.Length > 0 && last != '\n'
+                && !text.StartsWith('\n') && !text.StartsWith("\r\n", StringComparison.Ordinal))
+                text = (crlf ? "\r\n" : "\n") + text;
+            addedBytes = encoding.GetByteCount(text);
+            // No preamble in the appended segment; the original bytes were copied unchanged.
+            using var writer = new StreamWriter(output, WithoutPreamble(encoding), 8192, leaveOpen: true);
+            await writer.WriteAsync(text.AsMemory(), ct);
+            await writer.FlushAsync(ct);
+            bytes += addedBytes;
+        }
+        var reference = direct
+            ? await ctx.Artifacts.AppendAsync(path, ArtifactKind.FileSet, path, WriteTail, ct)
+            : await ctx.Artifacts.CreateAsync(path, ArtifactKind.FileSet, path, output => WriteTail(null, output), ct);
+        return ToolResults.Ok(
+            existed ? $"APPENDED {addedBytes} bytes to the end of '{path}' (now {bytes} bytes). Everything that was already in it is unchanged."
+                : $"Created new file '{path}' ({bytes} bytes).",
+            artifacts: [reference], metadata: new Dictionary<string, object?>
+            {
+                ["path"] = path, ["bytes"] = bytes, ["replacedExistingFile"] = false,
+                ["appended"] = existed, ["previousVersionRecoverable"] = existed && ctx.Artifacts.CanRestore(path)
+            });
+    }
+
+    private static Encoding WithoutPreamble(Encoding encoding) => encoding.CodePage switch
+    {
+        1200 => new UnicodeEncoding(false, false, true),
+        1201 => new UnicodeEncoding(true, false, true),
+        12000 => new UTF32Encoding(false, false, true),
+        12001 => new UTF32Encoding(true, false, true),
+        _ => new UTF8Encoding(false, true)
+    };
 
     /// <summary>Below this, a file is short enough that rewriting it whole is not the risky act.</summary>
     private const int ShrinkGuardFloorBytes = 2_000;

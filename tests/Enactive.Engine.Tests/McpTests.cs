@@ -112,7 +112,7 @@ public sealed class McpTests
             Turn.Calls1(name, "{\"value\":\"test\"}"), Turn.Says("done"));
         var handler = new ScriptedDecisionHandler(answer);
         var worker = EngineFixture.WorkerWith(pattern) with { DefaultLevel = PermissionLevel.Autonomous };
-        var engine = new Orchestrator(new SingleProviderFactory(provider), new ModelResolver(), new StaticWorkerProvider(worker),
+        var engine = new Orchestrator(new Enactive.Workspace.WorkspaceChangesFactory(),new SingleProviderFactory(provider), new ModelResolver(), new StaticWorkerProvider(worker),
             tools, fx.Artifacts, fx.Workspace, new Planner(), new PermissionEngine(), handler,
             new PermissionPolicy(PermissionLevel.Autonomous, ["*"], []), new Services());
         var events = await fx.RunAsync(engine, "use MCP");

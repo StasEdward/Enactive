@@ -31,6 +31,12 @@ public sealed class ProviderConfig
     /// budget overrides it; the remaining context window and known model caps can only lower it.
     /// </summary>
     public int? MaxTokens { get; set; }
+    public int StreamIdleTimeoutSeconds { get; set; } = 300;
+    public bool OpenAiReasoningProfile { get; set; }
+    public int CompletionTimeoutSeconds { get; set; } = 900;
+    public int? ReasoningTokenAllowance { get; set; }
+    // Native Ollama only: null = server default, 0 = unload, negative = keep resident.
+    public int? OllamaKeepAliveSeconds { get; set; }
 
     /// <summary>
     /// How large a prompt this provider's models accept, in tokens — the CONTEXT window, not
@@ -87,6 +93,11 @@ public sealed class ProviderConfig
         Headers = new Dictionary<string, string>(Headers),
         Models = new List<string>(Models),
         MaxTokens = MaxTokens,
+        StreamIdleTimeoutSeconds = StreamIdleTimeoutSeconds,
+        OpenAiReasoningProfile = OpenAiReasoningProfile,
+        CompletionTimeoutSeconds = CompletionTimeoutSeconds,
+        ReasoningTokenAllowance = ReasoningTokenAllowance,
+        OllamaKeepAliveSeconds = OllamaKeepAliveSeconds,
         ContextWindowTokens = ContextWindowTokens,
         AnswerReserveTokens = AnswerReserveTokens,
         HandoverAtPercent = HandoverAtPercent
@@ -265,7 +276,7 @@ public enum ShellCommandPolicy
     /// <summary>Always ask, at every tier — including Autonomous.</summary>
     Ask,
 
-    /// <summary>Never. run_command and run_powershell are refused rather than asked about.</summary>
+    /// <summary>Never. run_command, run_powershell and git are refused rather than asked about.</summary>
     Off
 }
 
@@ -305,6 +316,9 @@ public sealed partial class AppSettings
 
     // Ollama context window (options.num_ctx). Null = inherit whatever the model was loaded with.
     public int? NumCtx { get; set; }
+
+    public Enactive.Core.Chat.GenerationBudgets GenerationBudgets { get; set; } = new();
+    public Enactive.Core.Chat.RepairConsultation RepairConsultation { get; set; } = new();
 
     // Send think:false to the local model so a reasoning model (qwen3, ...) answers directly instead of
     // burning a whole turn in <think> with empty content. On by default; only OllamaNative honors it.
@@ -460,7 +474,6 @@ public sealed partial class AppSettings
 
         try
         {
-            if (File.Exists(file))
             {
                 var loaded = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(file), JsonOptions);
                 if (loaded is not null)
@@ -481,6 +494,12 @@ public sealed partial class AppSettings
                         loaded.Smtp.Password = Secret.Unprotect(loaded.Smtp.PasswordProtected);
 
                     loaded.LoadMcpSecrets();
+                    foreach (var (stored, plaintext) in loaded.Providers.Select(p => (p.ApiKeyProtected, p.ApiKey))
+                        .Concat(new[] { (loaded.AnthropicApiKeyProtected, loaded.AnthropicApiKey),
+                            (loaded.RemoteAccess.TokenProtected, loaded.RemoteAccess.Token),
+                            (loaded.Smtp.PasswordProtected, loaded.Smtp.Password) }))
+                        if (Secret.IsProtected(stored) && string.IsNullOrEmpty(plaintext))
+                            loaded._unreadableSecrets.Add(stored);
                     loaded.MigrateIfNeeded();
 
                     // A file written by an older version can hold duplicate ids, which used to reach
@@ -497,12 +516,14 @@ public sealed partial class AppSettings
                 unreadable = "settings.json holds nothing this build could read.";
             }
         }
+        catch (FileNotFoundException) { /* First launch: no settings yet. */ }
+        catch (DirectoryNotFoundException) { /* First launch: no settings directory yet. */ }
         catch (Exception ex)
         {
             unreadable =
                 $"settings.json could not be read ({ex.GetType().Name}: {ex.Message}). Running on "
-                + "defaults — your file has NOT been changed. Fix it, or open Settings and save to "
-                + "replace it.";
+                + "defaults — your file has NOT been changed; automatic saving is disabled. Fix the file and restart, or save "
+                + "from Settings to replace it after keeping a backup.";
         }
 
         var seeded = SeedFromEnvironment();
@@ -512,7 +533,10 @@ public sealed partial class AppSettings
         // damaged file leaves nowhere to fix it from - but they are the wrong thing to run on
         // silently, because from the outside a defaulted configuration and a chosen one look alike.
         if (unreadable is not null)
+        {
             seeded.LoadProblems = new[] { unreadable };
+            seeded.SaveBlocked = true;
+        }
 
         return seeded;
     }
@@ -545,6 +569,13 @@ public sealed partial class AppSettings
     [JsonIgnore]
     public string? LastSaveError { get; private set; }
 
+    /// <summary>Defaults loaded after a failure must never overwrite the original automatically.</summary>
+    [JsonIgnore]
+    public bool SaveBlocked { get; private set; }
+
+    /// <summary>Used when a host has to run on defaults after configuration construction fails.</summary>
+    public void BlockAutomaticSave() => SaveBlocked = true;
+
     /// <param name="path">
     /// A parameter so a test can point this at a fixture, for the same reason <see cref="Load"/>
     /// takes one: the whole path this method actually runs - packing MCP credentials, encrypting
@@ -552,27 +583,42 @@ public sealed partial class AppSettings
     /// write and the replace - is exactly what each STEP's own unit test cannot exercise together,
     /// and until this existed no test ran <c>Save</c> at all rather than risk a real %APPDATA%.
     /// </param>
-    public bool Save(string? path = null)
+    public bool Save(string? path = null, bool replaceUnreadable = false)
     {
         LastSaveError = null;
+        if (SaveBlocked && !replaceUnreadable)
+        {
+            LastSaveError = "Automatic saving is disabled because settings could not be loaded. "
+                + "Fix the file and restart, or save explicitly from Settings to keep a backup and replace it.";
+            return false;
+        }
         try
         {
             var file = path ?? SettingsFile();
+            Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+            if (SaveBlocked)
+            {
+                // Recovery must fail closed if the original cannot be backed up. A unique name
+                // keeps repeated attempts from overwriting an earlier recovery copy.
+                var backup = file + $".before-recovery-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid():N}.bak";
+                try { File.Copy(file, backup, overwrite: false); }
+                catch (FileNotFoundException) { /* First launch or original removed: nothing to back up. */ }
+            }
             SaveMcpSecrets();
             Directory.CreateDirectory(Path.GetDirectoryName(file)!);
 
             // Encrypt every provider key; plaintext is [JsonIgnore] so it never reaches disk.
             foreach (var p in Providers)
-                p.ApiKeyProtected = Secret.Protect(p.ApiKey);
+                p.ApiKeyProtected = ProtectOrPreserve(p.ApiKey, p.ApiKeyProtected);
 
             // The device token, same rule: the encrypted form is the only one that reaches disk.
-            RemoteAccess.TokenProtected = Secret.Protect(RemoteAccess.Token);
+            RemoteAccess.TokenProtected = ProtectOrPreserve(RemoteAccess.Token, RemoteAccess.TokenProtected);
 
             // And the mail password. [JsonIgnore] on the plaintext is what keeps it off disk.
-            Smtp.PasswordProtected = Secret.Protect(Smtp.Password);
+            Smtp.PasswordProtected = ProtectOrPreserve(Smtp.Password, Smtp.PasswordProtected);
 
             // Legacy key: persist only the encrypted form, blanking the plaintext during serialization.
-            AnthropicApiKeyProtected = Secret.Protect(AnthropicApiKey);
+            AnthropicApiKeyProtected = ProtectOrPreserve(AnthropicApiKey, AnthropicApiKeyProtected);
             var legacyPlain = AnthropicApiKey;
             AnthropicApiKey = string.Empty;
             try
@@ -592,8 +638,17 @@ public sealed partial class AppSettings
             return false;
         }
 
+        SaveBlocked = false;
         return true;
     }
+
+    private HashSet<string> _unreadableSecrets = new(StringComparer.Ordinal);
+
+    private string ProtectOrPreserve(string plaintext, string stored)
+        => string.IsNullOrEmpty(plaintext) && Secret.IsProtected(stored)
+           && (_unreadableSecrets.Contains(stored) || string.IsNullOrEmpty(Secret.Unprotect(stored)))
+            ? stored
+            : Secret.Protect(plaintext);
 
     /// <summary>
     /// Brings an older settings.json up to <see cref="CurrentSchemaVersion"/>. Unlike the team-schema
@@ -747,11 +802,16 @@ public sealed partial class AppSettings
     /// </summary>
     public AppSettings Clone() => new()
     {
+        SaveBlocked = SaveBlocked,
+        _unreadableSecrets = new HashSet<string>(_unreadableSecrets, StringComparer.Ordinal),
+        LoadProblems = LoadProblems.ToArray(),
         // Must be copied: a clone that fell back to 1 would be saved as a v1 file, and the next load
         // would re-run the migration and hand "*" back to a worker the user had just emptied.
         SchemaVersion = SchemaVersion,
         GlobalInstructions = GlobalInstructions,
         NumCtx = NumCtx,
+        GenerationBudgets = GenerationBudgets with { },
+        RepairConsultation = RepairConsultation with { },
         DisableThinking = DisableThinking,
         AllowImplicitToolCalls = AllowImplicitToolCalls,
         ReviewContent = ReviewContent,
@@ -816,6 +876,14 @@ public sealed partial class AppSettings
         repairs.AddRange(RenameDuplicates(Workers, w => w.Id, (w, id) => w.Id = id, "worker"));
         repairs.AddRange(UnencryptedSecrets());
         repairs.AddRange(UnreadableRemoteToken());
+        foreach (var provider in Providers)
+            if (Secret.IsProtected(provider.ApiKeyProtected) && string.IsNullOrEmpty(provider.ApiKey))
+                repairs.Add($"The API key for provider '{provider.Id}' cannot be decrypted. "
+                    + "Its encrypted value will be preserved on save; enter a replacement key to use it here.");
+        if (Secret.IsProtected(Smtp.PasswordProtected) && string.IsNullOrEmpty(Smtp.Password))
+            repairs.Add("The SMTP password cannot be decrypted. Its encrypted value will be preserved on save; enter a replacement password to use it here.");
+        if (Secret.IsProtected(AnthropicApiKeyProtected) && string.IsNullOrEmpty(AnthropicApiKey))
+            repairs.Add("The legacy Anthropic key cannot be decrypted. Its encrypted value will be preserved on save.");
 
         LoadProblems = repairs;
         return repairs;
@@ -936,7 +1004,9 @@ public sealed partial class AppSettings
                      ("Plan", Bindings.Plan),
                      ("Review", Bindings.Review),
                      ("Execute · light", Bindings.ExecuteLight),
-                     ("Execute · heavy", Bindings.ExecuteHeavy)
+                     ("Execute · heavy", Bindings.ExecuteHeavy),
+                     ("Repair consultant", RepairConsultation.Enabled && RepairConsultation.Model is { } consultant
+                         ? consultant.ProviderId + "/" + consultant.Model : null)
                  })
         {
             if (ParseRef(reference) is { } model

@@ -36,7 +36,9 @@ public sealed class CopyFileTool : ITool
                    + "relative to the workspace root. Fails if the destination already exists. "
                    + "Prefer this over reading a file and writing it back: reading is truncated for "
                    + "large files and the copy would silently be partial.",
-        JsonSchema: Schema, WorkspaceEffect: WorkspaceEffect.Changed);
+        JsonSchema: Schema, WorkspaceEffect: WorkspaceEffect.Changed,
+        ChangedPathArguments: ["to"],
+        RepairsFileFailures: false, ProgressIdentity: ProgressIdentity.Action, Kind: ToolKind.Relocate);
 
     public PermissionLevel RequiredLevel => PermissionLevel.Execute;
 
@@ -65,10 +67,12 @@ public sealed class CopyFileTool : ITool
             if (string.Equals(source, destination, Enactive.Core.Context.WorkspaceGuard.Comparison))
                 return ToolResults.Unreadable("'from' and 'to' are the same file.");
 
-            if (!File.Exists(source))
-                return ToolResults.Fail($"File not found: {from}");
-
-            if (File.Exists(destination) || await ctx.Artifacts.TryReadPendingAsync(to, ct) is not null)
+            await using var input = await ctx.Artifacts.TryOpenPendingAsync(from, ct)
+                ?? (File.Exists(source) ? new FileStream(source, FileMode.Open, FileAccess.Read,
+                    FileShare.Read | FileShare.Delete, 81920, useAsync: true) : null);
+            if (input is null) return ToolResults.Fail($"File not found: {from}");
+            await using var pendingDestination = await ctx.Artifacts.TryOpenPendingAsync(to, ct);
+            if (File.Exists(destination) || pendingDestination is not null)
                 return ToolResults.Fail(
                     $"'{to}' already exists. Copying onto it would destroy it — choose another name, "
                     + "or delete that file deliberately first.");
@@ -78,17 +82,14 @@ public sealed class CopyFileTool : ITool
             // context, not a UTF-8 round trip. A copy that returns something else is not a copy.
             long copied = 0;
 
-            var reference = await ctx.Artifacts.CreateAsync(
-                to, ArtifactKind.FileSet, to,
-                async stream =>
-                {
-                    await using var input = new FileStream(
-                        source, FileMode.Open, FileAccess.Read, FileShare.Read,
-                        bufferSize: 81920, useAsync: true);
-                    await input.CopyToAsync(stream, ct);
-                    copied = input.Length;
-                },
-                ct);
+            async Task Copy(Stream stream)
+            {
+                await input.CopyToAsync(stream, ct);
+                copied = input.Length;
+            }
+            var reference = ctx.Artifacts.CanCheckVersion
+                ? await ctx.Artifacts.CreateCheckedAsync(to, ArtifactKind.FileSet, to, Copy, new ArtifactVersion(null), ct)
+                : await ctx.Artifacts.CreateAsync(to, ArtifactKind.FileSet, to, Copy, ct);
 
             return ToolResults.Ok(
                 output: $"Copied '{from}' to '{to}' ({copied} bytes). The new file can be undone.",

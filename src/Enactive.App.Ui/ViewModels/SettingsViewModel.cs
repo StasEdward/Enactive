@@ -152,6 +152,14 @@ internal sealed partial class SettingsViewModel : ObservableObject
     private int _shellCommandsIndex;
     private bool _closeToTray;
     private bool _runAtStartup;
+    private readonly Task _startupLoad;
+    private bool _startupLoaded;
+    private async Task LoadStartupAsync()
+    {
+        RunAtStartup = await Task.Run(StartupEntry.IsEnabled);
+        _startupLoaded = true;
+        OnPropertyChanged(nameof(StartupSupported));
+    }
     private string _startupNote = string.Empty;
     private ProviderRow? _selectedProvider;
     private WorkerRow? _selectedWorker;
@@ -284,6 +292,14 @@ internal sealed partial class SettingsViewModel : ObservableObject
         InitializeWritableRoots();
 
         _numCtxText = _working.NumCtx?.ToString() ?? string.Empty;
+        _generationAction = _working.GenerationBudgets.Action.ToString();
+        _generationFileWrite = _working.GenerationBudgets.FileWrite.ToString();
+        _generationFinalAnswer = _working.GenerationBudgets.FinalAnswer.ToString();
+        _generationHandover = _working.GenerationBudgets.Handover.ToString();
+        _generationPlanner = _working.GenerationBudgets.Planner.ToString();
+        _repairModel = _working.RepairConsultation.Model is { } repairModel ? repairModel.ProviderId + "/" + repairModel.Model : "";
+        _repairThreshold = _working.RepairConsultation.FailedRepairs.ToString();
+
         _globalInstructions = _working.GlobalInstructions;
         _disableThinking = _working.DisableThinking;
         _verifyWrites = _working.VerifyWrites;
@@ -301,7 +317,7 @@ internal sealed partial class SettingsViewModel : ObservableObject
 
         // Read from the system, not from settings.json: the Run key is the truth, and a copy would
         // drift the first time the user removed it in Task Manager.
-        _runAtStartup = StartupEntry.IsEnabled();
+        _startupLoad = LoadStartupAsync();
         _startupNote = StartupEntry.Supported
             ? string.Empty
             : "Only Windows starts programs this way; this desktop does not.";
@@ -332,7 +348,7 @@ internal sealed partial class SettingsViewModel : ObservableObject
 
         AddWorkerCommand = new RelayCommand(AddWorker);
 
-        SaveCommand = new RelayCommand(Save);
+        SaveCommand = new AsyncRelayCommand(SaveAsync);
         CancelCommand = new RelayCommand(() => CloseRequested?.Invoke());
     }
 
@@ -348,6 +364,20 @@ internal sealed partial class SettingsViewModel : ObservableObject
     public event Action<WorkerConfig, IReadOnlyList<string>, Action>? WorkerEditRequested;
 
     // ── General ───────────────────────────────────────────────────────────────
+    private string _generationAction = "";
+    private string _repairModel = "";
+    private string _repairThreshold = "0";
+    public string RepairModelText { get => _repairModel; set => Set(ref _repairModel, value); }
+    public string RepairThresholdText { get => _repairThreshold; set => Set(ref _repairThreshold, value); }
+    private string _generationFileWrite = "";
+    private string _generationFinalAnswer = "";
+    private string _generationHandover = "";
+    private string _generationPlanner = "";
+    public string GenerationPlannerText { get => _generationPlanner; set => Set(ref _generationPlanner, value); }
+    public string GenerationActionText { get => _generationAction; set => Set(ref _generationAction, value); }
+    public string GenerationFileWriteText { get => _generationFileWrite; set => Set(ref _generationFileWrite, value); }
+    public string GenerationFinalAnswerText { get => _generationFinalAnswer; set => Set(ref _generationFinalAnswer, value); }
+    public string GenerationHandoverText { get => _generationHandover; set => Set(ref _generationHandover, value); }
     public string NumCtxText { get => _numCtxText; set => Set(ref _numCtxText, value); }
     public string GlobalInstructions { get => _globalInstructions; set => Set(ref _globalInstructions, value); }
     public bool DisableThinking { get => _disableThinking; set => Set(ref _disableThinking, value); }
@@ -385,7 +415,7 @@ internal sealed partial class SettingsViewModel : ObservableObject
     /// </summary>
     public bool RunAtStartup { get => _runAtStartup; set => Set(ref _runAtStartup, value); }
 
-    public bool StartupSupported => StartupEntry.Supported;
+    public bool StartupSupported => StartupEntry.Supported && _startupLoaded;
 
     /// <summary>Empty when there is nothing to say - a note that is always there is not read.</summary>
     public string StartupNote
@@ -442,7 +472,7 @@ internal sealed partial class SettingsViewModel : ObservableObject
 
     public RelayCommand AddProviderCommand { get; }
     public RelayCommand AddWorkerCommand { get; }
-    public RelayCommand SaveCommand { get; }
+    public AsyncRelayCommand SaveCommand { get; }
     public RelayCommand CancelCommand { get; }
 
     private void AddProvider()
@@ -521,9 +551,22 @@ internal sealed partial class SettingsViewModel : ObservableObject
     private async Task<bool> ConfirmAsync(string headline, string detail)
         => ConfirmRequested is null || await ConfirmRequested(headline, detail);
 
-    private void Save()
+    private async Task SaveAsync()
     {
+        await _startupLoad;
         _working.NumCtx = int.TryParse(NumCtxText.Trim(), out var n) ? n : null;
+        var repairParts = RepairModelText.Trim().Split('/', 2);
+        _working.RepairConsultation = _working.RepairConsultation with {
+            Model = repairParts.Length == 2 && repairParts.All(p => !string.IsNullOrWhiteSpace(p))
+                ? new Enactive.Core.Providers.ModelRef(repairParts[0], repairParts[1]) : null,
+            FailedRepairs = int.TryParse(RepairThresholdText.Trim(), out var repairThreshold) && repairThreshold >= 2 ? repairThreshold : 0
+        };
+        _working.GenerationBudgets = new(
+            Action: int.TryParse(GenerationActionText.Trim(), out var genAction) && genAction > 0 ? genAction : new Enactive.Core.Chat.GenerationBudgets().Action,
+            FileWrite: int.TryParse(GenerationFileWriteText.Trim(), out var genFileWrite) && genFileWrite > 0 ? genFileWrite : new Enactive.Core.Chat.GenerationBudgets().FileWrite,
+            FinalAnswer: int.TryParse(GenerationFinalAnswerText.Trim(), out var genFinalAnswer) && genFinalAnswer > 0 ? genFinalAnswer : new Enactive.Core.Chat.GenerationBudgets().FinalAnswer,
+            Handover: int.TryParse(GenerationHandoverText.Trim(), out var genHandover) && genHandover > 0 ? genHandover : new Enactive.Core.Chat.GenerationBudgets().Handover,
+            Planner: int.TryParse(GenerationPlannerText.Trim(), out var genPlanner) && genPlanner > 0 ? genPlanner : new Enactive.Core.Chat.GenerationBudgets().Planner);
         _working.GlobalInstructions = GlobalInstructions;
         _working.DisableThinking = DisableThinking;
         _working.VerifyWrites = VerifyWrites;
@@ -553,15 +596,15 @@ internal sealed partial class SettingsViewModel : ObservableObject
             : ShellCommandPolicy.Follow;
         _working.CloseToTray = CloseToTray;
 
-        var startupRefused =
-            StartupEntry.Supported
-            && RunAtStartup != StartupEntry.IsEnabled()
-            && !StartupEntry.Set(RunAtStartup);
+        var requestedStartup = RunAtStartup;
+        var startupRefused = await Task.Run(() => StartupEntry.Supported
+            && requestedStartup != StartupEntry.IsEnabled()
+            && !StartupEntry.Set(requestedStartup));
 
         if (startupRefused)
         {
             // Show what actually happened rather than a tick that means nothing.
-            RunAtStartup = StartupEntry.IsEnabled();
+            RunAtStartup = await Task.Run(StartupEntry.IsEnabled);
             StartupNote = "Windows would not let that be changed. Start-up is left as it was.";
         }
 

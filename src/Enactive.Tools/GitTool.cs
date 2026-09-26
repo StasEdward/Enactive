@@ -7,8 +7,9 @@ using Enactive.Core.Tools;
 
 /// <summary>
 /// Runs a git command in the workspace. Arguments are passed as an array (preferred, no quoting
-/// issues) or a single string; the tool always invokes the real <c>git</c> binary — it cannot run
-/// anything else. Execute-level and gated behind an approval by default (it can also mutate history).
+/// issues) or a single string. Git can execute aliases, hooks, filters and external helpers and
+/// select other repositories. This is general command execution governed by ShellTools policy,
+/// not a workspace sandbox. Execute-level and gated behind an approval by default.
 /// </summary>
 public sealed class GitTool : ITool
 {
@@ -22,8 +23,9 @@ public sealed class GitTool : ITool
                    + "recognise it. More examples: [\"status\"], [\"log\",\"--oneline\",\"-5\"], "
                    + "[\"commit\",\"-m\",\"message with spaces\"] - a later argument may contain spaces, the "
                    + "subcommand never does. A plain string is also accepted and is split on spaces. "
-                   + "Do NOT include the leading 'git'.",
-        JsonSchema: Schema);
+                   + "Do NOT include the leading 'git'. Git can run external programs through configuration/hooks "
+                   + "and access other repositories; shell execution permissions apply.",
+        JsonSchema: Schema, Kind: ToolKind.Command);
 
     public PermissionLevel RequiredLevel => PermissionLevel.Execute;
 

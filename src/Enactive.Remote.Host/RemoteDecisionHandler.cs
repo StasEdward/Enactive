@@ -47,11 +47,15 @@ public sealed class RemoteDecisionHandler(
 
     public async Task<DecisionOutcome> RequestAsync(DecisionRequest request, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
+        request = request with { RequiresExplicitAnswer = true };
         // Without a bound action there is nothing to identify remotely, so this is a local question.
         // Publishing it would produce a card on the phone that no answer could ever be matched to.
         if (request.Action is not { } action)
         {
-            return await desktop.RequestAsync(request, ct);
+            var localAnswer = await desktop.RequestAsync(request, ct);
+            ct.ThrowIfCancellationRequested();
+            return localAnswer;
         }
 
         var approvalId = request.Id.ToString("N");
@@ -77,17 +81,27 @@ public sealed class RemoteDecisionHandler(
         using var race = CancellationTokenSource.CreateLinkedTokenSource(ct);
         race.CancelAfter(timeout);
 
-        var local = desktop.RequestAsync(request, race.Token);
         var remote = approvals.WaitAsync(approvalId, actionHash);
+        Task<DecisionOutcome>? local = null;
 
         try
         {
+            local = desktop.RequestAsync(request, race.Token);
             var winner = await Task.WhenAny(local, remote);
+            race.Token.ThrowIfCancellationRequested();
 
             // Whoever lost is told to stop: the desktop card closes, and a command arriving for
             // this request afterwards finds nothing waiting.
             await race.CancelAsync();
             approvals.Forget(approvalId);
+
+            // Cancellation starts asynchronous card cleanup; finish it before advancing the run.
+            if (winner != local)
+            {
+                try { await local; }
+                catch (OperationCanceledException) when (race.IsCancellationRequested) { }
+            }
+            ct.ThrowIfCancellationRequested();
 
             var outcome = winner == local
                 ? await local
@@ -111,6 +125,22 @@ public sealed class RemoteDecisionHandler(
             approvals.Forget(approvalId);
             Report(approvalId, actionHash, ApprovalOutcome.Invalidated);
             throw;
+        }
+        catch (Exception)
+        {
+            Report(approvalId, actionHash, ApprovalOutcome.Invalidated);
+            throw;
+        }
+        finally
+        {
+            await race.CancelAsync();
+            approvals.Forget(approvalId);
+            if (local is not null)
+            {
+                // Observe the losing task on every exit, including cancellation/error paths.
+                try { await local; }
+                catch (Exception) { /* Preserve the outcome or original exception reported above. */ }
+            }
         }
     }
 

@@ -35,11 +35,9 @@ public sealed class ShellOutputEncodingTests
 {
     private const string Marker = "before—after";
 
-    [Fact]
+    [WindowsFact]
     public async Task A_command_that_types_a_utf8_file_gets_its_real_characters_back()
     {
-        if (!OperatingSystem.IsWindows())
-            return;
 
         using var fx = new EngineFixture();
         var path = Path.Combine(fx.Root, "marker.txt");
@@ -52,11 +50,9 @@ public sealed class ShellOutputEncodingTests
         Assert.Contains(Marker, result.Output ?? "", StringComparison.Ordinal);
     }
 
-    [Fact]
+    [WindowsFact]
     public async Task A_powershell_script_that_reads_a_utf8_file_gets_its_real_characters_back()
     {
-        if (!OperatingSystem.IsWindows())
-            return;
 
         using var fx = new EngineFixture();
         var path = Path.Combine(fx.Root, "marker.txt");

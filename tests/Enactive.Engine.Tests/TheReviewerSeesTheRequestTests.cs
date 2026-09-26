@@ -52,15 +52,16 @@ public sealed class TheReviewerSeesTheRequestTests
     }
 
     [Fact]
-    public void A_huge_request_is_cut_and_says_so()
+    public void A_huge_request_keeps_requirements_after_the_old_cutoff()
     {
-        var huge = new string('x', 10_000);
+        var huge = new string('x', 10_000) + "\nEvery new test must be checked by mutation.";
 
         var prompt = Reviewer.BuildExecutionUserPrompt(
             "a step", "did it", "-> run_command\n<- exit code 0", NoArtifacts, request: huge);
 
-        Assert.Contains("cut here", prompt, StringComparison.Ordinal);
-        Assert.True(prompt.Length < huge.Length + 2000, "the whole request was carried");
+        Assert.Contains("Every new test must be checked by mutation.", prompt, StringComparison.Ordinal);
+        Assert.Contains("O002", prompt);
+        Assert.DoesNotContain("cut here", prompt, StringComparison.Ordinal);
     }
 
     // ── through a real run ───────────────────────────────────────────────────

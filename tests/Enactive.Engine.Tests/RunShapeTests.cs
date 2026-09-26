@@ -229,7 +229,7 @@ public sealed class RunShapeTests
             Turn.Says(plan),
             Turn.Calls1("run_command", """{"command":"echo hi"}""", "c1"),
             Turn.Says("Ran it."));
-        var reviewer = new FakeChatProvider(Verdicts.Pass(), Verdicts.Shown("the command succeeded", 1));
+        var reviewer = new FakeChatProvider(Verdicts.Combined(Verdicts.Shown("the command succeeded", 1)));
 
         var events = await fx.RunAsync(
             fx.Build(worker, router: Routers.WithReviewer(), reviewProvider: reviewer,

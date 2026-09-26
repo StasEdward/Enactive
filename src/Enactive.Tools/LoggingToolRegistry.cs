@@ -24,6 +24,7 @@ public sealed class LoggingToolRegistry : IToolRegistry
     }
 
     public IReadOnlyList<ToolDefinition> Definitions => _inner.Definitions;
+    public ToolDefinition? DefinitionOf(string name) => _inner.DefinitionOf(name);
     public long? WorkspaceVersion(Guid workspaceId) => _inner.WorkspaceVersion(workspaceId);
     public bool RequiresApprovalOf(string toolName) => _inner.RequiresApprovalOf(toolName);
 

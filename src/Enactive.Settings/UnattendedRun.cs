@@ -46,7 +46,10 @@ public sealed record RunEnvironment(
     AppSettings Settings,
     PermissionPolicy Policy,
     RunSettings RunSettings,
-    string? WorkerId);
+    string? WorkerId)
+{
+    public RunEngineOptions EngineOptions { get; } = RunEngineOptions.Capture(Settings);
+}
 
 /// <summary>
 /// One composed run, ready to submit: the engine to run it with, the intent to run, and the things
@@ -109,7 +112,7 @@ public static class UnattendedRun
 
         try
         {
-            var settings = environment.Settings;
+
 
             // A run started from the web never runs a shell, and this is where that is true. The
             // decision handler refuses one too, but a handler only sees what the policy decided to
@@ -119,35 +122,12 @@ public static class UnattendedRun
                 ? RemotePolicy.ForRemoteRun(environment.Policy)
                 : environment.Policy;
 
-            var orchestrator = new Orchestrator(
-                environment.Providers,
-                environment.Models,
-                environment.Workers,
-                new LoggingToolRegistry(tools, environment.Log),
-                new DiskArtifactStore(workspace),
-                workspace,
-                environment.Planner,
-                environment.Permissions,
-                decisions,
-                policy,
-                new NoServices(),
-                router: environment.Router,
-                reviewRetries: settings.ReviewRetries,
-                successRetries: settings.SuccessRetries,
-                proposeChecks: settings.ProposeChecks,
-                numCtx: settings.NumCtx,
-                disableThinking: settings.DisableThinking,
-                maxParallelSteps: settings.MaxParallelSteps,
-                evidenceBudget: settings.EvidenceBudget,
-                allowImplicitToolCalls: settings.AllowImplicitToolCalls,
-                reviewContent: settings.ReviewContent,
-                checkSoundness: settings.CheckSoundness,
-                revertRejectedSteps: settings.RevertRejectedSteps,
-                // An unattended run is the one that most needs this: it lives in a Task owned by
-                // this process, so closing the app kills it wherever it happens to be, and without
-                // a checkpoint there is nothing for Resume to offer afterwards.
-                checkpoints: new JsonCheckpointStore(workspace),
-                settings: environment.RunSettings);
+            var orchestrator = RunEngineComposition.Build(
+                new RunEngineResources(environment.Providers, environment.Models, environment.Workers,
+                    new LoggingToolRegistry(tools, environment.Log), new DiskArtifactStore(workspace),
+                    workspace, environment.Planner, environment.Permissions, decisions, policy,
+                    new NoServices(), environment.Router), environment.EngineOptions,
+                checkpoints: new JsonCheckpointStore(workspace), settings: environment.RunSettings);
 
             var context = await new ContextProvider(workspace, new EnvironmentProbe(), memory)
                 .BuildAsync(new IntentFocus(workspace.Id), ct);

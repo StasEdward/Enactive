@@ -147,7 +147,7 @@ public static class EngineComposition
             p.MaxTokens,
             p.ContextWindowTokens,
             p.AnswerReserveTokens,
-            p.HandoverAtPercent)).ToList();
+            p.HandoverAtPercent, p.StreamIdleTimeoutSeconds, p.OpenAiReasoningProfile, p.OllamaKeepAliveSeconds, p.CompletionTimeoutSeconds, p.ReasoningTokenAllowance)).ToList();
 
     /// <summary>
     /// The configured team, or the built-in one when a person has never edited it. Global
@@ -168,7 +168,7 @@ public static class EngineComposition
         var workers = settings.Workers.Select(w => new Worker(
             w.Id,
             w.Role,
-            DefaultWorkers.Augment(w.Instructions, settings.GlobalInstructions, settings.VerifyWrites),
+            DefaultWorkers.Augment(w.Instructions, settings.GlobalInstructions, settings.VerifyWrites, w.Tools),
             w.Tools,
             w.Level,
             new ModelPolicy(

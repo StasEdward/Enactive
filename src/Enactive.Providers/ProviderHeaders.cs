@@ -15,8 +15,11 @@ using Enactive.Core.Providers;
 internal static class ProviderHeaders
 {
     public static void Apply(HttpRequestMessage request, ProviderDescriptor descriptor)
+        => Apply(request, descriptor.Headers);
+
+    public static void Apply(HttpRequestMessage request, IReadOnlyDictionary<string, string>? headers)
     {
-        if (descriptor.Headers is not { Count: > 0 } headers)
+        if (headers is not { Count: > 0 })
             return;
 
         foreach (var header in headers)
@@ -26,7 +29,17 @@ internal static class ProviderHeaders
 
             // Without validation: these are the user's own headers for their own endpoint, and
             // HttpClient's idea of which ones are "restricted" is not a judgement to impose here.
-            request.Headers.TryAddWithoutValidation(header.Key, header.Value);
+            try
+            {
+                request.Headers.Remove(header.Key);
+                if (request.Headers.TryAddWithoutValidation(header.Key, header.Value)) continue;
+            }
+            catch (InvalidOperationException) { /* A content header belongs on HttpContent. */ }
+            if (request.Content is { } content)
+            {
+                content.Headers.Remove(header.Key);
+                content.Headers.TryAddWithoutValidation(header.Key, header.Value);
+            }
         }
     }
 }

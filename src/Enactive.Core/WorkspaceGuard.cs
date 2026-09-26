@@ -115,10 +115,20 @@ public static class WorkspaceGuard
         if (Path.IsPathRooted(relative))
             throw new ArgumentException("Absolute paths are not allowed.", nameof(relativePath));
 
+        if (OperatingSystem.IsWindows() && relative.Contains(':'))
+            throw new ArgumentException("NTFS stream paths are not allowed.", nameof(relativePath));
+
+        // On Windows .NET expands existing 8.3 components here, including when the remaining
+        // suffix does not exist. Reserved-folder checks must use this result, not raw input.
+        // ShortPathGuardTests exercises real OS aliases, short roots and junction combinations.
         var full = Path.GetFullPath(Path.Combine(fullRoot, relative));
 
         if (!IsInside(fullRoot, full))
             throw new ArgumentException("Path escapes the workspace root.", nameof(relativePath));
+        if (OperatingSystem.IsWindows() && Path.GetRelativePath(fullRoot, full) != "."
+            && Path.GetRelativePath(fullRoot, full).Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                .Any(segment => segment.EndsWith('.') || segment.EndsWith(' ')))
+            throw new ArgumentException("Windows trailing-dot/space path aliases are not allowed.", nameof(relativePath));
 
         // Both remaining questions are asked of the EFFECTIVE path — where the write actually lands
         // once every link on the way has been followed — not of the string the caller typed. Asking
@@ -129,6 +139,14 @@ public static class WorkspaceGuard
 
         if (!IsInside(fullRoot, effective))
             throw new ArgumentException("Path escapes the workspace root.", nameof(relativePath));
+
+        if (OperatingSystem.IsWindows() && Path.GetRelativePath(fullRoot, effective).Contains(':'))
+            throw new ArgumentException("NTFS stream paths are not allowed.", nameof(relativePath));
+
+        if (!allowReserved && Path.GetRelativePath(fullRoot, effective)
+            .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+            .Any(segment => string.Equals(segment, ".git", Comparison)))
+            throw new ArgumentException("Git metadata is reserved; use the permission-controlled git tool.", nameof(relativePath));
 
         if (!allowReserved && TouchesReserved(fullRoot, effective))
             throw new ReservedPathException(nameof(relativePath));

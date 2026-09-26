@@ -97,19 +97,16 @@ public sealed class WhatProvesTheWorkTests
     }
 
     /// <summary>
-    /// The schema exists and is NOT sent. An outside review asked for it; a test written months
+    /// A schema is deliberately NOT sent. An outside review asked for it; a test written months
     /// earlier refused it within the minute, holding a decision already argued — constrained
     /// decoding on a small planner can eat the reasoning the planner is there for, and the
     /// instruction attached to it was "measure before changing this".
     ///
-    /// <para>So the shape stays in the words, where every planner can read it, and the constant
-    /// stays unused with its reason on it — an experiment waiting for evidence rather than debt.</para>
+    /// <para>So the shape stays in the words, where every planner can read it, instead of an unused schema constant.</para>
     /// </summary>
     [Fact]
     public void The_shape_is_in_the_words_because_the_schema_is_not_sent()
     {
-        Assert.Contains("\"maxItems\": 4", Planner.PlanWithChecksSchema, StringComparison.Ordinal);
-
         // The words carry it, and must: nothing else does.
         Assert.Contains("\"checks\":[{\"name\"", Prompt(), StringComparison.Ordinal);
         Assert.Contains("up to 4 shell commands", Prompt(), StringComparison.Ordinal);

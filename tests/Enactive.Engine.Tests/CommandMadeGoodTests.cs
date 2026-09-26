@@ -41,11 +41,9 @@ public sealed class CommandMadeGoodTests
     /// redirection. Before this, the failure stayed open and the run was Incomplete over work that
     /// had been done.
     /// </summary>
-    [Fact]
+    [WindowsFact]
     public async Task A_command_verified_under_a_different_spelling_closes_its_failure()
     {
-        if (!OperatingSystem.IsWindows())
-            return;
 
         using var fx = new EngineFixture();
 
@@ -66,11 +64,9 @@ public sealed class CommandMadeGoodTests
     /// DIFFERENT target must not clear the failure. Same program, same subcommand, another
     /// operand — the step never made good what it broke, and the run has to say so.
     /// </summary>
-    [Fact]
+    [WindowsFact]
     public async Task A_success_against_another_target_leaves_the_failure_open()
     {
-        if (!OperatingSystem.IsWindows())
-            return;
 
         using var fx = new EngineFixture();
         fx.Write("other.txt", "a different file entirely");
@@ -91,11 +87,9 @@ public sealed class CommandMadeGoodTests
     /// run_powershell for pipes and switches between the two freely, so a fix verified through
     /// the other shell is still the fix.
     /// </summary>
-    [Fact]
+    [WindowsFact]
     public async Task A_failure_in_one_shell_is_made_good_in_the_other()
     {
-        if (!OperatingSystem.IsWindows())
-            return;
 
         using var fx = new EngineFixture();
 
@@ -115,11 +109,9 @@ public sealed class CommandMadeGoodTests
     /// A failure nobody ever came back to is still a failure. Without this the loosening could be
     /// read as "commands stopped counting", which is the opposite of what it does.
     /// </summary>
-    [Fact]
+    [WindowsFact]
     public async Task A_failure_never_returned_to_still_fails_the_run()
     {
-        if (!OperatingSystem.IsWindows())
-            return;
 
         using var fx = new EngineFixture();
 

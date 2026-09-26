@@ -31,7 +31,9 @@ public sealed class DeleteFileTool : ITool
         Name: "delete_file",
         Description: "Delete a file inside the workspace. The path is relative to the workspace "
                    + "root. Deletes one file, never a directory. Always asks first.",
-        JsonSchema: Schema, WorkspaceEffect: WorkspaceEffect.Changed);
+        JsonSchema: Schema, WorkspaceEffect: WorkspaceEffect.Changed,
+        ChangedPathArguments: ["path"],
+        RepairsFileFailures: false, ProgressIdentity: ProgressIdentity.Action, Kind: ToolKind.Relocate, FileCoverage: FileCoverageBehavior.Delete);
 
     public PermissionLevel RequiredLevel => PermissionLevel.Execute;
 

@@ -35,6 +35,19 @@ using Enactive.Workspace;
 //   ENACTIVE_OLLAMA_URL  the first provider's base URL
 
 // "timeline" as the first argument shows the project's run history instead of running an intent:
+if (args is ["--help"] or ["-h"])
+{
+    Console.WriteLine("""
+        Enactive CLI
+        enactive "request" "workspace" [--role developer] [--autonomy execute] [--approve allow|deny]
+        enactive timeline "workspace"
+        enactive --template TEMPLATE --workspace PATH [--param name=value] [--report FILE]
+        enactive --due
+        Providers and models are configured in Enactive Settings.
+        """);
+    return 0;
+}
+
 //   dotnet run --project src/Enactive.App.Console -- timeline "<workspace path>"
 var isTimeline = args.Length > 0 && string.Equals(args[0], "timeline", StringComparison.OrdinalIgnoreCase);
 
@@ -207,7 +220,7 @@ if (args.Length > 0 && string.Equals(args[0], "inbox", StringComparison.OrdinalI
     return 0;
 }
 
-using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
+using var http = new HttpClient { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
 
 // ── Global log ────────────────────────────────────────────────────────────────
 // Readable summaries + raw wire, mirrored to a daily file under %APPDATA%/Enactive/logs.
@@ -248,35 +261,8 @@ var artifactStore = new DiskArtifactStore(workspace);
 // the model in its own description when there is nowhere to send.
 var mailAccount = EngineComposition.Mail(settings);
 
-var builtInTools = new List<ITool>
-{
-    new WriteFileTool(),
-    new EditFileTool(),
-    new ReadFileTool(),
-    // Registered here because the roles name them. A tool a role names but the host does not
-    // register is the same defect as a tool the host registers and no role names, seen from the
-    // other side: the model is told about a capability that is not there.
-    new ReadFilesTool(),
-    new SearchFilesTool(),
-    // The three that answer WITHOUT returning file content - how many, how large, same or not -
-    // so a question with a small answer costs a small answer.
-    new CountMatchesTool(),
-    new FileStatsTool(),
-    new CompareFilesTool(),
-    new ListDirectoryTool(),
-    new CreateDirectoryTool(),
-    new MoveFileTool(),
-    new CopyFileTool(),
-    new DeleteFileTool(),
-    new RunCommandTool(),
-    new RunPowerShellTool(),
-    new GitTool(),
-    new DockerTool()
-};
-
-builtInTools.Add(new SendEmailTool(mailAccount));
-
-IToolRegistry toolRegistry = new LoggingToolRegistry(new ToolRegistry(builtInTools), logHub);
+IToolRegistry toolRegistry = new LoggingToolRegistry(
+    new ToolRegistry(BuiltInTools.Create(mailAccount)), logHub);
 var contextProvider = new ContextProvider(workspace, new EnvironmentProbe(), memoryStore);
 var workers = workerProvider.All;
 
@@ -512,32 +498,12 @@ if (args.Contains("--resume", StringComparer.OrdinalIgnoreCase))
         + $"{resumeFrom.Finished} of {resumeFrom.Steps.Count} step(s) were done.");
 }
 
-var orchestrator = new Orchestrator(
-    providerFactory, modelResolver, workerProvider, toolRegistry,
-    artifactStore, workspace, planner, permissionEngine, decisionHandler,
-    spec?.Permissions ?? permissionPolicy, new EmptyServiceProvider(),
-    successCriteria: spec?.SuccessCriteria, limits: spec?.Limits,
-    checkpoints: checkpointStore,
-    settings: resumeFrom?.Settings,
-    // Which model runs which phase. There was no router here at all, so a person who had bound
-    // planning to a stronger provider got none of it from a schedule, and was not told.
-    router: engine.Router,
-    // The engine's own switches, from the settings, as the desktop passes them. This file passed
-    // none, so a run started here used the ORCHESTRATOR's defaults - not the person's - for the
-    // context window, thinking, retries and review. checkSoundness was the one exception: it was
-    // hard-coded true here with a comment saying "on, like the window", written when there was no
-    // way to ask the window. Now there is, and the answer is the setting.
-    reviewRetries: settings.ReviewRetries,
-    successRetries: settings.SuccessRetries,
-    proposeChecks: settings.ProposeChecks,
-    numCtx: settings.NumCtx,
-    disableThinking: settings.DisableThinking,
-    maxParallelSteps: settings.MaxParallelSteps,
-    evidenceBudget: settings.EvidenceBudget,
-    allowImplicitToolCalls: settings.AllowImplicitToolCalls,
-    reviewContent: settings.ReviewContent,
-    checkSoundness: settings.CheckSoundness,
-    revertRejectedSteps: settings.RevertRejectedSteps);
+var orchestrator = RunEngineComposition.Build(
+    new RunEngineResources(providerFactory, modelResolver, workerProvider, toolRegistry,
+        artifactStore, workspace, planner, permissionEngine, decisionHandler,
+        spec?.Permissions ?? permissionPolicy, new EmptyServiceProvider(), engine.Router),
+    RunEngineOptions.Capture(settings), checkpoints: checkpointStore, settings: resumeFrom?.Settings,
+    successCriteria: spec?.SuccessCriteria, limits: spec?.Limits);
 var runRecorder = new RunRecorder(runStore, memoryStore, workspace.Id, spec: spec?.Snapshot());
 
 // ── Run ──────────────────────────────────────────────────────────────────────

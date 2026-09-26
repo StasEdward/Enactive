@@ -70,7 +70,7 @@ public sealed class VisibleProofEvidenceTests
     public void Hidden_writes_still_refute_nothing_to_do()
     {
         var journal = new ExecutionJournal();
-        journal.Record(1, "write_file", "{}", ActionOutcome.Succeeded, "created");
+        journal.Record(1, "write_file", "{}", ActionOutcome.Succeeded, "created", Enactive.Core.Tools.WorkspaceEffect.Changed);
         for (var i = 0; i < 100; i++)
             journal.Record(1, "read_file", "a.txt", ActionOutcome.Succeeded, "content");
         var view = journal.Describe(maxChars: 1200);
@@ -115,18 +115,23 @@ public sealed class VisibleProofEvidenceTests
             new Turn(Calls: Enumerable.Range(1, 100)
                 .Select(i => new ToolCall($"r{i}", "read_file", """{"path":"a.txt"}""")).ToArray()),
             Turn.Says("Inspected."));
-        var reviewer = new FakeChatProvider(Verdicts.Pass(), Verdicts.Shown("the file was read", citation));
+        var verdict = Verdicts.Combined(Verdicts.Shown("the file was read", citation));
+        var reviewer = new FakeChatProvider(verdict, verdict);
 
         var events = await fx.RunAsync(
             fx.Build(worker, router: Routers.WithReviewer(), reviewProvider: reviewer,
                 reviewRetries: 0, checkSoundness: true, evidenceBudget: 1500), "inspect files");
 
-        Assert.Equal(2, reviewer.Requests.Count);
+        Assert.Equal(sound ? 1 : 2, reviewer.Requests.Count);
         var prompt = string.Join("\n", reviewer.Requests.Last().Messages.Select(m => m.Content));
         Assert.DoesNotContain("[1] ->", prompt);
         Assert.Contains("[100] ->", prompt);
         Assert.Equal(sound, events.Last().Outcome() == RunOutcomeKind.Completed);
         if (!sound)
-            Assert.Contains(events, e => e.Kind == EventKind.ReviewFailed && e.Summary.Contains("not shown"));
+        {
+            Assert.Equal(RunOutcomeKind.Incomplete, events.Last().Outcome());
+            Assert.Contains(events, e => e.Kind == EventKind.ErrorObserved && e.Summary.Contains("not shown"));
+            Assert.DoesNotContain(events, e => e.Kind == EventKind.ReviewFailed);
+        }
     }
 }

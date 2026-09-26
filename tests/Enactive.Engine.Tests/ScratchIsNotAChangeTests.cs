@@ -121,7 +121,7 @@ public sealed class ScratchIsNotAChangeTests
     [Fact]
     public void The_stall_guard_still_counts_a_scratch_write_as_progress()
     {
-        Assert.True(MutatingTools.Changes("write_file"));
+        Assert.Equal(ProgressIdentity.Action, new Enactive.Tools.WriteFileTool().Definition.ProgressIdentity);
     }
 }
 

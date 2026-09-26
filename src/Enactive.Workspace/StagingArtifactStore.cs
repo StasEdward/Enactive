@@ -11,15 +11,25 @@ public sealed class StagedChange
     public StagedChange(
         Guid id, string relativePath, string key, string? oldContent, string newContent,
         int sequence, int scope = -1, string? baseHash = null)
+        : this(id, relativePath, key,
+            oldContent is null ? null : StagedContent.FromText(oldContent),
+            StagedContent.FromText(newContent), sequence, scope, baseHash)
+    {
+    }
+
+    internal StagedChange(
+        Guid id, string relativePath, string key, StagedContent? oldBytes, StagedContent newBytes,
+        int sequence, int scope, string? baseHash, Guid? parentId = null)
     {
         Id = id;
         RelativePath = relativePath;
         Key = key;
-        OldContent = oldContent;
-        NewContent = newContent;
+        _oldBytes = oldBytes;
+        NewBytes = newBytes;
         Sequence = sequence;
         Scope = scope;
         BaseHash = baseHash;
+        ParentId = parentId;
     }
 
     /// <summary>
@@ -31,6 +41,7 @@ public sealed class StagedChange
     public int Scope { get; }
 
     public Guid Id { get; }
+    public Guid? ParentId { get; }
 
     /// <summary>The path as the caller spelled it. For display only — never for matching.</summary>
     public string RelativePath { get; }
@@ -43,8 +54,15 @@ public sealed class StagedChange
     /// and two proposals for one file were not ordered against each other.
     /// </summary>
     public string Key { get; }
-    public string? OldContent { get; }
-    public string NewContent { get; }
+    private readonly StagedContent? _oldBytes;
+    internal StagedContent NewBytes { get; }
+    internal StagedContent? OldBytes => _oldBytes;
+    // Full text remains an explicit compatibility view, not retained storage.
+    public string? OldContent => _oldBytes?.ReadText();
+    public string NewContent => NewBytes.ReadText();
+    public long OldByteCount => _oldBytes?.Length ?? 0;
+    public long NewByteCount => NewBytes.Length;
+    public bool IsBinary => NewBytes.IsBinary() || (_oldBytes?.IsBinary() ?? false);
 
     /// <summary>
     /// Position in the run's write order. Two proposals for the same path must be applied oldest
@@ -53,25 +71,12 @@ public sealed class StagedChange
     public int Sequence { get; }
 
     /// <summary>
-    /// Hash of the file as it was when this proposal was made (null when the file did not exist).
-    /// Apply compares it against the file on disk, so an edit made in the meantime is a conflict
-    /// rather than something to overwrite silently.
-    /// </summary>
-    /// <summary>
-    /// A hash of what this change expects to find on disk when it is applied — the guard
-    /// <see cref="StagingArtifactStore.Apply"/> uses to refuse a proposal whose base has moved
-    /// underneath it. Null when the change was proposed as a new file.
-    ///
-    /// <para>Which bytes those are depends on what the change was based on, and the two cases are
-    /// not the same hash. Chained behind an earlier PROPOSAL, it expects that proposal's text, which
-    /// staging itself will have written as UTF-8 — so the text hashes correctly. Based on the FILE,
-    /// it expects the file's own bytes, and those do not survive a decode to text and back: a BOM,
-    /// UTF-16, any invalid byte. Hashing the diff's text in both cases made an unopenable file
-    /// compare equal to a different unopenable file.</para>
+    /// Hash of the exact bytes expected on disk when applied: the preceding proposal's bytes,
+    /// or the original file's bytes. Null means the file must not exist.
     /// </summary>
     public string? BaseHash { get; }
 
-    public bool IsNew => OldContent is null;
+    public bool IsNew => _oldBytes is null;
     public bool Applied { get; private set; }
     public bool Rejected { get; private set; }
     public bool Pending => !Applied && !Rejected;
@@ -86,6 +91,8 @@ public sealed record ApplyResult(bool Applied, string? Conflict = null)
     public static readonly ApplyResult Ok = new(true);
     public static ApplyResult Blocked(string reason) => new(false, reason);
 }
+
+public sealed record RejectResult(bool Rejected, string? Conflict = null);
 
 /// <summary>Content hashing for the concurrency checks. SHA-256, hex.</summary>
 public static class FileHash
@@ -104,7 +111,11 @@ public static class FileHash
     /// <para>Not a SHA-256 collision: the information was gone before the hash function saw it.</para>
     /// </summary>
     public static string? OfFile(string fullPath)
-        => File.Exists(fullPath) ? OfBytes(File.ReadAllBytes(fullPath)) : null;
+    {
+        if (!File.Exists(fullPath)) return null;
+        using var stream = File.OpenRead(fullPath);
+        return Convert.ToHexString(SHA256.HashData(stream));
+    }
 
     /// <summary>Of bytes already in hand — so a caller that must read a file anyway reads it once.</summary>
     public static string OfBytes(byte[] bytes) => Convert.ToHexString(SHA256.HashData(bytes));
@@ -125,15 +136,16 @@ public static class FileHash
 ///    never compared to anything: if the user (or another task) changed the file after the proposal
 ///    was made, <c>File.WriteAllText</c> quietly erased that change.
 ///
-/// Still true, and stated rather than papered over: proposals are held in memory and do not survive
+/// Still true, and stated rather than papered over: proposals use private temporary files and do not survive
 /// closing the app, and shell tools work on the real folder, so a staged run is not a transaction.
 /// </summary>
-public sealed class StagingArtifactStore : IOwnedArtifactStore
+public sealed class StagingArtifactStore : IOwnedArtifactStore, IDisposable
 {
     private readonly string _root;
     private readonly List<StagedChange> _changes = new();
     private readonly object _gate = new();
     private int _sequence;
+    private readonly SemaphoreSlim _writes = new(1, 1);
 
     /// <summary>Owner ids handed out so far. -1 is "nobody", and nobody's proposals are undone.</summary>
     private int _owners = -1;
@@ -163,15 +175,21 @@ public sealed class StagingArtifactStore : IOwnedArtifactStore
         string relativePath, ArtifactKind kind, string title, Func<Stream, Task> write, CancellationToken ct)
         => CreateAsync(relativePath, kind, title, write, Unowned, ct);
 
-    public async Task<ArtifactRef> CreateAsync(
-        string relativePath, ArtifactKind kind, string title, Func<Stream, Task> write,
-        int owner, CancellationToken ct)
-    {
-        // Capture the proposed content without touching disk.
-        await using var buffer = new MemoryStream();
-        await write(buffer);
-        var newContent = Encoding.UTF8.GetString(buffer.ToArray());
+    public bool CanCheckVersion => true;
+    public Task<ArtifactRef> CreateCheckedAsync(string path, ArtifactKind kind, string title,
+        Func<Stream, Task> write, ArtifactVersion expected, CancellationToken ct)
+        => CreateCoreAsync(path, kind, title, write, Unowned, ct, expected);
+    public Task<ArtifactRef> CreateCheckedAsync(string path, ArtifactKind kind, string title,
+        Func<Stream, Task> write, ArtifactVersion expected, int owner, CancellationToken ct)
+        => CreateCoreAsync(path, kind, title, write, owner, ct, expected);
+    public Task<ArtifactRef> CreateAsync(string relativePath, ArtifactKind kind, string title,
+        Func<Stream, Task> write, int owner, CancellationToken ct)
+        => CreateCoreAsync(relativePath, kind, title, write, owner, ct);
 
+    private async Task<ArtifactRef> CreateCoreAsync(
+        string relativePath, ArtifactKind kind, string title, Func<Stream, Task> write,
+        int owner, CancellationToken ct, ArtifactVersion? expected = null)
+    {
         var full = ResolveInside(relativePath);
         var key = KeyOf(full);
 
@@ -181,46 +199,48 @@ public sealed class StagingArtifactStore : IOwnedArtifactStore
         // exist for the `run_command` that was written to run it, and the step fails on a file it
         // has just been told it created. Nor is there anything for a person to approve: a diff of
         // a throwaway is a question with no useful answer.
-        if (WorkspaceGuard.IsScratch(_root, full))
+        await _writes.WaitAsync(ct);
+        StagedContent? captured = null, original = null;
+        try
         {
-            SweepScratchOnce();
+            if (expected is not null && (NewestPending(key)?.NewBytes.Hash ?? FileHash.OfFile(full)) != expected.Hash)
+                throw new IOException("File changed since it was read; read the current version and retry the edit.");
+            if (WorkspaceGuard.IsScratch(_root, full))
+            {
+                SweepScratchOnce();
 
-            var directory = Path.GetDirectoryName(full);
-            if (!string.IsNullOrEmpty(directory))
-                Directory.CreateDirectory(directory);
+                var directory = Path.GetDirectoryName(full);
+                if (!string.IsNullOrEmpty(directory))
+                    Directory.CreateDirectory(directory);
 
-            await AtomicWrite.Replace(full, s => s.WriteAsync(
-                Encoding.UTF8.GetBytes(newContent)).AsTask());
+                await AtomicWrite.Replace(full, write);
 
-            return new ArtifactRef(Guid.NewGuid(), kind, title, relativePath);
+                return new ArtifactRef(Guid.NewGuid(), kind, title, relativePath);
+            }
+
+            var pending = NewestPending(key);
+            if (pending is null && File.Exists(full))
+                original = await StagedContent.CaptureAsync(async output =>
+                {
+                    await using var input = new FileStream(full, FileMode.Open, FileAccess.Read,
+                        FileShare.Read | FileShare.Delete, 8192, FileOptions.Asynchronous);
+                    await input.CopyToAsync(output, ct);
+                }, ct);
+            captured = await StagedContent.CaptureAsync(write, ct);
+            var oldContent = pending?.NewBytes ?? original;
+            var id = Guid.NewGuid();
+            lock (_gate)
+                _changes.Add(new StagedChange(id, relativePath, key, oldContent, captured,
+                    _sequence++, owner, oldContent?.Hash, pending?.Id));
+            captured = original = null; // ownership passed to the change
+            return new ArtifactRef(id, kind, title, relativePath);
         }
-
-        // The base for the diff and for the conflict check is what a reader would see NOW: an earlier
-        // pending proposal for the same path, else the file on disk. Diffing against the disk while a
-        // proposal is already outstanding shows a change the user never made.
-        // The base for the diff and for the conflict check is what a reader would see NOW: an earlier
-        // pending proposal for the same path, else the file on disk. Diffing against the disk while a
-        // proposal is already outstanding shows a change the user never made.
-        //
-        // The file is read as BYTES, once, and hashed as bytes — a file's content does not survive a
-        // decode to text and back, and Undo/Apply comparing a text hash is how two different binary
-        // files came out equal. Behind an earlier proposal there is no file to hash yet: what this
-        // change expects to find is that proposal's text, which staging writes as UTF-8, so the text
-        // hash is the right one there. See StagedChange.BaseHash.
-        var onDisk = File.Exists(full) ? await File.ReadAllBytesAsync(full, ct) : null;
-        var pending = NewestPending(key);
-
-        var oldContent = pending ?? (onDisk is null ? null : Encoding.UTF8.GetString(onDisk));
-        var baseHash = pending is not null
-            ? FileHash.Of(pending)
-            : onDisk is null ? null : FileHash.OfBytes(onDisk);
-
-        var id = Guid.NewGuid();
-        lock (_gate)
-            _changes.Add(new StagedChange(
-                id, relativePath, key, oldContent, newContent, _sequence++, owner, baseHash));
-
-        return new ArtifactRef(id, kind, title, relativePath);
+        finally
+        {
+            captured?.Dispose();
+            original?.Dispose();
+            _writes.Release();
+        }
     }
 
     public Task<Stream> OpenAsync(Guid artifactId, CancellationToken ct)
@@ -232,13 +252,15 @@ public sealed class StagingArtifactStore : IOwnedArtifactStore
         if (change is null)
             throw new FileNotFoundException("Unknown staged artifact.", artifactId.ToString());
 
-        Stream stream = new MemoryStream(Encoding.UTF8.GetBytes(change.NewContent));
+        Stream stream = change.NewBytes.Open();
         return Task.FromResult(stream);
     }
 
     public Task DeleteAsync(Guid artifactId, CancellationToken ct)
     {
-        Reject(artifactId);
+        ct.ThrowIfCancellationRequested();
+        var result = Reject(artifactId);
+        if (!result.Rejected) throw new IOException(result.Conflict);
         return Task.CompletedTask;
     }
 
@@ -249,10 +271,10 @@ public sealed class StagingArtifactStore : IOwnedArtifactStore
         try { key = KeyOf(ResolveInside(relativePath)); }
         catch (ArgumentException) { return Task.FromResult<string?>(null); }
 
-        return Task.FromResult(NewestPending(key));
+        return Task.FromResult(NewestPending(key)?.NewContent);
     }
 
-    private string? NewestPending(string key)
+    private StagedChange? NewestPending(string key)
     {
         lock (_gate)
         {
@@ -260,11 +282,17 @@ public sealed class StagingArtifactStore : IOwnedArtifactStore
             {
                 var change = _changes[i];
                 if (change.Pending && string.Equals(change.Key, key, WorkspaceGuard.Comparison))
-                    return change.NewContent;
+                    return change;
             }
         }
 
         return null;
+    }
+
+    public Task<Stream?> TryOpenPendingAsync(string relativePath, CancellationToken ct)
+    {
+        var change = NewestPending(KeyOf(ResolveInside(relativePath)));
+        return Task.FromResult<Stream?>(change is null ? null : change.NewBytes.Open());
     }
 
     /// <summary>
@@ -272,6 +300,13 @@ public sealed class StagingArtifactStore : IOwnedArtifactStore
     /// REPORTED, never resolved by overwriting: the whole point of staging is that the user decides.
     /// </summary>
     public ApplyResult Apply(Guid id)
+    {
+        if (!_writes.Wait(0)) return ApplyResult.Blocked("A proposal is being written; retry after it finishes.");
+        try { return ApplyCore(id); }
+        finally { _writes.Release(); }
+    }
+
+    private ApplyResult ApplyCore(Guid id)
     {
         StagedChange? change;
         lock (_gate)
@@ -319,7 +354,8 @@ public sealed class StagingArtifactStore : IOwnedArtifactStore
 
             // Write beside the target and move into place: an interrupted apply must not leave the
             // user with half a file.
-            AtomicWrite.Replace(full, change.NewContent);
+            using var input = change.NewBytes.Open();
+            AtomicWrite.ReplaceFrom(full, input);
         }
         catch (Exception ex)
         {
@@ -330,11 +366,41 @@ public sealed class StagingArtifactStore : IOwnedArtifactStore
         return ApplyResult.Ok;
     }
 
-    /// <summary>Discard a staged change.</summary>
-    public void Reject(Guid id)
+    /// <summary>Discard only a leaf proposal; descendants must be rejected first.</summary>
+    public RejectResult Reject(Guid id)
+    {
+        if (!_writes.Wait(0)) return new(false, "A proposal is being written; retry after it finishes.");
+        try
+        {
+            lock (_gate)
+            {
+                var change = _changes.Find(c => c.Id == id);
+                if (change is null || !change.Pending) return new(false, "This change is no longer pending.");
+                if (_changes.Any(c => !c.Rejected && DescendsFrom(c, change.Id)))
+                    return new(false, "Later proposals depend on this change; reject them first.");
+                change.MarkRejected();
+                return new(true);
+            }
+        }
+        finally { _writes.Release(); }
+    }
+
+    private bool DescendsFrom(StagedChange change, Guid ancestor)
+    {
+        var parent = change.ParentId;
+        while (parent is { } id)
+        {
+            if (id == ancestor) return true;
+            parent = _changes.Find(c => c.Id == id)?.ParentId;
+        }
+        return false;
+    }
+
+    public IReadOnlyCollection<string> PendingBy(int owner)
     {
         lock (_gate)
-            _changes.Find(c => c.Id == id)?.MarkRejected();
+            return _changes.Where(c => c.Pending && c.Scope == owner).Select(c => c.Key)
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
     /// <summary>
@@ -457,43 +523,43 @@ public sealed class StagingArtifactStore : IOwnedArtifactStore
                 .ToArray();
     }
 
-    /// <summary>
-    /// Drops the proposals made for these paths since the checkpoint — the staged equivalent of
-    /// putting the files back. Nothing was written to disk, so there is nothing to restore and
-    /// nothing to conflict with: a rejected step's proposals simply stop existing.
-    /// </summary>
-    public Task<RevertReport> RevertOwnedAsync(
+    /// <summary>Reject this owner's pending versions only when no foreign version depends on them.</summary>
+    public async Task<RevertReport> RevertOwnedAsync(
         int owner, IReadOnlyCollection<string> paths, CancellationToken ct)
     {
         var reverted = new List<string>();
-
-        // The caller's paths come out of a transcript, so they carry whatever spelling the model
-        // used. Canonicalise them the same way the proposals were, or "./doc.txt" and "doc.txt"
-        // describe the same file and match nothing.
-        var wanted = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var path in paths)
+        var kept = new List<string>();
+        var reasons = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        await _writes.WaitAsync(ct);
+        try
         {
-            try { wanted.Add(KeyOf(ResolveInside(path))); }
-            catch (ArgumentException) { /* a path no proposal could have used */ }
-        }
-
-        lock (_gate)
-        {
-            foreach (var change in _changes)
+            foreach (var path in paths.Distinct(StringComparer.OrdinalIgnoreCase))
             {
-                if (change.Scope != owner || !change.Pending)
-                    continue;
-
-                if (!wanted.Contains(change.Key))
-                    continue;
-
-                change.MarkRejected();
-                if (!reverted.Contains(change.Key, StringComparer.OrdinalIgnoreCase))
-                    reverted.Add(change.Key);
+                string key;
+                try { key = KeyOf(ResolveInside(path)); }
+                catch (ArgumentException)
+                {
+                    kept.Add(path); reasons[path] = "Invalid workspace path."; continue;
+                }
+                lock (_gate)
+                {
+                    var mine = _changes.Where(c => c.Key.Equals(key, WorkspaceGuard.Comparison)
+                        && c.Scope == owner && !c.Rejected).ToArray();
+                    string? conflict = mine.Any(c => c.Applied) ? "This step has changes already applied to disk."
+                        : _changes.Any(c => c.Scope != owner && !c.Rejected && mine.Any(m => DescendsFrom(c, m.Id)))
+                            ? "Another step's proposal depends on this version; nothing was reverted."
+                            : mine.Length == 0 ? "No pending changes owned by this step." : null;
+                    if (conflict is not null)
+                    {
+                        kept.Add(key); reasons[key] = conflict; continue;
+                    }
+                    foreach (var change in mine) change.MarkRejected();
+                    reverted.Add(key);
+                }
             }
         }
-
-        return Task.FromResult(new RevertReport(reverted, Array.Empty<string>()));
+        finally { _writes.Release(); }
+        return new RevertReport(reverted, kept, reasons);
     }
 
     /// <summary>The shared rule — see the same note on <see cref="DiskArtifactStore"/>.</summary>
@@ -513,4 +579,11 @@ public sealed class StagingArtifactStore : IOwnedArtifactStore
     private string KeyOf(string full)
         => Path.GetRelativePath(_root, full)
                .Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar);
+    /// <summary>Release retained proposals after their consumers (including review UI) are finished.</summary>
+    public void Dispose()
+    {
+        foreach (var content in Changes.SelectMany(c => new[] { c.OldBytes, c.NewBytes }).OfType<StagedContent>().Distinct())
+            content.Dispose();
+    }
+
 }

@@ -1,5 +1,7 @@
 namespace Enactive.Engine.Tests;
 
+using Enactive.Core.Chat;
+
 using Xunit;
 
 /// <summary>
@@ -14,12 +16,8 @@ using Xunit;
 /// the engine added nothing — so the model generated until it chose to stop. A hosted provider has
 /// a bill to make somebody care; a local one does not.</para>
 ///
-/// <para><b>Derived, not invented.</b> A constant would either truncate a long write that would
-/// have fitted — the largest real one measured is 5,478 tokens, a report appended with
-/// <c>edit_file</c> — or sit high enough to be no limit at all. What is LEFT of the declared window
-/// cannot truncate anything that would have succeeded, because anything longer was going to
-/// overflow the window regardless. It only turns two silent minutes into <c>finish=length</c>,
-/// which the loop already explains.</para>
+/// <para>The remaining window is an additional ceiling. A separate purpose-specific generation
+/// budget applies even when the provider declares no window.</para>
 /// </summary>
 public sealed class AnAnswerCannotBeLongerThanTheRoomLeftTests
 {
@@ -58,12 +56,10 @@ public sealed class AnAnswerCannotBeLongerThanTheRoomLeftTests
     }
 
     /// <summary>
-    /// THE BOUNDARY. A provider that states no window gets no ceiling from here. Its own
-    /// <c>max_tokens</c> setting caps the answer and says nothing about the transcript, which is
-    /// every hosted provider — and inventing a number for them would cut work that was fine.
+    /// Without a declared context window, the action budget still bounds generation.
     /// </summary>
     [Fact]
-    public async Task A_provider_with_no_stated_window_is_left_alone()
+    public async Task A_provider_with_no_stated_window_gets_an_action_budget()
     {
         using var fx = new EngineFixture();
 
@@ -73,6 +69,7 @@ public sealed class AnAnswerCannotBeLongerThanTheRoomLeftTests
 
         await fx.RunAsync(fx.Build(provider, EngineFixture.Role("developer")), "write it");
 
-        Assert.All(provider.Requests, r => Assert.Null(r.OutputTokenLimit));
+        Assert.All(provider.Requests.Where(r => r.Tools is { Count: > 0 }),
+            r => Assert.Equal(new GenerationBudgets().Action, r.OutputTokenLimit));
     }
 }

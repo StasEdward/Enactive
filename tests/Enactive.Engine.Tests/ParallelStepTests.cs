@@ -326,8 +326,15 @@ public sealed class ParallelStepTests
             events,
             e => e.Kind == EventKind.ToolResult && e.Summary.Contains("Access to the path is denied"));
 
-        Assert.Equal(RunOutcomeKind.Completed, events.Last().Outcome());
-        Assert.Equal(10, events.Count(e => e.Kind == EventKind.ArtifactProduced));
+        // Stale read-modify-write attempts are now explicit conflicts, not silent lost updates.
+        // This scripted worker does not repair errors; it may therefore finish Incomplete.
+        var conflicts = events.Count(e => e.Kind == EventKind.ToolResult
+            && e.Summary.Contains("changed since it was read"));
+        var committed = events.Count(e => e.Kind == EventKind.ArtifactProduced);
+        Assert.Equal(10, committed + conflicts);
+        Assert.True(committed > 0, events.Text());
+        Assert.True(events.Last().Outcome() is RunOutcomeKind.Completed or RunOutcomeKind.Incomplete, events.Text());
+        Assert.Matches("^(left|right) [1-5]$", fixture.Read("shared.txt"));
     }
 
     // ── the scheduler, under something wider than a diamond ─────────────────
@@ -516,8 +523,37 @@ public sealed class ParallelStepTests
                 Turn.Says("Left done."))
             .Step("Right", Writes("shared.txt", "right accepted"), Turn.Says("Right done."));
 
-        // Left is rejected and reverts; Right is accepted. The reviewer answers by step title, so
-        // this is deterministic however the two interleave.
+        // Exercise A -> B -> A deliberately. Concurrent stale edits can now be refused by CAS;
+        // this test requires all three writes to commit before checking ownership-aware revert.
+        var firstLeft = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var rightWritten = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondLeft = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        int leftTurns = 0, rightTurns = 0;
+        provider.BeforeStreamRequest = async (request, ct) =>
+        {
+            if (request.Messages.Any(m => m.Content?.Contains("Proceed with this step of the plan: Left") == true))
+            {
+                var turn = Interlocked.Increment(ref leftTurns);
+                if (turn == 2)
+                {
+                    firstLeft.TrySetResult();
+                    await rightWritten.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
+                }
+                if (turn == 3) secondLeft.TrySetResult();
+            }
+            else if (request.Messages.Any(m => m.Content?.Contains("Proceed with this step of the plan: Right") == true))
+            {
+                var turn = Interlocked.Increment(ref rightTurns);
+                if (turn == 1) await firstLeft.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
+                if (turn == 2)
+                {
+                    rightWritten.TrySetResult();
+                    await secondLeft.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
+                }
+            }
+        };
+
+        // Left is rejected and reverts; Right is accepted.
         var reviewer = new VerdictByStepProvider()
             .On("Left", Verdicts.Fail("the left branch did not do what it claimed"));
 

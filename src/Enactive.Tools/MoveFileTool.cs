@@ -27,7 +27,9 @@ public sealed class MoveFileTool : ITool
         Name: "move_file",
         Description: "Rename or move a file inside the workspace. Both paths are relative to the "
                    + "workspace root. Fails if the destination already exists.",
-        JsonSchema: Schema, WorkspaceEffect: WorkspaceEffect.Changed);
+        JsonSchema: Schema, WorkspaceEffect: WorkspaceEffect.Changed,
+        ChangedPathArguments: ["from", "to"],
+        RepairsFileFailures: true, ProgressIdentity: ProgressIdentity.Action, Kind: ToolKind.Relocate, FileCoverage: FileCoverageBehavior.Move);
 
     public PermissionLevel RequiredLevel => PermissionLevel.Execute;
 
@@ -56,14 +58,6 @@ public sealed class MoveFileTool : ITool
             if (string.Equals(source, destination, Enactive.Core.Context.WorkspaceGuard.Comparison))
                 return ToolResults.Unreadable("'from' and 'to' are the same file.");
 
-            if (!File.Exists(source))
-                return ToolResults.Fail($"File not found: {from}");
-
-            if (File.Exists(destination) || await ctx.Artifacts.TryReadPendingAsync(to, ct) is not null)
-                return ToolResults.Fail(
-                    $"'{to}' already exists. Moving onto it would destroy it — choose another name, "
-                    + "or delete that file deliberately first.");
-
             // Asked BEFORE anything is written. A move is a write and then a removal, and a store
             // that cannot express a removal — staging, whose proposals are a file's next content and
             // have no way to say "gone" — used to accept the first half and throw on the second: the
@@ -76,6 +70,14 @@ public sealed class MoveFileTool : ITool
                     + "review, and staging cannot express a deletion, so the move could only half "
                     + "happen. Write the new file and delete the old one yourself once the staged "
                     + "changes are applied, or re-run without staging.");
+
+            if (!File.Exists(source))
+                return ToolResults.Fail($"File not found: {from}");
+
+            if (File.Exists(destination) || await ctx.Artifacts.TryReadPendingAsync(to, ct) is not null)
+                return ToolResults.Fail(
+                    $"'{to}' already exists. Moving onto it would destroy it — choose another name, "
+                    + "or delete that file deliberately first.");
 
             // BYTES, not text. This read the file with ReadAllTextAsync and wrote UTF-8 back, which
             // is not a move: a PNG or a zip came out with every invalid UTF-8 byte replaced by U+FFFD,

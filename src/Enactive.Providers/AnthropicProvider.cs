@@ -12,9 +12,9 @@ using Enactive.Core.Tools;
 
 /// <summary>
 /// Anthropic Messages API adapter. Used as the reasoning/review agent in multi-agent mode.
-/// Non-streaming CompleteAsync (planning + review need only that); StreamChatAsync wraps it as one chunk.
+/// Completion and SSE streaming share request construction and capability negotiation.
 /// </summary>
-public sealed class AnthropicProvider : IChatProvider
+public sealed partial class AnthropicProvider : IChatProvider
 {
     private const string AnthropicVersion = "2023-06-01";
     private const int DefaultMaxTokens = 32000;
@@ -22,7 +22,7 @@ public sealed class AnthropicProvider : IChatProvider
 
     // Discovered per-model output caps: on a 400 saying our max_tokens exceeds the model's limit, we parse
     // the real maximum from the error and remember it, so later calls to that model request the right size.
-    private static readonly ConcurrentDictionary<string, int> ModelCaps = new();
+    private readonly ConcurrentDictionary<string, int> ModelCaps = new();
 
     private readonly HttpClient _http;
     private readonly ProviderDescriptor _descriptor;
@@ -54,31 +54,9 @@ public sealed class AnthropicProvider : IChatProvider
     public int? AnswerReserve(ChatRequest request) => _descriptor.AnswerReserveTokens;
 
     public int? HandoverAtPercent(ChatRequest request) => _descriptor.HandoverAtPercent;
+    public int ReasoningAllowance(ChatRequest request) => Math.Clamp(_descriptor.ReasoningTokenAllowance ?? (false ? 8192 : 0), 0, 65536);
 
-    public async IAsyncEnumerable<ChatStreamEvent> StreamChatAsync(
-        ChatRequest request, [EnumeratorCancellation] CancellationToken ct)
-    {
-        var completion = await CompleteAsync(request, ct);
-        if (completion.Message.Content is { Length: > 0 } text)
-            yield return new TextDelta(text);
-        // Each call needs its OWN index. Every one used to be emitted as index 0, and the orchestrator
-        // merges deltas by index: two calls in one completion collapsed into a single call carrying the
-        // LAST name and id with the FIRST call's arguments, and the other action vanished. A read+write
-        // pair on the same path was the dangerous case — the write inherited the read's arguments.
-        if (completion.Message.ToolCalls is { Count: > 0 } calls)
-            for (var i = 0; i < calls.Count; i++)
-                yield return new ToolCallDelta(i, calls[i].Id, calls[i].Name, calls[i].ArgumentsJson);
-
-        // The counts were already in the response and were being thrown away here, which is why a
-        // run on Claude reported no tokens at all while a local one did.
-        if (completion.PromptTokens is not null || completion.CompletionTokens is not null)
-            yield return new UsageDelta(
-                completion.PromptTokens, completion.CompletionTokens, completion.CachedPromptTokens);
-
-        yield return new FinishDelta(completion.FinishReason);
-    }
-
-    public async Task<ChatCompletion> CompleteAsync(ChatRequest request, CancellationToken ct)
+    private HttpRequestMessage BuildHttpRequest(ChatRequest request, bool stream, bool includeTemperature, int maxTokens, bool includeSchema)
     {
         var systemParts = new List<string>();
         var wire = new List<Dictionary<string, object?>>();
@@ -120,6 +98,7 @@ public sealed class AnthropicProvider : IChatProvider
                     break;
 
                 default:
+                    if (string.IsNullOrWhiteSpace(m.Content)) break;
                     wire.Add(Turn(
                         m.Role == ChatRole.Assistant ? "assistant" : "user",
                         new Dictionary<string, object?> { ["type"] = "text", ["text"] = m.Content ?? "" }));
@@ -143,17 +122,12 @@ public sealed class AnthropicProvider : IChatProvider
         // ever gets it wrong.
         MarkForCaching(wire.Count > 0 ? LastBlockOf(wire[^1]) : null);
 
-        // Build + send in a local function so we can retry once without `temperature`: newer Anthropic models
-        // (e.g. Opus 5.x) reject it with 400 "temperature is deprecated for this model", while older ones still
-        // accept it — so we keep it by default and only drop it when the API tells us this model refuses it.
-        async Task<(bool Ok, int Status, string Body)> SendAsync(
-            bool includeTemperature, int maxTokens, bool includeSchema)
-        {
             var payload = new Dictionary<string, object?>
             {
                 ["model"] = request.Model,
                 ["max_tokens"] = maxTokens,
-                ["messages"] = wire.ToArray()
+                ["messages"] = wire.ToArray(),
+                ["stream"] = stream
             };
             // An ARRAY of blocks, not a string. A string cannot carry cache_control, and the system
             // prompt is the second-largest fixed thing in every request.
@@ -179,7 +153,7 @@ public sealed class AnthropicProvider : IChatProvider
                 {
                     ["name"] = t.Name,
                     ["description"] = t.Description,
-                    ["input_schema"] = ToElement(t.JsonSchema)
+                    ["input_schema"] = WireJson.Schema(t)
                 }).ToArray();
 
                 MarkForCaching(defined[^1]);
@@ -196,10 +170,10 @@ public sealed class AnthropicProvider : IChatProvider
                     format = new { type = "json_schema", schema = ToElement(schema) }
                 };
 
-            var url = _descriptor.BaseUrl.TrimEnd('/') + "/v1/messages";
+            var url = ProviderEndpoint.Chat(_descriptor, ProviderKind.Anthropic);
             var json = JsonSerializer.Serialize(payload, JsonOpts);
             WireTap.Request(_log, _descriptor.Id, request.Model, json);
-            using var httpRequest = new HttpRequestMessage(HttpMethod.Post, url)
+            var httpRequest = new HttpRequestMessage(HttpMethod.Post, url)
             {
                 Content = new StringContent(json, Encoding.UTF8, "application/json")
             };
@@ -210,71 +184,63 @@ public sealed class AnthropicProvider : IChatProvider
             // two had gone missing.
             ProviderHeaders.Apply(httpRequest, _descriptor);
 
-            using var response = await _http.SendAsync(httpRequest, HttpCompletionOption.ResponseContentRead, ct);
-            var responseBody = await response.Content.ReadAsStringAsync(ct);
-            return (response.IsSuccessStatusCode, (int)response.StatusCode, responseBody);
-        }
-
-        // Same preference/ceiling contract as the other adapters. Anthropic requires max_tokens,
-        // so supply its fallback when no preference is set; learned model caps remain hard limits.
-        var includeTemperature = true;
-        var maxTokens = OutputTokenBudget.Resolve(request, _descriptor, DefaultMaxTokens,
-            ModelCaps.TryGetValue(request.Model, out var known) ? known : null)!.Value;
-
-        // A model already known to refuse the schema is not asked again - one 400 per model, not
-        // one per request.
-        var includeSchema = request.ResponseSchema is { Length: > 0 }
-                            && !NoStructuredOutput.ContainsKey(request.Model);
-
-        var (ok, status, body) = await SendAsync(includeTemperature, maxTokens, includeSchema);
-
-        // Recover from the 400s Anthropic returns for otherwise-valid requests: `temperature` is
-        // deprecated on newer models, max_tokens above the model's cap (the error names the cap,
-        // which we parse and remember), and a schema this model or this account will not take.
-        // Bounded so we can fix at most all three.
-        for (var attempt = 0; attempt < 3 && !ok && status == 400; attempt++)
-        {
-            if (includeTemperature && request.Temperature is not null && IsTemperatureDeprecated(body))
-            {
-                includeTemperature = false;
-            }
-            else if (TryParseMaxTokensCap(body, maxTokens, out var cap))
-            {
-                ModelCaps[request.Model] = cap;
-                maxTokens = cap;
-            }
-            else if (includeSchema)
-            {
-                // Whatever the reason, the answer is the same: this was going to work without the
-                // schema, and the schema was only ever a request. Remembered so the next call does
-                // not pay for the same discovery.
-                NoStructuredOutput.TryAdd(request.Model, true);
-                includeSchema = false;
-            }
-            else
-            {
-                break;
-            }
-            (ok, status, body) = await SendAsync(includeTemperature, maxTokens, includeSchema);
-        }
-
-        if (!ok)
-        {
-            WireTap.Error(_log, _descriptor.Id, status, body);
-            throw new HttpRequestException($"Anthropic returned {status}: {Truncate(body, 500)}");
-        }
-
-        WireTap.Response(_log, _descriptor.Id, status, body);
-        return ParseCompletion(body);
+            return httpRequest;
     }
 
-    /// <summary>
-    /// Models that answered a schema with a 400. Static and per-process, like <c>ModelCaps</c> above
-    /// and for the same reason: it is a fact about the model, not about one request.
-    /// </summary>
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> NoStructuredOutput =
-        new(StringComparer.OrdinalIgnoreCase);
+    public Task<ChatCompletion> CompleteAsync(ChatRequest request, CancellationToken ct)
+        => ProviderDeadline.RunAsync(_descriptor.CompletionTimeoutSeconds, "completion", ct,
+            token => CompleteCoreAsync(request, token));
 
+    private async Task<ChatCompletion> CompleteCoreAsync(ChatRequest request, CancellationToken ct)
+    {
+        using var response = await SendConfiguredAsync(request, false, ct);
+        var body = await response.Content.ReadAsStringAsync(ct);
+        WireTap.Response(_log, _descriptor.Id, (int)response.StatusCode, body);
+        return ProviderResponse.Parse(() => ParseCompletion(body), _descriptor, request);
+    }
+
+    private readonly ConcurrentDictionary<string, bool> NoStructuredOutput = new(StringComparer.Ordinal);
+
+    private async Task<HttpResponseMessage> SendConfiguredAsync(ChatRequest request, bool stream, CancellationToken ct)
+    {
+        var includeTemperature = true;
+        int? learnedCap = null;
+        var wantedSchema = request.ResponseSchema is { Length: > 0 };
+        var includeSchema = wantedSchema && !NoStructuredOutput.ContainsKey(request.Model);
+        var maxTokens = OutputTokenBudget.Resolve(request, _descriptor, DefaultMaxTokens,
+            ModelCaps.TryGetValue(request.Model, out var known) ? known : null)!.Value;
+        for (var attempt = 0; ; attempt++)
+        {
+            using var message = BuildHttpRequest(request, stream, includeTemperature, maxTokens, includeSchema);
+            var response = stream
+                ? await ProviderDeadline.HeadersAsync(_http, message, _descriptor.StreamIdleTimeoutSeconds, ct)
+                : await _http.SendAsync(message, HttpCompletionOption.ResponseContentRead, ct);
+            if (response.IsSuccessStatusCode)
+            {
+                if (wantedSchema && !includeSchema) NoStructuredOutput[request.Model] = true;
+                if (learnedCap is { } confirmedCap) ModelCaps[request.Model] = confirmedCap;
+                return response;
+            }
+            using (response)
+            {
+                var body = await ProviderHttpError.ReadBodyAsync(response, _descriptor.StreamIdleTimeoutSeconds, ct);
+                if (attempt < 3 && response.StatusCode == System.Net.HttpStatusCode.BadRequest)
+                {
+                    if (includeTemperature && request.Temperature is not null && IsTemperatureDeprecated(body))
+                    { includeTemperature = false; continue; }
+                    if (TryParseMaxTokensCap(body, maxTokens, out var cap))
+                    { maxTokens = cap; learnedCap = cap; continue; }
+                    if (includeSchema && (OpenAiCompatibleProvider.UnsupportedField(body, "output_config", "json_schema")
+                        || OpenAiCompatibleProvider.UnsupportedField(body, "output_config.format", "json_schema")
+                        || OpenAiCompatibleProvider.UnsupportedField(body, "schema", "structured output")))
+                    { includeSchema = false; continue; }
+                }
+                WireTap.Error(_log, _descriptor.Id, (int)response.StatusCode, body);
+                throw ProviderHttpError.Create($"Anthropic returned {(int)response.StatusCode}: {Truncate(body, 500)}",
+                    (int)response.StatusCode, ProviderHttpError.RetryAfter(response));
+            }
+        }
+    }
     private static bool IsTemperatureDeprecated(string body)
         => body.Contains("temperature", StringComparison.OrdinalIgnoreCase)
            && body.Contains("deprecated", StringComparison.OrdinalIgnoreCase);
@@ -282,15 +248,18 @@ public sealed class AnthropicProvider : IChatProvider
     /// <summary>
     /// Detects the "max_tokens above the model's cap" 400 and extracts the allowed maximum. The message
     /// reads like "... 32000 &gt; 64000, which is the maximum ..." — the number after '&gt;' is the cap.
-    /// Falls back to a universally safe 8192 when the number can't be parsed.
+    /// Context-window errors and unrecognised messages do not establish an output cap.
     /// </summary>
     private static bool TryParseMaxTokensCap(string body, int requested, out int cap)
     {
         cap = 0;
-        if (!body.Contains("max_tokens", StringComparison.OrdinalIgnoreCase))
+        if (body.Contains("context", StringComparison.OrdinalIgnoreCase)
+            || body.Contains("input tokens", StringComparison.OrdinalIgnoreCase)
+            || body.Contains("prompt", StringComparison.OrdinalIgnoreCase))
             return false;
-        var m = Regex.Match(body, @">\s*(\d+)");
-        cap = m.Success && int.TryParse(m.Groups[1].Value, out var n) ? n : 8192;
+        var m = Regex.Match(body, @"\bmax_tokens\b\s*(?:must not be|must be less than or equal to|must be <=|is too large:?|:)?\s*(?:\d+\s*)?>\s*(\d+)", RegexOptions.IgnoreCase);
+        if (!m.Success) return false;
+        cap = int.TryParse(m.Groups[1].Value, out var n) ? n : 0;
         return cap > 0 && cap < requested;
     }
 
@@ -302,7 +271,9 @@ public sealed class AnthropicProvider : IChatProvider
         var text = new StringBuilder();
         List<ToolCall>? toolCalls = null;
 
-        if (root.TryGetProperty("content", out var content) && content.ValueKind == JsonValueKind.Array)
+        if (!root.TryGetProperty("content", out var content) || content.ValueKind != JsonValueKind.Array)
+            throw new InvalidOperationException("Provider response contained no content array.");
+        if (content.ValueKind == JsonValueKind.Array)
         {
             foreach (var block in content.EnumerateArray())
             {
@@ -353,7 +324,7 @@ public sealed class AnthropicProvider : IChatProvider
         var contentText = text.Length > 0 ? text.ToString() : null;
         return new ChatCompletion(
             new ChatMessage(ChatRole.Assistant, contentText, toolCalls),
-            finish, promptTokens, outputTokens, CachedPromptTokens: cached);
+            finish, promptTokens, outputTokens, CachedPromptTokens: cached) { CacheCreationPromptTokens = created };
     }
 
     /// <summary>One turn on the wire: a role and its content blocks.</summary>
@@ -386,8 +357,8 @@ public sealed class AnthropicProvider : IChatProvider
 
     private static JsonElement ToElement(string json)
     {
-        try { return JsonDocument.Parse(string.IsNullOrWhiteSpace(json) ? "{}" : json).RootElement.Clone(); }
-        catch { return JsonDocument.Parse("{}").RootElement.Clone(); }
+        try { return WireJson.Parse(string.IsNullOrWhiteSpace(json) ? "{}" : json); }
+        catch (JsonException) { return WireJson.Parse("{}"); }
     }
 
     private static string Truncate(string value, int max) => value.Length <= max ? value : value[..max] + "…";

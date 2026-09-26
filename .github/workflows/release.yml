@@ -12,21 +12,29 @@ on:
         type: string
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
+  gateway:
+    uses: ./.github/workflows/gateway-tests.yml
+    with:
+      ref: ${{ github.event.inputs.tag || github.ref_name }}
+
   release:
+    permissions:
+      contents: write
+    needs: gateway
     runs-on: windows-latest
 
     steps:
       - name: Resolve release tag
         id: release
         shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
-          $tag = "${{ github.event.release.tag_name }}"
-          if ([string]::IsNullOrWhiteSpace($tag)) { $tag = "${{ github.event.inputs.tag }}" }
-          if ([string]::IsNullOrWhiteSpace($tag)) { $tag = "${{ github.ref_name }}" }
-          if ($tag -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+([-.].*)?$') {
+          $tag = $env:RELEASE_TAG
+          if ($tag -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?(?:\+[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?\z') {
             throw "Tag '$tag' must look like v1.2.3"
           }
           "tag=$tag" >> $env:GITHUB_OUTPUT
@@ -61,6 +69,19 @@ jobs:
             -p:IncludeNativeLibrariesForSelfExtract=true `
             -p:DebugType=None `
             --output artifacts/enactive-win-x64
+
+          if ($LASTEXITCODE -ne 0) { throw "UI publish failed" }
+
+          dotnet publish src/Enactive.App.Console/Enactive.App.Console.csproj `
+            --configuration Release --runtime win-x64 --self-contained true --no-restore `
+            -p:Version=$env:VERSION -p:PublishSingleFile=true `
+            -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None `
+            --output artifacts/enactive-win-x64
+          if ($LASTEXITCODE -ne 0) { throw "CLI publish failed" }
+          if (!(Test-Path artifacts/enactive-win-x64/enactive-ui.exe) -or
+              !(Test-Path artifacts/enactive-win-x64/enactive.exe)) { throw "Package is missing an executable" }
+          & artifacts/enactive-win-x64/enactive.exe --help
+          if ($LASTEXITCODE -ne 0) { throw "Published CLI smoke test failed" }
 
           Compress-Archive `
             -Path artifacts/enactive-win-x64/* `

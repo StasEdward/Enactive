@@ -134,7 +134,7 @@ public sealed class ReviewScopeTests
     [Fact]
     public void The_shortened_result_clause_is_still_there()
     {
-        Assert.Contains("EVERY call", System, StringComparison.Ordinal);
+        Assert.Contains("omitted calls", System, StringComparison.Ordinal);
         Assert.Contains("shortened result is still a call that HAPPENED", System, StringComparison.Ordinal);
         Assert.Contains("Judge by the calls listed", System, StringComparison.Ordinal);
     }

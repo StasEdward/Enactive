@@ -19,12 +19,16 @@ internal sealed class LogRow
         // Padded so the category and message columns stay aligned whether or not a line has a step.
         var run = LogWindowViewModel.RunToken(entry).PadRight(9);
         var cat = string.IsNullOrEmpty(entry.Category) ? "" : $" [{entry.Category}]";
-        var msg = entry.Message.Replace("\r", " ").Replace("\n", " ");
+        var msg = entry.Message.Length > 200 ? entry.Message[..200] + "…" : entry.Message;
+        msg = msg.Replace("\r", " ").Replace("\n", " ");
         if (msg.Length > 200)
             msg = msg[..200] + "…";
         Line = $"{entry.At.ToLocalTime():HH:mm:ss.fff}  {Short(entry.Level)}  {entry.Source,-12} {run}{cat}  {msg}";
-        Brush = new SolidColorBrush(ColorFor(entry.Level));
+        Brush = BrushesByLevel[(int)entry.Level];
     }
+
+    private static readonly IBrush[] BrushesByLevel = Enum.GetValues<LogLevel>()
+        .Select(level => (IBrush)new Avalonia.Media.Immutable.ImmutableSolidColorBrush(ColorFor(level))).ToArray();
 
     public LogEntry Entry { get; }
     public string Line { get; }
@@ -88,9 +92,13 @@ internal sealed class LogWindowViewModel : ObservableObject
     private const int MaxRetained = 20000;
 
     private readonly LogHub _hub;
-    private readonly List<LogEntry> _all = new();
+    private readonly List<LogRow> _all = new();
     private readonly ConcurrentQueue<LogEntry> _pending = new();
     private readonly DispatcherTimer _drain;
+    private CancellationTokenSource? _filterCancellation;
+    private bool _detached;
+    private int _revision;
+    private bool _filtering;
 
     private LogLevel _displayMin = LogLevel.Trace;
     private string _selectedLevel = LogLevel.Trace.ToString();
@@ -109,12 +117,12 @@ internal sealed class LogWindowViewModel : ObservableObject
         foreach (var source in Enum.GetValues<LogSource>())
             Sources.Add(new SourceToggle(source, Rebuild));
 
-        ClearCommand = new RelayCommand(() => { _all.Clear(); _hub.Clear(); Rebuild(); });
+        ClearCommand = new RelayCommand(() => { _all.Clear(); _pending.Clear(); _revision++; _hub.Clear(); Rebuild(); });
         ExportCommand = new RelayCommand(Export);
         AnalyzeCommand = new RelayCommand(() => _ = AnalyzeAsync());
 
-        foreach (var entry in _hub.Snapshot())
-            _all.Add(entry);
+        foreach (var entry in _hub.Snapshot().TakeLast(MaxRetained))
+            _all.Add(new LogRow(entry));
         Rebuild();
 
         // The hub raises entries on its own pump thread; queue there, and move them onto the UI
@@ -128,7 +136,7 @@ internal sealed class LogWindowViewModel : ObservableObject
     /// <summary>Raised when rows were appended, so the view can scroll to the end if it wants to.</summary>
     public event Action? RowsAppended;
 
-    public ObservableCollection<LogRow> Rows { get; } = new();
+    public BatchObservableCollection<LogRow> Rows { get; } = new();
     public ObservableCollection<SourceToggle> Sources { get; } = new();
 
     public IReadOnlyList<string> Levels { get; } = Enum.GetNames<LogLevel>();
@@ -175,7 +183,7 @@ internal sealed class LogWindowViewModel : ObservableObject
     }
 
     public bool AutoScroll { get => _autoScroll; set => Set(ref _autoScroll, value); }
-    public bool Pause { get => _pause; set => Set(ref _pause, value); }
+    public bool Pause { get => _pause; set { if (Set(ref _pause, value) && !value) Rebuild(); } }
     public string Status { get => _status; set => Set(ref _status, value); }
     public string DetailText { get => _detailText; set => Set(ref _detailText, value); }
 
@@ -217,6 +225,8 @@ internal sealed class LogWindowViewModel : ObservableObject
     /// <summary>Stops following the hub. The window calls this when it closes.</summary>
     public void Detach()
     {
+        _detached = true;
+        _filterCancellation?.Cancel();
         _hub.Entry -= OnEntry;
         _drain.Stop();
     }
@@ -227,56 +237,81 @@ internal sealed class LogWindowViewModel : ObservableObject
     /// parallel run, so the filter matches against this same string.
     /// </summary>
     public static string RunToken(LogEntry entry, int idChars = 6)
-        => (entry.RunId is { } r ? r.ToString("N")[..idChars] : new string('-', idChars))
-           + (entry.Step is { } step ? "#" + step : "");
+        => LogFilter.RunToken(entry, idChars);
 
     private void OnEntry(LogEntry entry) => _pending.Enqueue(entry);
 
     private void DrainPending()
     {
-        if (_pending.IsEmpty)
-            return;
-
-        var appended = false;
-        while (_pending.TryDequeue(out var entry))
+        if (_pending.IsEmpty) return;
+        var added = new List<LogRow>();
+        // Bound each dispatcher tick; a busy producer must not monopolise the UI.
+        while (added.Count < 1000 && _pending.TryDequeue(out var entry))
+            added.Add(new LogRow(entry));
+        _all.AddRange(added);
+        var trimmed = _all.Count > MaxRetained;
+        if (trimmed) _all.RemoveRange(0, _all.Count - MaxRetained);
+        _revision++;
+        if (!_filtering && !Pause)
         {
-            _all.Add(entry);
-            if (_all.Count > MaxRetained)
-                _all.RemoveRange(0, _all.Count - MaxRetained);
-
-            if (!Pause && Passes(entry))
+            var sources = Sources.Where(s => s.IsEnabled).Select(s => s.Source).ToHashSet();
+            Rows.AppendTail(added.Where(r => LogFilter.Matches(r.Entry, _displayMin, sources, SearchText)), MaxRetained);
+            if (trimmed)
             {
-                Rows.Add(new LogRow(entry));
-                appended = true;
+                var retained = _all.ToHashSet();
+                Rows.ReplaceWith(Rows.Where(retained.Contains));
             }
-        }
-
-        UpdateStatus();
-        if (appended)
             RowsAppended?.Invoke();
-    }
-
-    private void Rebuild()
-    {
-        Rows.Clear();
-        foreach (var entry in _all)
-            if (Passes(entry))
-                Rows.Add(new LogRow(entry));
+        }
         UpdateStatus();
-        RowsAppended?.Invoke();
     }
 
-    private bool Passes(LogEntry entry)
-    {
-        if (entry.Level < _displayMin)
-            return false;
-        if (Sources.FirstOrDefault(s => s.Source == entry.Source) is { IsEnabled: false })
-            return false;
-        if (string.IsNullOrWhiteSpace(SearchText))
-            return true;
+    private void Rebuild() => _ = RebuildAsync();
 
-        var hay = $"{entry.Message} {entry.Category} {entry.Detail} {RunToken(entry)}";
-        return hay.Contains(SearchText, StringComparison.OrdinalIgnoreCase);
+    private async Task RebuildAsync(bool debounce = true)
+    {
+        _filterCancellation?.Cancel();
+        var cancellation = _filterCancellation = new CancellationTokenSource();
+        _filtering = true;
+        try
+        {
+            if (debounce) await Task.Delay(200, cancellation.Token);
+            // Publish a completed snapshot even during continuous logging; never starve the view.
+            var revision = _revision;
+            var snapshot = _all.ToArray();
+            var sources = Sources.Where(s => s.IsEnabled).Select(s => s.Source).ToHashSet();
+            var minimum = _displayMin;
+            var search = SearchText;
+            var rows = await Task.Run(() =>
+            {
+                var result = new List<LogRow>();
+                foreach (var row in snapshot)
+                {
+                    cancellation.Token.ThrowIfCancellationRequested();
+                    if (LogFilter.Matches(row.Entry, minimum, sources, search)) result.Add(row);
+                }
+                return result;
+            }, cancellation.Token);
+            cancellation.Token.ThrowIfCancellationRequested();
+            if (_detached) return;
+            var retained = _all.ToHashSet();
+            Rows.ReplaceWith(rows.Where(retained.Contains));
+            if (SelectedRow is { } selected && !Rows.Contains(selected)) SelectedRow = null;
+            UpdateStatus();
+            RowsAppended?.Invoke();
+            if (revision != _revision) _ = RebuildAsync(debounce: false);
+            return;
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
+        finally
+        {
+            if (ReferenceEquals(_filterCancellation, cancellation))
+            {
+                _filterCancellation = null;
+                _filtering = false;
+            }
+            cancellation.Dispose();
+        }
     }
 
     private void UpdateStatus()

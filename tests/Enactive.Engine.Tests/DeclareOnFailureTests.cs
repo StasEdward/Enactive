@@ -250,5 +250,5 @@ public sealed class DeclareOnFailureTests
         Assert.True(events.Has(EventKind.TaskFailed), events.Text());
     }
 
-    private static string KeyOf(ToolCall call) => Enactive.Agents.Orchestrator.CallIdentity.Of(call);
+    private static string KeyOf(ToolCall call) => Enactive.Agents.CallIdentity.Of(call);
 }

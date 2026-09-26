@@ -51,6 +51,9 @@ public sealed record DecisionRequest(
     /// </summary>
     public Guid Id { get; init; } = Guid.NewGuid();
 
+    /// <summary>Requires a fresh answer; remote requests must not inherit desktop standing grants.</summary>
+    public bool RequiresExplicitAnswer { get; init; }
+
     /// <summary>
     /// Everything the decision authorises, in full. <see cref="Detail"/> is a one-line summary and
     /// may be elided; this never is.

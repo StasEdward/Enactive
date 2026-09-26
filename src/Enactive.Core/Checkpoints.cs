@@ -24,7 +24,10 @@ public sealed record CheckpointStep(
     IReadOnlyList<Guid> DependsOn,
     string Complexity,
     string Status,
-    string? Outcome = null);
+    string? Outcome = null)
+{
+    public IReadOnlyList<string>? ObligationIds { get; init; }
+}
 
 /// <summary>
 /// Enough of an interrupted run to carry on from the last step boundary.

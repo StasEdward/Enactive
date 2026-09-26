@@ -411,6 +411,7 @@ internal static class ProcessExec
     public static async Task<RunOutcome> RunContainedAsync(
         Process process, int timeoutSeconds, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         // Made BEFORE the process starts, so there is no window in which a child could be started
         // outside it. Null on a platform without job objects; the process then runs as it always
         // did rather than not at all.
@@ -466,6 +467,7 @@ internal static class ProcessExec
             // is what happens when there is no job, and costs nothing when there is.
             job?.Terminate();
             try { if (!process.HasExited) process.Kill(entireProcessTree: true); } catch { /* ignore */ }
+            StopOutputReaders(process);
             return new RunOutcome(Completed: false, OutputCutShort: false);
         }
 
@@ -479,6 +481,7 @@ internal static class ProcessExec
         // grace timer winning the race does not mean output was lost - both streams may have
         // finished in the same instant - and the streams are the thing the answer is about.
         var complete = stdoutDone.Task.IsCompleted && stderrDone.Task.IsCompleted;
+        if (!complete) StopOutputReaders(process);
         return new RunOutcome(Completed: true, OutputCutShort: !complete);
     }
 
@@ -492,6 +495,8 @@ internal static class ProcessExec
             WorkingDirectory = workingDir,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
+            StandardOutputEncoding = Utf8NoBom,
+            StandardErrorEncoding = Utf8NoBom,
             UseShellExecute = false,
             CreateNoWindow = true,
 
@@ -544,6 +549,14 @@ internal static class ProcessExec
             outputCutShort: outcome.OutputCutShort);
     }
 
+    private static void StopOutputReaders(Process process)
+    {
+        // A launched child may retain the pipes indefinitely. Stop callbacks after the grace
+        // period; captures also synchronize snapshots with any callback already in flight.
+        try { process.CancelOutputRead(); } catch (InvalidOperationException) { }
+        try { process.CancelErrorRead(); } catch (InvalidOperationException) { }
+    }
+
     /// <summary>
     /// One process stream, captured up to a ceiling. Past it the lines are counted and dropped
     /// rather than kept: the caller only ever shows the first few thousand characters anyway, and a
@@ -566,6 +579,7 @@ internal static class ProcessExec
         private const int HeadChars = MaxCapturedChars / 2;
         private const int TailChars = MaxCapturedChars - HeadChars;
 
+        private readonly object _gate = new();
         private readonly StringBuilder _head = new();
         private readonly Queue<string> _tail = new();
         private int _tailChars;
@@ -574,39 +588,45 @@ internal static class ProcessExec
 
         public void Add(string? line)
         {
-            if (line is null)
-                return;
-
-            if (!_headFull && _head.Length + line.Length + 1 <= HeadChars)
+            lock (_gate)
             {
-                _head.AppendLine(line);
-                return;
-            }
+                if (line is null)
+                    return;
 
-            _headFull = true;
+                if (!_headFull && _head.Length + line.Length + 1 <= HeadChars)
+                {
+                    _head.AppendLine(line);
+                    return;
+                }
 
-            // One line longer than the whole tail keeps its END, which is where a line says how it came out.
-            if (line.Length + 1 > TailChars)
-                line = "…" + line[^(TailChars - 2)..];
+                _headFull = true;
 
-            _tail.Enqueue(line);
-            _tailChars += line.Length + 1;
-            while (_tailChars > TailChars && _tail.Count > 1)
-            {
-                _tailChars -= _tail.Dequeue().Length + 1;
-                _dropped++;
+                // One line longer than the whole tail keeps its END, which is where a line says how it came out.
+                if (line.Length + 1 > TailChars)
+                    line = "…" + line[^(TailChars - 2)..];
+
+                _tail.Enqueue(line);
+                _tailChars += line.Length + 1;
+                while (_tailChars > TailChars && _tail.Count > 1)
+                {
+                    _tailChars -= _tail.Dequeue().Length + 1;
+                    _dropped++;
+                }
             }
         }
 
         public override string ToString()
         {
-            var text = new StringBuilder(_head.ToString());
-            if (_dropped > 0)
-                text.Append($"… ({_dropped} line(s) in the middle produced and dropped — output passed "
-                            + $"{MaxCapturedChars:N0} characters; the first and the last lines are kept)\n");
-            foreach (var line in _tail)
-                text.AppendLine(line);
-            return text.ToString();
+            lock (_gate)
+            {
+                var text = new StringBuilder(_head.ToString());
+                if (_dropped > 0)
+                    text.Append($"… ({_dropped} line(s) in the middle produced and dropped — output passed "
+                                + $"{MaxCapturedChars:N0} characters; the first and the last lines are kept)\n");
+                foreach (var line in _tail)
+                    text.AppendLine(line);
+                return text.ToString();
+            }
         }
     }
 }

@@ -108,11 +108,9 @@ public sealed class ScratchAreaTests
     /// the current directory, and whether the current directory is searched depends on an
     /// environment variable the host may have set.
     /// </summary>
-    [Fact]
+    [WindowsFact]
     public async Task A_script_written_to_scratch_can_be_run()
     {
-        if (!OperatingSystem.IsWindows())
-            return;
 
         using var fx = new EngineFixture();
         await fx.Invoke(new WriteFileTool(),

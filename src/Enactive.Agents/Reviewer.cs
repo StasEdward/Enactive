@@ -15,6 +15,7 @@ public sealed record ProofOutcome(ProofClaim Claim, int PromptTokens = 0, int Co
 {
     /// <summary>The cached share of <see cref="PromptTokens"/>, or null where nobody counted.</summary>
     public int? CachedPromptTokens { get; init; }
+    public int? CacheCreationPromptTokens { get; init; }
 }
 
 /// <summary>
@@ -28,12 +29,17 @@ public sealed record ProofOutcome(ProofClaim Claim, int PromptTokens = 0, int Co
 public sealed record ReviewResult(
     bool Pass, string Notes, int PromptTokens = 0, int CompletionTokens = 0)
 {
+    public ProofVerdict? Soundness { get; init; }
+    public IReadOnlyList<ObligationClaim>? Obligations { get; init; }
+    public string? BudgetExhausted { get; init; }
+    public string? IncompleteReason { get; init; }
     /// <summary>
     /// The cached share of <see cref="PromptTokens"/>, or null where nobody counted. This is the
     /// phase most likely to have one on a real machine: review is bound to a cloud model, and a
     /// re-ask re-sends the same prefix it just sent.
     /// </summary>
     public int? CachedPromptTokens { get; init; }
+    public int? CacheCreationPromptTokens { get; init; }
 }
 
 /// <summary>One file the step wrote, as the reviewer needs to see it.</summary>
@@ -105,7 +111,7 @@ public enum ReviewMode
 /// and "the reviewer approved" are different facts, and treating the first as the second is how a
 /// gate ends up enforcing nothing while looking configured.
 /// </summary>
-public sealed class Reviewer
+public sealed partial class Reviewer : IReviewer
 {
     /// <summary>Per file, and in total — a reviewer prompt is not the place to send a whole repository.</summary>
     private const int MaxContentCharsPerFile = 8000;
@@ -123,7 +129,7 @@ public sealed class Reviewer
         // 2026-09-24, run 4f779e: the request named one exact test command; the step ran 22 different
         // `dotnet test --filter …` invocations instead, and execution review passed it - it had
         // nothing to check that instruction against, because nothing here had ever been given it.
-        string? request = null)
+        string? request = null, RequestObligations? obligations = null)
     {
         var messages = new List<ChatMessage>
         {
@@ -133,6 +139,11 @@ public sealed class Reviewer
                 : BuildExecutionUserPrompt(stepTitle, coderOutput, executionEvidence, artifacts, writtenFiles, request))
         };
 
+        if (obligations is not null)
+            messages[1] = ChatMessage.User((mode == ReviewMode.Content
+                ? BuildContentUserPrompt(stepTitle, coderOutput, writtenFiles ?? Array.Empty<WrittenFile>())
+                : BuildExecutionUserPrompt(stepTitle, coderOutput, executionEvidence, artifacts, writtenFiles)) + obligations.Describe());
+
         var completion = await provider.CompleteAsync(
             new ChatRequest(model, messages, Temperature: 0.0, ResponseSchema: VerdictSchema), ct);
         var answer = completion.Message.Content ?? "";
@@ -140,11 +151,12 @@ public sealed class Reviewer
         var prompt = completion.PromptTokens ?? 0;
         var output = completion.CompletionTokens ?? 0;
         var cached = completion.CachedPromptTokens;
+        var created = completion.CacheCreationPromptTokens;
 
         if (Parse(answer) is { } verdict)
             return verdict with
             {
-                PromptTokens = prompt, CompletionTokens = output, CachedPromptTokens = cached
+                PromptTokens = prompt, CompletionTokens = output, CachedPromptTokens = cached, CacheCreationPromptTokens = created
             };
 
         // No verdict in there. Ask once more, showing what came back and what was wanted, because a
@@ -167,17 +179,18 @@ public sealed class Reviewer
         // reports 400 on top of a first call that reported nothing is 400, and two silences are
         // still silence.
         cached = TokenCounts.Add(cached, retry.CachedPromptTokens);
+        created = TokenCounts.Add(created, retry.CacheCreationPromptTokens);
 
         if (Parse(retry.Message.Content ?? "") is { } retried)
             return retried with
             {
-                PromptTokens = prompt, CompletionTokens = output, CachedPromptTokens = cached
+                PromptTokens = prompt, CompletionTokens = output, CachedPromptTokens = cached, CacheCreationPromptTokens = created
             };
 
         // Twice with no verdict. A reviewer that cannot answer has not approved anything.
         return new ReviewResult(false,
             "the reviewer did not return a verdict, twice — treating the step as not reviewed",
-            prompt, output) { CachedPromptTokens = cached };
+            prompt, output) { CachedPromptTokens = cached, CacheCreationPromptTokens = created, IncompleteReason = "the reviewer did not return a verdict after clarification" };
     }
 
     /// <summary>
@@ -207,12 +220,6 @@ public sealed class Reviewer
         """;
 
     /// <summary>
-    /// Room for the request text in a prompt: generous, because a constraint worth checking can sit
-    /// anywhere in it, but not unbounded - the same reasoning as every other excerpt in this class.
-    /// </summary>
-    private const int MaxRequestChars = 4000;
-
-    /// <summary>
     /// The user's own request, quoted for the reviewer with the instruction to check it directly -
     /// not through the step's title, which is the planner's paraphrase of a piece of it. Shared
     /// between execution and content review because the failure is the same in both: a plan can
@@ -223,12 +230,11 @@ public sealed class Reviewer
         if (string.IsNullOrWhiteSpace(request))
             return "";
 
-        var shown = request.Length <= MaxRequestChars ? request : request[..MaxRequestChars] + "… (cut here)";
         return "\nThe user's ORIGINAL REQUEST for this run, verbatim - the step's title above is the "
              + "planner's paraphrase of a PIECE of this, and a specific instruction in it (an exact "
              + "command to use and no other, a naming or format rule, a check required of EVERY item "
              + "produced) does not survive being paraphrased into a title:\n"
-             + $"\"{shown}\"\n\n"
+             + RequestObligations.Create(request).Describe()
              + "If the request states such an instruction, check the evidence against THAT instruction "
              + "specifically, in addition to judging the report on its own terms. Only the step's own "
              + "share of the request is this step's to satisfy - a constraint about the run's LAST step "
@@ -391,12 +397,12 @@ public sealed class Reviewer
     /// </summary>
     public async Task<ProofOutcome> ProveAsync(
         string stepTitle, string coderOutput, string executionEvidence,
-        IChatProvider provider, string model, CancellationToken ct)
+        IChatProvider provider, string model, CancellationToken ct, string? request = null)
     {
         var messages = new List<ChatMessage>
         {
             ChatMessage.System(ProofSystemPrompt),
-            ChatMessage.User(BuildProofUserPrompt(stepTitle, coderOutput, executionEvidence))
+            ChatMessage.User(BuildProofUserPrompt(stepTitle, coderOutput, executionEvidence) + RequestBlock(request))
         };
 
         var completion = await provider.CompleteAsync(
@@ -406,9 +412,10 @@ public sealed class Reviewer
         var prompt = completion.PromptTokens ?? 0;
         var output = completion.CompletionTokens ?? 0;
         var cached = completion.CachedPromptTokens;
+        var created = completion.CacheCreationPromptTokens;
 
         if (ParseProof(answer) is { } claim)
-            return new ProofOutcome(claim, prompt, output) { CachedPromptTokens = cached };
+            return new ProofOutcome(claim, prompt, output) { CachedPromptTokens = cached, CacheCreationPromptTokens = created };
 
         messages.Add(new ChatMessage(ChatRole.Assistant, answer, null));
         messages.Add(ChatMessage.User(
@@ -425,16 +432,17 @@ public sealed class Reviewer
         prompt += retry.PromptTokens ?? 0;
         output += retry.CompletionTokens ?? 0;
         cached = TokenCounts.Add(cached, retry.CachedPromptTokens);
+        created = TokenCounts.Add(created, retry.CacheCreationPromptTokens);
 
         if (ParseProof(retry.Message.Content ?? "") is { } retried)
-            return new ProofOutcome(retried, prompt, output) { CachedPromptTokens = cached };
+            return new ProofOutcome(retried, prompt, output) { CachedPromptTokens = cached, CacheCreationPromptTokens = created };
 
         // Twice with nothing usable. Not proven — the same rule as the verdict, because "we could
         // not find out" and "it is fine" are different facts.
         return new ProofOutcome(
             new ProofClaim(ProofClaimKind.NotShown, Array.Empty<int>(),
                            "the proof pass did not answer, twice"),
-            prompt, output) { CachedPromptTokens = cached };
+            prompt, output) { CachedPromptTokens = cached, CacheCreationPromptTokens = created };
     }
 
     /// <summary>The shape of a proof answer, for a provider that can hold a model to one.</summary>
@@ -442,7 +450,7 @@ public sealed class Reviewer
         {
           "type": "object",
           "properties": {
-            "shown": { "type": "string", "enum": ["yes", "no", "not-by-any-call", "nothing-to-do"] },
+            "shown": { "type": "string", "enum": ["yes", "no", "not-by-any-call", "nothing-to-do", "expected-failure"] },
             "calls": { "type": "array", "items": { "type": "integer" } },
             "what": { "type": "string" }
           },
@@ -469,9 +477,11 @@ public sealed class Reviewer
         + "Another reviewer has already confirmed that the report is truthful about the evidence; "
         + "that is not your question. Yours is narrower: does the evidence SHOW the objective was met?\n\n"
         + "Respond with ONLY a JSON object, no prose and no code fences:\n"
-        + "{\"shown\":\"yes\"|\"no\"|\"not-by-any-call\"|\"nothing-to-do\",\"calls\":[numbers],"
-        + "\"what\":\"one sentence\"}\n\n"
-        + "\"yes\" — the evidence shows it. Put in \"calls\" the number of EVERY call that shows it, "
+        + "{\"shown\":\"yes\"|\"no\"|\"not-by-any-call\"|\"nothing-to-do\"|\"expected-failure\",\"calls\":[numbers],"
+        + "\"what\":\"one sentence\"}\n\n" + ProofGuidance;
+
+    internal const string ProofGuidance =
+        "\"yes\" — the evidence shows it. Put in \"calls\" the number of EVERY call that shows it, "
         + "as numbered in the evidence, and nothing else. Only cite a call you can actually see. A "
         + "citation is checked against what really happened, so a number you are unsure of is worse "
         + "than one fewer number.\n\n"
@@ -491,8 +501,14 @@ public sealed class Reviewer
         + "answer that names none is not believed, because \"nothing needed doing\" is a finding and "
         + "a finding rests on having looked. This is not the answer for a step that simply did not "
         + "do its work: use it only when the calls themselves say the work was not needed.\n\n"
-        + "A call marked ERROR or REFUSED did not do its job and cannot be what shows an objective "
-        + "was met. A call marked NOTHING THERE ran and answered — a file that is absent, an offset "
+        + "\"expected-failure\" — ONLY for an explicitly requested negative test (including a mutation check). "
+        + "Cite the commands with a recorded nonzero exit and explain the requested negative behavior and "
+        + "matching failure in what. Missing expectedExitCodes does not require rerunning an observed negative test. "
+        + "A timeout, refused command, compilation error or unrelated test failure cannot demonstrate the intended "
+        + "mutation. Assess restoration and passing regression tests separately. The command's original outcome "
+        + "remains unchanged.\n\n"
+        + "A call marked ERROR cannot support yes; a REFUSED call never proves execution. "
+        + "A call marked NOTHING THERE ran and answered — a file that is absent, an offset "
         + "past the end — and can be exactly what shows one.\n\n"
         // The evidence header already says a long RESULT keeps its start and end. What it does not
         // say, and what only this pass needs, is what to do about it when your answer is a list of
@@ -529,6 +545,7 @@ public sealed class Reviewer
             var kind = s.GetString()?.Trim().ToLowerInvariant() switch
             {
                 "yes" => ProofClaimKind.Shown,
+                "expected-failure" => ProofClaimKind.ExpectedFailure,
                 "no" => ProofClaimKind.NotShown,
                 "not-by-any-call" or "not_by_any_call" or "notbyanycall" => ProofClaimKind.NotByAnyCall,
                 "nothing-to-do" or "nothing_to_do" or "nothingtodo" => ProofClaimKind.NothingToDo,
@@ -599,78 +616,48 @@ public sealed class Reviewer
         }
     }
 
-    internal const string ExecutionSystemPrompt =
-        "You are a senior code reviewer verifying a coding agent's step against real tool-execution evidence. "
-        + "Trust the execution evidence (actual commands + their real output/exit codes) over the agent's own summary, "
-        + "which may be mistaken or fabricated. Respond with ONLY a JSON object, no prose and no code fences: "
-        + "{\"verdict\":\"pass\" or \"fail\",\"notes\":\"short, specific feedback\"}. "
-        // "the REQUIRED command" was the wording, and it made the reviewer decide for itself what a
-        // step required. Anchored to the report instead: a command matters here when the answer
-        // leans on it. See the paragraph on choosing tools below.
-        + "Fail if the agent's report leans on a command that was never run, a command it did run "
-        + "failed, or a reported/saved value is fabricated or a placeholder not present in the real "
-        + "output. Otherwise pass.\n\n"
-        // The clause that stops the reviewer failing work it simply could not see. On 2026-09-07 the
-        // evidence was cut after the first two calls and it concluded, correctly from what it had,
-        // that no source files were ever read. Five had been. Every call is listed now, and this
-        // says what a shortened RESULT means so the two are never confused again.
-        + "The evidence lists EVERY call the step made, oldest first, and says how many there were. "
-        + "A result may be shortened and says so where it is: a shortened result is still a call that "
-        + "HAPPENED, and is never grounds to say the work was not done. Judge by the calls listed. If "
-        + "a call you would expect is genuinely absent from the list, that is a real finding; if you "
-        + "can see the call and only part of its output, it is not.\n\n"
-        // Added 2026-09-08 17:31. An analysis step read eleven files and quoted a target framework
-        // out of Directory.Build.props; 1,645 characters had been cut from the middle of that
-        // result and the value was in them. The reviewer failed the step - twice - because "the
-        // provided output for that file is truncated and does not contain this value". Correct
-        // about the excerpt, wrong about the file, and it is the ENGINE that cut it.
-        + "What is cut from a result is CUT, not absent: you are reading an excerpt, and a value the "
-        + "report quotes that you cannot find in it may be sitting in the part you were not shown. "
-        + "Unverified is not fabricated. Fail a quote only when a result you CAN see says something "
-        + "different — never for a quote you merely cannot locate.\n\n"
-        // Added 2026-09-07 20:16. A step titled "Analyze test coverage and identify gaps" read the
-        // test project and two source files and produced a specific, correct analysis. It was failed
-        // for "no actual analysis or test coverage commands were executed" — a requirement nobody
-        // stated, inferred from the step's TITLE. The retry then ran commands to satisfy the
-        // reviewer rather than to learn anything, and the run died on one of them.
-        + "WHICH TOOLS a step uses are the agent's to choose. Reading and listing IS the work of an "
-        + "analysis, review or planning step, and many steps correctly run no command at all — a "
-        + "step is never deficient merely for not having run one. So do not ask whether a command "
-        + "OUGHT to have been run; ask whether THE ANSWER IS SUPPORTED. Fail when the agent reports "
-        + "something only a command could have produced — a build that succeeded, a test that "
-        + "passed, a version or a measurement it printed — and no such call is in the evidence. An "
-        + "answer drawn from files the evidence shows it read is supported, however few commands it "
-        + "ran.\n\n"
-        // Without this the reviewer reads "exit code 1" and fails the step by its own rule, which
-        // would put the run back exactly where it was.
-        + "A call may DECLARE the exit codes it expects, in an \"expectedExitCodes\" argument you can "
-        + "see in the evidence. A test runner that returns 1 because a test failed is reporting, not "
-        + "malfunctioning, and a call that got a code it declared is recorded as succeeded — its exit "
-        + "code alone is then not a finding. What IS a finding: a declaration that does not fit the "
-        + "command (a build declaring failure acceptable), or a report that contradicts the output "
-        + "under it, such as \"all tests pass\" over output listing failures.\n\n"
-        // Added after this clause's own words were turned against a step: "the evidence shows errors
-        // for offsets 800 and 400 being past the end of the file. The agent's report does not
-        // account for these errors." Those calls answered. Nothing was wrong.
-        + "A result marked NOTHING THERE is not an error and is not something the report has to "
-        + "account for. It is a lookup that ran and found nothing: a file that does not exist, an "
-        + "offset past the end of one. Asking and being told no is how anything explores a tree it "
-        + "has not seen, and the agent is free to say nothing about it. ERROR is the label for a "
-        + "call that went wrong; judge only those.\n\n"
-        + "The evidence may be followed by what this step CHANGED in the workspace, made by any tool - "
-        + "a command included - as diffs, new files or deletions. That is what was actually written: "
-        + "check a saved result, a report or a code change against it and against the command output "
-        + "above. In a diff, '+' lines were added by this step, '-' lines removed, and lines starting "
-        + "with a space are unchanged context.";
+    internal const string ExecutionSystemPrompt = ExecutionGuidance + VerdictResponseInstruction;
+    internal const string VerdictResponseInstruction =
+        "Respond with ONLY a JSON object, no prose and no code fences: "
+        + "{\"verdict\":\"pass\" or \"fail\",\"notes\":\"short, specific feedback\"}.\n\n";
+    internal const string ExecutionGuidance =
+        """
+        Review the step against real tool evidence and workspace changes, trusting those over the agent's summary.
+        Ask whether THE ANSWER IS SUPPORTED. Fail if the report leans on a command that was never run,
+        a command it did run failed unexpectedly, or visible evidence contradicts a reported/saved value
+        (fabricated or placeholder output). Otherwise pass.
+        WHICH TOOLS to use are the agent's to choose within the request: reading/listing can support analysis.
+        A step is never deficient merely for not having run one. Claims of builds, tests or measurements
+        require the corresponding calls, not assumptions from the step title.
+
+        Tool approval never waives request prohibitions. A ban on deleting files includes restoration
+        and scratch cleanup. Do not invent exceptions: correct final files do not excuse a violation.
+
+        Judge by the calls listed, using their original evidence IDs. The evidence marks omitted calls:
+        their outcomes are unknown. A shortened result is still a call that HAPPENED.
+        What is omitted is CUT, not absent. Unverified is not fabricated: fail a quote only for a visible
+        contradiction, never merely because it is missing from an excerpt. State evidence gaps.
+
+        expectedExitCodes declares expected outcomes: an intentionally failing test is reporting, not malfunctioning.
+        Its expected exit code alone is no finding. Flag a declaration that does not fit the command
+        (accepting a broken build as success), or a report that contradicts the output.
+        A requested mutation's matching failure is evidence even without expectedExitCodes; do not rerun
+        just to declare it. Compilation errors or unrelated failures do not prove mutation detection.
+        NOTHING THERE is not an error and is not something the report has to account for;
+        it means a lookup found nothing. ERROR denotes a failed call.
+
+        Workspace changes include writes through commands. Check saved results/code against these and tool output.
+        In diffs, '+' lines are additions, '-' removals, and space-prefixed lines unchanged context.
+
+        """;
 
     // Deliberately narrow. A content reviewer that fails on anything it is merely unsure about blocks
     // every run and gets switched off, so it is told to fail only on a specific, nameable falsehood —
     // and told explicitly that style, length and completeness are none of its business.
-    internal const string ContentSystemPrompt =
+    internal const string ContentSystemPrompt = ContentGuidance + VerdictResponseInstruction;
+    internal const string ContentGuidance =
         "You are a senior technical reviewer checking a document another agent just wrote, for FACTUAL "
         + "correctness. The agent may be a small model that invents plausible-looking detail.\n\n"
-        + "Respond with ONLY a JSON object, no prose and no code fences: "
-        + "{\"verdict\":\"pass\" or \"fail\",\"notes\":\"short, specific feedback\"}.\n\n"
         + "FAIL when you can point to a SPECIFIC assertion that is wrong or invented, such as:\n"
         + "- a package, tool, command or file that does not exist under that name;\n"
         + "- command syntax, subcommands, flags or configuration keys that are not real;\n"

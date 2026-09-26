@@ -36,11 +36,10 @@ public sealed class ShellApprovalTests
     [InlineData("RUN_COMMAND", true)]
     [InlineData("read_file", false)]
     [InlineData("write_file", false)]
-    // git and docker take an argument array for one named program, which is a smaller thing to
-    // approve. docker run can mount anything and is a real hole in that reasoning; it is written
-    // down in ShellTools rather than half-closed here.
-    [InlineData("git", false)]
-    [InlineData("docker", false)]
+    // Git arguments can invoke external programs, including without an explicit -c argument.
+    [InlineData("git", true)]
+    [InlineData("GIT", true)]
+    [InlineData("docker", true)]
     public void The_shells_are_the_tools_handed_a_command_line(string tool, bool isShell)
         => Assert.Equal(isShell, ShellTools.IsShell(tool));
 

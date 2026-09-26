@@ -36,6 +36,44 @@ public sealed class CheckpointStoreTests : IDisposable
 
     private string Folder => Path.Combine(_root, ".enactive", "checkpoints");
 
+    [Fact]
+    public async Task Cancelled_replacement_keeps_previous_checkpoint_and_removes_its_temporary_file()
+    {
+        var store = new JsonCheckpointStore(_workspace);
+        var original = Checkpoint("original");
+        await store.SaveAsync(original, default);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => store.SaveAsync(
+            original with { Request = new string('x', 100000) }, new CancellationToken(true)));
+        Assert.Equal("original", (await store.LoadAsync(original.RunId, default))!.Request);
+        Assert.Empty(Directory.GetFiles(Folder, "*.tmp"));
+    }
+
+    [Fact]
+    public async Task Concurrent_store_instances_use_distinct_temporaries_and_publish_whole_snapshots()
+    {
+        var original = Checkpoint("original");
+        await new JsonCheckpointStore(_workspace).SaveAsync(original, default);
+        var texts = Enumerable.Range(0, 12).Select(i => $"{i}:" + new string((char)('a' + i), 50000)).ToArray();
+        await Task.WhenAll(texts.Select(text => new JsonCheckpointStore(_workspace)
+            .SaveAsync(original with { Request = text }, default)));
+        Assert.Contains((await new JsonCheckpointStore(_workspace).LoadAsync(original.RunId, default))!.Request, texts);
+        Assert.Empty(Directory.GetFiles(Folder, "*.tmp"));
+    }
+
+    [WindowsFact]
+    public async Task Cancellation_during_replace_retry_keeps_the_previous_checkpoint()
+    {
+        var store = new JsonCheckpointStore(_workspace);
+        var original = Checkpoint("original");
+        await store.SaveAsync(original, default);
+        using (new FileStream(Path.Combine(Folder, $"{original.RunId:N}.json"), FileMode.Open, FileAccess.Read, FileShare.Read))
+        using (var stop = new CancellationTokenSource(TimeSpan.FromMilliseconds(100)))
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => store.SaveAsync(
+                original with { Request = "replacement" }, stop.Token));
+        Assert.Equal("original", (await store.LoadAsync(original.RunId, default))!.Request);
+        Assert.Empty(Directory.GetFiles(Folder, "*.tmp"));
+    }
+
     private static RunCheckpoint Checkpoint(
         string request = "do the thing",
         int minutesAgo = 0,

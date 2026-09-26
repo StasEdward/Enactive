@@ -145,7 +145,7 @@ public sealed class ConnectedAndOfferedToNobodyTests
         // indistinguishable from naming none of them until somebody is told.
         var worker = EngineFixture.WorkerWith("read_file", "mcp__other__*");
 
-        var engine = new Orchestrator(
+        var engine = new Orchestrator(new Enactive.Workspace.WorkspaceChangesFactory(),
             new SingleProviderFactory(provider), new ModelResolver(),
             new StaticWorkerProvider(worker), tools, fx.Artifacts, fx.Workspace,
             new Planner(), new PermissionEngine(), fx.Decisions,

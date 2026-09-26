@@ -49,7 +49,9 @@ internal sealed class RemoteAccessService : IAsyncDisposable
     private readonly string _databasePath;
 
     private readonly CancellationTokenSource _stopping = new();
-    private readonly List<Task> _runs = [];
+    private readonly BackgroundRunGroup _runs = new();
+    private readonly object _lifecycle = new();
+    private Task? _shutdown;
 
     private HostStore? _store;
     private SignalRGatewayConnection? _connection;
@@ -138,7 +140,11 @@ internal sealed class RemoteAccessService : IAsyncDisposable
             return;
         }
 
-        _loop = Task.Run(() => RunAsync(_stopping.Token));
+        lock (_lifecycle)
+        {
+            if (_shutdown is not null || _loop is not null) return;
+            _loop = Task.Run(() => RunAsync(_stopping.Token));
+        }
     }
 
     private async Task RunAsync(CancellationToken ct)
@@ -220,7 +226,7 @@ internal sealed class RemoteAccessService : IAsyncDisposable
 
                 foreach (var command in await loop.TurnAsync(Publishable(_workspaces()), ct))
                 {
-                    Begin(command, ct);
+                    Begin(command);
                 }
             }
             else
@@ -228,7 +234,6 @@ internal sealed class RemoteAccessService : IAsyncDisposable
                 await loop.FlushAsync(ct);
             }
 
-            Reap();
             await Task.Delay(FlushEvery, ct);
         }
 
@@ -283,35 +288,16 @@ internal sealed class RemoteAccessService : IAsyncDisposable
     /// while it does - otherwise nothing this run produces would be sent until it finished, and a
     /// phone would show a task that started and then said nothing for ten minutes.</para>
     /// </summary>
-    private void Begin(HostCommand command, CancellationToken ct)
+    private void Begin(HostCommand command)
     {
-        var run = Task.Run(async () =>
+        _runs.TryStart(async ct =>
         {
-            try
-            {
-                await _runner!.ApplyAsync(command, ct);
-            }
+            try { await _runner!.ApplyAsync(command, ct); }
             catch (Exception failure)
             {
-                // ApplyAsync writes the run's own ending itself. Reaching here means something
-                // outside a run went wrong - an unknown command kind from a newer gateway, say.
                 Status = $"A remote command could not be carried out: {failure.Message}";
             }
-        }, ct);
-
-        lock (_runs)
-        {
-            _runs.Add(run);
-        }
-    }
-
-    /// <summary>Forgets finished runs, so the list is what is actually going on.</summary>
-    private void Reap()
-    {
-        lock (_runs)
-        {
-            _runs.RemoveAll(r => r.IsCompleted);
-        }
+        });
     }
 
     /// <summary>
@@ -388,32 +374,32 @@ internal sealed class RemoteAccessService : IAsyncDisposable
         return null;
     }
 
-    /// <summary>
-    /// Stops connecting and lets go of the connection.
-    ///
-    /// <para>Runs in flight are cancelled rather than waited for. They are cancelled the same way
-    /// closing the application cancels a background run, and they report Interrupted the next time
-    /// this computer connects - which is true, and is better than a desktop that will not close
-    /// because a phone started something long.</para>
-    /// </summary>
-    public async ValueTask DisposeAsync()
+    /// <summary>Close admission, cancel and drain accepted commands before disposing their store.</summary>
+    public ValueTask DisposeAsync()
     {
-        await _stopping.CancelAsync();
+        lock (_lifecycle)
+            return new ValueTask(_shutdown ??= Task.Run(ShutdownAsync));
+    }
 
+    private async Task ShutdownAsync()
+    {
+        var runs = _runs.StopAsync();
         try
         {
-            if (_loop is not null)
-                await _loop;
+            await Task.WhenAll(_stopping.CancelAsync(), runs, _loop ?? Task.CompletedTask);
         }
         catch (Exception)
         {
-            // Shutting down. Nothing here is worth reporting to somebody who is closing the app.
+            // WhenAll has settled every owner, including terminal persistence, even on failure.
         }
-
-        if (_connection is not null)
-            await _connection.DisposeAsync();
-
-        _store?.Dispose();
-        _stopping.Dispose();
+        try
+        {
+            if (_connection is not null) await _connection.DisposeAsync();
+        }
+        finally
+        {
+            _store?.Dispose();
+            _stopping.Dispose();
+        }
     }
 }

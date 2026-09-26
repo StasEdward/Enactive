@@ -48,7 +48,8 @@ public sealed class OutcomeTests
         using var fx = new EngineFixture();
         var provider = new FakeChatProvider(
             Turn.Says("""{"disposition":"quick_action","title":"write a long file"}"""),
-            new Turn("half of an ans", null, FinishReason: "length"));
+            new Turn("half of an ans", null, FinishReason: "length"))
+        { WhenExhausted = new Turn("still cut", FinishReason: "length") };
 
         var orchestrator = fx.Build(provider);
         var events = await fx.RunAsync(orchestrator, "write something long");
@@ -183,8 +184,8 @@ public sealed class OutcomeTests
 
         var events = await fx.RunAsync(orchestrator, "write a file");
 
-        Assert.Contains(events, e => e.Kind == EventKind.ReviewFailed);
-        Assert.Equal(RunOutcomeKind.Failed, Terminal(events).Outcome());
+        Assert.Contains(events, e => e.Kind == EventKind.ErrorObserved && e.Summary.Contains("review error"));
+        Assert.Equal(RunOutcomeKind.Incomplete, Terminal(events).Outcome());
     }
 }
 

@@ -23,7 +23,9 @@ public sealed class CreateDirectoryTool : ITool
         Description: "Create a folder inside the workspace, including any missing parents. "
                    + "Path is relative to the workspace root. Succeeds if it already exists. "
                    + "Not needed before write_file, which creates folders on its own.",
-        JsonSchema: Schema, WorkspaceEffect: WorkspaceEffect.Changed);
+        JsonSchema: Schema, WorkspaceEffect: WorkspaceEffect.Changed,
+        ChangedPathArguments: ["path"],
+        RepairsFileFailures: true, ProgressIdentity: ProgressIdentity.Action, Kind: ToolKind.Write);
 
     public PermissionLevel RequiredLevel => PermissionLevel.Execute;
 

@@ -35,6 +35,7 @@ public sealed record OutboxItem(string EventId, string RunId, long Sequence, Hos
 public sealed class HostStore : IDisposable
 {
     private readonly SqliteConnection _connection;
+    private readonly System.Threading.Lock _gate = new();
 
     public HostStore(string databasePath)
     {
@@ -100,6 +101,7 @@ public sealed class HostStore : IDisposable
     /// </summary>
     public bool Accept(HostCommand command)
     {
+        using var guard = _gate.EnterScope();
         using var statement = _connection.CreateCommand();
         statement.CommandText = """
             INSERT INTO inbox (command_id, kind, payload, received_at)
@@ -136,6 +138,7 @@ public sealed class HostStore : IDisposable
     /// </summary>
     public bool BeginRun(string commandId, string runId)
     {
+        using var guard = _gate.EnterScope();
         using var transaction = _connection.BeginTransaction();
 
         var claimed = Execute(transaction,
@@ -190,6 +193,7 @@ public sealed class HostStore : IDisposable
     {
         var runs = new List<string>();
 
+        using var guard = _gate.EnterScope();
         using var statement = _connection.CreateCommand();
         statement.CommandText = "SELECT run_id FROM runs WHERE state <> $ended ORDER BY started_at";
         Bind(statement, "$ended", LocalRunState.Ended.ToString());
@@ -216,6 +220,7 @@ public sealed class HostStore : IDisposable
         string runId, RemoteEventKind kind, string? detail = null,
         ApprovalRequest? approval = null, ApprovalResolution? resolution = null)
     {
+        using var guard = _gate.EnterScope();
         using var transaction = _connection.BeginTransaction();
 
         var sequence = Convert.ToInt64(
@@ -258,6 +263,7 @@ public sealed class HostStore : IDisposable
     {
         var items = new List<OutboxItem>();
 
+        using var guard = _gate.EnterScope();
         using var statement = _connection.CreateCommand();
         statement.CommandText = """
             SELECT o.event_id, o.run_id, o.sequence, o.payload, o.attempts
@@ -303,6 +309,7 @@ public sealed class HostStore : IDisposable
     {
         var ids = new List<string>();
 
+        using var guard = _gate.EnterScope();
         using var statement = _connection.CreateCommand();
         statement.CommandText = "SELECT event_id FROM outbox WHERE parked = 1 ORDER BY created_at";
 
@@ -315,7 +322,7 @@ public sealed class HostStore : IDisposable
         return ids;
     }
 
-    public void Dispose() => _connection.Dispose();
+    public void Dispose() { lock (_gate) _connection.Dispose(); }
 
     // ── plumbing ────────────────────────────────────────────────────────────
 
@@ -330,6 +337,7 @@ public sealed class HostStore : IDisposable
 
     private int Execute(SqliteTransaction? transaction, string sql, params (string Name, object? Value)[] parameters)
     {
+        using var guard = _gate.EnterScope();
         using var statement = _connection.CreateCommand();
         statement.CommandText = sql;
         statement.Transaction = transaction;
@@ -347,6 +355,7 @@ public sealed class HostStore : IDisposable
 
     private object? Scalar(SqliteTransaction? transaction, string sql, params (string Name, object? Value)[] parameters)
     {
+        using var guard = _gate.EnterScope();
         using var statement = _connection.CreateCommand();
         statement.CommandText = sql;
         statement.Transaction = transaction;

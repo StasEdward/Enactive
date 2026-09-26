@@ -263,7 +263,7 @@ public sealed class EvidenceBudgetTests
     {
         var instructions = Enactive.Agents.Reviewer.ExecutionSystemPrompt;
 
-        Assert.Contains("EVERY call", instructions, StringComparison.Ordinal);
+        Assert.Contains("omitted calls", instructions, StringComparison.Ordinal);
         Assert.Contains("shortened result is still a call that HAPPENED", instructions, StringComparison.Ordinal);
         Assert.Contains("Judge by the calls listed", instructions, StringComparison.Ordinal);
     }

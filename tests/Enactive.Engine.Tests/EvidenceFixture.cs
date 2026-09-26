@@ -1,6 +1,7 @@
 namespace Enactive.Engine.Tests;
 
 using Enactive.Core.Execution;
+using Enactive.Core.Tools;
 
 internal static class EvidenceFixture
 {
@@ -10,7 +11,15 @@ internal static class EvidenceFixture
     {
         var journal = new ExecutionJournal();
         foreach (var action in actions)
-            journal.Record(action.Step, action.Tool, action.Arguments, action.Outcome, action.Output);
+        {
+            var definition = EngineFixture.ShippedTools().Select(t => t.Definition)
+                .FirstOrDefault(d => d.Name == action.Tool);
+            var effect = action.WorkspaceEffect != WorkspaceEffect.Unknown ? action.WorkspaceEffect
+                : action.Outcome == ActionOutcome.Succeeded ? definition?.WorkspaceEffect ?? WorkspaceEffect.Unknown
+                : WorkspaceEffect.Unknown;
+            journal.Record(action.Step, action.Tool, action.Arguments, action.Outcome, action.Output,
+                effect, action.ChangedPaths ?? (definition is null ? null : ToolEffects.Paths(definition, action.Arguments)));
+        }
         return ProofAudit.Check(claim, journal.Describe(maxChars: int.MaxValue), workspaceRoot);
     }
 }
