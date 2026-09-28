@@ -51,8 +51,11 @@ public sealed class ADocumentFromItemsIsDeclaredTests
     {
         var (plan, criteria) = Shape(report: false);
         var missing = FanOut.MissingReport(plan, criteria);
-        Assert.Equal((1, "Docs/R.md"), (missing!.Value.Step, missing.Value.Path));
-        Assert.Contains("\"report\":\"Docs/R.md\"", missing.Value.Diagnostic, StringComparison.Ordinal);
+        Assert.Equal(1, missing!.Value.Step);
+        // A question, not an answer: no path is proposed as the report.
+        Assert.Contains("\"report\":\"<path>\"", missing.Value.Diagnostic, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"report\":\"Docs/R.md\"", missing.Value.Diagnostic, StringComparison.Ordinal);
+        Assert.Contains("return the plan unchanged", missing.Value.Diagnostic, StringComparison.Ordinal);
 
         var (declared, c2) = Shape(report: true);
         Assert.Null(FanOut.MissingReport(declared, c2));
@@ -72,11 +75,11 @@ public sealed class ADocumentFromItemsIsDeclaredTests
         """;
 
     /// <summary>
-    /// THE ONE THAT MATTERS: the planner leaves the report out, is asked, leaves it out again - and the engine
-    /// declares it. The page step cannot write it, hands its findings on, and the engine assembles it.
+    /// The planner leaves the report out, is asked, and leaves it out again: the engine does NOT pick one. The
+    /// page step still cannot write the file the criteria name; the step after the items writes it.
     /// </summary>
     [Fact]
-    public async Task A_report_the_planner_will_not_declare_is_declared_by_the_engine()
+    public async Task A_report_the_planner_does_not_declare_is_not_declared_by_the_engine()
     {
         using var fx = new EngineFixture { StepOutputs = true, TypedCriteria = true, DynamicSteps = true };
         fx.Write("wiki/a.md", "# A\n");
@@ -84,20 +87,52 @@ public sealed class ADocumentFromItemsIsDeclaredTests
             Turn.Says(Undeclared),
             Turn.Says(Undeclared),                                                                          // asked, and unchanged
             Turn.Calls1(StepOutputContract.ToolName, """{"pages":["wiki/a.md"]}""", "s0"), Turn.Says("Listed."),
-            Turn.Calls1("write_file", """{"path":"Docs/R.md","content":"# my report"}""", "w1"),         // refused
+            Turn.Calls1("write_file", """{"path":"Docs/R.md","content":"# page a"}""", "w1"),            // refused: the run's result
             Turn.Calls1(StepOutputContract.ToolName, """{"findings":"accurate"}""", "s1"), Turn.Says("Checked."),
-            Turn.Calls1(StepOutputContract.ToolName, """{"summary":"One page, accurate."}""", "s2"), Turn.Says("Compiled."));
+            Turn.Calls1("write_file", """{"path":"Docs/R.md","content":"# compiled\npage a: accurate\n"}""", "w2"),
+            Turn.Says("Compiled."));
 
         var events = await fx.RunAsync(fx.Build(worker, EngineFixture.Role("developer")), "check every page");
 
-        Assert.Contains(events, e => e.Summary.Contains("Asking the planner to declare it", StringComparison.Ordinal));
-        Assert.Contains(events, e => e.Summary.Contains("the engine declares 'Docs/R.md' the report of step 1", StringComparison.Ordinal));
-        Assert.Contains(events, e => e.Kind == EventKind.ToolResult && e.Summary.StartsWith("write_file -> refused: 'Docs/R.md' is written by the engine", StringComparison.Ordinal));
-        var report = fx.Read("Docs/R.md").Replace("\r", "");
-        Assert.StartsWith("# check page\n", report, StringComparison.Ordinal);
-        Assert.Contains("One page, accurate.", report, StringComparison.Ordinal);
-        Assert.Contains("accurate", report, StringComparison.Ordinal);
-        Assert.DoesNotContain("# my report", report, StringComparison.Ordinal);
+        Assert.Contains(events, e => e.Summary.Contains("The plan declares no report", StringComparison.Ordinal));
+        Assert.DoesNotContain(events, e => e.Summary.Contains("the engine declares", StringComparison.Ordinal));
+        Assert.Contains(events, e => e.Kind == EventKind.ToolResult && e.Summary.StartsWith("write_file -> refused: 'Docs/R.md' is what the whole run delivers", StringComparison.Ordinal));
+        Assert.StartsWith("# compiled", fx.Read("Docs/R.md"), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The reproduction: find modules, fix each, build - the criteria name src/Program.cs. The engine proposes
+    /// nothing, and a report declared on a source file is refused whoever declares it: it would be overwritten.
+    /// </summary>
+    [Fact]
+    public async Task A_source_file_the_criteria_name_is_never_made_a_report()
+    {
+        using var fx = new EngineFixture { StepOutputs = true, TypedCriteria = true, DynamicSteps = true };
+        fx.Write("src/Program.cs", "class Program { }\n");
+        fx.Write("src/Mod/A.cs", "class A { }\n");
+        const string plan = """
+            {"disposition":"task","title":"fix the modules",
+             "steps":[{"title":"find modules","dependsOn":[],"output":{"modules":{"type":"path[]","description":"module folders"}}},
+                      {"title":"fix module","dependsOn":[0],"forEach":{"step":0,"field":"modules"}},
+                      {"title":"build","dependsOn":[1]}],
+             "criteria":[{"kind":"file_exists","path":"src/Program.cs"}]}
+            """;
+        var declaredOnSource = plan.Replace("\"forEach\":{\"step\":0,\"field\":\"modules\"}",
+            "\"forEach\":{\"step\":0,\"field\":\"modules\"},\"report\":\"src/Program.cs\"");
+        Assert.NotEqual(plan, declaredOnSource);
+        var worker = new FakeChatProvider(
+            Turn.Says(plan),
+            Turn.Says(declaredOnSource),                                                                   // the planner, asked, declares the wrong thing
+            Turn.Calls1(StepOutputContract.ToolName, """{"modules":["src/Mod"]}""", "s0"), Turn.Says("Found one."),
+            Turn.Says("Fixed it."),
+            Turn.Says("Built."));
+
+        var events = await fx.RunAsync(fx.Build(worker, EngineFixture.Role("developer")), "fix every module");
+
+        Assert.DoesNotContain(events, e => e.Summary.Contains("\"report\":\"src/Program.cs\"", StringComparison.Ordinal)
+                                           && e.Kind == EventKind.ContextAssembled && e.Summary.Contains("Asking", StringComparison.Ordinal));
+        Assert.Contains(events, e => e.Summary.Contains("will not assemble 'src/Program.cs'", StringComparison.Ordinal));
+        Assert.Equal("class Program { }\n", fx.Read("src/Program.cs").Replace("\r", ""));
     }
 
     [Fact]

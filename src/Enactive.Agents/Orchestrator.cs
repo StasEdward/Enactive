@@ -591,8 +591,7 @@ public sealed partial class Orchestrator : IOrchestrator
         }
 
         // A document made from a step's items has to be declared, so the engine can reserve and assemble it.
-        // Asked of the planner once; if the corrected plan still leaves it out, the engine declares it - the
-        // path is the one the run's criteria name, which no item's step may write in any case.
+        // The planner is asked, once and neutrally, whether its plan makes one; the answer is its to give.
         if (resume is null && _dynamicSteps && _stepOutputs && plan.Plan is { } undeclared
             && FanOut.MissingReport(undeclared, plan.PlannedCriteria) is { } missing)
         {
@@ -618,17 +617,14 @@ public sealed partial class Orchestrator : IOrchestrator
             // A correction that is not a readable plan, or no plan at all, does not replace the one that was.
             if (unclear is not null || plan.Readout == PlanReadout.Unreadable || plan.Plan is null || PlanValidation.Error(plan.Plan) is not null)
                 plan = before;
-            if (FanOut.MissingReport(plan.Plan!, plan.PlannedCriteria) is { } still)
-            {
-                var steps = plan.Plan!.Steps.ToArray();
-                steps[still.Step] = steps[still.Step] with { Report = still.Path };
-                plan = plan with { Plan = plan.Plan with { Steps = steps } };
-                yield return scope.Ev(EventKind.ContextAssembled,
-                    $"The plan still left it undeclared{(unclear is null ? "" : $" ({unclear})")}: the engine declares '{still.Path}' "
-                    + $"the report of step {still.Step} (\"{steps[still.Step].Title}\"), and assembles it from the items' results.");
-            }
-            else
-                yield return scope.Ev(EventKind.ContextAssembled, "The planner declared the report.");
+            // Never chosen by the engine: a file the criteria name is not thereby a document made from the
+            // items - "fix each module, then build" names src/Program.cs, and assembling Markdown into it
+            // would overwrite the source. The declaration is the planner's, explicitly, or there is none.
+            yield return scope.Ev(EventKind.ContextAssembled,
+                FanOut.MissingReport(plan.Plan!, plan.PlannedCriteria) is null
+                    ? "The planner declared the report."
+                    : $"The plan declares no report{(unclear is null ? "" : $" ({unclear})")}: the items hand their results on, "
+                      + "and the steps after them write what they write; no item step may write a file the criteria name.");
         }
 
         // A quick action that stopped at a question is carried on AS the quick action it was, from

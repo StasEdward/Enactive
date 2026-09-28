@@ -67,6 +67,16 @@ public static class FanOut
                 dropped.Add($"'{steps[i].Title}' will not assemble '{report}' - a report is a path inside the workspace.");
                 steps[i] = steps[i] with { Report = null };
             }
+            // The engine writes Markdown. A report path that is not a document - source, a project, data - would
+            // be overwritten with it, whoever declared it.
+            else if (steps[i].Report is { } notADocument
+                     && !Path.GetExtension(notADocument).ToLowerInvariant().Equals(".md")
+                     && Path.GetExtension(notADocument).ToLowerInvariant() is not (".markdown" or ".txt"))
+            {
+                dropped.Add($"'{steps[i].Title}' will not assemble '{notADocument}' - the engine writes a Markdown document, "
+                            + "and a report is a .md, .markdown or .txt file, never source or data it would overwrite.");
+                steps[i] = steps[i] with { Report = null };
+            }
         }
         // A step after the items of a report hands its summary on as a value; the engine puts it in the
         // document. Added to its contract whatever else it declared - see ReportDocument.
@@ -96,11 +106,15 @@ public static class FanOut
         {
             var step = plan.Steps[i];
             if (step.ForEach is null || step.Report is not null || !plan.Steps.Any(s => s.DependsOn.Contains(step.Id))) continue;
+            // A question, not an answer: which file - if any - is a document made from the items is not
+            // something the engine can tell from a criterion naming it.
             return (i, deliverables[0],
-                $"Step {i} (\"{step.Title}\") is done for each item, a later step builds on its results, and the run delivers "
-                + $"{string.Join(", ", deliverables)}. Declare the document the items' results make on that step - "
-                + $"\"report\":\"{deliverables[0]}\" - so the engine assembles it from every item's recorded result and no step "
-                + "edits it; the step after the items hands on a \"summary\" instead of writing the file.");
+                $"Step {i} (\"{step.Title}\") is done for each item and a later step builds on its results. If the items' results "
+                + "together make ONE document (a report - Markdown or text, not source code), declare it on that step with "
+                + "\"report\":\"<path>\": the engine then assembles it from every item's recorded result, no step edits it, and the "
+                + "step after the items hands on a \"summary\". The run's criteria name "
+                + $"{string.Join(", ", deliverables)} - only declare one of them if it IS that document. If the items make no such "
+                + "document, return the plan unchanged.");
         }
         return null;
     }
