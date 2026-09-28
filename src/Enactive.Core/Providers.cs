@@ -42,7 +42,9 @@ public sealed record ProviderDescriptor(
     /// The prompt size a step WORKS at, as distinct from the window it may never exceed. See
     /// <c>ProviderConfig.WorkingContextTokens</c>.
     /// </summary>
-    int? WorkingContextTokens = null);
+    int? WorkingContextTokens = null,
+    /// <summary>How hard the model is asked to work (Anthropic <c>output_config.effort</c>). See <c>ProviderConfig.Effort</c>.</summary>
+    string? Effort = null);
 
 /// <summary>Talks to an LLM. Implementations live in Enactive.Providers (transport stays out of Core).</summary>
 public interface IChatProvider

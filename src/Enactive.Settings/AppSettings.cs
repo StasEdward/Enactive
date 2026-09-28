@@ -99,6 +99,18 @@ public sealed class ProviderConfig
     /// </summary>
     public int? WorkingContextTokens { get; set; }
 
+    /// <summary>
+    /// How hard this provider's models are asked to work: low, medium, high, xhigh or max - sent as
+    /// Anthropic's <c>output_config.effort</c>. Blank sends nothing and the model's own default applies
+    /// (high on Claude Sonnet 5, medium on Claude Opus 5.5).
+    ///
+    /// <para><b>Why it matters.</b> A Claude 5 model reasons by default, adaptively, and what it reasons
+    /// counts against the same output limit as its answer. At the default effort a combined review spent
+    /// 5,501 and then 11,002 output tokens and returned no text at all (run ddca5350, 2026-09-28). A lower
+    /// effort makes it reason less, or not at all for a simple question.</para>
+    /// </summary>
+    public string? Effort { get; set; }
+
     public ProviderConfig Clone() => new()
     {
         Id = Id,
@@ -118,7 +130,8 @@ public sealed class ProviderConfig
         ContextWindowTokens = ContextWindowTokens,
         AnswerReserveTokens = AnswerReserveTokens,
         HandoverAtPercent = HandoverAtPercent,
-        WorkingContextTokens = WorkingContextTokens
+        WorkingContextTokens = WorkingContextTokens,
+        Effort = Effort
     };
 }
 

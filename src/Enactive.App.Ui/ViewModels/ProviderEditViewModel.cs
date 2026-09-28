@@ -38,6 +38,7 @@ internal sealed class ProviderEditViewModel : ObservableObject
     private string _answerReserveText;
     private string _handoverAtText;
     private string _workingContextText;
+    private string _effortText;
     private string _headersText;
     private string _modelsText;
     private string _status = string.Empty;
@@ -63,6 +64,7 @@ internal sealed class ProviderEditViewModel : ObservableObject
         _answerReserveText = config.AnswerReserveTokens?.ToString() ?? string.Empty;
         _handoverAtText = config.HandoverAtPercent?.ToString() ?? string.Empty;
         _workingContextText = config.WorkingContextTokens?.ToString() ?? string.Empty;
+        _effortText = config.Effort ?? string.Empty;
         _headersText = ModelFetch.FormatHeaders(config.Headers);
         _modelsText = string.Join("\n", config.Models);
 
@@ -98,6 +100,9 @@ internal sealed class ProviderEditViewModel : ObservableObject
 
     /// <summary>The prompt size to work at, in tokens — see ProviderConfig.WorkingContextTokens.</summary>
     public string WorkingContextText { get => _workingContextText; set => Set(ref _workingContextText, value); }
+
+    /// <summary>How hard the model is asked to work — see ProviderConfig.Effort.</summary>
+    public string EffortText { get => _effortText; set => Set(ref _effortText, value); }
     public string HeadersText { get => _headersText; set => Set(ref _headersText, value); }
     public string ModelsText { get => _modelsText; set => Set(ref _modelsText, value); }
     public string Status { get => _status; set => Set(ref _status, value); }
@@ -215,6 +220,8 @@ internal sealed class ProviderEditViewModel : ObservableObject
             int.TryParse(HandoverAtText.Trim().TrimEnd('%'), out var hp) && hp is > 0 and < 100 ? hp : null;
         _config.WorkingContextTokens =
             int.TryParse(WorkingContextText.Trim(), out var wc) && wc > 0 ? wc : null;
+        var effort = EffortText.Trim().ToLowerInvariant();
+        _config.Effort = effort is "low" or "medium" or "high" or "xhigh" or "max" ? effort : null;
         _config.Headers = ModelFetch.ParseHeaders(HeadersText);
         _config.Models = ModelLines();
         _onSaved();

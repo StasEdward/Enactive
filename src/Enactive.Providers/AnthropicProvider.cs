@@ -55,9 +55,17 @@ public sealed partial class AnthropicProvider : IChatProvider
 
     public int? HandoverAtPercent(ChatRequest request) => _descriptor.HandoverAtPercent;
     public int? WorkingContext(ChatRequest request) => _descriptor.WorkingContextTokens;
-    public int ReasoningAllowance(ChatRequest request) => Math.Clamp(_descriptor.ReasoningTokenAllowance ?? (false ? 8192 : 0), 0, 65536);
+    /// <summary>
+    /// Room for reasoning on top of the answer. A Claude 5 model reasons by default (adaptive thinking),
+    /// and those tokens count against max_tokens with the answer - so an allowance of nothing left a
+    /// review at the default effort to spend its whole limit reasoning and return no text (run ddca5350:
+    /// 11,002 output tokens, 0 characters). The limit is a ceiling, not a spend: a model that does not
+    /// reason costs nothing for it. An explicit allowance, 0 included, is taken as said.
+    /// </summary>
+    public int ReasoningAllowance(ChatRequest request) => Math.Clamp(_descriptor.ReasoningTokenAllowance ?? 8192, 0, 65536);
 
-    private HttpRequestMessage BuildHttpRequest(ChatRequest request, bool stream, bool includeTemperature, int maxTokens, bool includeSchema)
+    private HttpRequestMessage BuildHttpRequest(ChatRequest request, bool stream, bool includeTemperature, int maxTokens, bool includeSchema,
+        bool includeEffort = false)
     {
         var systemParts = new List<string>();
         var wire = new List<Dictionary<string, object?>>();
@@ -165,11 +173,15 @@ public sealed partial class AnthropicProvider : IChatProvider
             // use - but incompatible with prefill and with citations, and the schema subset is
             // narrower than the tool-use one. So it is sent hopefully and dropped on refusal below,
             // never depended on.
+            // One object for both: the response format and how hard the model is to work (effort) are two
+            // fields of output_config, and a second assignment would drop the first.
+            var outputConfig = new Dictionary<string, object?>();
             if (includeSchema && request.ResponseSchema is { Length: > 0 } schema)
-                payload["output_config"] = new
-                {
-                    format = new { type = "json_schema", schema = ToElement(schema) }
-                };
+                outputConfig["format"] = new { type = "json_schema", schema = ToElement(schema) };
+            if (includeEffort && _descriptor.Effort is { Length: > 0 } effort)
+                outputConfig["effort"] = effort;
+            if (outputConfig.Count > 0)
+                payload["output_config"] = outputConfig;
 
             var url = ProviderEndpoint.Chat(_descriptor, ProviderKind.Anthropic);
             var json = JsonSerializer.Serialize(payload, JsonOpts);
@@ -201,6 +213,8 @@ public sealed partial class AnthropicProvider : IChatProvider
     }
 
     private readonly ConcurrentDictionary<string, bool> NoStructuredOutput = new(StringComparer.Ordinal);
+    // A model that refused the configured effort: sent without it from then on, and said so once.
+    private readonly ConcurrentDictionary<string, bool> NoEffort = new(StringComparer.Ordinal);
     // Scoped to this endpoint/configuration instance, never a global model-name assumption.
     private readonly ConcurrentDictionary<string, bool> NoTemperature = new(StringComparer.Ordinal);
 
@@ -212,6 +226,7 @@ public sealed partial class AnthropicProvider : IChatProvider
         var wantedSchema = request.ResponseSchema is { Length: > 0 };
         var schemaTooComplex = false;
         var includeSchema = wantedSchema && !NoStructuredOutput.ContainsKey(request.Model);
+        var includeEffort = _descriptor.Effort is { Length: > 0 } && !NoEffort.ContainsKey(request.Model);
         var maxTokens = OutputTokenBudget.Resolve(request, _descriptor, DefaultMaxTokens,
             ModelCaps.TryGetValue(request.Model, out var known) ? known : null)!.Value;
         for (var attempt = 0; ; attempt++)
@@ -223,7 +238,7 @@ public sealed partial class AnthropicProvider : IChatProvider
                     ChatMessage.System("Return only JSON conforming to this response schema. "
                         + "The application validates the complete response: " + request.ResponseSchema) }).ToArray() }
                 : request;
-            using var message = BuildHttpRequest(wireRequest, stream, includeTemperature, maxTokens, includeSchema);
+            using var message = BuildHttpRequest(wireRequest, stream, includeTemperature, maxTokens, includeSchema, includeEffort);
             var response = stream
                 ? await ProviderDeadline.HeadersAsync(_http, message, _descriptor.StreamIdleTimeoutSeconds, ct)
                 : await _http.SendAsync(message, HttpCompletionOption.ResponseContentRead, ct);
@@ -243,6 +258,14 @@ public sealed partial class AnthropicProvider : IChatProvider
                     { includeTemperature = false; temperatureRejected = true; continue; }
                     if (TryParseMaxTokensCap(body, maxTokens, out var cap))
                     { maxTokens = cap; learnedCap = cap; continue; }
+                    if (includeEffort && body.Contains("effort", StringComparison.OrdinalIgnoreCase))
+                    {
+                        _log.Warn(LogSource.Llm, $"Anthropic refused effort '{_descriptor.Effort}' for {request.Model}; sending without it from now on.",
+                            category: _descriptor.Id);
+                        NoEffort[request.Model] = true;
+                        includeEffort = false;
+                        continue;
+                    }
                     if (includeSchema && IsGrammarTooComplex(body))
                     {
                         _log.Warn(LogSource.Llm, "Anthropic rejected the response grammar as too complex; retrying this request with the schema in the prompt. Local response validation remains required.",
@@ -315,6 +338,8 @@ public sealed partial class AnthropicProvider : IChatProvider
         var root = doc.RootElement;
 
         var text = new StringBuilder();
+        var thinking = new StringBuilder();
+        var thinkingBlocks = 0;
         List<ToolCall>? toolCalls = null;
 
         if (!root.TryGetProperty("content", out var content) || content.ValueKind != JsonValueKind.Array)
@@ -327,6 +352,15 @@ public sealed partial class AnthropicProvider : IChatProvider
                 if (type == "text" && block.TryGetProperty("text", out var txt) && txt.ValueKind == JsonValueKind.String)
                 {
                     text.Append(txt.GetString());
+                }
+                // Reasoning. A Claude 5 model reasons unasked, and by default returns the blocks with their
+                // text omitted - so the text may be empty while the tokens were spent. Counted either way:
+                // a reply of no text that reasoned is not the same fact as a reply of nothing.
+                else if (type is "thinking" or "redacted_thinking")
+                {
+                    thinkingBlocks++;
+                    if (block.TryGetProperty("thinking", out var th) && th.ValueKind == JsonValueKind.String)
+                        thinking.Append(th.GetString());
                 }
                 else if (type == "tool_use")
                 {
@@ -369,9 +403,12 @@ public sealed partial class AnthropicProvider : IChatProvider
             : (inputTokens ?? 0) + (cached ?? 0) + (created ?? 0);
 
         var contentText = text.Length > 0 ? text.ToString() : null;
+        var reasoned = thinking.Length > 0 ? thinking.ToString()
+            : thinkingBlocks > 0 ? $"({thinkingBlocks} reasoning block(s); the provider returned no text for them)"
+            : null;
         return new ChatCompletion(
             new ChatMessage(ChatRole.Assistant, contentText, toolCalls),
-            finish, promptTokens, outputTokens, CachedPromptTokens: cached) { CacheCreationPromptTokens = created };
+            finish, promptTokens, outputTokens, Thinking: reasoned, CachedPromptTokens: cached) { CacheCreationPromptTokens = created };
     }
 
     private static void RequireCompletedTurn(string? finish)
