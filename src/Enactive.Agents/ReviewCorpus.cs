@@ -1,8 +1,5 @@
 namespace Enactive.Agents;
 
-using System.Security.Cryptography;
-using System.Text;
-using System.Text.Json;
 using Enactive.Core.Execution;
 
 /// <summary>
@@ -44,10 +41,7 @@ internal static class ReviewCorpus
     /// <summary>Under the workspace, beside the engine's other own data.</summary>
     internal const string Folder = ".enactive/review-corpus";
 
-    /// <summary>Oldest removed past this many. A bound, not a measurement: enough to hold weeks of refusals.</summary>
-    internal const int Keep = 200;
-
-    private static readonly JsonSerializerOptions Json = new() { WriteIndented = true };
+    internal const int Keep = RefusalCorpus.Keep;
 
     /// <summary>
     /// The structural validators, in the order the combined review applies them. ONE definition,
@@ -78,37 +72,11 @@ internal static class ReviewCorpus
             errors.ToArray());
     }
 
-    /// <summary>
-    /// Best effort. A review must never fail because its refusal could not be written down: the
-    /// corpus is an instrument, and the run it observes matters more than the observation.
-    /// </summary>
+    /// <summary>Best effort; see <see cref="RefusalCorpus.Record{T}"/>.</summary>
     internal static void Record(string? workspaceRoot, ReviewCorpusCase refusal)
-    {
-        if (string.IsNullOrWhiteSpace(workspaceRoot)) return;
-        try
-        {
-            var folder = Path.Combine(workspaceRoot, Folder);
-            Directory.CreateDirectory(folder);
-            var text = JsonSerializer.Serialize(refusal, Json);
-            var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text)))[..12].ToLowerInvariant();
-            File.WriteAllText(Path.Combine(folder, $"{refusal.RecordedAt:yyyyMMdd-HHmmss}-{hash}.json"), text);
+        => RefusalCorpus.Record(workspaceRoot, Folder, refusal.RecordedAt, refusal);
 
-            // The folder is the engine's own, and so is every file in it.
-            foreach (var old in new DirectoryInfo(folder).GetFiles("*.json")
-                         .OrderByDescending(f => f.Name, StringComparer.Ordinal).Skip(Keep))
-                old.Delete();
-        }
-        // ArgumentException too: a workspace path the file system rejects outright throws that, not
-        // an IOException, and the test for this caught the first draft letting it through.
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException
-                                       or ArgumentException)
-        {
-        }
-    }
-
-    internal static ReviewCorpusCase Read(string path)
-        => JsonSerializer.Deserialize<ReviewCorpusCase>(File.ReadAllText(path), Json)
-           ?? throw new InvalidDataException("Not a review corpus case: " + path);
+    internal static ReviewCorpusCase Read(string path) => RefusalCorpus.Read<ReviewCorpusCase>(path);
 
     /// <summary>The sources, rebuilt by the same three calls that built them during the review.</summary>
     internal static ReviewSources RestoreSources(IReadOnlyList<ReviewCorpusSource> recorded)

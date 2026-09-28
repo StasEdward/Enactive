@@ -114,29 +114,17 @@ public sealed class ARefusedReviewReplaysTests(ITestOutputHelper output)
 
     /// <summary>
     /// The corpus that lives in the repository: refusals copied in from real runs, replayed against
-    /// the validators as they are NOW. A case that has started to pass is a refusal a change has
-    /// fixed; one that still fails says so, with its current reason. This is the number the next
-    /// change to the reviewer is measured by - not a prediction, a count.
+    /// the validators as they are NOW and held to <c>expected.json</c> - a case that was accepted and
+    /// is refused again fails the build, and so does one that started passing without the manifest
+    /// saying so. See <see cref="CorpusRatchet"/>.
     /// </summary>
     [Fact]
     public void Every_refusal_in_the_corpus_still_replays()
-    {
-        var folder = CorpusFolder();
-        var cases = Directory.Exists(folder)
-            ? Directory.GetFiles(folder, "*.json").OrderBy(f => f, StringComparer.Ordinal).ToArray()
-            : [];
-
-        var fixedNow = 0;
-        foreach (var path in cases)
+        => CorpusRatchet.Hold(CorpusRatchet.RepositoryFolder("review-corpus"), path =>
         {
-            var recorded = ReviewCorpus.Read(path);
-            var now = Replay(recorded);
-            if (now.Count == 0) fixedNow++;
-            output.WriteLine($"{Path.GetFileName(path)} [{recorded.Model}]: "
-                + (now.Count == 0 ? "ACCEPTED NOW" : "still refused: " + string.Join(" | ", now)));
-        }
-        output.WriteLine($"\n{fixedNow}/{cases.Length} recorded refusals are accepted by today's validators.");
-    }
+            var now = Replay(ReviewCorpus.Read(path));
+            return now.Count == 0 ? null : string.Join(" | ", now);
+        }, output);
 
     [Fact]
     public void Recording_never_fails_the_review_it_observes()
@@ -168,12 +156,5 @@ public sealed class ARefusedReviewReplaysTests(ITestOutputHelper output)
             Assert.DoesNotContain(kept, f => ReviewCorpus.Read(f).RecordedAt < start.AddSeconds(3));
         }
         finally { Directory.Delete(root, true); }
-    }
-
-    private static string CorpusFolder()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "Enactive.sln"))) dir = dir.Parent;
-        return Path.Combine(dir!.FullName, "tests", "Enactive.Engine.Tests", "review-corpus");
     }
 }

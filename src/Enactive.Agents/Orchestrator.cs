@@ -524,7 +524,8 @@ public sealed partial class Orchestrator : IOrchestrator
             yield return scope.Ev(EventKind.ReviewRequested, "Planner is checking final criteria against the original request before execution…");
             plan = await InScopeAsync(runId, taskId, null, () => PlanCheckReview.RunAsync(plan with { Checks = CriteriaFor(plan) }, intent.RawText,
                 intent.Context, models.PlanProvider, models.Plan.Model, budget,
-                _generationBudgets.For(GenerationPurpose.Planning), ct, preserveCriteria: resume is not null || _successCriteria.Count > 0 || !_proposeChecks, tools: _tools.Definitions));
+                _generationBudgets.For(GenerationPurpose.Planning), ct, preserveCriteria: resume is not null || _successCriteria.Count > 0 || !_proposeChecks, tools: _tools.Definitions,
+                workspaceRoot: _workspace.RootPath));
             yield return scope.Usage(WorkEventPayload.WorkPurpose.Plan, models.Plan,
                 plan.PromptTokens, plan.CompletionTokens, cached: plan.CachedPromptTokens, created: plan.CacheCreationPromptTokens);
             if (plan.IncompleteReason is { } contractFailure)
@@ -1721,7 +1722,8 @@ public sealed partial class Orchestrator : IOrchestrator
                     var checkedRepair = await InScopeAsync(runId, taskId, null, () => PlanCheckReview.RunAsync(
                         new PlanResult(IntentDisposition.QuickAction, "Review repaired criteria", null) { Checks = revised, Restrictions = intent.Context.Restrictions, ActionPolicy = intent.Context.ActionPolicy },
                         intent.RawText, intent.Context, plannerProvider, plannerModel.Model, budget,
-                        _generationBudgets.For(GenerationPurpose.Planning), ct, preserveCriteria: true, tools: _tools.Definitions));
+                        _generationBudgets.For(GenerationPurpose.Planning), ct, preserveCriteria: true, tools: _tools.Definitions,
+                        workspaceRoot: _workspace.RootPath));
                     if (session is not null)
                         yield return session.Scope.Usage(WorkEventPayload.WorkPurpose.Plan, plannerModel,
                             checkedRepair.PromptTokens, checkedRepair.CompletionTokens,

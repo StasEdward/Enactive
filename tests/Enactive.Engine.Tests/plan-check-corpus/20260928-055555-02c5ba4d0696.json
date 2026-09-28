@@ -1,0 +1,587 @@
+{
+  "RecordedAt": "2026-09-28T08:55:55+03:00",
+  "Model": "claude-opus-4-7",
+  "Answer": "{\n  \"sources\": [\n    {\"id\": \"O001\", \"assessment\": \"Instruction to add tests for the least-covered behaviour. Requires identifying existing coverage; no final check command required.\"},\n    {\"id\": \"O002\", \"assessment\": \"Tests must be in style of existing tests, must fail if behaviour is broken (verified by temporarily breaking and restoring). No source files may be modified to make tests pass. This is a worker verification step, not a final check.\"},\n    {\"id\": \"O003\", \"assessment\": \"Test command is 'dotnet test'. Must be run as-is. If it exits 0 with no output it ran no tests. Not included as a final check because the locked criteria list contains only 'Builds'.\"},\n    {\"id\": \"O004\", \"assessment\": \"Every invocation of the test command must accept exit codes 0 or 1 as expected (non-zero is the finding). Build/restore must not be given expectedExitCodes. Not represented in final checks list.\"},\n    {\"id\": \"O005\", \"assessment\": \"Report which tests failed and why. Reporting is a worker responsibility, not a final shell check.\"}\n  ],\n  \"checks\": [\n    {\n      \"name\": \"Builds\",\n      \"command\": \"dotnet build\",\n      \"origin\": \"proposed\",\n      \"request_quote\": null,\n      \"expectedExitCode\": 0,\n      \"reason\": \"Ensures the test project (with newly added tests) compiles. Build is expected to succeed per the request's separation of build/restore from the test command.\"\n    }\n  ],\n  \"forbidden_effects\": [],\n  \"action_policy\": null,\n  \"unresolved\": null\n}",
+  "Complete": true,
+  "Inputs": {
+    "Request": "Add tests to this workspace for the behaviour with the least coverage you can identify from the tests already here.\n\nWrite tests for behaviour that is not covered yet, in the style of the tests that are already here. Each test must FAIL if the behaviour it describes is broken — check that by breaking it temporarily and putting it back. Do not change any source file to make a test pass.\n\nTest command: dotnet test\n\nRun the tests with THAT command and no other. If it exits 0 and prints nothing at all it ran no tests — say so and find the command that does, rather than reporting a pass.\n\nEVERY time you run the test command — at any step, including immediately after writing a new test — pass \"expectedExitCodes\": [0, 1] to run_command. This task writes tests for behaviour that is not covered and may well be broken, so a non-zero exit from the TEST COMMAND is expected at every step: it is the finding, not a malfunction. Report which tests failed and why. Do NOT pass expectedExitCodes to a build or a restore — those are meant to succeed, and a non-zero exit there is a real failure to fix.",
+    "Checks": [
+      {
+        "Name": "Builds",
+        "Command": "dotnet build",
+        "ExpectedExitCode": 0,
+        "Required": true,
+        "Origin": "Declared",
+        "AlreadyPassing": false,
+        "RequestQuote": null,
+        "PlanningReason": null
+      }
+    ],
+    "Restrictions": [],
+    "ActionPolicy": null,
+    "Tools": [
+      {
+        "Name": "write_file",
+        "Kind": "Write",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "edit_file",
+        "Kind": "Write",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "read_file",
+        "Kind": "Read",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "read_files",
+        "Kind": "Read",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "search_files",
+        "Kind": "Read",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "count_matches",
+        "Kind": "Read",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "file_stats",
+        "Kind": "Read",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "compare_files",
+        "Kind": "Read",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "list_dir",
+        "Kind": "Read",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "create_directory",
+        "Kind": "Write",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "move_file",
+        "Kind": "Relocate",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "copy_file",
+        "Kind": "Relocate",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "delete_file",
+        "Kind": "Relocate",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "run_command",
+        "Kind": "Command",
+        "CommandPolicy": "SimpleCommand"
+      },
+      {
+        "Name": "run_powershell",
+        "Kind": "Command",
+        "CommandPolicy": "PowerShell"
+      },
+      {
+        "Name": "git",
+        "Kind": "Command",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "docker",
+        "Kind": "Command",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "send_email",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__desktop-commander__get_config_bc4fcdd4a3b3",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__desktop-commander__set_config_value_b7c4aca44165",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__desktop-commander__read_file_c9f8123bd272",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__desktop-commander__read_multiple_files_e5a76d8b8c47",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__desktop-commander__write_file_15223b63a4a5",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__desktop-commander__write_pdf_d8d250fc0109",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__desktop-commander__create_directory_8e08ae38fb4e",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__desktop-commander__list_directory_e83a035ce66b",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__desktop-commander__move_file_403dde2c0d9d",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__desktop-commander__start_search_c2991c82e799",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__desktop-commander__get_more_search_res_8c9b6f5763fb",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__desktop-commander__stop_search_74979191b4ac",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__desktop-commander__list_searches_fa551dc0c45c",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__desktop-commander__get_file_info_2a6c9a903aed",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__desktop-commander__edit_block_235d69233bb4",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__desktop-commander__start_process_5dfbabdc22a7",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__desktop-commander__read_process_output_0afe470349fa",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__desktop-commander__interact_with_proce_b825b6c9bf3d",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__desktop-commander__force_terminate_05ffba4fe680",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__desktop-commander__list_sessions_9d42b703dc41",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__desktop-commander__list_processes_a1dc93a24a67",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__desktop-commander__kill_process_1efbb0b47248",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__desktop-commander__get_usage_stats_43dd06725558",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__desktop-commander__get_recent_tool_cal_2139f93d6c9a",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__desktop-commander__give_feedback_to_de_2e9774ee5525",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__desktop-commander__get_prompts_473a2da47474",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__log-analyzer__read_log_abbf916b6ef3",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__find_attribute_usag_3f01d0492925",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__get_instantiation_o_ef4efabb6344",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__inspect_external_as_312e2f9b3518",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__get_type_overview_d4329cd3a10d",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__start_background_ta_5b4c9c329ffc",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__find_unused_symbols_ebfaada2e0df",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__analyze_data_flow_dce164ccae4e",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__find_references_2329d96b8a96",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__set_active_solution_eebc0878eb97",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__list_trusted_paths_acb9c84abb8f",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__revoke_trust_fe7e0de42529",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__get_task_status_3798e932fb26",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__check_architecture_bd8049d72c85",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__find_implementation_2fe7fcc0ccd7",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__find_circular_depen_95ffd04bcd5f",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__find_god_objects_e3ac425359f5",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__apply_code_action_581a1e3b5a1e",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__find_callers_c9a148e851e0",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__rename_symbol_0ecb5767996b",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__find_disposable_mis_8ba4680fe383",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__find_obsolete_usage_1f7ec739ae2d",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__get_method_source_557ae0bca5c9",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__peek_il_ba0c206fc872",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__get_project_health_06b39e668a3b",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__get_di_registration_4a825724c21e",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__find_catch_blocks_102673d60baf",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__trust_solution_5c199525884c",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__find_large_classes_273f2a5bec65",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__get_public_api_surf_193d9e794cb4",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__get_code_actions_0dc5065b256c",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__get_source_generato_dc3fed4a0aa5",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__find_naming_violati_ed195218250a",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__analyze_method_656b2ed62ec1",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__get_extension_metho_ac47c32e7da8",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__get_overloads_28b9465b9596",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__generate_test_skele_3e94f397a813",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__unload_solution_4dcd1dff1982",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__find_tests_for_symb_90c3592ae553",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__find_throw_sites_4bfd51c6c959",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__get_diagnostics_28ba28f309be",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__find_async_violatio_f36d92b2537a",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__list_solutions_d3ebab9038ee",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__list_running_tasks_020c39295d5a",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__get_project_depende_f346c6997c95",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__get_call_graph_68cc31355f34",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__get_complexity_metr_c4dadfdb36ad",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__resolve_stack_trace_c8e7acf63ba9",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__get_generated_code_8be689b357f8",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__get_operators_3b3c6fbe11be",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__analyze_control_flo_39e508eb92b9",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__load_solution_4e590c187239",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__find_breaking_chang_5eff50cdc813",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__go_to_definition_9fe166ad7482",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__find_uncovered_symb_7ee8fe8c7628",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__search_symbols_ec0b6d6c89d2",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__get_symbol_context_ef457346d0b7",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__get_exception_flow_e4791a7a3834",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__change_signature_90e0ea78fb56",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__get_test_summary_888919cc0909",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__find_reflection_usa_cd97dcf204d3",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__rebuild_solution_70c12cd537c4",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__analyze_change_impa_c6ca67762ee0",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__find_event_subscrib_401c87a81739",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__get_code_fixes_06b0fdfb01f5",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__get_file_overview_9a6474792a19",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__get_type_hierarchy_6d986cbc1843",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      },
+      {
+        "Name": "mcp__roslyn-codelens__get_nuget_dependenc_4cc5fe1eaaf4",
+        "Kind": "Unknown",
+        "CommandPolicy": "None"
+      }
+    ],
+    "PreserveCriteria": true
+  },
+  "Refusal": "Locked criterion omitted or changed; report unresolved instead."
+}
