@@ -151,10 +151,13 @@ public sealed class ARefusedReviewReplaysTests(ITestOutputHelper output)
     /// them, and only then did report_checks - kept as it was - get refused, with no round left. All the
     /// validators now run at once, and the first refusal names both.
     /// </summary>
-    [Fact]
-    public void A_first_refusal_names_what_used_to_surface_only_after_a_correction()
+    [Theory]
+    [InlineData("20260928-112433-9ddb535bf12f.json")]   // run 4f1d97, Operations
+    [InlineData("20260928-131703-974d7a67965c.json")]   // run 2508838d, Operations
+    [InlineData("20260928-132550-42640557ae7d.json")]   // run 2508838d, README
+    public void A_first_refusal_names_what_used_to_surface_only_after_a_correction(string recorded)
     {
-        var first = ReviewCorpus.Read(Path.Combine(CorpusRatchet.RepositoryFolder("review-corpus"), "20260928-112433-9ddb535bf12f.json"));
+        var first = ReviewCorpus.Read(Path.Combine(CorpusRatchet.RepositoryFolder("review-corpus"), recorded));
         var now = Replay(first);
         Assert.Contains(now, e => e.StartsWith("$.proof.calls[0]", StringComparison.Ordinal));
         Assert.Contains(now, e => e.StartsWith("$.report_checks[0].calls: cite only displayed evidence", StringComparison.Ordinal));
