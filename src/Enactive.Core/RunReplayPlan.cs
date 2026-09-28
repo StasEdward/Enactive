@@ -169,7 +169,7 @@ public static class RunReplayPlan
         var outcome = kind switch
         {
             RunOutcomeKind.Completed => StepOutcomeKind.Succeeded,
-            RunOutcomeKind.Incomplete => StepOutcomeKind.Incomplete,
+            RunOutcomeKind.Incomplete or RunOutcomeKind.NeedsUser => StepOutcomeKind.Incomplete,
             _ => StepOutcomeKind.Failed
         };
 

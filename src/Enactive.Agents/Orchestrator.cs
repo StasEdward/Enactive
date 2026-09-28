@@ -113,6 +113,9 @@ public sealed partial class Orchestrator : IOrchestrator
     private readonly Planner _planner;
     private readonly IPermissionEngine _permissions;
     private readonly IDecisionHandler _decisions;
+    // The same handler, through the ledger of questions runs have stopped at - see DecisionLedger.
+    private readonly LedgeredDecisions _ledgered;
+    private readonly DecisionLedger _ledger;
     private readonly PermissionPolicy _policy;
     private readonly IServiceProvider _services;
     private readonly IModelRouter _router;
@@ -273,7 +276,9 @@ public sealed partial class Orchestrator : IOrchestrator
         _workspace = workspace;
         _planner = planner;
         _permissions = permissions;
-        _decisions = decisions;
+        _ledger = new DecisionLedger(workspace.RootPath);
+        _ledgered = new LedgeredDecisions(decisions, _ledger);
+        _decisions = _ledgered;
         _policy = policy;
         _services = services;
         _router = router ?? new ModelRouter(modelResolver);
@@ -307,7 +312,7 @@ public sealed partial class Orchestrator : IOrchestrator
     }
 
     public IAsyncEnumerable<WorkEvent> SubmitIntentAsync(Intent intent, CancellationToken ct)
-        => RunAsync(intent, null, ct);
+        => StopsAtQuestions(RunAsync(intent, null, ct), intent.Id, ct);
 
     /// <summary>
     /// Picks an interrupted run up at its last step boundary. A NEW run under the SAME task - see
@@ -315,14 +320,69 @@ public sealed partial class Orchestrator : IOrchestrator
     /// </summary>
     public IAsyncEnumerable<WorkEvent> ResumeRunAsync(
         RunCheckpoint checkpoint, WorkContext context, CancellationToken ct)
-        => RunAsync(
+        => StopsAtQuestions(RunAsync(
             // The task id comes from the checkpoint, never from a caller: a resumed run that landed
             // under a different task would show in the history as unrelated work, and everything
             // built on "attempts at one task" would quietly stop being true.
             new Intent(checkpoint.TaskId, checkpoint.Request, IntentSource.CommandBar, context,
                        DateTimeOffset.UtcNow, checkpoint.WorkerId),
             checkpoint,
-            ct);
+            ct), checkpoint.TaskId, ct);
+
+    /// <summary>
+    /// Where a run that stopped at a question ends: with the question, not with an error.
+    ///
+    /// <para>A question nobody is here to answer unwinds the run like a cancellation - from inside
+    /// a tool call, through the step, through whatever pump the step ran on - because until it is
+    /// answered, that is what it is. What it must NOT do is end like one. So this is the one place
+    /// that knows the difference: when the run stops and the ledger says it stopped at a question,
+    /// the run ends with <see cref="RunOutcomeKind.NeedsUser"/> and the question in its reason, and
+    /// its last step boundary is left in place to be picked up - no ending code ran, so nothing
+    /// forgot the checkpoint. Anything else goes on up exactly as it came.</para>
+    ///
+    /// <para>A run that reaches an end - any end - has no more use for the answers it was given,
+    /// and they are forgotten with it, as its checkpoint is.</para>
+    /// </summary>
+    private async IAsyncEnumerable<WorkEvent> StopsAtQuestions(IAsyncEnumerable<WorkEvent> run, Guid taskId,
+        [EnumeratorCancellation] CancellationToken ct)
+    {
+        var events = run.GetAsyncEnumerator(ct);
+        var runId = Guid.Empty;
+        try
+        {
+            while (true)
+            {
+                WorkEvent? current = null;
+                ParkedDecision? parked = null;
+                try
+                {
+                    if (!await events.MoveNextAsync()) break;
+                    current = events.Current;
+                }
+                catch (Exception) when (!ct.IsCancellationRequested && _ledgered.TakeParked(taskId) is { } question)
+                {
+                    parked = question;
+                }
+
+                if (parked is not null)
+                {
+                    var reason = $"waiting for your decision: {parked.Topic} {parked.Detail}".TrimEnd()
+                               + " - answer it, and the run goes on from where it stopped.";
+                    yield return new WorkEvent(Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow, EventKind.TaskFailed,
+                        $"{RunOutcomeKind.NeedsUser}: {reason}", WorkEventPayload.OutcomePayload(RunOutcomeKind.NeedsUser, reason));
+                    yield break;
+                }
+
+                runId = current!.RunId;
+                yield return current;
+            }
+        }
+        finally
+        {
+            await events.DisposeAsync();
+        }
+        _ledger.Forget(taskId);
+    }
 
     /// <param name="resume">
     /// The interrupted run this one is carrying on from, or null for a run starting fresh. Both go

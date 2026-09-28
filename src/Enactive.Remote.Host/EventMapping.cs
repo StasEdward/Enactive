@@ -118,6 +118,9 @@ public static class EventMapping
             RunOutcomeKind.Failed => (RemoteEventKind.Failed, detail),
             RunOutcomeKind.Incomplete => (RemoteEventKind.Incomplete, detail),
             RunOutcomeKind.Cancelled => (RemoteEventKind.Cancelled, detail),
+            // The remote contract has no word for "waiting for you" yet; unfinished is the true one
+            // of those it has, and the detail says what it is waiting for.
+            RunOutcomeKind.NeedsUser => (RemoteEventKind.Incomplete, detail),
 
             // The engine ended the run and did not say how. Reported as unfinished rather than as
             // either success or failure: both would be inventions, and this way the run stops

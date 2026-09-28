@@ -79,7 +79,15 @@ public enum RunOutcomeKind
     Incomplete,
 
     /// <summary>The user stopped it.</summary>
-    Cancelled
+    Cancelled,
+
+    /// <summary>
+    /// Stopped at a question only a person can answer, with nobody there to answer it - and kept,
+    /// not refused. The question is written down, the run's last step boundary is kept, and the run
+    /// carries on from there once somebody answers. Not an ending: nothing about the work is known
+    /// to be wrong or unfinished, only that it cannot go on without somebody.
+    /// </summary>
+    NeedsUser
 }
 
 /// <summary>How one unit of work ended. Aggregated into a <see cref="RunOutcomeKind"/>.</summary>

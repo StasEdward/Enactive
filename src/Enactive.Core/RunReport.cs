@@ -29,6 +29,9 @@ public static class RunReport
         RunOutcomeKind.Failed => 1,
         RunOutcomeKind.Incomplete => 2,
         RunOutcomeKind.Cancelled => 130,   // the shell convention for SIGINT
+        // Not a failure and not unfinished work: a question is waiting for somebody. A pipeline
+        // may want to notify rather than alert, and it can only do that if the code is its own.
+        RunOutcomeKind.NeedsUser => 3,
         _ => 1
     };
 
