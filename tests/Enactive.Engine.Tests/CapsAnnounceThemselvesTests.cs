@@ -112,7 +112,10 @@ public sealed class CapsAnnounceThemselvesTests
         // The digest that replaced the excerpt for logs too large to hold. Its own caps: how much
         // of one record's message survives, and how many timeline entries it will list.
         ["LogDigest.MessageChars"] = "A_message_too_long_for_the_digest_is_cut_and_says_so",
-        ["LogPayload.MaxEntryBytes"] = nameof(BoundedWireLoggingTests.Wire_capture_is_optional_and_bounded_without_changing_the_answer)
+        ["LogPayload.MaxEntryBytes"] = nameof(BoundedWireLoggingTests.Wire_capture_is_optional_and_bounded_without_changing_the_answer),
+        // The places a step cites, opened by the engine for its review: a long range and a long line say they were cut.
+        ["CitedPlaces.MaxLines"] = nameof(ACitedPlaceIsOpenedByTheEngineTests.A_long_range_and_a_long_line_say_they_were_cut),
+        ["CitedPlaces.MaxLineChars"] = nameof(ACitedPlaceIsOpenedByTheEngineTests.A_long_range_and_a_long_line_say_they_were_cut)
     };
 
     /// <summary>

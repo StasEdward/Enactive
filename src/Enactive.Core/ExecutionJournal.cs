@@ -171,7 +171,13 @@ public enum ToolCallOrigin
     Nudged,
 
     /// <summary>It came in a repeat attempt of a step whose review was rejected.</summary>
-    Retry
+    Retry,
+
+    /// <summary>
+    /// Made by the engine itself when the step was reviewed - a place the step cited, opened as the workspace
+    /// stands (CitedPlaces). Not a call of the model's.
+    /// </summary>
+    Engine
 }
 
 /// <summary>

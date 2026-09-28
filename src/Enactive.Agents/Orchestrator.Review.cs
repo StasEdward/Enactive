@@ -58,7 +58,7 @@ public sealed partial class Orchestrator
         IArtifactScope store, RunScope scope, RunModels models, int? stepNumber,
         IWorkspaceChanges? changes, WorkspaceSnapshot? before, string request,
         Func<WorkEvent, ValueTask> publish, CancellationToken ct, IReadOnlyList<string>? planSteps = null,
-        RequestObligations? obligations = null)
+        RequestObligations? obligations = null, string? handedOn = null)
     {
         var prefix = stepNumber is { } number ? $"[{number}] " : "";
         ValueTask Emit(EventKind kind, string summary) => publish(scope.Ev(kind, prefix + summary, stepNumber));
@@ -72,6 +72,18 @@ public sealed partial class Orchestrator
         if (scope.Budget.TurnExhausted is { } beforeReview)
             return new(new ReviewResult(false, beforeReview), BudgetExhausted: beforeReview);
         await Emit(EventKind.ReviewRequested, stepNumber is null ? "reviewing…" : "reviewing with reasoner…");
+
+        // The places the report and the handed-on result cite, opened by the engine now and recorded as its
+        // own observations, so the reviewer judges a claim about "Program.cs:223" against line 223 and not
+        // against whatever part of the file the step happened to read and the evidence happened to keep.
+        var cited = CitedPlaces.Observe(LastAssistant(messages) + "\n" + (handedOn ?? ""), _workspace.RootPath,
+            () => CitedPlaces.Sweep(_workspace.RootPath));
+        foreach (var (place, observed) in cited)
+            journal.Record(stepNumber, CitedPlaces.ToolName, JsonSerializer.Serialize(new { cited = place }),
+                ActionOutcome.Succeeded, observed, WorkspaceEffect.None, origin: ToolCallOrigin.Engine);
+        if (cited.Count > 0)
+            await Emit(EventKind.ContextAssembled,
+                $"Opened {cited.Count} place(s) the step's report and result cite, for the review: {string.Join(", ", cited.Select(c => c.Cited))}");
         var (review, mode) = await ReviewAsync(
             title, messages, journal, evidenceStart, stepStart, scope.Artifacts, store,
             models.ReviewProvider!, models.ReviewModel, ct, changes, before, request,
@@ -124,10 +136,25 @@ public sealed partial class Orchestrator
             lock (artifacts)
                 changed = FilesTouched(artifacts);
 
-            var written = (changes is not null && before is not null
-                              ? await MeasuredChangesAsync(changes, before, journal.Actions.Skip(stepStart).ToArray(), ct)
-                              : null)
-                          ?? await ReadWrittenAsync(store, ct);
+            var measured = changes is not null && before is not null
+                ? await MeasuredChangesAsync(changes, before, journal.Actions.Skip(stepStart).ToArray(), ct)
+                : null;
+            IReadOnlyList<WrittenFile> written = measured ?? await ReadWrittenAsync(store, ct);
+            // What the step wrote where the comparison does not look - a file git ignores, a folder it skips -
+            // is still the step's work. Run 16d57849: the report the step wrote, Docs/DRIFT_ollama.md, is ignored
+            // by git; the review saw none of it, and could not confirm "a full summary table" it had not been shown.
+            if (measured is not null)
+            {
+                var shown = measured.Select(w => w.RelativePath.Replace('\\', '/')).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                var unmeasured = (await ReadWrittenAsync(store, ct))
+                    // Scratch stays out of review, as everywhere: helpers and logs, not the work.
+                    .Where(w => !shown.Contains(w.RelativePath.Replace('\\', '/'))
+                                && !w.RelativePath.Replace('\\', '/').StartsWith(WorkspaceGuard.ScratchPrefix + "/", StringComparison.OrdinalIgnoreCase))
+                    .Select(w => w with { Heading = "WRITTEN by this step where the workspace comparison does not look (a file git "
+                                                   + "ignores, or a folder it skips) - how it is NOW:" })
+                    .ToArray();
+                if (unmeasured.Length > 0) written = [.. measured, .. unmeasured];
+            }
             return await _stepReview.ExecuteAsync(title, LastAssistant(convo), journal,
                 evidenceStart, stepStart, changed, written, reviewProvider, reviewModel, ct,
                 request, obligations, beforeRetry);
