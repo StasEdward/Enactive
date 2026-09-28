@@ -94,8 +94,10 @@ internal static class ReviewCorpus
     {
         var errors = CombinedReviewValidation.Errors(answer, obligations, evidence).ToList();
         errors.AddRange(ReportCommandAudit.Errors(answer, evidence, sources, obligations));
-        if (errors.Count == 0)
-            errors.AddRange(SemanticReviewAudit.Errors(answer, evidence, sources, obligations));
+        // All at once, not in layers: a refusal that names everything wrong can be corrected in one
+        // round; one that names the next layer only after the first is fixed runs out of rounds.
+        foreach (var error in SemanticReviewAudit.Errors(answer, evidence, sources, obligations))
+            if (!errors.Contains(error)) errors.Add(error);
         if (errors.Count > 0)
             return new(errors, []);
         var repairs = ReviewRepairContract.Errors(answer, sources, obligations);

@@ -31,15 +31,28 @@ internal static class SemanticReviewAudit
         
         """;
 
+    /// <summary>
+    /// The citation and routing errors - of every part that can be read, whatever else is wrong with the
+    /// answer. It used to run only once the structure was clean, so its errors surfaced only after a
+    /// correction, with no attempt left (run 4f1d97, step 9: report_checks refused after the parts that
+    /// had been asked for were fixed). A part too malformed to read is left to the structural check.
+    /// </summary>
     internal static IReadOnlyList<string> Errors(string answer, EvidenceView evidence, ReviewSources sources, RequestObligations obligations)
     {
-        using var doc = JsonDocument.Parse(ModelText.ExtractJsonObject(ModelText.StripThink(answer))!);
+        if (ModelText.ExtractJsonObject(ModelText.StripThink(answer)) is not { } json) return [];
+        JsonDocument doc;
+        try { doc = JsonDocument.Parse(json); }
+        catch (JsonException) { return []; }
+        using var _ = doc;
         var root = doc.RootElement;
         var errors = new List<string>();
+        if (root.ValueKind != JsonValueKind.Object) return errors;
+
         void Reference(JsonElement reference, string path, bool assertion = false)
         {
-            var source = sources.Find(reference.GetProperty("source_id").GetString()!);
-            if (source is null || source.Fragment(reference.GetProperty("fragment_id").GetString()!) is null)
+            if (Str(reference, "source_id") is not { } sourceId || Str(reference, "fragment_id") is not { } fragmentId) return;
+            var source = sources.Find(sourceId);
+            if (source is null || source.Fragment(fragmentId) is null)
                 errors.Add(path + ": cite an existing nonempty displayed source fragment");
             else if (!assertion && source.Kind == "execution-evidence")
                 errors.Add(path + ": tool evidence is not a worker/saved report source");
@@ -47,59 +60,66 @@ internal static class SemanticReviewAudit
                 errors.Add(path + ": a worker summary is not an assertion implementation; cite visible test/check source");
         }
         var ci = 0;
-        foreach (var claim in root.GetProperty("claims").EnumerateArray())
+        foreach (var claim in Arr(root, "claims"))
         {
             var ri = 0;
-            foreach (var requirement in claim.GetProperty("requirements").EnumerateArray())
+            foreach (var requirement in Arr(claim, "requirements"))
             {
                 var path = $"$.claims[{ci}].requirements[{ri++}].verification";
-                var check = requirement.GetProperty("verification");
-                var assertions = check.GetProperty("assertions");
-                if (requirement.GetProperty("scope").GetString() != obligations.CurrentScope
-                    && !requirement.GetProperty("global").GetBoolean()
-                    && check.GetProperty("verdict").GetString() != "not-applicable")
+                if (requirement.ValueKind != JsonValueKind.Object || !requirement.TryGetProperty("verification", out var check)
+                    || check.ValueKind != JsonValueKind.Object) continue;
+                var verdict = Str(check, "verdict");
+                if (Str(requirement, "scope") is { } scope && scope != obligations.CurrentScope
+                    && !(requirement.TryGetProperty("global", out var global) && global.ValueKind == JsonValueKind.True)
+                    && verdict is not null && verdict != "not-applicable")
                     errors.Add(path + ": deferred requirements need not-applicable with a scope explanation; do not repair another step here");
-                if (check.GetProperty("verdict").GetString() == "pass"
-                    && (assertions.GetArrayLength() == 0 || string.IsNullOrWhiteSpace(check.GetProperty("detects").GetString())))
+                var assertions = Arr(check, "assertions").ToArray();
+                if (verdict == "pass" && (assertions.Length == 0 || string.IsNullOrWhiteSpace(Str(check, "detects"))))
                     errors.Add(path + ": pass requires actual assertion references and the violating behavior they detect");
                 var ai = 0;
-                foreach (var assertion in assertions.EnumerateArray()) Reference(assertion, path + $".assertions[{ai++}]", true);
+                foreach (var assertion in assertions) Reference(assertion, path + $".assertions[{ai++}]", true);
             }
             ci++;
         }
         var mappings = new HashSet<(string, string)>();
         var i = 0;
-        foreach (var check in root.GetProperty("report_checks").EnumerateArray())
+        foreach (var check in Arr(root, "report_checks"))
         {
             var path = $"$.report_checks[{i++}]";
+            if (check.ValueKind != JsonValueKind.Object) continue;
             Reference(check, path);
-            foreach (var call in check.GetProperty("calls").EnumerateArray())
-                if (!evidence.VisibleActionIds.Contains(call.GetInt32()))
+            foreach (var call in Arr(check, "calls"))
+                if (call.ValueKind == JsonValueKind.Number && call.TryGetInt32(out var id) && !evidence.VisibleActionIds.Contains(id))
                     errors.Add(path + ".calls: cite only displayed evidence");
-            var kind = check.GetProperty("kind").GetString();
-            if (kind == "observed" && check.GetProperty("verdict").GetString() == "pass"
-                && check.GetProperty("calls").GetArrayLength() == 0)
+            var kind = Str(check, "kind");
+            if (kind == "observed" && Str(check, "verdict") == "pass" && !Arr(check, "calls").Any())
                 errors.Add(path + ".calls: an observed result requires visible supporting evidence");
-            if (kind != "requirement-map") continue;
-            var sourceId = check.GetProperty("source_id").GetString()!;
-            var fragmentId = check.GetProperty("fragment_id").GetString()!;
+            if (kind != "requirement-map" || Str(check, "source_id") is not { } sourceId || Str(check, "fragment_id") is not { } fragmentId) continue;
             mappings.Add((sourceId, fragmentId));
             var fragment = sources.Find(sourceId)?.Fragment(fragmentId) ?? "";
             var mentioned = Ids(fragment);
-            var listed = check.GetProperty("obligation_ids").EnumerateArray().Select(x => x.GetString()!).ToHashSet();
+            var listed = Arr(check, "obligation_ids").Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString()!).ToHashSet();
             if (!mentioned.SetEquals(listed))
                 errors.Add(path + ".obligation_ids: list exactly the O-IDs on the cited fragment");
             // Unknown IDs in a report are a WORK defect, not a malformed reviewer response.
-            if (listed.Any(id => !obligations.Items.Any(o => o.Id == id))
-                && check.GetProperty("verdict").GetString() == "pass")
+            if (listed.Any(id => !obligations.Items.Any(o => o.Id == id)) && Str(check, "verdict") == "pass")
                 errors.Add(path + ".verdict: unknown report O-ID cannot pass; assess the report defect");
         }
-        foreach (var source in sources.All.Where(s => s.Kind != "execution-evidence"))
-            for (var f = 0; f < source.Fragments.Length; f++)
-                if (Ids(source.Fragments[f]).Count > 0 && !mappings.Contains((source.Id, $"F{f + 1}")))
-                    errors.Add($"$.report_checks: missing requirement-map assessment for {source.Id}/F{f + 1}");
+        // Only when report_checks could be read at all: a missing section is the structural check's to name.
+        if (root.TryGetProperty("report_checks", out var checks) && checks.ValueKind == JsonValueKind.Array)
+            foreach (var source in sources.All.Where(s => s.Kind != "execution-evidence"))
+                for (var f = 0; f < source.Fragments.Length; f++)
+                    if (Ids(source.Fragments[f]).Count > 0 && !mappings.Contains((source.Id, $"F{f + 1}")))
+                        errors.Add($"$.report_checks: missing requirement-map assessment for {source.Id}/F{f + 1}");
         return errors;
     }
+
+    private static string? Str(JsonElement e, string name)
+        => e.ValueKind == JsonValueKind.Object && e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+
+    private static IEnumerable<JsonElement> Arr(JsonElement e, string name)
+        => e.ValueKind == JsonValueKind.Object && e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Array
+            ? v.EnumerateArray().ToArray() : [];
 
     internal static HashSet<string> Ids(string text) => Regex.Matches(text, @"\bO\d{3,}\b", RegexOptions.None,
         TimeSpan.FromMilliseconds(100)).Select(m => m.Value).ToHashSet(StringComparer.Ordinal);

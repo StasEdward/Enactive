@@ -273,6 +273,40 @@ public sealed class AReviewIsCorrectedByPartsTests(ITestOutputHelper output)
             schema["required"]!.AsArray().Select(r => r!.GetValue<string>()).ToArray());
     }
 
+    // ── a third round, only for progress ─────────────────────────────────────────────────
+
+    private static JsonObject Patch(JsonNode claim)
+        => new() { ["verdict"] = "pass", ["notes"] = "checked", ["claims"] = new JsonArray(claim), ["repairs"] = new JsonArray() };
+
+    /// <summary>
+    /// A correction by parts that fixed what it was asked and got something else wrong gets one more round -
+    /// it is getting somewhere; one that sends the same mistake back does not.
+    /// </summary>
+    [Theory]
+    [InlineData(true, 3)]
+    [InlineData(false, 2)]
+    public async Task A_correction_that_got_somewhere_gets_one_more_round(bool progress, int requests)
+    {
+        var obligations = RequestObligations.Create("Write one record\nWrite another record");
+        var good = Answer("O001", "O002")["claims"]![1]!;
+        var wrongScope = good.DeepClone();
+        wrongScope["scope"] = "S9";
+        // Progress: O002 missing, then sent with a wrong scope (a different error), then right.
+        // No progress: O002 with a wrong scope, then the same wrong scope again.
+        var first = progress ? Answer("O001") : Answer("O001", "O002");
+        if (!progress) first["claims"]![1]!["scope"] = "S9";
+        var provider = new FakeChatProvider(
+            Turn.Says(first.ToJsonString()),
+            Turn.Says(Patch(wrongScope.DeepClone()).ToJsonString()),
+            Turn.Says(Patch(good.DeepClone()).ToJsonString()));
+
+        var result = await new Reviewer().ReviewWithProofAsync("write", "Wrote both records", new ExecutionJournal().Describe(),
+            [], [], obligations, provider, "review", default);
+
+        Assert.Equal(requests, provider.Requests.Count);
+        Assert.Equal(progress, result.Pass);
+    }
+
     // ── the corpus ───────────────────────────────────────────────────────────────────────
 
     /// <summary>

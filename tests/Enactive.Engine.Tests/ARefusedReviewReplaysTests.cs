@@ -146,6 +146,20 @@ public sealed class ARefusedReviewReplaysTests(ITestOutputHelper output)
         }
     }
 
+    /// <summary>
+    /// Run 4f1d97, step 9: the first refusal named the proof's citations, a correction by parts fixed
+    /// them, and only then did report_checks - kept as it was - get refused, with no round left. All the
+    /// validators now run at once, and the first refusal names both.
+    /// </summary>
+    [Fact]
+    public void A_first_refusal_names_what_used_to_surface_only_after_a_correction()
+    {
+        var first = ReviewCorpus.Read(Path.Combine(CorpusRatchet.RepositoryFolder("review-corpus"), "20260928-112433-9ddb535bf12f.json"));
+        var now = Replay(first);
+        Assert.Contains(now, e => e.StartsWith("$.proof.calls[0]", StringComparison.Ordinal));
+        Assert.Contains(now, e => e.StartsWith("$.report_checks[0].calls: cite only displayed evidence", StringComparison.Ordinal));
+    }
+
     [Fact]
     public void Recording_never_fails_the_review_it_observes()
     {

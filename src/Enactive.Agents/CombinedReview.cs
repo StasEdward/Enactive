@@ -188,7 +188,12 @@ public sealed partial class Reviewer
         ReviewMappingCompletion? mappingCompletion = null;
         // Amendment G: a refusal about parts is corrected by those parts; see ReviewSectionRepair.
         ReviewSectionRepair? sectionRepair = null;
-        for (var attempt = 0; attempt < 2; attempt++)
+        // Two rounds, and a third only for a correction by parts that got somewhere: the corrected answer
+        // is refused again by parts, for something other than the last time. Bounded by the review budget
+        // like any round (beforeRetry below).
+        var rounds = 2;
+        IReadOnlyList<string>? refusedByParts = null;
+        for (var attempt = 0; attempt < rounds; attempt++)
         {
             if (attempt > 0 && beforeRetry?.Invoke(prompt, output) is { } spent)
                 return new(false, spent, prompt, output) { CachedPromptTokens = cached, CacheCreationPromptTokens = created, BudgetExhausted = spent };
@@ -263,6 +268,10 @@ public sealed partial class Reviewer
                     }
                     else if (ReviewSectionRepair.For(decoded, errors, obligations) is { } parts)
                     {
+                        if (sectionRepair is not null && attempt == rounds - 1 && rounds == 2
+                            && refusedByParts is not null && !refusedByParts.SequenceEqual(errors))
+                            rounds = 3;
+                        refusedByParts = errors;
                         sectionRepair = parts;
                         messages.Add(ChatMessage.User(parts.Instruction(references.Diagnostic(problem)) + sources.Describe()));
                     }
