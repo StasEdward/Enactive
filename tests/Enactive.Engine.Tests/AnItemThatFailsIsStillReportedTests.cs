@@ -82,6 +82,8 @@ public sealed class AnItemThatFailsIsStillReportedTests
         var events = await fx.RunAsync(fx.Build(worker), "review every wiki page");
 
         Assert.NotEqual(RunOutcomeKind.Completed, events.Last().Outcome());
+        // The run's headline is what the items came to, not the first reason one of them gave.
+        Assert.Contains("2 item step(s): 1 not finished, 1 done, not reviewed", events.Last().Summary, StringComparison.Ordinal);
         Assert.Contains(events, e => e.Kind == EventKind.StepCompleted
                                      && e.Summary.Contains("review page: wiki/a.md — INCOMPLETE: the context window is full", StringComparison.Ordinal));
         Assert.Contains(events, e => e.Kind == EventKind.StepCompleted && e.Summary.Contains("review page: wiki/b.md — done", StringComparison.Ordinal));

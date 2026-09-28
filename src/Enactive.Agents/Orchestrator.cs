@@ -1832,6 +1832,17 @@ public sealed partial class Orchestrator : IOrchestrator
             reasons = stepReasons.ToArray();
         }
 
+        // A run whose work was done item by item leads with what the items came to, from the engine's
+        // records - not with the first reason one item happened to give (run 4f1d97 led with a reviewer's
+        // remark about one page of twelve).
+        var itemSteps = scheduler.Steps.Where(s => s.ExpandedFrom is not null).ToArray();
+        if (itemSteps.Length > 0)
+        {
+            var byStatus = itemSteps.GroupBy(s => ItemReport.Status(session.Records.GetValueOrDefault(s.Id)))
+                .Select(g => $"{g.Count()} {g.Key.ToLowerInvariant()}");
+            reasons = [$"{itemSteps.Length} item step(s): {string.Join(", ", byStatus)}", .. reasons];
+        }
+
         var runOutcome = RunOutcomeOf(outcomes);
         if (cycle && runOutcome == RunOutcomeKind.Completed)
             runOutcome = RunOutcomeKind.Incomplete;
