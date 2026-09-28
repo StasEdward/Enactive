@@ -22,7 +22,7 @@ public sealed partial class Orchestrator
         await foreach (var ev in RunToolLoopAsync(scope.TaskId, scope.RunId, provider, model.Model,
             models.Worker, step.Messages, scope.Artifacts, context, step.Store, step.Journal, step.Reads,
             stepNumber, result, scope.Budget, scope.Granted, ct, model.ProviderId,
-            step.RestartFrom, changes, before, attemptOrigin))
+            step.RestartFrom, changes, before, attemptOrigin, step.Output, step.OutputSlot))
             await publish(ev);
         if (!models.ReviewOn || !result.Succeeded) return null;
         return await ReviewAttemptAsync(title, step.Messages, step.Journal, step.EvidenceStart,

@@ -70,7 +70,10 @@ public static class EventMapping
         EventKind.ReviewRequested,
         EventKind.TaskCompleted,
         EventKind.TaskFailed,
-        EventKind.GenerationProgress
+        EventKind.GenerationProgress,
+        // A step's output is its values - paths and text from the workspace - for the next step,
+        // and the gateway has no more business holding them than a command's output.
+        EventKind.StepOutputRecorded
     ];
 
     /// <summary>Whether this kind is one the owner sees a line for.</summary>

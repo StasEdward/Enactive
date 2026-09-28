@@ -27,6 +27,12 @@ public sealed record CheckpointStep(
     string? Outcome = null)
 {
     public IReadOnlyList<string>? ObligationIds { get; init; }
+
+    /// <summary>The output the plan declared for this step, so a resumed step is held to the same contract.</summary>
+    public Enactive.Core.Tasks.StepOutputSchema? Output { get; init; }
+
+    /// <summary>What a finished step handed on - its dependents, resumed, still receive it.</summary>
+    public Enactive.Core.Tasks.StepOutput? Result { get; init; }
 }
 
 /// <summary>

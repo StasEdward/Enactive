@@ -202,6 +202,7 @@ public sealed partial class Orchestrator : IOrchestrator
     /// </summary>
     private readonly IReadOnlyList<SuccessCriterionDefinition> _successCriteria;
     private readonly IReadOnlyList<IEcosystem> _ecosystems;
+    private readonly bool _stepOutputs;
     private readonly ISuccessEvaluator _successEvaluator;
 
     /// <summary>
@@ -260,8 +261,13 @@ public sealed partial class Orchestrator : IOrchestrator
         // The kinds of project the engine can build and read, each behind IEcosystem. None by
         // default: a workspace no ecosystem recognises gets no build check, and so does a test that
         // says nothing about builds.
-        IReadOnlyList<IEcosystem>? ecosystems = null)
+        IReadOnlyList<IEcosystem>? ecosystems = null,
+        // Phase 2: whether the planner may declare what a step hands on as values, and steps must
+        // then hand it on with submit_step_output. Off by default - it changes the planner's prompt
+        // and what every such step must do to finish, and is to be switched on by evidence.
+        bool stepOutputs = false)
     {
+        _stepOutputs = stepOutputs;
         _ecosystems = ecosystems ?? Array.Empty<IEcosystem>();
         // The machine's own store unless a test points it somewhere temporary. Defaulted rather
         // than required because a run that never writes outside the workspace never touches it, and
@@ -506,6 +512,7 @@ public sealed partial class Orchestrator : IOrchestrator
                         intent.RawText, intent.Context, models.PlanProvider, models.Plan.Model, ct,
                         _limits.MaxSteps, _proposeChecks && _successCriteria.Count == 0,
                         turnCeiling: RunawayCeiling, outputBudget: _generationBudgets.For(GenerationPurpose.Planning),
+                        stepOutputs: _stepOutputs,
                         beforeRetry: budget.TurnExhaustedAfter));
         }
         catch (RetryBudgetExceededException ex)
@@ -549,7 +556,8 @@ public sealed partial class Orchestrator : IOrchestrator
                     ct.ThrowIfCancellationRequested();
                     plan = await InScopeAsync(runId, taskId, null, () => _planner.ReplanAsync(
                         intent.RawText, intent.Context, plan, defect, models.PlanProvider, models.Plan.Model, ct,
-                        _limits.MaxSteps, _proposeChecks && _successCriteria.Count == 0, RunawayCeiling, _generationBudgets.For(GenerationPurpose.Planning)));
+                        _limits.MaxSteps, _proposeChecks && _successCriteria.Count == 0, RunawayCeiling, _generationBudgets.For(GenerationPurpose.Planning),
+                        _stepOutputs));
                 }
                 catch (OperationCanceledException) { throw; }
                 catch (Exception ex) { replanFailure = "Plan repair failed: " + ex.Message; }
@@ -579,6 +587,11 @@ public sealed partial class Orchestrator : IOrchestrator
             yield return scope.Ev(EventKind.ContextAssembled,
                 "Carried on as the quick action it was when it stopped at a question, not re-planned into steps.");
         }
+
+        // Step outputs are a switch, not a suggestion the planner can take up on its own: with it off,
+        // a declared output is dropped and the steps run as they always did.
+        if (!_stepOutputs && plan.Plan is { } declaring && declaring.Steps.Any(st => st.Output is not null))
+            plan = plan with { Plan = declaring with { Steps = declaring.Steps.Select(st => st with { Output = null }).ToArray() } };
 
         // Validate before baseline checks, worker dispatch, or checkpoint writes can have effects.
         // A completed prefix in a checkpoint does not make a structurally invalid graph valid.
@@ -699,6 +712,9 @@ public sealed partial class Orchestrator : IOrchestrator
         }
 
         var session = new RunSession(scope, messages) { Builds = builds };
+        // What finished steps handed on comes back with them: their dependents, resumed, receive it.
+        foreach (var finished in resume?.Steps ?? [])
+            if (finished.Result is { } handed) session.Outputs[finished.Id] = handed;
         if (plan.Disposition == IntentDisposition.QuickAction)
         {
             await foreach (var ev in RunQuickActionAsync(intent, session, models, plan, ct))
@@ -1059,7 +1075,11 @@ public sealed partial class Orchestrator : IOrchestrator
                 .Select(s => new CheckpointStep(
                     s.Id, s.Title, s.DependsOn, s.Complexity.ToString(),
                     (statuses.TryGetValue(s.Id, out var st) ? st : StepStatus.Pending).ToString(),
-                    outcomesNow.TryGetValue(s.Id, out var oc) ? oc.ToString() : null) { ObligationIds = s.ObligationIds })
+                    outcomesNow.TryGetValue(s.Id, out var oc) ? oc.ToString() : null)
+                    {
+                        ObligationIds = s.ObligationIds, Output = s.Output,
+                        Result = session.Outputs.TryGetValue(s.Id, out var handed) ? handed : null
+                    })
                 .ToArray();
 
             return new RunCheckpoint(
@@ -1136,6 +1156,10 @@ public sealed partial class Orchestrator : IOrchestrator
                 // would tell this step that the work it depends on does not exist.
                 unverifiedSteps = stepOutcomes.Where(p => p.Value == StepOutcomeKind.DoneUnverified).Select(p => p.Key).ToArray();
             }
+            // What the steps it depends on handed on, as values (Phase 2) - not a retelling of them.
+            var handedOn = step.DependsOn.Select(d => session.Outputs.TryGetValue(d, out var o) ? o : null).OfType<StepOutput>().ToArray();
+            if (handedOn.Length > 0)
+                convo.Add(ChatMessage.User(StepOutputContract.ForDependents(handedOn)));
             convo.Add(ChatMessage.User(
                 $"Proceed with this step of the plan: {step.Title}\n"
                 + $"This is step {stepNumber} of {total}. Current obligation scope: S{stepNumber}.\n"
@@ -1188,7 +1212,7 @@ public sealed partial class Orchestrator : IOrchestrator
 
             // The record of what has been done, over the same ground as `convo` above: shared with
             // the rest of the run when the conversation is, this step's own when it is not.
-            var attemptState = session.BeginStep(convo, store, restartFrom);
+            var attemptState = session.BeginStep(convo, store, restartFrom, step.Output);
 
             // The workspace as this step found it. Taken once, before the first attempt: a retry
             // after a rejection is judged on everything the STEP changed, not on its last attempt.
@@ -1257,6 +1281,15 @@ public sealed partial class Orchestrator : IOrchestrator
             // RunOutcomeOf - and it says so on its card, with the reason the verdict was missing.
             if (outcome is StepOutcomeKind.Succeeded or StepOutcomeKind.DoneUnverified)
             {
+                // What it handed on, kept and recorded BEFORE its dependents are released, for the
+                // same reason as the digest below: one dispatched a moment early must find it.
+                if (attemptState.OutputSlot.Build(stepNumber, step.Title, step.Output) is { } handed)
+                {
+                    session.Outputs[step.Id] = handed;
+                    await Publish(new WorkEvent(Guid.NewGuid(), scope.TaskId, scope.RunId, DateTimeOffset.UtcNow,
+                        EventKind.StepOutputRecorded, $"[{stepNumber}] output handed on: {handed.ValuesJson}",
+                        WorkEventPayload.StepOutputPayload(handed)));
+                }
                 lock (digest)
                     digest.Add($"{step.Title}: {Gist(LastAssistant(convo))}");
                 await EmitStepDone(outcome == StepOutcomeKind.Succeeded
@@ -1614,7 +1647,7 @@ public sealed partial class Orchestrator : IOrchestrator
                 s.Id, s.Title, CheckpointNames.StatusOf(s.Status), s.DependsOn,
                 Enum.TryParse<StepComplexity>(s.Complexity, ignoreCase: true, out var c)
                     ? c
-                    : StepComplexity.Normal) { ObligationIds = s.ObligationIds })
+                    : StepComplexity.Normal) { ObligationIds = s.ObligationIds, Output = s.Output })
             .ToArray();
 
         // Understood rather than Unreadable: this plan was read successfully once, by the run that
@@ -1646,6 +1679,20 @@ public sealed partial class Orchestrator : IOrchestrator
 
     /// <summary>How a finished step is named on its card.</summary>
     /// <summary>What became of every file this run produced, as the engine sees it now. See ProducedFiles.</summary>
+    /// <summary>A path a step output names exists: in the workspace on disk, or staged by this run.</summary>
+    private bool OutputPathExists(string path, IArtifactScope store)
+    {
+        if (store.PendingPaths.Any(p => string.Equals(p.Replace('\\', '/').TrimStart('.', '/'),
+                path.Replace('\\', '/').TrimStart('.', '/'), StringComparison.OrdinalIgnoreCase)))
+            return true;
+        try
+        {
+            var full = WorkspaceGuard.ResolveInside(_workspace.RootPath, path);
+            return File.Exists(full) || Directory.Exists(full);
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException) { return false; }
+    }
+
     /// <summary>Most build targets one run baselines: a workspace of loose projects with no solution is built a few at most.</summary>
     private const int MaxBuildTargets = 4;
 
@@ -2350,7 +2397,9 @@ public sealed partial class Orchestrator : IOrchestrator
         IWorkspaceChanges? changes = null, WorkspaceSnapshot? stepStart = null,
         // What a call in THIS attempt counts as when nothing else explains it: Retry once the
         // step is being repeated after a rejected review, Native the first time through.
-        ToolCallOrigin attemptOrigin = ToolCallOrigin.Native)
+        ToolCallOrigin attemptOrigin = ToolCallOrigin.Native,
+        // What this step must hand on as values, and where what it hands on is kept (Phase 2).
+        StepOutputSchema? outputSchema = null, StepOutputSlot? outputSlot = null)
     {
         // An async iterator cannot return a value, so the caller passes in the slot the loop fills.
         // Without it "how did this end" existed only as English inside an event, and every consumer
@@ -2445,6 +2494,9 @@ public sealed partial class Orchestrator : IOrchestrator
             _decisions.CanApprove);
 
         var toolDefs = _tools.Definitions.Where(d => offer.Offered.Contains(d.Name)).ToArray();
+        // The step's own hand-over, when the plan declared what it hands on. Not in the registry: it
+        // belongs to this step, and is made from the schema it will be checked against.
+        if (outputSchema is not null) toolDefs = [.. toolDefs, StepOutputContract.Tool(outputSchema)];
 
         // Withheld VISIBLY. A run that quietly cannot use git and does not say so is a worse
         // failure than the one above: the report would name a plan that could never have worked,
@@ -3161,6 +3213,26 @@ public sealed partial class Orchestrator : IOrchestrator
                     yield break;
                 }
 
+                // A step that was to hand its result on as values and has not: told once, with the
+                // fields, and then not called finished - the steps after it would have nothing.
+                if (outputSchema is not null && outputSlot is { Values: null })
+                {
+                    if (!outputSlot.Nudged)
+                    {
+                        outputSlot.Nudged = true;
+                        messages.Add(ChatMessage.User(
+                            $"This step is not finished until it hands its result on with {StepOutputContract.ToolName}. "
+                            + "Call it now with the step's result: "
+                            + string.Join(", ", outputSchema.Fields.Where(f => f.Required).Select(f => f.Name)) + "."));
+                        continue;
+                    }
+                    loopResult.Set(StepOutcomeKind.Incomplete,
+                        $"the step finished without handing on its declared output ({StepOutputContract.ToolName}), "
+                        + "so the steps after it would have nothing to work from");
+                    yield return Ev(EventKind.ErrorObserved, "The step finished without submitting its declared output.");
+                    yield break;
+                }
+
                 loopResult.Set(StepOutcomeKind.Succeeded, null);
                 yield break; // genuine final answer - no tool calls
             }
@@ -3217,6 +3289,38 @@ public sealed partial class Orchestrator : IOrchestrator
                 // the conversation so far, what this loop did, and this call with the rest of its turn.
                 void ParkHere() => _progress.Park(taskId, new ParkedPosition(stepNo, messages.ToArray(),
                     journal.Actions.Skip(loopMark).ToArray(), toolCalls.Skip(callIndex).ToArray()));
+
+                // The step's hand-over: checked here, against the one contract, and nowhere else.
+                if (outputSchema is not null && outputSlot is not null && call.Name == StepOutputContract.ToolName)
+                {
+                    yield return Invoked(call);
+                    var sameAgain = outputSlot.LastRefused == TaskProgress.Canonical(call.ArgumentsJson);
+                    var verdict = StepOutputContract.Check(outputSchema, call.ArgumentsJson,
+                        path => OutputPathExists(path, store), id => id >= 1 && id <= journal.Actions.Count);
+                    string handed;
+                    if (verdict.Accepted)
+                    {
+                        outputSlot.Accept(verdict);
+                        outputSlot.LastRefused = null;
+                        handed = $"Accepted as this step's output (revision {outputSlot.Revision}); the steps after it receive "
+                            + "these values." + (verdict.Notes.Count > 0 ? " " + string.Join(" ", verdict.Notes) : "")
+                            + " Finish the step with a short closing message.";
+                        journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Succeeded, handed, WorkspaceEffect.None);
+                        yield return Ev(EventKind.ToolResult, $"{call.Name} -> ok: {handed}");
+                    }
+                    else
+                    {
+                        // A submission sent again unchanged is said to be one (C.5): a refusal that
+                        // does not say so changes nothing about what the model does next.
+                        handed = (sameAgain ? "This is the same submission as the last one, unchanged - the problems below still stand. " : "")
+                            + string.Join(" ", verdict.Errors) + " Nothing was stored; send the corrected submission.";
+                        outputSlot.LastRefused = TaskProgress.Canonical(call.ArgumentsJson);
+                        journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Refused, handed, WorkspaceEffect.None);
+                        yield return Ev(EventKind.ToolResult, $"{call.Name} -> failed: {handed}");
+                    }
+                    messages.Add(ChatMessage.Tool(call.Id, handed));
+                    continue;
+                }
                 if (readResults.Count == 0 && CanRunRead(call))
                 {
                     var group = toolCalls.Skip(callIndex).Take(ParallelToolReads.Limit)

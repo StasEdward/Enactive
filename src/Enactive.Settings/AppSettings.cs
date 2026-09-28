@@ -393,6 +393,11 @@ public sealed partial class AppSettings
     // asked for it. Turn it off to judge ad-hoc runs the way they were judged before.
     public bool ProposeChecks { get; set; } = true;
 
+    // Phase 2: a planned step may declare what it hands on as values, and must then hand it on with
+    // submit_step_output; the steps after it receive the values instead of a retelling. Off until
+    // runs show it helps - it changes the planner's prompt and what a declared step needs to finish.
+    public bool StepOutputs { get; set; }
+
     // Put a rejected step's files back to how they were before it ran. Without this the gate stops
     // only the REPORT: the run says Failed while the rejected document stays in the workspace, which
     // is the version someone is most likely to open next. A file changed since the step wrote it is
@@ -857,6 +862,7 @@ public sealed partial class AppSettings
         WindowHeight = WindowHeight,
         KeepRuns = KeepRuns,
         ProposeChecks = ProposeChecks,
+        StepOutputs = StepOutputs,
         Bindings = Bindings.Clone(),
         RemoteAccess = RemoteAccess.Clone(),
         Smtp = Smtp.Clone(),

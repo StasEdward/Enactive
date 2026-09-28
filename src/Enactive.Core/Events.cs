@@ -58,7 +58,13 @@ public enum EventKind
     /// tool-call arguments and reasoning did not. Asked the same afternoon: "the model went off
     /// generating something again". It was writing a 27 KB report.</para>
     /// </summary>
-    GenerationProgress
+    GenerationProgress,
+
+    /// <summary>
+    /// A step's output, accepted by the engine (Phase 2): its values and where they came from, in
+    /// the payload. The run's record of it - the steps after it are handed these values.
+    /// </summary>
+    StepOutputRecorded
 }
 
 /// <summary>
@@ -635,6 +641,14 @@ public static class WorkEventPayload
             return null;
         }
     }
+
+    /// <summary>A step output as values: the whole record, so the run store holds what the next step was given.</summary>
+    public static string StepOutputPayload(Enactive.Core.Tasks.StepOutput output)
+        => System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, object?>
+        {
+            ["step"] = output.StepNo,
+            ["stepOutput"] = output
+        }, PayloadJson);
 
     public static string OutcomePayload(RunOutcomeKind kind, string? reason = null)
         => System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, string?>

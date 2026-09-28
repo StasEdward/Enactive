@@ -412,6 +412,9 @@ public sealed class EngineFixture : IDisposable
     /// <summary>The ecosystems the engine may build. None unless a test is about builds.</summary>
     public Enactive.Core.Builds.IEcosystem[]? EcosystemsOverride { get; set; }
 
+    /// <summary>Phase 2 step outputs. Off, as shipped, unless a test is about them.</summary>
+    public bool StepOutputs { get; set; }
+
     /// <summary>
     /// Invokes a tool the way the engine does: a fresh context over this fixture's workspace, with
     /// this fixture's journalled artifact store unless the caller hands in a step's own.
@@ -623,7 +626,8 @@ public sealed class EngineFixture : IDisposable
             checkpoints: checkpoints,
             settings: settings,
             checkSoundness: checkSoundness,
-            ecosystems: EcosystemsOverride);
+            ecosystems: EcosystemsOverride,
+            stepOutputs: StepOutputs);
     }
 
     /// <summary>Runs one intent to completion and returns every event it produced.</summary>

@@ -110,11 +110,11 @@ public sealed class Planner
         string request, WorkContext context, IChatProvider provider, string model,
         CancellationToken ct, int? maxSteps = null, bool proposeChecks = false,
         int? turnCeiling = null, int outputBudget = 4096,
-        Func<int, int, string?>? beforeRetry = null)
+        Func<int, int, string?>? beforeRetry = null, bool stepOutputs = false)
     {
         var messages = new List<ChatMessage>
         {
-            ChatMessage.System(SystemPromptFor(maxSteps, proposeChecks, turnCeiling)),
+            ChatMessage.System(SystemPromptFor(maxSteps, proposeChecks, turnCeiling, stepOutputs)),
             ChatMessage.User(Where(context) + Enactive.Core.Execution.RequestObligations.ExecutionPrompt(request))
         };
 
@@ -192,7 +192,7 @@ public sealed class Planner
     /// <summary>One structural repair attempt. Never falls back to execution of an unplanned action.</summary>
     internal async Task<PlanResult> ReplanAsync(string request, WorkContext context, PlanResult invalid,
         string diagnostic, IChatProvider provider, string model, CancellationToken ct,
-        int? maxSteps, bool proposeChecks, int turnCeiling, int outputBudget = 4096)
+        int? maxSteps, bool proposeChecks, int turnCeiling, int outputBudget = 4096, bool stepOutputs = false)
     {
         var steps = invalid.Plan!.Steps;
         var indices = steps.Select((step, index) => (step.Id, index)).GroupBy(x => x.Id)
@@ -205,12 +205,13 @@ public sealed class Planner
                 title = s.Title,
                 dependsOn = s.DependsOn.Select(id => indices.TryGetValue(id, out var index) ? index : -1).ToArray(),
                 complexity = s.Complexity.ToString().ToLowerInvariant(),
-                obligations = s.ObligationIds
+                obligations = s.ObligationIds,
+                output = s.Output is { } declared ? OutputJson(declared) : null
             })
         });
         ChatMessage[] messages =
         [
-            ChatMessage.System(SystemPromptFor(maxSteps, proposeChecks, turnCeiling)),
+            ChatMessage.System(SystemPromptFor(maxSteps, proposeChecks, turnCeiling, stepOutputs)),
             ChatMessage.User(Where(context) + Enactive.Core.Execution.RequestObligations.ExecutionPrompt(request)),
             ChatMessage.Assistant(prior),
             ChatMessage.User("The entire plan was rejected before execution: " + diagnostic
@@ -368,7 +369,11 @@ public sealed class Planner
                                 var known = Enactive.Core.Execution.RequestObligations.Create(fallbackTitle).Items.Select(o => o.Id).ToHashSet(StringComparer.Ordinal);
                                 if (obligationIds.Any(id => !known.Contains(id))) return null;
                             }
-                            specs.Add(new PlanStepSpec(stepTitle!, deps, ParseComplexity(el), declared) { ObligationIds = obligationIds });
+                            specs.Add(new PlanStepSpec(stepTitle!, deps, ParseComplexity(el), declared)
+                            {
+                                ObligationIds = obligationIds,
+                                Output = el.TryGetProperty("output", out var output) ? ParseOutput(output, specs.Count + 1) : null
+                            });
                         }
                     }
                 }
@@ -470,6 +475,39 @@ public sealed class Planner
         return StepComplexity.Normal;
     }
 
+    /// <summary>
+    /// A step's declared output, read leniently: a field with a type the engine cannot check is left
+    /// out rather than taken on trust, and a declaration with no field left is no declaration.
+    /// </summary>
+    internal static StepOutputSchema? ParseOutput(JsonElement output, int stepNo)
+    {
+        if (output.ValueKind != JsonValueKind.Object) return null;
+        var fields = new List<StepOutputField>();
+        foreach (var property in output.EnumerateObject())
+        {
+            if (property.Value.ValueKind != JsonValueKind.Object || string.IsNullOrWhiteSpace(property.Name)) continue;
+            var field = property.Value;
+            var type = StepOutputSchema.TypeNamed(field.TryGetProperty("type", out var t) && t.ValueKind == JsonValueKind.String ? t.GetString() : null);
+            if (type is null) continue;
+            int? Positive(string name) => field.TryGetProperty(name, out var n) && n.ValueKind == JsonValueKind.Number
+                && n.TryGetInt32(out var v) && v > 0 ? v : null;
+            fields.Add(new StepOutputField(property.Name, type.Value,
+                field.TryGetProperty("description", out var d) && d.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(d.GetString())
+                    ? d.GetString()! : property.Name,
+                Required: !(field.TryGetProperty("required", out var r) && r.ValueKind == JsonValueKind.False),
+                MaxItems: Positive("maxItems"), MaxLength: Positive("maxLength")));
+        }
+        return fields.Count == 0 ? null : new StepOutputSchema($"step{stepNo}", 1, fields);
+    }
+
+    /// <summary>A declared output as the planner wrote it, for a plan sent back to it to repair.</summary>
+    private static Dictionary<string, object?> OutputJson(StepOutputSchema schema)
+        => schema.Fields.ToDictionary(f => f.Name, f => (object?)new Dictionary<string, object?>
+        {
+            ["type"] = StepOutputSchema.NameOf(f.Type), ["description"] = f.Description, ["required"] = f.Required,
+            ["maxItems"] = f.MaxItems, ["maxLength"] = f.MaxLength
+        });
+
     private static string Truncate(string value, int max)
         => value.Length <= max ? value : value[..max];
 
@@ -481,6 +519,16 @@ public sealed class Planner
         + "or, when the request genuinely needs several stages:\n"
         + "{\"disposition\":\"task\",\"title\":\"short title\","
         + "\"steps\":[{\"title\":\"...\",\"dependsOn\":[],\"complexity\":\"normal\"}]}";
+
+    /// <summary>
+    /// How a step declares what it hands on as values (Phase 2). Short on purpose: the contract itself
+    /// reaches the worker through the tool made from it, not through this prompt.
+    /// </summary>
+    internal const string StepOutputsPrompt =
+        " A step whose RESULT later steps must use as data (pages to process, files found, names, counts) declares it: "
+        + "\"output\":{\"<field>\":{\"type\":\"path[]\",\"description\":\"...\",\"maxItems\":12}}; types: text, string, integer, "
+        + "boolean, path, path[], string[]. The step hands the values on with a tool and its dependents receive them. "
+        + "Limits are this task's (maxItems, maxLength). Declare nothing when prose is enough.";
 
     private const string SystemPrompt =
         """
@@ -546,9 +594,14 @@ public sealed class Planner
     /// How many turns a single step may take before the engine abandons it
     /// (<c>Orchestrator.RunawayCeiling</c>). Null leaves the paragraph out entirely.
     /// </param>
-    internal static string SystemPromptFor(int? maxSteps, bool proposeChecks = false, int? turnCeiling = null)
+    internal static string SystemPromptFor(int? maxSteps, bool proposeChecks = false, int? turnCeiling = null,
+        bool stepOutputs = false)
     {
         var prompt = SystemPrompt;
+
+        // Sent only when step outputs are on (amendment E: every paragraph says when it is NOT sent).
+        if (stepOutputs)
+            prompt += StepOutputsPrompt;
 
         if (turnCeiling is > 0)
             prompt += $" A step is ONE conversation with growing history. A step running past {turnCeiling} turns is ABANDONED; "

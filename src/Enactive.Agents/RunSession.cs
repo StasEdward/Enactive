@@ -14,6 +14,9 @@ internal sealed class RunSession(RunScope scope, List<ChatMessage> messages)
     public List<ChatMessage> Messages { get; } = messages;
     public List<string> Digest { get; } = new();
     public RequestObligations? Obligations { get; set; }
+
+    /// <summary>What each finished step handed on, by step id - see StepOutputContract.</summary>
+    public System.Collections.Concurrent.ConcurrentDictionary<Guid, StepOutput> Outputs { get; } = new();
     /// <summary>What the workspace's build reported before any work. See BuildRegression.</summary>
     public IReadOnlyList<BuildBaseline> Builds { get; init; } = [];
     public Dictionary<Guid, StepOutcomeKind> Outcomes { get; } = new();
@@ -65,17 +68,24 @@ internal sealed class RunSession(RunScope scope, List<ChatMessage> messages)
     }
 
     public StepAttemptState BeginStep(List<ChatMessage> conversation, IArtifactScope store,
-        IReadOnlyList<ChatMessage>? restartFrom = null)
+        IReadOnlyList<ChatMessage>? restartFrom = null, StepOutputSchema? output = null)
     {
         var journal = _sharedJournal ?? new ExecutionJournal();
         Track(journal, store);
         var start = journal.Mark();
         return new(conversation, store, journal, _sharedReads ?? new ReadLedger(),
-            _sharedJournal is null ? start : 0, start, restartFrom);
+            _sharedJournal is null ? start : 0, start, restartFrom) { Output = output };
     }
 }
 
 /// <summary>Survives retries of one step; transcript and evidence keep the same history.</summary>
 internal sealed record StepAttemptState(
     List<ChatMessage> Messages, IArtifactScope Store, ExecutionJournal Journal, ReadLedger Reads,
-    int EvidenceStart, int StepStart, IReadOnlyList<ChatMessage>? RestartFrom);
+    int EvidenceStart, int StepStart, IReadOnlyList<ChatMessage>? RestartFrom)
+{
+    /// <summary>What this step must hand on as values, when the plan declared it. Null: prose, as before.</summary>
+    public StepOutputSchema? Output { get; init; }
+
+    /// <summary>What it has handed on so far. Survives retries of the step, like its transcript.</summary>
+    public StepOutputSlot OutputSlot { get; } = new();
+}

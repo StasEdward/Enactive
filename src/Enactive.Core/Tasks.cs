@@ -21,6 +21,9 @@ public sealed record PlanStep(
     StepComplexity Complexity = StepComplexity.Normal)
 {
     public IReadOnlyList<string>? ObligationIds { get; init; }
+
+    /// <summary>What this step hands on as values, when the plan declared it (Phase 2). Null: prose, as before.</summary>
+    public StepOutputSchema? Output { get; init; }
 }
 
 /// <summary>A plan is a graph of steps. v1 builds a linear chain via <see cref="LinearPlan"/>.</summary>
@@ -56,6 +59,7 @@ public sealed record PlanStepSpec(
     bool DependenciesDeclared = false)
 {
     public IReadOnlyList<string>? ObligationIds { get; init; }
+    public StepOutputSchema? Output { get; init; }
 }
 
 /// <summary>
@@ -87,7 +91,7 @@ public static class DagPlan
                 deps = i > 0 ? new[] { ids[i - 1] } : Array.Empty<Guid>();
 
             steps.Add(new PlanStep(ids[i], specs[i].Title, StepStatus.Pending, deps, specs[i].Complexity)
-                { ObligationIds = specs[i].ObligationIds });
+                { ObligationIds = specs[i].ObligationIds, Output = specs[i].Output });
         }
         return new Plan(Guid.NewGuid(), steps);
     }
