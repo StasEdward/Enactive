@@ -16,7 +16,7 @@ using Xunit;
 /// </summary>
 public sealed class WavesAreValidatedAndAttributedTests
 {
-    private sealed class Pages(string extra = "") : IEcosystem
+    internal sealed class Pages(string extra = "") : IEcosystem
     {
         public string Name => "pages";
 
@@ -41,15 +41,15 @@ public sealed class WavesAreValidatedAndAttributedTests
                 }).ToArray();
     }
 
-    private const string Alpha = "Alpha writes page a";
-    private const string Beta = "Beta writes page b";
+    internal const string Alpha = "Alpha writes page a";
+    internal const string Beta = "Beta writes page b";
 
-    private static string Plan(params (string Title, int[] After)[] steps)
+    internal static string Plan(params (string Title, int[] After)[] steps)
         => "{\"disposition\":\"task\",\"title\":\"pages\",\"steps\":["
            + string.Join(",", steps.Select(s => $"{{\"title\":\"{s.Title}\",\"dependsOn\":[{string.Join(",", s.After)}]}}"))
            + "]}";
 
-    private static EngineFixture Wiki(string extra = "")
+    internal static EngineFixture Wiki(string extra = "")
     {
         var fx = new EngineFixture { EcosystemsOverride = [new Pages(extra)], ValidateWaves = true };
         fx.Write("pages.lint", "rules");
@@ -57,13 +57,13 @@ public sealed class WavesAreValidatedAndAttributedTests
         return fx;
     }
 
-    private static Turn Writes(string path, string content, string id)
+    internal static Turn Writes(string path, string content, string id)
         => Turn.Calls1("write_file", $$"""{"path":"{{path}}","content":"{{content}}"}""", id);
 
-    private static int Builds(EngineFixture fx)
+    internal static int Builds(EngineFixture fx)
         => File.Exists(Path.Combine(fx.Root, "builds.log")) ? fx.Read("builds.log").Split('\n', StringSplitOptions.RemoveEmptyEntries).Length : 0;
 
-    private static IEnumerable<string> Lines(IEnumerable<WorkEvent> events, string text)
+    internal static IEnumerable<string> Lines(IEnumerable<WorkEvent> events, string text)
         => events.Where(e => e.Summary.Contains(text, StringComparison.Ordinal)).Select(e => e.Summary);
 
     /// <summary>THE DoD: a parallel wave is built once, not once per step, and the end of the run does not build it again.</summary>

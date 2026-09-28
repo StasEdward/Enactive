@@ -206,6 +206,7 @@ public sealed partial class Orchestrator : IOrchestrator
     private readonly bool _typedCriteria;
     private readonly bool _dynamicSteps;
     private readonly bool _validateWaves;
+    private readonly string _waveStore;
     private readonly FanOutLimits _fanOut;
     private readonly ISuccessEvaluator _successEvaluator;
 
@@ -280,9 +281,12 @@ public sealed partial class Orchestrator : IOrchestrator
         FanOutLimits? fanOut = null,
         // Phase 6: whether a plan's waves are validated where nothing is running, and a regression
         // attributed to the step that made it. Off by default: it runs builds the run did not run before.
-        bool validateWaves = false)
+        bool validateWaves = false,
+        // Where a wave's files are kept for a resume - outside every workspace. A test points it somewhere temporary.
+        string? waveStore = null)
     {
         _validateWaves = validateWaves;
+        _waveStore = waveStore ?? WaveCapture.DefaultStore();
         _stepOutputs = stepOutputs;
         _typedCriteria = typedCriteria;
         _dynamicSteps = dynamicSteps;
@@ -532,7 +536,7 @@ public sealed partial class Orchestrator : IOrchestrator
                         _limits.MaxSteps, _proposeChecks && _successCriteria.Count == 0,
                         turnCeiling: RunawayCeiling, outputBudget: _generationBudgets.For(GenerationPurpose.Planning),
                         stepOutputs: _stepOutputs, typedCriteria: _typedCriteria,
-                        beforeRetry: budget.TurnExhaustedAfter, dynamicSteps: _dynamicSteps));
+                        beforeRetry: budget.TurnExhaustedAfter, dynamicSteps: _dynamicSteps, validateWaves: _validateWaves));
         }
         catch (RetryBudgetExceededException ex)
         {
@@ -576,7 +580,7 @@ public sealed partial class Orchestrator : IOrchestrator
                     plan = await InScopeAsync(runId, taskId, null, () => _planner.ReplanAsync(
                         intent.RawText, intent.Context, plan, defect, models.PlanProvider, models.Plan.Model, ct,
                         _limits.MaxSteps, _proposeChecks && _successCriteria.Count == 0, RunawayCeiling, _generationBudgets.For(GenerationPurpose.Planning),
-                        _stepOutputs, _typedCriteria, _dynamicSteps));
+                        _stepOutputs, _typedCriteria, _dynamicSteps, _validateWaves));
                 }
                 catch (OperationCanceledException) { throw; }
                 catch (Exception ex) { replanFailure = "Plan repair failed: " + ex.Message; }
@@ -611,7 +615,7 @@ public sealed partial class Orchestrator : IOrchestrator
                     plan = await InScopeAsync(runId, taskId, null, () => _planner.ReplanAsync(
                         intent.RawText, intent.Context, plan, missing.Diagnostic, models.PlanProvider, models.Plan.Model, ct,
                         _limits.MaxSteps, _proposeChecks && _successCriteria.Count == 0, RunawayCeiling, _generationBudgets.For(GenerationPurpose.Planning),
-                        _stepOutputs, _typedCriteria, _dynamicSteps));
+                        _stepOutputs, _typedCriteria, _dynamicSteps, _validateWaves));
                 }
                 catch (OperationCanceledException) { throw; }
                 catch (Exception ex) { unclear = "the planner could not be asked: " + ex.Message; }
@@ -1137,6 +1141,64 @@ public sealed partial class Orchestrator : IOrchestrator
                 };
         }
 
+        // Phase 6: the steps that ended since nothing was last running are one wave, validated once at
+        // its end - see WaveLedger. Only where there is a build to compare with. A resumed run carries
+        // on the waves where the checkpoint left them: the next wave is compared with what the last
+        // validated one left, and the open wave keeps its steps and - if they were kept - its files.
+        var waveDir = WaveCapture.DirFor(_waveStore, _workspace.RootPath, scope.TaskId);
+        var trialDir = WaveCapture.TrialDirFor(_waveStore, _workspace.RootPath, scope.TaskId);
+        var baselineTaken = session.Builds.Where(b => b.Taken).ToArray();
+        var waves = !_validateWaves || baselineTaken.Length == 0 ? null
+            : resume?.Waves is { } savedWaves ? WaveLedger.Resume(savedWaves, baselineTaken, _ecosystems)
+            : new WaveLedger(baselineTaken);
+        session.Waves = waves;
+        var waveBeforeKept = false;
+        // Whether the open wave's starting point is known. A resumed run without its kept files starts
+        // from a workspace no wave validated: what is broken may predate it.
+        var waveBeforeKnown = resume is null;
+        if (waves is not null)
+        {
+            // The process died in the middle of trial builds: the workspace is as a trial left it, not as the
+            // wave did. Put back first - everything after this, the wave's own capture included, reads it.
+            if (WaveCapture.Load(trialDir) is { } midTrial)
+            {
+                var putBack = WaveCapture.PutBack(_workspace.RootPath, midTrial, _ecosystems);
+                yield return scope.Ev(EventKind.ErrorObserved, "The interrupted run stopped in the middle of a trial build: "
+                    + (putBack.Count == 0 ? "the files the build reads were already as the wave had left them."
+                        : $"{putBack.Count} file(s) the build reads were put back as the wave had left them ({string.Join(", ", putBack.Take(5))}"
+                          + (putBack.Count > 5 ? ", ..." : "") + ").")
+                    + " What the trial wrote elsewhere was not kept and could not be put back.");
+                try { Directory.Delete(trialDir, recursive: true); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            }
+            if (resume?.Waves is { BeforeKept: true } && WaveCapture.Load(waveDir) is { } kept)
+            {
+                waves.Before = kept;
+                waveBeforeKnown = true;
+                waveBeforeKept = true;
+            }
+            else
+            {
+                waves.Before = WaveCapture.Take(_workspace.RootPath, _ecosystems);
+                KeepWaveBefore();
+            }
+            if (resume is not null)
+                yield return scope.Ev(EventKind.ContextAssembled, resume.Waves is null
+                    ? "Waves: the interrupted run left no wave state; the next wave is compared with the run's baseline."
+                    : $"Waves: carried on from the interrupted run - {waves.Closed} wave(s) closed, {waves.Steps.Count} step(s) "
+                      + $"in the open one, compared with where the last validated wave left things"
+                      + (waveBeforeKnown ? "." : "; the files as the open wave began were not kept, so it cannot be taken back to them."));
+        }
+
+        // The files as the current wave found them, beside the checkpoint - only when there is one to resume from.
+        void KeepWaveBefore()
+        {
+            waveBeforeKept = false;
+            if (_checkpoints is null || waves?.Before?.Files is null) return;
+            try { waves.Before.Save(waveDir); waveBeforeKept = true; }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        }
+
         // ── Checkpointing ─────────────────────────────────────────────────
         //
         // Written at STEP BOUNDARIES and nowhere else, because that is the only place a run can be
@@ -1178,7 +1240,7 @@ public sealed partial class Orchestrator : IOrchestrator
                         Result = session.Outputs.TryGetValue(s.Id, out var handed) ? handed : null,
                         ForEach = s.ForEach, Items = s.Items, ExpandedFrom = s.ExpandedFrom, Joins = s.Joins, NotExpanded = s.NotExpanded,
                         Record = session.Records.TryGetValue(s.Id, out var record) ? record : null,
-                        Report = s.Report,
+                        Report = s.Report, Critical = s.Critical,
                         Owned = s.ExpandedFrom is null ? null : _progress.OwnedBy(scope.TaskId, s.Id) is { Count: > 0 } owned ? owned.ToArray() : null
                     })
                 .ToArray();
@@ -1189,7 +1251,8 @@ public sealed partial class Orchestrator : IOrchestrator
                 steps, doneLines, transcript,
                 produced.Select(a => a.RelativePath).ToArray(),
                 scope.Budget.StepsRun, scope.Budget.TokensSpent, _settings) { Checks = CriteriaFor(plan), Restrictions = plan.Restrictions, ActionPolicy = plan.ActionPolicy,
-                    Baseline = session.Builds.Count == 0 ? null : session.Builds.Select(b => b.ToSnapshot()).ToArray() };
+                    Baseline = session.Builds.Count == 0 ? null : session.Builds.Select(b => b.ToSnapshot()).ToArray(),
+                    Waves = waves?.ToCheckpoint(waveBeforeKept) };
         });
 
         // Forgets the checkpoint: this run reached an end, and an ending is not resumable. Called
@@ -1202,18 +1265,15 @@ public sealed partial class Orchestrator : IOrchestrator
         // that one. The offer to resume therefore outlived the work it was an offer to finish: the
         // task ran to completion and the UNFINISHED card stayed on screen, still amber, still saying
         // nobody knew how it ended, and pressing it again started the same plan a second time.
-        Task ForgetCheckpointAsync() => checkpointWriter.ForgetAsync(scope.RunId, resume?.RunId);
+        async Task ForgetCheckpointAsync()
+        {
+            await checkpointWriter.ForgetAsync(scope.RunId, resume?.RunId);
+            // The wave's files were kept only so a resume could use them; an ending is not resumable.
+            foreach (var dir in new[] { waveDir, trialDir })
+                try { if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        }
 
-        // Phase 6: the steps that ended since nothing was last running are one wave, validated once at
-        // its end - see WaveLedger. Only where there is a build to compare with.
-        var waves = _validateWaves && session.Builds.Any(b => b.Taken)
-            ? new WaveLedger(session.Builds.Where(b => b.Taken).ToArray())
-            : null;
-        session.Waves = waves;
-        if (waves is not null)
-            waves.Before = WaveCapture.Take(_workspace.RootPath, _ecosystems);
-        // A resumed run starts from a workspace no wave validated: what is broken may predate this run.
-        var waveBeforeKnown = resume is null;
 
         async Task RunStepAsync(PlanStep step, CancellationToken stepCt)
         {
@@ -1813,7 +1873,8 @@ public sealed partial class Orchestrator : IOrchestrator
             var wct = stepLifetime.Token;
             var root = _workspace.RootPath;
             var no = waves.Closed + 1;
-            var span = WaveLedger.Span(steps);
+            var span = WaveLedger.Span(steps) + (steps.Count == 1 && scheduler.Steps.Any(p => p.Id == steps[0].Id && p.Critical)
+                ? ", critical - validated as soon as it ended" : "");
             var due = waves.Reference.Where(b => waves.Requires(b.Ecosystem)).ToArray();
             if (due.Length == 0)
             {
@@ -1874,6 +1935,11 @@ public sealed partial class Orchestrator : IOrchestrator
                             var seen = regressions.Select((r, i) => r.ReproducedBy(trial[i], root)).ToArray();
                             return seen.Any(v => v == true) ? true : seen.All(v => v is null) ? null : false;
                         }
+                        // The files as the wave left them, on disk while the trials run: a process that dies
+                        // in the middle of one leaves a workspace a resume can put back.
+                        if (_checkpoints is not null)
+                            try { after.Save(trialDir); }
+                            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
                         try
                         {
                             // A wave the engine did not see begin: is it broken before any of its changes?
@@ -1891,6 +1957,9 @@ public sealed partial class Orchestrator : IOrchestrator
                                 stop = "after trying the wave's steps one by one, the workspace could not be put back as the "
                                     + $"wave left it ({string.Join(", ", left.Take(5))}{(left.Count > 5 ? ", ..." : "")}); "
                                     + "no further step runs on a workspace the engine's own trial builds changed";
+                            else
+                                try { if (Directory.Exists(trialDir)) Directory.Delete(trialDir, recursive: true); }
+                                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
                         }
                     }
                     var trials = attribution.Trials == 0 ? "" : $" ({attribution.Trials} trial build(s))";
@@ -1917,7 +1986,10 @@ public sealed partial class Orchestrator : IOrchestrator
                 waves.Close();
                 waveBeforeKnown = true;
                 waves.Before = after ?? WaveCapture.Take(root, _ecosystems);
+                KeepWaveBefore();
             }
+            // Where the waves have got to is where a resume must pick them up.
+            await CheckpointAsync();
             return stop;
         }
 
@@ -2208,7 +2280,7 @@ public sealed partial class Orchestrator : IOrchestrator
                 {
                     ObligationIds = s.ObligationIds, Output = s.Output,
                     ForEach = s.ForEach, Items = s.Items, ExpandedFrom = s.ExpandedFrom, Joins = s.Joins, NotExpanded = s.NotExpanded,
-                    Report = s.Report
+                    Report = s.Report, Critical = s.Critical
                 })
             .ToArray();
 

@@ -117,11 +117,11 @@ public sealed class Planner
         CancellationToken ct, int? maxSteps = null, bool proposeChecks = false,
         int? turnCeiling = null, int outputBudget = 4096,
         Func<int, int, string?>? beforeRetry = null, bool stepOutputs = false, bool typedCriteria = false,
-        bool dynamicSteps = false)
+        bool dynamicSteps = false, bool validateWaves = false)
     {
         var messages = new List<ChatMessage>
         {
-            ChatMessage.System(SystemPromptFor(maxSteps, proposeChecks, turnCeiling, stepOutputs, typedCriteria, dynamicSteps)),
+            ChatMessage.System(SystemPromptFor(maxSteps, proposeChecks, turnCeiling, stepOutputs, typedCriteria, dynamicSteps, validateWaves)),
             ChatMessage.User(Where(context) + Enactive.Core.Execution.RequestObligations.ExecutionPrompt(request))
         };
 
@@ -200,7 +200,7 @@ public sealed class Planner
     internal async Task<PlanResult> ReplanAsync(string request, WorkContext context, PlanResult invalid,
         string diagnostic, IChatProvider provider, string model, CancellationToken ct,
         int? maxSteps, bool proposeChecks, int turnCeiling, int outputBudget = 4096, bool stepOutputs = false,
-        bool typedCriteria = false, bool dynamicSteps = false)
+        bool typedCriteria = false, bool dynamicSteps = false, bool validateWaves = false)
     {
         var steps = invalid.Plan!.Steps;
         var indices = steps.Select((step, index) => (step.Id, index)).GroupBy(x => x.Id)
@@ -216,12 +216,13 @@ public sealed class Planner
                 obligations = s.ObligationIds,
                 output = s.Output is { } declared ? OutputJson(declared) : null,
                 forEach = s.ForEach is { } each ? new { step = each.Step, field = each.Field } : null,
-                report = s.Report
+                report = s.Report,
+                critical = s.Critical ? true : (bool?)null
             })
-        });
+        }, new JsonSerializerOptions { DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull });
         ChatMessage[] messages =
         [
-            ChatMessage.System(SystemPromptFor(maxSteps, proposeChecks, turnCeiling, stepOutputs, typedCriteria, dynamicSteps)),
+            ChatMessage.System(SystemPromptFor(maxSteps, proposeChecks, turnCeiling, stepOutputs, typedCriteria, dynamicSteps, validateWaves)),
             ChatMessage.User(Where(context) + Enactive.Core.Execution.RequestObligations.ExecutionPrompt(request)),
             ChatMessage.Assistant(prior),
             ChatMessage.User("The entire plan was rejected before execution: " + diagnostic
@@ -385,7 +386,8 @@ public sealed class Planner
                                 Output = el.TryGetProperty("output", out var output) ? ParseOutput(output, specs.Count + 1) : null,
                                 ForEach = ParseForEach(el),
                                 Report = el.TryGetProperty("report", out var report) && report.ValueKind == JsonValueKind.String
-                                    && !string.IsNullOrWhiteSpace(report.GetString()) ? report.GetString() : null
+                                    && !string.IsNullOrWhiteSpace(report.GetString()) ? report.GetString() : null,
+                                Critical = el.TryGetProperty("critical", out var critical) && critical.ValueKind == JsonValueKind.True
                             });
                         }
                     }
@@ -574,6 +576,12 @@ public sealed class Planner
         + "findings on as values and never edit shared files: when the results make one document, add \"report\":\"path/to/doc.md\" "
         + "to that step - the engine writes the document from every item's result, and the step after the items hands on a \"summary\".";
 
+    /// <summary>A step validated alone and at once (Phase 6); sent only when waves are validated.</summary>
+    internal const string CriticalStepPrompt =
+        " A step whose effect on the build must be known before ANY other step runs - a change every later step builds on, "
+        + "such as a shared interface, a schema or a project file - may add \"critical\":true: it then runs alone and the "
+        + "engine builds and tests right after it. Use it rarely; it takes the step out of parallel work.";
+
     internal const string StepOutputsPrompt =
         " A step whose RESULT later steps must use as data (pages to process, files found, names, counts) declares it: "
         + "\"output\":{\"<field>\":{\"type\":\"path[]\",\"description\":\"...\",\"maxItems\":12}}; types: text, string, integer, "
@@ -645,7 +653,7 @@ public sealed class Planner
     /// (<c>Orchestrator.RunawayCeiling</c>). Null leaves the paragraph out entirely.
     /// </param>
     internal static string SystemPromptFor(int? maxSteps, bool proposeChecks = false, int? turnCeiling = null,
-        bool stepOutputs = false, bool typedCriteria = false, bool dynamicSteps = false)
+        bool stepOutputs = false, bool typedCriteria = false, bool dynamicSteps = false, bool validateWaves = false)
     {
         var prompt = SystemPrompt;
 
@@ -661,6 +669,9 @@ public sealed class Planner
 
         if (stepOutputs && dynamicSteps)
             prompt += DynamicStepsPrompt;
+
+        if (validateWaves)
+            prompt += CriticalStepPrompt;
 
         if (turnCeiling is > 0)
             prompt += $" A step is ONE conversation with growing history. A step running past {turnCeiling} turns is ABANDONED; "

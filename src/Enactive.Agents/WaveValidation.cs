@@ -2,6 +2,7 @@ namespace Enactive.Agents;
 
 using Enactive.Core.Builds;
 using Enactive.Core.Execution;
+using Enactive.Core.History;
 using Enactive.Core.Templates;
 
 /// <summary>One step that ended in a wave, and what it changed as the engine recorded it.</summary>
@@ -84,6 +85,81 @@ internal sealed class WaveCapture
         {
             return new(null, "the files the build reads could not all be read: " + ex.Message);
         }
+    }
+
+    /// <summary>
+    /// Keeps this capture in <paramref name="dir"/> - the files, and a manifest of every path with its hash -
+    /// so a run resumed after the process died can still take a wave back to where it began.
+    /// </summary>
+    public void Save(string dir)
+    {
+        if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+        var files = Path.Combine(dir, "files");
+        Directory.CreateDirectory(files);
+        var manifest = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (path, bytes) in Files!)
+        {
+            var full = Path.Combine(files, path.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+            File.WriteAllBytes(full, bytes);
+            manifest[path] = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes));
+        }
+        // Last: a folder without its manifest is a save that did not finish, and is not read back.
+        File.WriteAllText(Path.Combine(dir, "manifest.json"), System.Text.Json.JsonSerializer.Serialize(manifest));
+    }
+
+    /// <summary>A capture kept by <see cref="Save"/>, or null when it is missing, unfinished or not what was kept.</summary>
+    public static WaveCapture? Load(string dir)
+    {
+        try
+        {
+            var manifestPath = Path.Combine(dir, "manifest.json");
+            if (!File.Exists(manifestPath)) return null;
+            var manifest = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(manifestPath));
+            if (manifest is null) return null;
+            var files = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (path, hash) in manifest)
+            {
+                var bytes = File.ReadAllBytes(Path.Combine(dir, "files", path.Replace('/', Path.DirectorySeparatorChar)));
+                if (Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)) != hash) return null;
+                files[path] = bytes;
+            }
+            return new(files, null);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Where a task's wave capture is kept: OUTSIDE the workspace, under <paramref name="store"/>. Inside it -
+    /// even in the engine's own folder - a build that takes its sources by pattern would build the copy too:
+    /// found the first time a resume was tried, when the check read the kept page as a second one, and an
+    /// SDK-style project at the workspace root compiles every **/*.cs it finds.
+    /// </summary>
+    public static string DirFor(string store, string root, Guid taskId)
+        => Path.Combine(store, Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(Path.GetFullPath(root).ToLowerInvariant())))[..16], taskId.ToString("N"));
+
+    /// <summary>Where the files as a wave left them are kept while trial builds run, and only then.</summary>
+    public static string TrialDirFor(string store, string root, Guid taskId) => DirFor(store, root, taskId) + "-trial";
+
+    /// <summary>The machine's own store for wave captures: <c>%LOCALAPPDATA%/Enactive/waves</c>.</summary>
+    public static string DefaultStore()
+        => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Enactive", "waves");
+
+    /// <summary>
+    /// Puts every file a build reads back as <paramref name="capture"/> has it - changed ones rewritten,
+    /// ones it did not have removed - and names them. For a run that died in the middle of a trial build.
+    /// </summary>
+    public static IReadOnlyList<string> PutBack(string root, WaveCapture capture, IReadOnlyList<IEcosystem> ecosystems)
+    {
+        var now = Take(root, ecosystems);
+        if (now.Files is null) return [];
+        var changed = Changed(capture, now).Order(StringComparer.OrdinalIgnoreCase).ToArray();
+        Put(root, changed, capture);
+        return changed;
     }
 
     /// <summary>The paths whose content differs between two captures, added and removed ones included.</summary>
@@ -267,6 +343,26 @@ internal sealed class WaveLedger
 
     /// <summary>How many waves have been closed; the next one's number is this plus one.</summary>
     public int Closed { get; private set; }
+
+    /// <summary>Where the waves had got to, for the checkpoint.</summary>
+    public WaveCheckpoint ToCheckpoint(bool beforeKept)
+        => new(Reference.Select(b => b.ToSnapshot()).ToArray(),
+            Steps.Select(s => new WaveCheckpointStep(s.Id, s.No, s.Title, s.Wrote, s.UnrecordedWrites)).ToArray(),
+            Closed, beforeKept);
+
+    /// <summary>
+    /// The waves as a checkpoint left them: the reference the last validated wave left, and the open wave's
+    /// steps. A reference entry an ecosystem of this build cannot read falls back to the run's baseline.
+    /// </summary>
+    public static WaveLedger Resume(WaveCheckpoint saved, IReadOnlyList<BuildBaseline> baseline, IReadOnlyList<IEcosystem> ecosystems)
+    {
+        var reference = saved.Reference.Select(r => BuildBaseline.From(r, ecosystems)).ToArray();
+        var ledger = new WaveLedger(reference.All(r => r is { Taken: true }) && reference.Length > 0 ? reference! : baseline)
+            { Closed = saved.Closed };
+        foreach (var step in saved.Open)
+            ledger.Finished(new WaveStep(step.Id, step.No, step.Title, step.Wrote, step.UnrecordedWrites));
+        return ledger;
+    }
 
     public void Finished(WaveStep step)
     {

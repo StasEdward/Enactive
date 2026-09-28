@@ -31,6 +31,9 @@ public sealed class ByStepChatProvider : IChatProvider
 
     public ByStepChatProvider(string plan) => _plan = plan;
 
+    /// <summary>For a resumed run: the plan comes from the checkpoint, and nobody asks for it.</summary>
+    public bool Resumed { init => _planned = value; }
+
     /// <summary>The turns this step takes, in order, each time it is asked.</summary>
     public ByStepChatProvider Step(string title, params Turn[] turns)
     {

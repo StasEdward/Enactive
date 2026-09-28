@@ -47,7 +47,24 @@ public sealed record CheckpointStep(
 
     /// <summary>What the engine recorded about the step: outcome, cause, reason, and its last accepted result with its standing.</summary>
     public Enactive.Core.Tasks.StepRecord? Record { get; init; }
+
+    /// <summary>Runs alone and is validated as soon as it ends (Phase 6).</summary>
+    public bool Critical { get; init; }
 }
+
+/// <summary>A step of a wave not yet validated, and what it changed as the engine recorded it.</summary>
+public sealed record WaveCheckpointStep(Guid Id, int No, string Title, IReadOnlyList<string> Wrote, bool UnrecordedWrites);
+
+/// <summary>
+/// Where a plan's waves had got to (Phase 6), so a resumed run compares its next wave with what the last
+/// validated one left - not with the run's baseline - and carries on the wave that was open.
+/// </summary>
+/// <param name="Reference">What each build and test target reported where the last validated wave left it.</param>
+/// <param name="Open">The steps of the wave that had not been validated yet.</param>
+/// <param name="Closed">How many waves had been closed, so the next one keeps its number.</param>
+/// <param name="BeforeKept">Whether the files as the open wave found them were kept on disk beside the checkpoint.</param>
+public sealed record WaveCheckpoint(IReadOnlyList<Enactive.Core.Builds.BaselineSnapshot> Reference,
+    IReadOnlyList<WaveCheckpointStep> Open, int Closed, bool BeforeKept);
 
 /// <summary>
 /// Enough of an interrupted run to carry on from the last step boundary.
@@ -140,6 +157,9 @@ public sealed record RunCheckpoint(
     public IReadOnlyList<Enactive.Core.Builds.BaselineSnapshot>? Baseline { get; init; }
     /// <summary>The effective verification contract, preserved across resume. Null for older checkpoints.</summary>
     public IReadOnlyList<Enactive.Core.Templates.SuccessCriterionDefinition>? Checks { get; init; }
+
+    /// <summary>Where the plan's waves had got to (Phase 6). Null when waves were not validated.</summary>
+    public WaveCheckpoint? Waves { get; init; }
 }
 
 /// <summary>

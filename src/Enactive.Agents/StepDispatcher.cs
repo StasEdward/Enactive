@@ -37,7 +37,7 @@ internal static class StepDispatcher
                     }
                     holding = hold?.Invoke() == true;
                 }
-                foreach (var ready in holding ? [] : scheduler.NextReadyBatch(Math.Min(maxParallel - inFlight.Count, budget.RemainingSteps)))
+                foreach (var ready in holding ? [] : scheduler.NextReadyBatch(Math.Min(maxParallel - inFlight.Count, budget.RemainingSteps), inFlight.Count))
                 {
                     // Giving a step's items their steps, and joining them, is the engine's own work:
                     // no model runs, and it does not spend a step of the run's budget (Phase 5.3).

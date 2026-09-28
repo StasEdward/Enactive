@@ -170,7 +170,9 @@ public sealed class DagScheduler
     /// Up to <paramref name="max"/> Pending steps whose dependencies are all Done. Every returned step
     /// is marked Running before it is returned, so concurrent callers never receive the same step.
     /// </summary>
-    public IReadOnlyList<PlanStep> NextReadyBatch(int max)
+    /// <param name="running">How many steps are in flight. A <see cref="PlanStep.Critical"/> step is handed
+    /// out only when none is, and alone; while one is ready or running nothing else is (Phase 6).</param>
+    public IReadOnlyList<PlanStep> NextReadyBatch(int max, int running = 0)
     {
         if (max <= 0)
             return Array.Empty<PlanStep>();
@@ -178,6 +180,18 @@ public sealed class DagScheduler
         var ready = new List<PlanStep>();
         lock (_gate)
         {
+            if (_steps.Any(s => s.Critical && _status[s.Id] == StepStatus.Running))
+                return Array.Empty<PlanStep>();
+            // A critical step that is ready waits for what is running to finish - and nothing new starts
+            // meanwhile, or a steady stream of other steps could keep it waiting for ever.
+            if (_steps.FirstOrDefault(s => s.Critical && _status[s.Id] == StepStatus.Pending && DependenciesSatisfied(s)) is { } critical)
+            {
+                if (running > 0)
+                    return Array.Empty<PlanStep>();
+                _status[critical.Id] = StepStatus.Running;
+                return [critical];
+            }
+
             foreach (var s in _steps)
             {
                 if (ready.Count >= max)

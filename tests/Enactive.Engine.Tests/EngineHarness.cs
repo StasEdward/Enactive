@@ -422,6 +422,9 @@ public sealed class EngineFixture : IDisposable
     public bool DynamicSteps { get; set; }
     public bool ValidateWaves { get; set; }
 
+    /// <summary>Where wave captures are kept: beside this fixture's folder, never in the machine's own store.</summary>
+    public string WaveStore => Root + "-waves";
+
     /// <summary>Phase 5.4 limits; the shipped defaults unless a test sets its own.</summary>
     public FanOutLimits? FanOut { get; set; }
 
@@ -637,7 +640,8 @@ public sealed class EngineFixture : IDisposable
             settings: settings,
             checkSoundness: checkSoundness,
             ecosystems: EcosystemsOverride,
-            stepOutputs: StepOutputs, typedCriteria: TypedCriteria, dynamicSteps: DynamicSteps, fanOut: FanOut, validateWaves: ValidateWaves);
+            stepOutputs: StepOutputs, typedCriteria: TypedCriteria, dynamicSteps: DynamicSteps, fanOut: FanOut, validateWaves: ValidateWaves,
+            waveStore: WaveStore);
     }
 
     /// <summary>Runs one intent to completion and returns every event it produced.</summary>
@@ -718,6 +722,7 @@ public sealed class EngineFixture : IDisposable
     public void Dispose()
     {
         try { Directory.Delete(Root, recursive: true); } catch { /* a temp folder that outlives a test is not a failure */ }
+        try { if (Directory.Exists(WaveStore)) Directory.Delete(WaveStore, recursive: true); } catch { }
     }
 
     private sealed class EmptyServices : IServiceProvider

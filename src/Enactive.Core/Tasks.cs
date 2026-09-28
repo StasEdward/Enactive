@@ -52,6 +52,12 @@ public sealed record PlanStep(
     /// only): reserved for the engine - no step changes it - and written by code from what was recorded.
     /// </summary>
     public string? Report { get; init; }
+
+    /// <summary>
+    /// A step whose effect on the build must be known before anything else runs (Phase 6.1): it runs with
+    /// nothing beside it, and is validated the moment it ends. Declared by the planner, never guessed.
+    /// </summary>
+    public bool Critical { get; init; }
 }
 
 /// <summary>Where a step's items come from: a list field of an earlier step's output, by its plan position (0-based).</summary>
@@ -93,6 +99,7 @@ public sealed record PlanStepSpec(
     public StepOutputSchema? Output { get; init; }
     public ForEachSource? ForEach { get; init; }
     public string? Report { get; init; }
+    public bool Critical { get; init; }
 }
 
 /// <summary>
@@ -124,7 +131,8 @@ public static class DagPlan
                 deps = i > 0 ? new[] { ids[i - 1] } : Array.Empty<Guid>();
 
             steps.Add(new PlanStep(ids[i], specs[i].Title, StepStatus.Pending, deps, specs[i].Complexity)
-                { ObligationIds = specs[i].ObligationIds, Output = specs[i].Output, ForEach = specs[i].ForEach, Report = specs[i].Report });
+                { ObligationIds = specs[i].ObligationIds, Output = specs[i].Output, ForEach = specs[i].ForEach, Report = specs[i].Report,
+                  Critical = specs[i].Critical });
         }
         return new Plan(Guid.NewGuid(), steps);
     }
