@@ -22,6 +22,9 @@ internal sealed class RunSession(RunScope scope, List<ChatMessage> messages)
 
     /// <summary>The plan's waves and what they were last validated against (Phase 6), or null when not validated.</summary>
     public WaveLedger? Waves { get; set; }
+
+    /// <summary>What each step is, from the plan, for whoever judges it - see FanOut.ScopeNote. By step number.</summary>
+    public System.Collections.Concurrent.ConcurrentDictionary<int, string> ScopeNotes { get; } = new();
     public Dictionary<Guid, StepOutcomeKind> Outcomes { get; } = new();
     // Guarded by Outcomes, matching the outcome/reason snapshot used by the scheduler.
     public List<string> Reasons { get; } = new();

@@ -27,7 +27,8 @@ public sealed partial class Orchestrator
         if (!models.ReviewOn || !result.Succeeded) return null;
         return await ReviewAttemptAsync(title, step.Messages, step.Journal, step.EvidenceStart,
             step.StepStart, step.Store, scope, models, stepNumber, changes, before, request,
-            publish, ct, planSteps, stepNumber is { } number ? session.Obligations?.AtStep(number) : null);
+            publish, ct, planSteps, stepNumber is { } number && session.Obligations?.AtStep(number) is { } at
+                ? at with { ScopeNote = session.ScopeNotes.GetValueOrDefault(number) } : null);
     }
     /// <summary>One retry lifecycle for quick and DAG. Transcript, journal and read coverage stay
     /// together; provider fallback is one-shot and does not consume a review attempt.</summary>

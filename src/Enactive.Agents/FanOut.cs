@@ -170,6 +170,31 @@ public static class FanOut
     }
 
     /// <summary>
+    /// What a step for particular items is, said to whoever judges it (Phase 5.3). A request is written for
+    /// the whole run - "check every page and write the findings into X" - and a reviewer holding one item's
+    /// step to it asks for every page, and for X. Run d91b6a45, 2026-09-28: a page step was rejected because
+    /// "the requirement mandates a persisted findings file; none exists" - a file no item's step may write,
+    /// which the engine assembles from their results. Null for a step that is not for particular items.
+    /// </summary>
+    public static string? ScopeNote(PlanStep step, IReadOnlyList<PlanStep> plan)
+    {
+        if (step.Items is not { Count: > 0 } items || step.ExpandedFrom is null) return null;
+        var forEach = plan.FirstOrDefault(s => s.Id == step.ExpandedFrom);
+        var note = $"it is done for {(items.Count == 1 ? "one item" : $"{items.Count} items")} - {string.Join(", ", items)} - "
+                   + "and every other item has a step of its own: judge its work on "
+                   + (items.Count == 1 ? "that item" : "those items") + ", not on the others. ";
+        if (forEach?.Report is { } report)
+            note += $"The items' results make one document, {report}, which the ENGINE assembles from each item's recorded result; "
+                    + "no step writes or edits it, and this one may not. For this step a requirement to write findings into "
+                    + $"{report} is met by handing its item's result on with {StepOutputContract.ToolName}: do not require the "
+                    + "document to exist, or to hold this item, and judge the result that was handed on.";
+        else
+            note += $"What it found is handed on with {StepOutputContract.ToolName}; what the run makes of all the items is the "
+                    + "steps after them.";
+        return note;
+    }
+
+    /// <summary>
     /// The join's output: the results of the steps it waited for, as one. A results field is the union
     /// of theirs, a list their concatenation, text theirs one after another under each step's title;
     /// a single value (a count, a flag) cannot be joined without deciding what it means, and is left out.

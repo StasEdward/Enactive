@@ -14,6 +14,12 @@ public sealed record RequestObligations(
     public IReadOnlyDictionary<string, IReadOnlyList<string>>? ScopeMap { get; init; }
     public bool FinalReview { get; init; }
 
+    /// <summary>
+    /// What the current step IS, as the engine knows it from the plan - for a reviewer judging it against a
+    /// request written for the whole run. Null when the plan says nothing the request does not.
+    /// </summary>
+    public string? ScopeNote { get; init; }
+
     public RequestObligations ForFinalReview() => this with {
         CurrentScope = "run", FinalReview = true,
         Scopes = Scopes.Concat(new[] { new KeyValuePair<string, string>("run", "Entire completed run") })
@@ -46,7 +52,8 @@ public sealed record RequestObligations(
         + ". A source unit can apply to multiple steps: implement here or verify earlier implementation as this step requires. "
         + "Assess only the current contribution, not completion of the whole multi-step requirement. "
         + "An empty assignment means unspecified, NOT waived: use the original request and this step's objective. "
-        + "Global constraints apply in every step regardless of assignment. Do not invent a different ownership map.\n");
+        + "Global constraints apply in every step regardless of assignment. Do not invent a different ownership map.\n"
+        + (ScopeNote is { Length: > 0 } note ? "What this step is, from the plan: " + note + "\n" : ""));
     public static RequestObligations Create(string request, string title = "Whole request", int? step = null,
         IReadOnlyList<string>? steps = null)
     {

@@ -81,6 +81,39 @@ internal sealed class WriteBoundary(
         return null;
     }
 
+    /// <summary>
+    /// For a step for one item: a call that only LOOKS at a document the engine assembles - reads it, searches
+    /// it, compares it - answered instead of run, with why. The document is made from every item's result,
+    /// may not exist yet, and nothing an item's step needs is in it. Any argument naming it counts, so no
+    /// tool has to declare which of its arguments are paths. Null for any other call.
+    /// </summary>
+    public string? AssembledByTheEngine(ToolCall call, ToolDefinition? definition)
+    {
+        if (items is null || reserved.Count == 0 || definition is null || definition.WorkspaceEffect != WorkspaceEffect.None)
+            return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(call.ArgumentsJson) ? "{}" : call.ArgumentsJson);
+            foreach (var value in Strings(doc.RootElement))
+                if (reserved.Contains(ShellLookup.Normal(value), StringComparer.OrdinalIgnoreCase))
+                    return $"'{ShellLookup.Normal(value)}' is the document the engine assembles from every item's recorded result - "
+                           + "it may not exist yet, and this step neither reads nor writes it. Nothing in it is needed here: hand "
+                           + $"this item's result on with {StepOutputContract.ToolName}, and it goes into the document.";
+        }
+        catch (JsonException) { }
+        return null;
+
+        static IEnumerable<string> Strings(JsonElement e)
+        {
+            switch (e.ValueKind)
+            {
+                case JsonValueKind.String: yield return e.GetString()!; break;
+                case JsonValueKind.Array: foreach (var x in e.EnumerateArray()) foreach (var s in Strings(x)) yield return s; break;
+                case JsonValueKind.Object: foreach (var p in e.EnumerateObject()) foreach (var s in Strings(p.Value)) yield return s; break;
+            }
+        }
+    }
+
     /// <summary>A call that went through: the files it created are this step's from now on.</summary>
     public void Succeeded(ToolCall call)
     {

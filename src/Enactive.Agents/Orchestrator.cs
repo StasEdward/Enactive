@@ -1434,6 +1434,8 @@ public sealed partial class Orchestrator : IOrchestrator
             var planNow = scheduler.Steps;
             var reserved = planNow.Where(s => s.Report is not null).Select(s => ShellLookup.Normal(s.Report!)).ToArray();
             var itemOf = step.ExpandedFrom is { } parent ? planNow.FirstOrDefault(s => s.Id == parent) : null;
+            if (FanOut.ScopeNote(step, planNow) is { } scopeNote)
+                session.ScopeNotes[stepNumber] = scopeNote;
             // The files the run's criteria are about: its result, which no single item's step makes.
             var deliverables = CriteriaFor(plan).Select(c => c.Typed?.Path).OfType<string>().Select(ShellLookup.Normal).ToArray();
             var boundary = reserved.Length == 0 && step.ExpandedFrom is null ? null
@@ -4269,6 +4271,19 @@ public sealed partial class Orchestrator : IOrchestrator
                     messages.Add(ChatMessage.Tool(call.Id, handed));
                     continue;
                 }
+                // A document the engine assembles, looked at by a step for one item: answered by the engine,
+                // not run. It may not exist yet, and whether it does is not the item's business - run
+                // d91b6a45: a page step read it, got "File not found", and ended INCOMPLETE on that.
+                if (boundary?.AssembledByTheEngine(call, _tools.DefinitionOf(call.Name)) is { } assembled)
+                {
+                    yield return Invoked(call);
+                    journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Refused, assembled, WorkspaceEffect.None);
+                    openFailures.RefusedByRule(call);
+                    messages.Add(ChatMessage.Tool(call.Id, "NOT RUN: " + assembled));
+                    yield return Ev(EventKind.ToolResult, $"{call.Name} -> not run: {assembled}");
+                    continue;
+                }
+
                 // Outside what this step may change: refused before it runs, and said why. Not an open
                 // failure - it is the engine's rule, not a call that went wrong - and the way on is named.
                 if (boundary?.Refuse(call, _tools.DefinitionOf(call.Name),
