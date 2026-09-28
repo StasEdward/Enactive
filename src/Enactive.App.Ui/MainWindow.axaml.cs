@@ -95,6 +95,11 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     private readonly List<StepCardViewModel> _running = new();
     private StepCardViewModel? _currentCard;
     private int _stepIndex;
+
+    // How many cards came before the plan's first one: a card made for events that arrived before the
+    // plan did (a planner criterion dropped, the planner checking its criteria). Step numbers count from
+    // the plan's first card, not from the top of the list - otherwise every step shows one card early.
+    private int _planOffset;
     private int _doneSteps;
     private int _totalSteps;
     private readonly Stopwatch _runStopwatch = new();
@@ -1076,6 +1081,13 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             if (titles.Length == 0)
                 return;
 
+            // A card made before the plan arrived is the planning's, not step 1's: it is closed, and the
+            // plan's cards are numbered after it.
+            foreach (var early in _cards)
+                early.SetDone();
+            _planOffset = _cards.Count;
+            _currentCard = null;
+            _running.Clear();
             _totalSteps = 0;   // the plan's own count, as before; steps it grows are added to it
             AddStepCards(titles);
 
@@ -1111,9 +1123,9 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             _stepIndex = Math.Max(_stepIndex, index);
 
             StepCardViewModel card;
-            if (index - 1 < _cards.Count)
+            if (_planOffset + index - 1 < _cards.Count)
             {
-                card = _cards[index - 1];
+                card = _cards[_planOffset + index - 1];
             }
             else
             {
@@ -1142,7 +1154,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         private StepCardViewModel? CardFor(WorkEvent ev)
         {
             var n = ev.StepNo();
-            return n is { } i && i - 1 >= 0 && i - 1 < _cards.Count ? _cards[i - 1] : null;
+            return n is { } i && i >= 1 && _planOffset + i - 1 < _cards.Count ? _cards[_planOffset + i - 1] : null;
         }
 
         private StepCardViewModel EnsureCurrentCard()
@@ -1461,6 +1473,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             _currentCard = null;
             _running.Clear();
             _stepIndex = 0;
+            _planOffset = 0;
             _doneSteps = 0;
             _totalSteps = 0;
             _liveTitle = string.Empty;

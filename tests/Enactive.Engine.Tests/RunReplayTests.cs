@@ -98,6 +98,22 @@ public sealed class RunReplayTests
 
     // ── planned runs are unchanged ────────────────────────────────────────────────────
 
+    /// <summary>The steps a plan grew while it ran (Phase 5.3) are replayed too, numbered after the ones it had.</summary>
+    [Fact]
+    public void Steps_the_plan_grew_are_replayed_after_the_ones_it_had()
+    {
+        var record = Record(
+            Ev(nameof(EventKind.PlanCreated), "Wiki — 2 steps: list | review", payload: WorkEventPayload.PlanPayload("Wiki", ["list", "review"])),
+            Ev(nameof(EventKind.PlanExpanded), "[2/3] review — 1 step(s) for 1 item(s)", payload: WorkEventPayload.PlanPayload("review", ["review: a.md"])),
+            Ev(nameof(EventKind.StepStarted), "[3/3] review: a.md", 3),
+            Ev(nameof(EventKind.StepCompleted), "[3/3] review: a.md — done", 3, WorkEventPayload.StepPayload(3, StepOutcomeKind.Succeeded)));
+
+        var segments = RunReplayPlan.Segments(record);
+
+        Assert.Equal(new[] { "list", "review", "review: a.md" }, segments.Select(s => s.Title).ToArray());
+        Assert.Equal(StepOutcomeKind.Succeeded, segments[2].Outcome);
+    }
+
     [Fact]
     public void A_planned_run_replays_one_segment_per_step_with_its_own_events()
     {

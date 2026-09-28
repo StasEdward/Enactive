@@ -220,6 +220,11 @@ public static class RunReplayPlan
         if (Stand(plan).PlanSteps() is { Count: > 0 } typed)
         {
             titles.AddRange(typed);
+            // And the steps the plan grew while it ran (Phase 5.3), numbered after the ones it had -
+            // without them every step for an item was a number past the end, and replay dropped it.
+            foreach (var grown in record.Events.Where(e => e.Kind == nameof(EventKind.PlanExpanded)))
+                if (Stand(grown).PlanSteps() is { Count: > 0 } added)
+                    titles.AddRange(added);
             return titles;
         }
 
