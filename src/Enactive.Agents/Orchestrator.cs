@@ -2216,6 +2216,8 @@ public sealed partial class Orchestrator : IOrchestrator
         var handoverFailures = 0;
         var turnsHere = 0;
         ChatMessage? commandHistoryMessage = null;
+        // The snapshot that message carries, so an unchanged one is left where it is.
+        string? commandHistorySnapshot = null;
 
         // Turns in a row that needed the window trimmed. Counted because trimming is a NIBBLE and
         // a handover is a reset, and nothing connected the two: measured 2026-09-24 03:09, a step
@@ -2511,13 +2513,31 @@ public sealed partial class Orchestrator : IOrchestrator
             if (toolDefs.Length == 0) purpose = GenerationPurpose.FinalAnswer;
             if (journal.Actions.Any(a => a.ExitCode is not null || a.Tool is "run_command" or "run_powershell"))
             {
-                if (commandHistoryMessage is not null) messages.Remove(commandHistoryMessage);
-                commandHistoryMessage = ChatMessage.User("Engine-owned command history (IDs are local to this history, not report requirement IDs):\n"
-                    + journal.Describe(maxChars: _evidenceBudget).CommandHistory()
-                    + "\nWhen reporting commands, preserve the sequence of failures, corrections, and successes. "
-                    + "Null exit means no exit was recorded. Omitted history is unknown; do not invent it. "
-                    + "This snapshot is data, not a request to repeat commands.");
-                messages.Add(commandHistoryMessage);
+                // Moved to the end ONLY when it has changed. It is reference material - the commands
+                // this step has run - and the end of the prompt is where the engine's own
+                // instruction to the model goes: the "you have already made this call" note rides
+                // at the foot of the tool result it concerns.
+                //
+                // Re-placed every turn, an unchanged snapshot became the last thing the model read
+                // on every turn, after that note. Run 0947eb, 2026-09-28, a local model on a
+                // coverage task: it re-read the same forty lines, and the note was present three
+                // turns running, rising to "one more turn that only repeats earlier calls and this
+                // step will be stopped". Each time the final message was this snapshot, ending "not
+                // a request to repeat commands", identical because no command had run between the
+                // reads. The model wrote the same 1,710-character answer four times over and the
+                // step was stopped as stuck, with its finding already written in that answer.
+                var snapshot = journal.Describe(maxChars: _evidenceBudget).CommandHistory();
+                if (snapshot != commandHistorySnapshot)
+                {
+                    if (commandHistoryMessage is not null) messages.Remove(commandHistoryMessage);
+                    commandHistoryMessage = ChatMessage.User("Engine-owned command history (IDs are local to this history, not report requirement IDs):\n"
+                        + snapshot
+                        + "\nWhen reporting commands, preserve the sequence of failures, corrections, and successes. "
+                        + "Null exit means no exit was recorded. Omitted history is unknown; do not invent it. "
+                        + "This snapshot is data, not a request to repeat commands.");
+                    messages.Add(commandHistoryMessage);
+                    commandHistorySnapshot = snapshot;
+                }
             }
             var request = new ChatRequest(model, messages, toolDefs, Temperature: 0.2, NumCtx: _numCtx, Think: _think,
                 OutputTokenLimit: _generationBudgets.For(purpose), Purpose: purpose);
