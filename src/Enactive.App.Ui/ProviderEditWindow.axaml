@@ -66,6 +66,10 @@
                 <TextBox Text="{Binding HandoverAtText}"
                          PlaceholderText="blank = after 60 turns, as without a window (e.g. 75 for a local model)" />
 
+                <TextBlock Classes="label" Text="Work at this prompt size (tokens)" />
+                <TextBox Text="{Binding WorkingContextText}"
+                         PlaceholderText="blank = a share of the window, as above. Set it to keep a large window in reserve (e.g. 80000 of 131072)" />
+
                 <TextBlock Classes="label" Text="Headers" />
                 <TextBox Classes="multiline" MinHeight="60" Text="{Binding HeadersText}"
                          PlaceholderText="extra headers — one Header-Name: value per line" />

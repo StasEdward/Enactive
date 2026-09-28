@@ -2234,6 +2234,33 @@ public sealed partial class Orchestrator : IOrchestrator
         // turn count decides, as it does for a provider with no window at all.
         var handoverAt = provider.HandoverAtPercent(probe) is int pct and > 0 and < 100 ? pct : (int?)null;
 
+        // The prompt size to WORK at, when somebody has said. It is not a share of the window on
+        // purpose - see ProviderConfig.WorkingContextTokens - so that declaring a model's real,
+        // larger window keeps the extra as reserve instead of growing the prompt.
+        //
+        // Clamped to the window LESS the answer's reserve, the same line the emergency trim works
+        // to below. Past that line a working size would never be reached, because the trim fires
+        // first; and clamped to the whole window instead, a handover would fire with no room left
+        // to write its own note in.
+        var working = provider.WorkingContext(probe) is int wanted and > 0
+            ? (statedWindow is > 0
+                ? Math.Min(wanted, statedWindow.Value - Math.Min(
+                    provider.AnswerReserve(probe) is int probeReserve and > 0
+                        ? probeReserve
+                        : Math.Max(statedWindow.Value / 8, 256),
+                    statedWindow.Value / 2))
+                : wanted)
+            : (int?)null;
+
+        // Where the step is handed over. Each setting is somebody saying "no further than this",
+        // so when both are set the nearer one wins.
+        long? byShare = statedWindow is > 0 && handoverAt is not null
+            ? (long)statedWindow.Value * handoverAt.Value / 100
+            : null;
+        long? handoverTokens = working is not null && byShare is not null
+            ? Math.Min(working.Value, byShare.Value)
+            : working ?? byShare;
+
         // The transcript's size when lastPromptTokens was measured, so what has been added since
         // can be estimated on top of a real count rather than instead of one.
         var sizeAtLastPrompt = 0;
@@ -2319,13 +2346,12 @@ public sealed partial class Orchestrator : IOrchestrator
             // an estimate of what has been added since - or unknown, when the provider states no
             // window or has not reported a prompt in THIS conversation yet. Unknown falls back to
             // the turn count, which is the only length signal a cloud provider gives.
-            var measured = statedWindow is > 0 && handoverAt is not null && lastPromptTokens is not null;
+            var measured = handoverTokens is not null && lastPromptTokens is not null;
             var fullNow = measured
                 ? lastPromptTokens!.Value
                   + scale.TokensFor(Math.Max(0, Transcript.Size(messages) + toolsOverhead - sizeAtLastPrompt))
                 : 0;
-            var windowIsFilling = measured && turnsHere > 0
-                && fullNow > (long)statedWindow!.Value * handoverAt!.Value / 100;
+            var windowIsFilling = measured && turnsHere > 0 && fullNow > handoverTokens!.Value;
             var tooManyTurns = !measured && turnsHere >= TurnsBeforeHandover;
 
             if ((tooManyTurns || windowIsFilling || windowIsThrashing) && handovers < MaxHandovers
@@ -2335,9 +2361,18 @@ public sealed partial class Orchestrator : IOrchestrator
                     ? $"The context window has been trimmed {TrimsBeforeHandover} turns running "
                       + "and is still full, so trimming is not keeping up"
                     : windowIsFilling
-                    ? $"The conversation has reached about {fullNow} of the {statedWindow} tokens this "
-                      + $"model was given ({fullNow * 100 / statedWindow!.Value}%), and the rest is "
-                      + "needed to write in"
+                    // Two different lines, said as what they are. Past the WORKING size the rest of
+                    // the window is reserve, deliberately unused; past a share of the window the
+                    // rest is what the answer needs.
+                    ? (working is not null && handoverTokens == working
+                        ? $"The conversation has reached about {fullNow} tokens, past the {working} "
+                          + "this model is set to work at"
+                          + (statedWindow is > 0
+                              ? $"; the rest of its {statedWindow}-token window is held in reserve"
+                              : "")
+                        : $"The conversation has reached about {fullNow} of the {statedWindow} tokens this "
+                          + $"model was given ({fullNow * 100 / statedWindow!.Value}%), and the rest is "
+                          + "needed to write in")
                     : $"This step has run {iteration - 1} turns";
 
                 // Said BEFORE the note is written, not after. Writing it is a whole turn - on a
@@ -2523,7 +2558,11 @@ public sealed partial class Orchestrator : IOrchestrator
                     // 110,000 tokens (~55 s on that machine). One cut to half the window buys many
                     // turns for the price of a single re-read. Half is a proportion of the stated
                     // window, not a number about any model; never above the budget itself.
-                    var trimTo = Math.Min(budget, window / 2);
+                    // Half the WORKING size when there is one. Getting this far means the prompt
+                    // went past where the step is meant to live and into the reserve; cutting back
+                    // to half of the working size buys the same run of untrimmed turns that half the
+                    // window did, but measured from where the step belongs.
+                    var trimTo = Math.Min(budget, working is int workingSize ? workingSize / 2 : window / 2);
                     var elided = Transcript.Elide(messages, scale.CharsFor(trimTo) - toolsOverhead);
                     sizeNow = Transcript.Size(messages) + toolsOverhead;
 

@@ -25,6 +25,7 @@ public sealed class ExplainedChatProvider(IChatProvider inner, string providerId
     public int? AnswerReserve(ChatRequest request) => inner.AnswerReserve(request);
 
     public int? HandoverAtPercent(ChatRequest request) => inner.HandoverAtPercent(request);
+    public int? WorkingContext(ChatRequest request) => inner.WorkingContext(request);
     public int ReasoningAllowance(ChatRequest request) => inner.ReasoningAllowance(request);
 
     public async IAsyncEnumerable<ChatStreamEvent> StreamChatAsync(

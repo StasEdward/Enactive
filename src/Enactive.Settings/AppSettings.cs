@@ -82,6 +82,23 @@ public sealed class ProviderConfig
     /// </summary>
     public int? HandoverAtPercent { get; set; }
 
+    /// <summary>
+    /// The prompt size a step WORKS at, in tokens - as distinct from <see cref="ContextWindowTokens"/>,
+    /// the size it may never exceed. Reaching it hands the step over to a fresh conversation; if a
+    /// prompt ever gets past it to the window's emergency line, the trim cuts back to half of it.
+    ///
+    /// <para>Why it is separate from the window. With the working size expressed as a share of the
+    /// window (<see cref="HandoverAtPercent"/>), declaring a model's real, larger window enlarges the
+    /// working prompt with it: 75% of 65,536 is 49,152 tokens, 75% of 131,072 is 98,304. The larger
+    /// window is worth having as a reserve that is almost never used, and the working size is worth
+    /// keeping where the model behaves steadily and a changed history is cheap to re-read. Those are
+    /// two different numbers, and one setting cannot hold both.</para>
+    ///
+    /// <para>Clamped to the window when both are set. Blank keeps the old behaviour exactly: the
+    /// share of the window, or the turn count.</para>
+    /// </summary>
+    public int? WorkingContextTokens { get; set; }
+
     public ProviderConfig Clone() => new()
     {
         Id = Id,
@@ -100,7 +117,8 @@ public sealed class ProviderConfig
         OllamaKeepAliveSeconds = OllamaKeepAliveSeconds,
         ContextWindowTokens = ContextWindowTokens,
         AnswerReserveTokens = AnswerReserveTokens,
-        HandoverAtPercent = HandoverAtPercent
+        HandoverAtPercent = HandoverAtPercent,
+        WorkingContextTokens = WorkingContextTokens
     };
 }
 

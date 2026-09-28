@@ -37,7 +37,12 @@ public sealed record ProviderDescriptor(
     bool OpenAiReasoningProfile = false,
     int? OllamaKeepAliveSeconds = null,
     int CompletionTimeoutSeconds = 900,
-    int? ReasoningTokenAllowance = null);
+    int? ReasoningTokenAllowance = null,
+    /// <summary>
+    /// The prompt size a step WORKS at, as distinct from the window it may never exceed. See
+    /// <c>ProviderConfig.WorkingContextTokens</c>.
+    /// </summary>
+    int? WorkingContextTokens = null);
 
 /// <summary>Talks to an LLM. Implementations live in Enactive.Providers (transport stays out of Core).</summary>
 public interface IChatProvider
@@ -73,6 +78,19 @@ public interface IChatProvider
     /// provider with no window at all.
     /// </summary>
     int? HandoverAtPercent(ChatRequest request) => null;
+
+    /// <summary>
+    /// The prompt size this provider's steps should WORK at, in tokens, when somebody has said -
+    /// distinct from <see cref="ContextWindow"/>, the size a prompt may never exceed. Reaching it
+    /// hands the step over to a fresh conversation, and an emergency trim cuts back to half of it.
+    ///
+    /// <para>Null means the working size is derived from the window, as it always has been: a share
+    /// of it by <see cref="HandoverAtPercent"/>, or the turn count. That coupling is exactly what
+    /// this exists to break - with the working size a fraction of the window, declaring a model's
+    /// real, larger window would enlarge the working prompt with it, when the point of the larger
+    /// window is to be held in reserve.</para>
+    /// </summary>
+    int? WorkingContext(ChatRequest request) => null;
 
     /// <summary>Additional generation allowance for reasoning; still subject to context and configured output caps.</summary>
     int ReasoningAllowance(ChatRequest request) => 0;

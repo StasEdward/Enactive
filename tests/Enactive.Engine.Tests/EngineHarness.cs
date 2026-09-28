@@ -109,6 +109,11 @@ public sealed class FakeChatProvider : IChatProvider
     public int? AnswerReserve(ChatRequest request) => Reserve;
 
     public int? HandoverAtPercent(ChatRequest request) => HandoverAt;
+
+    /// <summary>What ProviderConfig.WorkingContextTokens would say. Null = derived from the window, as before.</summary>
+    public int? Working { get; set; }
+
+    public int? WorkingContext(ChatRequest request) => Working;
     public int ReasoningTokens { get; set; }
     public int ReasoningAllowance(ChatRequest request) => ReasoningTokens;
 

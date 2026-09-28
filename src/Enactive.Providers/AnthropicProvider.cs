@@ -54,6 +54,7 @@ public sealed partial class AnthropicProvider : IChatProvider
     public int? AnswerReserve(ChatRequest request) => _descriptor.AnswerReserveTokens;
 
     public int? HandoverAtPercent(ChatRequest request) => _descriptor.HandoverAtPercent;
+    public int? WorkingContext(ChatRequest request) => _descriptor.WorkingContextTokens;
     public int ReasoningAllowance(ChatRequest request) => Math.Clamp(_descriptor.ReasoningTokenAllowance ?? (false ? 8192 : 0), 0, 65536);
 
     private HttpRequestMessage BuildHttpRequest(ChatRequest request, bool stream, bool includeTemperature, int maxTokens, bool includeSchema)

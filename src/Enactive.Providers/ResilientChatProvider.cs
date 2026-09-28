@@ -14,6 +14,7 @@ public sealed class ResilientChatProvider(IChatProvider inner, ILogSink? log = n
     public int? ContextWindow(ChatRequest request) => inner.ContextWindow(request);
     public int? AnswerReserve(ChatRequest request) => inner.AnswerReserve(request);
     public int? HandoverAtPercent(ChatRequest request) => inner.HandoverAtPercent(request);
+    public int? WorkingContext(ChatRequest request) => inner.WorkingContext(request);
     public int ReasoningAllowance(ChatRequest request) => inner.ReasoningAllowance(request);
 
     public async Task<ChatCompletion> CompleteAsync(ChatRequest request, CancellationToken ct)

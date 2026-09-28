@@ -50,6 +50,7 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
     public int? AnswerReserve(ChatRequest request) => _descriptor.AnswerReserveTokens;
 
     public int? HandoverAtPercent(ChatRequest request) => _descriptor.HandoverAtPercent;
+    public int? WorkingContext(ChatRequest request) => _descriptor.WorkingContextTokens;
     public int ReasoningAllowance(ChatRequest request) => Math.Clamp(_descriptor.ReasoningTokenAllowance ?? (_descriptor.OpenAiReasoningProfile ? 8192 : 0), 0, 65536);
 
     public async IAsyncEnumerable<ChatStreamEvent> StreamChatAsync(

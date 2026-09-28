@@ -56,6 +56,7 @@ public sealed class LoggingChatProvider : IChatProvider
     public int? AnswerReserve(ChatRequest request) => _inner.AnswerReserve(request);
 
     public int? HandoverAtPercent(ChatRequest request) => _inner.HandoverAtPercent(request);
+    public int? WorkingContext(ChatRequest request) => _inner.WorkingContext(request);
     public int ReasoningAllowance(ChatRequest request) => _inner.ReasoningAllowance(request);
 
     public async IAsyncEnumerable<ChatStreamEvent> StreamChatAsync(

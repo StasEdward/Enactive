@@ -147,7 +147,8 @@ public static class EngineComposition
             p.MaxTokens,
             p.ContextWindowTokens,
             p.AnswerReserveTokens,
-            p.HandoverAtPercent, p.StreamIdleTimeoutSeconds, p.OpenAiReasoningProfile, p.OllamaKeepAliveSeconds, p.CompletionTimeoutSeconds, p.ReasoningTokenAllowance)).ToList();
+            p.HandoverAtPercent, p.StreamIdleTimeoutSeconds, p.OpenAiReasoningProfile, p.OllamaKeepAliveSeconds, p.CompletionTimeoutSeconds, p.ReasoningTokenAllowance,
+            p.WorkingContextTokens)).ToList();
 
     /// <summary>
     /// The configured team, or the built-in one when a person has never edited it. Global

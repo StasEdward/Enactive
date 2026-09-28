@@ -10,6 +10,7 @@ internal sealed class RunBudgetChatProvider(IChatProvider inner, RunBudget budge
     public int? ContextWindow(ChatRequest request) => inner.ContextWindow(request);
     public int? AnswerReserve(ChatRequest request) => inner.AnswerReserve(request);
     public int? HandoverAtPercent(ChatRequest request) => inner.HandoverAtPercent(request);
+    public int? WorkingContext(ChatRequest request) => inner.WorkingContext(request);
     public int ReasoningAllowance(ChatRequest request) => inner.ReasoningAllowance(request);
     public Task<ChatCompletion> CompleteAsync(ChatRequest request, CancellationToken ct)
         => inner.CompleteAsync(request with { RetryBudget = budget }, ct);
