@@ -231,6 +231,19 @@ public sealed partial class Reviewer
             answer = ReviewCorpus.Prepare(answer, obligations);
             outputTruncated = completion.FinishReason is "length" or "max_tokens";
             if (outputTruncated) problem = "combined review reached its output token limit; keep claim explanations concise";
+            // Amendment G: what closed before the cut is kept, and only the rest is asked for - not the
+            // whole answer again with twice the room. Nothing kept (the cut came inside the first
+            // section, or the answer was itself a correction) asks for the whole, as before.
+            if (outputTruncated && attempt == 0 && sectionRepair is null && mappingCompletion is null
+                && completion.Message.ToolCalls is not { Count: > 0 }
+                && ReviewSectionRepair.ForCut(rawAnswer, obligations, references.Decode) is { } rest)
+            {
+                sectionRepair = rest;
+                messages.Add(ChatMessage.Assistant(rawAnswer));
+                messages.Add(ChatMessage.User(rest.Instruction("Your answer was cut off by the output limit before it was complete. "
+                    + "The parts that were complete are kept; keep explanations concise.") + sources.Describe()));
+                continue;
+            }
             if (!outputTruncated && completion.Message.ToolCalls is not { Count: > 0 })
             {
                 // The same validators the offline replay runs, from the one definition of them.
@@ -248,7 +261,7 @@ public sealed partial class Reviewer
                         mappingCompletion = new ReviewMappingCompletion(answer, references);
                         messages.Add(ChatMessage.User(mappingCompletion.Instruction));
                     }
-                    else if (ReviewSectionRepair.For(decoded, errors) is { } parts)
+                    else if (ReviewSectionRepair.For(decoded, errors, obligations) is { } parts)
                     {
                         sectionRepair = parts;
                         messages.Add(ChatMessage.User(parts.Instruction(references.Diagnostic(problem)) + sources.Describe()));
