@@ -3014,10 +3014,19 @@ public sealed partial class Orchestrator : IOrchestrator
                     + "turn, and on a local model it can take a minute or two.");
 
                 var engineEvidenceOnly = false;
-                var carried = await _handover.GenerateAsync(
+                var attempt = await _handover.GenerateAsync(
                     provider, new ChatRequest(model, messages, toolDefs, Temperature: 0.2, NumCtx: _numCtx, Think: _think,
                         OutputTokenLimit: (int)Math.Min(int.MaxValue, (long)_generationBudgets.For(GenerationPurpose.Handover) * (handoverFailures + 1)), Purpose: GenerationPurpose.Handover),
                     runBudget, ct);
+                var carried = attempt.Note;
+
+                // Why there is no note, said with what was measured. Six different faults used to
+                // come back as one null - a provider error, a note cut at the limit, reasoning that
+                // used the limit up, a tool call, an empty answer, no room in the window - and the
+                // log could not tell them apart, so neither could anyone choosing a fix.
+                if (carried is null)
+                    yield return Ev(EventKind.ContextTrimmed,
+                        $"Handover note not written (attempt {handoverFailures + 1} of 2): {attempt.Describe()}");
 
                 if (carried is null && ++handoverFailures >= 2 && runBudget.TurnExhausted is null)
                 {

@@ -155,7 +155,9 @@ public sealed class TokenScale
 {
     // Pessimistic on purpose: assuming FEWER characters per token over-estimates the transcript, and
     // over-estimating costs a little window, while under-estimating costs the step.
-    private double _charsPerToken = 3.0;
+    public const double DefaultCharsPerToken = 3.0;
+
+    private double _charsPerToken = DefaultCharsPerToken;
 
     /// <summary>Records what a request of <paramref name="chars"/> characters actually cost.</summary>
     public void Observe(int chars, int promptTokens)

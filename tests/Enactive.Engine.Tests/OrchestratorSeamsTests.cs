@@ -153,7 +153,7 @@ public sealed class OrchestratorSeamsTests
         var provider = new FakeChatProvider(turn);
         var request = new ChatRequest("model", [ChatMessage.User("original")], MaxTokens: 2048);
         var budget = RunBudget.Unlimited();
-        Assert.Equal(expected, await new Handover().GenerateAsync(provider, request, budget, default));
+        Assert.Equal(expected, (await new Handover().GenerateAsync(provider, request, budget, default)).Note);
         Assert.Equal(20, budget.TokensSpent);
         Assert.Single(request.Messages);
         Assert.Equal(2048, provider.Requests[0].MaxTokens);
@@ -168,7 +168,39 @@ public sealed class OrchestratorSeamsTests
         var provider = new FailingProvider(cancel ? new OperationCanceledException() : new IOException("offline"));
         var task = new Handover().GenerateAsync(provider, new ChatRequest("model", []), RunBudget.Unlimited(), default);
         if (cancel) await Assert.ThrowsAsync<OperationCanceledException>(() => task);
-        else Assert.Null(await task);
+        else
+        {
+            var result = await task;
+            Assert.Null(result.Note);
+            Assert.Equal(HandoverFailure.ProviderError, result.Failure);
+            Assert.Contains("IOException: offline", result.Describe(), StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
+    /// Each way a handover can come back without a note says which way it was, with what was measured -
+    /// six faults used to come back as one indistinguishable null.
+    /// </summary>
+    [Theory]
+    [InlineData("tool", HandoverFailure.ToolCall, "the model called read_file instead of writing it")]
+    [InlineData("cut", HandoverFailure.Truncated, "the note was cut at the output limit (finish=length; 2048 output token(s) of 2048")]
+    [InlineData("thinking", HandoverFailure.Truncated, "the output limit was reached while the model was still reasoning, before any note")]
+    [InlineData("empty", HandoverFailure.Empty, "the model finished without writing anything")]
+    public async Task A_handover_without_a_note_says_why(string shape, HandoverFailure failure, string said)
+    {
+        var turn = shape switch
+        {
+            "tool" => new Turn("I will read it", [new ToolCall("id", "read_file", "{}")], "tool_calls", 100, 20),
+            "cut" => new Turn("Findings so far: the pa", null, "length", 100, 2048),
+            "thinking" => new Turn(null, null, "length", 100, 2048, Thinking: "Let me think about what I found..."),
+            _ => new Turn("   ", null, "stop", 100, 1)
+        };
+        var result = await new Handover().GenerateAsync(new FakeChatProvider(turn),
+            new ChatRequest("model", [ChatMessage.User("work")], OutputTokenLimit: 2048), RunBudget.Unlimited(), default);
+
+        Assert.Null(result.Note);
+        Assert.Equal(failure, result.Failure);
+        Assert.StartsWith(said, result.Describe(), StringComparison.Ordinal);
     }
 
     private static StepReview Stage(IReviewer reviewer, bool soundness = true)
@@ -214,8 +246,8 @@ public sealed class OrchestratorSeamsTests
     private sealed class SpyHandover : IHandover
     {
         public int Calls;
-        public Task<string?> GenerateAsync(IChatProvider provider, ChatRequest step, RunBudget budget, CancellationToken ct)
-        { Calls++; return Task.FromResult<string?>("injected handover facts"); }
+        public Task<HandoverResult> GenerateAsync(IChatProvider provider, ChatRequest step, RunBudget budget, CancellationToken ct)
+        { Calls++; return Task.FromResult(HandoverResult.Written("injected handover facts")); }
     }
     private sealed class FailingProvider(Exception error) : IChatProvider
     {

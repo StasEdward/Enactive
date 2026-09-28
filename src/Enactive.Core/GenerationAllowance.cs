@@ -12,11 +12,15 @@ public static class GenerationAllowance
         var limit = Total(request.OutputTokenLimit ?? 2048, provider.ReasoningAllowance(request));
         if (provider.ContextWindow(request) is > 0 and var window)
         {
-            var prompt = new TokenScale().TokensFor(Transcript.Size(request.Messages)
+            var chars = Transcript.Size(request.Messages)
                 + (request.ResponseSchema?.Length ?? 0)
-                + (request.Tools is { Count: > 0 } ? System.Text.Json.JsonSerializer.Serialize(request.Tools).Length : 0));
+                + (request.Tools is { Count: > 0 } ? System.Text.Json.JsonSerializer.Serialize(request.Tools).Length : 0);
+            var prompt = new TokenScale().TokensFor(chars);
             var room = window - prompt;
-            if (room < 128) throw new InvalidOperationException("Insufficient context room for a complete model response. Increase the context window (num_ctx on Ollama) or shorten the request.");
+            // With the numbers: the prompt here is an ESTIMATE from characters at a fixed rate, and a
+            // refusal that does not say so cannot be told from a prompt that really is too large.
+            if (room < 128) throw new InvalidOperationException("Insufficient context room for a complete model response. Increase the context window (num_ctx on Ollama) or shorten the request. "
+                + $"(window {window} tokens; prompt estimated at {prompt} tokens from {chars} characters at {TokenScale.DefaultCharsPerToken} per token)");
             limit = Math.Min(limit, room);
         }
         return request with { OutputTokenLimit = limit };

@@ -37,5 +37,6 @@ public interface ISuccessEvaluator
 
 public interface IHandover
 {
-    Task<string?> GenerateAsync(IChatProvider provider, ChatRequest step, RunBudget runBudget, CancellationToken ct);
+    /// <summary>The note, or why there is none - never a bare null (see <see cref="HandoverResult"/>).</summary>
+    Task<HandoverResult> GenerateAsync(IChatProvider provider, ChatRequest step, RunBudget runBudget, CancellationToken ct);
 }

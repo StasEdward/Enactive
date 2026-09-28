@@ -125,9 +125,13 @@ public sealed class ModelBudgetReviewTests
     public async Task Handover_does_not_spend_when_exhausted_or_out_of_context()
     {
         var provider = new FakeChatProvider(Turn.Says("note")) { Window = 100 };
-        Assert.Null(await new Handover().GenerateAsync(provider, new("model", [ChatMessage.User(new string('x', 1000))]), RunBudget.Unlimited(), default));
+        var noRoom = await new Handover().GenerateAsync(provider, new("model", [ChatMessage.User(new string('x', 1000))]), RunBudget.Unlimited(), default);
+        Assert.Null(noRoom.Note);
+        Assert.Equal(HandoverFailure.NoRoom, noRoom.Failure);            // not a provider failing: nothing was asked
         var exhausted = new RunBudget(new(MaxTokens: 1), DateTimeOffset.UtcNow, tokensAlreadySpent: 1);
-        Assert.Null(await new Handover().GenerateAsync(provider, new("model", []), exhausted, default));
+        var spent = await new Handover().GenerateAsync(provider, new("model", []), exhausted, default);
+        Assert.Null(spent.Note);
+        Assert.Equal(HandoverFailure.BudgetExhausted, spent.Failure);
         Assert.Empty(provider.Requests);
     }
 
@@ -143,8 +147,11 @@ public sealed class ModelBudgetReviewTests
         }
         turns.Add(Turn.Says("done"));
         var provider = new FakeChatProvider(turns.ToArray());
-        await fx.RunAsync(fx.Build(provider), "write numbered files");
+        var events = await fx.RunAsync(fx.Build(provider), "write numbered files");
         var handovers = provider.Requests.Where(r => r.Purpose == GenerationPurpose.Handover).ToArray();
+        // Each failure is said, with its reason and what was measured - the log used to have nothing to tell them apart by.
+        Assert.Contains(events, e => e.Summary.StartsWith("Handover note not written (attempt 1 of 2): the note was cut at the output limit (finish=length", StringComparison.Ordinal));
+        Assert.Contains(events, e => e.Summary.StartsWith("Handover note not written (attempt 2 of 2): the note was cut", StringComparison.Ordinal));
         Assert.Equal(2, handovers.Length);
         Assert.Equal(2048, handovers[0].OutputTokenLimit);
         Assert.Equal(4096, handovers[1].OutputTokenLimit);
@@ -161,8 +168,8 @@ public sealed class ModelBudgetReviewTests
         await fx.RunAsync(fx.Build(worker), "answer");
         Assert.Equal(12288, worker.Requests.First(r => r.Purpose == GenerationPurpose.Action).OutputTokenLimit);
         var handover = new FakeChatProvider(Turn.Says("note")) { ReasoningTokens = 8192 };
-        Assert.Equal("note", await new Handover().GenerateAsync(handover,
-            new("model", [], OutputTokenLimit: 2048), RunBudget.Unlimited(), default));
+        Assert.Equal("note", (await new Handover().GenerateAsync(handover,
+            new("model", [], OutputTokenLimit: 2048), RunBudget.Unlimited(), default)).Note);
         Assert.Equal(10240, Assert.Single(handover.Requests).OutputTokenLimit);
     }
 
