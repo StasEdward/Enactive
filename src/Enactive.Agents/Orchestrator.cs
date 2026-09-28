@@ -1577,7 +1577,7 @@ public sealed partial class Orchestrator : IOrchestrator
             await Publish(scope.Event(EventKind.PlanExpanded,
                 $"[{forEachNo}/{total}] {forEach.Title} — {created.Count} step(s) for {items.Count} item(s)"
                 + (notExpanded is null ? "" : $": {notExpanded}"),
-                WorkEventPayload.PlanPayload(forEach.Title, created.Select(c => c.Title).ToArray())));
+                WorkEventPayload.PlanExpansionPayload(forEachNo, forEach.Title, created.Select(c => c.Title).ToArray())));
             await CheckpointAsync();
         }
 

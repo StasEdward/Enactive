@@ -185,6 +185,7 @@ public sealed class APlanGrowsFromWhatItFindsTests
         Assert.Equal(RunOutcomeKind.Completed, events.Last().Outcome());
         var grown = Assert.Single(events, e => e.Kind == EventKind.PlanExpanded);
         Assert.Equal(["review page: wiki/a.md", "review page: wiki/b.md"], grown.PlanSteps());
+        Assert.Equal(2, grown.StepNo());                                         // the step they were made from, to show them under
         Assert.Contains("This step is for one item from step 1's pages: wiki/a.md", Conversation(worker, "Proceed with this step of the plan: review page: wiki/a.md"),
             StringComparison.Ordinal);
         Assert.Contains("""{"notes":{"wiki/a.md":"fine","wiki/b.md":"fine"}}""", Conversation(worker, "Proceed with this step of the plan: summarise"),

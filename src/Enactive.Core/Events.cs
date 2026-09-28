@@ -431,6 +431,15 @@ public static class WorkEventPayload
     private sealed record PlanPayloadShape(string Title, IReadOnlyList<string> Steps);
 
     /// <summary>
+    /// The payload of a <see cref="EventKind.PlanExpanded"/> event: the step done for each item (its number,
+    /// so a view can put the new steps under it), its title, and the new steps' titles.
+    /// </summary>
+    public static string PlanExpansionPayload(int step, string title, IReadOnlyList<string> stepTitles)
+        => System.Text.Json.JsonSerializer.Serialize(new PlanExpansionShape(step, title, stepTitles), PayloadJson);
+
+    private sealed record PlanExpansionShape(int Step, string Title, IReadOnlyList<string> Steps);
+
+    /// <summary>
     /// Builds the payload of an <see cref="EventKind.ArtifactProduced"/> event: what was produced and
     /// where. The path used to be recovered by splitting the summary on its first ": ", which is a
     /// guess about a sentence, not a fact about a file.

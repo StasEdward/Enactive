@@ -875,8 +875,14 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                         CreateStepCards(ev);
                         break;
                     case EventKind.PlanExpanded:
-                        // Steps the plan grew while it ran: cards for them, after every card it had.
-                        AddStepCards(ev.PlanSteps()?.ToArray() ?? []);
+                        // Steps the plan grew while it ran: numbered after every step it had, SHOWN under the
+                        // step they were made from - a step after the items ran last and read first otherwise.
+                        var grownFrom = CardFor(ev);
+                        var grown = ev.PlanSteps()?.ToArray() ?? [];
+                        AddStepCards(grown, grownFrom);
+                        grownFrom?.SetActivity(grown.Length == 0
+                            ? "No steps for its items"
+                            : $"{grown.Length} item step(s); joins their results when they have all ended");
                         break;
                     case EventKind.StepStarted:
                         SetLiveAgent("Coder", Brand.PillCoder);
@@ -1084,7 +1090,10 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             // A card made before the plan arrived is the planning's, not step 1's: it is closed, and the
             // plan's cards are numbered after it.
             foreach (var early in _cards)
+            {
                 early.SetDone();
+                early.SetActivity("Planned");
+            }
             _planOffset = _cards.Count;
             _currentCard = null;
             _running.Clear();
@@ -1101,7 +1110,8 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             }
         }
 
-        private void AddStepCards(IReadOnlyList<string> titles)
+        /// <param name="under">A card the new ones are shown under (the step they were made from), or null for the end.</param>
+        private void AddStepCards(IReadOnlyList<string> titles, StepCardViewModel? under = null)
         {
             if (titles.Count == 0)
                 return;
@@ -1109,11 +1119,27 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             foreach (var title in titles)
             {
                 var card = new StepCardViewModel(title.Trim());
-                _cards.Add(card);
-                Live(() => _vm.Steps.Add(card));
+                _cards.Add(card);                                   // numbering: after every step the plan had
+                if (under is null)
+                    Live(() => _vm.Steps.Add(card));
+                else
+                {
+                    var parent = under;
+                    var below = _shownUnder.TryGetValue(parent, out var n) ? n : 0;
+                    _shownUnder[parent] = below + 1;
+                    Live(() =>
+                    {
+                        var at = _vm.Steps.IndexOf(parent);
+                        if (at < 0) _vm.Steps.Add(card);
+                        else _vm.Steps.Insert(Math.Min(at + 1 + below, _vm.Steps.Count), card);
+                    });
+                }
             }
             UpdateProgress();
         }
+
+        // How many cards are shown under each step done for each item - where the next one goes.
+        private readonly Dictionary<StepCardViewModel, int> _shownUnder = new();
 
         private void BeginStep(WorkEvent ev)
         {
@@ -1470,6 +1496,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             _shownArtifacts.Clear();
             _liveArtifacts.Clear();
             _cards.Clear();
+            _shownUnder.Clear();
             _currentCard = null;
             _running.Clear();
             _stepIndex = 0;
