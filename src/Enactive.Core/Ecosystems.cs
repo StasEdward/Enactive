@@ -32,4 +32,11 @@ public interface IEcosystem
 
     /// <summary>What the build printed, as diagnostics with workspace-relative paths.</summary>
     IReadOnlyList<BuildDiagnostic> ParseDiagnostics(string output, string workspaceRoot);
+
+    /// <summary>
+    /// What a run of <see cref="TestCommand"/> printed, as the tests it named and its totals - or
+    /// null when this ecosystem cannot read its own test output, and then its tests are not part of
+    /// the baseline. Defaulted so an ecosystem that knows only its build still is one.
+    /// </summary>
+    TestRunReport? ParseTests(string output) => null;
 }

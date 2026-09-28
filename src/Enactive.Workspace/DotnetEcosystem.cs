@@ -64,7 +64,83 @@ public sealed class DotnetEcosystem : IEcosystem
 
     public string BuildCommand(string target) => $"dotnet build \"{target}\" -nologo";
 
-    public string TestCommand(string target) => $"dotnet test \"{target}\" -nologo";
+    // Normal verbosity, so PASSING tests are named too. At the default verbosity only failures and
+    // skips are, and then a failing test cannot be told apart from a new one - which is the whole
+    // question the baseline asks.
+    public string TestCommand(string target) => $"dotnet test \"{target}\" -nologo --logger \"console;verbosity=normal\"";
+
+    // `  Passed Probe.Sums.Is_positive(n: 2) [< 1 ms]` - two spaces, the verdict, the name (which may
+    // hold spaces and brackets of its own), and the duration in square brackets at the end.
+    private static readonly Regex TestLine = new(
+        @"^  (?<verdict>Passed|Failed|Skipped) (?<name>.+?) \[[^\[\]]*\]\s*$", RegexOptions.Compiled);
+
+    // `Failed!  - Failed:     2, Passed:     2, Skipped:     1, Total:     5, Duration: 22 ms - x.dll`
+    private static readonly Regex SummaryLine = new(
+        @"^\s*(?:Passed|Failed)!\s+-\s+Failed:\s+(?<f>\d+),\s+Passed:\s+(?<p>\d+),\s+Skipped:\s+(?<s>\d+),\s+Total:\s+(?<t>\d+)",
+        RegexOptions.Compiled);
+
+    // The block normal verbosity closes with instead: `Total tests: 5` then `     Passed: 2` and so on.
+    private static readonly Regex BlockLine = new(
+        @"^\s*(?<key>Total tests|Passed|Failed|Skipped):\s+(?<n>\d+)\s*$", RegexOptions.Compiled);
+
+    /// <summary>
+    /// Fitted to <c>dotnet test</c> output captured on this machine on 2026-09-28 - xUnit, one test
+    /// passing, two failing, one skipped - at normal and at default verbosity. The totals are summed
+    /// over every test assembly the run reported. English output only: a localised SDK prints other
+    /// words, and then nothing is read rather than something guessed.
+    /// </summary>
+    public TestRunReport? ParseTests(string output)
+    {
+        var cases = new List<TestCaseResult>();
+        int passed = 0, failed = 0, skipped = 0, total = 0;
+        var summaries = 0;
+        var block = new Dictionary<string, int>();
+
+        foreach (var raw in output.Split('\n'))
+        {
+            var line = raw.TrimEnd('\r');
+            if (TestLine.Match(line) is { Success: true } test)
+            {
+                cases.Add(new TestCaseResult(test.Groups["name"].Value,
+                    Enum.Parse<TestVerdict>(test.Groups["verdict"].Value)));
+                continue;
+            }
+            if (SummaryLine.Match(line) is { Success: true } summary)
+            {
+                summaries++;
+                failed += int.Parse(summary.Groups["f"].Value);
+                passed += int.Parse(summary.Groups["p"].Value);
+                skipped += int.Parse(summary.Groups["s"].Value);
+                total += int.Parse(summary.Groups["t"].Value);
+                continue;
+            }
+            // A block is read only while nothing printed the one-line summary: the two never both appear
+            // for one assembly, and adding them would count it twice.
+            if (BlockLine.Match(line) is { Success: true } entry)
+            {
+                var key = entry.Groups["key"].Value;
+                if (key == "Total tests" && block.Count > 0) FlushBlock();
+                block[key] = int.Parse(entry.Groups["n"].Value);
+            }
+        }
+        FlushBlock();
+
+        if (cases.Count == 0 && summaries == 0) return null;   // nothing here reads as a test run
+        return new TestRunReport(cases, summaries > 0 ? new TestRunSummary(passed, failed, skipped, total) : null);
+
+        void FlushBlock()
+        {
+            if (block.TryGetValue("Total tests", out var t))
+            {
+                summaries++;
+                total += t;
+                passed += block.GetValueOrDefault("Passed");
+                failed += block.GetValueOrDefault("Failed");
+                skipped += block.GetValueOrDefault("Skipped");
+            }
+            block.Clear();
+        }
+    }
 
     // `path(line,col): error CS0103: message`, the position optionally a range `(l,c,l2,c2)`.
     private static readonly Regex Positioned = new(

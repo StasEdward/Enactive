@@ -116,6 +116,7 @@ public sealed partial class Orchestrator : IOrchestrator
     // The same handler, through the ledger of questions runs have stopped at - see DecisionLedger.
     private readonly LedgeredDecisions _ledgered;
     private readonly DecisionLedger _ledger;
+    private readonly BaselineStore _baselines;
     private readonly PermissionPolicy _policy;
     private readonly IServiceProvider _services;
     private readonly IModelRouter _router;
@@ -277,6 +278,7 @@ public sealed partial class Orchestrator : IOrchestrator
         _planner = planner;
         _permissions = permissions;
         _ledger = new DecisionLedger(workspace.RootPath);
+        _baselines = new BaselineStore(workspace.RootPath);
         _ledgered = new LedgeredDecisions(decisions, _ledger);
         _decisions = _ledgered;
         _policy = policy;
@@ -382,6 +384,7 @@ public sealed partial class Orchestrator : IOrchestrator
             await events.DisposeAsync();
         }
         _ledger.Forget(taskId);
+        _baselines.Forget(taskId);
     }
 
     /// <param name="resume">
@@ -653,16 +656,30 @@ public sealed partial class Orchestrator : IOrchestrator
             plan = plan with { Checks = plan.Checks.Where(c => c.Origin != CriterionOrigin.Proposed).Concat(kept).ToArray() };
         }
 
-        // What the workspace's build reported before any of the work, for the engine's own "no new
-        // build errors" at the end - see BuildRegression. Not on a resume: the workspace has already
-        // been worked on, and a baseline taken now would call the earlier work's errors old.
+        // What the workspace's build and tests reported before any of the work, for the engine's own
+        // regression checks at the end - see BuildRegression. A run carrying a task on - resumed at a
+        // step boundary, or started again after a question - does NOT take it again: the workspace has
+        // already been worked on, and a baseline taken now would call the earlier attempt's errors
+        // old. It gets the one taken before the first attempt back, from the checkpoint or from the
+        // task's own file (a quick action has no checkpoint).
         IReadOnlyList<BuildBaseline> builds = [];
-        if (resume is null && _ecosystems.Count > 0)
+        if (_ecosystems.Count > 0)
         {
-            builds = await InScopeAsync(scope.RunId, scope.TaskId, null,
-                () => BuildBaselineAsync(scope.TaskId, scope.RunId, intent.Context, ct));
-            foreach (var build in builds)
-                yield return scope.Ev(EventKind.ContextAssembled, build.Describe());
+            var kept = resume?.Baseline ?? _baselines.Load(scope.TaskId);
+            if (kept is { Count: > 0 })
+            {
+                builds = kept.Select(b => BuildBaseline.From(b, _ecosystems)).OfType<BuildBaseline>().ToArray();
+                foreach (var build in builds)
+                    yield return scope.Ev(EventKind.ContextAssembled, build.Describe() + " (kept from before the first attempt)");
+            }
+            else if (resume is null)
+            {
+                builds = await InScopeAsync(scope.RunId, scope.TaskId, null,
+                    () => BuildBaselineAsync(scope.TaskId, scope.RunId, intent.Context, ct));
+                if (builds.Count > 0) _baselines.Save(scope.TaskId, builds.Select(b => b.ToSnapshot()).ToArray());
+                foreach (var build in builds)
+                    yield return scope.Ev(EventKind.ContextAssembled, build.Describe());
+            }
         }
 
         var session = new RunSession(scope, messages) { Builds = builds };
@@ -1034,7 +1051,8 @@ public sealed partial class Orchestrator : IOrchestrator
                 intent.RawText, plan.Title, intent.WorkerId, resume?.Spec,
                 steps, doneLines, transcript,
                 produced.Select(a => a.RelativePath).ToArray(),
-                scope.Budget.StepsRun, scope.Budget.TokensSpent, _settings) { Checks = CriteriaFor(plan), Restrictions = plan.Restrictions, ActionPolicy = plan.ActionPolicy };
+                scope.Budget.StepsRun, scope.Budget.TokensSpent, _settings) { Checks = CriteriaFor(plan), Restrictions = plan.Restrictions, ActionPolicy = plan.ActionPolicy,
+                    Baseline = session.Builds.Count == 0 ? null : session.Builds.Select(b => b.ToSnapshot()).ToArray() };
         });
 
         // Forgets the checkpoint: this run reached an end, and an ending is not resumable. Called
@@ -1637,17 +1655,43 @@ public sealed partial class Orchestrator : IOrchestrator
 
         if (BuildRegression.WhyNotAllowed(_tools, _permissions, _policy) is { } why)
             return found.Select(f => new BuildBaseline(f.Ecosystem, f.Target, null, null, why)).ToArray();
-        try
+
+        var builds = await TakeAsync(found, BaselineKind.Build);
+
+        // The tests, where the ecosystem can read what they print - and only where its build passed:
+        // a build that fails stops its tests before they run, and the baseline would record nothing
+        // but the reason. Said so, rather than left out.
+        var tests = new List<BuildBaseline>();
+        foreach (var ecosystem in found.Select(f => f.Ecosystem).Distinct())
         {
-            var report = await CheckSuccessAsync(found.Select(f => BuildRegression.Criterion(f.Ecosystem, f.Target)).ToArray(),
-                taskId, runId, context, ct);
-            return found.Select((f, i) => BuildRegression.Baseline(f.Ecosystem, f.Target, report.Results[i], _workspace.RootPath))
-                .ToArray();
+            EcosystemTargets? targets;
+            try { targets = ecosystem.Detect(_workspace.RootPath); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { targets = null; }
+            var testTargets = (targets?.Tests ?? []).Take(MaxBuildTargets).Select(t => (ecosystem, t)).ToList();
+            if (testTargets.Count == 0) continue;
+            var built = builds.Where(b => b.Ecosystem == ecosystem).ToArray();
+            if (built.All(b => b.Taken && b.ExitCode == 0))
+                tests.AddRange(await TakeAsync(testTargets, BaselineKind.Test));
+            else
+                tests.AddRange(testTargets.Select(t => new BuildBaseline(t.ecosystem, t.t, null, null,
+                    "the build did not pass before the work, so its tests could not run") { Kind = BaselineKind.Test }));
         }
-        catch (OperationCanceledException) { throw; }
-        catch (Exception ex)
+        return builds.Concat(tests).ToArray();
+
+        async Task<IReadOnlyList<BuildBaseline>> TakeAsync(List<(IEcosystem Ecosystem, string Target)> what, BaselineKind kind)
         {
-            return found.Select(f => new BuildBaseline(f.Ecosystem, f.Target, null, null, ex.Message)).ToArray();
+            try
+            {
+                var report = await CheckSuccessAsync(what.Select(f => BuildRegression.Criterion(f.Ecosystem, f.Target, kind)).ToArray(),
+                    taskId, runId, context, ct);
+                return what.Select((f, i) => BuildRegression.Baseline(f.Ecosystem, f.Target, report.Results[i], _workspace.RootPath, kind))
+                    .ToArray();
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                return what.Select(f => new BuildBaseline(f.Ecosystem, f.Target, null, null, ex.Message) { Kind = kind }).ToArray();
+            }
         }
     }
 
@@ -1669,12 +1713,12 @@ public sealed partial class Orchestrator : IOrchestrator
 
             var runnable = due.Where(b => b.Taken).ToArray();
             var report = runnable.Length == 0 ? SuccessReport.NothingToCheck
-                : await CheckSuccessAsync(runnable.Select(b => BuildRegression.Criterion(b.Ecosystem, b.Target)).ToArray(),
+                : await CheckSuccessAsync(runnable.Select(b => BuildRegression.Criterion(b.Ecosystem, b.Target, b.Kind)).ToArray(),
                     scope.TaskId, scope.RunId, context, ct);
             return due.Select(b =>
             {
                 var index = Array.IndexOf(runnable, b);
-                var criterion = BuildRegression.Criterion(b.Ecosystem, b.Target);
+                var criterion = BuildRegression.Criterion(b.Ecosystem, b.Target, b.Kind);
                 var after = index >= 0 ? report.Results[index]
                     : new CriterionResult(criterion.Name, criterion.Command, false, CriterionOutcome.Unknown, null, null,
                         CriterionOrigin.System);

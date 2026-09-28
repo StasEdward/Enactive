@@ -7,17 +7,54 @@ using Enactive.Core.Permissions;
 using Enactive.Core.Templates;
 using Enactive.Core.Tools;
 
-/// <summary>What one ecosystem's build of one target reported before any work, or why it was not taken.</summary>
+/// <summary>Which half of the workspace baseline an entry is: what the build said, or what the tests said.</summary>
+internal enum BaselineKind { Build, Test }
+
+/// <summary>
+/// What one ecosystem's build - or test run - of one target reported before any work, or why it was
+/// not taken. Phase 1.6's WorkspaceBaseline is the list of these: ecosystems, targets, build status
+/// with its diagnostics, test status with its tests.
+/// </summary>
 internal sealed record BuildBaseline(IEcosystem Ecosystem, string Target, int? ExitCode, DiagnosticSet? Diagnostics,
     string? NotTaken)
 {
-    public bool Taken => NotTaken is null && ExitCode is not null && Diagnostics is not null;
+    public BaselineKind Kind { get; init; } = BaselineKind.Build;
 
-    /// <summary>One line for the run's log: what the build said before the work.</summary>
-    public string Describe() => Taken
-        ? $"Build before the work ({Ecosystem.Name}, {Target}): exit {ExitCode}, "
-          + $"{Diagnostics!.Total(DiagnosticSeverity.Error)} error(s), {Diagnostics.Total(DiagnosticSeverity.Warning)} warning(s)."
-        : $"Build before the work ({Ecosystem.Name}, {Target}) was not taken: {NotTaken}";
+    /// <summary>The tests the run named, for a <see cref="BaselineKind.Test"/> entry.</summary>
+    public TestRunReport? Tests { get; init; }
+
+    public bool Taken => NotTaken is null && ExitCode is not null
+                         && (Kind == BaselineKind.Build ? Diagnostics is not null : Tests is not null);
+
+    private string What => Kind == BaselineKind.Build ? "Build" : "Tests";
+
+    /// <summary>One line for the run's log: what the build or the tests said before the work.</summary>
+    public string Describe() => !Taken
+        ? $"{What} before the work ({Ecosystem.Name}, {Target}) was not taken: {NotTaken}"
+        : Kind == BaselineKind.Build
+            ? $"Build before the work ({Ecosystem.Name}, {Target}): exit {ExitCode}, "
+              + $"{Diagnostics!.Total(DiagnosticSeverity.Error)} error(s), {Diagnostics.Total(DiagnosticSeverity.Warning)} warning(s)."
+            : $"Tests before the work ({Ecosystem.Name}, {Target}): exit {ExitCode}, {Tests!.Describe()}.";
+
+    /// <summary>As data, for the checkpoint and the task's own file.</summary>
+    public BaselineSnapshot ToSnapshot()
+        => new(Ecosystem.Name, Kind.ToString(), Target, ExitCode, NotTaken, Diagnostics?.All, Tests);
+
+    /// <summary>
+    /// Back from data, against the ecosystems this engine has now. An ecosystem that is gone cannot
+    /// read what its build prints, so its entry comes back as not taken, and says why.
+    /// </summary>
+    public static BuildBaseline? From(BaselineSnapshot snapshot, IReadOnlyList<IEcosystem> ecosystems)
+    {
+        if (ecosystems.FirstOrDefault(e => e.Name == snapshot.Ecosystem) is not { } ecosystem) return null;
+        var kind = Enum.TryParse<BaselineKind>(snapshot.Kind, out var parsed) ? parsed : BaselineKind.Build;
+        return new(ecosystem, snapshot.Target, snapshot.ExitCode,
+            snapshot.Diagnostics is { } diagnostics ? DiagnosticSet.Of(diagnostics) : null, snapshot.NotTaken)
+        {
+            Kind = kind,
+            Tests = snapshot.Tests
+        };
+    }
 }
 
 /// <summary>
@@ -46,14 +83,19 @@ internal sealed record BuildBaseline(IEcosystem Ecosystem, string Target, int? E
 internal static class BuildRegression
 {
     internal const string Name = "No new build errors";
+    internal const string TestName = "No test that passed now fails";
 
     /// <summary>How many new errors the result names; the rest are counted.</summary>
     private const int MaxNamed = 5;
 
-    /// <summary>The engine's own build of one target, as a criterion the ordinary evaluator runs.</summary>
-    internal static SuccessCriterionDefinition Criterion(IEcosystem ecosystem, string target)
-        => new($"{Name} ({ecosystem.Name}: {target})", ecosystem.BuildCommand(target), 0,
-            Required: false, Origin: CriterionOrigin.System);
+    /// <summary>The engine's own build - or test run - of one target, as a criterion the ordinary evaluator runs.</summary>
+    internal static SuccessCriterionDefinition Criterion(IEcosystem ecosystem, string target,
+        BaselineKind kind = BaselineKind.Build)
+        => kind == BaselineKind.Build
+            ? new($"{Name} ({ecosystem.Name}: {target})", ecosystem.BuildCommand(target), 0,
+                Required: false, Origin: CriterionOrigin.System)
+            : new($"{TestName} ({ecosystem.Name}: {target})", ecosystem.TestCommand(target), 0,
+                Required: false, Origin: CriterionOrigin.System);
 
     /// <summary>
     /// Whether the engine may run a command of its own without asking anybody. The success-check
@@ -72,10 +114,18 @@ internal static class BuildRegression
         catch (Exception ex) { return "the command tool is not available: " + ex.Message; }
     }
 
-    internal static BuildBaseline Baseline(IEcosystem ecosystem, string target, CriterionResult result, string root)
-        => result.ExitCode is { } exit
-            ? new(ecosystem, target, exit, DiagnosticSet.Of(ecosystem.ParseDiagnostics(result.Output ?? "", root)), null)
-            : new(ecosystem, target, null, null, string.IsNullOrWhiteSpace(result.Detail) ? "it did not run" : result.Detail);
+    internal static BuildBaseline Baseline(IEcosystem ecosystem, string target, CriterionResult result, string root,
+        BaselineKind kind = BaselineKind.Build)
+    {
+        if (result.ExitCode is not { } exit)
+            return new(ecosystem, target, null, null, string.IsNullOrWhiteSpace(result.Detail) ? "it did not run" : result.Detail)
+                { Kind = kind };
+        if (kind == BaselineKind.Build)
+            return new(ecosystem, target, exit, DiagnosticSet.Of(ecosystem.ParseDiagnostics(result.Output ?? "", root)), null);
+        return ecosystem.ParseTests(result.Output ?? "") is { } tests
+            ? new(ecosystem, target, exit, null, null) { Kind = kind, Tests = tests }
+            : new(ecosystem, target, exit, null, "nothing its test run printed reads as a test result") { Kind = kind };
+    }
 
     /// <summary>
     /// Whether the run can have changed what this ecosystem's build reports: it wrote a file the
@@ -87,11 +137,14 @@ internal static class BuildRegression
            || actions.Any(a => a.Outcome != ActionOutcome.Refused && a.WorkspaceEffect != WorkspaceEffect.None
                                && a.ChangedPaths is not { Count: > 0 });
 
-    /// <summary>The build after the work, against the build before it.</summary>
+    /// <summary>The build - or the tests - after the work, against the same before it.</summary>
     internal static CriterionResult Compare(BuildBaseline before, CriterionResult after, string root)
     {
         CriterionResult Result(CriterionOutcome outcome, string detail)
             => new(after.Name, after.Command, Required: false, outcome, after.ExitCode, detail, CriterionOrigin.System);
+
+        if (before.Kind == BaselineKind.Test)
+            return CompareTests(before, after, Result);
 
         if (!before.Taken)
             return Result(CriterionOutcome.Unknown, "the build could not be run before the work, so there is nothing "
@@ -124,5 +177,44 @@ internal static class BuildRegression
                 + $"printed reads as a diagnostic that explains it. ({totals})");
 
         return Result(CriterionOutcome.Passed, $"no error that was not there before the work ({totals}).");
+    }
+
+    /// <summary>
+    /// The tests after the work, against the tests before it: a test that passed and fails now is
+    /// the work's regression; a test failing now that the run before did not name at all is
+    /// reported and not counted - it may be exactly what the work was asked to add.
+    /// </summary>
+    private static CriterionResult CompareTests(BuildBaseline before, CriterionResult after,
+        Func<CriterionOutcome, string, CriterionResult> result)
+    {
+        if (!before.Taken)
+            return result(CriterionOutcome.Unknown, "the tests could not be run before the work, so there is nothing "
+                + "to compare them with: " + before.NotTaken);
+        if (after.ExitCode is not { } exit)
+            return result(CriterionOutcome.Unknown, "the tests could not be run after the work: "
+                + (string.IsNullOrWhiteSpace(after.Detail) ? "they did not run" : after.Detail));
+
+        var was = before.Tests!;
+        if (before.Ecosystem.ParseTests(after.Output ?? "") is not { } now)
+            // Ran before, and nothing now reads as a test result: the tests did not get as far as
+            // running - a broken build stops them. That is the work's, whatever the build check says.
+            return before.ExitCode == 0
+                ? result(CriterionOutcome.Failed, $"the tests ran before the work and did not run after it (exit {exit}).")
+                : result(CriterionOutcome.Unknown, $"nothing the tests printed after the work reads as a test result (exit {exit}).");
+
+        var totals = $"before the work: {was.Describe()}; now: {now.Describe()}";
+        var added = now.FailingAndNew(was);
+        var newNote = added.Count == 0 ? ""
+            : $" {added.Count} test(s) the run before the work did not have fail now - not counted against it, it may be "
+              + "what the work was asked to add: " + string.Join(", ", added.Take(MaxNamed))
+              + (added.Count > MaxNamed ? $", and {added.Count - MaxNamed} more" : "") + ".";
+
+        var broken = now.Regressions(was);
+        if (broken.Count > 0)
+            return result(CriterionOutcome.Failed, $"{broken.Count} test(s) passed before the work and fail now: "
+                + string.Join(", ", broken.Take(MaxNamed)) + (broken.Count > MaxNamed ? $", and {broken.Count - MaxNamed} more" : "")
+                + $". ({totals}){newNote}");
+
+        return result(CriterionOutcome.Passed, $"no test that passed before the work fails now ({totals}).{newNote}");
     }
 }

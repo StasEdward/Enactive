@@ -23,18 +23,30 @@ public sealed class NoNewBuildErrorsTests
     /// A wiki linter, as an ecosystem: present where <c>wiki.lint</c> is, owns <c>.page</c> files,
     /// and "builds" by printing its report - lines of <c>ERROR code path: message</c>.
     /// </summary>
-    private sealed class WikiLint : IEcosystem
+    internal sealed class WikiLint : IEcosystem
     {
         public string Name => "wikilint";
 
+        // Its "tests" are the wiki's link checks: present where links.txt is, printing PASS/FAIL per link.
         public EcosystemTargets? Detect(string workspaceRoot)
-            => File.Exists(Path.Combine(workspaceRoot, "wiki.lint")) ? new(Name, ["wiki.lint"], []) : null;
+            => File.Exists(Path.Combine(workspaceRoot, "wiki.lint"))
+                ? new(Name, ["wiki.lint"], File.Exists(Path.Combine(workspaceRoot, "links.txt")) ? ["links"] : [])
+                : null;
 
         public bool Owns(string relativePath) => relativePath.EndsWith(".page", StringComparison.OrdinalIgnoreCase);
 
         public string BuildCommand(string target) => "type lint-report.txt";
 
-        public string TestCommand(string target) => "type lint-report.txt";
+        public string TestCommand(string target) => "type links.txt";
+
+        public TestRunReport? ParseTests(string output)
+        {
+            var cases = output.Split('\n').Select(l => l.Trim())
+                .Where(l => l.StartsWith("PASS ", StringComparison.Ordinal) || l.StartsWith("FAIL ", StringComparison.Ordinal))
+                .Select(l => new TestCaseResult(l[5..], l.StartsWith("PASS", StringComparison.Ordinal) ? TestVerdict.Passed : TestVerdict.Failed))
+                .ToArray();
+            return cases.Length == 0 ? null : new TestRunReport(cases, null);
+        }
 
         public IReadOnlyList<BuildDiagnostic> ParseDiagnostics(string output, string workspaceRoot)
             => output.Split('\n').Select(l => l.Trim())
@@ -47,7 +59,7 @@ public sealed class NoNewBuildErrorsTests
                 }).ToArray();
     }
 
-    private const string OneBrokenLink = "ERROR W1 pages/home.page: broken link to /old";
+    internal const string OneBrokenLink = "ERROR W1 pages/home.page: broken link to /old";
 
     private static EngineFixture Wiki(bool lint = true)
     {

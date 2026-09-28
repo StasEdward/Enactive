@@ -51,6 +51,7 @@ public sealed record DiagnosticRegression(DiagnosticIdentity Identity, int Added
 public sealed class DiagnosticSet
 {
     private readonly Dictionary<DiagnosticIdentity, int> _counts = new();
+    private readonly List<BuildDiagnostic> _all = new();
     private readonly Dictionary<DiagnosticIdentity, BuildDiagnostic> _examples = new();
 
     private DiagnosticSet() { }
@@ -62,12 +63,16 @@ public sealed class DiagnosticSet
         var set = new DiagnosticSet();
         foreach (var diagnostic in diagnostics.Distinct())
         {
+            set._all.Add(diagnostic);
             var id = diagnostic.Identity;
             set._counts[id] = set._counts.GetValueOrDefault(id) + 1;
             set._examples.TryAdd(id, diagnostic);
         }
         return set;
     }
+
+    /// <summary>Every diagnostic, repeats removed - what <see cref="Of"/> makes this set again from.</summary>
+    public IReadOnlyList<BuildDiagnostic> All => _all;
 
     public int Count(DiagnosticIdentity identity) => _counts.GetValueOrDefault(identity);
 

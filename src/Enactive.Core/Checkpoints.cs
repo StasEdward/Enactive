@@ -112,6 +112,12 @@ public sealed record RunCheckpoint(
     public IReadOnlyList<Enactive.Core.Tools.TaskRestriction> Restrictions { get; init; } = [];
 
     public bool Staged => Settings?.Staged ?? false;
+    /// <summary>
+    /// What the workspace's build and tests reported before the run's first attempt. A resumed run
+    /// compares against THIS, not against a baseline taken now over work already done - which would
+    /// call the interrupted attempt's errors old. Null for older checkpoints, and for a run that took none.
+    /// </summary>
+    public IReadOnlyList<Enactive.Core.Builds.BaselineSnapshot>? Baseline { get; init; }
     /// <summary>The effective verification contract, preserved across resume. Null for older checkpoints.</summary>
     public IReadOnlyList<Enactive.Core.Templates.SuccessCriterionDefinition>? Checks { get; init; }
 }
