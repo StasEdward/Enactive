@@ -1905,6 +1905,8 @@ public sealed partial class Orchestrator : IOrchestrator
     {
         public SuccessReport Report { get; set; } = SuccessReport.NothingToCheck;
         public string? IncompleteReason { get; set; }
+        /// <summary>How many changes to the definition of done this verification has numbered (Phase 4.1).</summary>
+        public int Revisions { get; set; }
         public RunOutcomeKind Apply(RunOutcomeKind current) =>
             IncompleteReason is not null && current is not (RunOutcomeKind.Failed or RunOutcomeKind.Cancelled)
                 ? RunOutcomeKind.Incomplete : Report.Apply(current);
@@ -1997,16 +1999,65 @@ public sealed partial class Orchestrator : IOrchestrator
                 if (decisions.Any(d => d.Kind == "check"))
                 {
                     var revised = criteria.ToArray();
+                    var changed = false;
                     foreach (var decision in decisions.Where(d => d.Kind == "check"))
                     {
                         var old = proposed[decision.Index];
                         for (var i = 0; i < revised.Length; i++)
+                        {
                             // A typed criterion is not a command to rewrite: what it checks is its type.
-                            if (revised[i].Origin == CriterionOrigin.Proposed && revised[i].Typed is null
-                                && revised[i].Name == old.Name && revised[i].Command == old.Command)
-                                revised[i] = revised[i] with { Command = decision.Command, AlreadyPassing = false };
-                        yield return ev(EventKind.ErrorObserved, $"Planner revised proposed check: {old.Command} -> {decision.Command}");
+                            if (revised[i].Origin != CriterionOrigin.Proposed || revised[i].Typed is not null
+                                || revised[i].Name != old.Name || revised[i].Command != old.Command)
+                                continue;
+
+                            // Phase 4: the definition of done may tighten on its own and may not loosen
+                            // without somebody saying so. A check that failed and is then replaced is the
+                            // exact moment it could quietly loosen - see ContractMonotonicity.
+                            var candidate = revised[i] with { Command = decision.Command, AlreadyPassing = false };
+                            var (strength, why) = ContractMonotonicity.Compare(revised[i], candidate);
+                            string? decidedBy = "engine";
+                            if (!ContractMonotonicity.AtLeastAsStrong(strength))
+                            {
+                                var request = new DecisionRequest(taskId,
+                                    $"Accept a changed check after '{old.Name}' failed?",
+                                    $"{old.Command}  ->  {decision.Command}",
+                                    [new DecisionOption("allow", "Accept the changed check"), new DecisionOption("deny", "Keep the original check")],
+                                    RecommendedOptionId: "deny",
+                                    FullDetail: $"The check '{old.Name}' failed. The planner says the check, not the work, is at fault, "
+                                        + $"and proposes to replace it.\n\nWas:  {old.Command}\nWould be:  {decision.Command}\n\n"
+                                        + $"Planner's reason: {decision.Reason}\n\nThe engine cannot show the new check asks for at least as much: "
+                                        + $"{why}. Accepting it changes what this run must meet to be called finished. Keeping the original "
+                                        + "leaves the failure standing.");
+                                yield return ev(EventKind.DecisionRequested, $"{request.Topic} {request.Detail}");
+                                var answer = await ToolAccess.AskAsync(_decisions, _decisionGate, request, ct);
+                                var accepted = string.Equals(answer.OptionId, "allow", StringComparison.OrdinalIgnoreCase);
+                                yield return ev(EventKind.DecisionResolved,
+                                    $"Changed check {(accepted ? "accepted" : "refused")}{(answer.Because is { } because ? $" ({because})" : "")}");
+                                if (!accepted)
+                                {
+                                    var kept = new ContractRevision(++result.Revisions, DateTimeOffset.UtcNow, "planner", decision.Reason,
+                                        revised[i], candidate, strength, why, Applied: false, DecidedBy: answer.Because ?? "the person");
+                                    yield return new WorkEvent(Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow, EventKind.ContractRevised,
+                                        $"Changed check refused, the original stands: {old.Command} (proposed: {decision.Command}; {why})",
+                                        WorkEventPayload.ContractRevisionPayload(kept));
+                                    continue;
+                                }
+                                decidedBy = answer.Because ?? "the person";
+                            }
+
+                            var revision = new ContractRevision(++result.Revisions, DateTimeOffset.UtcNow, "planner", decision.Reason,
+                                revised[i], candidate, strength, why, Applied: true, DecidedBy: decidedBy);
+                            revised[i] = candidate;
+                            changed = true;
+                            yield return new WorkEvent(Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow, EventKind.ContractRevised,
+                                $"Planner revised proposed check: {old.Command} -> {decision.Command} ({strength.ToString().ToLowerInvariant()}: {why}; "
+                                + $"let through by {decidedBy})",
+                                WorkEventPayload.ContractRevisionPayload(revision));
+                        }
                     }
+                    // Nothing was let through: the checks are what they were, and so is their failure.
+                    if (!changed)
+                        yield break;
                     // A repaired command is new executable text. Review it against the same request
                     // restrictions before dispatch; a permission grant cannot substitute for this.
                     var checkedRepair = await InScopeAsync(runId, taskId, null, () => PlanCheckReview.RunAsync(

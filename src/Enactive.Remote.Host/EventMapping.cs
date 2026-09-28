@@ -34,7 +34,9 @@ public static class EventMapping
         EventKind.ReviewFailed,
         EventKind.CriterionEvaluated,
         EventKind.ErrorObserved,
-        EventKind.ContextTrimmed
+        EventKind.ContextTrimmed,
+        // A definition of done changed after a check failed is something the owner is owed a line about.
+        EventKind.ContractRevised
     ];
 
     /// <summary>

@@ -69,6 +69,9 @@ public sealed class GenericVerificationContractTests
     public async Task Planner_repairs_its_check_without_dispatching_worker_repair(string requested)
     {
         using var fx = new EngineFixture();
+        // A replaced check cannot be shown to ask for at least as much as the one that failed, so since
+        // Phase 4 somebody has to accept it. Here somebody does.
+        fx.Decisions.Answer = "allow";
         var commands = new Commands();
         fx.ToolsOverride = EngineFixture.ShippedTools().Where(t => t.Definition.Name != "run_command").Append(commands).ToArray();
         var planner = new FakeChatProvider(Turn.Says(Plan(requested)), Turn.Says("""
@@ -89,13 +92,18 @@ public sealed class GenericVerificationContractTests
         Assert.Equal(3, planner.Requests.Count);
         Assert.Equal(2, commands.Seen.Count(c => c.Command == requested)); // Before and after check revision.
         Assert.All(commands.Seen, c => Assert.Equal(fx.Root, c.Root));
-        Assert.Contains(events, e => e.Summary.Contains("Planner revised proposed check"));
+        Assert.Contains(events, e => e.Kind == EventKind.ContractRevised && e.Summary.Contains("Planner revised proposed check")
+                                     && e.Summary.Contains("let through by the person", StringComparison.Ordinal));
+        Assert.Contains(fx.Decisions.Requests, r => r.Topic.Contains("Accept a changed check", StringComparison.Ordinal));
     }
 
     [Fact]
     public async Task Forbidden_replacement_is_stopped_before_execution_even_with_permissive_permissions()
     {
         using var fx = new EngineFixture();
+        // Even ACCEPTED by the person (Phase 4 asks), a replacement the request forbids does not run:
+        // accepting a lower bar is not permission to break the task's restrictions.
+        fx.Decisions.Answer = "allow";
         var commands = new Commands();
         fx.ToolsOverride = EngineFixture.ShippedTools().Where(t => t.Definition.Name != "run_command").Append(commands).ToArray();
         var planner = new FakeChatProvider(Turn.Says(Plan("custom-verify")), Turn.Says("""

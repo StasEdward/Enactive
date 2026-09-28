@@ -64,7 +64,13 @@ public enum EventKind
     /// A step's output, accepted by the engine (Phase 2): its values and where they came from, in
     /// the payload. The run's record of it - the steps after it are handed these values.
     /// </summary>
-    StepOutputRecorded
+    StepOutputRecorded,
+
+    /// <summary>
+    /// The run's definition of done changed after it was fixed (Phase 4): what changed, who changed it
+    /// and why, how it compares with what it replaced, and whether it was let through and on whose say.
+    /// </summary>
+    ContractRevised
 }
 
 /// <summary>
@@ -641,6 +647,10 @@ public static class WorkEventPayload
             return null;
         }
     }
+
+    /// <summary>A change to the definition of done, as values (Phase 4.1).</summary>
+    public static string ContractRevisionPayload(Enactive.Core.Templates.ContractRevision revision)
+        => System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, object?> { ["contractRevision"] = revision }, PayloadJson);
 
     /// <summary>A step output as values: the whole record, so the run store holds what the next step was given.</summary>
     public static string StepOutputPayload(Enactive.Core.Tasks.StepOutput output)
