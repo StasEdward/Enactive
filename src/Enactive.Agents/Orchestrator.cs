@@ -2925,6 +2925,19 @@ public sealed partial class Orchestrator : IOrchestrator
             ? Math.Min(working.Value, byShare.Value)
             : working ?? byShare;
 
+        // The tool definitions are part of every request - see ToolBudget. Past their share of the
+        // size this step works at, the MCP tools are offered through one search tool instead of listed.
+        var (listedTools, toolsOnRequest, definitionTokens) = ToolBudget.Split(toolDefs, working ?? statedWindow);
+        if (toolsOnRequest is not null)
+        {
+            toolDefs = listedTools;
+            toolsOverhead = toolDefs.Sum(ToolBudget.Size);
+            yield return Ev(EventKind.ContextAssembled,
+                $"The tool definitions would take about {definitionTokens} tokens ({definitionTokens * 100L / (working ?? statedWindow)!.Value}% of the "
+                + $"{working ?? statedWindow} this step works in): the {toolsOnRequest.Count} tools of {string.Join(", ", toolsOnRequest.Servers)} "
+                + $"are offered through {ToolBudget.FindToolName} instead, and each request carries about {ToolBudget.Tokens(toolDefs)}.");
+        }
+
         // The transcript's size when lastPromptTokens was measured, so what has been added since
         // can be estimated on top of a real count rather than instead of one.
         var sizeAtLastPrompt = 0;
@@ -3681,6 +3694,22 @@ public sealed partial class Orchestrator : IOrchestrator
                 // the conversation so far, what this loop did, and this call with the rest of its turn.
                 void ParkHere() => _progress.Park(taskId, new ParkedPosition(stepNo, messages.ToArray(),
                     journal.Actions.Skip(loopMark).ToArray(), toolCalls.Skip(callIndex).ToArray()));
+
+                // A search of the tools offered on request: what it finds is listed from the next turn.
+                if (toolsOnRequest is not null && call.Name == ToolBudget.FindToolName)
+                {
+                    yield return Invoked(call);
+                    var (found, searched) = toolsOnRequest.Find(call.ArgumentsJson);
+                    if (found.Count > 0)
+                    {
+                        toolDefs = [.. toolDefs, .. found];
+                        toolsOverhead += found.Sum(ToolBudget.Size);
+                    }
+                    journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Succeeded, searched, WorkspaceEffect.None);
+                    messages.Add(ChatMessage.Tool(call.Id, searched));
+                    yield return Ev(EventKind.ToolResult, $"{call.Name} -> ok: {searched}");
+                    continue;
+                }
 
                 // The step's hand-over: checked here, against the one contract, and nowhere else.
                 if (outputSchema is not null && outputSlot is not null && call.Name == StepOutputContract.ToolName)
