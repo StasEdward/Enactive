@@ -17,6 +17,13 @@ public static class InboxLines
     /// <param name="reason">What the engine recorded about the ending, if anything.</param>
     public static InboxLine For(string status, int artifacts, int decisions, string? reason)
     {
+        // Not an error and not a result: a question, waiting for whoever opens this. It reads as
+        // one, and it is the kind the inbox shows a question under - where it can be answered.
+        if (status == "NeedsUser")
+            return new InboxLine("decision", "Waiting for your decision"
+                + (artifacts > 0 ? $" · {artifacts} artifact(s) so far" : "")
+                + (reason is { Length: > 0 } ? " · " + reason : ""));
+
         // Anything that is not a completed run is flagged as such. CANCELLED is in this list and
         // used to be missing from it, so a run that was stopped part-way filed itself as a "result"
         // — the same lie as a green status pill over an abandoned job. The runner's own comment

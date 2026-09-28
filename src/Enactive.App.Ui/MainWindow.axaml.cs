@@ -1898,8 +1898,11 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         /// </summary>
         private static WorkspaceInfo WorkspaceFrom(string path) => WorkspaceInfo.For(path);
 
-        private void StartBackground(string text, string fullPath)
+        /// <param name="taskId">The task this carries on, when it is one that stopped at a question - see <see cref="ContinueParkedAsync"/>.</param>
+        /// <param name="resume">Its step boundary, when it has one; null starts the request again under <paramref name="taskId"/>.</param>
+        private void StartBackground(string text, string fullPath, Guid? taskId = null, RunCheckpoint? resume = null)
         {
+            var continuing = taskId is not null || resume is not null;
             if (_shuttingDown) return;
             // Background runs always wrote straight to disk while the run settings — and the history —
             // said "staged". Rather than lie about it, refuse the combination: staging that survives a
@@ -1934,7 +1937,8 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                 _vm.HasTask = true;
                 _vm.ShowLiveRun();
             }
-            _vm.InputText = string.Empty;
+            // What is being typed is somebody's next request; carrying an old one on is not a reason to clear it.
+            if (!continuing) _vm.InputText = string.Empty;
 
             // A row of its own, carrying the workspace it belongs to: the window is free again the
             // moment this starts, so this row is the only thing on screen that says it is happening.
@@ -1946,14 +1950,20 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             {
                 try
                 {
+                    // A question nobody is here for is kept, not refused: the run stops at it, the
+                    // inbox shows it where it can be answered, and answering carries the run on
+                    // (ContinueParkedAsync). It used to be answered "no" on the spot, and the only
+                    // way to get "yes" in was to start the whole task again, in the foreground.
                     var composed = await UnattendedRun.ComposeAsync(
                         environment, workspace, text, IntentSource.Inbox,
-                        new BackgroundDecisionHandler(inbox, workspace), ct);
+                        new ParkingDecisionHandler(), ct, resume?.TaskId ?? taskId);
 
                     await using (composed.Resources)
                     {
                         await BackgroundRunner.RunAsync(
-                            composed.Engine.SubmitIntentAsync(composed.Intent, ct),
+                            resume is null
+                                ? composed.Engine.SubmitIntentAsync(composed.Intent, ct)
+                                : composed.Engine.ResumeRunAsync(resume, composed.Intent.Context, ct),
                             inbox, workspace, text, ct);
                     }
                 }
@@ -1988,6 +1998,22 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             if (execution is null) EndLive(row);
             else _ = ObserveBackgroundAsync(execution);
         }
+
+    /// <summary>
+    /// Carries on a background run that stopped at a question, now answered: from its last step
+    /// boundary when it has one, otherwise by starting the same request again under the same task.
+    /// Either way, the step that asked is done again and, asking the same thing, is given the answer.
+    /// </summary>
+    private async Task ContinueParkedAsync(ParkedDecision parked, InboxItem item, string workspaceRoot)
+    {
+        var fullPath = Path.GetFullPath(workspaceRoot);
+        RunCheckpoint? checkpoint = null;
+        try { checkpoint = await ParkedRuns.CheckpointForAsync(new JsonCheckpointStore(WorkspaceFrom(fullPath)), parked.TaskId, CancellationToken.None); }
+        catch (Exception ex) { _log.Warn(LogSource.System, "Could not read the checkpoints to carry a run on: " + ex.Message); }
+
+        await Dispatcher.UIThread.InvokeAsync(() =>
+            StartBackground(checkpoint?.Request ?? item.Title, fullPath, parked.TaskId, checkpoint));
+    }
 
     private async Task ObserveBackgroundAsync(Task execution)
     {
@@ -2025,7 +2051,8 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         {
             var workspace = WorkspaceFrom(path);
             _inboxWindow = new InboxWindow(
-                InboxStoreFactory.Create(workspace), RunStoreFactory.Create(workspace), workspace.RootPath);
+                InboxStoreFactory.Create(workspace), RunStoreFactory.Create(workspace), workspace.RootPath,
+                (parked, item) => ContinueParkedAsync(parked, item, workspace.RootPath));
             // The badge follows the window: reading an item there updates the button here.
             _inboxWindow.UnreadChanged += unread =>
             {

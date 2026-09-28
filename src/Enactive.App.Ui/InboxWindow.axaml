@@ -74,6 +74,37 @@
                         <TextBlock Classes="hint" Text="{Binding DetailMeta}" />
                         <TextBlock Text="{Binding DetailSummary}" TextWrapping="Wrap"
                                    Foreground="{DynamicResource Brand.TextBody}" Margin="0,6,0,0" />
+
+                        <!-- The question the run behind this item stopped at. The whole action is shown,
+                             scrollable, above the buttons: nobody can consent to what they were not shown.
+                             Answering carries the run on in the background. -->
+                        <Border IsVisible="{Binding HasWaitingDecision}" Margin="0,10,0,0" Padding="10"
+                                CornerRadius="6" BorderThickness="1"
+                                BorderBrush="{DynamicResource Brand.Amber}">
+                            <StackPanel Spacing="6">
+                                <TextBlock Classes="panelHeader" Text="WAITING FOR YOUR DECISION" />
+                                <TextBlock Text="{Binding DecisionTopic}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                <TextBlock Classes="hint" Text="{Binding DecisionAsked}" />
+                                <ScrollViewer MaxHeight="220">
+                                    <SelectableTextBlock Text="{Binding DecisionText}" TextWrapping="Wrap"
+                                                         FontFamily="Consolas, Menlo, monospace" FontSize="12" />
+                                </ScrollViewer>
+                                <ItemsControl ItemsSource="{Binding DecisionOptions}">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <StackPanel Orientation="Horizontal" Spacing="8" />
+                                        </ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:WaitingAnswerViewModel">
+                                            <Button Content="{Binding Label}" Command="{Binding Command}" />
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                        </Border>
+                        <TextBlock Classes="hint" Text="{Binding DecisionStatus}" TextWrapping="Wrap"
+                                   IsVisible="{Binding DecisionStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                     </StackPanel>
 
                     <ScrollViewer>

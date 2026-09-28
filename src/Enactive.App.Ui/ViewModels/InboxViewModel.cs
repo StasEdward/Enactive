@@ -47,6 +47,14 @@ internal sealed class InboxItemViewModel : ObservableObject
     public FontWeight TitleWeight => IsUnread ? FontWeight.SemiBold : FontWeight.Normal;
 }
 
+/// <summary>One answer a waiting question offers, as a button.</summary>
+internal sealed class WaitingAnswerViewModel(string id, string label, bool recommended, Func<string, Task> answer)
+{
+    public string Id { get; } = id;
+    public string Label { get; } = recommended ? label + " (recommended)" : label;
+    public AsyncRelayCommand Command { get; } = new(() => answer(id));
+}
+
 /// <summary>One line of the run's timeline.</summary>
 internal sealed class RunEventViewModel
 {
@@ -96,11 +104,18 @@ internal sealed class InboxViewModel : ObservableObject
     private bool _hasSelection;
     private bool _hasRun;
 
-    public InboxViewModel(IInboxStore inbox, IRunStore runs, string workspaceRoot)
+    // The questions background runs stopped at, and who carries a run on once one is answered.
+    private readonly InboxDecisions _decisions;
+    private Enactive.Agents.ParkedDecision? _waiting;
+    private string _decisionStatus = string.Empty;
+
+    public InboxViewModel(IInboxStore inbox, IRunStore runs, string workspaceRoot,
+        Func<Enactive.Agents.ParkedDecision, InboxItem, Task>? carryOn = null)
     {
         _inbox = inbox;
         _runs = runs;
         WorkspaceRoot = workspaceRoot;
+        _decisions = new InboxDecisions(workspaceRoot, carryOn);
 
         RefreshCommand = new AsyncRelayCommand(RefreshAsync);
         MarkAllReadCommand = new AsyncRelayCommand(MarkAllReadAsync);
@@ -152,6 +167,44 @@ internal sealed class InboxViewModel : ObservableObject
 
     public AsyncRelayCommand RefreshCommand { get; }
     public AsyncRelayCommand MarkAllReadCommand { get; }
+
+    // ── a question the run behind the item stopped at ──
+
+    /// <summary>True while the selected item's run is stopped at a question nobody has answered yet.</summary>
+    public bool HasWaitingDecision => _waiting is not null;
+    public string DecisionTopic => _waiting?.Topic ?? string.Empty;
+
+    /// <summary>
+    /// Everything the answer authorises, in full - not the one-line summary. A person cannot consent
+    /// to what they were not shown (see DecisionRequest.FullText).
+    /// </summary>
+    public string DecisionText => _waiting?.FullText ?? string.Empty;
+    public string DecisionAsked => _waiting is null ? string.Empty : "asked " + _waiting.AskedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
+    public ObservableCollection<WaitingAnswerViewModel> DecisionOptions { get; } = new();
+
+    /// <summary>What happened to the answer: sent on, or refused because the question is no longer waiting.</summary>
+    public string DecisionStatus { get => _decisionStatus; set => Set(ref _decisionStatus, value); }
+
+    private void ShowWaiting(Enactive.Agents.ParkedDecision? waiting)
+    {
+        _waiting = waiting;
+        DecisionOptions.Clear();
+        foreach (var option in waiting?.Options ?? [])
+            DecisionOptions.Add(new WaitingAnswerViewModel(option.Id, option.Label,
+                string.Equals(option.Id, waiting!.RecommendedOptionId, StringComparison.OrdinalIgnoreCase), AnswerAsync));
+        OnPropertyChanged(nameof(HasWaitingDecision));
+        OnPropertyChanged(nameof(DecisionTopic));
+        OnPropertyChanged(nameof(DecisionText));
+        OnPropertyChanged(nameof(DecisionAsked));
+    }
+
+    /// <summary>Answers the question shown, once; see <see cref="InboxDecisions.AnswerAsync"/>.</summary>
+    private async Task AnswerAsync(string optionId)
+    {
+        if (_waiting is not { } waiting || Selected is not { } item) return;
+        ShowWaiting(null);   // one answer: the buttons go before anything can be clicked twice
+        DecisionStatus = await _decisions.AnswerAsync(waiting, item.Item, optionId);
+    }
 
     public async Task RefreshAsync()
     {
@@ -219,6 +272,8 @@ internal sealed class InboxViewModel : ObservableObject
         RunDecisions.Clear();
 
         HasSelection = item is not null;
+        DecisionStatus = string.Empty;
+        ShowWaiting(null);
         if (item is null)
         {
             DetailTitle = DetailMeta = DetailSummary = RunHeader = string.Empty;
@@ -241,6 +296,10 @@ internal sealed class InboxViewModel : ObservableObject
         // The header comes off the summary, so it appears at once; the timeline needs the events and
         // those are fetched for THIS run alone. The list used to hold every run whole so that this
         // line could be drawn without waiting.
+        // The question this item's run stopped at, if it is still waiting. By the run's TASK: the
+        // answer is to the task, and a run carried on is a new run under the same one.
+        ShowWaiting(_decisions.WaitingFor(summary.TaskId));
+
         var elapsed = summary.FinishedAt - summary.StartedAt;
         RunHeader = $"{summary.Title} — {summary.Status} · {summary.Model} · {elapsed.TotalSeconds:0}s";
         foreach (var a in summary.Artifacts)

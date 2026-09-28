@@ -165,8 +165,8 @@ public sealed class DecisionLedger(string workspaceRoot)
 /// <para>The other two answers for a run with nobody watching are both worse for some tasks.
 /// <see cref="UnattendedDecisionHandler"/> says no, which is right for a scheduled job that must
 /// never do what nobody approved, and ends the run without the thing it needed.
-/// <see cref="BackgroundDecisionHandler"/> says no and leaves a note. This says neither: it can
-/// approve, just not yet.</para>
+/// The window's background runs used to say no and leave a note in the inbox (the handler that did
+/// that is gone; this replaced it). This says neither: it can approve, just not yet.</para>
 /// </summary>
 public sealed class ParkingDecisionHandler : IDecisionHandler
 {

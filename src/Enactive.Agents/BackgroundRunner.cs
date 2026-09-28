@@ -28,7 +28,12 @@ public static class BackgroundRunner
                 switch (ev.Kind)
                 {
                     case EventKind.ArtifactProduced: artifacts++; break;
-                    case EventKind.DecisionRequested: decisions++; break;
+                    // The decisions that went against the run: refused, because nobody could say
+                    // yes. It counted every question asked, which was the same thing while every
+                    // background question was refused on the spot. Now a question either stops the
+                    // run (and is filed as the question) or is given the answer recorded for it,
+                    // and a run that was answered and completed has nothing waiting on anybody.
+                    case EventKind.DecisionResolved when ev.WasRefused() == true: decisions++; break;
                     case EventKind.ErrorObserved: error = ev.Summary; break;
 
                     // Read the typed outcome, not the event kind: "Incomplete" and "Failed" are

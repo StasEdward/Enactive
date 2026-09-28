@@ -91,8 +91,8 @@ public static class UnattendedRun
     /// </summary>
     /// <param name="decisions">
     /// Who answers permission requests for this run. It is the whole difference between the
-    /// callers: the background path files the question in the inbox and denies, the remote path
-    /// races the desktop against the phone.
+    /// callers: the background path stops at the question and keeps it for the inbox to answer
+    /// (ParkingDecisionHandler), the remote path races the desktop against the phone.
     /// </param>
     public static async Task<ComposedRun> ComposeAsync(
         RunEnvironment environment,
@@ -100,7 +100,11 @@ public static class UnattendedRun
         string prompt,
         IntentSource source,
         IDecisionHandler decisions,
-        CancellationToken ct)
+        CancellationToken ct,
+        // The task this run belongs to, when it is carrying one on: a task that stopped at a question
+        // and is started again once it is answered must be the same task, or the recorded answer
+        // cannot find its question. Null for a new task.
+        Guid? taskId = null)
     {
         var memory = MemoryStoreFactory.Create(workspace);
         var tools = await McpRunTools.ConnectAsync(
@@ -139,7 +143,7 @@ public static class UnattendedRun
                         RunStoreFactory.Create(workspace), memory, workspace.Id, environment.RunSettings),
                     environment.Log),
                 new Intent(
-                    Guid.NewGuid(), prompt, source, context, DateTimeOffset.UtcNow, environment.WorkerId),
+                    taskId ?? Guid.NewGuid(), prompt, source, context, DateTimeOffset.UtcNow, environment.WorkerId),
                 tools);
         }
         catch

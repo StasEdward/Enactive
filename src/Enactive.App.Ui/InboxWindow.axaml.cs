@@ -13,9 +13,11 @@ internal sealed partial class InboxWindow : Window
 {
     private readonly InboxViewModel _viewModel;
 
-    public InboxWindow(IInboxStore inbox, IRunStore runs, string workspaceRoot)
+    /// <param name="carryOn">What answering a question a background run stopped at does next: carries that run on.</param>
+    public InboxWindow(IInboxStore inbox, IRunStore runs, string workspaceRoot,
+        Func<Enactive.Agents.ParkedDecision, InboxItem, Task>? carryOn = null)
     {
-        _viewModel = new InboxViewModel(inbox, runs, workspaceRoot);
+        _viewModel = new InboxViewModel(inbox, runs, workspaceRoot, carryOn);
         DataContext = _viewModel;
         InitializeComponent();
 

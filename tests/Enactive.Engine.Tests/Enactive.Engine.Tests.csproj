@@ -34,6 +34,7 @@
     <Compile Include="../../src/Enactive.App.Ui/DecisionCompletion.cs" Link="Ui/DecisionCompletion.cs" />
     <Compile Include="../../src/Enactive.App.Ui/BatchObservableCollection.cs" Link="Ui/BatchObservableCollection.cs" />
     <Compile Include="../../src/Enactive.App.Ui/LogFilter.cs" Link="Ui/LogFilter.cs" />
+    <Compile Include="../../src/Enactive.App.Ui/InboxDecisions.cs" Link="Ui/InboxDecisions.cs" />
     <Using Include="Xunit" />
   </ItemGroup>
 
