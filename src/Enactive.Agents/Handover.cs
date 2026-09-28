@@ -40,6 +40,12 @@ public sealed record HandoverResult(string? Note, HandoverFailure? Failure = nul
     public int ThinkingCharacters { get; init; }
     public IReadOnlyList<string> ToolsCalled { get; init; } = [];
 
+    /// <summary>
+    /// A hand-over of the step's result the model made while writing the note - kept, not thrown away with
+    /// the reply: it is the one call that records what was established rather than announcing what is next.
+    /// </summary>
+    public Enactive.Core.Tools.ToolCall? HandOn { get; init; }
+
     public static HandoverResult Written(string note) => new(note);
 
     /// <summary>One line for the log and the step's events: the reason, then what was measured.</summary>
@@ -137,10 +143,19 @@ public sealed class Handover : IHandover
         // A reply that CALLS a tool is not a note, whatever text comes with it: the call will not
         // be run, and "I will read Prod.cs next" carried into the next conversation is an
         // intention where a record of results should be.
-        if (completion.Message.ToolCalls is { Count: > 0 })
+        //
+        // Except the step's own hand-over. It is not an intention but a record, and a step asked at each
+        // fresh start to hand on what it has will do exactly that here: run ddca5350, 2026-09-28 18:18, a
+        // 4,211-character note of 26 checked claims came with a submit_step_output of the same findings,
+        // and both were thrown away - the note for the call, the call for being in a note.
+        var calls = completion.Message.ToolCalls ?? [];
+        var handOn = calls.Count > 0 && calls.All(c => c.Name == StepOutputContract.ToolName) ? calls[^1] : null;
+        if (calls.Count > 0 && handOn is null)
             return Measured(null, HandoverFailure.ToolCall);
         if (completion.FinishReason is "length" or "max_tokens")
-            return Measured(null, HandoverFailure.Truncated);
-        return string.IsNullOrWhiteSpace(note) ? Measured(null, HandoverFailure.Empty) : Measured(note, null);
+            return Measured(null, HandoverFailure.Truncated) with { HandOn = handOn };
+        return string.IsNullOrWhiteSpace(note)
+            ? Measured(null, handOn is null ? HandoverFailure.Empty : HandoverFailure.ToolCall) with { HandOn = handOn }
+            : Measured(note, null) with { HandOn = handOn };
     }
 }

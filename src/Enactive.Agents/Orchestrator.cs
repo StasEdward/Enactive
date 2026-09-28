@@ -3573,6 +3573,32 @@ public sealed partial class Orchestrator : IOrchestrator
                 }
                 var carried = attempt.Note;
 
+                // A result handed on while the note was written: checked and kept like any other hand-over.
+                if (attempt.HandOn is { } handOnCall && outputSchema is not null && outputSlot is not null)
+                {
+                    yield return Invoked(handOnCall);
+                    var handOnVerdict = StepOutputContract.Check(outputSchema, handOnCall.ArgumentsJson,
+                        path => OutputPathExists(path, store), id => id >= 1 && id <= journal.Actions.Count);
+                    if (handOnVerdict.Accepted)
+                    {
+                        outputSlot.Accept(handOnVerdict);
+                        outputSlot.LastRefused = null;
+                        openFailures.HandedOn();
+                        outputSlot.Items = EvidenceCoverage.Gather(outputSchema, handOnVerdict.Values!, reads, journal.Actions, _tools.Definitions,
+                            boundary is { ForItem: true } ? boundary.Items : null);
+                        var acceptedWhy = $"Accepted as this step's output (revision {outputSlot.Revision}), handed on with the handover note.";
+                        journal.Record(stepNo, handOnCall.Name, Compact(handOnCall.ArgumentsJson), ActionOutcome.Succeeded, acceptedWhy, WorkspaceEffect.None);
+                        yield return Ev(EventKind.ToolResult, $"{handOnCall.Name} -> ok: {acceptedWhy}");
+                    }
+                    else
+                    {
+                        var refusedWhy = string.Join(" ", handOnVerdict.Errors) + " Nothing was stored.";
+                        outputSlot.LastRefused = TaskProgress.Canonical(handOnCall.ArgumentsJson);
+                        journal.Record(stepNo, handOnCall.Name, Compact(handOnCall.ArgumentsJson), ActionOutcome.Refused, refusedWhy, WorkspaceEffect.None);
+                        yield return Ev(EventKind.ToolResult, $"{handOnCall.Name} -> failed: {refusedWhy}");
+                    }
+                }
+
                 // Why there is no note, said with what was measured. Six different faults used to
                 // come back as one null - a provider error, a note cut at the limit, reasoning that
                 // used the limit up, a tool call, an empty answer, no room in the window - and the

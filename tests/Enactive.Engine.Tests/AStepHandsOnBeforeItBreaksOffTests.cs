@@ -3,6 +3,7 @@ namespace Enactive.Engine.Tests;
 using Enactive.Agents;
 using Enactive.Core.Chat;
 using Enactive.Core.Events;
+using Enactive.Core.Tools;
 using Xunit;
 
 /// <summary>
@@ -63,6 +64,50 @@ public sealed class AStepHandsOnBeforeItBreaksOffTests
         Assert.Equal(1, Asked(provider, HandOnNow));
         Assert.Single(events, e => e.Summary.Contains("asked to hand on its result now", StringComparison.Ordinal));
         Assert.True(events.Has(EventKind.TaskCompleted), events.Text());
+    }
+
+    /// <summary>
+    /// Run ddca5350, 18:18: asked for its note, the step wrote 4,211 characters of checked claims AND handed
+    /// the same findings on with submit_step_output. Both were thrown away - the note for carrying a call,
+    /// the call for being in a note. The note is kept, and the hand-over is checked and kept like any other.
+    /// </summary>
+    [Fact]
+    public async Task A_result_handed_on_with_the_note_keeps_both()
+    {
+        using var fx = new EngineFixture { StepOutputs = true };
+        var provider = new FakeChatProvider(
+            Turn.Says(OneStep),
+            Read(fx, 1, 3_000), Read(fx, 2, 9_000),
+            new Turn("# Note to self - claims 1 and 2 checked, both right.",
+                [new ToolCall("h1", StepOutputContract.ToolName, """{"findings":"claims 1-2 right"}""")], "tool_calls"),
+            Turn.Says("Handed on; done.")) { Window = 40_000, HandoverAt = 75, Working = 8_000 };
+
+        var events = await fx.RunAsync(fx.Build(provider, EngineFixture.Role("developer")), "check the claims");
+
+        Assert.Contains(events, e => e.Summary.Contains("fresh conversation and continuing", StringComparison.Ordinal));
+        Assert.DoesNotContain(events, e => e.Summary.Contains("Handover note not written", StringComparison.Ordinal));
+        Assert.Contains(events, e => e.Kind == EventKind.ToolResult && e.Summary.StartsWith(
+            $"{StepOutputContract.ToolName} -> ok: Accepted as this step's output (revision 1), handed on with the handover note", StringComparison.Ordinal));
+        Assert.Equal(1, Asked(provider, AgainHandOn));                           // the fresh start knows it was handed on
+        Assert.Contains(events, e => e.Kind == EventKind.StepOutputRecorded && e.Summary.Contains("claims 1-2 right", StringComparison.Ordinal));
+        Assert.True(events.Has(EventKind.TaskCompleted), events.Text());
+    }
+
+    /// <summary>Any other call in a note is still an intention, not a record: no note.</summary>
+    [Fact]
+    public async Task A_note_that_calls_another_tool_is_still_no_note()
+    {
+        using var fx = new EngineFixture { StepOutputs = true };
+        var provider = new FakeChatProvider(
+            Turn.Says(OneStep),
+            Read(fx, 1, 3_000), Read(fx, 2, 9_000),
+            new Turn("# Note - next I read claim 3.", [new ToolCall("r9", "read_file", """{"path":"claim1.md"}""")], "tool_calls"),
+            Turn.Calls1(StepOutputContract.ToolName, """{"findings":"claims 1-2 right"}""", "s1"),
+            Turn.Says("Done.")) { Window = 40_000, HandoverAt = 75, Working = 8_000 };
+
+        var events = await fx.RunAsync(fx.Build(provider, EngineFixture.Role("developer")), "check the claims");
+
+        Assert.Contains(events, e => e.Summary.Contains("Handover note not written (attempt 1 of 2): the model called read_file instead of writing it", StringComparison.Ordinal));
     }
 
     [Fact]
