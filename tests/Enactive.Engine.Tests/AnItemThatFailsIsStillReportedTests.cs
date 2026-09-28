@@ -88,8 +88,8 @@ public sealed class AnItemThatFailsIsStillReportedTests
 
         var report = string.Join("\n", worker.Requests.Last().Messages.Select(m => m.Content ?? ""));
         Assert.Contains("Proceed with this step of the plan: write the report", report, StringComparison.Ordinal);
-        Assert.Contains("- wiki/a.md: incomplete - the context window is full", report, StringComparison.Ordinal);
-        Assert.Contains("- wiki/b.md: done", report, StringComparison.Ordinal);
+        Assert.Contains("- wiki/a.md: Not finished - Result not provided; the context window is full", report, StringComparison.Ordinal);
+        Assert.Contains("- wiki/b.md: Done, not reviewed", report, StringComparison.Ordinal);
         Assert.Contains("""{"notes":{"wiki/b.md":"fine"}}""", report, StringComparison.Ordinal);
     }
 
@@ -109,7 +109,7 @@ public sealed class AnItemThatFailsIsStillReportedTests
 
         Assert.NotEqual(RunOutcomeKind.Completed, events.Last().Outcome());
         Assert.Contains(events, e => e.Kind == EventKind.StepCompleted && e.Summary.Contains("write the report — done", StringComparison.Ordinal));
-        Assert.Contains("- wiki/a.md: incomplete", string.Join("\n", worker.Requests.Last().Messages.Select(m => m.Content ?? "")),
+        Assert.Contains("- wiki/a.md: Not finished - Result not provided", string.Join("\n", worker.Requests.Last().Messages.Select(m => m.Content ?? "")),
             StringComparison.Ordinal);
     }
 }

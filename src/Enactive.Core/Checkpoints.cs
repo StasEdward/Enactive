@@ -40,6 +40,9 @@ public sealed record CheckpointStep(
     public Guid? ExpandedFrom { get; init; }
     public bool Joins { get; init; }
     public string? NotExpanded { get; init; }
+
+    /// <summary>What the engine recorded about the step: outcome, cause, reason, and its last accepted result with its standing.</summary>
+    public Enactive.Core.Tasks.StepRecord? Record { get; init; }
 }
 
 /// <summary>

@@ -46,6 +46,12 @@ public sealed record ReviewResult(
     /// a step with a damning verdict does not.</para>
     /// </summary>
     public bool VerdictUnavailable { get; init; }
+
+    /// <summary>
+    /// The reviewer answered, and its answer was that it could not tell - as opposed to an answer that
+    /// could not be used at all. Both leave the verdict missing; they are different reasons.
+    /// </summary>
+    public bool Undecided { get; init; }
     /// <summary>Concrete semantic defects, distinct from malformed review or unavailable evidence.</summary>
     public string? RepairAdvice { get; init; }
 

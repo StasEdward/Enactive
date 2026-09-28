@@ -84,7 +84,12 @@ public sealed partial class Orchestrator
                 // which also carries an IncompleteReason - it stays Incomplete, as it always was:
                 // that work must not be built on.
                 var verdictMissing = assessed.BudgetExhausted is not null || assessed.Review.VerdictUnavailable;
-                result.Set(verdictMissing ? StepOutcomeKind.DoneUnverified : StepOutcomeKind.Incomplete, unavailable);
+                // Why, as a code: a reviewer that said it could not tell is not a review that failed to
+                // be processed, and neither is a verdict against the work (a prohibition it broke).
+                result.Set(verdictMissing ? StepOutcomeKind.DoneUnverified : StepOutcomeKind.Incomplete, unavailable,
+                    !verdictMissing ? OutcomeCause.ReviewRejected
+                    : assessed.BudgetExhausted is null && assessed.Review.Undecided ? OutcomeCause.ReviewUndecided
+                    : OutcomeCause.ReviewUnprocessable);
                 await publish(scope.Ev(EventKind.ErrorObserved, prefix + unavailable, stepNumber));
                 return;
             }

@@ -23,6 +23,9 @@ internal sealed class RunSession(RunScope scope, List<ChatMessage> messages)
     // Guarded by Outcomes, matching the outcome/reason snapshot used by the scheduler.
     public List<string> Reasons { get; } = new();
 
+    /// <summary>What the engine recorded about each step that has ended - see StepRecord.</summary>
+    public System.Collections.Concurrent.ConcurrentDictionary<Guid, StepRecord> Records { get; } = new();
+
     /// <summary>Why each step that did not succeed ended as it did, by step - for the steps that report on it.</summary>
     public System.Collections.Concurrent.ConcurrentDictionary<Guid, string> ReasonOf { get; } = new();
     private ExecutionJournal? _sharedJournal;

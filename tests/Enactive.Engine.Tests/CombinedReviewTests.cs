@@ -33,6 +33,7 @@ public sealed class CombinedReviewTests
         Assert.Contains("Test file not shown", result.IncompleteReason!);
         Assert.Null(result.RepairAdvice);
         Assert.Single(provider.Requests);
+        Assert.True(result.Undecided);                 // it could not tell - not an answer that could not be used
     }
 
     [Theory]

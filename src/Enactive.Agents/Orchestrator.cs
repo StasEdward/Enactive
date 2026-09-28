@@ -756,7 +756,10 @@ public sealed partial class Orchestrator : IOrchestrator
         var session = new RunSession(scope, messages) { Builds = builds };
         // What finished steps handed on comes back with them: their dependents, resumed, receive it.
         foreach (var finished in resume?.Steps ?? [])
+        {
             if (finished.Result is { } handed) session.Outputs[finished.Id] = handed;
+            if (finished.Record is { } record) session.Records[finished.Id] = record;
+        }
         if (plan.Disposition == IntentDisposition.QuickAction)
         {
             await foreach (var ev in RunQuickActionAsync(intent, session, models, plan, ct))
@@ -932,6 +935,12 @@ public sealed partial class Orchestrator : IOrchestrator
 
         // The plan as it stands now: the planned steps, and any the run has grown since.
         Plan Current() => builtPlan with { Steps = scheduler.Steps };
+
+        // What the engine records about a step that has ended - its outcome, why, and its last accepted
+        // result with what that is worth. The step's own account of itself is not asked.
+        void Note(Guid id, StepOutcomeKind outcome, OutcomeCause cause, string? reason, StepOutput? result, bool reviewed = false)
+            => session.Records[id] = new StepRecord(outcome, cause, reason,
+                StepRecord.StandingOf(outcome, cause, result is not null, reviewed), result);
 
         // WHETHER A STEP BEGINS WHERE THE LAST ONE LEFT OFF, or with a digest of what it concluded.
         //
@@ -1125,7 +1134,8 @@ public sealed partial class Orchestrator : IOrchestrator
                     {
                         ObligationIds = s.ObligationIds, Output = s.Output,
                         Result = session.Outputs.TryGetValue(s.Id, out var handed) ? handed : null,
-                        ForEach = s.ForEach, Items = s.Items, ExpandedFrom = s.ExpandedFrom, Joins = s.Joins, NotExpanded = s.NotExpanded
+                        ForEach = s.ForEach, Items = s.Items, ExpandedFrom = s.ExpandedFrom, Joins = s.Joins, NotExpanded = s.NotExpanded,
+                        Record = session.Records.TryGetValue(s.Id, out var record) ? record : null
                     })
                 .ToArray();
 
@@ -1334,6 +1344,11 @@ public sealed partial class Orchestrator : IOrchestrator
                 outcomeReason = ex.Message;
             }
 
+            // The last result the step handed on, kept whatever came after it - and worth what its
+            // outcome makes it worth, never more (StepRecord.StandingOf).
+            Note(step.Id, outcome, outcome == stepResult.Kind ? stepResult.Cause : StepRecord.CauseOf(outcome), outcomeReason,
+                attemptState.OutputSlot.Build(stepNumber, step.Title, step.Output), models.ReviewOn);
+
             lock (stepOutcomes)
             {
                 stepOutcomes[step.Id] = outcome;
@@ -1421,6 +1436,7 @@ public sealed partial class Orchestrator : IOrchestrator
                 var skNo = stepNumbers.TryGetValue(sk.Id, out var n) ? n : 0;
                 lock (stepOutcomes)
                     stepOutcomes[sk.Id] = StepOutcomeKind.Skipped;
+                Note(sk.Id, StepOutcomeKind.Skipped, OutcomeCause.NotReached, "a step it depends on did not succeed", null);
                 await EmitStepDone(
                     $"[{skNo}/{total}] {sk.Title} — skipped (a dependency did not succeed)",
                     skNo > 0 ? skNo : (int?)null, StepOutcomeKind.Skipped);
@@ -1524,9 +1540,14 @@ public sealed partial class Orchestrator : IOrchestrator
                     : $"'{join.Title}': {items.Count(i => ended.GetValueOrDefault(i.Id) is StepOutcomeKind.Succeeded)} of {items.Length} item step(s) done.");
                 foreach (var item in items)
                 {
-                    var kind = ended.TryGetValue(item.Id, out var k) ? k : StepOutcomeKind.Skipped;
-                    lines.Add($"- {string.Join(", ", item.Items ?? [])}: {Word(kind)}"
-                        + (kind != StepOutcomeKind.Succeeded && session.ReasonOf.TryGetValue(item.Id, out var reason) ? $" - {Gist(reason, 300)}" : ""));
+                    // The engine's record, in the words ItemReport keeps for it - never the step's own
+                    // account of itself. A result that is less than confirmed is shown as what it is.
+                    var record = session.Records.GetValueOrDefault(item.Id);
+                    var remains = ItemReport.Remains(record);
+                    lines.Add($"- {string.Join(", ", item.Items ?? [])}: {ItemReport.Status(record)}"
+                        + (remains == "—" ? "" : $" - {remains}")
+                        + (record?.Result is { } result && ItemReport.Standing(record) is { } worth && record.Standing != ResultStanding.Unreviewed
+                            ? $" [{worth} {Gist(result.ValuesJson, 300)}]" : ""));
                 }
             }
             return ChatMessage.User("What the steps for each item came to (engine record) - report on EVERY item, "
@@ -1553,6 +1574,12 @@ public sealed partial class Orchestrator : IOrchestrator
                     : finished.Any(f => ended[f.Id] == StepOutcomeKind.DoneUnverified)
                         ? (StepOutcomeKind.DoneUnverified, "some item steps were done but not verified")
                         : (StepOutcomeKind.Succeeded, (string?)null);
+
+            Note(join.Id, outcome,
+                join.NotExpanded is not null ? OutcomeCause.NotExpanded
+                    : unfinished.Length > 0 ? OutcomeCause.ItemsUnfinished
+                    : outcome == StepOutcomeKind.DoneUnverified ? OutcomeCause.ReviewUnprocessable : OutcomeCause.None,
+                reason, null);
 
             lock (stepOutcomes)
             {
@@ -1590,6 +1617,7 @@ public sealed partial class Orchestrator : IOrchestrator
                 var skNo = stepNumbers.TryGetValue(sk.Id, out var n) ? n : 0;
                 lock (stepOutcomes)
                     stepOutcomes[sk.Id] = StepOutcomeKind.Skipped;
+                Note(sk.Id, StepOutcomeKind.Skipped, OutcomeCause.NotReached, "a step it depends on did not succeed", null);
                 await Publish(scope.Event(EventKind.StepCompleted, $"[{skNo}/{total}] {sk.Title} — skipped (a dependency did not succeed)",
                     WorkEventPayload.StepPayload(skNo > 0 ? skNo : null, StepOutcomeKind.Skipped)));
             }
@@ -1656,6 +1684,7 @@ public sealed partial class Orchestrator : IOrchestrator
                         var abNo = stepNumbers.TryGetValue(abandoned.Id, out var an) ? an : 0;
                         lock (stepOutcomes)
                             stepOutcomes[abandoned.Id] = StepOutcomeKind.Skipped;
+                        Note(abandoned.Id, StepOutcomeKind.Skipped, OutcomeCause.NotReached, spent, null);
                         await Publish(scope.Event(
                             EventKind.StepCompleted,
                             $"[{(abNo > 0 ? abNo : 0)}/{total}] {abandoned.Title} — skipped ({spent})",
@@ -1705,6 +1734,7 @@ public sealed partial class Orchestrator : IOrchestrator
                 var no = stepNumbers.TryGetValue(stranded.Id, out var sn) ? sn : 0;
                 lock (stepOutcomes)
                     stepOutcomes[stranded.Id] = StepOutcomeKind.Skipped;
+                Note(stranded.Id, StepOutcomeKind.Skipped, OutcomeCause.NotReached, "its dependencies could never be met", null);
 
                 yield return scope.Event(
                     EventKind.StepCompleted,
@@ -2122,10 +2152,15 @@ public sealed partial class Orchestrator : IOrchestrator
         /// <summary>Rejected on a review that found the work itself right. See <see cref="ReviewResult.WorkStands"/>.</summary>
         public bool WorkStands { get; set; }
 
-        public void Set(StepOutcomeKind kind, string? reason)
+        /// <summary>Why, as a code: what was recorded, or what the outcome implies.</summary>
+        public OutcomeCause Cause => _cause ?? StepRecord.CauseOf(Kind);
+        private OutcomeCause? _cause;
+
+        public void Set(StepOutcomeKind kind, string? reason, OutcomeCause? cause = null)
         {
             Kind = kind;
             Reason = reason;
+            _cause = cause;
         }
     }
 
@@ -3617,6 +3652,24 @@ public sealed partial class Orchestrator : IOrchestrator
                             $"An edit of {path} that did not apply is settled: the file holds the text it was to put there.");
                 }
 
+                // A step that was to hand its result on and has not is reminded ONCE, before any verdict -
+                // including the one on calls still open, which used to end the step first: in run 4f1d97
+                // three steps that had written their findings never heard the reminder. It is an ordinary
+                // turn: limits, budget and cancellation apply to it as to any other, and it makes nothing
+                // that did not finish into something that did.
+                if (outputSchema is not null && outputSlot is { Values: null, Nudged: false })
+                {
+                    outputSlot.Nudged = true;
+                    messages.Add(ChatMessage.User(
+                        $"This step is not finished until it hands its result on with {StepOutputContract.ToolName}. "
+                        + "Call it now with the step's result: "
+                        + string.Join(", ", outputSchema.Fields.Where(f => f.Required).Select(f => f.Name)) + "."
+                        + (openFailures.Count > 0
+                            ? " These calls are still open and keep the step unfinished: " + openFailures.Describe()
+                            : "")));
+                    continue;
+                }
+
                 // A final answer only settles the step if the actions behind it actually worked. The
                 // model saying "Done" over a failed read is the exact shape the follow-up review
                 // caught reporting green.
@@ -3642,15 +3695,6 @@ public sealed partial class Orchestrator : IOrchestrator
                 // fields, and then not called finished - the steps after it would have nothing.
                 if (outputSchema is not null && outputSlot is { Values: null })
                 {
-                    if (!outputSlot.Nudged)
-                    {
-                        outputSlot.Nudged = true;
-                        messages.Add(ChatMessage.User(
-                            $"This step is not finished until it hands its result on with {StepOutputContract.ToolName}. "
-                            + "Call it now with the step's result: "
-                            + string.Join(", ", outputSchema.Fields.Where(f => f.Required).Select(f => f.Name)) + "."));
-                        continue;
-                    }
                     loopResult.Set(StepOutcomeKind.Incomplete,
                         $"the step finished without handing on its declared output ({StepOutputContract.ToolName}), "
                         + "so the steps after it would have nothing to work from");
