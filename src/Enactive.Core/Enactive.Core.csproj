@@ -1,3 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <!-- Pure domain layer: models + abstractions only. No external packages, no transport/SDK types. -->
+
+  <ItemGroup>
+    <!-- For replaying recorded reviews: a test restores an EvidenceView exactly as it was recorded.
+         Production code has no such constructor on purpose - an evidence view is what the engine
+         OBSERVED, and a public way to build one would be a public way to fabricate one. -->
+    <InternalsVisibleTo Include="Enactive.Engine.Tests" />
+  </ItemGroup>
 </Project>

@@ -33,6 +33,20 @@ public sealed class EvidenceView
     public bool IsTruncated => ActionsOmitted || OutputsTruncated || ArgumentsTruncated;
     internal IReadOnlyList<ExecutedAction> Actions { get; }
 
+    /// <summary>
+    /// Everything this view was built from, so a review refused against it can be replayed exactly.
+    ///
+    /// <para><see cref="Actions"/> stays internal so that nothing rendering a review prompt reaches
+    /// calls the reviewer was not shown. Recording is a different act: a replay must count those calls
+    /// as the review did, or it checks a different view than the one that refused. This is the one
+    /// deliberate way out, and it builds nothing - restoring a view stays inside this assembly and its
+    /// tests, so there is still no public way to fabricate one.</para>
+    /// </summary>
+    public (string Text, IReadOnlyList<ExecutedAction> Actions, IReadOnlyList<int> VisibleActionIds,
+        bool OutputsTruncated, bool ArgumentsTruncated, bool HasPriorTranscript) ReplaySnapshot()
+        => (Text, Actions, VisibleActionIds.OrderBy(id => id).ToArray(),
+            OutputsTruncated, ArgumentsTruncated, HasPriorTranscript);
+
     /// <summary>Whether an ID exists, without exposing evidence that has not been shown.</summary>
     public bool ContainsAction(int number) => number >= 1 && number <= Actions.Count;
 

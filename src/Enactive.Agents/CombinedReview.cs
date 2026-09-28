@@ -228,14 +228,13 @@ public sealed partial class Reviewer
             if (outputTruncated) problem = "combined review reached its output token limit; keep claim explanations concise";
             if (!outputTruncated && completion.Message.ToolCalls is not { Count: > 0 })
             {
-                var errors = CombinedReviewValidation.Errors(answer, obligations, evidence).ToList();
-                errors.AddRange(ReportCommandAudit.Errors(answer, evidence, sources, obligations));
-                if (errors.Count == 0)
-                    errors.AddRange(SemanticReviewAudit.Errors(answer, evidence, sources, obligations));
-                if (errors.Count == 0)
-                    errors.AddRange(ReviewRepairContract.Errors(answer, sources, obligations));
+                // The same validators the offline replay runs, from the one definition of them.
+                var errors = ReviewCorpus.Validate(answer, obligations, evidence, sources);
                 if (errors.Count > 0)
                 {
+                    // Kept with what it was checked against, so this refusal can be replayed in a
+                    // second instead of rediscovered by a run. See ReviewCorpus.
+                    ReviewCorpus.Record(workspaceRoot, ReviewCorpus.Capture(model, answer, obligations, evidence, sources, errors));
                     problem = "Combined review response has structural errors:\n" + string.Join("\n", errors.Select(e => "- " + e));
                     messages.Add(ChatMessage.Assistant(rawAnswer));
                     if (attempt == 0 && errors.All(e => e.StartsWith("$.report_checks: missing requirement-map assessment for ", StringComparison.Ordinal))
