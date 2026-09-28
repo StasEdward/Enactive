@@ -68,6 +68,12 @@ public static class FanOut
                 steps[i] = steps[i] with { Report = null };
             }
         }
+        // A step after the items of a report hands its summary on as a value; the engine puts it in the
+        // document. Added to its contract whatever else it declared - see ReportDocument.
+        var reporting = steps.Where(st => st.ForEach is not null && st.Report is not null).Select(st => st.Id).ToHashSet();
+        for (var i = 0; i < steps.Length; i++)
+            if (steps[i].DependsOn.Any(reporting.Contains))
+                steps[i] = steps[i] with { Output = ReportDocument.WithSummary(steps[i].Output, i + 1) };
         return (plan with { Steps = steps }, dropped);
     }
 

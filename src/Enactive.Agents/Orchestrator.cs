@@ -1361,6 +1361,9 @@ public sealed partial class Orchestrator : IOrchestrator
             // outcome makes it worth, never more (StepRecord.StandingOf).
             Note(step.Id, outcome, outcome == stepResult.Kind ? stepResult.Cause : StepRecord.CauseOf(outcome), outcomeReason,
                 attemptState.OutputSlot.Build(stepNumber, step.Title, step.Output), models.ReviewOn);
+            // A summary for a report, or an item's record, may have just changed what the document says.
+            if (step.ExpandedFrom is not null || step.Output?.Fields.Any(f => f.Name == ReportDocument.SummaryField) == true)
+                await RenderAndPublishAsync(stepCt);
 
             lock (stepOutcomes)
             {
@@ -1535,6 +1538,62 @@ public sealed partial class Orchestrator : IOrchestrator
             await CheckpointAsync();
         }
 
+        // The documents the engine assembles (a step done for each item that declares a "report"), written
+        // from the records - see ReportDocument. Returns the events to publish, because the last call comes
+        // after the step channel has closed. Unchanged documents are left alone.
+        async Task<List<WorkEvent>> RenderReportsAsync(CancellationToken renderCt)
+        {
+            var said = new List<WorkEvent>();
+            var all = scheduler.Steps;
+            foreach (var each in all.Where(s => s.ForEach is not null && s.Report is not null))
+            {
+                var items = all.Where(s => s.ExpandedFrom == each.Id)
+                    .Select(s => new ReportDocument.Item(s.Items ?? [], session.Records.GetValueOrDefault(s.Id))).ToArray();
+                var summaries = all.Where(s => s.DependsOn.Contains(each.Id))
+                    .Select(s => session.Records.GetValueOrDefault(s.Id) is { } r && ReportDocument.SummaryOf(r.Result) is { } text
+                        ? new ReportDocument.Summary(s.Title, text, r) : null)
+                    .OfType<ReportDocument.Summary>().ToArray();
+                var notChecked = each.NotExpanded
+                    ?? (!each.Joins ? "the step that lists the items did not finish, so there were none to check" : null);
+                var document = ReportDocument.Render(each.Title, items, summaries, items.Length == 0 ? notChecked : null);
+
+                var rel = ShellLookup.Normal(each.Report!);
+                string full;
+                try { full = WorkspaceGuard.ResolveInside(_workspace.RootPath, rel); }
+                catch (Exception ex) when (ex is ArgumentException or NotSupportedException or IOException)
+                {
+                    said.Add(scope.Ev(EventKind.ErrorObserved, $"The report '{rel}' could not be written: {ex.Message}"));
+                    continue;
+                }
+                try
+                {
+                    if (File.Exists(full) && await File.ReadAllTextAsync(full, renderCt) == document) continue;
+                    Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+                    await File.WriteAllTextAsync(full, document, renderCt);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    said.Add(scope.Ev(EventKind.ErrorObserved, $"The report '{rel}' could not be written: {ex.Message}"));
+                    continue;
+                }
+                var reference = new ArtifactRef(Guid.NewGuid(), ArtifactKind.FileSet, rel, rel);
+                lock (scope.Artifacts)
+                    if (!scope.Artifacts.Any(a => string.Equals(ShellLookup.Normal(a.RelativePath), rel, StringComparison.OrdinalIgnoreCase)))
+                        scope.Artifacts.Add(reference);
+                said.Add(new WorkEvent(Guid.NewGuid(), scope.TaskId, scope.RunId, DateTimeOffset.UtcNow, EventKind.ArtifactProduced,
+                    $"{reference.Kind}: {rel}", WorkEventPayload.ArtifactPayload(reference.Kind.ToString(), rel, null)));
+                said.Add(scope.Ev(EventKind.ContextAssembled,
+                    $"The report {rel} was assembled by the engine from {items.Length} item record(s) and {summaries.Length} summary(ies)."));
+            }
+            return said;
+        }
+        var assemblesReports = builtPlan.Steps.Any(s => s.ForEach is not null && s.Report is not null);
+        async Task RenderAndPublishAsync(CancellationToken renderCt)
+        {
+            if (!assemblesReports) return;
+            foreach (var ev in await RenderReportsAsync(renderCt)) await Publish(ev);
+        }
+
         // Built from the recorded outcomes, not held anywhere, so a resumed run gives the same account.
         ChatMessage? ItemsAccount(PlanStep step)
         {
@@ -1613,6 +1672,7 @@ public sealed partial class Orchestrator : IOrchestrator
                 }
                 lock (digest)
                     digest.Add($"{join.Title}: {finished.Length} of {items.Length} item step(s) finished");
+                await RenderAndPublishAsync(joinCt);
                 await Publish(scope.Event(EventKind.StepCompleted,
                     $"[{joinNo}/{total}] {join.Title} — " + (outcome == StepOutcomeKind.Succeeded
                         ? $"done ({items.Length} item step(s))" : $"DONE, NOT VERIFIED: {reason}"),
@@ -1622,6 +1682,7 @@ public sealed partial class Orchestrator : IOrchestrator
                 return;
             }
 
+            await RenderAndPublishAsync(joinCt);
             var skipped = scheduler.MarkFailed(join.Id);
             await Publish(scope.Event(EventKind.StepCompleted, $"[{joinNo}/{total}] {join.Title} — INCOMPLETE: {reason}",
                 WorkEventPayload.StepPayload(joinNo, outcome, reason)));
@@ -1727,6 +1788,12 @@ public sealed partial class Orchestrator : IOrchestrator
             }
         }
 
+
+        // The documents, once more from the final records - so a resumed run, or one a limit stopped,
+        // leaves the same document a finished one would have for what it did.
+        if (assemblesReports)
+            foreach (var ev in await RenderReportsAsync(ct))
+                yield return ev;
 
         var cycle = scheduler.HasPending;
         if (cycle)

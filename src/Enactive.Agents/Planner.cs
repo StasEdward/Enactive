@@ -559,7 +559,7 @@ public sealed class Planner
     /// </summary>
     internal const string CoverageCriterionPrompt =
         " When a step names items (path[] or string[]) and a later step must handle EACH of them, that later step declares "
-        + "a \"results\" output (one entry per item) and the criteria add "
+        + "an output of TYPE results - \"output\":{\"notes\":{\"type\":\"results\"}} (one entry per item; not \"text\") - and the criteria add "
         + "{\"kind\":\"covers_all\",\"source\":{\"step\":0,\"field\":\"pages\"},\"results\":{\"step\":1,\"field\":\"notes\"},"
         + "\"evidence\":\"file_read\"}; evidence: file_read (each file read whole), command, or call.";
 
@@ -570,7 +570,9 @@ public sealed class Planner
     internal const string DynamicStepsPrompt =
         " When a step must be done for EACH item an earlier step names in a list output, write that step ONCE, for one item, "
         + "and add \"forEach\":{\"step\":0,\"field\":\"pages\"}: the engine gives every item its own step and hands their "
-        + "results on together to the steps that depend on it. Use this instead of guessing batches.";
+        + "results on together to the steps that depend on it. Use this instead of guessing batches. Item steps hand their "
+        + "findings on as values and never edit shared files: when the results make one document, add \"report\":\"path/to/doc.md\" "
+        + "to that step - the engine writes the document from every item's result, and the step after the items hands on a \"summary\".";
 
     internal const string StepOutputsPrompt =
         " A step whose RESULT later steps must use as data (pages to process, files found, names, counts) declares it: "
