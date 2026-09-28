@@ -223,7 +223,8 @@ public sealed partial class Reviewer
                 messages.Add(ChatMessage.User(problem + "\nReturn the corrected full response using displayed integer evidence IDs." + sources.Describe()));
                 continue;
             }
-            answer = ReviewScopeNormalization.Apply(answer, obligations);
+            var decoded = answer;
+            answer = ReviewCorpus.Prepare(answer, obligations);
             outputTruncated = completion.FinishReason is "length" or "max_tokens";
             if (outputTruncated) problem = "combined review reached its output token limit; keep claim explanations concise";
             if (!outputTruncated && completion.Message.ToolCalls is not { Count: > 0 })
@@ -234,7 +235,7 @@ public sealed partial class Reviewer
                 {
                     // Kept with what it was checked against, so this refusal can be replayed in a
                     // second instead of rediscovered by a run. See ReviewCorpus.
-                    ReviewCorpus.Record(workspaceRoot, ReviewCorpus.Capture(model, answer, obligations, evidence, sources, errors));
+                    ReviewCorpus.Record(workspaceRoot, ReviewCorpus.Capture(model, decoded, obligations, evidence, sources, errors));
                     problem = "Combined review response has structural errors:\n" + string.Join("\n", errors.Select(e => "- " + e));
                     messages.Add(ChatMessage.Assistant(rawAnswer));
                     if (attempt == 0 && errors.All(e => e.StartsWith("$.report_checks: missing requirement-map assessment for ", StringComparison.Ordinal))

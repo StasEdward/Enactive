@@ -15,8 +15,18 @@ internal static class ReviewScopeNormalization
         try
         {
             var json = ModelText.ExtractJsonObject(ModelText.StripThink(answer));
-            if (json is null || JsonNode.Parse(json) is not JsonObject root
-                || Text(root, "verdict") != "pass" || root["claims"] is not JsonArray claims) return answer;
+            if (json is null || JsonNode.Parse(json) is not JsonObject root) return answer;
+            // A reference, resolved - whatever the verdict. See ResolveScopeList.
+            var resolved = false;
+            if (root["claims"] is JsonArray all)
+                foreach (var claim in all.OfType<JsonObject>())
+                {
+                    resolved |= ResolveScopeList(claim, obligations);
+                    if (claim["requirements"] is JsonArray items)
+                        foreach (var part in items.OfType<JsonObject>()) resolved |= ResolveScopeList(part, obligations);
+                }
+            if (Text(root, "verdict") != "pass" || root["claims"] is not JsonArray claims)
+                return resolved ? root.ToJsonString() : answer;
             foreach (var claim in claims.OfType<JsonObject>())
             {
                 if (claim["requirements"] is not JsonArray parts) continue;
@@ -52,6 +62,27 @@ internal static class ReviewScopeNormalization
         }
         catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException or NullReferenceException)
         { return answer; } // The schema validator reports malformed fields without hiding them.
+    }
+
+    /// <summary>
+    /// A scope written as the plan's own list of steps - <c>"S2,S3"</c> - where one scope was asked
+    /// for. The prompt shows the requirement-to-step map as lists, and on 2026-09-28 the reviewer
+    /// copied the list into the claim; the review was refused and cost a round-trip. When the list
+    /// names only declared steps, includes the current one, and the claim is positive, it says
+    /// exactly what the current scope says: a requirement shared with this step, assessed for this
+    /// step's contribution - the reading <see cref="RequestObligations.EvidenceScope"/> already gives
+    /// any shared step. A "no" is left alone: it could mean "deferred to the others", and that is
+    /// the reviewer's to say, not the engine's to guess.
+    /// </summary>
+    private static bool ResolveScopeList(JsonObject node, RequestObligations obligations)
+    {
+        if (Text(node, "scope") is not { } scope || !scope.Contains(',')) return false;
+        var steps = scope.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        if (steps.Length < 2 || steps.Any(s => !obligations.Scopes.ContainsKey(s))
+            || !steps.Contains(obligations.CurrentScope, StringComparer.Ordinal)
+            || Text(node, "shown") is not ("yes" or "not-by-any-call" or "expected-failure")) return false;
+        node["scope"] = obligations.CurrentScope;
+        return true;
     }
 
     private static string? Text(JsonObject value, string key)

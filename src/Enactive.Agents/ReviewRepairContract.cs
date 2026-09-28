@@ -50,23 +50,47 @@ internal static class ReviewRepairContract
         return result;
     }
 
+    /// <summary>
+    /// A finding named exactly, or by the claim or requirement that holds it. The guidance asks for
+    /// the exact path of the verdict - <c>$.claims[1].requirements[0].verification</c> - and on
+    /// 2026-09-28 the final review named <c>$.claims[1]</c> and <c>$.claims[1].requirements[0]</c>
+    /// instead, and was refused for it twice. A container with exactly ONE failed verdict inside
+    /// names that verdict and nothing else; one with several is ambiguous and stays unresolved, so
+    /// it is refused as before rather than taken to cover verdicts its repair may not address.
+    /// </summary>
+    private static string Resolve(string link, IReadOnlyDictionary<string, JsonElement> findings)
+    {
+        if (findings.ContainsKey(link)) return link;
+        var inside = findings
+            .Where(f => f.Key.StartsWith(link + ".", StringComparison.Ordinal)
+                        && f.Value.GetProperty("verdict").GetString() == "fail")
+            .Select(f => f.Key).ToArray();
+        return inside.Length == 1 ? inside[0] : link;
+    }
+
     internal static IReadOnlyList<string> Errors(string answer, ReviewSources sources, RequestObligations obligations)
     {
         using var doc = Parse(answer);
         var findings = Findings(doc.RootElement);
         var errors = new List<string>();
-        var covered = new HashSet<string>();
+        // What each failed finding is already to be corrected WITH. One finding can need two different
+        // corrections - O002 on 2026-09-28 was "no source file changed" and "each test proven by
+        // breaking it", one requirement, two repairs - and that is not a duplicate. The same
+        // correction twice is.
+        var covered = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
         var i = 0;
         foreach (var repair in doc.RootElement.GetProperty("repairs").EnumerateArray())
         {
             var path = $"$.repairs[{i++}]";
-            var links = repair.GetProperty("findings").EnumerateArray().Select(x => x.GetString()!).ToArray();
+            var links = repair.GetProperty("findings").EnumerateArray()
+                .Select(x => Resolve(x.GetString()!, findings)).ToArray();
+            var change = (repair.GetProperty("change").GetString() ?? "").Trim();
             if (links.Length == 0) errors.Add(path + ".findings: identify at least one failed finding");
             foreach (var link in links)
             {
                 if (!findings.TryGetValue(link, out var finding) || finding.GetProperty("verdict").GetString() != "fail")
                     errors.Add(path + ".findings: " + link + " is not a failed finding; reconcile the verdict and proposed correction");
-                else if (!covered.Add(link))
+                else if (!(covered.TryGetValue(link, out var changes) ? changes : covered[link] = new(StringComparer.OrdinalIgnoreCase)).Add(change))
                     errors.Add(path + ".findings: duplicate repair for " + link + "; group its correction once");
             }
             foreach (var field in new[] { "defect", "change" })
@@ -98,7 +122,7 @@ internal static class ReviewRepairContract
                         errors.Add(path + ": report correction must target the cited report fragment, not another file");
         }
         foreach (var (path, finding) in findings)
-            if (finding.GetProperty("verdict").GetString() == "fail" && !covered.Contains(path))
+            if (finding.GetProperty("verdict").GetString() == "fail" && !covered.ContainsKey(path))
                 errors.Add(path + ": fail has no concrete repair; provide its target/defect/change or reconcile the verdict");
         return errors;
     }

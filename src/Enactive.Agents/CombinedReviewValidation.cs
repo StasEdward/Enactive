@@ -118,7 +118,7 @@ internal static class CombinedReviewValidation
             if (call.ValueKind == JsonValueKind.Number && call.TryGetInt32(out var id))
             {
                 if (!evidence.ContainsAction(id))
-                    errors.Add($"{path}.calls[{index}]: call {id} does not exist");
+                    errors.Add($"{path}.calls[{index}]: call {id} does not exist; cite the [n] that begins a call, not an [evidence N] line label");
                 else if (!evidence.VisibleActionIds.Contains(id) && !requested.Contains(id))
                     errors.Add($"{path}.calls[{index}]: call {id} was not shown; request it through need_evidence before citing it");
                 else if (Text(claim, "shown") == "expected-failure" && evidence.Cited(id) is { } action

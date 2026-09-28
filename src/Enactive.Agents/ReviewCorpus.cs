@@ -44,6 +44,15 @@ internal static class ReviewCorpus
     internal const int Keep = RefusalCorpus.Keep;
 
     /// <summary>
+    /// What the engine does to a decoded answer before any validator sees it: deterministic
+    /// bookkeeping, never a verdict (see <see cref="ReviewScopeNormalization"/>). Part of the one
+    /// definition, and recorded answers are kept from BEFORE it, so a change here is measured by the
+    /// corpus like a change to any validator.
+    /// </summary>
+    internal static string Prepare(string decoded, RequestObligations obligations)
+        => ReviewScopeNormalization.Apply(decoded, obligations);
+
+    /// <summary>
     /// The structural validators, in the order the combined review applies them. ONE definition,
     /// used by the review itself and by the replay, so the replay cannot drift from what production
     /// checks: an instrument that measures a different pipeline than the one that ran would report

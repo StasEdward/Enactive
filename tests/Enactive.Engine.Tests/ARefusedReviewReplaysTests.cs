@@ -70,7 +70,8 @@ public sealed class ARefusedReviewReplaysTests(ITestOutputHelper output)
             e.HasPriorTranscript);
 
     private static List<string> Replay(ReviewCorpusCase recorded)
-        => ReviewCorpus.Validate(recorded.Answer, recorded.Obligations, Restore(recorded.Evidence),
+        => ReviewCorpus.Validate(ReviewCorpus.Prepare(recorded.Answer, recorded.Obligations), recorded.Obligations,
+            Restore(recorded.Evidence),
             ReviewCorpus.RestoreSources(recorded.Sources));
 
     /// <summary>
