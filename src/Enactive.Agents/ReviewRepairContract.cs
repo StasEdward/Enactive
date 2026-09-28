@@ -140,6 +140,26 @@ internal static class ReviewRepairContract
     }
 
     /// <summary>
+    /// The answer passes the implementation and asks for no change to any saved file - see
+    /// <see cref="ReviewResult.WorkStands"/>. Any repair aimed at a saved file, sound or not, says
+    /// otherwise; so does anything that cannot be read.
+    /// </summary>
+    internal static bool WorkStands(string answer, ReviewSources sources)
+    {
+        try
+        {
+            using var doc = Parse(answer);
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("assessments", out var areas) || !areas.TryGetProperty("implementation", out var implementation)
+                || implementation.GetProperty("verdict").GetString() != "pass")
+                return false;
+            return !root.GetProperty("repairs").EnumerateArray().Any(repair =>
+                sources.Find(repair.TryGetProperty("source_id", out var id) ? id.GetString() ?? "" : "") is { Kind: "saved-file" });
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException or KeyNotFoundException) { return false; }
+    }
+
+    /// <summary>
     /// A repair that is safe to hand the worker even when the list it came in has gaps: every
     /// finding it names is a failure, and it says what is wrong and what to change.
     /// </summary>

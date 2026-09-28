@@ -48,6 +48,19 @@ public sealed record ReviewResult(
     public bool VerdictUnavailable { get; init; }
     /// <summary>Concrete semantic defects, distinct from malformed review or unavailable evidence.</summary>
     public string? RepairAdvice { get; init; }
+
+    /// <summary>
+    /// The reviewer judged what the step PRODUCED to be right - implementation: pass - and named no
+    /// file of it to correct; the failure it found is somewhere else: the report, the process, a
+    /// command run the wrong way. A step rejected on such a review keeps its files.
+    ///
+    /// <para><b>Measured 2026-09-28, run 3fe4f8.</b> The final review of step 1 said of the seven
+    /// tests it wrote "implementation: pass ... 7/7 pass", and failed the step for how it had run its
+    /// commands and what its report left out. The step was rejected, and the engine put the test file
+    /// back: the only thing the review had found right was the thing that was thrown away. False by
+    /// default, so every review that does not say this keeps the revert it always had.</para>
+    /// </summary>
+    public bool WorkStands { get; init; }
     /// <summary>
     /// The cached share of <see cref="PromptTokens"/>, or null where nobody counted. This is the
     /// phase most likely to have one on a real machine: review is bound to a cloud model, and a

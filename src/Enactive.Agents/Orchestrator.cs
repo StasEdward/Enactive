@@ -637,7 +637,7 @@ public sealed partial class Orchestrator : IOrchestrator
                 await RunAttemptsAsync(session, attemptState, models, models.Provider, models.Model,
                     intent.Context, quickResult, plan.Title, intent.RawText, null, quickChanges, quickBefore,
                     PublishQuick, quickLifetime.Token);
-                await RevertRejectedAsync(quickResult.Kind, store, scope,
+                await RevertRejectedAsync(quickResult, store, scope,
                     line => PublishQuick(scope.Ev(EventKind.ArtifactReverted, line)), quickLifetime.Token);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
@@ -1114,7 +1114,7 @@ public sealed partial class Orchestrator : IOrchestrator
                     stepReasons.Add(outcomeReason!);
             }
 
-            await RevertRejectedAsync(outcome, store, scope,
+            await RevertRejectedAsync(stepResult, store, scope,
                 line => Emit(EventKind.ArtifactReverted, $"[{stepNumber}] {line}"), stepCt);
 
             // The card's colour comes from this payload, not from the wording of the summary - and
@@ -1596,6 +1596,9 @@ public sealed partial class Orchestrator : IOrchestrator
         public string? Reason { get; private set; }
 
         public bool Succeeded => Kind == StepOutcomeKind.Succeeded;
+
+        /// <summary>Rejected on a review that found the work itself right. See <see cref="ReviewResult.WorkStands"/>.</summary>
+        public bool WorkStands { get; set; }
 
         public void Set(StepOutcomeKind kind, string? reason)
         {

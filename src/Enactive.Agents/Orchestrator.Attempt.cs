@@ -98,13 +98,26 @@ public sealed partial class Orchestrator
             var reason = stepNumber is not null && assessed.ProofRejected
                 ? "not shown to be done: " : "review not passed: ";
             result.Set(StepOutcomeKind.ReviewRejected, reason + assessed.Review.Notes);
+            result.WorkStands = !assessed.ProofRejected && assessed.Review.WorkStands;
         }
     }
 
-    private async Task RevertRejectedAsync(StepOutcomeKind outcome, IArtifactScope store,
+    private async Task RevertRejectedAsync(ToolLoopResult result, IArtifactScope store,
         RunScope scope, Func<string, ValueTask> publish, CancellationToken ct)
     {
-        if (outcome != StepOutcomeKind.ReviewRejected || !_revertRejectedSteps) return;
+        if (result.Kind != StepOutcomeKind.ReviewRejected || !_revertRejectedSteps) return;
+        if (result.WorkStands)
+        {
+            // Rejected, and still not put back: the review found the work itself right. The step
+            // stays rejected - nothing is built on it - but what it made is left for the person to
+            // see, rather than thrown away with the report it came with. See ReviewResult.WorkStands.
+            var kept = store.TouchedPaths;
+            if (kept.Count > 0)
+                await publish("Rejected, but NOT put back: " + string.Join(", ", kept)
+                    + " - the review found the work itself right (implementation: pass) and rejected the step "
+                    + "for something else; it is left as it is, and nothing is built on it.");
+            return;
+        }
         var report = await RevertAsync(store, scope.Artifacts, ct);
         foreach (var line in DescribeRevert(report)) await publish(line);
     }

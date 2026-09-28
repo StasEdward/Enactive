@@ -279,13 +279,15 @@ public sealed partial class Reviewer
                     if (SemanticReviewAudit.Outcome(answer) is { } semantic)
                         return result.Review with { Pass = false, Notes = semantic.Reason,
                             RepairAdvice = semantic.Unknown ? null : ReviewRepairContract.Render(answer, sources, obligations),
+                            WorkStands = !semantic.Unknown && ReviewRepairContract.WorkStands(answer, sources),
                             IncompleteReason = semantic.Unknown ? semantic.Reason : null,
                             // "Unknown" is the reviewer saying it could not tell - no verdict, not a bad one.
                             VerdictUnavailable = semantic.Unknown,
                             PromptTokens = prompt, CompletionTokens = output, CachedPromptTokens = cached,
                             CacheCreationPromptTokens = created };
                     if (!result.Review.Pass)
-                        return result.Review with { PromptTokens = prompt, CompletionTokens = output, CachedPromptTokens = cached, CacheCreationPromptTokens = created };
+                        return result.Review with { PromptTokens = prompt, CompletionTokens = output, CachedPromptTokens = cached, CacheCreationPromptTokens = created,
+                            WorkStands = ReviewRepairContract.WorkStands(answer, sources) };
                     if (ReportCommandAudit.Contradiction(answer, evidence, sources) is { } contradiction)
                         return result.Review with { Pass = false, Notes = contradiction,
                             PromptTokens = prompt, CompletionTokens = output, CachedPromptTokens = cached,
