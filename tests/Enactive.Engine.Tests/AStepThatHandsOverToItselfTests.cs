@@ -79,8 +79,8 @@ public sealed class AStepThatHandsOverToItselfTests
         var script = new List<Turn> { Turn.Says(QuickPlan) };
         for (var i = 0; i < 80; i++)
         {
-            if (i == 60) script.Add(new Turn(Text: "Incomplete notes", FinishReason: "length"));
-            if (i == 70) script.Add(Turn.Says(Note));
+            // Cut at the limit, and asked again at once: the second note follows the first immediately.
+            if (i == 60) { script.Add(new Turn(Text: "Incomplete notes", FinishReason: "length")); script.Add(Turn.Says(Note)); }
             script.Add(Turn.Calls1("write_file", $$"""{"path":"note{{i}}.md","content":"step {{i}}"}"""));
         }
         script.Add(Turn.Says("Finished."));

@@ -142,7 +142,8 @@ public sealed class ModelBudgetReviewTests
         var turns = new List<Turn> { Turn.Says("""{"disposition":"quick_action","title":"write"}""") };
         for (var i = 0; i < 80; i++)
         {
-            if (i is 60 or 70) turns.Add(new Turn("partial", FinishReason: "length"));
+            // Cut, and asked again at once with twice the room - cut again: the engine's evidence goes instead.
+            if (i == 60) { turns.Add(new Turn("partial", FinishReason: "length")); turns.Add(new Turn("partial", FinishReason: "length")); }
             turns.Add(Turn.Calls1("write_file", $$"""{"path":"n{{i}}.txt","content":"{{i}}"}"""));
         }
         turns.Add(Turn.Says("done"));
@@ -153,8 +154,8 @@ public sealed class ModelBudgetReviewTests
         Assert.Contains(events, e => e.Summary.StartsWith("Handover note not written (attempt 1 of 2): the note was cut at the output limit (finish=length", StringComparison.Ordinal));
         Assert.Contains(events, e => e.Summary.StartsWith("Handover note not written (attempt 2 of 2): the note was cut", StringComparison.Ordinal));
         Assert.Equal(2, handovers.Length);
-        Assert.Equal(2048, handovers[0].OutputTokenLimit);
-        Assert.Equal(4096, handovers[1].OutputTokenLimit);
+        Assert.Equal(4096, handovers[0].OutputTokenLimit);
+        Assert.Equal(8192, handovers[1].OutputTokenLimit);
         Assert.Contains(provider.Requests.SelectMany(r => r.Messages), m => m.Content?.Contains("Only the engine's measured evidence follows") == true);
         for (var i = 0; i < 80; i++) Assert.Equal(i.ToString(), fx.Read($"n{i}.txt"));
     }

@@ -3257,7 +3257,7 @@ public sealed partial class Orchestrator : IOrchestrator
                     + "turn, and on a local model it can take a minute or two.");
 
                 var engineEvidenceOnly = false;
-                var attempt = await _handover.GenerateAsync(
+                Task<HandoverResult> AskForNote() => _handover.GenerateAsync(
                     provider, new ChatRequest(model, messages, toolDefs, Temperature: 0.2, NumCtx: _numCtx, Think: _think,
                         OutputTokenLimit: (int)Math.Min(int.MaxValue, (long)_generationBudgets.For(GenerationPurpose.Handover) * (handoverFailures + 1)), Purpose: GenerationPurpose.Handover),
                     runBudget, ct,
@@ -3266,6 +3266,20 @@ public sealed partial class Orchestrator : IOrchestrator
                     // fixed three characters a token, and refused as "no room" at 61,413 of 65,536
                     // real tokens with four thousand free (run 80c951), and six times that morning.
                     promptTokens: measured ? (int)Math.Min(int.MaxValue, fullNow) : null);
+                var attempt = await AskForNote();
+
+                // A note cut at the limit is asked for again AT ONCE, with twice the room - not ten turns
+                // later. Waiting keeps the step in a nearly full window, and there it came apart: run
+                // 2508838d, 2026-09-28 16:03, a 7,461-character note cut at 2,048 tokens, then two runaway
+                // replies in the full conversation, and the page was lost before the second try came.
+                if (attempt.Note is null && attempt.Failure == HandoverFailure.Truncated && handoverFailures == 0
+                    && runBudget.TurnExhausted is null)
+                {
+                    yield return Ev(EventKind.ContextTrimmed,
+                        $"Handover note not written (attempt 1 of 2): {attempt.Describe()}. Asking again now, with twice the room.");
+                    handoverFailures++;
+                    attempt = await AskForNote();
+                }
                 var carried = attempt.Note;
 
                 // Why there is no note, said with what was measured. Six different faults used to
