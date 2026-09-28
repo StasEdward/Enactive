@@ -84,12 +84,14 @@ internal static class CorpusRatchet
             Assert.Fail($"{folder}\n" + string.Join("\n", problems));
     }
 
+    /// <summary>
+    /// A corpus folder in the source checkout these tests were built from - from the build's own
+    /// metadata (<see cref="TestRepository.Root"/>), not by walking up from where the assembly
+    /// landed. Built with --artifacts-path, as CI does, the assembly is nowhere under the checkout,
+    /// and the walk found nothing and threw.
+    /// </summary>
     internal static string RepositoryFolder(string name)
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "Enactive.sln"))) dir = dir.Parent;
-        return Path.Combine(dir!.FullName, "tests", "Enactive.Engine.Tests", name);
-    }
+        => Path.Combine(TestRepository.Root, "tests", "Enactive.Engine.Tests", name);
 }
 
 /// <summary>The gate itself, tested - a gate that cannot fail is the defect this exists to fix.</summary>
