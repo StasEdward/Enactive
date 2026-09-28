@@ -68,7 +68,7 @@ internal static class FileReadService
             // NotFound, not Fail: a read that finds nothing there has ANSWERED. Guessing at a path
             // and being told no is how a model explores a tree it has not seen.
             if (source is null)
-                return ToolResults.NotFound($"File not found: {path}");
+                return ToolResults.NotFound($"File not found: {path}. " + WhereToLook(ctx.WorkspaceRoot, path));
 
             // Only the window is held. This used to read the whole file into a string, split it into
             // an array of every line, and then keep a handful of them - so asking for twenty lines of
@@ -383,4 +383,46 @@ internal static class FileReadService
             });
     }
 
+
+    /// <summary>
+    /// Where to look instead, after a path that is not there: the nearest folder on the way to it that
+    /// IS there, and what it holds.
+    ///
+    /// <para>"File not found" alone was answered with the same path at another offset. Measured
+    /// 2026-09-28 13:28, run 80c951: a step asked for src/Enactive.AppHost/Program.cs - a project that
+    /// does not exist, guessed from how such solutions are often laid out - read it again with offset
+    /// 401, and again, until the engine stopped the step. The folder that does exist, listed, is the
+    /// answer to the question the model was really asking.</para>
+    /// </summary>
+    internal static string WhereToLook(string root, string path)
+    {
+        const int Shown = 20;
+        var parts = path.Replace('\\', '/').Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+        for (var n = parts.Length - 1; n >= 0; n--)
+        {
+            var folder = string.Join('/', parts[..n]);
+            string full;
+            try { full = n == 0 ? root : WorkspacePaths.ResolveInside(root, folder); }
+            catch (Exception ex) when (ex is ArgumentException or ReservedPathException) { return ""; }
+            if (!Directory.Exists(full)) continue;
+
+            string[] entries;
+            try
+            {
+                entries = Directory.EnumerateDirectories(full).Select(d => Path.GetFileName(d) + "/")
+                    .Concat(Directory.EnumerateFiles(full).Select(Path.GetFileName).OfType<string>())
+                    .Where(e => !e.StartsWith('.') && e is not ("bin/" or "obj/"))
+                    .Order(StringComparer.OrdinalIgnoreCase).ToArray();
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return ""; }
+
+            var gone = n < parts.Length - 1 ? $"'{string.Join('/', parts[..^1])}' does not exist either. " : "";
+            var where = n == 0 ? "The workspace root" : $"'{folder}'";
+            var list = entries.Length == 0 ? "nothing" : string.Join(", ", entries.Take(Shown))
+                + (entries.Length > Shown ? $", and {entries.Length - Shown} more" : "");
+            return gone + $"{where} holds: {list}. Reading it again at another offset will not find it: "
+                   + "pick a path from this list, or use search_files to find the name.";
+        }
+        return "";
+    }
 }

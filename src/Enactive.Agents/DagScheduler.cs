@@ -136,16 +136,17 @@ public sealed class DagScheduler
     }
 
     /// <summary>
-    /// Whether a join can never run: something it waits on OUTSIDE its items failed, or it has items
-    /// and not one of them succeeded. Null for a step that is not a join. An item that failed does not
-    /// hold the join back: nine of twelve is "these nine, not these three", never nothing (amendment D).
+    /// Whether a join can never run: something it waits on OUTSIDE its items failed. Null for a step
+    /// that is not a join. Items that failed do not hold the join back: nine of twelve is "these nine,
+    /// not these three", never nothing (amendment D).
     /// </summary>
     private bool? JoinCannotRun(PlanStep step)
     {
         if (!step.Joins) return null;
-        var items = step.DependsOn.Where(IsItemOf(step)).ToArray();
-        return step.DependsOn.Where(d => !IsItemOf(step)(d)).Any(d => _status.TryGetValue(d, out var st) && st is StepStatus.Failed or StepStatus.Skipped)
-               || (items.Length > 0 && items.All(d => _status.TryGetValue(d, out var st) && st is StepStatus.Failed or StepStatus.Skipped));
+        // Not even when none of them succeeded: the join still reports what each came to, and so can
+        // what follows it - "one page not finished, eleven not reached" is a result, and a skipped
+        // report is none (run 80c951, 2026-09-28: the final report was skipped behind twelve failed pages).
+        return step.DependsOn.Where(d => !IsItemOf(step)(d)).Any(d => _status.TryGetValue(d, out var st) && st is StepStatus.Failed or StepStatus.Skipped);
     }
 
     private Func<Guid, bool> IsItemOf(PlanStep join)

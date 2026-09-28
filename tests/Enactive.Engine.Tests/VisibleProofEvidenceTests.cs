@@ -109,11 +109,12 @@ public sealed class VisibleProofEvidenceTests
     public async Task The_orchestrator_audits_the_same_evidence_that_the_reviewer_received(int citation, bool sound)
     {
         using var fx = new EngineFixture();
-        fx.Write("a.txt", "content");
+        // A hundred DIFFERENT reads: the same read a hundred times in one turn is now run once.
+        for (var i = 1; i <= 100; i++) fx.Write($"a{i}.txt", "content");
         var worker = new FakeChatProvider(
             Turn.Says("""{"disposition":"task","title":"inspect","steps":[{"title":"inspect files","dependsOn":[]}]}"""),
             new Turn(Calls: Enumerable.Range(1, 100)
-                .Select(i => new ToolCall($"r{i}", "read_file", """{"path":"a.txt"}""")).ToArray()),
+                .Select(i => new ToolCall($"r{i}", "read_file", $$"""{"path":"a{{i}}.txt"}""")).ToArray()),
             Turn.Says("Inspected."));
         var verdict = Verdicts.Combined(Verdicts.Shown("the file was read", citation));
         var reviewer = new FakeChatProvider(verdict, verdict);

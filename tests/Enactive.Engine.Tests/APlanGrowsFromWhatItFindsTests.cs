@@ -49,9 +49,9 @@ public sealed class APlanGrowsFromWhatItFindsTests
         Assert.Equal(after.Id, scheduler.NextReady()!.Id);
     }
 
-    /// <summary>Amendment D: one item that did not finish does not take the other items' results with it.</summary>
+    /// <summary>Amendment D: items that did not finish do not take the other items' results - or the report - with them.</summary>
     [Fact]
-    public void An_item_that_failed_does_not_hold_the_join_back_and_all_of_them_failing_does()
+    public void Items_that_failed_do_not_hold_the_join_back_even_when_none_succeeded()
     {
         var (scheduler, find, each, after) = Graph();
         scheduler.MarkDone(find.Id);
@@ -64,14 +64,15 @@ public sealed class APlanGrowsFromWhatItFindsTests
         scheduler.MarkDone(b.Id);
         Assert.Equal(each.Id, scheduler.NextReady()!.Id);
 
-        var (again, find2, each2, after2) = Graph();
+        // Not even when none succeeded: the join reports what each came to (run 80c951).
+        var (again, find2, each2, _) = Graph();
         again.MarkDone(find2.Id);
         again.NextReady();
         var c = Item(each2, "c");
         again.Expand(each2.Id, [c]);
         again.NextReady();
-        var skipped = again.MarkFailed(c.Id);
-        Assert.Equal([each2.Id, after2.Id], skipped.Select(s => s.Id).ToArray());
+        Assert.Empty(again.MarkFailed(c.Id));
+        Assert.Equal(each2.Id, again.NextReady()!.Id);
     }
 
     [Fact]

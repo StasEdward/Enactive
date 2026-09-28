@@ -1229,6 +1229,12 @@ public sealed partial class Orchestrator : IOrchestrator
             var handedMessage = handedOn.Length > 0 ? ChatMessage.User(StepOutputContract.ForDependents(handedOn)) : null;
             if (handedMessage is not null)
                 convo.Add(handedMessage);
+            // What each item came to, for a step after a join: done, or not and why - so a report is
+            // written about every item, the unfinished ones included, and not only about the values
+            // the finished ones handed on.
+            var itemsMessage = ItemsAccount(step);
+            if (itemsMessage is not null)
+                convo.Add(itemsMessage);
             convo.Add(ChatMessage.User(
                 $"Proceed with this step of the plan: {step.Title}\n"
                 + $"This is step {stepNumber} of {total}. Current obligation scope: S{stepNumber}.\n"
@@ -1272,6 +1278,7 @@ public sealed partial class Orchestrator : IOrchestrator
                             + string.Join("\n", concluded.Select(d => "- " + d)))]
                         : Array.Empty<ChatMessage>(),
                     .. handedMessage is not null ? [handedMessage] : Array.Empty<ChatMessage>(),
+                    .. itemsMessage is not null ? [itemsMessage] : Array.Empty<ChatMessage>(),
                     convo[^1]];
             }
 
@@ -1335,7 +1342,10 @@ public sealed partial class Orchestrator : IOrchestrator
                 // failed without a reason contributes nothing rather than a blank the run would
                 // then have to decide how to render.
                 if (outcome != StepOutcomeKind.Succeeded && !string.IsNullOrWhiteSpace(outcomeReason))
+                {
                     stepReasons.Add(outcomeReason!);
+                    session.ReasonOf[step.Id] = outcomeReason!;
+                }
             }
 
             await RevertRejectedAsync(stepResult, store, scope,
@@ -1494,6 +1504,33 @@ public sealed partial class Orchestrator : IOrchestrator
                 + (notExpanded is null ? "" : $": {notExpanded}"),
                 WorkEventPayload.PlanPayload(forEach.Title, created.Select(c => c.Title).ToArray())));
             await CheckpointAsync();
+        }
+
+        // Built from the recorded outcomes, not held anywhere, so a resumed run gives the same account.
+        ChatMessage? ItemsAccount(PlanStep step)
+        {
+            var all = scheduler.Steps;
+            var joins = step.DependsOn.Select(d => all.FirstOrDefault(s => s.Id == d)).OfType<PlanStep>().Where(s => s.Joins).ToArray();
+            if (joins.Length == 0) return null;
+            Dictionary<Guid, StepOutcomeKind> ended;
+            lock (stepOutcomes)
+                ended = new Dictionary<Guid, StepOutcomeKind>(stepOutcomes);
+            var lines = new List<string>();
+            foreach (var join in joins)
+            {
+                var items = all.Where(s => s.ExpandedFrom == join.Id).ToArray();
+                lines.Add(join.NotExpanded is { } why
+                    ? $"'{join.Title}': its items were not given steps - {why}."
+                    : $"'{join.Title}': {items.Count(i => ended.GetValueOrDefault(i.Id) is StepOutcomeKind.Succeeded)} of {items.Length} item step(s) done.");
+                foreach (var item in items)
+                {
+                    var kind = ended.TryGetValue(item.Id, out var k) ? k : StepOutcomeKind.Skipped;
+                    lines.Add($"- {string.Join(", ", item.Items ?? [])}: {Word(kind)}"
+                        + (kind != StepOutcomeKind.Succeeded && session.ReasonOf.TryGetValue(item.Id, out var reason) ? $" - {Gist(reason, 300)}" : ""));
+                }
+            }
+            return ChatMessage.User("What the steps for each item came to (engine record) - report on EVERY item, "
+                + "the ones not done included, and say why they were not:\n" + string.Join("\n", lines));
         }
 
         // The join: what its items' steps handed on, as one, once every one of them has ended. An item
@@ -3625,6 +3662,10 @@ public sealed partial class Orchestrator : IOrchestrator
             var accounting = new ToolResultAccounting(_tools, progress, openFailures, reads, journal,
                 repairAttempts, _repairConsultation.Enabled, stepNo, turnOrigin);
             var readResults = new Dictionary<int, ToolInvocation.Result>();
+            // The reads made in this turn, by tool and arguments: the same read twice in one turn is
+            // run once. Measured 2026-09-28 13:28, run 80c951: one turn asked for four missing files,
+            // each twice; every duplicate is a second copy of the same answer in a full window.
+            var readsThisTurn = new HashSet<string>(StringComparer.Ordinal);
             ToolContext CallContext() => new(taskId, runId, _workspace.Id, context,
                 EffectivePolicyFor(worker), _workspace.RootPath, store, _services);
             WorkEvent Invoked(ToolCall item) => new(Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow,
@@ -3675,6 +3716,16 @@ public sealed partial class Orchestrator : IOrchestrator
                         yield return Ev(EventKind.ToolResult, $"{call.Name} -> failed: {handed}");
                     }
                     messages.Add(ChatMessage.Tool(call.Id, handed));
+                    continue;
+                }
+                if (CanRunRead(call) && !readsThisTurn.Add(call.Name + "\0" + TaskProgress.Canonical(call.ArgumentsJson)))
+                {
+                    readResults.Remove(callIndex, out _);
+                    yield return Invoked(call);
+                    const string same = "Not run: this is the same call, with the same arguments, as one made earlier in this "
+                        + "turn, and its result above stands.";
+                    messages.Add(ChatMessage.Tool(call.Id, same));
+                    yield return Ev(EventKind.ToolResult, $"{call.Name} -> {same}");
                     continue;
                 }
                 if (readResults.Count == 0 && CanRunRead(call))
