@@ -136,6 +136,31 @@ public enum ActionOutcome
 }
 
 /// <summary>
+/// How a tool call reached the engine. Recorded so the choice between repairing a malformed
+/// call and refusing it stops being a matter of opinion.
+///
+/// <para>The engine currently refuses: a turn with one unparseable call executes nothing, and raw
+/// fragments are deliberately not repaired or replayed. That is a deliberate decision, and the
+/// argument for changing it needs a number rather than a preference - how many calls a given model
+/// emits natively, how many only arrive after the engine recovers or re-asks for them, and how
+/// many never arrive at all. Nothing here changes what runs; it records how it got here.</para>
+/// </summary>
+public enum ToolCallOrigin
+{
+    /// <summary>The provider returned it as a structured tool call. The only origin that costs nothing.</summary>
+    Native,
+
+    /// <summary>Recovered from the reply TEXT by the engine, without asking the model again.</summary>
+    Healed,
+
+    /// <summary>It arrived only after the engine asked the model to send the call properly. Costs one turn.</summary>
+    Nudged,
+
+    /// <summary>It came in a repeat attempt of a step whose review was rejected.</summary>
+    Retry
+}
+
+/// <summary>
 /// One tool call, as it actually happened.
 /// </summary>
 /// <param name="Arguments">Compacted for reading — this is evidence, not a replay log.</param>
@@ -149,7 +174,8 @@ public sealed record ExecutedAction(
     WorkspaceEffect WorkspaceEffect = WorkspaceEffect.Unknown,
     IReadOnlyList<string>? ChangedPaths = null,
     int? ExitCode = null,
-    bool FileDeletion = false);
+    bool FileDeletion = false,
+    ToolCallOrigin Origin = ToolCallOrigin.Native);
 
 /// <summary>
 /// What a step actually did, written down when it did it.
@@ -194,6 +220,24 @@ public sealed class ExecutionJournal
         get { lock (_gate) return _actions.ToArray(); }
     }
 
+
+    /// <summary>
+    /// How many calls arrived each way, oldest journal to newest. The number behind the choice
+    /// between repairing a malformed call and refusing it: a model whose calls are all
+    /// <see cref="ToolCallOrigin.Native"/> is not the one that argument is about.
+    ///
+    /// <para>Counts every recorded call, including refused ones, because a call the engine had to
+    /// ask for twice and then refused anyway is exactly what this is here to make visible.</para>
+    /// </summary>
+    public IReadOnlyDictionary<ToolCallOrigin, int> OriginTally()
+    {
+        var tally = new Dictionary<ToolCallOrigin, int>();
+        lock (_gate)
+            foreach (var action in _actions)
+                tally[action.Origin] = tally.GetValueOrDefault(action.Origin) + 1;
+        return tally;
+    }
+
     /// <summary>
     /// A position to describe from later. A review judges the CURRENT attempt, so a retry starts
     /// from here rather than re-reading what an earlier, rejected attempt did.
@@ -205,11 +249,13 @@ public sealed class ExecutionJournal
 
     public void Record(int? step, string tool, string arguments, ActionOutcome outcome, string? output,
         WorkspaceEffect workspaceEffect = WorkspaceEffect.Unknown, IReadOnlyList<string>? changedPaths = null,
-        int? exitCode = null, bool fileDeletion = false)
+        int? exitCode = null, bool fileDeletion = false,
+        ToolCallOrigin origin = ToolCallOrigin.Native)
     {
         lock (_gate)
             _actions.Add(new ExecutedAction(DateTimeOffset.UtcNow, step, tool, arguments, outcome, output,
-                workspaceEffect, changedPaths is null ? null : Array.AsReadOnly(changedPaths.ToArray()), exitCode, fileDeletion));
+                workspaceEffect, changedPaths is null ? null : Array.AsReadOnly(changedPaths.ToArray()), exitCode, fileDeletion,
+                origin));
     }
 
     /// <summary>

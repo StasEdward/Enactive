@@ -7,7 +7,8 @@ using static Enactive.Agents.ToolCallParsing;
 /// <summary>One result enters progress, unresolved failures, read coverage and evidence in this order.
 /// Event emission, artifact publication and transcript lifetime remain with the tool loop.</summary>
 internal sealed class ToolResultAccounting(IToolRegistry tools, StepProgress progress, OpenFailures openFailures,
-    ReadLedger reads, ExecutionJournal journal, RepairAttempts repairAttempts, bool repairEnabled, int? stepNo)
+    ReadLedger reads, ExecutionJournal journal, RepairAttempts repairAttempts, bool repairEnabled, int? stepNo,
+    ToolCallOrigin origin)
 {
     internal string? Record(ToolCall call, ToolInvocation.Result invocation)
     {
@@ -50,7 +51,8 @@ internal sealed class ToolResultAccounting(IToolRegistry tools, StepProgress pro
             result.WorkspaceEffect ?? WorkspaceEffect.Unknown, result.ChangedPaths,
             exitCode: !result.DidNotRun && tools.DefinitionOf(call.Name)?.Kind == ToolKind.Command
                 && result.Metadata.TryGetValue("exitCode", out var code) && code is int exit ? exit : null,
-            fileDeletion: !result.DidNotRun && result.Success && RecordedOperations.DeletesFiles(call, tools.DefinitionOf(call.Name)));
+            fileDeletion: !result.DidNotRun && result.Success && RecordedOperations.DeletesFiles(call, tools.DefinitionOf(call.Name)),
+            origin: origin);
 
         return failure;
     }

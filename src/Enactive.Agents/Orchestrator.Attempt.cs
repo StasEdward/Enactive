@@ -15,13 +15,14 @@ public sealed partial class Orchestrator
         IChatProvider provider, ModelRef model, WorkContext context,
         ToolLoopResult result, string title, string request, int? stepNumber,
         IWorkspaceChanges? changes, WorkspaceSnapshot? before,
-        Func<WorkEvent, ValueTask> publish, CancellationToken ct, IReadOnlyList<string>? planSteps = null)
+        Func<WorkEvent, ValueTask> publish, CancellationToken ct, IReadOnlyList<string>? planSteps = null,
+        ToolCallOrigin attemptOrigin = ToolCallOrigin.Native)
     {
         var scope = session.Scope;
         await foreach (var ev in RunToolLoopAsync(scope.TaskId, scope.RunId, provider, model.Model,
             models.Worker, step.Messages, scope.Artifacts, context, step.Store, step.Journal, step.Reads,
             stepNumber, result, scope.Budget, scope.Granted, ct, model.ProviderId,
-            step.RestartFrom, changes, before))
+            step.RestartFrom, changes, before, attemptOrigin))
             await publish(ev);
         if (!models.ReviewOn || !result.Succeeded) return null;
         return await ReviewAttemptAsync(title, step.Messages, step.Journal, step.EvidenceStart,
@@ -55,7 +56,8 @@ public sealed partial class Orchestrator
             try
             {
                 assessed = await ExecuteAttemptAsync(session, step, models, provider, model, context,
-                    result, title, request, stepNumber, changes, before, publish, ct, planSteps);
+                    result, title, request, stepNumber, changes, before, publish, ct, planSteps,
+                    attempt > 1 ? ToolCallOrigin.Retry : ToolCallOrigin.Native);
             }
             catch (Exception ex) when (ex is not OperationCanceledException and not RetryBudgetExceededException)
             {

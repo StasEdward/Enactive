@@ -1389,7 +1389,8 @@ public sealed partial class Orchestrator : IOrchestrator
                     yield return scope.Ev(EventKind.ErrorObserved, "Worker correcting final-review defects: " + advice);
                     await foreach (var repairEvent in RunToolLoopAsync(scope.TaskId, scope.RunId, models.Provider,
                         models.Model.Model, models.Worker, repairMessages, scope.Artifacts, intent.Context,
-                        repairStore, repairJournal, new ReadLedger(), null, repairLoop, scope.Budget, scope.Granted, ct, models.Model.ProviderId))
+                        repairStore, repairJournal, new ReadLedger(), null, repairLoop, scope.Budget, scope.Granted, ct, models.Model.ProviderId,
+                        attemptOrigin: ToolCallOrigin.Retry))
                         yield return repairEvent;
                     session.Digest.Add("Final review correction: " + LastAssistant(repairMessages));
                     if (!repairLoop.Succeeded || scope.Budget.TurnExhausted is not null)
@@ -1714,7 +1715,8 @@ public sealed partial class Orchestrator : IOrchestrator
 
             await foreach (var repairEvent in RunToolLoopAsync(
                 taskId, runId, provider, model, worker, messages, artifacts,
-                intent.Context, store, journal, new ReadLedger(), null, loop, budget, granted, ct, providerId))
+                intent.Context, store, journal, new ReadLedger(), null, loop, budget, granted, ct, providerId,
+                attemptOrigin: ToolCallOrigin.Retry))
                 yield return repairEvent;
 
             report = await InScopeAsync(runId, taskId, null,
@@ -2076,7 +2078,10 @@ public sealed partial class Orchestrator : IOrchestrator
         // What the workspace looked like when this step began, and the means to compare it with
         // now - so a handover carries what the step CHANGED as a measurement, and not only as the
         // model's account of it. See HandoverFactsAsync.
-        IWorkspaceChanges? changes = null, WorkspaceSnapshot? stepStart = null)
+        IWorkspaceChanges? changes = null, WorkspaceSnapshot? stepStart = null,
+        // What a call in THIS attempt counts as when nothing else explains it: Retry once the
+        // step is being repeated after a rejected review, Native the first time through.
+        ToolCallOrigin attemptOrigin = ToolCallOrigin.Native)
     {
         // An async iterator cannot return a value, so the caller passes in the slot the loop fills.
         // Without it "how did this end" existed only as English inside an event, and every consumer
@@ -2113,6 +2118,9 @@ public sealed partial class Orchestrator : IOrchestrator
         // A reply that describes a call instead of making one earns exactly ONE re-ask per step; without
         // the cap a model that keeps explaining itself would burn every iteration on the same nudge.
         var repairRequested = false;
+        // Set when the engine asks for a call to be re-sent properly; the calls that arrive on the
+        // NEXT turn are what that question bought, and are recorded as such.
+        var resendAsked = false;
         var repairAttempts = new RepairAttempts();
         var repairGoal = RepairAttempts.Clip(string.Join("\n", messages.Where(m => m.Role == ChatRole.User)
             .Select(m => m.Content)), 3000);
@@ -2726,6 +2734,7 @@ public sealed partial class Orchestrator : IOrchestrator
                 if (described is not null && !repairRequested)
                 {
                     repairRequested = true;
+                    resendAsked = true;
                     messages.Add(ChatMessage.User(
                         $"Your reply described a '{described.Name}' call in plain text instead of invoking it. "
                         + "Nothing was executed. If you meant to act, send it again as a real tool call. "
@@ -2830,8 +2839,14 @@ public sealed partial class Orchestrator : IOrchestrator
                     + "actually invoking it - executed anyway because AllowImplicitToolCalls is on. "
                     + "Verify the result below.");
 
+            // Healing beats being asked, being asked beats the attempt default: each names the
+            // cheapest thing that explains how this turn produced a call at all.
+            var turnOrigin = recovered ? ToolCallOrigin.Healed
+                : resendAsked ? ToolCallOrigin.Nudged
+                : attemptOrigin;
+            resendAsked = false;
             var accounting = new ToolResultAccounting(_tools, progress, openFailures, reads, journal,
-                repairAttempts, _repairConsultation.Enabled, stepNo);
+                repairAttempts, _repairConsultation.Enabled, stepNo, turnOrigin);
             var readResults = new Dictionary<int, ToolInvocation.Result>();
             ToolContext CallContext() => new(taskId, runId, _workspace.Id, context,
                 EffectivePolicyFor(worker), _workspace.RootPath, store, _services);

@@ -126,7 +126,7 @@ public sealed class NegativeEvidenceAndConstraintsTests
         var tools = new ToolRegistry(EngineFixture.ShippedTools());
         var journal = new ExecutionJournal();
         var accounting = new ToolResultAccounting(tools, new(tools.Definitions), new(tools.Definitions),
-            new(), journal, new(), false, 1);
+            new(), journal, new(), false, 1, ToolCallOrigin.Native);
         accounting.Record(new("delete", tool, arguments), new(ToolResults.Ok("operation completed"), 0, 1));
         Assert.Equal(deletion, journal.Actions[0].FileDeletion);
         journal.Record(1, "write_file", "restore", ActionOutcome.Succeeded, "restored");

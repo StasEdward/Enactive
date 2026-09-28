@@ -15,7 +15,8 @@ public sealed class ToolResultAccountingTests
         var failures = new OpenFailures(tools.Definitions);
         var progress = new StepProgress(tools.Definitions);
         var journal = new ExecutionJournal();
-        var accounting = new ToolResultAccounting(tools, progress, failures, new(), journal, new(), true, 2);
+        var accounting = new ToolResultAccounting(tools, progress, failures, new(), journal, new(), true, 2,
+            ToolCallOrigin.Native);
         var call = new ToolCall("id", "run_command", """{"command":"build"}""");
         progress.BeginTurn();
         var failure = accounting.Record(call, new(ToolResults.Fail("exit 1", "compiler diagnostic"), 3, 3));
@@ -41,7 +42,7 @@ public sealed class ToolResultAccountingTests
         var reads = new ReadLedger();
         var journal = new ExecutionJournal();
         var accounting = new ToolResultAccounting(tools, new(tools.Definitions), new(tools.Definitions),
-            reads, journal, new(), false, null);
+            reads, journal, new(), false, null, ToolCallOrigin.Native);
         var call = new ToolCall("read", "read_file", """{"path":"a.txt","offset":1,"limit":1}""");
         var result = await fx.Invoke(new ReadFileTool(), call.ArgumentsJson);
         Assert.True(result.Success, result.Error);
