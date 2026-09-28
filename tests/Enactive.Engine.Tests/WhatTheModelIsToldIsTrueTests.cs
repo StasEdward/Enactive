@@ -75,4 +75,30 @@ public sealed class WhatTheModelIsToldIsTrueTests
         Assert.Single(told);
         Assert.Contains("do the work with the tools you have", told[0].Content!, StringComparison.Ordinal);
     }
+
+    /// <summary>Run 16d57849: a fresh start after a handover is rebuilt from the preamble, and the note was not in it.</summary>
+    [Fact]
+    public async Task What_is_not_offered_is_said_again_after_a_fresh_start()
+    {
+        using var fx = new EngineFixture();
+        Turn Read(int i, int prompt)
+        {
+            fx.Write($"p{i}.md", $"page {i}");
+            return Turn.Calls1("read_file", $$"""{"path":"p{{i}}.md"}""", $"r{i}").Reporting(prompt: prompt);
+        }
+        var provider = new FakeChatProvider(
+            Turn.Says("""{"disposition":"quick_action","title":"read"}"""),
+            Read(1, 3_000), Read(2, 9_000),
+            Turn.Says("# Note - read p1 and p2."),
+            Read(3, 3_000),
+            Turn.Says("Done.")) { Window = 40_000, HandoverAt = 75, Working = 8_000 };
+
+        var events = await fx.RunAsync(fx.Build(provider, EngineFixture.WorkerWith("read_file", "list_dir", "run_command"),
+            policy: new Enactive.Core.Permissions.PermissionPolicy(Enactive.Core.Permissions.PermissionLevel.Execute, ["*"], ["run_command"]),
+            decisions: new UnattendedDecisionHandler()), "read the pages");
+
+        Assert.Contains(events, e => e.Summary.Contains("fresh conversation and continuing", StringComparison.Ordinal));
+        var fresh = provider.Requests.First(r => r.Messages.Any(m => m.Content?.Contains("started again from your own notes", StringComparison.Ordinal) == true));
+        Assert.Single(fresh.Messages, m => m.Content?.StartsWith("Not available in this run: run_command", StringComparison.Ordinal) == true);
+    }
 }

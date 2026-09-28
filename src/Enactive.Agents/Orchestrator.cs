@@ -754,7 +754,7 @@ public sealed partial class Orchestrator : IOrchestrator
                 + JsonSerializer.Serialize(new { plan.ActionPolicy, plan.Restrictions })));
 
         if (resume is null && plan.Checks.Any(c => c.PlanningReason is not null))
-            messages.Add(ChatMessage.User("Final verification contract approved during planning:\n"
+            messages.Add(ChatMessage.User(ContractHeading + "\n"
                 + CheckLines(plan.Checks)
                 + "\nThese criteria are checked after the work. Perform your assigned step; do not run later-step "
                 + "verification prematurely or change the project location to fit a check. Original request restrictions still apply."));
@@ -943,7 +943,12 @@ public sealed partial class Orchestrator : IOrchestrator
         // step appends "Proceed with this step" to a shared conversation. After step 1 has replied
         // it can no longer be recovered: Preamble() reads "everything before the first assistant
         // message", and from then on that includes step 1's instruction.
-        var requestPreamble = messages.Take(2).ToArray();
+        var requestPreamble = messages.Take(2)
+            // The checks the run is judged by, when it has them: part of what the run was told before any
+            // step, and lost at a step's fresh start without this (run 16d57849).
+            .Concat(messages.Skip(2).Where(m => m.Role == ChatRole.User
+                && m.Content?.StartsWith(ContractHeading, StringComparison.Ordinal) == true).Take(1))
+            .ToArray();
 
         // ── Task with a DAG plan ──────────────────────────────────────────
         var builtPlan = plan.Plan ?? LinearPlan.FromTitles(new[] { plan.Title });
@@ -3278,13 +3283,18 @@ public sealed partial class Orchestrator : IOrchestrator
         // (run_command) and run PowerShell ..., plus git and docker" - and a run that does not offer them
         // said so only to the log (run 9c1a061b, 2026-09-28: the prompt promised four tools the request
         // did not carry). Once per conversation: a step that shares it has been told already.
-        if (offer.Because is { } withheldBecause)
+        string? notOffered = offer.Because is { } withheldBecause
+            ? $"Not available in this run: {withheldBecause}. Where your instructions mention "
+              + "these tools, do the work with the tools you have, or say what could not be done without them."
+            : null;
+        // Said again whenever the conversation is started over: a restart is rebuilt from the run's
+        // preamble and the step's instruction, and this was in neither (run 16d57849's fresh start lacked it).
+        void SayWhatIsNotOffered()
         {
-            var notOffered = $"Not available in this run: {withheldBecause}. Where your instructions mention "
-                             + "these tools, do the work with the tools you have, or say what could not be done without them.";
-            if (!messages.Any(m => m.Role == ChatRole.User && m.Content == notOffered))
+            if (notOffered is not null && !messages.Any(m => m.Role == ChatRole.User && m.Content == notOffered))
                 messages.Add(ChatMessage.User(notOffered));
         }
+        SayWhatIsNotOffered();
 
         // And the servers the ROLE filtered out before any of that. ToolOffers never sees them -
         // its candidate list is already role-filtered - so without this they are not withheld, they
@@ -3673,6 +3683,7 @@ public sealed partial class Orchestrator : IOrchestrator
                         var kept = Preamble(messages);
                         messages.RemoveRange(kept, messages.Count - kept);
                     }
+                    SayWhatIsNotOffered();
                     messages.Add(ChatMessage.User(
                         $"You have been working on this for {iteration - 1} turn(s) and the "
                         + "conversation was getting long, so it has been started again from "
@@ -3861,6 +3872,7 @@ public sealed partial class Orchestrator : IOrchestrator
                         startedAfresh = true;
                         messages.Clear();
                         messages.AddRange(restartFrom);
+                        SayWhatIsNotOffered();
                         sizeNow = Transcript.Size(messages) + toolsOverhead;
                         lastPromptTokens = null;
                         trimmedInARow = 0;
@@ -4805,6 +4817,8 @@ public sealed partial class Orchestrator : IOrchestrator
     /// The checks a run is judged by, one line each, as a person would write them - not the engine's own record
     /// of them. Serialized, the model was handed "Origin":1, "Typed":null and \u0027 for a quote (run 9c1a061b).
     /// </summary>
+    private const string ContractHeading = "Final verification contract approved during planning:";
+
     internal static string CheckLines(IEnumerable<SuccessCriterionDefinition> checks)
         => string.Join("\n", checks.Select(c =>
             $"- {c.Name}: " + (c.Typed is not null ? $"{c.Command} (checked by the engine)" : $"`{c.Command}`, expected exit code {c.ExpectedExitCode}")
