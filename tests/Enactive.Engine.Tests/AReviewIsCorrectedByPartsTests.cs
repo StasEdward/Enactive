@@ -101,26 +101,83 @@ public sealed class AReviewIsCorrectedByPartsTests(ITestOutputHelper output)
             ["$.claims: missing obligation ID 'O002'", "$.claims: missing obligation ID 'O003'", "$.claims: missing obligation ID 'O004'",
              "$.claims[0].scope: unknown scope 'S9'"], Four)!.ClaimIds);
 
-    /// <summary>The claims asked for replace theirs; the others are the originals, untouched; the list follows the obligations.</summary>
+    private static JsonObject Patch(JsonArray claims)
+        => new() { ["verdict"] = "pass", ["notes"] = "n", ["claims"] = claims, ["repairs"] = new JsonArray() };
+
+    /// <summary>
+    /// The claims asked for replace theirs in their own places; the others are the originals, untouched,
+    /// where they were - repairs and the reviewer's own reasoning name claims by position - and a
+    /// missing one is added at the end.
+    /// </summary>
     [Fact]
-    public void Claims_given_replace_only_the_ones_asked_for_in_the_obligations_order()
+    public void Claims_given_replace_only_the_ones_asked_for_and_every_claim_keeps_its_place()
     {
         var original = Answer("O003", "O001", "O002");
         original["claims"]![0]!["what"] = "kept three";
         original["claims"]![1]!["what"] = "kept one";
         var parts = ReviewSectionRepair.For(original.ToJsonString(),
             ["$.claims[2].scope: unknown scope 'S9'", "$.claims: missing obligation ID 'O004'"], Four)!;
+        Assert.Equal(["O003", "O001", "O002", "O004"], parts.ClaimOrder);
 
-        var fresh = Answer("O002", "O004", "O001")["claims"]!.AsArray();
-        fresh[2]!["what"] = "not asked for";
-        var merged = JsonNode.Parse(parts.Merge(new JsonObject
-        {
-            ["verdict"] = "pass", ["notes"] = "n", ["claims"] = fresh.DeepClone(), ["repairs"] = new JsonArray()
-        }.ToJsonString()))!["claims"]!.AsArray();
+        var fresh = Answer("O004", "O002")["claims"]!.DeepClone().AsArray();
+        fresh[1]!["what"] = "corrected two";
+        var merged = JsonNode.Parse(parts.Merge(Patch(fresh).ToJsonString()))!["claims"]!.AsArray();
 
-        Assert.Equal(["O001", "O002", "O003", "O004"], merged.Select(c => c!["id"]!.GetValue<string>()).ToArray());
-        Assert.Equal("kept one", merged[0]!["what"]!.GetValue<string>());
-        Assert.Equal("kept three", merged[2]!["what"]!.GetValue<string>());
+        Assert.Equal(["O003", "O001", "O002", "O004"], merged.Select(c => c!["id"]!.GetValue<string>()).ToArray());
+        Assert.Equal("kept three", merged[0]!["what"]!.GetValue<string>());
+        Assert.Equal("kept one", merged[1]!["what"]!.GetValue<string>());
+        Assert.Equal("corrected two", merged[2]!["what"]!.GetValue<string>());
+    }
+
+    /// <summary>A claim is matched by its ID alone, so an ID that was not asked for, twice, or not at all is refused, not guessed at.</summary>
+    [Theory]
+    [InlineData("O002,O004,O001", "O001 was not asked for")]
+    [InlineData("O002,O004,O009", "O009 was not asked for")]
+    [InlineData("O002,O004,O004", "O004 came back twice")]
+    [InlineData("O002", "O004 did not come back")]
+    public void Claims_given_under_an_id_not_asked_for_twice_or_not_at_all_are_refused(string ids, string why)
+    {
+        var parts = ReviewSectionRepair.For(Answer("O001", "O002", "O003").ToJsonString(),
+            ["$.claims[1].scope: unknown scope 'S9'", "$.claims: missing obligation ID 'O004'"], Four)!;
+        var error = Assert.Throws<FormatException>(() => parts.Merge(Patch(Answer(ids.Split(','))["claims"]!.AsArray().DeepClone().AsArray()).ToJsonString()));
+        Assert.Contains(why, error.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>The reviewer is told what is wrong with each claim under its stable ID, not only by a position.</summary>
+    [Fact]
+    public void What_is_wrong_is_said_claim_by_claim()
+    {
+        var parts = ReviewSectionRepair.For(Answer("O001", "O002", "O003").ToJsonString(),
+            ["$.claims[1].requirements[0].verification: required field is missing"], Four)!;
+        Assert.Contains("O002: $.claims[1].requirements[0].verification: required field is missing.",
+            parts.Instruction("refused"), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A disagreement between sections is corrected on both sides: a repair pointing at a claim that did
+    /// not fail may be the wrong repair or the wrong claim, so the claim is asked for with it.
+    /// </summary>
+    [Fact]
+    public void An_error_in_one_section_about_another_asks_for_both()
+    {
+        var parts = ReviewSectionRepair.For(Answer("O001", "O002", "O003").ToJsonString(),
+            ["$.repairs[0].findings: $.claims[1] is not a failed finding; reconcile the verdict and proposed correction"], Four)!;
+
+        Assert.Equal(["verdict", "notes", "claims", "repairs"], parts.Requested);
+        Assert.Equal(["O002"], parts.ClaimIds);
+    }
+
+    /// <summary>A claim under an ID no obligation has answers nothing: it is dropped, and the one it should have been is asked for.</summary>
+    [Fact]
+    public void A_claim_under_an_unknown_id_is_dropped_and_the_missing_one_asked_for()
+    {
+        var original = Answer("O001", "O009", "O002");
+        var parts = ReviewSectionRepair.For(original.ToJsonString(),
+            ["$.claims[1].id: unknown obligation ID 'O009'", "$.claims: missing obligation ID 'O003'"],
+            RequestObligations.Create("one\ntwo\nthree"))!;
+
+        Assert.Equal(["O003"], parts.ClaimIds);
+        Assert.Equal(["O001", "O002", "O003"], parts.ClaimOrder);
     }
 
     // ── a cut answer ─────────────────────────────────────────────────────────────────────
@@ -199,7 +256,8 @@ public sealed class AReviewIsCorrectedByPartsTests(ITestOutputHelper output)
         var patch = new JsonObject
         {
             ["verdict"] = "pass", ["notes"] = "checked",
-            ["claims"] = Answer("O001", "O002")["claims"]!.DeepClone(), ["repairs"] = new JsonArray()
+            // Only the claim asked for: a claim sent back unasked would be refused.
+            ["claims"] = new JsonArray(Answer("O001", "O002")["claims"]![1]!.DeepClone()), ["repairs"] = new JsonArray()
         };
         var provider = new FakeChatProvider(Turn.Says(first.ToJsonString()), Turn.Says(patch.ToJsonString()));
 

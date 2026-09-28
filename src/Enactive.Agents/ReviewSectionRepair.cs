@@ -2,6 +2,7 @@ namespace Enactive.Agents;
 
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using Enactive.Core.Execution;
 using Enactive.Core.Providers;
 
@@ -26,8 +27,9 @@ using Enactive.Core.Providers;
 /// with its requirements - and where the recorded refusals mostly are: a missing ID, a wrong scope,
 /// two fields missing from one requirement of one claim. Asking for the whole section again for that
 /// re-generated every claim that was right. The engine owns the list of obligations, so the unit it
-/// asks for is one claim: a refusal that names claims by position or a missing ID gets exactly those
-/// claims back, the others stand, and the merged list is put in the obligations' order.</para>
+/// asks for is one claim: a refusal that names claims - where an error is, in an error's text, or as
+/// missing - gets exactly those claims back, by their stable IDs and with what was wrong with each;
+/// the others stand in their places; the whole answer is validated again after the merge.</para>
 ///
 /// <para><b>A cut answer keeps what was complete.</b> An answer stopped by the output limit was asked
 /// for again whole, with twice the room. Everything before the cut that closed - whole sections, whole
@@ -45,23 +47,33 @@ internal sealed class ReviewSectionRepair
 
     private readonly JsonObject _original;
 
-    // Claims asked for one by one: which, and the order the merged list takes. Null: the whole section.
-    private readonly IReadOnlyList<string>? _claimIds;
-    private readonly IReadOnlyList<string> _order;
+    // Claims asked for one by one. Null: the whole section, when it is asked for at all.
+    private readonly ClaimPlan? _claims;
 
     public IReadOnlyList<string> Requested { get; }
     public IReadOnlyList<string> Kept { get; }
     public string Schema { get; }
 
     /// <summary>The obligation IDs whose claims are asked for, when only some are; null when the whole section is.</summary>
-    public IReadOnlyList<string>? ClaimIds => _claimIds;
+    public IReadOnlyList<string>? ClaimIds => _claims?.Ids;
 
-    private ReviewSectionRepair(JsonObject original, IReadOnlyList<string> requested,
-        IReadOnlyList<string>? claimIds = null, IReadOnlyList<string>? order = null)
+    /// <summary>The obligation IDs of the claims in the merged answer, position by position; null when the whole section is asked for.</summary>
+    public IReadOnlyList<string>? ClaimOrder => _claims?.Order;
+
+    /// <summary>
+    /// Which claims are asked for, the order the merged list takes, and what was wrong with each.
+    /// <para>The order is the answer's own: a claim keeps its position, because the repairs and the
+    /// reviewer's own reasoning name claims by it. A claim under an ID no obligation has, or a second
+    /// one under an ID already answered, is dropped - it answers nothing - and a claim that was
+    /// missing is added at the end.</para>
+    /// </summary>
+    private sealed record ClaimPlan(IReadOnlyList<string> Ids, IReadOnlyList<string> Order,
+        IReadOnlyDictionary<string, IReadOnlyList<string>> Errors);
+
+    private ReviewSectionRepair(JsonObject original, IReadOnlyList<string> requested, ClaimPlan? claims = null)
     {
         _original = original;
-        _claimIds = claimIds;
-        _order = order ?? [];
+        _claims = claims;
         Requested = requested;
         Kept = Sections.Where(s => !requested.Contains(s)).ToArray();
         var full = JsonNode.Parse(Reviewer.CombinedWireSchema)!["properties"]!;
@@ -97,6 +109,11 @@ internal sealed class ReviewSectionRepair
             var section = end < 0 ? path : path[..end];
             if (!Sections.Contains(section)) return null;
             wrong.Add(section);
+            // An error in one section about another - a repair that points at a claim which did not
+            // fail - is a disagreement between the two, and either side may be the one to correct:
+            // both are asked for, so the answer can be reconciled rather than patched on one side.
+            foreach (Match reference in Reference.Matches(error[(2 + (end < 0 ? path.Length : end))..]))
+                if (Sections.Contains(reference.Groups[1].Value)) wrong.Add(reference.Groups[1].Value);
         }
         if (wrong.Count == 0) return null;
 
@@ -106,10 +123,27 @@ internal sealed class ReviewSectionRepair
         var requested = Sections.Where(wrong.Contains).ToArray();
         if (requested.Length == Sections.Length) return null;
 
-        var claimIds = wrong.Contains("claims") && obligations is not null
-            ? ClaimsNamed(original, errors.Where(e => e.StartsWith("$.claims", StringComparison.Ordinal)).ToArray(), obligations)
-            : null;
-        return new ReviewSectionRepair(original, requested, claimIds, obligations?.Items.Select(o => o.Id).ToArray());
+        var claims = wrong.Contains("claims") && obligations is not null ? PlanClaims(original, errors, obligations) : null;
+        return new ReviewSectionRepair(original, requested, claims);
+    }
+
+    /// <summary>A path into a section, inside an error's text: <c>$.claims[1]</c>, <c>$.assessments.report</c>.</summary>
+    private static readonly Regex Reference = new(@"\$\.([a-z_]+)", RegexOptions.CultureInvariant);
+
+    private static readonly Regex ClaimAt = new(@"\$\.claims\[(\d+)\]", RegexOptions.CultureInvariant);
+
+    private static string? IdOf(JsonNode? claim) => claim is JsonObject o && o["id"]?.GetValueKind() == JsonValueKind.String
+        ? o["id"]!.GetValue<string>() : null;
+
+    /// <summary>The positions of the claims that answer an obligation - the first under each known ID - with their IDs.</summary>
+    private static List<(int Index, string Id)> Answering(JsonArray claims, IReadOnlyCollection<string> expected)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var kept = new List<(int, string)>();
+        for (var i = 0; i < claims.Count; i++)
+            if (IdOf(claims[i]) is { } id && expected.Contains(id) && seen.Add(id))
+                kept.Add((i, id));
+        return kept;
     }
 
     /// <summary>
@@ -130,54 +164,68 @@ internal sealed class ReviewSectionRepair
         var wrong = Sections.Where(s => !kept.ContainsKey(s)).ToHashSet(StringComparer.Ordinal);
         wrong.Add("verdict");
         wrong.Add("notes");
-        IReadOnlyList<string>? claimIds = null;
+        ClaimPlan? plan = null;
         if (kept["claims"] is JsonArray claims)
         {
-            var present = claims.OfType<JsonObject>().Select(c => c["id"]?.GetValueKind() == JsonValueKind.String ? c["id"]!.GetValue<string>() : null)
-                .OfType<string>().ToHashSet(StringComparer.Ordinal);
-            var missing = obligations.Items.Select(o => o.Id).Where(id => !present.Contains(id)).ToArray();
+            var expected = obligations.Items.Select(o => o.Id).ToArray();
+            var answering = Answering(claims, expected);
+            var missing = expected.Where(id => answering.All(a => a.Id != id)).ToArray();
             if (missing.Length > 0)
             {
                 wrong.Add("claims");
-                claimIds = missing;
+                plan = new ClaimPlan(missing, [.. answering.Select(a => a.Id), .. missing],
+                    missing.ToDictionary(id => id, _ => (IReadOnlyList<string>)["not given before the output limit cut the answer"], StringComparer.Ordinal));
             }
         }
         if (wrong.Overlaps(Findings)) wrong.Add("repairs");
         var requested = Sections.Where(wrong.Contains).ToArray();
         return requested.Length == Sections.Length
             ? null
-            : new ReviewSectionRepair(kept, requested, claimIds, obligations.Items.Select(o => o.Id).ToArray());
+            : new ReviewSectionRepair(kept, requested, plan);
     }
 
     /// <summary>
-    /// The claims a refusal names, by obligation ID - or null when it names the section as a whole
-    /// (not a list, or an error with no claim to place it in), or every claim anyway.
+    /// The claims a refusal names, by obligation ID - wherever it names them: as the place an error is,
+    /// in the text of an error elsewhere, or as missing. Null when it names the section as a whole (not
+    /// a list, an error at no claim), or every claim anyway.
     /// </summary>
-    private static IReadOnlyList<string>? ClaimsNamed(JsonObject original, IReadOnlyList<string> errors, RequestObligations obligations)
+    private static ClaimPlan? PlanClaims(JsonObject original, IReadOnlyList<string> errors, RequestObligations obligations)
     {
         if (original["claims"] is not JsonArray claims) return null;
         var expected = obligations.Items.Select(o => o.Id).ToArray();
-        var named = new HashSet<string>(StringComparer.Ordinal);
+        var answering = Answering(claims, expected);
+        var idAt = answering.ToDictionary(a => a.Index, a => a.Id);
+        var named = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        void Name(string id, string error)
+        {
+            if (!named.TryGetValue(id, out var list)) named[id] = list = [];
+            list.Add(error);
+        }
+
         foreach (var error in errors)
         {
             const string missing = "$.claims: missing obligation ID '";
             if (error.StartsWith(missing, StringComparison.Ordinal) && error.IndexOf('\'', missing.Length) is var close and > 0)
             {
-                named.Add(error[missing.Length..close]);
+                Name(error[missing.Length..close], error);
                 continue;
             }
-            if (!error.StartsWith("$.claims[", StringComparison.Ordinal)) return null;
-            var end = error.IndexOf(']');
-            if (end < 0 || !int.TryParse(error["$.claims[".Length..end], out var index) || index < 0 || index >= claims.Count) return null;
-            // A claim under an ID no obligation has, or a second one under the same ID, is dropped in the
-            // merge; the obligation it should have answered is then missing and named on its own.
-            if (claims[index] is JsonObject claim && claim["id"]?.GetValueKind() == JsonValueKind.String
-                && claim["id"]!.GetValue<string>() is var id && expected.Contains(id)
-                && !error.Contains("duplicate obligation ID", StringComparison.Ordinal))
-                named.Add(id);
+            if (error.StartsWith("$.claims", StringComparison.Ordinal) && !error.StartsWith("$.claims[", StringComparison.Ordinal))
+                return null;
+            foreach (Match at in ClaimAt.Matches(error))
+            {
+                if (!int.TryParse(at.Groups[1].Value, out var index) || index >= claims.Count) return null;
+                // A claim that answers no obligation is dropped in the merge; the obligation it should
+                // have answered is then missing, and named on its own.
+                if (idAt.TryGetValue(index, out var id)) Name(id, error);
+            }
         }
-        var ids = expected.Where(named.Contains).ToArray();
-        return ids.Length == 0 || ids.Length == expected.Length ? null : ids;
+
+        var ids = expected.Where(named.ContainsKey).ToArray();
+        if (ids.Length == 0 || ids.Length == expected.Length) return null;
+        var order = answering.Select(a => a.Id).ToList();
+        order.AddRange(ids.Where(id => !order.Contains(id)));
+        return new ClaimPlan(ids, order, ids.ToDictionary(id => id, id => (IReadOnlyList<string>)named[id], StringComparer.Ordinal));
     }
 
     /// <summary>
@@ -246,10 +294,11 @@ internal sealed class ReviewSectionRepair
     /// <summary>What the reviewer is asked: exactly these parts, with the rest named as kept.</summary>
     public string Instruction(string diagnostic)
     {
-        var claims = _claimIds is null ? "" :
-            $" In claims return ONLY the claims for {string.Join(", ", _claimIds)}; the claims for "
-            + $"{string.Join(", ", _order.Where(id => !_claimIds.Contains(id)))} stand as you gave them. After the merge the "
-            + $"claims are in this order: {string.Join(", ", _order.Select((id, i) => $"$.claims[{i}]={id}"))}.";
+        var claims = _claims is not { } plan ? "" :
+            $" In claims return ONLY the claims for {string.Join(", ", plan.Ids)}, each under its own id; any other id is "
+            + $"refused. The claims for {string.Join(", ", plan.Order.Where(id => !plan.Ids.Contains(id)))} stand as you gave them. "
+            + $"What is wrong, by claim: {string.Join(" ", plan.Ids.Select(id => $"{id}: {string.Join("; ", plan.Errors[id])}."))} "
+            + $"After the merge the claims are in this order: {string.Join(", ", plan.Order.Select((id, i) => $"$.claims[{i}]={id}"))}.";
         return diagnostic
            + $"\nCorrect ONLY these parts of your answer, and return them as one JSON object with exactly these "
            + $"top-level fields: {string.Join(", ", Requested)}. Everything else you gave stands exactly as it was "
@@ -280,34 +329,37 @@ internal sealed class ReviewSectionRepair
 
         var merged = _original.DeepClone().AsObject();
         foreach (var (key, value) in patch)
-            merged[key] = key == "claims" && _claimIds is not null && value is JsonArray given
-                ? MergeClaims(given)
+            merged[key] = key == "claims" && _claims is { } plan
+                ? MergeClaims(plan, value as JsonArray ?? throw new FormatException("claims: expected the list of the claims asked for."))
                 : value?.DeepClone();
         return merged.ToJsonString();
     }
 
     /// <summary>
-    /// The claims asked for from <paramref name="given"/>, the rest from the answer they correct, in the
-    /// obligations' order. A claim under an ID no obligation has is left out; validation names what is missing.
+    /// The claims asked for, each in the place of the one it corrects, the others as they were given.
+    /// Strict, because a claim is matched by its ID alone: an ID not asked for, one sent twice or one
+    /// asked for and not sent back would each leave the engine to guess which claim is meant.
     /// </summary>
-    private JsonArray MergeClaims(JsonArray given)
+    private JsonArray MergeClaims(ClaimPlan plan, JsonArray given)
     {
-        static string? Id(JsonNode? claim) => claim is JsonObject o && o["id"]?.GetValueKind() == JsonValueKind.String
-            ? o["id"]!.GetValue<string>() : null;
-        var byId = given.Where(c => Id(c) is not null).GroupBy(Id).ToDictionary(g => g.Key!, g => g.First(), StringComparer.Ordinal);
-        // Every claim came back: the whole section was answered, and it replaces the old one.
-        if (_order.All(byId.ContainsKey)) return (JsonArray)given.DeepClone();
-        var old = (_original["claims"] as JsonArray ?? []).Where(c => Id(c) is not null)
-            .GroupBy(Id).ToDictionary(g => g.Key!, g => g.First(), StringComparer.Ordinal);
-
-        var merged = new JsonArray();
-        foreach (var id in _order)
+        var byId = new Dictionary<string, JsonNode>(StringComparer.Ordinal);
+        foreach (var claim in given)
         {
-            var claim = _claimIds!.Contains(id) && byId.TryGetValue(id, out var fresh) ? fresh
-                : old.TryGetValue(id, out var kept) ? kept
-                : byId.GetValueOrDefault(id);
-            if (claim is not null) merged.Add(claim.DeepClone());
+            if (IdOf(claim) is not { } id)
+                throw new FormatException("claims: every entry must be a claim with its id.");
+            if (!plan.Ids.Contains(id))
+                throw new FormatException($"claims: {id} was not asked for; return only the claims for {string.Join(", ", plan.Ids)}.");
+            if (!byId.TryAdd(id, claim!))
+                throw new FormatException($"claims: {id} came back twice; return each claim asked for once.");
         }
+        var absent = plan.Ids.Where(id => !byId.ContainsKey(id)).ToArray();
+        if (absent.Length > 0)
+            throw new FormatException($"claims: {string.Join(", ", absent)} did not come back; return every claim asked for.");
+
+        var old = Answering(_original["claims"] as JsonArray ?? [], plan.Order).ToDictionary(a => a.Id, a => a.Index);
+        var merged = new JsonArray();
+        foreach (var id in plan.Order)
+            merged.Add(byId.TryGetValue(id, out var fresh) ? fresh.DeepClone() : _original["claims"]![old[id]]!.DeepClone());
         return merged;
     }
 }
