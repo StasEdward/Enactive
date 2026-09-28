@@ -170,6 +170,8 @@ public sealed class FileStatsTool : ITool
         if (listed < rows.Count)
             output.AppendLine($"… {rows.Count - listed} smaller file(s) not listed; the totals above "
                             + "include all of them.");
+        if (!one && WorkspaceScan.IgnoredNote(scanRoot) is { Length: > 0 } ignoredNote)
+            output.AppendLine(ignoredNote.TrimStart('\n'));
 
         return ToolResults.Ok(
             output: output.ToString().TrimEnd(),

@@ -93,9 +93,12 @@ internal static class WorkspaceScan
         };
         var ignoreCase = WorkspaceGuard.Comparison != StringComparison.Ordinal;
 
+        // The folders the scan root's own .gitignore excludes by name, cut off at the root only.
+        var ignored = WorkspaceGuard.IgnoredFolders(root).Select(f => Path.GetFullPath(Path.Combine(root, f))).ToArray();
         return new FileSystemEnumerable<string>(root, (ref FileSystemEntry entry) => entry.ToFullPath(), options)
         {
-            ShouldRecursePredicate = (ref FileSystemEntry entry) => !SkippedName(entry.FileName),
+            ShouldRecursePredicate = (ref FileSystemEntry entry) => !SkippedName(entry.FileName)
+                && (ignored.Length == 0 || !ignored.Contains(entry.ToFullPath(), StringComparer.OrdinalIgnoreCase)),
             ShouldIncludePredicate = (ref FileSystemEntry entry) =>
                 !entry.IsDirectory && FileSystemName.MatchesSimpleExpression(glob, entry.FileName, ignoreCase)
         };
@@ -176,6 +179,13 @@ internal static class WorkspaceScan
         ".woff", ".woff2", ".ttf", ".otf", ".eot",
         ".pdf", ".mp3", ".mp4", ".wav", ".avi", ".mov", ".mkv", ".db", ".sqlite"
     };
+
+    /// <summary>What a sweep of <paramref name="root"/> left out because the project's .gitignore excludes it - or nothing.</summary>
+    public static string IgnoredNote(string root)
+        => WorkspaceGuard.IgnoredFolders(root) is { Count: > 0 } ignored
+            ? $"\n… left out: {string.Join(", ", ignored.Select(f => f + "/"))} - excluded by the project's .gitignore. "
+              + "Name one with 'path' to look inside it."
+            : "";
 
     public static string Relative(string root, string file)
         => Path.GetRelativePath(root, file).Replace(Path.DirectorySeparatorChar, '/');

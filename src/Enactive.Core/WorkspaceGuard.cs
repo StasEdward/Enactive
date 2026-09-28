@@ -67,6 +67,36 @@ public static class WorkspaceGuard
         { ReservedFolder, "bin", "obj", "node_modules", ".git", ".vs", "dist", "packages" };
 
     /// <summary>
+    /// The folders directly under <paramref name="root"/> that its own .gitignore excludes by name - "work/",
+    /// "/archive", "tmp". The project has said they are not part of it; a sweep that walks them finds old
+    /// copies of the code and reports them as the code (run 9c1a061b: a claim checked against
+    /// work/Orchestrator.final.cs). Only plain names of folders that exist: a pattern with a wildcard, a
+    /// path, a negation or a file is left to git. Nothing when there is no .gitignore.
+    /// </summary>
+    public static IReadOnlyList<string> IgnoredFolders(string root)
+    {
+        try
+        {
+            var file = Path.Combine(root, ".gitignore");
+            if (!File.Exists(file)) return [];
+            var folders = new List<string>();
+            foreach (var raw in File.ReadLines(file))
+            {
+                var line = raw.Trim();
+                if (line.Length == 0 || line[0] is '#' or '!') continue;
+                var name = line.Trim('/');
+                if (name.Length == 0 || name.IndexOfAny(['*', '?', '[', '/', '\\']) >= 0) continue;
+                // What every sweep skips anyway (.enactive/, bin/ ...) is not news, and not said again.
+                if (SkippedFolders.Contains(name, StringComparer.OrdinalIgnoreCase)) continue;
+                if (Directory.Exists(Path.Combine(root, name)) && !folders.Contains(name, StringComparer.OrdinalIgnoreCase))
+                    folders.Add(name);
+            }
+            return folders;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return []; }
+    }
+
+    /// <summary>
     /// Path comparison for the current OS. Linux is case-sensitive; Windows and macOS are not by
     /// default. Getting this backwards either lets a path escape or refuses a legitimate one.
     /// </summary>

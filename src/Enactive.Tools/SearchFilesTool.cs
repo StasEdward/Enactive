@@ -203,7 +203,7 @@ public sealed class SearchFilesTool : ITool
             return ToolResults.Fail($"Search failed: {ex.Message}");
         }
 
-        var skipped = Skipped(skippedLarge, skippedBinary);
+        var skipped = Skipped(skippedLarge, skippedBinary) + (one ? "" : WorkspaceScan.IgnoredNote(searchRoot));
 
         if (matches == 0)
             return ToolResults.Ok(

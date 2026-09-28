@@ -160,7 +160,7 @@ public sealed class CountMatchesTool : ITool
             return ToolResults.Fail($"Count failed: {ex.Message}");
         }
 
-        var skipped = WorkspaceScan.SkippedNote(skippedLarge, skippedBinary);
+        var skipped = WorkspaceScan.SkippedNote(skippedLarge, skippedBinary) + (one ? "" : WorkspaceScan.IgnoredNote(searchRoot));
 
         // Zero is an ANSWER, not a failure: "this string is nowhere in the workspace" is exactly
         // what somebody deciding whether to delete a symbol wants to hear. Ok, not NotFound.

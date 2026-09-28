@@ -755,7 +755,7 @@ public sealed partial class Orchestrator : IOrchestrator
 
         if (resume is null && plan.Checks.Any(c => c.PlanningReason is not null))
             messages.Add(ChatMessage.User("Final verification contract approved during planning:\n"
-                + System.Text.Json.JsonSerializer.Serialize(plan.Checks)
+                + CheckLines(plan.Checks)
                 + "\nThese criteria are checked after the work. Perform your assigned step; do not run later-step "
                 + "verification prematurely or change the project location to fit a check. Original request restrictions still apply."));
 
@@ -3274,6 +3274,17 @@ public sealed partial class Orchestrator : IOrchestrator
         // with no reason in it anywhere.
         if (offer.Sentence is { } withheldSentence)
             yield return Ev(EventKind.ContextAssembled, withheldSentence);
+        // And to the model. Its instructions are the role's, written for every run - "run shell commands
+        // (run_command) and run PowerShell ..., plus git and docker" - and a run that does not offer them
+        // said so only to the log (run 9c1a061b, 2026-09-28: the prompt promised four tools the request
+        // did not carry). Once per conversation: a step that shares it has been told already.
+        if (offer.Because is { } withheldBecause)
+        {
+            var notOffered = $"Not available in this run: {withheldBecause}. Where your instructions mention "
+                             + "these tools, do the work with the tools you have, or say what could not be done without them.";
+            if (!messages.Any(m => m.Role == ChatRole.User && m.Content == notOffered))
+                messages.Add(ChatMessage.User(notOffered));
+        }
 
         // And the servers the ROLE filtered out before any of that. ToolOffers never sees them -
         // its candidate list is already role-filtered - so without this they are not withheld, they
@@ -3667,8 +3678,11 @@ public sealed partial class Orchestrator : IOrchestrator
                         + "conversation was getting long, so it has been started again from "
                         + (engineEvidenceOnly ? "engine evidence" : "your own notes")
                         + ". This is what had been recorded:\n\n" + carried
-                        + "\n\nCarry on from there. The files you wrote are still on disk; read one "
-                        + "back if you need what is in it."
+                        + "\n\nCarry on from there."
+                        // Only a step that wrote something is told to read it back: told so after writing
+                        // nothing, it went to read a report it had never written (run 9c1a061b).
+                        + (store.TouchedPaths.Count > 0 || store.PendingPaths.Count > 0
+                            ? " The files you wrote are still on disk; read one back if you need what is in it." : "")
                         // A step that is to hand its result on, and a conversation that did not fit: what it
                         // has established so far is handed on now, so a step that breaks off later leaves a
                         // provisional result rather than nothing (run 21df3d79: 146 calls, three handovers,
@@ -4787,6 +4801,16 @@ public sealed partial class Orchestrator : IOrchestrator
         return flat.Length <= max ? flat : flat[..max] + "…";
     }
 
+    /// <summary>
+    /// The checks a run is judged by, one line each, as a person would write them - not the engine's own record
+    /// of them. Serialized, the model was handed "Origin":1, "Typed":null and \u0027 for a quote (run 9c1a061b).
+    /// </summary>
+    internal static string CheckLines(IEnumerable<SuccessCriterionDefinition> checks)
+        => string.Join("\n", checks.Select(c =>
+            $"- {c.Name}: " + (c.Typed is not null ? $"{c.Command} (checked by the engine)" : $"`{c.Command}`, expected exit code {c.ExpectedExitCode}")
+            + (c.Required ? "" : " (optional)")
+            + (string.IsNullOrWhiteSpace(c.PlanningReason) ? "" : $" - why: {c.PlanningReason}")));
+
     private string BuildUserPrompt(Intent intent)
     {
         var context = intent.Context;
@@ -4823,8 +4847,15 @@ public sealed partial class Orchestrator : IOrchestrator
                         + "for this run. Outcomes may be stale; verify relevant files and results again. "
                         + "Recent entries only; long entries are shortened with an ellipsis.");
 
+            // An approval given "for this run" was for that run, and says nothing about this one; and an entry
+            // said twice is one fact. Run 9c1a061b was shown "run_powershell: allowed outside, for this run" four times.
+            var shown = new HashSet<string>(StringComparer.Ordinal);
             foreach (var entry in context.Memory)
-                sb.AppendLine($"- [{entry.Kind}] {Gist(entry.Content, 200)}");
+            {
+                if (entry.Content.TrimEnd().EndsWith("for this run", StringComparison.OrdinalIgnoreCase)) continue;
+                var line = $"- [{entry.Kind}] {Gist(entry.Content, 200)}";
+                if (shown.Add(line)) sb.AppendLine(line);
+            }
         }
         sb.AppendLine();
         sb.AppendLine("## Request (the user's intent)");
