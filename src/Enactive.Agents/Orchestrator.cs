@@ -11,6 +11,7 @@ using System.Threading.Channels;
 // verified differentially, so the less of it is visible at the call sites, the better.
 using static Enactive.Agents.ToolCallParsing;
 using Enactive.Core.Artifacts;
+using Enactive.Core.Builds;
 using Enactive.Core.Chat;
 using Enactive.Core.Context;
 using Enactive.Core.Diagnostics;
@@ -194,6 +195,7 @@ public sealed partial class Orchestrator : IOrchestrator
     /// own closing sentence and a reviewer's opinion of free text.
     /// </summary>
     private readonly IReadOnlyList<SuccessCriterionDefinition> _successCriteria;
+    private readonly IReadOnlyList<IEcosystem> _ecosystems;
     private readonly ISuccessEvaluator _successEvaluator;
 
     /// <summary>
@@ -248,8 +250,13 @@ public sealed partial class Orchestrator : IOrchestrator
         WritableRoots? writableRoots = null,
         GenerationBudgets? generationBudgets = null,
         RepairConsultation? repairConsultation = null,
-        OrchestratorServices? agents = null)
+        OrchestratorServices? agents = null,
+        // The kinds of project the engine can build and read, each behind IEcosystem. None by
+        // default: a workspace no ecosystem recognises gets no build check, and so does a test that
+        // says nothing about builds.
+        IReadOnlyList<IEcosystem>? ecosystems = null)
     {
+        _ecosystems = ecosystems ?? Array.Empty<IEcosystem>();
         // The machine's own store unless a test points it somewhere temporary. Defaulted rather
         // than required because a run that never writes outside the workspace never touches it, and
         // making every caller name it would put a policy decision in the signature of every test.
@@ -586,7 +593,19 @@ public sealed partial class Orchestrator : IOrchestrator
             plan = plan with { Checks = plan.Checks.Where(c => c.Origin != CriterionOrigin.Proposed).Concat(kept).ToArray() };
         }
 
-        var session = new RunSession(scope, messages);
+        // What the workspace's build reported before any of the work, for the engine's own "no new
+        // build errors" at the end - see BuildRegression. Not on a resume: the workspace has already
+        // been worked on, and a baseline taken now would call the earlier work's errors old.
+        IReadOnlyList<BuildBaseline> builds = [];
+        if (resume is null && _ecosystems.Count > 0)
+        {
+            builds = await InScopeAsync(scope.RunId, scope.TaskId, null,
+                () => BuildBaselineAsync(scope.TaskId, scope.RunId, intent.Context, ct));
+            foreach (var build in builds)
+                yield return scope.Ev(EventKind.ContextAssembled, build.Describe());
+        }
+
+        var session = new RunSession(scope, messages) { Builds = builds };
         if (plan.Disposition == IntentDisposition.QuickAction)
         {
             await foreach (var ev in RunQuickActionAsync(intent, session, models, plan, ct))
@@ -694,6 +713,8 @@ public sealed partial class Orchestrator : IOrchestrator
         }
 
         foreach (var check in ProducedFilesNow(scope, session))
+            yield return scope.Criterion(check);
+        foreach (var check in await BuildRegressionNowAsync(scope, session, intent.Context, ct))
             yield return scope.Criterion(check);
 
         var quickNet = quickOutcome == RunOutcomeKind.Completed
@@ -1450,6 +1471,8 @@ public sealed partial class Orchestrator : IOrchestrator
         // and the final review have had their turn to change it.
         foreach (var check in ProducedFilesNow(scope, session))
             yield return scope.Criterion(check);
+        foreach (var check in await BuildRegressionNowAsync(scope, session, intent.Context, ct))
+            yield return scope.Criterion(check);
 
         // This run reached an end, whatever kind of end. Nothing here is resumable any more, and a
         // checkpoint left behind would offer to redo work that is finished.
@@ -1529,6 +1552,79 @@ public sealed partial class Orchestrator : IOrchestrator
 
     /// <summary>How a finished step is named on its card.</summary>
     /// <summary>What became of every file this run produced, as the engine sees it now. See ProducedFiles.</summary>
+    /// <summary>Most build targets one run baselines: a workspace of loose projects with no solution is built a few at most.</summary>
+    private const int MaxBuildTargets = 4;
+
+    /// <summary>
+    /// Each recognised ecosystem's build of each of its targets, run before any work, through the
+    /// same evaluator, tool, policy and task contract as any check. Never a way for a run to fail:
+    /// what cannot be taken is recorded as not taken, and the end compares nothing against it.
+    /// </summary>
+    private async Task<IReadOnlyList<BuildBaseline>> BuildBaselineAsync(Guid taskId, Guid runId, WorkContext context,
+        CancellationToken ct)
+    {
+        var found = new List<(IEcosystem Ecosystem, string Target)>();
+        foreach (var ecosystem in _ecosystems)
+        {
+            EcosystemTargets? targets;
+            try { targets = ecosystem.Detect(_workspace.RootPath); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { targets = null; }
+            foreach (var target in targets?.Build ?? [])
+                found.Add((ecosystem, target));
+        }
+        if (found.Count == 0) return [];
+        found = found.Take(MaxBuildTargets).ToList();
+
+        if (BuildRegression.WhyNotAllowed(_tools, _permissions, _policy) is { } why)
+            return found.Select(f => new BuildBaseline(f.Ecosystem, f.Target, null, null, why)).ToArray();
+        try
+        {
+            var report = await CheckSuccessAsync(found.Select(f => BuildRegression.Criterion(f.Ecosystem, f.Target)).ToArray(),
+                taskId, runId, context, ct);
+            return found.Select((f, i) => BuildRegression.Baseline(f.Ecosystem, f.Target, report.Results[i], _workspace.RootPath))
+                .ToArray();
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            return found.Select(f => new BuildBaseline(f.Ecosystem, f.Target, null, null, ex.Message)).ToArray();
+        }
+    }
+
+    /// <summary>
+    /// The build again, where the run can have changed what it reports, compared with the build
+    /// before the work. Nothing when there was no baseline or nothing the build depends on changed.
+    /// </summary>
+    private async Task<IReadOnlyList<CriterionResult>> BuildRegressionNowAsync(RunScope scope, RunSession session,
+        WorkContext context, CancellationToken ct)
+    {
+        if (session.Builds.Count == 0) return [];
+        try
+        {
+            ArtifactRef[] produced;
+            lock (scope.Artifacts) produced = scope.Artifacts.ToArray();
+            var actions = session.RunEvidence().Actions;
+            var due = session.Builds.Where(b => BuildRegression.Touched(b.Ecosystem, produced, actions)).ToArray();
+            if (due.Length == 0) return [];
+
+            var runnable = due.Where(b => b.Taken).ToArray();
+            var report = runnable.Length == 0 ? SuccessReport.NothingToCheck
+                : await CheckSuccessAsync(runnable.Select(b => BuildRegression.Criterion(b.Ecosystem, b.Target)).ToArray(),
+                    scope.TaskId, scope.RunId, context, ct);
+            return due.Select(b =>
+            {
+                var index = Array.IndexOf(runnable, b);
+                var criterion = BuildRegression.Criterion(b.Ecosystem, b.Target);
+                var after = index >= 0 ? report.Results[index]
+                    : new CriterionResult(criterion.Name, criterion.Command, false, CriterionOutcome.Unknown, null, null,
+                        CriterionOrigin.System);
+                return BuildRegression.Compare(b, after, _workspace.RootPath);
+            }).ToArray();
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception) { return []; }   // an instrument; the run it observes matters more
+    }
+
     private IReadOnlyList<CriterionResult> ProducedFilesNow(RunScope scope, RunSession session)
     {
         ArtifactRef[] produced;

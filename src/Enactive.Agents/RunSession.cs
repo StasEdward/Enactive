@@ -14,6 +14,8 @@ internal sealed class RunSession(RunScope scope, List<ChatMessage> messages)
     public List<ChatMessage> Messages { get; } = messages;
     public List<string> Digest { get; } = new();
     public RequestObligations? Obligations { get; set; }
+    /// <summary>What the workspace's build reported before any work. See BuildRegression.</summary>
+    public IReadOnlyList<BuildBaseline> Builds { get; init; } = [];
     public Dictionary<Guid, StepOutcomeKind> Outcomes { get; } = new();
     // Guarded by Outcomes, matching the outcome/reason snapshot used by the scheduler.
     public List<string> Reasons { get; } = new();

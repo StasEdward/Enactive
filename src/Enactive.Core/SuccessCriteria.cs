@@ -77,6 +77,13 @@ public sealed record CriterionResult(
     bool AlreadyPassing = false)
 {
     /// <summary>
+    /// What the command printed, as the tool returned it - not cut to fit a report like
+    /// <see cref="Detail"/>. For whatever reads the output rather than the exit code: a build's
+    /// diagnostics, compared with the build before the work. Not serialized into events.
+    /// </summary>
+    public string? Output { get; init; }
+
+    /// <summary>
     /// Whether this result holds the run back.
     ///
     /// <para>A required criterion that FAILED always does: it ran, and it said no. An

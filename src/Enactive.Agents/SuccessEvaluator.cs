@@ -168,7 +168,7 @@ public sealed class SuccessEvaluator : ISuccessEvaluator
             exitCode,
             exitCode == criterion.ExpectedExitCode ? null : Trim(result.Output ?? result.Error),
             criterion.Origin,
-            criterion.AlreadyPassing);
+            criterion.AlreadyPassing) { Output = result.Output ?? result.Error };
     }
 
     private static bool TryExitCode(ToolResult result, out int exitCode)

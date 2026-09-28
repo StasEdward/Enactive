@@ -50,5 +50,8 @@ public static class RunEngineComposition
             evidenceBudget: options.EvidenceBudget, allowImplicitToolCalls: options.AllowImplicitToolCalls,
             reviewContent: options.ReviewContent, checkSoundness: options.CheckSoundness,
             revertRejectedSteps: options.RevertRejectedSteps, checkpoints: checkpoints, settings: settings,
-            successCriteria: successCriteria, limits: limits, agents: resources.Agents);
+            successCriteria: successCriteria, limits: limits, agents: resources.Agents,
+            // The kinds of project the engine can build for its own "no new build errors" check.
+            // A new kind is a new IEcosystem here; nothing in the orchestrator changes.
+            ecosystems: [new DotnetEcosystem()]);
 }
