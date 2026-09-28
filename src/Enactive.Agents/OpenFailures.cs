@@ -159,6 +159,7 @@ internal sealed class OpenFailures
         {
             _namedNothing[key] = Kind(asTool ?? call.Name);
             _neverHappened[key] = Kind(asTool ?? call.Name);
+            if (FileNamedBy(call) is { } aimedAt) _neverHappenedAt[key] = aimedAt;
         }
         else if (EditOf(call) is { } edit)
             _editOf[key] = edit;
@@ -172,6 +173,24 @@ internal sealed class OpenFailures
         }
         else if (RepairsFiles(call.Name))
             _namedNothing[key] = Kind(call.Name);
+    }
+
+    /// <summary>The file a call that never happened was aimed at, where it named one - see <see cref="RefusedByRule"/>.</summary>
+    private readonly Dictionary<string, string> _neverHappenedAt = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// The engine refused a call by its own rule (a write boundary): that change will not happen, so a
+    /// call aimed at the same file that never happened - one from a turn cut at its limit - is no longer
+    /// waiting to be made good. Run dd7ca94b, 2026-09-28: a page step's cut turn held an edit of the
+    /// shared report; the step sent it again, the boundary refused it, and the step was failed for the
+    /// cut one - a change it had been told it may not make.
+    /// </summary>
+    public void RefusedByRule(ToolCall call)
+    {
+        if (FileNamedBy(call) is not { } file) return;
+        foreach (var open in _neverHappenedAt.Where(p => string.Equals(ShellLookup.Normal(p.Value), ShellLookup.Normal(file),
+                     StringComparison.OrdinalIgnoreCase)).Select(p => p.Key).ToArray())
+            Close(open);
     }
 
     /// <summary>A lookup whose target is not there. An answer — unless the step has nothing else.</summary>
@@ -302,6 +321,7 @@ internal sealed class OpenFailures
         _namedNothing.Remove(key);
         _lookupOf.Remove(key);
         _editOf.Remove(key);
+        _neverHappenedAt.Remove(key);
     }
 
     /// <summary>What an edit wanted, from its own arguments: a path, the text to replace and its replacement.</summary>

@@ -30,7 +30,8 @@ internal sealed class WriteBoundary(
     IReadOnlyCollection<string> reserved,
     IReadOnlyList<string>? items,
     Func<IReadOnlySet<string>> owned,
-    Action<string> own)
+    Action<string> own,
+    IReadOnlyCollection<string>? deliverables = null)
 {
     private readonly Dictionary<string, List<string>> _creating = new(StringComparer.Ordinal);
 
@@ -59,6 +60,12 @@ internal sealed class WriteBoundary(
 
             if (ThroughLink(full))
                 return $"'{rel}' goes through a link, and a step for one item does not change what a link may lead to.";
+            // What the run's criteria are about is the run's result, not one item's: a step for one item
+            // does not create it either (run dd7ca94b: the first page step created the shared report,
+            // and so owned it).
+            if (deliverables?.Contains(rel, StringComparer.OrdinalIgnoreCase) == true && !WithinItem(rel))
+                return $"'{rel}' is what the whole run delivers, not one item's result: a step for one item does not create or "
+                       + $"change it. Hand what you found on with {StepOutputContract.ToolName}; the step after the items writes it.";
             if (WithinItem(rel) || owned().Contains(rel)) continue;
             if (!File.Exists(full) && !Directory.Exists(full))
             {

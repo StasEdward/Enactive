@@ -1321,9 +1321,11 @@ public sealed partial class Orchestrator : IOrchestrator
             var planNow = scheduler.Steps;
             var reserved = planNow.Where(s => s.Report is not null).Select(s => ShellLookup.Normal(s.Report!)).ToArray();
             var itemOf = step.ExpandedFrom is { } parent ? planNow.FirstOrDefault(s => s.Id == parent) : null;
+            // The files the run's criteria are about: its result, which no single item's step makes.
+            var deliverables = CriteriaFor(plan).Select(c => c.Typed?.Path).OfType<string>().Select(ShellLookup.Normal).ToArray();
             var boundary = reserved.Length == 0 && step.ExpandedFrom is null ? null
                 : new WriteBoundary(_workspace.RootPath, reserved, step.ExpandedFrom is null ? null : step.Items ?? [],
-                    () => _progress.OwnedBy(scope.TaskId, step.Id), path => _progress.Own(scope.TaskId, step.Id, path));
+                    () => _progress.OwnedBy(scope.TaskId, step.Id), path => _progress.Own(scope.TaskId, step.Id, path), deliverables);
             var attemptState = session.BeginStep(convo, store, restartFrom, step.Output, ownConversation) with
             {
                 Boundary = boundary, WithholdUnchecked = itemOf?.Report is not null
@@ -3948,6 +3950,7 @@ public sealed partial class Orchestrator : IOrchestrator
                 {
                     yield return Invoked(call);
                     journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Refused, notItsToChange, WorkspaceEffect.None);
+                    openFailures.RefusedByRule(call);
                     messages.Add(ChatMessage.Tool(call.Id, "REFUSED: " + notItsToChange));
                     yield return Ev(EventKind.ToolResult, $"{call.Name} -> refused: {notItsToChange}");
                     continue;

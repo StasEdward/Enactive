@@ -55,6 +55,35 @@ public sealed class AStepForOneItemChangesOnlyItsOwnTests : IDisposable
         Assert.Null(page.Refuse(Call("""{"path":"Docs/REPORT.md"}"""), Reader, _ => false));            // declares no path: not this check
     }
 
+    /// <summary>
+    /// Run dd7ca94b: the first page step created the shared report the run's criteria name, and so owned it.
+    /// What the run's criteria are about is the run's result: a step for one item does not create it.
+    /// </summary>
+    [Fact]
+    public void A_file_the_runs_criteria_name_is_not_one_items_to_create()
+    {
+        var page = new WriteBoundary(_root, [], ["wiki/a.md"], () => _owned, p => _owned.Add(p), ["Docs/DRIFT.md"]);
+        Assert.Contains("is what the whole run delivers", page.Refuse(Call("""{"path":"Docs/DRIFT.md"}"""), Writer, _ => false));
+        Assert.Null(page.Refuse(Call("""{"path":"notes/a.md"}"""), Writer, _ => false));
+    }
+
+    /// <summary>
+    /// Run dd7ca94b: an edit from a turn cut at its limit never happened; sent again, it was refused by the
+    /// boundary. That change will not happen - the cut one no longer waits to be made good.
+    /// </summary>
+    [Fact]
+    public void A_call_that_never_happened_is_settled_when_the_same_change_is_refused_by_rule()
+    {
+        ToolDefinition[] tools = [new("edit_file", "e", "{}", WorkspaceEffect.Changed, ["path"], RepairsFileFailures: true)];
+        var open = new Enactive.Agents.OpenFailures(tools);
+        open.Failed(new ToolCall("c1", "edit_file", """{"path":"Docs/R.md","old_string":"a","new_string":"b"}"""), "cut at the limit; nothing executed", didNotRun: true);
+        open.Failed(new ToolCall("c2", "edit_file", """{"path":"notes/a.md","old_string":"a","new_string":"b"}"""), "cut at the limit; nothing executed", didNotRun: true);
+        Assert.Equal(2, open.Count);
+
+        open.RefusedByRule(new ToolCall("c3", "edit_file", """{"path":"./Docs/R.md","old_string":"a","new_string":"c"}"""));
+        Assert.Equal(1, open.Count);                                              // the one on another file still waits
+    }
+
     [Fact]
     public void A_document_the_engine_assembles_is_changed_by_no_step()
     {
