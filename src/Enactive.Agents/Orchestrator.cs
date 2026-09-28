@@ -3070,6 +3070,8 @@ public sealed partial class Orchestrator : IOrchestrator
         // because the backstop is about the step and not about one of its conversations.
         var handovers = 0;
         var handoverRetryAt = 0;
+        // Whether a step with no fresh start left has been asked to hand its result on now - once.
+        var askedToHandOnNow = false;
         var handoverFailures = 0;
         var turnsHere = 0;
         ChatMessage? commandHistoryMessage = null;
@@ -3265,6 +3267,23 @@ public sealed partial class Orchestrator : IOrchestrator
             var windowIsFilling = measured && turnsHere > 0 && fullNow > handoverTokens!.Value;
             var tooManyTurns = !measured && turnsHere >= TurnsBeforeHandover;
 
+            // No fresh start left and the window full again: what follows is trimming, and after enough of it
+            // a model that has lost what it checked goes round in circles (run 21df3d79, Architecture: "Now
+            // let me check the WorkspaceGuard claim... confirmed... Now let me check the WorkspaceGuard claim").
+            // A step that is to hand its result on is asked, once, to hand it on now. An ordinary turn:
+            // limits apply, and nothing is taken from its prose.
+            if ((windowIsFilling || windowIsThrashing) && handovers >= MaxHandovers && outputSchema is not null
+                && !askedToHandOnNow)
+            {
+                askedToHandOnNow = true;
+                messages.Add(ChatMessage.User(
+                    "The conversation is full again and this step has no fresh start left. Hand on your result NOW with "
+                    + $"{StepOutputContract.ToolName}, from what you have established - say plainly what you have not checked - "
+                    + "and then finish the step with a short closing message."));
+                yield return Ev(EventKind.ContextTrimmed,
+                    "No fresh start left and the window is full again: the step is asked to hand on its result now.");
+            }
+
             if ((tooManyTurns || windowIsFilling || windowIsThrashing) && handovers < MaxHandovers
                 && iteration >= handoverRetryAt)
             {
@@ -3387,7 +3406,16 @@ public sealed partial class Orchestrator : IOrchestrator
                         + (engineEvidenceOnly ? "engine evidence" : "your own notes")
                         + ". This is what had been recorded:\n\n" + carried
                         + "\n\nCarry on from there. The files you wrote are still on disk; read one "
-                        + "back if you need what is in it."));
+                        + "back if you need what is in it."
+                        // A step that is to hand its result on, and a conversation that did not fit: what it
+                        // has established so far is handed on now, so a step that breaks off later leaves a
+                        // provisional result rather than nothing (run 21df3d79: 146 calls, three handovers,
+                        // no hand-over, and nine minutes of checked claims lost).
+                        + (outputSchema is null ? ""
+                            : outputSlot is { Values: null }
+                                ? $"\n\nFirst, hand on what you have established so far with {StepOutputContract.ToolName} - "
+                                  + "what is not checked yet, say so. Call it again when you have more: the last accepted one counts."
+                                : $"\n\nWhen you have more, call {StepOutputContract.ToolName} again with the whole result: the last accepted one counts.")));
 
                     // The last one is said differently, because it is the last WARNING there is.
                     // After it nothing stands between the step and the backstop, which abandons it
