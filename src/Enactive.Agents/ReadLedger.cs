@@ -54,6 +54,17 @@ internal sealed class ReadLedger
         // re-reading, and the step ended there.
         public bool Discarded;
 
+        // It has been seen whole at some point - every line, from one read or from windows that
+        // join up. Kept through a trim (which clears what is seen, not what was): whether an item's
+        // result was backed by a whole read is a fact about what the step did (Phase 5.1).
+        public bool EverWhole;
+
+        public void NoteIfWhole()
+        {
+            if (TotalKnown && TooLong.Count == 0 && Unseen().Count == 0)
+                EverWhole = true;
+        }
+
         public void Clear()
         {
             Discarded |= _seen.Count > 0;
@@ -182,6 +193,7 @@ internal sealed class ReadLedger
                 entry.Total = file.TotalLines;
                 entry.TotalKnown = file.TotalLinesKnown;
                 entry.Add(1, file.LinesShownWhole);
+                entry.NoteIfWhole();
             }
             return;
         }
@@ -212,6 +224,23 @@ internal sealed class ReadLedger
         // Every window counts, in whatever order it came. A hole between windows is still a hole,
         // and a hole is exactly what makes a rewrite unsafe.
         coverage.Add(from, to);
+        coverage.NoteIfWhole();
+    }
+
+    /// <summary>
+    /// Whether this step has seen <paramref name="path"/> whole, and if not, what it has not seen -
+    /// the evidence behind an item's result (Phase 5.1). Partial is not complete: a file read to line
+    /// 400 of 518 has not been read, whatever the result says about it.
+    /// </summary>
+    internal (bool Whole, string? Gap) SeenWhole(string path)
+    {
+        if (!_files.TryGetValue(Key(path), out var coverage)) return (false, "never read");
+        if (coverage.EverWhole) return (true, null);
+        if (!coverage.TotalKnown) return (false, "seen only as an excerpt");
+        if (coverage.TooLong.Count > 0) return (false, $"line {coverage.TooLong.Min()} was too long to be shown whole");
+        var gaps = coverage.Unseen();
+        return (false, $"lines {string.Join(", ", gaps.Select(g => g.From == g.To ? $"{g.From}" : $"{g.From}-{g.To}"))} "
+                       + $"of {coverage.Total} not read");
     }
 
     /// <summary>

@@ -21,7 +21,13 @@ public enum StepOutputFieldType
     PathList,
 
     /// <summary>A list of <see cref="String"/>.</summary>
-    StringList
+    StringList,
+
+    /// <summary>
+    /// A result per item: an object keyed by the item (a path, a name), each value that item's result
+    /// as text (Phase 5.1). The engine records, for each key, what evidence the step had for it.
+    /// </summary>
+    Results
 }
 
 /// <summary>
@@ -49,6 +55,7 @@ public sealed record StepOutputSchema(string Id, int Version, IReadOnlyList<Step
         StepOutputFieldType.Boolean => "boolean",
         StepOutputFieldType.Path => "path",
         StepOutputFieldType.PathList => "path[]",
+        StepOutputFieldType.Results => "results",
         _ => "string[]"
     };
 
@@ -61,6 +68,7 @@ public sealed record StepOutputSchema(string Id, int Version, IReadOnlyList<Step
         "path" => StepOutputFieldType.Path,
         "path[]" or "paths" => StepOutputFieldType.PathList,
         "string[]" or "strings" => StepOutputFieldType.StringList,
+        "results" or "map" => StepOutputFieldType.Results,
         _ => null
     };
 }
@@ -81,6 +89,12 @@ public sealed record StepOutput(
     int Revision,
     IReadOnlyList<string> Notes)
 {
+    /// <summary>
+    /// For each item of a <see cref="StepOutputFieldType.Results"/> field, what the step had shown
+    /// for it when it handed the result on - recorded by the engine, not stated by the step.
+    /// </summary>
+    public IReadOnlyList<ItemEvidence>? Items { get; init; }
+
     /// <summary>One value by name, or null.</summary>
     public JsonElement? Value(string name)
     {
@@ -88,3 +102,26 @@ public sealed record StepOutput(
         return doc.RootElement.TryGetProperty(name, out var value) ? value.Clone() : null;
     }
 }
+
+/// <summary>
+/// A kind of evidence an item's result can be backed by (Phase 5.2). Named by what was DONE, not by
+/// which tool did it: any tool that declares the read-coverage protocol produces a file read.
+/// </summary>
+// Written by name: it is kept in checkpoints and payloads, where a number would change meaning if the list did.
+[System.Text.Json.Serialization.JsonConverter(typeof(System.Text.Json.Serialization.JsonStringEnumConverter<EvidenceKind>))]
+public enum EvidenceKind
+{
+    /// <summary>The file was read whole - every line, not an excerpt or a window of it.</summary>
+    FileRead,
+
+    /// <summary>A command ran successfully with the item among its arguments.</summary>
+    Command,
+
+    /// <summary>Any call succeeded with the item among its arguments: a page fetched, a message opened.</summary>
+    Call
+}
+
+/// <summary>What one item's result was backed by when it was handed on, and, when not by a whole read, why.</summary>
+/// <param name="Complete">The kinds of complete evidence the step had for the item.</param>
+/// <param name="Gap">What was missing for a file read: never read, seen as an excerpt, the lines not read.</param>
+public sealed record ItemEvidence(string Field, string Item, IReadOnlyList<EvidenceKind> Complete, string? Gap);

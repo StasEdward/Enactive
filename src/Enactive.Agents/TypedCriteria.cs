@@ -5,7 +5,15 @@ using Enactive.Core.Builds;
 using Enactive.Core.Templates;
 
 /// <summary>A criterion as the planner wrote it, before the engine has accepted it.</summary>
-public sealed record PlannedCriterion(string Kind, string? Path, bool NonEmpty, string? Text, string? Target, string Raw);
+public sealed record PlannedCriterion(string Kind, string? Path, bool NonEmpty, string? Text, string? Target, string Raw)
+{
+    // covers_all (Phase 5.1): {"source":{"step":0,"field":"pages"},"results":{"step":2,"field":"notes"},"evidence":"file_read"}
+    public int? SourceStep { get; init; }
+    public string? SourceField { get; init; }
+    public int? ResultsStep { get; init; }
+    public string? ResultsField { get; init; }
+    public string? Evidence { get; init; }
+}
 
 /// <summary>
 /// Acceptance criteria the planner states as TYPES - "this file exists", "it says this", "the tests
@@ -25,7 +33,7 @@ public sealed record PlannedCriterion(string Kind, string? Path, bool NonEmpty, 
 public static class TypedCriteria
 {
     /// <summary>What the planner may write, in its words.</summary>
-    internal static readonly string[] Kinds = ["file_exists", "file_contains", "tests_pass"];
+    internal static readonly string[] Kinds = ["file_exists", "file_contains", "tests_pass", "covers_all"];
 
     /// <summary>The planner's "criteria" list, read leniently: whatever is there is kept for validation to judge.</summary>
     public static IReadOnlyList<PlannedCriterion> Read(JsonElement root)
@@ -36,9 +44,22 @@ public static class TypedCriteria
         {
             string? Text(string name) => item.ValueKind == JsonValueKind.Object && item.TryGetProperty(name, out var v)
                 && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+            (int? Step, string? Field) Ref(string name)
+            {
+                if (item.ValueKind != JsonValueKind.Object || !item.TryGetProperty(name, out var r) || r.ValueKind != JsonValueKind.Object)
+                    return (null, null);
+                return (r.TryGetProperty("step", out var s) && s.ValueKind == JsonValueKind.Number && s.TryGetInt32(out var n) ? n : null,
+                    r.TryGetProperty("field", out var f) && f.ValueKind == JsonValueKind.String ? f.GetString() : null);
+            }
+            var (sourceStep, sourceField) = Ref("source");
+            var (resultsStep, resultsField) = Ref("results");
             read.Add(new PlannedCriterion(Text("kind") ?? "", Text("path"),
                 !(item.ValueKind == JsonValueKind.Object && item.TryGetProperty("non_empty", out var ne) && ne.ValueKind == JsonValueKind.False),
-                Text("text"), Text("target"), item.GetRawText()));
+                Text("text"), Text("target"), item.GetRawText())
+            {
+                SourceStep = sourceStep, SourceField = sourceField, ResultsStep = resultsStep, ResultsField = resultsField,
+                Evidence = Text("evidence")
+            });
         }
         return read;
     }
@@ -49,7 +70,8 @@ public static class TypedCriteria
     /// targets, so it goes through the command gate and the task's contract like any command.
     /// </summary>
     public static (IReadOnlyList<SuccessCriterionDefinition> Accepted, IReadOnlyList<string> Dropped) Validate(
-        IReadOnlyList<PlannedCriterion> planned, string workspaceRoot, IReadOnlyList<IEcosystem> ecosystems)
+        IReadOnlyList<PlannedCriterion> planned, string workspaceRoot, IReadOnlyList<IEcosystem> ecosystems,
+        Enactive.Core.Tasks.Plan? plan = null)
     {
         var accepted = new List<SuccessCriterionDefinition>();
         var dropped = new List<string>();
@@ -83,6 +105,17 @@ public static class TypedCriteria
                         accepted.Add(new SuccessCriterionDefinition($"Tests pass ({target})", ecosystem.TestCommand(target), 0,
                             Required: true, Origin: CriterionOrigin.Proposed)
                             { Typed = new TypedCriterion(TypedCriterionKind.TestsPass, Target: target) });
+                    break;
+
+                case "covers_all":
+                    var coverage = new TypedCriterion(TypedCriterionKind.EvidenceCoversAll,
+                        SourceStep: c.SourceStep, SourceField: c.SourceField, ResultsStep: c.ResultsStep, ResultsField: c.ResultsField,
+                        Evidence: EvidenceCoverage.KindNamed(c.Evidence));
+                    if (c.Evidence is { } named && coverage.Evidence is null) { Drop(c, $"'{named}' is not an evidence kind (file_read, command, call)"); break; }
+                    if (EvidenceCoverage.Invalid(coverage, plan) is { } why) { Drop(c, why); break; }
+                    accepted.Add(new SuccessCriterionDefinition(
+                        $"Every {c.SourceField} item is covered", EvidenceCoverage.Describe(coverage), 0, Required: true,
+                        Origin: CriterionOrigin.Proposed) { Typed = coverage });
                     break;
 
                 case "semantic":

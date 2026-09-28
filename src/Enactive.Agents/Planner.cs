@@ -539,10 +539,20 @@ public sealed class Planner
         + "{\"kind\":\"file_contains\",\"path\":\"...\",\"text\":\"exact text\"}, {\"kind\":\"tests_pass\"}. "
         + "Only what the request makes certain; [] when nothing is.";
 
+    /// <summary>
+    /// The coverage criterion (Phase 5.1), sent only when both criteria and step outputs are on: it
+    /// is stated over declared outputs, and a planner that cannot declare them cannot use it.
+    /// </summary>
+    internal const string CoverageCriterionPrompt =
+        " When a step names items (path[] or string[]) and a later step must handle EACH of them, that later step declares "
+        + "a \"results\" output (one entry per item) and the criteria add "
+        + "{\"kind\":\"covers_all\",\"source\":{\"step\":0,\"field\":\"pages\"},\"results\":{\"step\":1,\"field\":\"notes\"},"
+        + "\"evidence\":\"file_read\"}; evidence: file_read (each file read whole), command, or call.";
+
     internal const string StepOutputsPrompt =
         " A step whose RESULT later steps must use as data (pages to process, files found, names, counts) declares it: "
         + "\"output\":{\"<field>\":{\"type\":\"path[]\",\"description\":\"...\",\"maxItems\":12}}; types: text, string, integer, "
-        + "boolean, path, path[], string[]. The step hands the values on with a tool and its dependents receive them. "
+        + "boolean, path, path[], string[], results. The step hands the values on with a tool and its dependents receive them. "
         + "Limits are this task's (maxItems, maxLength). Declare nothing when prose is enough.";
 
     private const string SystemPrompt =
@@ -620,6 +630,9 @@ public sealed class Planner
         // Sent only when step outputs are on (amendment E: every paragraph says when it is NOT sent).
         if (stepOutputs)
             prompt += StepOutputsPrompt;
+
+        if (stepOutputs && typedCriteria)
+            prompt += CoverageCriterionPrompt;
 
         if (turnCeiling is > 0)
             prompt += $" A step is ONE conversation with growing history. A step running past {turnCeiling} turns is ABANDONED; "

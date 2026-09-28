@@ -66,6 +66,11 @@ public sealed class SuccessEvaluator : ISuccessEvaluator
         if (criterion.Typed is { InEngine: true })
             return TypedCriteria.Evaluate(criterion, context.WorkspaceRoot);
 
+        // Decided from what the run's steps handed on, which only the run has (Phase 5.1).
+        if (criterion.Typed is { FromRun: true })
+            return new(criterion.Name, criterion.Command, criterion.Required, CriterionOutcome.Unknown, null,
+                "it is decided from this run's step outputs, and none were given here", criterion.Origin, criterion.AlreadyPassing);
+
         CriterionResult Unknown(string why)
             => new(criterion.Name, criterion.Command, criterion.Required,
                    CriterionOutcome.Unknown, null, why, criterion.Origin, criterion.AlreadyPassing);

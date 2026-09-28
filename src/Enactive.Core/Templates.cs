@@ -65,7 +65,14 @@ public enum TypedCriterionKind
     FileContains,
 
     /// <summary>The workspace's tests pass - through the ecosystem that recognises it, as a command check.</summary>
-    TestsPass
+    TestsPass,
+
+    /// <summary>
+    /// Every item one step named has a result from another step, backed by complete evidence of the
+    /// required kind (Phase 5.1). Decided by the engine from the run's step outputs - not from any
+    /// step's account of how much it covered.
+    /// </summary>
+    EvidenceCoversAll
 }
 
 /// <summary>A planner-stated criterion, once validated: its kind and what it is about.</summary>
@@ -74,10 +81,20 @@ public sealed record TypedCriterion(
     string? Path = null,
     bool NonEmpty = true,
     string? Text = null,
-    string? Target = null)
+    string? Target = null,
+    // EvidenceCoversAll: which step's field lists the items, which step's field holds a result per
+    // item, and what kind of evidence each result must be backed by. Steps are 0-based plan indices.
+    int? SourceStep = null,
+    string? SourceField = null,
+    int? ResultsStep = null,
+    string? ResultsField = null,
+    Enactive.Core.Tasks.EvidenceKind? Evidence = null)
 {
-    /// <summary>Whether the engine decides it itself, rather than by running a command.</summary>
+    /// <summary>Whether the engine decides it itself from the workspace, rather than by running a command.</summary>
     public bool InEngine => Kind is TypedCriterionKind.FileExists or TypedCriterionKind.FileContains;
+
+    /// <summary>Whether it is decided from what this run's steps handed on - so only the run can decide it.</summary>
+    public bool FromRun => Kind is TypedCriterionKind.EvidenceCoversAll;
 }
 
 /// <summary>

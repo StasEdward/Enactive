@@ -15,6 +15,7 @@ internal sealed class StepOutputSlot
     public JsonObject? Values { get; private set; }
     public IReadOnlyList<int> Evidence { get; private set; } = [];
     public IReadOnlyList<string> Notes { get; private set; } = [];
+    public IReadOnlyList<ItemEvidence>? Items { get; set; }
     public int Revision { get; private set; }
     public DateTimeOffset At { get; private set; }
     public Guid AttemptId { get; private set; }
@@ -35,7 +36,10 @@ internal sealed class StepOutputSlot
     public StepOutput? Build(int stepNo, string title, StepOutputSchema? schema)
         => schema is null || Values is null
             ? null
-            : new StepOutput(stepNo, title, AttemptId, schema.Id, schema.Version, At, Values.ToJsonString(), Evidence, Revision, Notes);
+            : new StepOutput(stepNo, title, AttemptId, schema.Id, schema.Version, At, Values.ToJsonString(), Evidence, Revision, Notes)
+            {
+                Items = Items is { Count: > 0 } items ? items : null
+            };
 }
 
 /// <summary>
@@ -87,12 +91,16 @@ internal static class StepOutputContract
         var limit = field switch
         {
             { Type: StepOutputFieldType.Text, MaxLength: { } n } => $", up to {n} characters - longer is cut",
+            { Type: StepOutputFieldType.Results, MaxItems: { } n, MaxLength: { } l } => $", at most {n} items, each result up to {l} characters",
+            { Type: StepOutputFieldType.Results, MaxLength: { } n } => $", each result up to {n} characters - longer is cut",
             { MaxLength: { } n } => $", at most {n} characters",
             { MaxItems: { } n } => $", at most {n} items",
             _ => ""
         };
         var paths = field.Type is StepOutputFieldType.Path or StepOutputFieldType.PathList
             ? ", workspace-relative, must exist" : "";
+        if (field.Type == StepOutputFieldType.Results)
+            paths = ", an object with one entry per item: the item (as named) as the key, its result as text";
         return $"{field.Name} ({StepOutputSchema.NameOf(field.Type)}, {(field.Required ? "required" : "optional")}{paths}{limit}): "
                + field.Description;
     }
@@ -104,6 +112,10 @@ internal static class StepOutputContract
         {
             StepOutputFieldType.Integer => Of("integer"),
             StepOutputFieldType.Boolean => Of("boolean"),
+            StepOutputFieldType.Results => new JsonObject
+            {
+                ["type"] = "object", ["additionalProperties"] = new JsonObject { ["type"] = "string" }, ["description"] = field.Description
+            },
             StepOutputFieldType.PathList or StepOutputFieldType.StringList => new JsonObject
             {
                 ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = field.Description
@@ -245,9 +257,57 @@ internal static class StepOutputContract
                 }
                 return new JsonArray(paths.Select(p => (JsonNode)JsonValue.Create(p)!).ToArray());
 
+            case StepOutputFieldType.Results:
+                return Results(field, value, errors, notes);
+
             default:
                 return List() is { } strings ? new JsonArray(strings.Select(p => (JsonNode)JsonValue.Create(p)!).ToArray()) : null;
         }
+    }
+
+    /// <summary>
+    /// A result per item (Phase 5.1). The whole object is refused for what is wrong with it - a list
+    /// of items is not cut, which ones to drop is the work's decision - and a result over its length
+    /// is cut and marked, like any text.
+    /// </summary>
+    private static JsonObject? Results(StepOutputField field, JsonNode value, List<string> errors, List<string> notes)
+    {
+        if (value is not JsonObject map || map.Any(p => p.Value is not JsonValue v || !v.TryGetValue<string>(out _)))
+        {
+            errors.Add($"{field.Name}: expected an object with one entry per item - the item as the key, its result as text.");
+            return null;
+        }
+        if (map.Count == 0) { errors.Add($"{field.Name} is empty - an empty field hands nothing on."); return null; }
+        if (field.MaxItems is { } max && map.Count > max)
+        {
+            errors.Add($"{field.Name}: {map.Count} items, and this step's output takes at most {max}.");
+            return null;
+        }
+        if (map.Select(p => p.Key).Where(string.IsNullOrWhiteSpace).Any())
+        {
+            errors.Add($"{field.Name}: an entry has no item as its key.");
+            return null;
+        }
+        var empty = map.Where(p => string.IsNullOrWhiteSpace(p.Value!.GetValue<string>())).Select(p => p.Key).ToArray();
+        if (empty.Length > 0)
+        {
+            errors.Add($"{field.Name}: no result for {string.Join(", ", empty.Take(5))}"
+                       + (empty.Length > 5 ? $", and {empty.Length - 5} more" : "") + " - leave an item out rather than send it empty.");
+            return null;
+        }
+
+        var kept = new JsonObject();
+        foreach (var (item, result) in map)
+        {
+            var text = result!.GetValue<string>();
+            if (field.MaxLength is { } limit && text.Length > limit)
+            {
+                notes.Add($"{field.Name}: the result for '{item}' was cut to {limit} of its {text.Length} characters.");
+                text = text[..limit] + $" … [cut by the engine: {text.Length - limit} characters over this field's limit of {limit}]";
+            }
+            kept[item] = text;
+        }
+        return kept;
     }
 
     /// <summary>What the steps after this one are shown: the accepted values, as data.</summary>

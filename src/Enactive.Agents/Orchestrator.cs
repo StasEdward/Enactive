@@ -629,7 +629,7 @@ public sealed partial class Orchestrator : IOrchestrator
         // with its reason, never a reason for the run to fail (3.2).
         if (_typedCriteria && resume is null && plan.PlannedCriteria.Count > 0)
         {
-            var (accepted, dropped) = TypedCriteria.Validate(plan.PlannedCriteria, _workspace.RootPath, _ecosystems);
+            var (accepted, dropped) = TypedCriteria.Validate(plan.PlannedCriteria, _workspace.RootPath, _ecosystems, plan.Plan);
             foreach (var why in dropped)
                 yield return scope.Ev(EventKind.ErrorObserved, why);
             if (accepted.Count > 0)
@@ -1598,7 +1598,7 @@ public sealed partial class Orchestrator : IOrchestrator
                         runReason = scope.Budget.TurnExhausted ?? repairLoop.Reason ?? "Final correction did not complete.";
                         break;
                     }
-                    var rechecked = await CheckSuccessAsync(CriteriaFor(plan), scope.TaskId, scope.RunId, intent.Context, ct);
+                    var rechecked = await CheckSuccessAsync(CriteriaFor(plan), scope.TaskId, scope.RunId, intent.Context, ct, session.Outputs.Values);
                     foreach (var check in rechecked.Results) yield return scope.Criterion(check);
                     if (rechecked.Apply(RunOutcomeKind.Completed) == RunOutcomeKind.Completed)
                         continue; // New independent whole-run review; a green check alone cannot approve the correction.
@@ -1944,7 +1944,7 @@ public sealed partial class Orchestrator : IOrchestrator
         [EnumeratorCancellation] CancellationToken ct, RunSession? session = null, IChatProvider? plannerProvider = null, ModelRef? plannerModel = null)
     {
         var report = await InScopeAsync(runId, taskId, null,
-            () => CheckSuccessAsync(criteria, taskId, runId, intent.Context, ct));
+            () => CheckSuccessAsync(criteria, taskId, runId, intent.Context, ct, session?.Outputs.Values));
 
         foreach (var checkResult in report.Results)
             yield return criterion(checkResult);
@@ -2077,7 +2077,7 @@ public sealed partial class Orchestrator : IOrchestrator
                     }
                     // Same permissions, same workspace, all criteria including requested/template ones.
                     report = await InScopeAsync(runId, taskId, null,
-                        () => CheckSuccessAsync(revised, taskId, runId, intent.Context, ct));
+                        () => CheckSuccessAsync(revised, taskId, runId, intent.Context, ct, session?.Outputs.Values));
                     foreach (var checkResult in report.Results) yield return criterion(checkResult);
                     result.Report = report;
                     // One bounded check repair. Do not turn a still-unresolved criterion into code repair.
@@ -2109,7 +2109,7 @@ public sealed partial class Orchestrator : IOrchestrator
                 yield return repairEvent;
 
             report = await InScopeAsync(runId, taskId, null,
-                () => CheckSuccessAsync(criteria, taskId, runId, intent.Context, ct));
+                () => CheckSuccessAsync(criteria, taskId, runId, intent.Context, ct, session?.Outputs.Values));
 
             foreach (var checkResult in report.Results)
                 yield return criterion(checkResult);
@@ -2214,6 +2214,17 @@ public sealed partial class Orchestrator : IOrchestrator
             Artifacts: _artifacts,
             Services: _services);
 
+        // A coverage criterion is about what THIS run's steps hand on; before any step there is nothing
+        // it could already be true of, so there is nothing to learn by trying it now.
+        var fromRun = proposed.Where(c => c.Typed is { FromRun: true }).ToArray();
+        if (fromRun.Length > 0)
+        {
+            var (keptNow, notesNow) = await BaselineAsync(proposed.Except(fromRun).ToArray(), taskId, runId, context, ct);
+            return ([.. keptNow, .. fromRun], notesNow);
+        }
+        if (proposed.Count == 0)
+            return ([], []);
+
         SuccessReport report;
         try
         {
@@ -2282,10 +2293,24 @@ public sealed partial class Orchestrator : IOrchestrator
 
     private async Task<SuccessReport> CheckSuccessAsync(
         IReadOnlyList<SuccessCriterionDefinition> criteria,
-        Guid taskId, Guid runId, WorkContext context, CancellationToken ct)
+        Guid taskId, Guid runId, WorkContext context, CancellationToken ct,
+        // What this run's steps handed on: a coverage criterion is decided from it and from nothing else.
+        IEnumerable<StepOutput>? outputs = null)
     {
         if (criteria.Count == 0)
             return SuccessReport.NothingToCheck;
+
+        if (criteria.Any(c => c.Typed is { FromRun: true }))
+        {
+            var handed = outputs?.ToArray() ?? [];
+            var rest = criteria.Where(c => c.Typed is not { FromRun: true }).ToArray();
+            var others = await CheckSuccessAsync(rest, taskId, runId, context, ct);
+            var results = new List<CriterionResult>(criteria.Count);
+            var next = 0;
+            foreach (var c in criteria)
+                results.Add(c.Typed is { FromRun: true } ? EvidenceCoverage.Evaluate(c, handed) : others.Results[next++]);
+            return new SuccessReport(results);
+        }
 
         var toolContext = new ToolContext(
             TaskId: taskId,
@@ -3381,8 +3406,13 @@ public sealed partial class Orchestrator : IOrchestrator
                     {
                         outputSlot.Accept(verdict);
                         outputSlot.LastRefused = null;
+                        // What the step had shown for each item it hands a result on for, recorded now
+                        // and by the engine (Phase 5.1): later, only this counts as coverage.
+                        outputSlot.Items = EvidenceCoverage.Gather(outputSchema, verdict.Values!, reads, journal.Actions, _tools.Definitions);
+                        var unbacked = EvidenceCoverage.Unbacked(outputSlot.Items);
                         handed = $"Accepted as this step's output (revision {outputSlot.Revision}); the steps after it receive "
                             + "these values." + (verdict.Notes.Count > 0 ? " " + string.Join(" ", verdict.Notes) : "")
+                            + (unbacked is null ? "" : " " + unbacked)
                             + " Finish the step with a short closing message.";
                         journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Succeeded, handed, WorkspaceEffect.None);
                         yield return Ev(EventKind.ToolResult, $"{call.Name} -> ok: {handed}");
