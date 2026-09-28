@@ -158,16 +158,28 @@ internal static class BuildRegression
         var totals = $"before the work: exit {before.ExitCode}, {was.Total(DiagnosticSeverity.Error)} error(s); "
                    + $"now: exit {exit}, {now.Total(DiagnosticSeverity.Error)} error(s)";
 
-        var added = now.NewSince(was);
-        if (added.Count > 0)
+        var all = now.NewSince(was);
+        // What the machine did is not the work's regression: a build that could not replace files another
+        // process holds has not been compared at all, and says so rather than failing the work.
+        var environmental = all.Where(r => before.Ecosystem.IsEnvironmental(r.Identity)).ToArray();
+        var added = all.Except(environmental).ToArray();
+        var aside = environmental.Length == 0 ? ""
+            : $" {environmental.Sum(r => r.Added)} other new error(s) are the machine's, not the code's ("
+              + string.Join(", ", environmental.Select(r => r.Identity.Code).Distinct()) + ": a file in use by another process).";
+        if (added.Length == 0 && environmental.Length > 0)
+            return Result(CriterionOutcome.Unknown, "the build could not replace files that another process holds, so what the "
+                + $"work did to the code was not compared: {environmental.Sum(r => r.Added)} error(s) of "
+                + string.Join(", ", environmental.Select(r => r.Identity.Code).Distinct())
+                + $", e.g. {environmental[0].Identity.Message} Close what holds them and build again. ({totals})");
+        if (added.Length > 0)
         {
             var named = added.Take(MaxNamed).Select(r =>
                 $"{r.Identity.Code} in {r.Identity.Path ?? "(no file)"}"
                 + (r.Example.Line is { } line ? $" line {line}" : "")
                 + $": {r.Identity.Message}" + (r.Added > 1 ? $" (x{r.Added})" : ""));
             return Result(CriterionOutcome.Failed, $"{added.Sum(r => r.Added)} error(s) not in the build before the work - "
-                + string.Join("; ", named) + (added.Count > MaxNamed ? $"; and {added.Count - MaxNamed} more" : "")
-                + $". ({totals})");
+                + string.Join("; ", named) + (added.Length > MaxNamed ? $"; and {added.Length - MaxNamed} more" : "")
+                + $".{aside} ({totals})");
         }
 
         // Passed before and fails now, with nothing in the output the ecosystem can read as the

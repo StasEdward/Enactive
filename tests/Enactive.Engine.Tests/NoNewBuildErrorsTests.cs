@@ -5,6 +5,7 @@ using Enactive.Core.Builds;
 using Enactive.Core.Events;
 using Enactive.Core.Permissions;
 using Enactive.Core.Templates;
+using Enactive.Workspace;
 using Xunit;
 
 /// <summary>
@@ -182,6 +183,38 @@ public sealed class NoNewBuildErrorsTests
         var result = BuildRegression.Compare(Before(0, ""), After(1, "something went wrong"), "C:/w");
         Assert.Equal(CriterionOutcome.Failed, result.Outcome);
         Assert.Contains("passed before the work and fails now", result.Detail!, StringComparison.Ordinal);
+    }
+
+    // ── the machine, not the code ─────────────────────────────────────────────────────
+
+    private static string Locked(string dll)
+        => @"C:\Program Files\dotnet\sdk\10.0.401\Microsoft.Common.CurrentVersion.targets(5096,5): error MSB3021: Unable to copy file "
+           + $@"""C:\w\src\{dll}\bin\Debug\{dll}.dll"" to ""bin\Debug\{dll}.dll"". The process cannot access the file "
+           + $@"'C:\w\src\App\bin\Debug\{dll}.dll' because it is being used by another process. [C:\w\src\App\App.csproj]" + "\n";
+
+    private static BuildBaseline DotnetBefore(string output)
+        => BuildRegression.Baseline(new DotnetEcosystem(), "App.sln", After(1, output), "C:/w");
+
+    /// <summary>
+    /// Run 4f1d97: a read-only audit failed "13 error(s) not in the build before the work", every one a
+    /// file the running application held. That is not compared, and says why.
+    /// </summary>
+    [Fact]
+    public void Files_held_by_another_process_are_not_the_works_regression()
+    {
+        var result = BuildRegression.Compare(DotnetBefore(Locked("Core")), After(1, Locked("Core") + Locked("Agents") + Locked("Secrets")), "C:/w");
+        Assert.Equal(CriterionOutcome.Unknown, result.Outcome);
+        Assert.Contains("could not replace files that another process holds", result.Detail!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_real_error_beside_them_still_fails_and_is_the_one_named()
+    {
+        var real = @"C:\w\src\App\A.cs(10,5): error CS0103: The name 'y' does not exist in the current context [C:\w\src\App\App.csproj]" + "\n";
+        var result = BuildRegression.Compare(DotnetBefore(Locked("Core")), After(1, Locked("Core") + Locked("Agents") + real), "C:/w");
+        Assert.Equal(CriterionOutcome.Failed, result.Outcome);
+        Assert.StartsWith("1 error(s) not in the build before the work - CS0103", result.Detail!, StringComparison.Ordinal);
+        Assert.Contains("are the machine's, not the code's (MSB3021", result.Detail!, StringComparison.Ordinal);
     }
 
     [Fact]

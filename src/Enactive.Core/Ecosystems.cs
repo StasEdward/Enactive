@@ -39,4 +39,11 @@ public interface IEcosystem
     /// the baseline. Defaulted so an ecosystem that knows only its build still is one.
     /// </summary>
     TestRunReport? ParseTests(string output) => null;
+
+    /// <summary>
+    /// Whether a diagnostic is about the MACHINE rather than the code: a file another process holds, a
+    /// path the build could not write. Such an error says nothing about what the work did, and is not
+    /// counted as the work's regression. Defaulted to no, so an ecosystem that cannot tell counts all.
+    /// </summary>
+    bool IsEnvironmental(DiagnosticIdentity identity) => false;
 }

@@ -246,4 +246,13 @@ public sealed class DotnetEcosystem : IEcosystem
                || Regex.IsMatch(text, @"Include\s*=\s*""(Microsoft\.NET\.Test\.Sdk|xunit|xunit\.v3|NUnit|MSTest\.TestFramework|MSTest)""",
                    RegexOptions.IgnoreCase);
     }
+
+    /// <summary>
+    /// MSBuild failing to copy or replace an output because another process holds it (MSB3021, MSB3026,
+    /// MSB3027): the running application locking its own binaries. Measured 2026-09-28, run 4f1d97: a
+    /// read-only audit was failed as "13 error(s) not in the build before the work", every one of them this.
+    /// </summary>
+    public bool IsEnvironmental(DiagnosticIdentity identity)
+        => identity.Code is "MSB3021" or "MSB3026" or "MSB3027"
+           || identity.Message.Contains("being used by another process", StringComparison.OrdinalIgnoreCase);
 }
