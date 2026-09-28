@@ -115,13 +115,18 @@ internal static class SemanticReviewAudit
                 .Select(c => (Label: (string?)("Report " + c.GetProperty("source_id").GetString() + "/" + c.GetProperty("fragment_id").GetString()), Check: c)))
             .Concat(doc.RootElement.GetProperty("assessments").EnumerateObject()
                 .Select(a => (Label: (string?)a.Name, Check: a.Value))).ToArray();
-        // Unknown must not cause an invented worker repair even if other findings are concrete.
-        foreach (var verdict in new[] { "unknown", "fail" })
-        {
-            var found = checks.Where(c => c.Check.GetProperty("verdict").GetString() == verdict).ToArray();
-            if (found.Length > 0) return new(verdict == "unknown",
-                string.Join("\n", found.Select(c => c.Label + ": " + c.Check.GetProperty("reason").GetString())));
-        }
-        return null;
+        string Lines(IEnumerable<(string? Label, JsonElement Check)> found)
+            => string.Join("\n", found.Select(c => c.Label + ": " + c.Check.GetProperty("reason").GetString()));
+        var failed = checks.Where(c => c.Check.GetProperty("verdict").GetString() == "fail").ToArray();
+        var unknown = checks.Where(c => c.Check.GetProperty("verdict").GetString() == "unknown").ToArray();
+        // A concrete failure is a verdict, whatever else could not be told. It used to be the other
+        // way round, and on 2026-09-28 one "unknown" beside a found violation - a source file changed
+        // against an explicit ban - turned the whole final review into "no verdict". Unknown still
+        // never becomes a worker repair: the repair contract renders failures only, and what could
+        // not be established is named here, for the reader, and stays with review.
+        if (failed.Length > 0)
+            return new(false, Lines(failed)
+                + (unknown.Length == 0 ? "" : "\nNot established (left with review, not a repair):\n" + Lines(unknown)));
+        return unknown.Length > 0 ? new(true, Lines(unknown)) : null;
     }
 }

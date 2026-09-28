@@ -25,6 +25,9 @@ internal sealed record ReviewCorpusCase(
     IReadOnlyList<ReviewCorpusSource> Sources,
     IReadOnlyList<string> Errors);
 
+/// <summary>What refuses a review answer, and what is only a gap in its repairs. See <see cref="ReviewCorpus.Check"/>.</summary>
+internal sealed record ReviewValidation(IReadOnlyList<string> Refusals, IReadOnlyList<string> RepairGaps);
+
 /// <summary>An evidence view, as data. Restoring one is a test's job; see Enactive.Core.csproj.</summary>
 internal sealed record ReviewCorpusEvidence(
     string Text,
@@ -60,14 +63,35 @@ internal static class ReviewCorpus
     /// </summary>
     internal static List<string> Validate(string answer, RequestObligations obligations, EvidenceView evidence,
         ReviewSources sources)
+        => Check(answer, obligations, evidence, sources).Refusals.ToList();
+
+    /// <summary>
+    /// What refuses the answer, and what is only missing from its list of repairs.
+    ///
+    /// <para><b>A fail is not refused for its bookkeeping.</b> On 2026-09-28 the final review found
+    /// a source file changed against the request's explicit ban and 107 of 111 tests failing, said
+    /// FAIL, twice - and was refused both times over which repair named which finding. The run
+    /// ended "done, not verified", and the violation it had found was nowhere in the outcome. A
+    /// strict repair contract exists so that a worker is not sent to fix something nobody
+    /// identified; it was never meant to decide whether a failure the reviewer DID identify counts.
+    /// So when everything else holds and the verdict is fail, the repair contract's complaints are
+    /// gaps, not refusals: the verdict stands, the repairs that are sound go to the worker, and the
+    /// next review sees whatever they did not fix. Failing is the safe direction - it cannot let
+    /// bad work through. A pass is held to every rule, as before.</para>
+    /// </summary>
+    internal static ReviewValidation Check(string answer, RequestObligations obligations, EvidenceView evidence,
+        ReviewSources sources)
     {
         var errors = CombinedReviewValidation.Errors(answer, obligations, evidence).ToList();
         errors.AddRange(ReportCommandAudit.Errors(answer, evidence, sources, obligations));
         if (errors.Count == 0)
             errors.AddRange(SemanticReviewAudit.Errors(answer, evidence, sources, obligations));
-        if (errors.Count == 0)
-            errors.AddRange(ReviewRepairContract.Errors(answer, sources, obligations));
-        return errors;
+        if (errors.Count > 0)
+            return new(errors, []);
+        var repairs = ReviewRepairContract.Errors(answer, sources, obligations);
+        return repairs.Count > 0 && ReviewRepairContract.FindsFailure(answer)
+            ? new([], repairs)
+            : new(repairs, []);
     }
 
     internal static ReviewCorpusCase Capture(string model, string answer, RequestObligations obligations,

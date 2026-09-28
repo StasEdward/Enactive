@@ -230,7 +230,7 @@ public sealed partial class Reviewer
             if (!outputTruncated && completion.Message.ToolCalls is not { Count: > 0 })
             {
                 // The same validators the offline replay runs, from the one definition of them.
-                var errors = ReviewCorpus.Validate(answer, obligations, evidence, sources);
+                var errors = ReviewCorpus.Check(answer, obligations, evidence, sources).Refusals;
                 if (errors.Count > 0)
                 {
                     // Kept with what it was checked against, so this refusal can be replayed in a

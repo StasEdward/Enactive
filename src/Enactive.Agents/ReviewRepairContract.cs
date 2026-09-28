@@ -127,11 +127,41 @@ internal static class ReviewRepairContract
         return errors;
     }
 
+    /// <summary>The answer says fail, and names at least one finding it failed. See <see cref="ReviewCorpus.Check"/>.</summary>
+    internal static bool FindsFailure(string answer)
+    {
+        try
+        {
+            using var doc = Parse(answer);
+            return doc.RootElement.TryGetProperty("verdict", out var verdict) && verdict.GetString() == "fail"
+                   && Findings(doc.RootElement).Values.Any(f => f.GetProperty("verdict").GetString() == "fail");
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException or KeyNotFoundException) { return false; }
+    }
+
+    /// <summary>
+    /// A repair that is safe to hand the worker even when the list it came in has gaps: every
+    /// finding it names is a failure, and it says what is wrong and what to change.
+    /// </summary>
+    private static bool Sound(JsonElement repair, IReadOnlyDictionary<string, JsonElement> findings)
+    {
+        var links = repair.GetProperty("findings").EnumerateArray().Select(x => Resolve(x.GetString()!, findings)).ToArray();
+        return links.Length > 0
+               && links.All(l => findings.TryGetValue(l, out var f) && f.GetProperty("verdict").GetString() == "fail")
+               && !string.IsNullOrWhiteSpace(repair.GetProperty("defect").GetString())
+               && !string.IsNullOrWhiteSpace(repair.GetProperty("change").GetString());
+    }
+
     internal static string Render(string answer, ReviewSources sources, RequestObligations obligations)
     {
         using var doc = Parse(answer);
+        var findings = Findings(doc.RootElement);
         var referenced = new HashSet<string>();
-        var repairs = doc.RootElement.GetProperty("repairs").EnumerateArray().Select(repair => {
+        var covered = new HashSet<string>(StringComparer.Ordinal);
+        // Only sound repairs reach the worker. For an answer that met the whole contract that is
+        // every repair, and this renders exactly what it always did.
+        var repairs = doc.RootElement.GetProperty("repairs").EnumerateArray().Where(r => Sound(r, findings)).Select(repair => {
+            foreach (var link in repair.GetProperty("findings").EnumerateArray()) covered.Add(Resolve(link.GetString()!, findings));
             var source = sources.Find(repair.GetProperty("source_id").GetString()!);
             var ids = repair.GetProperty("obligation_ids").EnumerateArray().Select(x => x.GetString()!).ToArray();
             foreach (var id in ids) referenced.Add(id);
@@ -144,8 +174,15 @@ internal static class ReviewRepairContract
                 obligation_ids = ids
             };
         }).ToArray();
+        // A failure the review named but gave no correction for: the worker is told it was found, and
+        // is not told to hunt for a fix nobody identified. The next review sees whether it remains.
+        var unrepaired = findings.Where(f => f.Value.GetProperty("verdict").GetString() == "fail" && !covered.Contains(f.Key))
+            .Select(f => new { finding = f.Key, reason = f.Value.TryGetProperty("reason", out var why) ? why.GetString() : null })
+            .ToArray();
         return "Repair contract (correct only these targets; retain all other work):\n"
             + JsonSerializer.Serialize(repairs)
+            + (unrepaired.Length == 0 ? "" : "\nAlso found failing, with no correction given (context, not a target to change):\n"
+                + JsonSerializer.Serialize(unrepaired))
             + "\nRelevant original requirements (immutable reference, not a file to edit):\n"
             + JsonSerializer.Serialize(obligations.Items.Where(o => referenced.Contains(o.Id)))
             + "\nworker-message means reply with the corrected statement; do not edit a file to fix a chat statement. "

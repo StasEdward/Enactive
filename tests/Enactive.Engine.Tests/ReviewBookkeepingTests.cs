@@ -111,6 +111,58 @@ public sealed class ReviewBookkeepingTests
         Assert.Contains(errors, e => e.Contains("fail has no concrete repair", StringComparison.Ordinal));
     }
 
+    // ── a failure the review found ───────────────────────────────────────────────────────
+
+    /// <summary>
+    /// The final review of 2026-09-28, small: a FAIL that names a real failure and repairs it, with a
+    /// second failure it gave no repair for, and a requirement it could not establish. It used to be
+    /// refused for the missing repair, twice, and then the "unknown" made it no verdict at all - the
+    /// run ended "done, not verified" with a banned source-file change found and unreported. Now the
+    /// fail stands, the sound repair goes to the worker, the unrepaired failure goes as context, and
+    /// the unknown is named but never turned into work.
+    /// </summary>
+    [Fact]
+    public async Task A_fail_is_a_verdict_even_when_its_repair_list_has_a_gap()
+    {
+        var answer = Failing(requirements: 2);
+        var unknown = answer["claims"]![0]!["requirements"]![1]!;
+        unknown["requirement"] = "Report the result";
+        unknown["verification"]!["verdict"] = "unknown";
+        unknown["verification"]!["reason"] = "The output of the final run was cut";
+        answer["report_checks"] = new JsonArray(new JsonObject {
+            ["source_id"] = "worker-report", ["fragment_id"] = "F1", ["kind"] = "inferred",
+            ["verdict"] = "fail", ["reason"] = "The report does not mention the changed source file",
+            ["calls"] = new JsonArray(), ["obligation_ids"] = new JsonArray()
+        });
+        answer["repairs"] = new JsonArray(Verdicts.Repair("$.claims[0]", "A source file was changed", "Revert the source file"));
+        var provider = new FakeChatProvider(Turn.Says(answer.ToJsonString()), Turn.Says(answer.ToJsonString()));
+
+        var result = await new Reviewer().ReviewWithProofAsync("write", "Two records", new ExecutionJournal().Describe(),
+            [], [], RequestObligations.Create("Write one record"), provider, "review", default);
+
+        Assert.Single(provider.Requests);            // not sent back over the gap
+        Assert.False(result.Pass);
+        Assert.False(result.VerdictUnavailable);     // a verdict, not "could not tell"
+        Assert.Contains("Revert the source file", result.RepairAdvice!, StringComparison.Ordinal);
+        Assert.Contains("with no correction given", result.RepairAdvice!, StringComparison.Ordinal);
+        Assert.Contains("does not mention the changed source file", result.RepairAdvice!, StringComparison.Ordinal);
+        Assert.DoesNotContain("output of the final run was cut", result.RepairAdvice!, StringComparison.Ordinal);
+        Assert.Contains("Not established", result.Notes, StringComparison.Ordinal);
+    }
+
+    /// <summary>A PASS is held to every rule: the same gap in a passing answer is refused and sent back.</summary>
+    [Fact]
+    public void A_pass_with_the_same_gap_is_still_refused()
+    {
+        var answer = Failing();
+        answer["verdict"] = "pass";
+        answer["repairs"] = new JsonArray();
+        var obligations = RequestObligations.Create("Write one record");
+        var check = ReviewCorpus.Check(answer.ToJsonString(), obligations, new ExecutionJournal().Describe(), new ReviewSources("done"));
+        Assert.Contains(check.Refusals, e => e.Contains("fail has no concrete repair", StringComparison.Ordinal));
+        Assert.Empty(check.RepairGaps);
+    }
+
     /// <summary>One requirement can need two corrections - "revert the source file" and "prove each test by breaking it" - and they are not a duplicate. The same correction twice is.</summary>
     [Fact]
     public void Two_different_corrections_of_one_finding_are_not_a_duplicate_and_the_same_one_twice_is()
