@@ -25,7 +25,10 @@ internal static class StepDispatcher
                 }
                 foreach (var ready in scheduler.NextReadyBatch(Math.Min(maxParallel - inFlight.Count, budget.RemainingSteps)))
                 {
-                    budget.StepStarted();
+                    // Giving a step's items their steps, and joining them, is the engine's own work:
+                    // no model runs, and it does not spend a step of the run's budget (Phase 5.3).
+                    if (ready.ForEach is null && !ready.Joins)
+                        budget.StepStarted();
                     inFlight.Add(runStep(ready, lifetime.Token));
                 }
                 if (inFlight.Count == 0) break;

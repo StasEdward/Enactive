@@ -869,6 +869,10 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                         }
                         CreateStepCards(ev);
                         break;
+                    case EventKind.PlanExpanded:
+                        // Steps the plan grew while it ran: cards for them, after every card it had.
+                        AddStepCards(ev.PlanSteps()?.ToArray() ?? []);
+                        break;
                     case EventKind.StepStarted:
                         SetLiveAgent("Coder", Brand.PillCoder);
                         BeginStep(ev);
@@ -1072,14 +1076,8 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             if (titles.Length == 0)
                 return;
 
-            _totalSteps = titles.Length;
-            foreach (var title in titles)
-            {
-                var card = new StepCardViewModel(title.Trim());
-                _cards.Add(card);
-                Live(() => _vm.Steps.Add(card));
-            }
-            UpdateProgress();
+            _totalSteps = 0;   // the plan's own count, as before; steps it grows are added to it
+            AddStepCards(titles);
 
             static string[] FromSummary(string summary)
             {
@@ -1089,6 +1087,20 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                     ? Array.Empty<string>()
                     : summary[(index + marker.Length)..].Split(" | ", StringSplitOptions.RemoveEmptyEntries);
             }
+        }
+
+        private void AddStepCards(IReadOnlyList<string> titles)
+        {
+            if (titles.Count == 0)
+                return;
+            _totalSteps += titles.Count;
+            foreach (var title in titles)
+            {
+                var card = new StepCardViewModel(title.Trim());
+                _cards.Add(card);
+                Live(() => _vm.Steps.Add(card));
+            }
+            UpdateProgress();
         }
 
         private void BeginStep(WorkEvent ev)

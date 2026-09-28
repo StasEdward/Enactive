@@ -116,11 +116,12 @@ public sealed class Planner
         string request, WorkContext context, IChatProvider provider, string model,
         CancellationToken ct, int? maxSteps = null, bool proposeChecks = false,
         int? turnCeiling = null, int outputBudget = 4096,
-        Func<int, int, string?>? beforeRetry = null, bool stepOutputs = false, bool typedCriteria = false)
+        Func<int, int, string?>? beforeRetry = null, bool stepOutputs = false, bool typedCriteria = false,
+        bool dynamicSteps = false)
     {
         var messages = new List<ChatMessage>
         {
-            ChatMessage.System(SystemPromptFor(maxSteps, proposeChecks, turnCeiling, stepOutputs, typedCriteria)),
+            ChatMessage.System(SystemPromptFor(maxSteps, proposeChecks, turnCeiling, stepOutputs, typedCriteria, dynamicSteps)),
             ChatMessage.User(Where(context) + Enactive.Core.Execution.RequestObligations.ExecutionPrompt(request))
         };
 
@@ -199,7 +200,7 @@ public sealed class Planner
     internal async Task<PlanResult> ReplanAsync(string request, WorkContext context, PlanResult invalid,
         string diagnostic, IChatProvider provider, string model, CancellationToken ct,
         int? maxSteps, bool proposeChecks, int turnCeiling, int outputBudget = 4096, bool stepOutputs = false,
-        bool typedCriteria = false)
+        bool typedCriteria = false, bool dynamicSteps = false)
     {
         var steps = invalid.Plan!.Steps;
         var indices = steps.Select((step, index) => (step.Id, index)).GroupBy(x => x.Id)
@@ -213,12 +214,13 @@ public sealed class Planner
                 dependsOn = s.DependsOn.Select(id => indices.TryGetValue(id, out var index) ? index : -1).ToArray(),
                 complexity = s.Complexity.ToString().ToLowerInvariant(),
                 obligations = s.ObligationIds,
-                output = s.Output is { } declared ? OutputJson(declared) : null
+                output = s.Output is { } declared ? OutputJson(declared) : null,
+                forEach = s.ForEach is { } each ? new { step = each.Step, field = each.Field } : null
             })
         });
         ChatMessage[] messages =
         [
-            ChatMessage.System(SystemPromptFor(maxSteps, proposeChecks, turnCeiling, stepOutputs, typedCriteria)),
+            ChatMessage.System(SystemPromptFor(maxSteps, proposeChecks, turnCeiling, stepOutputs, typedCriteria, dynamicSteps)),
             ChatMessage.User(Where(context) + Enactive.Core.Execution.RequestObligations.ExecutionPrompt(request)),
             ChatMessage.Assistant(prior),
             ChatMessage.User("The entire plan was rejected before execution: " + diagnostic
@@ -379,7 +381,8 @@ public sealed class Planner
                             specs.Add(new PlanStepSpec(stepTitle!, deps, ParseComplexity(el), declared)
                             {
                                 ObligationIds = obligationIds,
-                                Output = el.TryGetProperty("output", out var output) ? ParseOutput(output, specs.Count + 1) : null
+                                Output = el.TryGetProperty("output", out var output) ? ParseOutput(output, specs.Count + 1) : null,
+                                ForEach = ParseForEach(el)
                             });
                         }
                     }
@@ -508,6 +511,14 @@ public sealed class Planner
         return fields.Count == 0 ? null : new StepOutputSchema($"step{stepNo}", 1, fields);
     }
 
+    /// <summary>A step's "forEach", read leniently; whether it can be honoured is the engine's to check (FanOut.Validate).</summary>
+    internal static ForEachSource? ParseForEach(JsonElement step)
+        => step.TryGetProperty("forEach", out var each) && each.ValueKind == JsonValueKind.Object
+           && each.TryGetProperty("step", out var s) && s.ValueKind == JsonValueKind.Number && s.TryGetInt32(out var index)
+           && each.TryGetProperty("field", out var f) && f.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(f.GetString())
+            ? new ForEachSource(index, f.GetString()!)
+            : null;
+
     /// <summary>A declared output as the planner wrote it, for a plan sent back to it to repair.</summary>
     private static Dictionary<string, object?> OutputJson(StepOutputSchema schema)
         => schema.Fields.ToDictionary(f => f.Name, f => (object?)new Dictionary<string, object?>
@@ -548,6 +559,15 @@ public sealed class Planner
         + "a \"results\" output (one entry per item) and the criteria add "
         + "{\"kind\":\"covers_all\",\"source\":{\"step\":0,\"field\":\"pages\"},\"results\":{\"step\":1,\"field\":\"notes\"},"
         + "\"evidence\":\"file_read\"}; evidence: file_read (each file read whole), command, or call.";
+
+    /// <summary>
+    /// Steps done for each item (Phase 5.3); sent only with step outputs AND dynamic steps on, since the
+    /// items are a declared output (amendment E).
+    /// </summary>
+    internal const string DynamicStepsPrompt =
+        " When a step must be done for EACH item an earlier step names in a list output, write that step ONCE, for one item, "
+        + "and add \"forEach\":{\"step\":0,\"field\":\"pages\"}: the engine gives every item its own step and hands their "
+        + "results on together to the steps that depend on it. Use this instead of guessing batches.";
 
     internal const string StepOutputsPrompt =
         " A step whose RESULT later steps must use as data (pages to process, files found, names, counts) declares it: "
@@ -620,7 +640,7 @@ public sealed class Planner
     /// (<c>Orchestrator.RunawayCeiling</c>). Null leaves the paragraph out entirely.
     /// </param>
     internal static string SystemPromptFor(int? maxSteps, bool proposeChecks = false, int? turnCeiling = null,
-        bool stepOutputs = false, bool typedCriteria = false)
+        bool stepOutputs = false, bool typedCriteria = false, bool dynamicSteps = false)
     {
         var prompt = SystemPrompt;
 
@@ -633,6 +653,9 @@ public sealed class Planner
 
         if (stepOutputs && typedCriteria)
             prompt += CoverageCriterionPrompt;
+
+        if (stepOutputs && dynamicSteps)
+            prompt += DynamicStepsPrompt;
 
         if (turnCeiling is > 0)
             prompt += $" A step is ONE conversation with growing history. A step running past {turnCeiling} turns is ABANDONED; "

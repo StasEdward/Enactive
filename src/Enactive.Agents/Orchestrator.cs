@@ -204,6 +204,8 @@ public sealed partial class Orchestrator : IOrchestrator
     private readonly IReadOnlyList<IEcosystem> _ecosystems;
     private readonly bool _stepOutputs;
     private readonly bool _typedCriteria;
+    private readonly bool _dynamicSteps;
+    private readonly FanOutLimits _fanOut;
     private readonly ISuccessEvaluator _successEvaluator;
 
     /// <summary>
@@ -269,10 +271,17 @@ public sealed partial class Orchestrator : IOrchestrator
         bool stepOutputs = false,
         // Phase 3: whether the planner may state acceptance criteria as types the engine checks
         // itself. Off by default: it changes the planner's prompt, and is to be switched on by evidence.
-        bool typedCriteria = false)
+        bool typedCriteria = false,
+        // Phase 5.3: whether a step may be declared "for each" item another step hands on, and the plan
+        // grow by one step per item. Off by default, like the phases before it; it needs step outputs.
+        bool dynamicSteps = false,
+        // Phase 5.4: how far a plan may grow without asking.
+        FanOutLimits? fanOut = null)
     {
         _stepOutputs = stepOutputs;
         _typedCriteria = typedCriteria;
+        _dynamicSteps = dynamicSteps;
+        _fanOut = fanOut ?? FanOutLimits.Default;
         _ecosystems = ecosystems ?? Array.Empty<IEcosystem>();
         // The machine's own store unless a test points it somewhere temporary. Defaulted rather
         // than required because a run that never writes outside the workspace never touches it, and
@@ -518,7 +527,7 @@ public sealed partial class Orchestrator : IOrchestrator
                         _limits.MaxSteps, _proposeChecks && _successCriteria.Count == 0,
                         turnCeiling: RunawayCeiling, outputBudget: _generationBudgets.For(GenerationPurpose.Planning),
                         stepOutputs: _stepOutputs, typedCriteria: _typedCriteria,
-                        beforeRetry: budget.TurnExhaustedAfter));
+                        beforeRetry: budget.TurnExhaustedAfter, dynamicSteps: _dynamicSteps));
         }
         catch (RetryBudgetExceededException ex)
         {
@@ -562,7 +571,7 @@ public sealed partial class Orchestrator : IOrchestrator
                     plan = await InScopeAsync(runId, taskId, null, () => _planner.ReplanAsync(
                         intent.RawText, intent.Context, plan, defect, models.PlanProvider, models.Plan.Model, ct,
                         _limits.MaxSteps, _proposeChecks && _successCriteria.Count == 0, RunawayCeiling, _generationBudgets.For(GenerationPurpose.Planning),
-                        _stepOutputs, _typedCriteria));
+                        _stepOutputs, _typedCriteria, _dynamicSteps));
                 }
                 catch (OperationCanceledException) { throw; }
                 catch (Exception ex) { replanFailure = "Plan repair failed: " + ex.Message; }
@@ -597,6 +606,17 @@ public sealed partial class Orchestrator : IOrchestrator
         // a declared output is dropped and the steps run as they always did.
         if (!_stepOutputs && plan.Plan is { } declaring && declaring.Steps.Any(st => st.Output is not null))
             plan = plan with { Plan = declaring with { Steps = declaring.Steps.Select(st => st with { Output = null }).ToArray() } };
+
+        // "For each" is a switch too, and needs step outputs: the items are one. Off, the step runs once.
+        if ((!_dynamicSteps || !_stepOutputs) && plan.Plan is { } eaching && eaching.Steps.Any(st => st.ForEach is not null && !st.Joins))
+            plan = plan with { Plan = eaching with { Steps = eaching.Steps.Select(st => st.Joins ? st : st with { ForEach = null }).ToArray() } };
+        else if (resume is null && plan.Plan is { } growing && growing.Steps.Any(st => st.ForEach is not null))
+        {
+            var (honoured, runOnce) = FanOut.Validate(growing);
+            plan = plan with { Plan = honoured };
+            foreach (var why in runOnce)
+                yield return scope.Ev(EventKind.ErrorObserved, why);
+        }
 
         // Validate before baseline checks, worker dispatch, or checkpoint writes can have effects.
         // A completed prefix in a checkpoint does not make a structurally invalid graph valid.
@@ -904,10 +924,14 @@ public sealed partial class Orchestrator : IOrchestrator
         // step card by this number, and its cards come from the plan in plan order; as soon as
         // readiness order differs from plan order (any real DAG, and every parallel run) a dispatch
         // counter would point at the wrong card. For a linear plan the two are identical, as before.
-        var stepNumbers = new Dictionary<Guid, int>();
+        // Concurrent: the plan grows while steps run (Phase 5.3), and new steps are numbered after the rest.
+        var stepNumbers = new System.Collections.Concurrent.ConcurrentDictionary<Guid, int>();
         for (var i = 0; i < builtPlan.Steps.Count; i++)
             stepNumbers[builtPlan.Steps[i].Id] = i + 1;
         var maxParallel = _maxParallelSteps;
+
+        // The plan as it stands now: the planned steps, and any the run has grown since.
+        Plan Current() => builtPlan with { Steps = scheduler.Steps };
 
         // WHETHER A STEP BEGINS WHERE THE LAST ONE LEFT OFF, or with a digest of what it concluded.
         //
@@ -1093,14 +1117,15 @@ public sealed partial class Orchestrator : IOrchestrator
             var transcript = messages.ToArray();
 
             var statuses = scheduler.Snapshot();
-            var steps = builtPlan.Steps
+            var steps = scheduler.Steps
                 .Select(s => new CheckpointStep(
                     s.Id, s.Title, s.DependsOn, s.Complexity.ToString(),
                     (statuses.TryGetValue(s.Id, out var st) ? st : StepStatus.Pending).ToString(),
                     outcomesNow.TryGetValue(s.Id, out var oc) ? oc.ToString() : null)
                     {
                         ObligationIds = s.ObligationIds, Output = s.Output,
-                        Result = session.Outputs.TryGetValue(s.Id, out var handed) ? handed : null
+                        Result = session.Outputs.TryGetValue(s.Id, out var handed) ? handed : null,
+                        ForEach = s.ForEach, Items = s.Items, ExpandedFrom = s.ExpandedFrom, Joins = s.Joins, NotExpanded = s.NotExpanded
                     })
                 .ToArray();
 
@@ -1132,6 +1157,19 @@ public sealed partial class Orchestrator : IOrchestrator
             // parallel run stays readable in one log file.
             using var _stepScope = LogScope.Begin(scope.RunId, scope.TaskId, stepNumber);
             ValueTask Emit(EventKind kind, string summary) => Publish(scope.Ev(kind, summary, stepNumber));
+
+            // A step for each item runs no model: first it gives its items their steps, then - once they
+            // have all ended - it joins what they handed on (Phase 5.3).
+            if (step.Joins)
+            {
+                await JoinAsync(step, stepNumber, stepCt);
+                return;
+            }
+            if (step.ForEach is not null)
+            {
+                await ExpandAsync(step, stepNumber, stepCt);
+                return;
+            }
 
             var depNote = step.DependsOn.Count > 0 ? $" (after {step.DependsOn.Count} dep)" : "";
             await Emit(EventKind.StepStarted, $"[{stepNumber}/{total}] {step.Title}{depNote}");
@@ -1185,7 +1223,8 @@ public sealed partial class Orchestrator : IOrchestrator
             convo.Add(ChatMessage.User(
                 $"Proceed with this step of the plan: {step.Title}\n"
                 + $"This is step {stepNumber} of {total}. Current obligation scope: S{stepNumber}.\n"
-                + StepBoundary.Describe(builtPlan, step.Id, completedSteps, unverifiedSteps)
+                + FanOut.Instruction(step, scheduler.Steps)
+                + StepBoundary.Describe(Current(), step.Id, completedSteps, unverifiedSteps)
                 + session.Obligations.AtStep(stepNumber).MappingPrompt()
                 + "Do only this step. Apply the relevant requirement IDs from the original request; "
                 + "keep global constraints and leave other scopes to their steps. "
@@ -1252,7 +1291,7 @@ public sealed partial class Orchestrator : IOrchestrator
                 await RunAttemptsAsync(session, attemptState, models, stepProvider, stepRef,
                     intent.Context, stepResult, step.Title, intent.RawText, stepNumber,
                     workspaceChanges, beforeStep, Publish, stepCt,
-                    builtPlan.Steps.Select(s => s.Title).ToArray(), step.Complexity);
+                    scheduler.Steps.Select(s => s.Title).ToArray(), step.Complexity);
                 outcome = stepResult.Kind;
                 outcomeReason = stepResult.Reason;
             }
@@ -1360,6 +1399,139 @@ public sealed partial class Orchestrator : IOrchestrator
             //
             // Reaching this at all means the process died before the run could finish - a run that
             // fails normally goes on to its terminal event, which deletes its checkpoint.
+            await CheckpointAsync();
+        }
+
+        // ── The plan growing from what its steps found (Phase 5.3) ──────────
+        //
+        // A step for each item is handed out once the step it takes its items from is Done - and so
+        // written down - and gives the items their steps here. Asking about a limit happens here too,
+        // so a run that stops at that question has lost nothing: resumed, this step is handed out again
+        // and the answer is waiting for it.
+        async Task ExpandAsync(PlanStep forEach, int forEachNo, CancellationToken expandCt)
+        {
+            var each = forEach.ForEach!;
+            var sourceId = builtPlan.Steps.Count > each.Step ? builtPlan.Steps[each.Step].Id : Guid.Empty;
+            var handed = session.Outputs.TryGetValue(sourceId, out var output) ? output : null;
+            var items = FanOut.Items(handed, each.Field);
+            var all = scheduler.Steps;
+            IReadOnlyList<IReadOnlyList<string>> groups = items.Select(i => (IReadOnlyList<string>)[i]).ToArray();
+            string? notExpanded = handed is null ? $"step {each.Step + 1} handed on no list '{each.Field}'" : null;
+
+            // Room without asking: this expansion's limit, the plan's, and the run's own step budget
+            // less what is already waiting for it.
+            var waiting = scheduler.Snapshot().Count(p => p.Value == StepStatus.Pending);
+            var room = Math.Min(_fanOut.MaxStepsPerExpansion, _fanOut.MaxTotalSteps - all.Count);
+            if (scope.Budget.RemainingSteps != int.MaxValue)
+                room = Math.Min(room, scope.Budget.RemainingSteps - waiting);
+            var depth = FanOut.Depth(all, forEach);
+            if (notExpanded is null && (items.Count > room || depth > _fanOut.MaxDepth))
+            {
+                var over = depth > _fanOut.MaxDepth
+                    ? $"that would be {depth} levels of steps for each item, and the limit is {_fanOut.MaxDepth}"
+                    : $"{items.Count} steps is more than the {Math.Max(0, room)} this run may add without asking";
+                var canBatch = depth <= _fanOut.MaxDepth && room >= 1;
+                var per = canBatch ? (int)Math.Ceiling(items.Count / (double)room) : 0;
+                var options = new List<DecisionOption> { new("allow", $"Create all {items.Count} steps") };
+                if (canBatch) options.Add(new("batch", $"Group them into {room} steps of about {per} items"));
+                options.Add(new("deny", "Do not create them"));
+                var request = new DecisionRequest(scope.TaskId,
+                    $"Create a step for each of the {items.Count} items step {each.Step + 1} found?",
+                    $"'{forEach.Title}': {items.Count} items; {over}.",
+                    options, RecommendedOptionId: canBatch ? "batch" : "deny",
+                    FullDetail: $"Step {each.Step + 1} handed on {items.Count} items in '{each.Field}', and '{forEach.Title}' is to be done "
+                        + $"for each of them: {string.Join(", ", items.Take(20))}{(items.Count > 20 ? $", and {items.Count - 20} more" : "")}.\n\n"
+                        + $"The plan has {all.Count} steps; {over}."
+                        + (canBatch ? $"\n\nGrouping gives {room} steps of about {per} items each: every item is still done, in fewer, longer steps." : "")
+                        + "\n\nNot creating them leaves this part of the work undone, and says so.");
+                await Publish(scope.Ev(EventKind.DecisionRequested, $"{request.Topic} {request.Detail}", forEachNo));
+                var answer = await ToolAccess.AskAsync(_decisions, _decisionGate, request, expandCt);
+                await Publish(scope.Ev(EventKind.DecisionResolved,
+                    $"Steps for each item: {answer.OptionId}{(answer.Because is { } because ? $" ({because})" : "")}", forEachNo));
+                if (string.Equals(answer.OptionId, "batch", StringComparison.OrdinalIgnoreCase) && canBatch)
+                    groups = FanOut.Batches(items, room);
+                else if (!string.Equals(answer.OptionId, "allow", StringComparison.OrdinalIgnoreCase))
+                {
+                    groups = [];
+                    notExpanded = $"{items.Count} items were not given steps: {over}, and creating them was not allowed";
+                }
+            }
+
+            var created = FanOut.Steps(forEach, groups);
+            scheduler.Expand(forEach.Id, created, notExpanded);
+            var now = scheduler.Steps;
+            for (var i = 0; i < now.Count; i++)
+                stepNumbers[now[i].Id] = i + 1;
+            total = now.Count;
+            // New steps are new scopes: the reviewer of step 9 must know there is a step 9.
+            session.Obligations = RequestObligations.ForPlan(intent.RawText, Current());
+            await Publish(scope.Event(EventKind.PlanExpanded,
+                $"[{forEachNo}/{total}] {forEach.Title} — {created.Count} step(s) for {items.Count} item(s)"
+                + (notExpanded is null ? "" : $": {notExpanded}"),
+                WorkEventPayload.PlanPayload(forEach.Title, created.Select(c => c.Title).ToArray())));
+            await CheckpointAsync();
+        }
+
+        // The join: what its items' steps handed on, as one, once every one of them has ended. An item
+        // that did not finish is named, and the others are handed on all the same (amendment D).
+        async Task JoinAsync(PlanStep join, int joinNo, CancellationToken joinCt)
+        {
+            await Publish(scope.Ev(EventKind.StepStarted, $"[{joinNo}/{total}] {join.Title} (joining its items)", joinNo));
+            var items = scheduler.Steps.Where(s => s.ExpandedFrom == join.Id).ToArray();
+            Dictionary<Guid, StepOutcomeKind> ended;
+            lock (stepOutcomes)
+                ended = new Dictionary<Guid, StepOutcomeKind>(stepOutcomes);
+            var finished = items.Where(i => ended.GetValueOrDefault(i.Id) is StepOutcomeKind.Succeeded or StepOutcomeKind.DoneUnverified).ToArray();
+            var unfinished = items.Except(finished).ToArray();
+
+            var (outcome, reason) = join.NotExpanded is { } notExpanded
+                ? (StepOutcomeKind.Incomplete, notExpanded)
+                : unfinished.Length > 0
+                    ? (StepOutcomeKind.DoneUnverified, $"{unfinished.Length} of {items.Length} item step(s) did not finish: "
+                        + string.Join("; ", unfinished.Select(u => u.Title)))
+                    : finished.Any(f => ended[f.Id] == StepOutcomeKind.DoneUnverified)
+                        ? (StepOutcomeKind.DoneUnverified, "some item steps were done but not verified")
+                        : (StepOutcomeKind.Succeeded, (string?)null);
+
+            lock (stepOutcomes)
+            {
+                stepOutcomes[join.Id] = outcome;
+                if (reason is not null && outcome != StepOutcomeKind.Succeeded) stepReasons.Add(reason);
+            }
+
+            if (outcome is StepOutcomeKind.Succeeded or StepOutcomeKind.DoneUnverified)
+            {
+                var handedOn = finished.Select(f => (Step: f, Output: session.Outputs.TryGetValue(f.Id, out var o) ? o : null))
+                    .Where(x => x.Output is not null).Select(x => (x.Step, x.Output!)).ToArray();
+                if (FanOut.Join(join, joinNo, handedOn) is { } joined)
+                {
+                    session.Outputs[join.Id] = joined;
+                    await Publish(new WorkEvent(Guid.NewGuid(), scope.TaskId, scope.RunId, DateTimeOffset.UtcNow,
+                        EventKind.StepOutputRecorded, $"[{joinNo}] output handed on: {joined.ValuesJson}",
+                        WorkEventPayload.StepOutputPayload(joined)));
+                }
+                lock (digest)
+                    digest.Add($"{join.Title}: {finished.Length} of {items.Length} item step(s) finished");
+                await Publish(scope.Event(EventKind.StepCompleted,
+                    $"[{joinNo}/{total}] {join.Title} — " + (outcome == StepOutcomeKind.Succeeded
+                        ? $"done ({items.Length} item step(s))" : $"DONE, NOT VERIFIED: {reason}"),
+                    WorkEventPayload.StepPayload(joinNo, outcome, reason)));
+                scheduler.MarkDone(join.Id);
+                await CheckpointAsync();
+                return;
+            }
+
+            var skipped = scheduler.MarkFailed(join.Id);
+            await Publish(scope.Event(EventKind.StepCompleted, $"[{joinNo}/{total}] {join.Title} — INCOMPLETE: {reason}",
+                WorkEventPayload.StepPayload(joinNo, outcome, reason)));
+            foreach (var sk in skipped)
+            {
+                var skNo = stepNumbers.TryGetValue(sk.Id, out var n) ? n : 0;
+                lock (stepOutcomes)
+                    stepOutcomes[sk.Id] = StepOutcomeKind.Skipped;
+                await Publish(scope.Event(EventKind.StepCompleted, $"[{skNo}/{total}] {sk.Title} — skipped (a dependency did not succeed)",
+                    WorkEventPayload.StepPayload(skNo > 0 ? skNo : null, StepOutcomeKind.Skipped)));
+            }
             await CheckpointAsync();
         }
 
@@ -1669,7 +1841,11 @@ public sealed partial class Orchestrator : IOrchestrator
                 s.Id, s.Title, CheckpointNames.StatusOf(s.Status), s.DependsOn,
                 Enum.TryParse<StepComplexity>(s.Complexity, ignoreCase: true, out var c)
                     ? c
-                    : StepComplexity.Normal) { ObligationIds = s.ObligationIds, Output = s.Output })
+                    : StepComplexity.Normal)
+                {
+                    ObligationIds = s.ObligationIds, Output = s.Output,
+                    ForEach = s.ForEach, Items = s.Items, ExpandedFrom = s.ExpandedFrom, Joins = s.Joins, NotExpanded = s.NotExpanded
+                })
             .ToArray();
 
         // Understood rather than Unreadable: this plan was read successfully once, by the run that

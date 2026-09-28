@@ -24,7 +24,32 @@ public sealed record PlanStep(
 
     /// <summary>What this step hands on as values, when the plan declared it (Phase 2). Null: prose, as before.</summary>
     public StepOutputSchema? Output { get; init; }
+
+    /// <summary>
+    /// A step to be done once for EACH item another step hands on (Phase 5.3). It is not run as it
+    /// stands: when the source step has handed its list on, the engine creates one step per item (or
+    /// per batch of items) from it, and this step becomes the point where their results join.
+    /// </summary>
+    public ForEachSource? ForEach { get; init; }
+
+    /// <summary>The items a step created from a <see cref="ForEach"/> step is for.</summary>
+    public IReadOnlyList<string>? Items { get; init; }
+
+    /// <summary>The <see cref="ForEach"/> step this one was created from.</summary>
+    public Guid? ExpandedFrom { get; init; }
+
+    /// <summary>
+    /// A <see cref="ForEach"/> step whose items have been given steps of their own: it runs no model,
+    /// waits until every one of them has ended - however it ended - and hands their results on as one.
+    /// </summary>
+    public bool Joins { get; init; }
+
+    /// <summary>Why a <see cref="ForEach"/> step's items were given no steps, when they were not (a limit nobody lifted).</summary>
+    public string? NotExpanded { get; init; }
 }
+
+/// <summary>Where a step's items come from: a list field of an earlier step's output, by its plan position (0-based).</summary>
+public sealed record ForEachSource(int Step, string Field);
 
 /// <summary>A plan is a graph of steps. v1 builds a linear chain via <see cref="LinearPlan"/>.</summary>
 public sealed record Plan(Guid Id, IReadOnlyList<PlanStep> Steps);
@@ -60,6 +85,7 @@ public sealed record PlanStepSpec(
 {
     public IReadOnlyList<string>? ObligationIds { get; init; }
     public StepOutputSchema? Output { get; init; }
+    public ForEachSource? ForEach { get; init; }
 }
 
 /// <summary>
@@ -91,7 +117,7 @@ public static class DagPlan
                 deps = i > 0 ? new[] { ids[i - 1] } : Array.Empty<Guid>();
 
             steps.Add(new PlanStep(ids[i], specs[i].Title, StepStatus.Pending, deps, specs[i].Complexity)
-                { ObligationIds = specs[i].ObligationIds, Output = specs[i].Output });
+                { ObligationIds = specs[i].ObligationIds, Output = specs[i].Output, ForEach = specs[i].ForEach });
         }
         return new Plan(Guid.NewGuid(), steps);
     }

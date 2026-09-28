@@ -70,7 +70,14 @@ public enum EventKind
     /// The run's definition of done changed after it was fixed (Phase 4): what changed, who changed it
     /// and why, how it compares with what it replaced, and whether it was let through and on whose say.
     /// </summary>
-    ContractRevised
+    ContractRevised,
+
+    /// <summary>
+    /// The plan grew while it ran (Phase 5.3): a step to be done for each item was given one step per
+    /// item, or per batch. The payload is the step's title and the new steps' titles, numbered after
+    /// every step the plan already had.
+    /// </summary>
+    PlanExpanded
 }
 
 /// <summary>

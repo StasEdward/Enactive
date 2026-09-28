@@ -36,7 +36,9 @@ public static class EventMapping
         EventKind.ErrorObserved,
         EventKind.ContextTrimmed,
         // A definition of done changed after a check failed is something the owner is owed a line about.
-        EventKind.ContractRevised
+        EventKind.ContractRevised,
+        // New steps the owner's panel has no card for yet.
+        EventKind.PlanExpanded
     ];
 
     /// <summary>

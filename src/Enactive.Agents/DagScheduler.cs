@@ -14,13 +14,15 @@ using Enactive.Core.Tasks;
 /// </summary>
 public sealed class DagScheduler
 {
-    private readonly IReadOnlyList<PlanStep> _steps;
+    // Grows while the run does (Phase 5.3): a step to be done for each item is given one step per
+    // item once the item list exists. New steps go at the END, so every step keeps its plan position.
+    private readonly List<PlanStep> _steps;
     private readonly Dictionary<Guid, StepStatus> _status = new();
     private readonly object _gate = new();
 
     public DagScheduler(Plan plan)
     {
-        _steps = plan.Steps;
+        _steps = plan.Steps.ToList();
         foreach (var s in _steps)
             _status[s.Id] = StepStatus.Pending;
     }
@@ -49,7 +51,7 @@ public sealed class DagScheduler
     /// </summary>
     public DagScheduler(Plan plan, IReadOnlyDictionary<Guid, StepStatus> restore)
     {
-        _steps = plan.Steps;
+        _steps = plan.Steps.ToList();
         foreach (var s in _steps)
         {
             var status = restore.TryGetValue(s.Id, out var stored) ? stored : StepStatus.Pending;
@@ -75,14 +77,12 @@ public sealed class DagScheduler
             {
                 if (_status[s.Id] != StepStatus.Pending)
                     continue;
-                foreach (var dep in s.DependsOn)
-                    if (_status.TryGetValue(dep, out var st) && st is StepStatus.Failed or StepStatus.Skipped)
-                    {
-                        _status[s.Id] = StepStatus.Skipped;
-                        skipped.Add(s);
-                        changed = true;
-                        break;
-                    }
+                if (JoinCannotRun(s) ?? s.DependsOn.Any(dep => _status.TryGetValue(dep, out var st) && st is StepStatus.Failed or StepStatus.Skipped))
+                {
+                    _status[s.Id] = StepStatus.Skipped;
+                    skipped.Add(s);
+                    changed = true;
+                }
             }
         }
         return skipped;
@@ -99,7 +99,57 @@ public sealed class DagScheduler
             return new Dictionary<Guid, StepStatus>(_status);
     }
 
-    public int Total => _steps.Count;
+    public int Total
+    {
+        get { lock (_gate) return _steps.Count; }
+    }
+
+    /// <summary>Every step as it stands now - with the steps the run has grown, in plan order.</summary>
+    public IReadOnlyList<PlanStep> Steps
+    {
+        get { lock (_gate) return _steps.ToArray(); }
+    }
+
+    /// <summary>
+    /// Gives a step to be done for each item its steps (Phase 5.3): they are added at the end of the
+    /// plan, Pending, and the step itself - handed out once its source was Done, to do exactly this -
+    /// goes back to Pending as the join that waits for them. With none - no items,
+    /// or a limit nobody lifted - the join is ready at once and says why, rather than waiting forever.
+    /// </summary>
+    public void Expand(Guid forEachId, IReadOnlyList<PlanStep> expansions, string? notExpanded = null)
+    {
+        lock (_gate)
+        {
+            var at = _steps.FindIndex(s => s.Id == forEachId);
+            if (at < 0) throw new InvalidOperationException("No such step to expand.");
+            var step = _steps[at];
+            if (step.Joins) throw new InvalidOperationException($"'{step.Title}' has already been expanded.");
+            _steps[at] = step with { DependsOn = [.. step.DependsOn, .. expansions.Select(e => e.Id)], Joins = true, NotExpanded = notExpanded };
+            // It was handed out to be expanded; now it waits, as the join, for what it was given.
+            _status[forEachId] = StepStatus.Pending;
+            foreach (var expansion in expansions)
+            {
+                _steps.Add(expansion with { ExpandedFrom = forEachId });
+                _status[expansion.Id] = StepStatus.Pending;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Whether a join can never run: something it waits on OUTSIDE its items failed, or it has items
+    /// and not one of them succeeded. Null for a step that is not a join. An item that failed does not
+    /// hold the join back: nine of twelve is "these nine, not these three", never nothing (amendment D).
+    /// </summary>
+    private bool? JoinCannotRun(PlanStep step)
+    {
+        if (!step.Joins) return null;
+        var items = step.DependsOn.Where(IsItemOf(step)).ToArray();
+        return step.DependsOn.Where(d => !IsItemOf(step)(d)).Any(d => _status.TryGetValue(d, out var st) && st is StepStatus.Failed or StepStatus.Skipped)
+               || (items.Length > 0 && items.All(d => _status.TryGetValue(d, out var st) && st is StepStatus.Failed or StepStatus.Skipped));
+    }
+
+    private Func<Guid, bool> IsItemOf(PlanStep join)
+        => id => _steps.Any(s => s.Id == id && s.ExpandedFrom == join.Id);
 
     public int DoneCount
     {
@@ -207,9 +257,14 @@ public sealed class DagScheduler
     /// </summary>
     private bool DependenciesSatisfied(PlanStep step)
     {
+        var item = step.Joins ? IsItemOf(step) : _ => false;
         foreach (var dep in step.DependsOn)
-            if (!_status.TryGetValue(dep, out var st) || st != StepStatus.Done)
+        {
+            if (!_status.TryGetValue(dep, out var st)) return false;
+            // A join waits for its items to END, not to succeed; the others must be Done.
+            if (st != StepStatus.Done && !(item(dep) && st is StepStatus.Failed or StepStatus.Skipped))
                 return false;
+        }
         return true;
     }
 }

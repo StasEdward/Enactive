@@ -418,6 +418,12 @@ public sealed class EngineFixture : IDisposable
     /// <summary>Phase 3 typed criteria. Off, as shipped, unless a test is about them.</summary>
     public bool TypedCriteria { get; set; }
 
+    /// <summary>Phase 5.3 steps for each item. Off, as shipped, unless a test is about them.</summary>
+    public bool DynamicSteps { get; set; }
+
+    /// <summary>Phase 5.4 limits; the shipped defaults unless a test sets its own.</summary>
+    public FanOutLimits? FanOut { get; set; }
+
     /// <summary>
     /// Invokes a tool the way the engine does: a fresh context over this fixture's workspace, with
     /// this fixture's journalled artifact store unless the caller hands in a step's own.
@@ -630,7 +636,7 @@ public sealed class EngineFixture : IDisposable
             settings: settings,
             checkSoundness: checkSoundness,
             ecosystems: EcosystemsOverride,
-            stepOutputs: StepOutputs, typedCriteria: TypedCriteria);
+            stepOutputs: StepOutputs, typedCriteria: TypedCriteria, dynamicSteps: DynamicSteps, fanOut: FanOut);
     }
 
     /// <summary>Runs one intent to completion and returns every event it produced.</summary>

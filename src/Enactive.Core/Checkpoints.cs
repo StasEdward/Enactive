@@ -33,6 +33,13 @@ public sealed record CheckpointStep(
 
     /// <summary>What a finished step handed on - its dependents, resumed, still receive it.</summary>
     public Enactive.Core.Tasks.StepOutput? Result { get; init; }
+
+    // The graph as it grew (Phase 5.3): a resumed run carries on with the steps its items were given.
+    public Enactive.Core.Tasks.ForEachSource? ForEach { get; init; }
+    public IReadOnlyList<string>? Items { get; init; }
+    public Guid? ExpandedFrom { get; init; }
+    public bool Joins { get; init; }
+    public string? NotExpanded { get; init; }
 }
 
 /// <summary>

@@ -403,6 +403,15 @@ public sealed partial class AppSettings
     // Off until runs show it helps.
     public bool TypedCriteria { get; set; }
 
+    // Phase 5.3: a step may be declared "for each" item an earlier step hands on, and the plan grows
+    // by one step per item once the list exists. Needs StepOutputs. Off until runs show it helps.
+    public bool DynamicSteps { get; set; }
+
+    // Phase 5.4: how far a plan may grow without asking - per "for each", in total, and in depth.
+    public int MaxStepsPerExpansion { get; set; } = 12;
+    public int MaxTotalSteps { get; set; } = 40;
+    public int MaxFanOutDepth { get; set; } = 2;
+
     // Put a rejected step's files back to how they were before it ran. Without this the gate stops
     // only the REPORT: the run says Failed while the rejected document stays in the workspace, which
     // is the version someone is most likely to open next. A file changed since the step wrote it is
@@ -869,6 +878,10 @@ public sealed partial class AppSettings
         ProposeChecks = ProposeChecks,
         StepOutputs = StepOutputs,
         TypedCriteria = TypedCriteria,
+        DynamicSteps = DynamicSteps,
+        MaxStepsPerExpansion = MaxStepsPerExpansion,
+        MaxTotalSteps = MaxTotalSteps,
+        MaxFanOutDepth = MaxFanOutDepth,
         Bindings = Bindings.Clone(),
         RemoteAccess = RemoteAccess.Clone(),
         Smtp = Smtp.Clone(),
