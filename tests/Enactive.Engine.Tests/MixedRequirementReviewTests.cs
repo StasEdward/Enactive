@@ -49,10 +49,17 @@ public sealed class MixedRequirementReviewTests
             reviewContent: false, checkSoundness: true, reviewRetries: 2), "Write result.txt; verify later; no git or deletion.");
         Assert.Equal(corrected ? RunOutcomeKind.Completed : RunOutcomeKind.Incomplete, events.Last().Outcome());
         Assert.Equal("keep", fx.Read("result.txt"));
-        Assert.Equal(corrected ? 5 : 3, worker.Requests.Count);
-        Assert.Equal(corrected ? 4 : 2, reviewer.Requests.Count);
+        // Uncorrected, the first step's reviewer never returned a valid verdict. Its work WAS done -
+        // result.txt is on disk - so it is DoneUnverified, and the verification step still runs
+        // (see DoneButNotVerifiedTests). Before, that step was skipped: three worker requests and one
+        // step started. The run is still Incomplete either way, because no verdict was given, and
+        // the only step reviewed after the first is the second, so no whole-run review follows.
+        Assert.Equal(5, worker.Requests.Count);
+        Assert.Equal(corrected ? 4 : 3, reviewer.Requests.Count);
         Assert.Contains(expectedPath, reviewer.Requests[1].Messages.Last().Content!);
         Assert.DoesNotContain(events, e => e.Kind is EventKind.ArtifactReverted or EventKind.ReviewFailed);
-        Assert.Equal(corrected ? 2 : 1, events.Count(e => e.Kind == EventKind.StepStarted));
+        Assert.Equal(2, events.Count(e => e.Kind == EventKind.StepStarted));
+        Assert.Equal(corrected ? StepOutcomeKind.Succeeded : StepOutcomeKind.DoneUnverified,
+            events.Last(e => e.Kind == EventKind.StepCompleted && e.StepNo() == 1).StepOutcome());
     }
 }

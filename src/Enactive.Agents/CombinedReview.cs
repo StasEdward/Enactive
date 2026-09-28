@@ -203,7 +203,7 @@ public sealed partial class Reviewer
             catch (Exception ex)
             {
                 return new(false, "review error: " + ex.Message, prompt, output)
-                    { CachedPromptTokens = cached, CacheCreationPromptTokens = created, IncompleteReason = "review error: " + ex.Message };
+                    { CachedPromptTokens = cached, CacheCreationPromptTokens = created, IncompleteReason = "review error: " + ex.Message, VerdictUnavailable = true };
             }
             prompt += completion.PromptTokens ?? 0;
             output += completion.CompletionTokens ?? 0;
@@ -278,6 +278,8 @@ public sealed partial class Reviewer
                         return result.Review with { Pass = false, Notes = semantic.Reason,
                             RepairAdvice = semantic.Unknown ? null : ReviewRepairContract.Render(answer, sources, obligations),
                             IncompleteReason = semantic.Unknown ? semantic.Reason : null,
+                            // "Unknown" is the reviewer saying it could not tell - no verdict, not a bad one.
+                            VerdictUnavailable = semantic.Unknown,
                             PromptTokens = prompt, CompletionTokens = output, CachedPromptTokens = cached,
                             CacheCreationPromptTokens = created };
                     if (!result.Review.Pass)
@@ -305,7 +307,7 @@ public sealed partial class Reviewer
                 + "Include proof and every obligation ID, and judge only the evidence now displayed. No more evidence requests."));
         }
         return new(false, problem + " after clarification", prompt, output)
-            { CachedPromptTokens = cached, CacheCreationPromptTokens = created, IncompleteReason = problem + " after clarification" };
+            { CachedPromptTokens = cached, CacheCreationPromptTokens = created, IncompleteReason = problem + " after clarification", VerdictUnavailable = true };
     }
 
     private sealed record Combined(ReviewResult Review, ProofClaim? Proof, IReadOnlyList<ObligationClaim>? Claims, IReadOnlyList<int> NeedEvidence);

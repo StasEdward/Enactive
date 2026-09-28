@@ -140,6 +140,16 @@ internal sealed class StepCardViewModel : ObservableObject
         SetStatus("skipped", Brand.StepSkipped);
     }
 
+    /// <summary>
+    /// The step's work was done and its review returned no verdict. Neither green nor red: green would
+    /// claim a confirmation nobody gave, red would say the work is missing when it is on disk.
+    /// </summary>
+    public void SetUnverified()
+    {
+        FlushPendingNote();
+        SetStatus("not verified", Brand.StepUnverified);
+    }
+
     public void SetActivity(string text) => Activity = text;
 
     /// <summary>

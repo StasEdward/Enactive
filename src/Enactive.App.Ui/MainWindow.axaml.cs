@@ -905,6 +905,13 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                             doneCard?.SetSkipped();
                             doneCard?.SetActivity(stepSays);
                         }
+                        else if (stepOutcome == StepOutcomeKind.DoneUnverified)
+                        {
+                            // Checked before wasFailed, which counts anything short of Succeeded as a
+                            // failure and would paint work that is on disk red.
+                            doneCard?.SetUnverified();
+                            doneCard?.SetActivity(stepSays);
+                        }
                         else if (wasFailed)
                         {
                             doneCard?.SetFailed();

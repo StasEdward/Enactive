@@ -97,7 +97,27 @@ public enum StepOutcomeKind
     Incomplete,
 
     /// <summary>Never ran, because something it depended on did not succeed.</summary>
-    Skipped
+    Skipped,
+
+    /// <summary>
+    /// The work was done; the verdict on it was not obtained. The worker finished, and the reviewer
+    /// then failed to return a usable answer - an error, a response the validators refused after
+    /// clarification, no verdict at all - or the budget ran out before it could be asked.
+    ///
+    /// <para>Kept apart from <see cref="Incomplete"/>, which means the WORK did not finish, because
+    /// the two were one outcome and that cost real work. Run 4b3b7457, 2026-09-27: a harness written,
+    /// twenty tests passing, confirmed by an independent re-run; the reviewer's answer lacked one
+    /// field, so the step was Incomplete, the next step was Skipped, and the report said nothing was
+    /// verified - with both files on disk. Refusing to call this step verified was right. Concluding
+    /// it had not been done, and stopping everything after it, was not.</para>
+    ///
+    /// <para>So its dependents run: the work they build on exists, and they are reviewed on their
+    /// own. The run still cannot be Completed on the strength of it - it counts as Incomplete there,
+    /// exactly as before - and nothing here is reverted, because nothing here was rejected.</para>
+    ///
+    /// <para>Last in the list so no number already written anywhere changes meaning.</para>
+    /// </summary>
+    DoneUnverified
 }
 
 /// <summary>
@@ -259,8 +279,38 @@ public static class WorkEventPayload
 
     /// <summary>Minimal JSON string escaping — provider ids and model names are not free text, but a
     /// backslash or quote in one must not produce a payload nothing can parse.</summary>
+    /// <summary>
+    /// A JSON string literal. Every character JSON requires escaped IS escaped: backslash, quote, and
+    /// every control character, a line break among them. Anything else, Cyrillic included, is left as
+    /// it is - valid JSON, and readable in a raw log.
+    ///
+    /// <para>It escaped only the backslash and the quote, so a REASON with a line break in it - "Combined
+    /// review response has structural errors:" followed by a list, for one - made the whole payload
+    /// invalid. Every reader then failed to parse it and got nothing: the step's outcome read as null,
+    /// and the window, falling back to looking for "FAILED:" in the summary, found none in
+    /// "INCOMPLETE:" and painted the card green, "Done". Run 4b3b7457 on 2026-09-27 ended its second
+    /// step exactly that way.</para>
+    /// </summary>
     private static string Quote(string value)
-        => "\"" + value.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
+    {
+        var quoted = new System.Text.StringBuilder(value.Length + 2).Append('"');
+        foreach (var c in value)
+        {
+            switch (c)
+            {
+                case '\\': quoted.Append("\\\\"); break;
+                case '"': quoted.Append("\\\""); break;
+                case '\n': quoted.Append("\\n"); break;
+                case '\r': quoted.Append("\\r"); break;
+                case '\t': quoted.Append("\\t"); break;
+                default:
+                    if (c < ' ') quoted.Append("\\u").Append(((int)c).ToString("x4"));
+                    else quoted.Append(c);
+                    break;
+            }
+        }
+        return quoted.Append('"').ToString();
+    }
 
     /// <summary>
     /// The provider id an event names, or null. Null for a run recorded before this was written
@@ -277,7 +327,14 @@ public static class WorkEventPayload
     {
         if (string.IsNullOrEmpty(payload)) return null;
         var match = regex.Match(payload);
-        return match.Success ? match.Groups[1].Value.Replace("\\\"", "\"").Replace("\\\\", "\\") : null;
+        if (!match.Success) return null;
+        // Decoded as the JSON string it is, so this is the exact inverse of Quote - line breaks and
+        // \u escapes included. A payload recorded before Quote escaped control characters can hold a
+        // raw one, which is not a valid JSON string; that falls back to the decoding those payloads
+        // were read with, and loses nothing it used to return.
+        var raw = match.Groups[1].Value;
+        try { return System.Text.Json.JsonSerializer.Deserialize<string>("\"" + raw + "\""); }
+        catch (System.Text.Json.JsonException) { return raw.Replace("\\\"", "\"").Replace("\\\\", "\\"); }
     }
 
     private static readonly System.Text.RegularExpressions.Regex ProviderRegex =

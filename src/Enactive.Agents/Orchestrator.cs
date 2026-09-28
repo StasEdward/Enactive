@@ -1005,12 +1005,19 @@ public sealed partial class Orchestrator : IOrchestrator
                     + session.RunEvidence().Describe(maxChars: _evidenceBudget).CommandHistory()
                     + "\nUse these recorded facts when writing reports. Do not omit initial failures or replace them with a later success."));
             Guid[] completedSteps;
+            Guid[] unverifiedSteps;
             lock (stepOutcomes)
+            {
                 completedSteps = stepOutcomes.Where(p => p.Value == StepOutcomeKind.Succeeded).Select(p => p.Key).ToArray();
+                // Shown as its own state, not folded into "completed" and not left as "outside the
+                // current scope": the first would claim a verdict that was never given, the second
+                // would tell this step that the work it depends on does not exist.
+                unverifiedSteps = stepOutcomes.Where(p => p.Value == StepOutcomeKind.DoneUnverified).Select(p => p.Key).ToArray();
+            }
             convo.Add(ChatMessage.User(
                 $"Proceed with this step of the plan: {step.Title}\n"
                 + $"This is step {stepNumber} of {total}. Current obligation scope: S{stepNumber}.\n"
-                + StepBoundary.Describe(builtPlan, step.Id, completedSteps)
+                + StepBoundary.Describe(builtPlan, step.Id, completedSteps, unverifiedSteps)
                 + session.Obligations.AtStep(stepNumber).MappingPrompt()
                 + "Do only this step. Apply the relevant requirement IDs from the original request; "
                 + "keep global constraints and leave other scopes to their steps. "
@@ -1123,11 +1130,18 @@ public sealed partial class Orchestrator : IOrchestrator
             //
             // Nothing here needs to happen before the unblocking. Everything here needs to be
             // visible to whoever the unblocking releases.
-            if (outcome == StepOutcomeKind.Succeeded)
+            // DoneUnverified releases its dependents too: the work they build on exists, and each of
+            // them is reviewed on its own. What it does NOT do is count as accepted - see
+            // RunOutcomeOf - and it says so on its card, with the reason the verdict was missing.
+            if (outcome is StepOutcomeKind.Succeeded or StepOutcomeKind.DoneUnverified)
             {
                 lock (digest)
                     digest.Add($"{step.Title}: {Gist(LastAssistant(convo))}");
-                await EmitStepDone($"[{stepNumber}/{total}] {step.Title} — done", stepNumber, outcome);
+                await EmitStepDone(outcome == StepOutcomeKind.Succeeded
+                        ? $"[{stepNumber}/{total}] {step.Title} — done"
+                        : $"[{stepNumber}/{total}] {step.Title} — DONE, NOT VERIFIED"
+                          + (string.IsNullOrWhiteSpace(outcomeReason) ? "" : ": " + outcomeReason),
+                    stepNumber, outcome, outcome == StepOutcomeKind.Succeeded ? null : outcomeReason);
                 scheduler.MarkDone(step.Id);
                 // AFTER the unblocking, for the same reason the digest goes before it: a checkpoint
                 // taken first would record this step as still Running, and a resume would redo a
@@ -1500,6 +1514,7 @@ public sealed partial class Orchestrator : IOrchestrator
         StepOutcomeKind.ReviewRejected => "review rejected",
         StepOutcomeKind.Incomplete => "incomplete",
         StepOutcomeKind.Skipped => "skipped",
+        StepOutcomeKind.DoneUnverified => "done, not verified",
         _ => "failed"
     };
 
@@ -1516,7 +1531,10 @@ public sealed partial class Orchestrator : IOrchestrator
         if (steps.Any(s => s is StepOutcomeKind.Failed or StepOutcomeKind.ReviewRejected))
             return RunOutcomeKind.Failed;
 
-        if (steps.Any(s => s is StepOutcomeKind.Incomplete or StepOutcomeKind.Skipped))
+        // DoneUnverified with them: its work was done, but a run is Completed only on verdicts that
+        // were actually given. Left out of this line it would fall through to Completed - a run
+        // declaring itself finished on a step nobody confirmed.
+        if (steps.Any(s => s is StepOutcomeKind.Incomplete or StepOutcomeKind.Skipped or StepOutcomeKind.DoneUnverified))
             return RunOutcomeKind.Incomplete;
 
         return RunOutcomeKind.Completed;

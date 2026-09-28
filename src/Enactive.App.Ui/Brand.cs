@@ -148,6 +148,8 @@ internal static class Brand
     public static readonly IBrush StepDone = Success;
     public static readonly IBrush StepSkipped = LineStrong;
     public static readonly IBrush StepFailed = Danger;
+    // Done but not confirmed: amber, like a step waiting on a person - not failed, not settled.
+    public static readonly IBrush StepUnverified = Warning;
 
     // ── Autonomy tiers ──────────────────────────────────────────────────────
     // Read as a risk scale, because that is what it is: how much the agent may do

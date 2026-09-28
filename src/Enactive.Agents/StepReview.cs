@@ -45,5 +45,5 @@ internal sealed class StepReview(IReviewer reviewer, IToolRegistry tools, string
 
     internal static (ReviewResult Result, ReviewMode Mode) Failure(Exception ex)
         => (new ReviewResult(false, "review error: " + ex.Message)
-            { IncompleteReason = "review error: " + ex.Message }, ReviewMode.Execution);
+            { IncompleteReason = "review error: " + ex.Message, VerdictUnavailable = true }, ReviewMode.Execution);
 }

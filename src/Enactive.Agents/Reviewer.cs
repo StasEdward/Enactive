@@ -33,6 +33,19 @@ public sealed record ReviewResult(
     public IReadOnlyList<ObligationClaim>? Obligations { get; init; }
     public string? BudgetExhausted { get; init; }
     public string? IncompleteReason { get; init; }
+
+    /// <summary>
+    /// The reviewer could not return a usable verdict: an error, a response refused after
+    /// clarification, no verdict at all, or its own statement that it could not tell. Set only where
+    /// that is what happened, and false by default, so any path not marked keeps its old outcome.
+    ///
+    /// <para>Distinct from <see cref="IncompleteReason"/>, which is also set when the reviewer DID
+    /// reach a verdict that ends the step - a prohibition the work violated. That work must not be
+    /// built on, and this flag is what keeps the two apart: a step whose verdict is missing becomes
+    /// <see cref="Enactive.Core.Events.StepOutcomeKind.DoneUnverified"/> and releases its dependents;
+    /// a step with a damning verdict does not.</para>
+    /// </summary>
+    public bool VerdictUnavailable { get; init; }
     /// <summary>Concrete semantic defects, distinct from malformed review or unavailable evidence.</summary>
     public string? RepairAdvice { get; init; }
     /// <summary>
@@ -192,7 +205,7 @@ public sealed partial class Reviewer : IReviewer
         // Twice with no verdict. A reviewer that cannot answer has not approved anything.
         return new ReviewResult(false,
             "the reviewer did not return a verdict, twice — treating the step as not reviewed",
-            prompt, output) { CachedPromptTokens = cached, CacheCreationPromptTokens = created, IncompleteReason = "the reviewer did not return a verdict after clarification" };
+            prompt, output) { CachedPromptTokens = cached, CacheCreationPromptTokens = created, IncompleteReason = "the reviewer did not return a verdict after clarification", VerdictUnavailable = true };
     }
 
     /// <summary>

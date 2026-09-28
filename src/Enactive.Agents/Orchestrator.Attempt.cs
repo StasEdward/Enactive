@@ -77,7 +77,14 @@ public sealed partial class Orchestrator
             if (assessed is null) return;
             if ((assessed.BudgetExhausted ?? assessed.Review.IncompleteReason) is { } unavailable)
             {
-                result.Set(StepOutcomeKind.Incomplete, unavailable);
+                // A review ran at all only because the worker finished (ExecuteAttemptAsync returns
+                // null otherwise), so when the verdict is what is missing, the work is DONE and only
+                // unconfirmed. That is DoneUnverified, and its dependents run. When instead the
+                // reviewer reached a verdict that ends the step - a prohibition the work violated,
+                // which also carries an IncompleteReason - it stays Incomplete, as it always was:
+                // that work must not be built on.
+                var verdictMissing = assessed.BudgetExhausted is not null || assessed.Review.VerdictUnavailable;
+                result.Set(verdictMissing ? StepOutcomeKind.DoneUnverified : StepOutcomeKind.Incomplete, unavailable);
                 await publish(scope.Ev(EventKind.ErrorObserved, prefix + unavailable, stepNumber));
                 return;
             }
