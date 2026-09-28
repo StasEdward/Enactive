@@ -246,7 +246,7 @@ public sealed class OrchestratorSeamsTests
     private sealed class SpyHandover : IHandover
     {
         public int Calls;
-        public Task<HandoverResult> GenerateAsync(IChatProvider provider, ChatRequest step, RunBudget budget, CancellationToken ct)
+        public Task<HandoverResult> GenerateAsync(IChatProvider provider, ChatRequest step, RunBudget budget, CancellationToken ct, int? promptTokens = null)
         { Calls++; return Task.FromResult(HandoverResult.Written("injected handover facts")); }
     }
     private sealed class FailingProvider(Exception error) : IChatProvider

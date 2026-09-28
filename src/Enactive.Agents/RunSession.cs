@@ -67,14 +67,20 @@ internal sealed class RunSession(RunScope scope, List<ChatMessage> messages)
         if (resume is { Transcript.Count: > 0 }) _sharedJournal.NotePriorTranscript();
     }
 
+    /// <param name="ownConversation">
+    /// The step has a conversation of its own even though the run shares one (a step for one item).
+    /// Its journal and what it has read are then its own too: the evidence window is the transcript
+    /// window, and a reviewer must not judge it against calls it never saw.
+    /// </param>
     public StepAttemptState BeginStep(List<ChatMessage> conversation, IArtifactScope store,
-        IReadOnlyList<ChatMessage>? restartFrom = null, StepOutputSchema? output = null)
+        IReadOnlyList<ChatMessage>? restartFrom = null, StepOutputSchema? output = null, bool ownConversation = false)
     {
-        var journal = _sharedJournal ?? new ExecutionJournal();
+        var shared = ownConversation ? null : _sharedJournal;
+        var journal = shared ?? new ExecutionJournal();
         Track(journal, store);
         var start = journal.Mark();
-        return new(conversation, store, journal, _sharedReads ?? new ReadLedger(),
-            _sharedJournal is null ? start : 0, start, restartFrom) { Output = output };
+        return new(conversation, store, journal, (ownConversation ? null : _sharedReads) ?? new ReadLedger(),
+            shared is null ? start : 0, start, restartFrom) { Output = output };
     }
 }
 

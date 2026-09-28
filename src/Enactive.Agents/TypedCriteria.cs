@@ -38,9 +38,19 @@ public static class TypedCriteria
     /// <summary>The planner's "criteria" list, read leniently: whatever is there is kept for validation to judge.</summary>
     public static IReadOnlyList<PlannedCriterion> Read(JsonElement root)
     {
-        if (!root.TryGetProperty("criteria", out var list) || list.ValueKind != JsonValueKind.Array) return [];
+        // At the top of the plan, where the prompt asks for them - and inside steps, where a planner
+        // also puts them. They were read only at the top, so a plan that put "covers_all" and
+        // "file_exists" in its steps lost both without a word (run 80c951, 2026-09-28): not accepted,
+        // not dropped, not mentioned. A criterion stated twice is one criterion.
+        var items = new List<JsonElement>();
+        if (root.TryGetProperty("criteria", out var top) && top.ValueKind == JsonValueKind.Array)
+            items.AddRange(top.EnumerateArray());
+        if (root.TryGetProperty("steps", out var steps) && steps.ValueKind == JsonValueKind.Array)
+            foreach (var step in steps.EnumerateArray())
+                if (step.ValueKind == JsonValueKind.Object && step.TryGetProperty("criteria", out var own) && own.ValueKind == JsonValueKind.Array)
+                    items.AddRange(own.EnumerateArray());
         var read = new List<PlannedCriterion>();
-        foreach (var item in list.EnumerateArray())
+        foreach (var item in items.DistinctBy(i => JsonSerializer.Serialize(i)))
         {
             string? Text(string name) => item.ValueKind == JsonValueKind.Object && item.TryGetProperty(name, out var v)
                 && v.ValueKind == JsonValueKind.String ? v.GetString() : null;

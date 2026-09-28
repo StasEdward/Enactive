@@ -38,5 +38,7 @@ public interface ISuccessEvaluator
 public interface IHandover
 {
     /// <summary>The note, or why there is none - never a bare null (see <see cref="HandoverResult"/>).</summary>
-    Task<HandoverResult> GenerateAsync(IChatProvider provider, ChatRequest step, RunBudget runBudget, CancellationToken ct);
+    /// <param name="promptTokens">The conversation's size as the caller measured it, when it has; otherwise it is estimated.</param>
+    Task<HandoverResult> GenerateAsync(IChatProvider provider, ChatRequest step, RunBudget runBudget, CancellationToken ct,
+        int? promptTokens = null);
 }

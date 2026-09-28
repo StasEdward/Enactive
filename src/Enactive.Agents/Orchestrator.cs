@@ -1178,8 +1178,16 @@ public sealed partial class Orchestrator : IOrchestrator
             // Seeded with the base prompt plus a digest of what earlier steps concluded, rather
             // than replaying their whole tool transcript. Two steps could never append to one list
             // anyway, so a parallel run has always taken this path.
+            //
+            // A step for ONE ITEM takes it too, whatever the degree (Phase 5.3). Its inputs are
+            // handed to it as values, and what the steps before it read is not its business - while
+            // a shared conversation is exactly how one item's overflow became every later item's:
+            // measured 2026-09-28 13:29, run 80c951, eleven item steps ended "the context window is
+            // full ... nothing left to trim" in three seconds without making one call, each inheriting
+            // the 61,000-token conversation of the item before it.
+            var ownConversation = !stepsShareOneConversation || step.ExpandedFrom is not null;
             List<ChatMessage> convo;
-            if (stepsShareOneConversation)
+            if (!ownConversation)
             {
                 convo = messages;
             }
@@ -1202,7 +1210,7 @@ public sealed partial class Orchestrator : IOrchestrator
 
             // The request and plan live in the preamble, once per conversation. Only the active
             // scope is appended here; handover keeps that preamble plus this step's instruction.
-            if (!stepsShareOneConversation)
+            if (ownConversation)
                 convo.Add(ChatMessage.User("Engine-owned history of earlier commands (history-local IDs, not review citations):\n"
                     + session.RunEvidence().Describe(maxChars: _evidenceBudget).CommandHistory()
                     + "\nUse these recorded facts when writing reports. Do not omit initial failures or replace them with a later success."));
@@ -1218,8 +1226,9 @@ public sealed partial class Orchestrator : IOrchestrator
             }
             // What the steps it depends on handed on, as values (Phase 2) - not a retelling of them.
             var handedOn = step.DependsOn.Select(d => session.Outputs.TryGetValue(d, out var o) ? o : null).OfType<StepOutput>().ToArray();
-            if (handedOn.Length > 0)
-                convo.Add(ChatMessage.User(StepOutputContract.ForDependents(handedOn)));
+            var handedMessage = handedOn.Length > 0 ? ChatMessage.User(StepOutputContract.ForDependents(handedOn)) : null;
+            if (handedMessage is not null)
+                convo.Add(handedMessage);
             convo.Add(ChatMessage.User(
                 $"Proceed with this step of the plan: {step.Title}\n"
                 + $"This is step {stepNumber} of {total}. Current obligation scope: S{stepNumber}.\n"
@@ -1247,9 +1256,24 @@ public sealed partial class Orchestrator : IOrchestrator
             //
             // A FORKED conversation needs none of this - it opens with this step's instruction, so
             // Preamble() is already exactly right - and null says so rather than computing it twice.
-            var restartFrom = stepsShareOneConversation
-                ? runPreamble.Append(convo[^1]).ToArray()
-                : null;
+            //
+            // With what earlier steps concluded and what they handed on, as a forked step has them:
+            // it used to be the preamble and the instruction alone, so a step restarted this way lost
+            // the values it had been handed - the very thing it was told to work from.
+            ChatMessage[]? restartFrom = null;
+            if (!ownConversation)
+            {
+                string[] concluded;
+                lock (digest)
+                    concluded = digest.ToArray();
+                restartFrom = [.. runPreamble,
+                    .. concluded.Length > 0
+                        ? [ChatMessage.User("Earlier steps of this plan are already finished and their results are on disk:\n"
+                            + string.Join("\n", concluded.Select(d => "- " + d)))]
+                        : Array.Empty<ChatMessage>(),
+                    .. handedMessage is not null ? [handedMessage] : Array.Empty<ChatMessage>(),
+                    convo[^1]];
+            }
 
             // Per-step model auto-routing: pick the Execute model for this step's complexity (light for
             // trivial, heavy for complex, the worker's own for normal). Falls back to the base model.
@@ -1273,7 +1297,7 @@ public sealed partial class Orchestrator : IOrchestrator
 
             // The record of what has been done, over the same ground as `convo` above: shared with
             // the rest of the run when the conversation is, this step's own when it is not.
-            var attemptState = session.BeginStep(convo, store, restartFrom, step.Output);
+            var attemptState = session.BeginStep(convo, store, restartFrom, step.Output, ownConversation);
 
             // The workspace as this step found it. Taken once, before the first attempt: a retry
             // after a rejection is judged on everything the STEP changed, not on its last attempt.
@@ -2872,6 +2896,19 @@ public sealed partial class Orchestrator : IOrchestrator
         // stops at a question keeps what IT did, not what the steps before it did.
         var loopMark = journal.Mark();
 
+        // Whether this step has already been started again from its own instruction because the
+        // conversation it inherited left no room. Once: after that the room problem is its own.
+        var startedAfresh = false;
+
+        // Nothing of its own: no call in the record, and no reply after its instruction. The record
+        // alone is not enough - a step that has only WRITTEN has made no call, and its text is its work.
+        bool NothingOfItsOwn()
+        {
+            if (restartFrom is not { Count: > 0 } || journal.Actions.Any(a => a.Step == stepNo)) return false;
+            var at = messages.LastIndexOf(restartFrom[^1]);
+            return at >= 0 && !messages.Skip(at + 1).Any(m => m.Role == ChatRole.Assistant);
+        }
+
         // Carried on from where it stopped at a question, rather than done again from its beginning:
         // the conversation as it stood - every call made and what it answered - and the record of
         // what was done. The calls of that turn that never ran are answered as not run, so the model
@@ -3017,7 +3054,12 @@ public sealed partial class Orchestrator : IOrchestrator
                 var attempt = await _handover.GenerateAsync(
                     provider, new ChatRequest(model, messages, toolDefs, Temperature: 0.2, NumCtx: _numCtx, Think: _think,
                         OutputTokenLimit: (int)Math.Min(int.MaxValue, (long)_generationBudgets.For(GenerationPurpose.Handover) * (handoverFailures + 1)), Purpose: GenerationPurpose.Handover),
-                    runBudget, ct);
+                    runBudget, ct,
+                    // The size this loop MEASURED - the provider's last count plus what was added
+                    // since, at the rate this conversation showed. Without it the note was fitted on a
+                    // fixed three characters a token, and refused as "no room" at 61,413 of 65,536
+                    // real tokens with four thousand free (run 80c951), and six times that morning.
+                    promptTokens: measured ? (int)Math.Min(int.MaxValue, fullNow) : null);
                 var carried = attempt.Note;
 
                 // Why there is no note, said with what was measured. Six different faults used to
@@ -3244,6 +3286,26 @@ public sealed partial class Orchestrator : IOrchestrator
                             + $"This also costs the provider's prefix cache from that point: the next turn "
                             + $"re-reads the prompt instead of resuming it. {trimmedInARow} turn(s) running; "
                             + $"at {TrimsBeforeHandover} the step is handed over instead.");
+
+                    // A step that has done NOTHING yet, in a conversation it inherited from the steps
+                    // before it, has nothing of its own to lose: it starts again from the run's
+                    // instructions, what the earlier steps concluded and handed on, and its own
+                    // instruction - rather than end before its first call because an earlier step
+                    // filled the window (run 80c951, 2026-09-28).
+                    if (scale.TokensFor(sizeNow) > budget && restartFrom is not null && !startedAfresh && NothingOfItsOwn())
+                    {
+                        var inherited = scale.TokensFor(sizeNow);
+                        startedAfresh = true;
+                        messages.Clear();
+                        messages.AddRange(restartFrom);
+                        sizeNow = Transcript.Size(messages) + toolsOverhead;
+                        lastPromptTokens = null;
+                        trimmedInARow = 0;
+                        yield return Ev(EventKind.ContextTrimmed,
+                            $"The conversation this step inherited from earlier steps leaves it no room (about {inherited} of "
+                            + $"{window} tokens), and it has done nothing of its own yet: it starts from the run's instructions, "
+                            + "the earlier steps' conclusions and values, and its own instruction instead.");
+                    }
 
                     // Trimming had nothing left to give and the transcript still does not fit. Stop
                     // here rather than send it: the provider would answer with a fragment, and a

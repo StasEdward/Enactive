@@ -74,7 +74,7 @@ public sealed record HandoverResult(string? Note, HandoverFailure? Failure = nul
 public sealed class Handover : IHandover
 {
     public async Task<HandoverResult> GenerateAsync(
-        IChatProvider provider, ChatRequest step, RunBudget runBudget, CancellationToken ct)
+        IChatProvider provider, ChatRequest step, RunBudget runBudget, CancellationToken ct, int? promptTokens = null)
     {
         var asked = new List<ChatMessage>(step.Messages)
         {
@@ -95,7 +95,9 @@ public sealed class Handover : IHandover
         ChatRequest request;
         try
         {
-            request = GenerationAllowance.Fit(step with { Messages = asked }, provider);
+            // The measured size, plus the request for the note itself, when the caller has measured.
+            request = GenerationAllowance.Fit(step with { Messages = asked }, provider,
+                promptTokens is { } measured ? measured + new TokenScale().TokensFor(asked[^1].Content?.Length ?? 0) : null);
         }
         catch (InvalidOperationException ex)
         {
