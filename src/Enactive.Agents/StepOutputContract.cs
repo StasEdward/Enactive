@@ -2,6 +2,7 @@ namespace Enactive.Agents;
 
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Enactive.Core.Context;
 using Enactive.Core.Tasks;
 using Enactive.Core.Tools;
 
@@ -142,7 +143,10 @@ internal static class StepOutputContract
     /// </summary>
     /// <param name="exists">Whether a workspace-relative path exists - on disk, or staged by this run.</param>
     /// <param name="callExists">Whether a call number exists in this step's evidence.</param>
-    internal static Verdict Check(StepOutputSchema schema, string argumentsJson, Func<string, bool> exists, Func<int, bool> callExists)
+    /// <param name="items">For a step done for particular items: those items. A result per item is then keyed by
+    /// them and nothing else.</param>
+    internal static Verdict Check(StepOutputSchema schema, string argumentsJson, Func<string, bool> exists, Func<int, bool> callExists,
+        IReadOnlyList<string>? items = null)
     {
         var errors = new List<string>();
         var notes = new List<string>();
@@ -167,7 +171,7 @@ internal static class StepOutputContract
 
         var values = new JsonObject();
         foreach (var field in schema.Fields)
-            if (submitted[field.Name] is { } value && Field(field, value, exists, errors, notes) is { } kept)
+            if (submitted[field.Name] is { } value && Field(field, value, exists, errors, notes, items) is { } kept)
                 values[field.Name] = kept;
 
         var evidence = new List<int>();
@@ -185,7 +189,7 @@ internal static class StepOutputContract
     }
 
     private static JsonNode? Field(StepOutputField field, JsonNode value, Func<string, bool> exists,
-        List<string> errors, List<string> notes)
+        List<string> errors, List<string> notes, IReadOnlyList<string>? items = null)
     {
         string? Text()
         {
@@ -258,7 +262,7 @@ internal static class StepOutputContract
                 return new JsonArray(paths.Select(p => (JsonNode)JsonValue.Create(p)!).ToArray());
 
             case StepOutputFieldType.Results:
-                return Results(field, value, errors, notes);
+                return Results(field, value, errors, notes, items);
 
             default:
                 return List() is { } strings ? new JsonArray(strings.Select(p => (JsonNode)JsonValue.Create(p)!).ToArray()) : null;
@@ -270,7 +274,8 @@ internal static class StepOutputContract
     /// of items is not cut, which ones to drop is the work's decision - and a result over its length
     /// is cut and marked, like any text.
     /// </summary>
-    private static JsonObject? Results(StepOutputField field, JsonNode value, List<string> errors, List<string> notes)
+    private static JsonObject? Results(StepOutputField field, JsonNode value, List<string> errors, List<string> notes,
+        IReadOnlyList<string>? items = null)
     {
         if (value is not JsonObject map || map.Any(p => p.Value is not JsonValue v || !v.TryGetValue<string>(out _)))
         {
@@ -296,9 +301,42 @@ internal static class StepOutputContract
             return null;
         }
 
-        var kept = new JsonObject();
-        foreach (var (item, result) in map)
+        // A step for particular items keys its results by them. Run c30307ab, 2026-09-28: a page step keyed
+        // its finding "Architecture.md", and then six times by its own fields - "page", "verdict",
+        // "checks_checked", "details" - all accepted; coverage then counted each key as a file never read and
+        // asked for it to be read, and the step went round handing the same result on seven times.
+        // A key that names exactly one item by its file name or the end of its path is that item, and is
+        // said to be; any other key is refused, with the one shape that is right.
+        var renamed = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (items is { Count: > 0 })
         {
+            var strangers = new List<string>();
+            foreach (var key in map.Select(p => p.Key))
+            {
+                var normal = ShellLookup.Normal(key);
+                if (items.Any(i => string.Equals(ShellLookup.Normal(i), normal, StringComparison.OrdinalIgnoreCase)))
+                    continue;
+                var named = items.Where(i => ShellLookup.Normal(i).EndsWith("/" + normal.TrimStart('/'), StringComparison.OrdinalIgnoreCase)).ToArray();
+                if (named.Length == 1) renamed[key] = named[0];
+                else strangers.Add(key);
+            }
+            if (strangers.Count > 0)
+            {
+                errors.Add($"{field.Name}: {string.Join(", ", strangers.Take(5).Select(k => $"'{k}'"))}"
+                    + (strangers.Count > 5 ? $" and {strangers.Count - 5} more" : "")
+                    + $" {(strangers.Count == 1 ? "is not an item" : "are not items")} of this step. This step is for "
+                    + string.Join(", ", items) + $": the key is the item, and everything you found about it is ONE text value - "
+                    + $"{{\"{field.Name}\":{{\"{items[0]}\":\"...\"}}}}.");
+                return null;
+            }
+            foreach (var (from, to) in renamed)
+                notes.Add($"{field.Name}: '{from}' was taken as the item {to}.");
+        }
+
+        var kept = new JsonObject();
+        foreach (var (key, result) in map)
+        {
+            var item = renamed.GetValueOrDefault(key, key);
             var text = result!.GetValue<string>();
             if (field.MaxLength is { } limit && text.Length > limit)
             {
