@@ -3,6 +3,7 @@ namespace Enactive.Engine.Tests;
 using Enactive.Agents;
 using Enactive.Core.Builds;
 using Enactive.Core.Events;
+using Enactive.Core.Templates;
 using Xunit;
 
 /// <summary>
@@ -38,8 +39,9 @@ public sealed class AFlakyTestIsRunAgainTests
         public TestRunReport? ParseTests(string output)
         {
             var cases = output.Split('\n').Select(l => l.Trim())
-                .Where(l => l.StartsWith("PASS ", StringComparison.Ordinal) || l.StartsWith("FAIL ", StringComparison.Ordinal))
-                .Select(l => new TestCaseResult(l[5..], l.StartsWith("PASS", StringComparison.Ordinal) ? TestVerdict.Passed : TestVerdict.Failed))
+                .Where(l => l.StartsWith("PASS ", StringComparison.Ordinal) || l.StartsWith("FAIL ", StringComparison.Ordinal)
+                            || l.StartsWith("SKIP ", StringComparison.Ordinal))
+                .Select(l => new TestCaseResult(l[5..], l[0] switch { 'P' => TestVerdict.Passed, 'F' => TestVerdict.Failed, _ => TestVerdict.Skipped }))
                 .ToArray();
             return cases.Length == 0 ? null : new TestRunReport(cases, null);
         }
@@ -73,5 +75,63 @@ public sealed class AFlakyTestIsRunAgainTests
         var check = await TestCheckAsync(alwaysFails: true);
         Assert.StartsWith("FAIL", check.Summary, StringComparison.Ordinal);
         Assert.Contains("1 test(s) passed before the work and fail now: t1, both times it ran", check.Summary, StringComparison.Ordinal);
+    }
+
+    // ── the second run, read strictly (review P2) ─────────────────────────────────────
+
+    private static readonly Flip Eco = new();
+
+    private static CriterionResult Ran(string output, int? exit = 0)
+        => new("tests", "run", false, CriterionOutcome.Failed, exit, exit is null ? "the command tool was not available" : null,
+            CriterionOrigin.System) { Output = output };
+
+    private static CriterionResult Compare(string first, CriterionResult again)
+    {
+        var before = new BuildBaseline(Eco, "t", 0, null, null)
+            { Kind = BaselineKind.Test, Tests = Eco.ParseTests("PASS t1\nPASS t2")! };
+        return BuildRegression.Compare(before, Ran(first), "C:/w", again: again);
+    }
+
+    [Fact]
+    public void A_test_the_second_run_skipped_is_not_flaky_it_is_unconfirmed()
+    {
+        var result = Compare("FAIL t1\nPASS t2", Ran("SKIP t1\nPASS t2"));
+        Assert.Equal(CriterionOutcome.Unknown, result.Outcome);
+        Assert.DoesNotContain("flaky", result.Detail, StringComparison.Ordinal);
+        Assert.Contains("1 test(s) failed and were not confirmed by a second run (it skipped them or did not name them): t1", result.Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_test_the_second_run_did_not_name_is_unconfirmed()
+    {
+        var result = Compare("FAIL t1\nPASS t2", Ran("PASS t2"));
+        Assert.Equal(CriterionOutcome.Unknown, result.Outcome);
+        Assert.Contains("not confirmed", result.Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_second_run_that_did_not_happen_confirms_nothing()
+    {
+        var result = Compare("FAIL t1\nPASS t2", Ran("", exit: null));
+        Assert.Equal(CriterionOutcome.Unknown, result.Outcome);
+        Assert.DoesNotContain("both times", result.Detail, StringComparison.Ordinal);
+        Assert.Contains("(it did not run: the command tool was not available): t1", result.Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Failed_twice_is_counted_and_what_was_not_confirmed_is_said_beside_it()
+    {
+        var result = Compare("FAIL t1\nFAIL t2", Ran("FAIL t1\nSKIP t2"));
+        Assert.Equal(CriterionOutcome.Failed, result.Outcome);
+        Assert.Contains("1 test(s) passed before the work and fail now: t1, both times it ran", result.Detail, StringComparison.Ordinal);
+        Assert.Contains("not confirmed by a second run (it skipped them or did not name them): t2", result.Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Only_a_test_that_passed_the_second_time_is_flaky()
+    {
+        var result = Compare("FAIL t1\nPASS t2", Ran("PASS t1\nPASS t2"));
+        Assert.Equal(CriterionOutcome.Passed, result.Outcome);
+        Assert.Contains("flaky, not counted: t1", result.Detail, StringComparison.Ordinal);
     }
 }

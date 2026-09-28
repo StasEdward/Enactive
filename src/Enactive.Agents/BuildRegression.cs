@@ -204,6 +204,9 @@ internal static class BuildRegression
     /// the work's regression; a test failing now that the run before did not name at all is
     /// reported and not counted - it may be exactly what the work was asked to add.
     /// </summary>
+    private static string Named(IReadOnlyCollection<string> tests)
+        => string.Join(", ", tests.Take(MaxNamed)) + (tests.Count > MaxNamed ? $", and {tests.Count - MaxNamed} more" : "");
+
     private static CriterionResult CompareTests(BuildBaseline before, CriterionResult after,
         Func<CriterionOutcome, string, CriterionResult> result, string span,
         CriterionResult? again)
@@ -233,21 +236,35 @@ internal static class BuildRegression
         var broken = now.Regressions(was);
         // Run again (deferred item B): a test that fails once and passes the next time is flaky, not
         // broken by the work - on this machine one test suite gave 41, 42, 43 and 46 failures on the
-        // same code. Only what failed both times is counted.
+        // same code. Only what failed both times is counted, and only what PASSED the second time is
+        // flaky: a test the second run skipped or did not name, or a second run that did not happen,
+        // has confirmed nothing either way.
         var flakyNote = "";
-        if (broken.Count > 0 && again?.ExitCode is not null && before.Ecosystem.ParseTests(again.Output ?? "") is { } second)
+        var unconfirmed = Array.Empty<string>();
+        if (broken.Count > 0 && again is not null)
         {
-            var twice = second.Regressions(was);
-            var flaky = broken.Where(t => !twice.Contains(t)).ToArray();
-            broken = broken.Where(twice.Contains).ToArray();
+            var second = again.ExitCode is null ? null : before.Ecosystem.ParseTests(again.Output ?? "");
+            var flaky = second is null ? [] : broken.Where(t => second.VerdictOf(t) == TestVerdict.Passed).ToArray();
+            unconfirmed = broken.Where(t => second?.VerdictOf(t) is not (TestVerdict.Passed or TestVerdict.Failed)).ToArray();
+            broken = second is null ? [] : broken.Where(t => second.VerdictOf(t) == TestVerdict.Failed).ToArray();
             if (flaky.Length > 0)
                 flakyNote = $" {flaky.Length} test(s) failed and then passed when run again - flaky, not counted: "
-                    + string.Join(", ", flaky.Take(MaxNamed)) + (flaky.Length > MaxNamed ? $", and {flaky.Length - MaxNamed} more" : "") + ".";
+                    + Named(flaky) + ".";
+            if (unconfirmed.Length > 0)
+                flakyNote += $" {unconfirmed.Length} test(s) failed and were not confirmed by a second run ("
+                    + (second is null
+                        ? again.ExitCode is null
+                            ? "it did not run" + (string.IsNullOrWhiteSpace(again.Detail) ? "" : ": " + again.Detail)
+                            : "nothing it printed reads as a test result"
+                        : "it skipped them or did not name them")
+                    + "): " + Named(unconfirmed) + ".";
         }
         if (broken.Count > 0)
             return result(CriterionOutcome.Failed, $"{broken.Count} test(s) passed before {span} and fail now: "
-                + string.Join(", ", broken.Take(MaxNamed)) + (broken.Count > MaxNamed ? $", and {broken.Count - MaxNamed} more" : "")
-                + (again is null ? "" : ", both times it ran") + $". ({totals}){newNote}{flakyNote}");
+                + Named(broken) + (again is null ? "" : ", both times it ran") + $". ({totals}){newNote}{flakyNote}");
+        if (unconfirmed.Length > 0)
+            return result(CriterionOutcome.Unknown, $"no test that passed before {span} failed twice, and not every failure "
+                + $"could be checked again ({totals}).{newNote}{flakyNote}");
 
         return result(CriterionOutcome.Passed, $"no test that passed before {span} fails now ({totals}).{newNote}{flakyNote}");
     }

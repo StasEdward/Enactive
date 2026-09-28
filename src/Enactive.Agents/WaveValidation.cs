@@ -50,7 +50,10 @@ internal sealed class WaveCapture
 
     public string? NotTaken { get; }
 
-    public static WaveCapture Take(string root, IReadOnlyList<IEcosystem> ecosystems, long maxBytes = MaxBytes)
+    /// <param name="everything">Every file outside the skipped folders, not only what a build reads: what
+    /// trial builds must leave as they found it.</param>
+    public static WaveCapture Take(string root, IReadOnlyList<IEcosystem> ecosystems, long maxBytes = MaxBytes,
+        bool everything = false)
     {
         var files = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
         long total = 0;
@@ -66,11 +69,12 @@ internal sealed class WaveCapture
                 foreach (var file in Directory.EnumerateFiles(dir))
                 {
                     var rel = Path.GetRelativePath(root, file).Replace('\\', '/');
-                    if (!ecosystems.Any(e => e.Owns(rel))) continue;
+                    if (!everything && !ecosystems.Any(e => e.Owns(rel))) continue;
                     var bytes = File.ReadAllBytes(file);
                     total += bytes.Length;
                     if (total > maxBytes)
-                        return new(null, $"what the build reads is more than {maxBytes / (1024 * 1024)} MB, too much to keep a copy of");
+                        return new(null, $"{(everything ? "the workspace" : "what the build reads")} is more than "
+                            + $"{maxBytes / (1024 * 1024)} MB, too much to keep a copy of");
                     files[rel] = bytes;
                 }
             }
@@ -112,6 +116,27 @@ internal sealed class WaveCapture
             else if (File.Exists(full))
                 File.Delete(full);
         }
+    }
+
+    /// <summary>
+    /// Puts the whole workspace back as <paramref name="whole"/> (taken with <c>everything</c>) had it -
+    /// every file that differs, whoever changed it, added ones removed - and says what could NOT be put
+    /// back: empty when the workspace is as it was. Trial builds write what they write; nothing of it
+    /// may outlive them (a trial that changed a file the wave did not was left in place before).
+    /// </summary>
+    public static IReadOnlyList<string> Restore(string root, WaveCapture whole, IReadOnlyList<IEcosystem> ecosystems)
+    {
+        var now = Take(root, ecosystems, everything: true);
+        if (now.Files is null) return ["(the workspace could not be read back: " + now.NotTaken + ")"];
+        foreach (var path in Changed(whole, now))
+        {
+            try { Put(root, [path], whole); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* named by the check below */ }
+        }
+        var back = Take(root, ecosystems, everything: true);
+        return back.Files is null
+            ? ["(the workspace could not be read back: " + back.NotTaken + ")"]
+            : Changed(whole, back).Order(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
     /// <summary>A workspace-relative path with forward slashes, or null for one outside the workspace.</summary>
@@ -253,6 +278,9 @@ internal sealed class WaveLedger
     {
         get { lock (_gate) return _steps.ToArray(); }
     }
+
+    /// <summary>Whether the current wave has a step that needs it validated before anything new starts.</summary>
+    public bool Waiting => Steps.Any(s => Reference.Any(b => s.Changes(b.Ecosystem)));
 
     /// <summary>Whether this wave changed what <paramref name="ecosystem"/>'s build reads (6.1).</summary>
     public bool Requires(IEcosystem ecosystem) => Steps.Any(s => s.Changes(ecosystem));

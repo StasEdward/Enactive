@@ -16,7 +16,7 @@ using Xunit;
 /// </summary>
 public sealed class WavesAreValidatedAndAttributedTests
 {
-    private sealed class Pages : IEcosystem
+    private sealed class Pages(string extra = "") : IEcosystem
     {
         public string Name => "pages";
 
@@ -25,7 +25,8 @@ public sealed class WavesAreValidatedAndAttributedTests
 
         public bool Owns(string relativePath) => relativePath.EndsWith(".page", StringComparison.OrdinalIgnoreCase);
 
-        public string BuildCommand(string target) => "echo x>>builds.log & findstr /s /n /c:\"BROKEN\" *.page";
+        public string BuildCommand(string target)
+            => "echo x>>builds.log & " + (extra.Length > 0 ? $"({extra}) & " : "") + "findstr /s /n /c:\"BROKEN\" *.page";
 
         public string TestCommand(string target) => "echo none";
 
@@ -48,9 +49,9 @@ public sealed class WavesAreValidatedAndAttributedTests
            + string.Join(",", steps.Select(s => $"{{\"title\":\"{s.Title}\",\"dependsOn\":[{string.Join(",", s.After)}]}}"))
            + "]}";
 
-    private static EngineFixture Wiki()
+    private static EngineFixture Wiki(string extra = "")
     {
-        var fx = new EngineFixture { EcosystemsOverride = [new Pages()], ValidateWaves = true };
+        var fx = new EngineFixture { EcosystemsOverride = [new Pages(extra)], ValidateWaves = true };
         fx.Write("pages.lint", "rules");
         fx.Write("pages/home.page", "# Home\n");
         return fx;
@@ -81,6 +82,32 @@ public sealed class WavesAreValidatedAndAttributedTests
                                      && e.Summary.Contains("wave 1", StringComparison.Ordinal));
         Assert.Equal(2, Builds(fx));                                             // the baseline, and the wave
         Assert.DoesNotContain(events, e => e.Summary.Contains("regression", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// A step that builds on a wave starts after the wave is validated, not with it. A step marks itself done
+    /// a moment before its task ends, and the dependent was dispatched in that moment - the wave then ran on
+    /// into it, and was validated with the dependent's changes in it.
+    /// </summary>
+    [Fact]
+    public async Task What_builds_on_a_wave_starts_after_it_is_validated()
+    {
+        const string Gamma = "Gamma builds on both";
+        for (var run = 0; run < 5; run++)
+        {
+            using var fx = Wiki();
+            var provider = new ByStepChatProvider(Plan((Alpha, []), (Beta, []), (Gamma, [0, 1])));
+            provider.Step(Alpha, Writes("pages/a.page", "# A", "a1"), Turn.Says("Wrote a."));
+            provider.Step(Beta, Writes("pages/b.page", "# B", "b1"), Turn.Says("Wrote b."));
+            provider.Step(Gamma, Writes("pages/c.page", "# C", "c1"), Turn.Says("Wrote c."));
+
+            var events = (await fx.RunAsync(fx.Build(provider, EngineFixture.Role("developer"), maxParallelSteps: 2), "write the pages")).ToList();
+
+            var validated = events.FindIndex(e => e.Summary.StartsWith("Wave 1 (steps 1 and 2)", StringComparison.Ordinal));
+            var started = events.FindIndex(e => e.Kind == EventKind.StepStarted && e.Summary.Contains(Gamma, StringComparison.Ordinal));
+            Assert.True(validated >= 0 && validated < started, string.Join("\n", events.Select(e => e.Summary)));
+            Assert.Single(Lines(events, "Wave 2 (step 3)"));
+        }
     }
 
     /// <summary>THE ONE THAT MATTERS: two steps in one wave, one breaks the build, and the engine says which.</summary>
@@ -179,6 +206,56 @@ public sealed class WavesAreValidatedAndAttributedTests
     /// A file two steps both wrote is not one step's alone: the store keeps them from overwriting each other,
     /// but edits of one file by two steps leave content neither made alone, and a trial cannot split it.
     /// </summary>
+    /// <summary>
+    /// Review finding P1: a trial build that wrote a file the wave had not changed left it behind. Here
+    /// every build appends to builds.log, and the trial with page a and without page b writes a page of
+    /// its own - one the build READS. Neither outlives the trials, and neither reaches the next trial.
+    /// </summary>
+    [Fact]
+    public async Task What_a_trial_build_writes_anywhere_does_not_outlive_it()
+    {
+        using var fx = Wiki(@"if exist pages\a.page if not exist pages\b.page (echo # gen>pages\gen.page)");
+        var provider = new ByStepChatProvider(Plan((Alpha, []), (Beta, [])));
+        provider.Step(Alpha, Writes("pages/a.page", "# A", "a1"), Turn.Says("Wrote a."));
+        provider.Step(Beta, Writes("pages/b.page", "BROKEN link", "b1"), Turn.Says("Wrote b."));
+
+        var events = await fx.RunAsync(fx.Build(provider, EngineFixture.Role("developer"), maxParallelSteps: 2), "write the pages");
+
+        Assert.Contains("(2 trial build(s))", Assert.Single(Lines(events, "Wave 1 regression")), StringComparison.Ordinal);
+        Assert.False(File.Exists(Path.Combine(fx.Root, "pages", "gen.page")));
+        Assert.Equal(2, Builds(fx));                                             // the trials' lines are gone with them
+        Assert.Empty(Lines(events, "could not be put back"));
+    }
+
+    /// <summary>What cannot be put back stops the run: no step builds on a workspace the engine's trials changed.</summary>
+    [Fact]
+    public async Task A_workspace_that_cannot_be_put_back_stops_the_run()
+    {
+        const string After = "Gamma builds on both";
+        using var fx = Wiki(@"if exist pages\a.page if not exist pages\b.page (echo x>stuck.txt & attrib +r stuck.txt)");
+        try
+        {
+            var provider = new ByStepChatProvider(Plan((Alpha, []), (Beta, []), (After, [0, 1])));
+            provider.Step(Alpha, Writes("pages/a.page", "# A", "a1"), Turn.Says("Wrote a."));
+            provider.Step(Beta, Writes("pages/b.page", "BROKEN link", "b1"), Turn.Says("Wrote b."));
+            provider.Step(After, Turn.Says("Built on them."));
+
+            var events = await fx.RunAsync(fx.Build(provider, EngineFixture.Role("developer"), maxParallelSteps: 2), "write the pages");
+
+            Assert.Contains(events, e => e.Kind == EventKind.ErrorObserved
+                                         && e.Summary.Contains("could not be put back as the wave left it (stuck.txt)", StringComparison.Ordinal));
+            Assert.Contains(events, e => e.Kind == EventKind.StepCompleted && e.Summary.Contains(After, StringComparison.Ordinal)
+                                         && e.Summary.Contains("skipped", StringComparison.Ordinal));
+            Assert.DoesNotContain(provider.Requests, r => r.Messages.Any(m => m.Content?.Contains(After, StringComparison.Ordinal) == true
+                                                                               && m.Content.Contains("Proceed with this step", StringComparison.Ordinal)));
+        }
+        finally
+        {
+            var stuck = Path.Combine(fx.Root, "stuck.txt");
+            if (File.Exists(stuck)) File.SetAttributes(stuck, FileAttributes.Normal);
+        }
+    }
+
     [Fact]
     public async Task Two_steps_that_wrote_the_same_file_are_an_ambiguous_attribution()
     {

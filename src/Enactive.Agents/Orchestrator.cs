@@ -1804,9 +1804,12 @@ public sealed partial class Orchestrator : IOrchestrator
             => (await CheckSuccessAsync(which.Select(b => BuildRegression.Criterion(b.Ecosystem, b.Target, b.Kind)).ToArray(),
                 scope.TaskId, scope.RunId, intent.Context, wct)).Results.ToArray();
 
-        async Task WaveBoundaryAsync()
+        // Why the run cannot go on after a wave, or null: a workspace the engine's own trial builds changed
+        // and could not put back is not one any further step may build on.
+        async Task<string?> WaveBoundaryAsync()
         {
-            if (waves is null || waves.Steps is not { Count: > 0 } steps) return;
+            if (waves is null || waves.Steps is not { Count: > 0 } steps) return null;
+            string? stop = null;
             var wct = stepLifetime.Token;
             var root = _workspace.RootPath;
             var no = waves.Closed + 1;
@@ -1818,7 +1821,7 @@ public sealed partial class Orchestrator : IOrchestrator
                 waves.Close();
                 await Publish(scope.Ev(EventKind.ContextAssembled,
                     $"Wave {no} ({span}) changed nothing a build reads: no validation needed."));
-                return;
+                return null;
             }
 
             await Publish(scope.Ev(EventKind.ContextAssembled,
@@ -1842,11 +1845,18 @@ public sealed partial class Orchestrator : IOrchestrator
                 {
                     var what = string.Join("; ", regressions.Select(r => r.Describe()));
                     Attribution attribution;
+                    // The whole workspace as the wave left it - not only what the build reads - so that
+                    // whatever a trial build writes, anywhere, is put back. No copy, no trials.
+                    var whole = waves.Before?.Files is null || after.Files is null || _artifacts.PendingPaths.Count > 0
+                        ? null : WaveCapture.Take(root, _ecosystems, everything: true);
                     if (waves.Before?.Files is null || after.Files is null)
                         attribution = new(null, steps, "the files the build reads were not kept - "
                             + (waves.Before?.NotTaken ?? after.NotTaken), 0);
                     else if (_artifacts.PendingPaths.Count > 0)
                         attribution = new(null, steps, "the run's writes are staged, not on disk, so no step can be tried alone", 0);
+                    else if (whole is not { Files: not null })
+                        attribution = new(null, steps, "the workspace could not be copied to be put back after trial builds, "
+                            + "so no step was tried alone: " + whole?.NotTaken, 0);
                     else
                     {
                         var before = waves.Before;
@@ -1854,6 +1864,10 @@ public sealed partial class Orchestrator : IOrchestrator
                         var targets = regressions.Select(r => r.Reference).ToArray();
                         async Task<bool?> Trial(IReadOnlySet<string> files)
                         {
+                            // From the wave's end every time: what the last trial wrote does not reach the next.
+                            if (WaveCapture.Restore(root, whole, _ecosystems) is { Count: > 0 } stuck)
+                                throw new IOException("a trial build left files that could not be put back: "
+                                    + string.Join(", ", stuck.Take(5)));
                             WaveCapture.Put(root, changed.Except(files, StringComparer.OrdinalIgnoreCase), before);
                             WaveCapture.Put(root, files, after);
                             var trial = await BuildsNowAsync(targets, wct);
@@ -1871,13 +1885,13 @@ public sealed partial class Orchestrator : IOrchestrator
                         }
                         finally
                         {
-                            // Always as the wave left it, whatever a trial did or threw.
-                            WaveCapture.Put(root, changed, after);
+                            // Always as the wave left it, whatever a trial did or threw - every file, not
+                            // only the wave's. What cannot be put back stops the run.
+                            if (WaveCapture.Restore(root, whole, _ecosystems) is { Count: > 0 } left)
+                                stop = "after trying the wave's steps one by one, the workspace could not be put back as the "
+                                    + $"wave left it ({string.Join(", ", left.Take(5))}{(left.Count > 5 ? ", ..." : "")}); "
+                                    + "no further step runs on a workspace the engine's own trial builds changed";
                         }
-                        if (WaveCapture.Take(root, _ecosystems) is { Files: not null } back && WaveCapture.Changed(after, back).Count > 0)
-                            await Publish(scope.Ev(EventKind.ErrorObserved,
-                                "After trying the wave's steps one by one, the workspace is not as the wave left it: "
-                                + string.Join(", ", WaveCapture.Changed(after, back).Take(5))));
                     }
                     var trials = attribution.Trials == 0 ? "" : $" ({attribution.Trials} trial build(s))";
                     await Publish(scope.Ev(EventKind.ErrorObserved, attribution.Culprit is { } culprit
@@ -1904,6 +1918,7 @@ public sealed partial class Orchestrator : IOrchestrator
                 waveBeforeKnown = true;
                 waves.Before = after ?? WaveCapture.Take(root, _ecosystems);
             }
+            return stop;
         }
 
         // Dispatcher: keep up to maxParallel steps in flight, topping up as each one finishes.
@@ -1934,7 +1949,8 @@ public sealed partial class Orchestrator : IOrchestrator
                     // checkpoint records those steps as Skipped. If the process then dies, a
                     // resume does not quietly do work a limit had already refused.
                     await CheckpointAsync();
-                }, () => events.Writer.TryComplete(), waves is null ? null : WaveBoundaryAsync);
+                }, () => events.Writer.TryComplete(), waves is null ? null : WaveBoundaryAsync,
+                waves is null ? null : () => waves.Waiting);
         }, CancellationToken.None);
 
         try

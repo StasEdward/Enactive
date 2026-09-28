@@ -31,6 +31,9 @@ public sealed record TestRunReport(IReadOnlyList<TestCaseResult> Cases, TestRunS
         return verdicts;
     }
 
+    /// <summary>How one test came out in this run, or null when the run did not name it.</summary>
+    public TestVerdict? VerdictOf(string name) => ByName().TryGetValue(name, out var verdict) ? verdict : null;
+
     /// <summary>Tests that passed in <paramref name="before"/> and fail now.</summary>
     public IReadOnlyList<string> Regressions(TestRunReport before)
     {
