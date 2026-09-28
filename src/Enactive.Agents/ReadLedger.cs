@@ -47,11 +47,23 @@ internal sealed class ReadLedger
         // model's business; what was seen is the engine's, and it aggregates the ranges itself.
         private readonly List<(int From, int To)> _seen = new();
 
-        public void Clear() => _seen.Clear();
+        // It WAS read, and the text has since been cut from the conversation (a trim, a handover).
+        // Not the same as never having seen it whole, and the refusal must not say it was: on
+        // 2026-09-28 11:36 a step read a 48-line file in full, the conversation was trimmed, and
+        // the write was refused as "seen only as an excerpt" - three times, the model never
+        // re-reading, and the step ended there.
+        public bool Discarded;
+
+        public void Clear()
+        {
+            Discarded |= _seen.Count > 0;
+            _seen.Clear();
+        }
 
         public void Add(int from, int to)
         {
             if (to < from) return;
+            Discarded = false;
             _seen.Add((from, to));
             _seen.Sort((a, b) => a.From.CompareTo(b.From));
             var merged = new List<(int From, int To)>();
@@ -251,6 +263,12 @@ internal sealed class ReadLedger
                  + $"Either use edit_file, which replaces one exact passage and leaves the rest alone, or read "
                  + $"what is missing first: read_file with \"offset\": {next}.";
         }
+
+        if (coverage.Discarded)
+            return $"This step read '{path}' earlier, but that text has since been cut from this conversation to "
+                 + "make room, so a whole-file write now would be written from memory of it and replace what is "
+                 + "actually there. Read it again first - read_file with \"offset\": 1 - or change one passage "
+                 + "with edit_file.";
 
         if (coverage.Contiguous == 0)
             return $"This step has seen '{path}' only as an excerpt, not whole ({coverage.Total} lines), so a "

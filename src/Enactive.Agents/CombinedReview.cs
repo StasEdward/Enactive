@@ -236,7 +236,7 @@ public sealed partial class Reviewer
                 {
                     // Kept with what it was checked against, so this refusal can be replayed in a
                     // second instead of rediscovered by a run. See ReviewCorpus.
-                    ReviewCorpus.Record(workspaceRoot, ReviewCorpus.Capture(model, decoded, obligations, evidence, sources, errors));
+                    ReviewCorpus.Record(workspaceRoot, ReviewCorpus.Capture(model, decoded, obligations, evidence, sources, errors, rawAnswer));
                     problem = "Combined review response has structural errors:\n" + string.Join("\n", errors.Select(e => "- " + e));
                     messages.Add(ChatMessage.Assistant(rawAnswer));
                     if (attempt == 0 && errors.All(e => e.StartsWith("$.report_checks: missing requirement-map assessment for ", StringComparison.Ordinal))

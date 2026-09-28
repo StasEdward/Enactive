@@ -60,13 +60,31 @@ internal static class ModelText
     /// same as valid: prose like "I used the shape {like this}" is a balanced span and not JSON, and
     /// returning it would throw away the real object further along the same sentence. The first
     /// candidate that parses is the answer.</para>
+    ///
+    /// <para><b>Never an object from INSIDE a broken one.</b> A candidate that fails is stepped over
+    /// whole, not one character at a time: stepping in finds its own members - whole, balanced,
+    /// valid - and hands one back as the answer. On 2026-09-28 11:01 a reviewer's 4,644-character
+    /// answer had one ']' where a '}' belonged, so its root never closed; the scan went on inside it,
+    /// found the step's assessment {"verdict":"fail","reason":"..."}, and validated THAT as the whole
+    /// answer. The reviewer was told eight required fields were missing - every one of which it had
+    /// sent - and never that its JSON was broken. And an object that opens with a key and never closes
+    /// is the answer, cut off or mistyped: everything after its brace lies inside it, so there is
+    /// nothing further along to find (see <see cref="JsonProblem"/> for saying what broke).</para>
     /// </summary>
     public static string? ExtractJsonObject(string text)
     {
         for (var i = 0; i < text.Length; i++)
         {
-            if (text[i] != '{' || Balanced(text, i) is not { } candidate)
+            if (text[i] != '{')
                 continue;
+
+            if (Balanced(text, i) is not { } candidate)
+            {
+                // Prose like "{see below" never closes either, and the answer may follow it. An
+                // object that opens with a key is not prose.
+                if (OpensWithKey(text, i)) return null;
+                continue;
+            }
 
             try
             {
@@ -76,11 +94,49 @@ internal static class ModelText
             }
             catch (JsonException)
             {
-                // Balanced but not JSON. Keep looking - the real object may be further along.
+                // Balanced but not JSON - prose like "{like this}", or a broken object. Either way
+                // its inside is not the answer: carry on AFTER it.
             }
+            i += candidate.Length - 1;
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Why the text holds no JSON object, where one was plainly meant: the parser's own complaint
+    /// about the first object that opens with a key, with a few characters either side of where it
+    /// stopped. Null when there is no such object to complain about.
+    /// </summary>
+    public static string? JsonProblem(string text)
+    {
+        for (var i = 0; i < text.Length; i++)
+        {
+            if (text[i] != '{' || !OpensWithKey(text, i)) continue;
+            var candidate = Balanced(text, i) ?? text[i..];
+            try
+            {
+                using var _ = JsonDocument.Parse(candidate);
+                return null;
+            }
+            catch (JsonException ex)
+            {
+                var at = (int)Math.Min(ex.BytePositionInLine ?? 0, candidate.Length);
+                var near = candidate[Math.Max(0, at - 40)..Math.Min(candidate.Length, at + 20)].Replace('\n', ' ');
+                return Balanced(text, i) is null
+                    ? $"the JSON object is never closed - a brace or bracket is missing or mistyped; the parser stopped near: …{near}…"
+                    : $"the JSON object does not parse ({ex.Message}); near: …{near}…";
+            }
+        }
+        return null;
+    }
+
+    private static bool OpensWithKey(string text, int brace)
+    {
+        for (var j = brace + 1; j < text.Length; j++)
+            if (!char.IsWhiteSpace(text[j]))
+                return text[j] == '"';
+        return false;
     }
 
     private static string? Balanced(string text, int start)

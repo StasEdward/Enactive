@@ -19,7 +19,12 @@ internal static class CombinedReviewValidation
     {
         var errors = new List<string>();
         var json = ModelText.ExtractJsonObject(ModelText.StripThink(answer));
-        if (json is null) return ["$: expected a combined JSON object"];
+        // What broke, when an object was plainly meant - not a list of fields "missing" from a
+        // fragment of it (see ModelText.ExtractJsonObject, 2026-09-28 11:01).
+        if (json is null)
+            return [ModelText.JsonProblem(ModelText.StripThink(answer)) is { } broken
+                ? "$: " + broken + ". Return the whole object again, complete and valid."
+                : "$: expected a combined JSON object"];
         try
         {
             using var document = JsonDocument.Parse(json);

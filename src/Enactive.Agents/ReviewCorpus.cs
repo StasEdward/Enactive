@@ -23,7 +23,17 @@ internal sealed record ReviewCorpusCase(
     RequestObligations Obligations,
     ReviewCorpusEvidence Evidence,
     IReadOnlyList<ReviewCorpusSource> Sources,
-    IReadOnlyList<string> Errors);
+    IReadOnlyList<string> Errors)
+{
+    /// <summary>
+    /// What the model actually sent, before the engine took a JSON object out of it and decoded its
+    /// references. <see cref="Answer"/> is what the validators saw, and on 2026-09-28 11:01 the two
+    /// were different things: the extraction handed on a fragment of a broken answer, and a corpus
+    /// holding only the fragment could not show that. For reading, not replayed: turning it into
+    /// <see cref="Answer"/> needs the review's reference table. Null in cases recorded before it.
+    /// </summary>
+    public string? RawAnswer { get; init; }
+}
 
 /// <summary>What refuses a review answer, and what is only a gap in its repairs. See <see cref="ReviewCorpus.Check"/>.</summary>
 internal sealed record ReviewValidation(IReadOnlyList<string> Refusals, IReadOnlyList<string> RepairGaps);
@@ -95,14 +105,14 @@ internal static class ReviewCorpus
     }
 
     internal static ReviewCorpusCase Capture(string model, string answer, RequestObligations obligations,
-        EvidenceView evidence, ReviewSources sources, IReadOnlyList<string> errors)
+        EvidenceView evidence, ReviewSources sources, IReadOnlyList<string> errors, string? rawAnswer = null)
     {
         var view = evidence.ReplaySnapshot();
         return new(DateTimeOffset.UtcNow, model, answer, obligations,
             new(view.Text, view.Actions, view.VisibleActionIds,
                 view.OutputsTruncated, view.ArgumentsTruncated, view.HasPriorTranscript),
             sources.All.Select(s => new ReviewCorpusSource(s.Id, s.Kind, s.Label, s.VisibleText)).ToArray(),
-            errors.ToArray());
+            errors.ToArray()) { RawAnswer = rawAnswer };
     }
 
     /// <summary>Best effort; see <see cref="RefusalCorpus.Record{T}"/>.</summary>
