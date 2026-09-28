@@ -68,7 +68,8 @@ internal static class ReportCommandAudit
                     {
                         var last = Text(item, "occurrence") == "last";
                         if (evidence.CommandOccurrence(number, step, last) is { } actual && actual != number)
-                            errors.Add(path + $".occurrence: selected {(last ? "last" : "first")} command is call {actual}, not {number}. "
+                            errors.Add(path + $".occurrence: selected {(last ? "last" : "first")} command is call {actual}, not {number}"
+                                + (evidence.VisibleActionIds.Contains(actual) ? ". " : $" (call {actual} is older than the calls you were shown). ")
                                 + "Use specific unless the source actually asserts an initial/final occurrence. "
                                 + "If the source is false, explain that as a verdict defect using the correct reference.");
                         if (!last && evidence.HasPriorTranscript)

@@ -68,10 +68,20 @@ internal static class HandoverEvidence
                          .Append("A file you changed only to try something - a deliberate breakage, a temporary ")
                          .Append("edit - is still changed until you put it back:\n");
 
+                    // Which of them a file tool of this step wrote. The rest differ all the same, but the
+                    // engine cannot say this step changed them - a command may have, or something
+                    // outside the run did (run 3fe4f8, 2026-09-28: three files deleted by nobody in
+                    // the run, and the step was told it had changed them). Putting back a file this
+                    // step never touched would undo somebody else's work.
+                    var mine = touched.Select(PathKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
                     var room = MaxHandoverDiffChars;
                     foreach (var change in found.Take(20))
                     {
-                        facts.Append($"  - {change.Path} ({change.Kind.ToString().ToLowerInvariant()})\n");
+                        facts.Append($"  - {change.Path} ({change.Kind.ToString().ToLowerInvariant()})")
+                             .Append(mine.Contains(PathKey(change.Path)) ? "" : " - no file tool of this step wrote it: "
+                                 + "a command you ran may have, or something outside the run did. Do not put it back "
+                                 + "unless you know this step changed it")
+                             .Append('\n');
                         if (change.Kind != FileChangeKind.Modified || change.Diff is not { Length: > 0 } diff)
                             continue;
 

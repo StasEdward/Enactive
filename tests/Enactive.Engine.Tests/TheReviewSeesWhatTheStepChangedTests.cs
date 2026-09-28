@@ -61,7 +61,7 @@ public sealed class TheReviewSeesWhatTheStepChangedTests
         await fx.RunAsync(fx.Build(worker, router: Routers.WithReviewer(), reviewProvider: reviewer), "append it");
 
         var prompt = PromptOf(reviewer);
-        Assert.Contains("What this step CHANGED in the workspace", prompt, StringComparison.Ordinal);
+        Assert.Contains("What CHANGED in the workspace while this step ran", prompt, StringComparison.Ordinal);
         Assert.Contains("+appended-by-a-command", prompt, StringComparison.Ordinal);
     }
 
@@ -107,7 +107,7 @@ public sealed class TheReviewSeesWhatTheStepChangedTests
         await fx.RunAsync(fx.Build(worker, router: Routers.WithReviewer(), reviewProvider: reviewer), "check the disks");
 
         var prompt = PromptOf(reviewer);
-        Assert.Contains("NEW FILE, created by this step", prompt, StringComparison.Ordinal);
+        Assert.Contains("NEW FILE, created while this step ran, by no file tool of it (a command it ran can have done it", prompt, StringComparison.Ordinal);
         Assert.Contains("disk-report-line", prompt, StringComparison.Ordinal);
     }
 
@@ -126,6 +126,6 @@ public sealed class TheReviewSeesWhatTheStepChangedTests
 
         await fx.RunAsync(fx.Build(worker, router: Routers.WithReviewer(), reviewProvider: reviewer), "look");
 
-        Assert.DoesNotContain("What this step CHANGED", PromptOf(reviewer), StringComparison.Ordinal);
+        Assert.DoesNotContain("What CHANGED in the workspace", PromptOf(reviewer), StringComparison.Ordinal);
     }
 }

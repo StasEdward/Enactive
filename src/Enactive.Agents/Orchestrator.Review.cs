@@ -125,7 +125,7 @@ public sealed partial class Orchestrator
                 changed = FilesTouched(artifacts);
 
             var written = (changes is not null && before is not null
-                              ? await MeasuredChangesAsync(changes, before, ct)
+                              ? await MeasuredChangesAsync(changes, before, journal.Actions.Skip(stepStart).ToArray(), ct)
                               : null)
                           ?? await ReadWrittenAsync(store, ct);
             return await _stepReview.ExecuteAsync(title, LastAssistant(convo), journal,

@@ -2018,7 +2018,7 @@ public sealed partial class Orchestrator : IOrchestrator
     /// caller falls back to the store's record.
     /// </summary>
     private async Task<IReadOnlyList<WrittenFile>?> MeasuredChangesAsync(
-        IWorkspaceChanges changes, WorkspaceSnapshot before, CancellationToken ct)
+        IWorkspaceChanges changes, WorkspaceSnapshot before, IReadOnlyList<ExecutedAction> stepActions, CancellationToken ct)
     {
         if (await changes.TakeAsync(ct) is not { } after
             || await changes.CompareAsync(before, after, ct) is not { } found)
@@ -2027,22 +2027,24 @@ public sealed partial class Orchestrator : IOrchestrator
         var written = new List<WrittenFile>(found.Count);
         foreach (var change in found)
         {
+            // Who changed it, from the journal - the comparison says only THAT it changed.
+            var by = ChangeAuthorship.By(ChangeAuthorship.Of(change.Path, change.OldPath, stepActions));
             var (content, heading) = change switch
             {
                 { Kind: FileChangeKind.Deleted } =>
-                    ("(deleted)", "DELETED by this step."),
+                    ("(deleted)", $"DELETED{by}."),
                 { Binary: true } =>
-                    ("(a binary file - its contents are not shown)", "CHANGED by this step (binary)."),
+                    ("(a binary file - its contents are not shown)", $"CHANGED{by} (binary)."),
                 { Kind: FileChangeKind.Added } =>
-                    (await ReadNowAsync(change.Path, ct), "NEW FILE, created by this step - its whole content:"),
+                    (await ReadNowAsync(change.Path, ct), $"NEW FILE, created{by} - its whole content:"),
                 { Diff: { } diff } =>
                     (Hunks(diff),
                      (change.Kind == FileChangeKind.Renamed ? $"RENAMED from {change.OldPath}, and " : "")
-                     + "CHANGED by this step - a unified diff: '+' lines were added, '-' lines removed, "
+                     + $"CHANGED{by} - a unified diff: '+' lines were added, '-' lines removed, "
                      + "lines starting with a space are unchanged context:"),
                 _ =>
                     (await ReadNowAsync(change.Path, ct),
-                     "CHANGED by this step. There is no record of how it was before (the workspace is not "
+                     $"CHANGED{by}. There is no record of how it was before (the workspace is not "
                      + "a git repository), so this is how it is NOW:")
             };
 

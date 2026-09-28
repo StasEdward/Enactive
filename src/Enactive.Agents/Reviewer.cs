@@ -270,8 +270,12 @@ public sealed partial class Reviewer : IReviewer
         if (changes is { Count: > 0 })
         {
             var sb = new StringBuilder();
-            sb.AppendLine().AppendLine("What this step CHANGED in the workspace - made by any tool, commands "
-                                       + "included (this is ground truth for what was written):");
+            // "While this step ran", not "by this step": the comparison measures the workspace, and
+            // something outside the run can change it too (run 3fe4f8, 2026-09-28). Each file says
+            // what the journal shows about who changed it.
+            sb.AppendLine().AppendLine("What CHANGED in the workspace while this step ran - by any tool, commands "
+                                       + "included, or by something outside the run; each file says whether this "
+                                       + "step's calls account for it (this is ground truth for what is on disk):");
             AppendFiles(sb, changes, sources);
             changed = sb.ToString();
         }
