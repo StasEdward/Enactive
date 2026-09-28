@@ -127,6 +127,25 @@ public sealed class ARefusedReviewReplaysTests(ITestOutputHelper output)
             return now.Count == 0 ? null : string.Join(" | ", now);
         }, output);
 
+    /// <summary>
+    /// A command report whose evidence_id points at tool output is told so, about the evidence_id it
+    /// wrote - not about a source_type the engine filled in (run 4f1d97: 4 of 5 refusals, and a
+    /// correction by parts sent the same id back).
+    /// </summary>
+    [Fact]
+    public void A_command_report_citing_tool_output_is_told_so_about_its_evidence_id()
+    {
+        var cases = Directory.GetFiles(CorpusRatchet.RepositoryFolder("review-corpus"), "2026*.json").Select(ReviewCorpus.Read)
+            .Where(c => c.Answer.Contains("\"source_type\":\"execution-evidence\"", StringComparison.Ordinal)).ToArray();
+        Assert.NotEmpty(cases);
+        foreach (var recorded in cases)
+        {
+            var now = Replay(recorded);
+            Assert.Contains(now, e => e.Contains(".evidence_id: it cites displayed tool output, not a report", StringComparison.Ordinal));
+            Assert.DoesNotContain(now, e => e.Contains("source_type: expected one of", StringComparison.Ordinal));
+        }
+    }
+
     [Fact]
     public void Recording_never_fails_the_review_it_observes()
     {

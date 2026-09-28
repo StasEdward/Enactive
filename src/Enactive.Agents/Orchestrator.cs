@@ -2669,6 +2669,17 @@ public sealed partial class Orchestrator : IOrchestrator
     }
 
     /// <summary>A file as it is now, or a sentence saying why it cannot be shown.</summary>
+    /// <summary>A workspace file's text, or null when it is not there or cannot be read.</summary>
+    private async Task<string?> ReadOrNullAsync(string relativePath, CancellationToken ct)
+    {
+        try
+        {
+            var full = WorkspaceGuard.ResolveInside(_workspace.RootPath, relativePath);
+            return File.Exists(full) ? await File.ReadAllTextAsync(full, ct) : null;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException) { return null; }
+    }
+
     private async Task<string> ReadNowAsync(string relativePath, CancellationToken ct)
     {
         try
@@ -3593,6 +3604,19 @@ public sealed partial class Orchestrator : IOrchestrator
                     yield break;
                 }
 
+                // An edit that did not apply is settled by its file holding what it wanted - read now, as
+                // the run sees the file - and by nothing less: not by another write to the file, not by
+                // the same stale old_string sent again (run 4f1d97, 2026-09-28).
+                if (openFailures.EditPaths is { Count: > 0 } edited)
+                {
+                    var contents = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var path in edited)
+                        contents[path] = await store.TryReadPendingAsync(path, ct) ?? await ReadOrNullAsync(path, ct);
+                    foreach (var path in openFailures.Settle(p => contents.GetValueOrDefault(p)))
+                        yield return Ev(EventKind.ContextAssembled,
+                            $"An edit of {path} that did not apply is settled: the file holds the text it was to put there.");
+                }
+
                 // A final answer only settles the step if the actions behind it actually worked. The
                 // model saying "Done" over a failed read is the exact shape the follow-up review
                 // caught reporting green.
@@ -4033,6 +4057,16 @@ public sealed partial class Orchestrator : IOrchestrator
                 var reply = result.Success
                     ? (result.Output ?? "OK")
                     : $"ERROR: {failure}";
+
+                // A shell lookup that exited non-zero: not forgiven - its exit cannot tell "not there"
+                // from "went wrong" - but pointed at the tools that answer the question as a result,
+                // whose answer for the same paths settles it. See ShellLookup.
+                if (!result.Success && !result.DidNotRun && ShellLookup.Program(call.Name, call.ArgumentsJson) is { } lookup
+                    && new[] { "file_stats", "count_matches", "search_files", "list_dir" }.Where(n => toolDefs.Any(d => d.Name == n)).ToArray()
+                        is { Length: > 0 } structured)
+                    reply += $"\n{lookup} exits non-zero both when it finds nothing and when it fails, so this stays a failed call. "
+                        + $"Ask the question with {string.Join(", ", structured)} instead: their 'not there' or 'no matches' is an "
+                        + "answer, not a failure, and answering for the same path(s) settles this call.";
 
                 // A repeat is executed and answered like any call - but the model is TOLD it is
                 // one. The stall detector knew from the first repeat; the model learned nothing

@@ -96,10 +96,18 @@ public sealed class EditFileTool : ITool
                 }
             }
 
+            // Said with what the file holds NOW. A model sending the same old_string again after the file
+            // moved on (run 4f1d97, 2026-09-28) is sending a passage that is not there any more; and if
+            // the replacement is already in, the change it wants has been made.
             if (occurrences == 0)
                 return ToolResults.Fail(
-                    $"'old_string' does not appear in {path}. Read the file and copy the passage "
-                    + "exactly, including indentation and line breaks.");
+                    before.Contains(newString, StringComparison.Ordinal)
+                        ? $"'old_string' does not appear in {path}, and 'new_string' already does (line "
+                          + $"{LineOf(before, newString)}): the change is already in the file. Do not send this edit again; "
+                          + "read the lines if you need to check them."
+                        : $"'old_string' does not appear in {path} as the file is now. Read the lines you mean to change "
+                          + "and copy them exactly as they stand, including indentation and line breaks - sending the same "
+                          + "'old_string' again will fail again.");
             if (occurrences > 1)
                 return ToolResults.Fail(
                     $"'old_string' appears {occurrences} times in {path}; it has to identify one "
@@ -192,4 +200,10 @@ public sealed class EditFileTool : ITool
       "required": ["path", "old_string", "new_string"]
     }
     """;
+
+    private static int LineOf(string text, string passage)
+    {
+        var at = text.IndexOf(passage, StringComparison.Ordinal);
+        return at < 0 ? 0 : text.AsSpan(0, at).Count('\n') + 1;
+    }
 }

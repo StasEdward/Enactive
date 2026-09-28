@@ -31,6 +31,7 @@ internal static class CombinedReviewValidation
             var root = document.RootElement;
             Validate(root, Schema, "$", errors);
             if (root.ValueKind != JsonValueKind.Object) return errors;
+            CitedNotAReport(root, errors);
             if (Text(root, "verdict") == "fail" && string.IsNullOrWhiteSpace(Text(root, "notes")))
                 errors.Add("$.notes: a rejection must explain the defect or unmet requirement");
             var requested = new HashSet<int>();
@@ -108,6 +109,29 @@ internal static class CombinedReviewValidation
         }
         catch (JsonException ex) { errors.Add($"{ex.Path ?? "$"}: invalid JSON"); }
         return errors.Distinct(StringComparer.Ordinal).ToArray();
+    }
+
+    /// <summary>
+    /// A command report that cites something other than a report, said about the field the reviewer
+    /// wrote. The reviewer sends an evidence_id; the engine resolves it to a source and fills in its
+    /// type - so "source_type: expected one of saved-file, worker-report" named a field the reviewer
+    /// never wrote and cannot change. In 4 of the 5 refusals recorded on 2026-09-28 (run 4f1d97) the
+    /// id pointed at displayed tool output, and a correction by parts sent the same id back.
+    /// </summary>
+    private static void CitedNotAReport(JsonElement root, List<string> errors)
+    {
+        if (!root.TryGetProperty("command_reports", out var reports) || reports.ValueKind != JsonValueKind.Array) return;
+        var index = 0;
+        foreach (var report in reports.EnumerateArray())
+        {
+            var path = $"$.command_reports[{index++}]";
+            if (report.ValueKind != JsonValueKind.Object || Text(report, "source_type") is not { } kind
+                || kind is "saved-file" or "worker-report") continue;
+            errors.RemoveAll(e => e.StartsWith(path + ".source_type", StringComparison.Ordinal));
+            errors.Add($"{path}.evidence_id: it cites {(kind == "execution-evidence" ? "displayed tool output" : kind)}, not a report. "
+                + "A command report records what the worker's message or a saved file SAYS about a command's outcome: cite "
+                + "that fragment of the report, or leave this entry out when no report says it.");
+        }
     }
 
     private static void CheckCitations(JsonElement claim, string path, EvidenceView evidence,

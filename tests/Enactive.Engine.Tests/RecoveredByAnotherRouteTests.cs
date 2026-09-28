@@ -43,7 +43,34 @@ public sealed class RecoveredByAnotherRouteTests
     /// the reported step did, and it is the recommended fallback when edit_file cannot match.
     /// </summary>
     [Fact]
-    public async Task An_edit_that_did_not_match_is_closed_by_rewriting_the_file()
+    public async Task An_edit_that_did_not_match_is_closed_by_rewriting_the_file_with_what_it_wanted()
+    {
+        using var fx = new EngineFixture();
+        fx.Write("Program.cs", "// the original\n");
+
+        var events = await fx.RunAsync(
+            fx.Build(
+                new FakeChatProvider(
+                    Turn.Says(QuickAction),
+                    Turn.Calls1("edit_file",
+                                """{"path":"Program.cs","old_string":"nowhere","new_string":"// the tests"}"""),
+                    Turn.Calls1("write_file",
+                                """{"path":"Program.cs","content":"// the tests\n"}""", "c2"),
+                    Turn.Says("Rewrote Program.cs; the edit would not match.")),
+                EngineFixture.Role("developer")),
+            "add the tests");
+
+        Assert.False(events.Has(EventKind.TaskFailed), events.Text());
+        Assert.Contains(events, e => e.Summary.Contains("An edit of Program.cs that did not apply is settled", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// A later write to the file is not the change the edit wanted: without the wanted text in the
+    /// file, the failed edit stays open - an edit is closed by the file's state, not by something
+    /// else having been written to it (2026-09-28).
+    /// </summary>
+    [Fact]
+    public async Task A_rewrite_without_what_the_edit_wanted_leaves_it_open()
     {
         using var fx = new EngineFixture();
         fx.Write("Program.cs", "// the original\n");
@@ -55,13 +82,12 @@ public sealed class RecoveredByAnotherRouteTests
                     Turn.Calls1("edit_file",
                                 """{"path":"Program.cs","old_string":"nowhere","new_string":"x"}"""),
                     Turn.Calls1("write_file",
-                                """{"path":"Program.cs","content":"// the tests\n"}""", "c2"),
-                    Turn.Says("Rewrote Program.cs; the edit would not match.")),
+                                """{"path":"Program.cs","content":"// something else\n"}""", "c2"),
+                    Turn.Says("Rewrote Program.cs.")),
                 EngineFixture.Role("developer")),
             "add the tests");
 
-        Assert.False(events.Has(EventKind.TaskFailed), events.Text());
-        Assert.Equal("// the tests\n", fx.Read("Program.cs"));
+        Assert.Contains(events, e => e.Summary.Contains("unresolved tool call: edit_file", StringComparison.Ordinal));
     }
 
     /// <summary>
@@ -100,7 +126,7 @@ public sealed class RecoveredByAnotherRouteTests
                 new FakeChatProvider(
                     Turn.Says(QuickAction),
                     Turn.Calls1("edit_file",
-                                """{"path":"Program.cs","old_string":"nowhere","new_string":"x"}"""),
+                                """{"path":"Program.cs","old_string":"nowhere","new_string":"// the tests"}"""),
                     Turn.Calls1("write_file", """{"content":"// no path\n"}""", "c2"),
                     Turn.Calls1("write_file",
                                 """{"path":"Program.cs","content":"// the tests\n"}""", "c3"),

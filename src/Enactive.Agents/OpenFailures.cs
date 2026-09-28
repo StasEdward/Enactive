@@ -122,6 +122,21 @@ internal sealed class OpenFailures
     /// </summary>
     private readonly Dictionary<string, string> _shellOf = new(StringComparer.Ordinal);
 
+    /// <summary>
+    /// Open failed shell LOOKUPS - dir, findstr, Test-Path - and the paths each asked about that have
+    /// not been answered since. See <see cref="ShellLookup"/>: their exit code cannot tell "not there"
+    /// from "went wrong", so they are not forgiven; a structured lookup that answers for every one of
+    /// those paths settles them.
+    /// </summary>
+    private readonly Dictionary<string, HashSet<string>> _lookupOf = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Open failed EDITS and the state they were after: this file, holding this text, the old text gone.
+    /// Closed by that state being confirmed in the file (<see cref="Settle"/>) - not by any later write
+    /// to the file, which says nothing about whether the change the edit wanted is in it.
+    /// </summary>
+    private readonly Dictionary<string, (string Path, string Old, string New)> _editOf = new(StringComparer.Ordinal);
+
     /// <param name="asTool">
     /// The tool this call was REACHING for, when the name it used was not one. A call to
     /// <c>run-powershell</c> is closed by a <c>run_powershell</c> that works, because that is
@@ -145,17 +160,63 @@ internal sealed class OpenFailures
             _namedNothing[key] = Kind(asTool ?? call.Name);
             _neverHappened[key] = Kind(asTool ?? call.Name);
         }
+        else if (EditOf(call) is { } edit)
+            _editOf[key] = edit;
         else if (FileNamedBy(call) is { } file)
             _fileOf[key] = file;
         else if (ShellOperation.For(call.Name, call.ArgumentsJson) is { } operation)
+        {
             _shellOf[key] = operation;
+            if (ShellLookup.Paths(call.Name, call.ArgumentsJson) is { Count: > 0 } asked)
+                _lookupOf[key] = asked.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        }
         else if (RepairsFiles(call.Name))
             _namedNothing[key] = Kind(call.Name);
     }
 
     /// <summary>A lookup whose target is not there. An answer — unless the step has nothing else.</summary>
     public void FoundNothing(ToolCall call, string? error)
-        => _foundNothing[Key(call)] = Line(call, error);
+    {
+        _foundNothing[Key(call)] = Line(call, error);
+        // "Not there", said by a tool that can say it, answers a shell lookup's question about it.
+        Answered(call);
+    }
+
+    /// <summary>The files open edits were changing - the ones whose state <see cref="Settle"/> has to read.</summary>
+    public IReadOnlyList<string> EditPaths => _editOf.Values.Select(e => e.Path).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+
+    /// <summary>A structured lookup answered - found or not - for the paths it names; see <see cref="_lookupOf"/>.</summary>
+    private void Answered(ToolCall call)
+    {
+        if (ShellTools.IsShell(call.Name) || _definitions.FirstOrDefault(d => d.Name == call.Name)?.Kind != ToolKind.Read)
+            return;
+        var named = PathsNamedBy(call);
+        if (named.Count == 0) return;
+        foreach (var (key, asked) in _lookupOf.ToArray())
+        {
+            asked.RemoveWhere(p => named.Contains(p));
+            if (asked.Count == 0) Close(key);
+        }
+    }
+
+    /// <summary>
+    /// Closes the open edits whose wanted state is now in their file: the new text there and the old
+    /// text gone (or kept inside the new one). Returns what it closed, to be said.
+    /// </summary>
+    /// <param name="read">The file's content as the run sees it - staged or on disk - or null when it cannot be read.</param>
+    public IReadOnlyList<string> Settle(Func<string, string?> read)
+    {
+        var settled = new List<string>();
+        foreach (var (key, edit) in _editOf.ToArray())
+        {
+            if (read(edit.Path) is not { } content || !content.Contains(edit.New, StringComparison.Ordinal)
+                || (content.Contains(edit.Old, StringComparison.Ordinal) && !edit.New.Contains(edit.Old, StringComparison.Ordinal)))
+                continue;
+            settled.Add(edit.Path);
+            Close(key);
+        }
+        return settled;
+    }
 
     /// <summary>
     /// A call that worked, and the files it produced.
@@ -195,6 +256,7 @@ internal sealed class OpenFailures
             _anythingChanged = true;
 
         Close(Key(call));
+        Answered(call);
 
         foreach (var reference in produced)
             foreach (var open in _fileOf.Where(p => SameFile(p.Value, reference.RelativePath))
@@ -238,6 +300,43 @@ internal sealed class OpenFailures
         _fileOf.Remove(key);
         _shellOf.Remove(key);
         _namedNothing.Remove(key);
+        _lookupOf.Remove(key);
+        _editOf.Remove(key);
+    }
+
+    /// <summary>What an edit wanted, from its own arguments: a path, the text to replace and its replacement.</summary>
+    private static (string Path, string Old, string New)? EditOf(ToolCall call)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(call.ArgumentsJson) ? "{}" : call.ArgumentsJson);
+            var root = doc.RootElement;
+            string? Text(string name) => root.ValueKind == JsonValueKind.Object && root.TryGetProperty(name, out var v)
+                && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+            return Text("path") is { Length: > 0 } path && Text("old_string") is { Length: > 0 } old && Text("new_string") is { } @new
+                ? (path, old, @new) : null;
+        }
+        catch (JsonException) { return null; }
+    }
+
+    /// <summary>The paths a structured call names - "path", or each of "paths" - in the form lookups compare.</summary>
+    private static HashSet<string> PathsNamedBy(ToolCall call)
+    {
+        var named = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(call.ArgumentsJson) ? "{}" : call.ArgumentsJson);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) return named;
+            if (root.TryGetProperty("path", out var one) && one.ValueKind == JsonValueKind.String && one.GetString() is { Length: > 0 } p)
+                named.Add(ShellLookup.Normal(p));
+            if (root.TryGetProperty("paths", out var many) && many.ValueKind == JsonValueKind.Array)
+                foreach (var item in many.EnumerateArray())
+                    if (item.ValueKind == JsonValueKind.String && item.GetString() is { Length: > 0 } q)
+                        named.Add(ShellLookup.Normal(q));
+        }
+        catch (JsonException) { }
+        return named;
     }
 
     /// <summary>The file a call was trying to change, from its own arguments.</summary>
