@@ -420,6 +420,7 @@ public sealed class EngineFixture : IDisposable
 
     /// <summary>Phase 5.3 steps for each item. Off, as shipped, unless a test is about them.</summary>
     public bool DynamicSteps { get; set; }
+    public bool ValidateWaves { get; set; }
 
     /// <summary>Phase 5.4 limits; the shipped defaults unless a test sets its own.</summary>
     public FanOutLimits? FanOut { get; set; }
@@ -636,7 +637,7 @@ public sealed class EngineFixture : IDisposable
             settings: settings,
             checkSoundness: checkSoundness,
             ecosystems: EcosystemsOverride,
-            stepOutputs: StepOutputs, typedCriteria: TypedCriteria, dynamicSteps: DynamicSteps, fanOut: FanOut);
+            stepOutputs: StepOutputs, typedCriteria: TypedCriteria, dynamicSteps: DynamicSteps, fanOut: FanOut, validateWaves: ValidateWaves);
     }
 
     /// <summary>Runs one intent to completion and returns every event it produced.</summary>

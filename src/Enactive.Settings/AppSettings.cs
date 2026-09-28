@@ -412,6 +412,11 @@ public sealed partial class AppSettings
     public int MaxTotalSteps { get; set; } = 40;
     public int MaxFanOutDepth { get; set; } = 2;
 
+    // Phase 6: a plan's steps are built and tested once per wave - where nothing is running - instead of
+    // only at the end, and a regression is put on the step that made it, or said to be ambiguous. Off
+    // until runs show it helps: it runs builds, and trial builds when something broke.
+    public bool ValidateWaves { get; set; }
+
     // Put a rejected step's files back to how they were before it ran. Without this the gate stops
     // only the REPORT: the run says Failed while the rejected document stays in the workspace, which
     // is the version someone is most likely to open next. A file changed since the step wrote it is
@@ -882,6 +887,7 @@ public sealed partial class AppSettings
         MaxStepsPerExpansion = MaxStepsPerExpansion,
         MaxTotalSteps = MaxTotalSteps,
         MaxFanOutDepth = MaxFanOutDepth,
+        ValidateWaves = ValidateWaves,
         Bindings = Bindings.Clone(),
         RemoteAccess = RemoteAccess.Clone(),
         Smtp = Smtp.Clone(),

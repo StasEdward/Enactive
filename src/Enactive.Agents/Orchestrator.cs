@@ -205,6 +205,7 @@ public sealed partial class Orchestrator : IOrchestrator
     private readonly bool _stepOutputs;
     private readonly bool _typedCriteria;
     private readonly bool _dynamicSteps;
+    private readonly bool _validateWaves;
     private readonly FanOutLimits _fanOut;
     private readonly ISuccessEvaluator _successEvaluator;
 
@@ -276,8 +277,12 @@ public sealed partial class Orchestrator : IOrchestrator
         // grow by one step per item. Off by default, like the phases before it; it needs step outputs.
         bool dynamicSteps = false,
         // Phase 5.4: how far a plan may grow without asking.
-        FanOutLimits? fanOut = null)
+        FanOutLimits? fanOut = null,
+        // Phase 6: whether a plan's waves are validated where nothing is running, and a regression
+        // attributed to the step that made it. Off by default: it runs builds the run did not run before.
+        bool validateWaves = false)
     {
+        _validateWaves = validateWaves;
         _stepOutputs = stepOutputs;
         _typedCriteria = typedCriteria;
         _dynamicSteps = dynamicSteps;
@@ -1199,6 +1204,17 @@ public sealed partial class Orchestrator : IOrchestrator
         // nobody knew how it ended, and pressing it again started the same plan a second time.
         Task ForgetCheckpointAsync() => checkpointWriter.ForgetAsync(scope.RunId, resume?.RunId);
 
+        // Phase 6: the steps that ended since nothing was last running are one wave, validated once at
+        // its end - see WaveLedger. Only where there is a build to compare with.
+        var waves = _validateWaves && session.Builds.Any(b => b.Taken)
+            ? new WaveLedger(session.Builds.Where(b => b.Taken).ToArray())
+            : null;
+        session.Waves = waves;
+        if (waves is not null)
+            waves.Before = WaveCapture.Take(_workspace.RootPath, _ecosystems);
+        // A resumed run starts from a workspace no wave validated: what is broken may predate this run.
+        var waveBeforeKnown = resume is null;
+
         async Task RunStepAsync(PlanStep step, CancellationToken stepCt)
         {
             var stepNumber = stepNumbers.TryGetValue(step.Id, out var planNo) ? planNo : 0;
@@ -1420,6 +1436,10 @@ public sealed partial class Orchestrator : IOrchestrator
 
             await RevertRejectedAsync(stepResult, store, scope,
                 line => Emit(EventKind.ArtifactReverted, $"[{stepNumber}] {line}"), stepCt);
+
+            // What it changed, for the wave it ended in (Phase 6) - after a revert, which the files show.
+            waves?.Finished(WaveStep.Of(step.Id, stepNumber, step.Title, store.TouchedPaths,
+                attemptState.Journal.Actions.Skip(attemptState.StepStart), _workspace.RootPath));
 
             // The card's colour comes from this payload, not from the wording of the summary - and
             // so does the LINE UNDER IT. The reason used to be glued into the summary only, so a
@@ -1780,6 +1800,112 @@ public sealed partial class Orchestrator : IOrchestrator
         string? limitReason = null;
 
 
+        async Task<CriterionResult[]> BuildsNowAsync(IReadOnlyList<BuildBaseline> which, CancellationToken wct)
+            => (await CheckSuccessAsync(which.Select(b => BuildRegression.Criterion(b.Ecosystem, b.Target, b.Kind)).ToArray(),
+                scope.TaskId, scope.RunId, intent.Context, wct)).Results.ToArray();
+
+        async Task WaveBoundaryAsync()
+        {
+            if (waves is null || waves.Steps is not { Count: > 0 } steps) return;
+            var wct = stepLifetime.Token;
+            var root = _workspace.RootPath;
+            var no = waves.Closed + 1;
+            var span = WaveLedger.Span(steps);
+            var due = waves.Reference.Where(b => waves.Requires(b.Ecosystem)).ToArray();
+            if (due.Length == 0)
+            {
+                // Nothing a build reads changed, so the capture the wave began from still holds.
+                waves.Close();
+                await Publish(scope.Ev(EventKind.ContextAssembled,
+                    $"Wave {no} ({span}) changed nothing a build reads: no validation needed."));
+                return;
+            }
+
+            await Publish(scope.Ev(EventKind.ContextAssembled,
+                $"Wave {no} ({span}) changed what a build reads: validating it once."));
+            WaveCapture? after = null;
+            try
+            {
+                var results = await BuildsNowAsync(due, wct);
+                after = WaveCapture.Take(root, _ecosystems);
+                var regressions = new List<WaveRegression>();
+                for (var i = 0; i < due.Length; i++)
+                {
+                    var compared = BuildRegression.Compare(due[i], results[i], root, span);
+                    var again = BuildRegression.WorthRunningAgain(due[i], compared) ? (await BuildsNowAsync([due[i]], wct))[0] : null;
+                    if (again is not null) compared = BuildRegression.Compare(due[i], results[i], root, span, again);
+                    await Publish(scope.Criterion(compared with { Name = $"{compared.Name}, wave {no}" }));
+                    if (WaveRegression.Of(due[i], results[i], again, root) is { } regressed) regressions.Add(regressed);
+                }
+
+                if (regressions.Count > 0)
+                {
+                    var what = string.Join("; ", regressions.Select(r => r.Describe()));
+                    Attribution attribution;
+                    if (waves.Before?.Files is null || after.Files is null)
+                        attribution = new(null, steps, "the files the build reads were not kept - "
+                            + (waves.Before?.NotTaken ?? after.NotTaken), 0);
+                    else if (_artifacts.PendingPaths.Count > 0)
+                        attribution = new(null, steps, "the run's writes are staged, not on disk, so no step can be tried alone", 0);
+                    else
+                    {
+                        var before = waves.Before;
+                        var changed = WaveCapture.Changed(before, after);
+                        var targets = regressions.Select(r => r.Reference).ToArray();
+                        async Task<bool?> Trial(IReadOnlySet<string> files)
+                        {
+                            WaveCapture.Put(root, changed.Except(files, StringComparer.OrdinalIgnoreCase), before);
+                            WaveCapture.Put(root, files, after);
+                            var trial = await BuildsNowAsync(targets, wct);
+                            var seen = regressions.Select((r, i) => r.ReproducedBy(trial[i], root)).ToArray();
+                            return seen.Any(v => v == true) ? true : seen.All(v => v is null) ? null : false;
+                        }
+                        try
+                        {
+                            // A wave the engine did not see begin: is it broken before any of its changes?
+                            if (!waveBeforeKnown && await Trial(new HashSet<string>()) == true)
+                                attribution = new(null, [], "it is there with none of the wave's changes: it predates "
+                                    + "this wave (the run was resumed from a state no wave validated)", 1);
+                            else
+                                attribution = await WaveLedger.AttributeAsync(steps, changed, Trial);
+                        }
+                        finally
+                        {
+                            // Always as the wave left it, whatever a trial did or threw.
+                            WaveCapture.Put(root, changed, after);
+                        }
+                        if (WaveCapture.Take(root, _ecosystems) is { Files: not null } back && WaveCapture.Changed(after, back).Count > 0)
+                            await Publish(scope.Ev(EventKind.ErrorObserved,
+                                "After trying the wave's steps one by one, the workspace is not as the wave left it: "
+                                + string.Join(", ", WaveCapture.Changed(after, back).Take(5))));
+                    }
+                    var trials = attribution.Trials == 0 ? "" : $" ({attribution.Trials} trial build(s))";
+                    await Publish(scope.Ev(EventKind.ErrorObserved, attribution.Culprit is { } culprit
+                        ? $"Wave {no} regression ({what}) is {culprit.Name}'s: {attribution.Explanation}{trials}."
+                        : $"Wave {no} regression ({what}) cannot be put on one step - attribution ambiguous: "
+                          + $"{attribution.Explanation}{trials}."));
+                }
+
+                // The next wave is compared with where this one left things, not blamed for what this one broke.
+                waves.Reference = due.Select((b, i) => BuildRegression.Baseline(b.Ecosystem, b.Target, results[i], root, b.Kind) is { Taken: true } now ? now : b)
+                    .Concat(waves.Reference.Where(b => !due.Contains(b))).ToArray();
+                if (after.Files is not null)
+                    waves.LastValidated = (after, due.Select((b, i) => (Name: BuildRegression.Criterion(b.Ecosystem, b.Target, b.Kind).Name, Result: results[i]))
+                        .ToDictionary(p => p.Name, p => p.Result));
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                await Publish(scope.Ev(EventKind.ErrorObserved, $"Wave {no} could not be validated: {ex.Message}"));
+            }
+            finally
+            {
+                waves.Close();
+                waveBeforeKnown = true;
+                waves.Before = after ?? WaveCapture.Take(root, _ecosystems);
+            }
+        }
+
         // Dispatcher: keep up to maxParallel steps in flight, topping up as each one finishes.
         var pump = Task.Run(async () =>
         {
@@ -1808,7 +1934,7 @@ public sealed partial class Orchestrator : IOrchestrator
                     // checkpoint records those steps as Skipped. If the process then dies, a
                     // resume does not quietly do work a limit had already refused.
                     await CheckpointAsync();
-                }, () => events.Writer.TryComplete());
+                }, () => events.Writer.TryComplete(), waves is null ? null : WaveBoundaryAsync);
         }, CancellationToken.None);
 
         try
@@ -2194,19 +2320,38 @@ public sealed partial class Orchestrator : IOrchestrator
             var due = session.Builds.Where(b => BuildRegression.Touched(b.Ecosystem, produced, actions)).ToArray();
             if (due.Length == 0) return [];
 
-            var runnable = due.Where(b => b.Taken).ToArray();
+            // The last wave's builds, when nothing a build reads has changed since: the same builds again
+            // would say the same thing (Phase 6 - a plan's waves are not built twice at its end).
+            IReadOnlyDictionary<string, CriterionResult>? known = null;
+            if (session.Waves?.LastValidated is { } last
+                && WaveCapture.Take(_workspace.RootPath, _ecosystems) is { Files: not null } now
+                && WaveCapture.Changed(last.Files, now).Count == 0)
+                known = last.Results;
+            string NameOf(BuildBaseline b) => BuildRegression.Criterion(b.Ecosystem, b.Target, b.Kind).Name;
+
+            var runnable = due.Where(b => b.Taken && known?.ContainsKey(NameOf(b)) != true).ToArray();
             var report = runnable.Length == 0 ? SuccessReport.NothingToCheck
                 : await CheckSuccessAsync(runnable.Select(b => BuildRegression.Criterion(b.Ecosystem, b.Target, b.Kind)).ToArray(),
                     scope.TaskId, scope.RunId, context, ct);
-            return due.Select(b =>
+            var firsts = due.Select(b =>
             {
                 var index = Array.IndexOf(runnable, b);
                 var criterion = BuildRegression.Criterion(b.Ecosystem, b.Target, b.Kind);
-                var after = index >= 0 ? report.Results[index]
+                return known?.GetValueOrDefault(criterion.Name) is { } reused ? reused
+                    : index >= 0 ? report.Results[index]
                     : new CriterionResult(criterion.Name, criterion.Command, false, CriterionOutcome.Unknown, null, null,
                         CriterionOrigin.System);
-                return BuildRegression.Compare(b, after, _workspace.RootPath);
             }).ToArray();
+            var compared = due.Select((b, i) => BuildRegression.Compare(b, firsts[i], _workspace.RootPath)).ToArray();
+            // A test that failed once is run again before it is counted (deferred item B).
+            for (var i = 0; i < compared.Length; i++)
+                if (BuildRegression.WorthRunningAgain(due[i], compared[i]))
+                {
+                    var rerun = await CheckSuccessAsync([BuildRegression.Criterion(due[i].Ecosystem, due[i].Target, due[i].Kind)],
+                        scope.TaskId, scope.RunId, context, ct);
+                    compared[i] = BuildRegression.Compare(due[i], firsts[i], _workspace.RootPath, again: rerun.Results[0]);
+                }
+            return compared;
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception) { return []; }   // an instrument; the run it observes matters more

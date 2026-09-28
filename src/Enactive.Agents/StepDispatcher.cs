@@ -9,7 +9,7 @@ internal static class StepDispatcher
 {
     internal static async Task<string?> RunAsync(DagScheduler scheduler, RunBudget budget, int maxParallel,
         CancellationTokenSource lifetime, Func<PlanStep, CancellationToken, Task> runStep,
-        Func<string, Task> onLimit, Action complete)
+        Func<string, Task> onLimit, Action complete, Func<Task>? boundary = null)
     {
         string? limitReason = null;
         var inFlight = new List<Task>();
@@ -35,6 +35,9 @@ internal static class StepDispatcher
                 var finished = await Task.WhenAny(inFlight);
                 inFlight.Remove(finished);
                 await finished;
+                // Nothing running: the end of a wave (Phase 6), before anything that builds on it starts.
+                if (inFlight.Count == 0 && boundary is not null)
+                    await boundary();
             }
             return limitReason;
         }

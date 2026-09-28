@@ -19,6 +19,9 @@ internal sealed class RunSession(RunScope scope, List<ChatMessage> messages)
     public System.Collections.Concurrent.ConcurrentDictionary<Guid, StepOutput> Outputs { get; } = new();
     /// <summary>What the workspace's build reported before any work. See BuildRegression.</summary>
     public IReadOnlyList<BuildBaseline> Builds { get; init; } = [];
+
+    /// <summary>The plan's waves and what they were last validated against (Phase 6), or null when not validated.</summary>
+    public WaveLedger? Waves { get; set; }
     public Dictionary<Guid, StepOutcomeKind> Outcomes { get; } = new();
     // Guarded by Outcomes, matching the outcome/reason snapshot used by the scheduler.
     public List<string> Reasons { get; } = new();

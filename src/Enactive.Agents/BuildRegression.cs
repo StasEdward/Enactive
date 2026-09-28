@@ -137,25 +137,33 @@ internal static class BuildRegression
            || actions.Any(a => a.Outcome != ActionOutcome.Refused && a.WorkspaceEffect != WorkspaceEffect.None
                                && a.ChangedPaths is not { Count: > 0 });
 
+    /// <summary>
+    /// Whether a result is worth a second run before it is believed: tests that passed and fail now can be
+    /// flaky. A build is not run twice - what it prints is the same both times.
+    /// </summary>
+    internal static bool WorthRunningAgain(BuildBaseline before, CriterionResult compared)
+        => before.Kind == BaselineKind.Test && compared.Outcome == CriterionOutcome.Failed;
+
     /// <summary>The build - or the tests - after the work, against the same before it.</summary>
-    internal static CriterionResult Compare(BuildBaseline before, CriterionResult after, string root)
+    internal static CriterionResult Compare(BuildBaseline before, CriterionResult after, string root, string span = "the work",
+        CriterionResult? again = null)
     {
         CriterionResult Result(CriterionOutcome outcome, string detail)
             => new(after.Name, after.Command, Required: false, outcome, after.ExitCode, detail, CriterionOrigin.System);
 
         if (before.Kind == BaselineKind.Test)
-            return CompareTests(before, after, Result);
+            return CompareTests(before, after, Result, span, again);
 
         if (!before.Taken)
-            return Result(CriterionOutcome.Unknown, "the build could not be run before the work, so there is nothing "
+            return Result(CriterionOutcome.Unknown, $"the build could not be run before {span}, so there is nothing "
                 + "to compare it with: " + before.NotTaken);
         if (after.ExitCode is not { } exit)
-            return Result(CriterionOutcome.Unknown, "the build could not be run after the work: "
+            return Result(CriterionOutcome.Unknown, $"the build could not be run after {span}: "
                 + (string.IsNullOrWhiteSpace(after.Detail) ? "it did not run" : after.Detail));
 
         var now = DiagnosticSet.Of(before.Ecosystem.ParseDiagnostics(after.Output ?? "", root));
         var was = before.Diagnostics!;
-        var totals = $"before the work: exit {before.ExitCode}, {was.Total(DiagnosticSeverity.Error)} error(s); "
+        var totals = $"before {span}: exit {before.ExitCode}, {was.Total(DiagnosticSeverity.Error)} error(s); "
                    + $"now: exit {exit}, {now.Total(DiagnosticSeverity.Error)} error(s)";
 
         var all = now.NewSince(was);
@@ -177,7 +185,7 @@ internal static class BuildRegression
                 $"{r.Identity.Code} in {r.Identity.Path ?? "(no file)"}"
                 + (r.Example.Line is { } line ? $" line {line}" : "")
                 + $": {r.Identity.Message}" + (r.Added > 1 ? $" (x{r.Added})" : ""));
-            return Result(CriterionOutcome.Failed, $"{added.Sum(r => r.Added)} error(s) not in the build before the work - "
+            return Result(CriterionOutcome.Failed, $"{added.Sum(r => r.Added)} error(s) not in the build before {span} - "
                 + string.Join("; ", named) + (added.Length > MaxNamed ? $"; and {added.Length - MaxNamed} more" : "")
                 + $".{aside} ({totals})");
         }
@@ -185,10 +193,10 @@ internal static class BuildRegression
         // Passed before and fails now, with nothing in the output the ecosystem can read as the
         // reason. That is still a build broken by the time the run ended, and is said as one.
         if (before.ExitCode == 0 && exit != 0)
-            return Result(CriterionOutcome.Failed, "the build passed before the work and fails now, and nothing it "
+            return Result(CriterionOutcome.Failed, $"the build passed before {span} and fails now, and nothing it "
                 + $"printed reads as a diagnostic that explains it. ({totals})");
 
-        return Result(CriterionOutcome.Passed, $"no error that was not there before the work ({totals}).");
+        return Result(CriterionOutcome.Passed, $"no error that was not there before {span} ({totals}).");
     }
 
     /// <summary>
@@ -197,13 +205,14 @@ internal static class BuildRegression
     /// reported and not counted - it may be exactly what the work was asked to add.
     /// </summary>
     private static CriterionResult CompareTests(BuildBaseline before, CriterionResult after,
-        Func<CriterionOutcome, string, CriterionResult> result)
+        Func<CriterionOutcome, string, CriterionResult> result, string span,
+        CriterionResult? again)
     {
         if (!before.Taken)
-            return result(CriterionOutcome.Unknown, "the tests could not be run before the work, so there is nothing "
+            return result(CriterionOutcome.Unknown, $"the tests could not be run before {span}, so there is nothing "
                 + "to compare them with: " + before.NotTaken);
         if (after.ExitCode is not { } exit)
-            return result(CriterionOutcome.Unknown, "the tests could not be run after the work: "
+            return result(CriterionOutcome.Unknown, $"the tests could not be run after {span}: "
                 + (string.IsNullOrWhiteSpace(after.Detail) ? "they did not run" : after.Detail));
 
         var was = before.Tests!;
@@ -211,22 +220,35 @@ internal static class BuildRegression
             // Ran before, and nothing now reads as a test result: the tests did not get as far as
             // running - a broken build stops them. That is the work's, whatever the build check says.
             return before.ExitCode == 0
-                ? result(CriterionOutcome.Failed, $"the tests ran before the work and did not run after it (exit {exit}).")
-                : result(CriterionOutcome.Unknown, $"nothing the tests printed after the work reads as a test result (exit {exit}).");
+                ? result(CriterionOutcome.Failed, $"the tests ran before {span} and did not run after it (exit {exit}).")
+                : result(CriterionOutcome.Unknown, $"nothing the tests printed after {span} reads as a test result (exit {exit}).");
 
-        var totals = $"before the work: {was.Describe()}; now: {now.Describe()}";
+        var totals = $"before {span}: {was.Describe()}; now: {now.Describe()}";
         var added = now.FailingAndNew(was);
         var newNote = added.Count == 0 ? ""
-            : $" {added.Count} test(s) the run before the work did not have fail now - not counted against it, it may be "
-              + "what the work was asked to add: " + string.Join(", ", added.Take(MaxNamed))
+            : $" {added.Count} test(s) the run before {span} did not have fail now - not counted against it, it may be "
+              + $"what {span} was asked to add: " + string.Join(", ", added.Take(MaxNamed))
               + (added.Count > MaxNamed ? $", and {added.Count - MaxNamed} more" : "") + ".";
 
         var broken = now.Regressions(was);
+        // Run again (deferred item B): a test that fails once and passes the next time is flaky, not
+        // broken by the work - on this machine one test suite gave 41, 42, 43 and 46 failures on the
+        // same code. Only what failed both times is counted.
+        var flakyNote = "";
+        if (broken.Count > 0 && again?.ExitCode is not null && before.Ecosystem.ParseTests(again.Output ?? "") is { } second)
+        {
+            var twice = second.Regressions(was);
+            var flaky = broken.Where(t => !twice.Contains(t)).ToArray();
+            broken = broken.Where(twice.Contains).ToArray();
+            if (flaky.Length > 0)
+                flakyNote = $" {flaky.Length} test(s) failed and then passed when run again - flaky, not counted: "
+                    + string.Join(", ", flaky.Take(MaxNamed)) + (flaky.Length > MaxNamed ? $", and {flaky.Length - MaxNamed} more" : "") + ".";
+        }
         if (broken.Count > 0)
-            return result(CriterionOutcome.Failed, $"{broken.Count} test(s) passed before the work and fail now: "
+            return result(CriterionOutcome.Failed, $"{broken.Count} test(s) passed before {span} and fail now: "
                 + string.Join(", ", broken.Take(MaxNamed)) + (broken.Count > MaxNamed ? $", and {broken.Count - MaxNamed} more" : "")
-                + $". ({totals}){newNote}");
+                + (again is null ? "" : ", both times it ran") + $". ({totals}){newNote}{flakyNote}");
 
-        return result(CriterionOutcome.Passed, $"no test that passed before the work fails now ({totals}).{newNote}");
+        return result(CriterionOutcome.Passed, $"no test that passed before {span} fails now ({totals}).{newNote}{flakyNote}");
     }
 }
