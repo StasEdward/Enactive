@@ -215,7 +215,8 @@ public sealed class Planner
                 complexity = s.Complexity.ToString().ToLowerInvariant(),
                 obligations = s.ObligationIds,
                 output = s.Output is { } declared ? OutputJson(declared) : null,
-                forEach = s.ForEach is { } each ? new { step = each.Step, field = each.Field } : null
+                forEach = s.ForEach is { } each ? new { step = each.Step, field = each.Field } : null,
+                report = s.Report
             })
         });
         ChatMessage[] messages =
@@ -382,7 +383,9 @@ public sealed class Planner
                             {
                                 ObligationIds = obligationIds,
                                 Output = el.TryGetProperty("output", out var output) ? ParseOutput(output, specs.Count + 1) : null,
-                                ForEach = ParseForEach(el)
+                                ForEach = ParseForEach(el),
+                                Report = el.TryGetProperty("report", out var report) && report.ValueKind == JsonValueKind.String
+                                    && !string.IsNullOrWhiteSpace(report.GetString()) ? report.GetString() : null
                             });
                         }
                     }

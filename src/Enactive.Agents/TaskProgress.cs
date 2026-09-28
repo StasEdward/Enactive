@@ -46,7 +46,13 @@ internal sealed class TaskProgress(string workspaceRoot)
 {
     internal const string Folder = ".enactive/progress";
 
-    private sealed record State(List<DoneOnce> Done, List<ParkedPosition> Parked);
+    private sealed record State(List<DoneOnce> Done, List<ParkedPosition> Parked)
+    {
+        /// <summary>Files a step created, by step - written the moment they are created. See WriteBoundary.</summary>
+        public List<OwnedFile>? Owned { get; init; }
+    }
+
+    internal sealed record OwnedFile(Guid Step, string Path);
 
     private static readonly JsonSerializerOptions Json = new()
     {
@@ -109,6 +115,29 @@ internal sealed class TaskProgress(string workspaceRoot)
         }
     }
 
+    /// <summary>
+    /// A file this step created, and may therefore go on changing - recorded at once, not at a boundary,
+    /// so a step restarted after a crash still owns what it made before it.
+    /// </summary>
+    public void Own(Guid taskId, Guid step, string path)
+    {
+        lock (_gate)
+        {
+            var state = Read(taskId);
+            var owned = state.Owned ?? [];
+            if (!owned.Any(o => o.Step == step && string.Equals(o.Path, path, StringComparison.OrdinalIgnoreCase)))
+                owned.Add(new OwnedFile(step, path));
+            Write(taskId, state with { Owned = owned });
+        }
+    }
+
+    public IReadOnlySet<string> OwnedBy(Guid taskId, Guid step)
+    {
+        lock (_gate)
+            return (Read(taskId).Owned ?? []).Where(o => o.Step == step).Select(o => o.Path)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
     public void Forget(Guid taskId)
     {
         lock (_gate)
@@ -138,7 +167,7 @@ internal sealed class TaskProgress(string workspaceRoot)
         {
             var file = FileOf(taskId);
             if (File.Exists(file) && JsonSerializer.Deserialize<State>(File.ReadAllText(file), Json) is { } state)
-                return new State(state.Done ?? [], state.Parked ?? []);
+                return new State(state.Done ?? [], state.Parked ?? []) { Owned = state.Owned };
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException) { }
         return new State([], []);

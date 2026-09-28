@@ -100,4 +100,10 @@ internal sealed record StepAttemptState(
 
     /// <summary>What it has handed on so far. Survives retries of the step, like its transcript.</summary>
     public StepOutputSlot OutputSlot { get; } = new();
+
+    /// <summary>What this step may change - see WriteBoundary. Null: nothing beyond the ordinary gates.</summary>
+    public WriteBoundary? Boundary { get; init; }
+
+    /// <summary>Whether tools the boundary cannot check are kept from this step (a step whose results the engine assembles).</summary>
+    public bool WithholdUnchecked { get; init; }
 }

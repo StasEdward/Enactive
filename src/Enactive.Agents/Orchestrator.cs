@@ -1135,7 +1135,9 @@ public sealed partial class Orchestrator : IOrchestrator
                         ObligationIds = s.ObligationIds, Output = s.Output,
                         Result = session.Outputs.TryGetValue(s.Id, out var handed) ? handed : null,
                         ForEach = s.ForEach, Items = s.Items, ExpandedFrom = s.ExpandedFrom, Joins = s.Joins, NotExpanded = s.NotExpanded,
-                        Record = session.Records.TryGetValue(s.Id, out var record) ? record : null
+                        Record = session.Records.TryGetValue(s.Id, out var record) ? record : null,
+                        Report = s.Report,
+                        Owned = s.ExpandedFrom is null ? null : _progress.OwnedBy(scope.TaskId, s.Id) is { Count: > 0 } owned ? owned.ToArray() : null
                     })
                 .ToArray();
 
@@ -1314,7 +1316,18 @@ public sealed partial class Orchestrator : IOrchestrator
 
             // The record of what has been done, over the same ground as `convo` above: shared with
             // the rest of the run when the conversation is, this step's own when it is not.
-            var attemptState = session.BeginStep(convo, store, restartFrom, step.Output, ownConversation);
+            // What this step may change: no document the engine assembles, and - a step for one item - only
+            // its item and what it creates. See WriteBoundary.
+            var planNow = scheduler.Steps;
+            var reserved = planNow.Where(s => s.Report is not null).Select(s => ShellLookup.Normal(s.Report!)).ToArray();
+            var itemOf = step.ExpandedFrom is { } parent ? planNow.FirstOrDefault(s => s.Id == parent) : null;
+            var boundary = reserved.Length == 0 && step.ExpandedFrom is null ? null
+                : new WriteBoundary(_workspace.RootPath, reserved, step.ExpandedFrom is null ? null : step.Items ?? [],
+                    () => _progress.OwnedBy(scope.TaskId, step.Id), path => _progress.Own(scope.TaskId, step.Id, path));
+            var attemptState = session.BeginStep(convo, store, restartFrom, step.Output, ownConversation) with
+            {
+                Boundary = boundary, WithholdUnchecked = itemOf?.Report is not null
+            };
 
             // The workspace as this step found it. Taken once, before the first attempt: a retry
             // after a rejection is judged on everything the STEP changed, not on its last attempt.
@@ -1935,7 +1948,8 @@ public sealed partial class Orchestrator : IOrchestrator
                     : StepComplexity.Normal)
                 {
                     ObligationIds = s.ObligationIds, Output = s.Output,
-                    ForEach = s.ForEach, Items = s.Items, ExpandedFrom = s.ExpandedFrom, Joins = s.Joins, NotExpanded = s.NotExpanded
+                    ForEach = s.ForEach, Items = s.Items, ExpandedFrom = s.ExpandedFrom, Joins = s.Joins, NotExpanded = s.NotExpanded,
+                    Report = s.Report
                 })
             .ToArray();
 
@@ -2786,7 +2800,9 @@ public sealed partial class Orchestrator : IOrchestrator
         // step is being repeated after a rejected review, Native the first time through.
         ToolCallOrigin attemptOrigin = ToolCallOrigin.Native,
         // What this step must hand on as values, and where what it hands on is kept (Phase 2).
-        StepOutputSchema? outputSchema = null, StepOutputSlot? outputSlot = null)
+        StepOutputSchema? outputSchema = null, StepOutputSlot? outputSlot = null,
+        // What this step may change, and whether tools that cannot be checked against it are kept from it.
+        WriteBoundary? boundary = null, bool withholdUnchecked = false)
     {
         // An async iterator cannot return a value, so the caller passes in the slot the loop fills.
         // Without it "how did this end" existed only as English inside an event, and every consumer
@@ -2879,6 +2895,22 @@ public sealed partial class Orchestrator : IOrchestrator
                     : decision;
             },
             _decisions.CanApprove);
+
+        // A tool that may change files without saying which cannot be held to a write boundary. The
+        // engine does not claim to: where the boundary matters most - a step whose results it assembles
+        // into a document - such tools are not offered; elsewhere the step is told they are not covered.
+        var uncheckable = _tools.Definitions.Where(d => offer.Offered.Contains(d.Name) && WriteBoundary.Unchecked(d)).Select(d => d.Name).ToArray();
+        if (withholdUnchecked && uncheckable.Length > 0)
+            offer = offer with
+            {
+                Offered = offer.Offered.Except(uncheckable).ToArray(),
+                Withheld = [.. offer.Withheld, .. uncheckable.Select(n => new WithheldTool(n,
+                    "can change files without saying which, and a step for one item whose results the engine assembles changes only what it can be checked on"))]
+            };
+        else if (boundary is { ForItem: true } && uncheckable.Length > 0)
+            yield return Ev(EventKind.ContextAssembled,
+                $"This step is for {string.Join(", ", boundary.Items)}: the engine checks what file tools change against that; "
+                + $"{string.Join(", ", uncheckable)} can change files without saying which, and are not covered by that check.");
 
         var toolDefs = _tools.Definitions.Where(d => offer.Offered.Contains(d.Name)).ToArray();
         // The step's own hand-over, when the plan declared what it hands on. Not in the registry: it
@@ -3815,6 +3847,18 @@ public sealed partial class Orchestrator : IOrchestrator
                     messages.Add(ChatMessage.Tool(call.Id, handed));
                     continue;
                 }
+                // Outside what this step may change: refused before it runs, and said why. Not an open
+                // failure - it is the engine's rule, not a call that went wrong - and the way on is named.
+                if (boundary?.Refuse(call, _tools.DefinitionOf(call.Name),
+                        path => store.PendingPaths.Any(p => string.Equals(ShellLookup.Normal(p), path, StringComparison.OrdinalIgnoreCase)))
+                    is { } notItsToChange)
+                {
+                    yield return Invoked(call);
+                    journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Refused, notItsToChange, WorkspaceEffect.None);
+                    messages.Add(ChatMessage.Tool(call.Id, "REFUSED: " + notItsToChange));
+                    yield return Ev(EventKind.ToolResult, $"{call.Name} -> refused: {notItsToChange}");
+                    continue;
+                }
                 if (CanRunRead(call) && !readsThisTurn.Add(call.Name + "\0" + TaskProgress.Canonical(call.ArgumentsJson)))
                 {
                     readResults.Remove(callIndex, out _);
@@ -4057,6 +4101,7 @@ public sealed partial class Orchestrator : IOrchestrator
                 var invocation = readResult ?? await ToolInvocation.ExecuteAsync(call, _tools, CallContext(), ct);
                 var result = invocation.Value;
                 var failure = accounting.Record(call, invocation);
+                if (result.Success) boundary?.Succeeded(call);
                 // Written the moment it is done, not at a boundary: a process that dies next must
                 // still know this was sent.
                 if (result.Success && !result.DidNotRun && _tools.DefinitionOf(call.Name)?.OnceOnly == true)

@@ -46,6 +46,12 @@ public sealed record PlanStep(
 
     /// <summary>Why a <see cref="ForEach"/> step's items were given no steps, when they were not (a limit nobody lifted).</summary>
     public string? NotExpanded { get; init; }
+
+    /// <summary>
+    /// The document the engine assembles from this step's items' results (a <see cref="ForEach"/> step
+    /// only): reserved for the engine - no step changes it - and written by code from what was recorded.
+    /// </summary>
+    public string? Report { get; init; }
 }
 
 /// <summary>Where a step's items come from: a list field of an earlier step's output, by its plan position (0-based).</summary>
@@ -86,6 +92,7 @@ public sealed record PlanStepSpec(
     public IReadOnlyList<string>? ObligationIds { get; init; }
     public StepOutputSchema? Output { get; init; }
     public ForEachSource? ForEach { get; init; }
+    public string? Report { get; init; }
 }
 
 /// <summary>
@@ -117,7 +124,7 @@ public static class DagPlan
                 deps = i > 0 ? new[] { ids[i - 1] } : Array.Empty<Guid>();
 
             steps.Add(new PlanStep(ids[i], specs[i].Title, StepStatus.Pending, deps, specs[i].Complexity)
-                { ObligationIds = specs[i].ObligationIds, Output = specs[i].Output, ForEach = specs[i].ForEach });
+                { ObligationIds = specs[i].ObligationIds, Output = specs[i].Output, ForEach = specs[i].ForEach, Report = specs[i].Report });
         }
         return new Plan(Guid.NewGuid(), steps);
     }

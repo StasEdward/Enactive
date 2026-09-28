@@ -40,6 +40,10 @@ public sealed record CheckpointStep(
     public Guid? ExpandedFrom { get; init; }
     public bool Joins { get; init; }
     public string? NotExpanded { get; init; }
+    public string? Report { get; init; }
+
+    /// <summary>The files this step created and may therefore change (a step for one item) - see WriteBoundary.</summary>
+    public IReadOnlyList<string>? Owned { get; init; }
 
     /// <summary>What the engine recorded about the step: outcome, cause, reason, and its last accepted result with its standing.</summary>
     public Enactive.Core.Tasks.StepRecord? Record { get; init; }

@@ -55,11 +55,18 @@ public static class FanOut
             if (why is not null)
             {
                 dropped.Add($"'{steps[i].Title}' will run once, not for each item - {why}.");
-                steps[i] = steps[i] with { ForEach = null };
+                steps[i] = steps[i] with { ForEach = null, Report = null };
                 continue;
             }
             if (!steps[i].DependsOn.Contains(steps[each.Step].Id))
                 steps[i] = steps[i] with { DependsOn = [.. steps[i].DependsOn, steps[each.Step].Id] };
+            // A document to assemble must be a workspace-relative file path; one that is not is dropped,
+            // and the step's items still hand their results on.
+            if (steps[i].Report is { } report && (Path.IsPathRooted(report) || report.Replace('\\', '/').Split('/').Contains("..")))
+            {
+                dropped.Add($"'{steps[i].Title}' will not assemble '{report}' - a report is a path inside the workspace.");
+                steps[i] = steps[i] with { Report = null };
+            }
         }
         return (plan with { Steps = steps }, dropped);
     }
@@ -109,7 +116,9 @@ public static class FanOut
         var source = forEach?.ForEach is { } each ? $" from step {each.Step + 1}'s {each.Field}" : "";
         return $"This step is for {(items.Count == 1 ? "one item" : $"{items.Count} items")}{source}: "
                + string.Join(", ", items) + ". Do the work for exactly "
-               + (items.Count == 1 ? "it" : "these") + "; every other item has a step of its own.\n";
+               + (items.Count == 1 ? "it" : "these") + "; every other item has a step of its own. It may change "
+               + (items.Count == 1 ? "that item" : "those items") + " and files it creates, and nothing shared: hand what "
+               + $"it found on with {StepOutputContract.ToolName} - the engine assembles shared documents from every item's result.\n";
     }
 
     /// <summary>
