@@ -33,6 +33,8 @@ public sealed record ReviewResult(
     public IReadOnlyList<ObligationClaim>? Obligations { get; init; }
     public string? BudgetExhausted { get; init; }
     public string? IncompleteReason { get; init; }
+    /// <summary>Concrete semantic defects, distinct from malformed review or unavailable evidence.</summary>
+    public string? RepairAdvice { get; init; }
     /// <summary>
     /// The cached share of <see cref="PromptTokens"/>, or null where nobody counted. This is the
     /// phase most likely to have one on a real machine: review is bound to a cloud model, and a
@@ -243,7 +245,7 @@ public sealed partial class Reviewer : IReviewer
 
     internal static string BuildExecutionUserPrompt(
         string stepTitle, string coderOutput, string executionEvidence, IReadOnlyList<string> artifacts,
-        IReadOnlyList<WrittenFile>? changes = null, string? request = null)
+        IReadOnlyList<WrittenFile>? changes = null, string? request = null, ReviewSources? sources = null)
     {
         var files = artifacts.Count == 0 ? "(none)" : string.Join(", ", artifacts);
 
@@ -257,13 +259,13 @@ public sealed partial class Reviewer : IReviewer
             var sb = new StringBuilder();
             sb.AppendLine().AppendLine("What this step CHANGED in the workspace - made by any tool, commands "
                                        + "included (this is ground truth for what was written):");
-            AppendFiles(sb, changes);
+            AppendFiles(sb, changes, sources);
             changed = sb.ToString();
         }
 
         return $"Step: {stepTitle}\n\n"
              + RequestBlock(request)
-             + $"What the coding agent reported:\n{coderOutput}\n\n"
+             + $"What the coding agent reported (worker message, not a file):\n{sources?.RenderReport() ?? coderOutput}\n\n"
              + $"Tool execution evidence — the ACTUAL commands run and their real stdout/stderr/exit codes "
              + $"(this is the ground truth; the agent's own words above may be wrong or invented):\n{executionEvidence}\n\n"
              + $"Files changed: {files}\n"
@@ -318,7 +320,7 @@ public sealed partial class Reviewer : IReviewer
     /// The files, each under its own header, within the review budget - one renderer for both
     /// reviews, so a file reads the same whichever question is being asked of it.
     /// </summary>
-    private static void AppendFiles(StringBuilder sb, IReadOnlyList<WrittenFile> writtenFiles)
+    private static void AppendFiles(StringBuilder sb, IReadOnlyList<WrittenFile> writtenFiles, ReviewSources? sources = null)
     {
         var budget = MaxContentCharsTotal;
         foreach (var file in writtenFiles)
@@ -346,9 +348,10 @@ public sealed partial class Reviewer : IReviewer
             // which was fixed for command output and never carried across to the file a reviewer
             // reads.
             var slice = Shortening.ToFit(file.Content, Math.Min(MaxContentCharsPerFile, Math.Max(0, budget)));
+            var rendered = sources?.AddFile(file.RelativePath, slice) ?? slice;
 
             budget -= slice.Length;
-            sb.AppendLine(slice);
+            sb.AppendLine(rendered);
 
             // Against the file's REAL size, not against the string handed to us - which the caller
             // may already have cut to exactly this budget, making the comparison always false.

@@ -26,7 +26,10 @@ public enum CriterionOrigin
     /// so "the policy would not allow it" or "that program is not here" is a fact about a guess,
     /// not about the work. See <see cref="CriterionResult.Blocking"/>.</para>
     /// </summary>
-    Proposed
+    Proposed,
+
+    /// <summary>Extracted as an exact command explicitly requested by the user, with source text retained.</summary>
+    Requested
 }
 
 /// <summary>How one criterion came out.</summary>
@@ -75,7 +78,7 @@ public sealed record CriterionResult(
     {
         CriterionOutcome.Passed => false,
         CriterionOutcome.Failed => true,
-        _ => Origin == CriterionOrigin.Declared
+        _ => Origin != CriterionOrigin.Proposed
     };
 
     /// <summary>One line for a report or a prompt: what was asked, and what came back.</summary>

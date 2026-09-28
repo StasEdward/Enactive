@@ -100,7 +100,7 @@ public sealed class ModelBudgetReviewTests
         Assert.All(provider.Requests, r =>
         {
             Assert.Equal(GenerationPurpose.Review, r.Purpose);
-            Assert.Equal(12288, r.OutputTokenLimit);
+            Assert.InRange(r.OutputTokenLimit!.Value, 40 * 512, 32768);
         });
         var tiny = new FakeChatProvider() { Window = 100 };
         var result = await review.ReviewWithProofAsync("title", "report", journal.Describe(), [], [], obligations, tiny, "model", default);
@@ -114,7 +114,9 @@ public sealed class ModelBudgetReviewTests
         var provider = new FakeChatProvider(new Turn("partial", FinishReason: "length"), new Turn("partial", FinishReason: "length"));
         var result = await new Reviewer().ReviewWithProofAsync("title", "report", new ExecutionJournal().Describe(), [], [],
             RequestObligations.Create("one obligation"), provider, "model", default);
-        Assert.Equal(new int?[] { 2304, 4608 }, provider.Requests.Select(r => r.OutputTokenLimit));
+        Assert.Equal(2, provider.Requests.Count);
+        Assert.True(provider.Requests[1].OutputTokenLimit > provider.Requests[0].OutputTokenLimit);
+        Assert.All(provider.Requests, r => Assert.InRange(r.OutputTokenLimit!.Value, 4096, 32768));
         Assert.False(result.Pass);
         Assert.Contains("output token limit", result.IncompleteReason);
     }

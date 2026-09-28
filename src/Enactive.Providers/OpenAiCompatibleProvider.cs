@@ -314,9 +314,7 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
             {
                 if (Reasoning(delta) is { Length: > 0 } thinking)
                     events.Add(new ReasoningDelta(thinking));
-                if (delta.TryGetProperty("content", out var content)
-                    && content.ValueKind == JsonValueKind.String
-                    && content.GetString() is { Length: > 0 } text)
+                if (ResponseText(delta) is { Length: > 0 } text)
                 {
                     events.Add(new TextDelta(text));
                 }
@@ -415,9 +413,7 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
 
         var message = choices[0].GetProperty("message");
 
-        string? content = null;
-        if (message.TryGetProperty("content", out var contentEl) && contentEl.ValueKind == JsonValueKind.String)
-            content = contentEl.GetString();
+        var content = ResponseText(message);
 
         List<ToolCall>? toolCalls = null;
         if (message.TryGetProperty("tool_calls", out var toolCallsEl)
@@ -462,6 +458,31 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
             CachedPromptTokens = cached,
             Timings = ProviderTimings.OpenAi(root)
         };
+    }
+
+    // Refusals must never become an empty successful answer (including structured review).
+    private static string? ResponseText(JsonElement message)
+    {
+        if (message.TryGetProperty("refusal", out var refusal)
+            && refusal.ValueKind == JsonValueKind.String && !string.IsNullOrEmpty(refusal.GetString()))
+            throw new InvalidDataException("OpenAI-compatible provider refused the response (refusal): " + refusal.GetString());
+        if (!message.TryGetProperty("content", out var content) || content.ValueKind == JsonValueKind.Null)
+            return null;
+        if (content.ValueKind == JsonValueKind.String) return content.GetString();
+        if (content.ValueKind != JsonValueKind.Array)
+            throw new InvalidDataException("OpenAI-compatible response content must be text or an array of text blocks.");
+        var text = new StringBuilder();
+        foreach (var block in content.EnumerateArray())
+        {
+            var type = block.GetProperty("type").GetString();
+            if (type == "refusal")
+                throw new InvalidDataException("OpenAI-compatible provider refused the response (refusal): "
+                    + (block.TryGetProperty("refusal", out var reason) ? reason.GetString() : "unspecified"));
+            if (type != "text")
+                throw new InvalidDataException("OpenAI-compatible response contains an unsupported content block.");
+            text.Append(block.GetProperty("text").GetString());
+        }
+        return text.Length == 0 ? null : text.ToString();
     }
 
     private static string? Reasoning(JsonElement message)

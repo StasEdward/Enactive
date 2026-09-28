@@ -108,7 +108,12 @@ public sealed record RunCheckpoint(
     /// it. The window already refuses to start a BACKGROUND run while staging is on, for exactly
     /// this reason.</para>
     /// </summary>
+    public Enactive.Core.Tools.TaskActionPolicy? ActionPolicy { get; init; }
+    public IReadOnlyList<Enactive.Core.Tools.TaskRestriction> Restrictions { get; init; } = [];
+
     public bool Staged => Settings?.Staged ?? false;
+    /// <summary>The effective verification contract, preserved across resume. Null for older checkpoints.</summary>
+    public IReadOnlyList<Enactive.Core.Templates.SuccessCriterionDefinition>? Checks { get; init; }
 }
 
 /// <summary>

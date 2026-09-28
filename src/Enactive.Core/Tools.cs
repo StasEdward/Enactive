@@ -23,7 +23,17 @@ public sealed record ToolDefinition(string Name, string Description, string Json
     bool ParallelRead = false,
     ToolKind Kind = ToolKind.Unknown,
     FileCoverageBehavior FileCoverage = FileCoverageBehavior.None,
-    bool RunsSuccessChecks = false);
+    bool RunsSuccessChecks = false,
+    CommandPolicySyntax CommandPolicy = CommandPolicySyntax.None);
+
+/// <summary>Trusted command-policy adapter. None refuses command tools under an allowlist.</summary>
+public enum CommandPolicySyntax { None, SimpleCommand, PowerShell }
+
+/// <summary>Validates a command language without executing the requested script.</summary>
+public interface ICommandPolicyValidator
+{
+    Task<string?> ValidatePolicyAsync(string argumentsJson, TaskActionPolicy policy, IReadOnlyList<TaskRestriction> restrictions, CancellationToken ct);
+}
 
 /// <summary>Trusted host classification; never inferred from a name or from model/MCP text.
 /// Unknown keeps conservative review. Kind grants no permissions or concurrency guarantees.</summary>

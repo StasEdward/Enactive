@@ -148,7 +148,7 @@ public sealed class ConnectedAndOfferedToNobodyTests
         var engine = new Orchestrator(new Enactive.Workspace.WorkspaceChangesFactory(),
             new SingleProviderFactory(provider), new ModelResolver(),
             new StaticWorkerProvider(worker), tools, fx.Artifacts, fx.Workspace,
-            new Planner(), new PermissionEngine(), fx.Decisions,
+            new Planner(checksAuditEnabled: false), new PermissionEngine(), fx.Decisions,
             PermissionPolicy.PermissiveDefault, new NoServices());
 
         var events = await fx.RunAsync(engine, "do something without MCP");

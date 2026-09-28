@@ -231,15 +231,34 @@ public static class Verdicts
             requirement.Remove("id");
             requirement["requirement"] = "Requirement for " + id;
             requirement["global"] = false;
+            requirement["verification"] = System.Text.Json.Nodes.JsonNode.Parse("""
+                {"verdict":"not-applicable","reason":"This fixture reviews work without a separate test obligation","detects":"","assertions":[]}
+                """);
             requirement["prohibitions"] = new System.Text.Json.Nodes.JsonArray();
             claim["requirements"] = new System.Text.Json.Nodes.JsonArray(requirement);
             claims.Add(claim);
         }
         return Turn.Says(new System.Text.Json.Nodes.JsonObject {
             ["verdict"] = "pass", ["notes"] = "checked", ["proof"] = p,
-            ["claims"] = claims, ["need_evidence"] = new System.Text.Json.Nodes.JsonArray()
+            ["assessments"] = System.Text.Json.Nodes.JsonNode.Parse("""
+                {"implementation":{"verdict":"pass","reason":"Implementation checked"},
+                 "verification":{"verdict":"pass","reason":"Verification checked"},
+                 "report":{"verdict":"pass","reason":"Report checked"}}
+                """),
+            ["claims"] = claims, ["need_evidence"] = new System.Text.Json.Nodes.JsonArray(),
+            ["repairs"] = new System.Text.Json.Nodes.JsonArray(),
+            ["report_checks"] = new System.Text.Json.Nodes.JsonArray(),
+            ["command_reports"] = new System.Text.Json.Nodes.JsonArray()
         }.ToJsonString());
     }
+    public static System.Text.Json.Nodes.JsonObject Repair(string finding, string defect,
+        string change = "Correct the identified requirement", string source = "", string fragment = "")
+        => new() {
+            ["findings"] = new System.Text.Json.Nodes.JsonArray(finding),
+            ["target"] = source == "" ? "work" : "source", ["source_id"] = source, ["fragment_id"] = fragment,
+            ["defect"] = defect, ["change"] = change,
+            ["obligation_ids"] = new System.Text.Json.Nodes.JsonArray("O001")
+        };
     public const string ProviderId = "review";
     public const string Model = "reviewer-model";
 
@@ -376,6 +395,9 @@ public sealed class EngineFixture : IDisposable
     public DiskArtifactStore Artifacts { get; }
     public ScriptedDecisionHandler Decisions { get; } = new();
     public GenerationBudgets? GenerationBudgetsOverride { get; set; }
+    // Most fixtures isolate execution/review using pre-reviewed plans; contract integration tests use the production planner.
+    public bool ProposeChecks { get; set; } = true;
+    public Planner? PlannerOverride { get; set; }
     public RepairConsultation? RepairConsultationOverride { get; set; }
 
     public IWorkspaceChangesFactory? WorkspaceChangesOverride { get; set; }
@@ -572,11 +594,12 @@ public sealed class EngineFixture : IDisposable
             tools,
             artifacts ?? Artifacts,
             Workspace,
-            new Planner(),
+            PlannerOverride ?? new Planner(checksAuditEnabled: false),
             new PermissionEngine(),
             decisions ?? Decisions,
             policy ?? PermissionPolicy.PermissiveDefault,
             new EmptyServices(),
+            proposeChecks: ProposeChecks,
             generationBudgets: GenerationBudgetsOverride,
             repairConsultation: RepairConsultationOverride,
             router: router,

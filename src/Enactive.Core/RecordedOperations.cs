@@ -1,14 +1,13 @@
-namespace Enactive.Agents;
+namespace Enactive.Core.Tools;
 
 using System.Text.Json;
 using System.Text.RegularExpressions;
-using Enactive.Core.Tools;
 
 /// <summary>Positive evidence of built-in deletion operations. This is not shell containment:
 /// scripts, aliases and indirect commands may have unknown effects. Never infer absence from false.</summary>
-internal static class RecordedOperations
+public static class RecordedOperations
 {
-    internal static bool DeletesFiles(ToolCall call, ToolDefinition? definition)
+    public static bool DeletesFiles(ToolCall call, ToolDefinition? definition)
     {
         if (definition?.FileCoverage == FileCoverageBehavior.Delete) return true;
         // Only recognize a direct, simple built-in shell invocation. Do not scan quoted text,

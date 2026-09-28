@@ -97,6 +97,10 @@ public sealed record ProofVerdict(bool Sound, string Reason);
 /// </summary>
 public static class ProofAudit
 {
+    /// <summary>Structural support for a negative process test, not proof of its intended semantics.</summary>
+    public static bool HasRecordedNonzeroExit(ExecutedAction action)
+        => action.Outcome != ActionOutcome.Refused && action.ExitCode is { } code && code != 0;
+
     /// <summary>
     /// The verdict on a claim, given the exact evidence view sent to the reviewer. Hidden actions
     /// cannot support citations, but still count when checking whether the workspace changed.
@@ -186,7 +190,7 @@ public static class ProofAudit
         // objective was to check that is proven by it. Refused does not: nothing ran.
         var cited = claim.Calls.Select(n => evidence.Cited(n)!).ToArray();
         if (claim.Kind == ProofClaimKind.ExpectedFailure)
-            return cited.All(a => a.Outcome != ActionOutcome.Refused && a.ExitCode is { } code && code != 0)
+            return cited.All(HasRecordedNonzeroExit)
                 ? new(true, "expected nonzero exit observed in " + Numbers(claim.Calls) + ": " + claim.What)
                 : new(false, "expected-failure requires a recorded nonzero process exit for every cited call; "
                     + "a refusal, timeout, missing exit code or successful test does not establish a negative test");

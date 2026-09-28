@@ -121,6 +121,13 @@ internal static class CombinedReviewValidation
                     errors.Add($"{path}.calls[{index}]: call {id} does not exist");
                 else if (!evidence.VisibleActionIds.Contains(id) && !requested.Contains(id))
                     errors.Add($"{path}.calls[{index}]: call {id} was not shown; request it through need_evidence before citing it");
+                else if (Text(claim, "shown") == "expected-failure" && evidence.Cited(id) is { } action
+                    && !ProofAudit.HasRecordedNonzeroExit(action))
+                    errors.Add($"{path}.calls[{index}]: call {id} ({action.Tool}, {action.Outcome}, "
+                        + $"exit={action.ExitCode?.ToString() ?? "not recorded"}) cannot support expected-failure. "
+                        + "Every citation for this claim must have a recorded nonzero process exit and must not be refused. "
+                        + "Separate setup/restoration evidence from the negative test. If the required failure was not observed, "
+                        + "report the unmet requirement rather than inventing evidence.");
             }
             index++;
         }
@@ -148,6 +155,11 @@ internal static class CombinedReviewValidation
             return;
         }
         if (EffectiveScope(claim, id, obligations) == obligations.CurrentScope) return;
+        if (obligations.FinalReview)
+        {
+            errors.Add($"{path}.scope: final review requires scope run; no requirement can remain deferred");
+            return;
+        }
         if (Text(claim, "shown") != "no")
             errors.Add($"{path}.shown: another step's obligation must be explicitly deferred with shown=no, not claimed completed");
         EmptyCalls(claim, path, errors);
@@ -179,7 +191,8 @@ internal static class CombinedReviewValidation
         if (schema.TryGetProperty("enum", out var choices)
             && !choices.EnumerateArray().Any(c => c.GetString() == value.GetString()))
             errors.Add($"{path}: expected one of {string.Join(", ", choices.EnumerateArray().Select(c => c.GetString()))}");
-        if (type == "string" && (path.EndsWith(".what", StringComparison.Ordinal) || path.EndsWith(".requirement", StringComparison.Ordinal))
+        if (type == "string" && (path.EndsWith(".what", StringComparison.Ordinal) || path.EndsWith(".requirement", StringComparison.Ordinal)
+            || path.EndsWith(".reason", StringComparison.Ordinal))
             && string.IsNullOrWhiteSpace(value.GetString()))
             errors.Add($"{path}: must not be blank");
         if (type == "object")

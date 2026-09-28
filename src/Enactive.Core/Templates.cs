@@ -39,7 +39,14 @@ public sealed record SuccessCriterionDefinition(
     int ExpectedExitCode = 0,
     bool Required = true,
     CriterionOrigin Origin = CriterionOrigin.Declared,
-    bool AlreadyPassing = false);
+    bool AlreadyPassing = false)
+{
+    /// <summary>Verbatim request passage identifying an explicitly requested verification.
+    /// Null for template criteria and model suggestions. This is provenance, not shell parsing.</summary>
+    public string? RequestQuote { get; init; }
+    /// <summary>Planner's explanation of final-check suitability and compliance with request constraints.</summary>
+    public string? PlanningReason { get; init; }
+}
 
 /// <summary>
 /// Ceilings on a single run. Null means "no limit of its own" - which is not zero, and is not the

@@ -44,11 +44,12 @@ public sealed class ResumeTests
         Assert.All(checkpoint.Steps, step => Assert.Equal(new[] { "O001" }, step.ObligationIds));
 
         var resumed = new FakeChatProvider(Turn.Calls1("read_file", """{"path":"result.txt"}"""), Turn.Says("verified"));
-        var reviewer = new FakeChatProvider(Verdicts.Combined(Verdicts.Shown("Verified prior implementation", 1), "S1"));
+        var reviewer = new FakeChatProvider(Verdicts.Combined(Verdicts.Shown("Verified prior implementation", 1), "S1"),
+            Verdicts.Combined(Verdicts.Shown("Current file verifies the whole request", 1), "run"));
         var events = await fx.ResumeAsync(fx.Build(resumed, checkpoints: store, router: Routers.WithReviewer(),
             reviewProvider: reviewer, checkSoundness: true, reviewContent: false, reviewRetries: 0), checkpoint);
         Assert.Equal(RunOutcomeKind.Completed, events.Last().Outcome());
-        Assert.Single(reviewer.Requests);
+        Assert.Equal(2, reviewer.Requests.Count);
         const string map = "\"O001\":[\"S1\",\"S2\"]";
         Assert.Contains(map, string.Join("\n", reviewer.Requests[0].Messages.Select(m => m.Content)));
         Assert.Contains(map, string.Join("\n", resumed.Requests[0].Messages.Select(m => m.Content)));

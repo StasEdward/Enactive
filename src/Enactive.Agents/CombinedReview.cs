@@ -10,10 +10,21 @@ public sealed partial class Reviewer
 {
     internal static readonly string CombinedSchema = MakeCombinedSchema();
 
+    internal static readonly string CombinedWireSchema = ReviewReferences.WireSchema(CombinedSchema);
+
     private static string MakeCombinedSchema()
     {
         var schema = JsonNode.Parse(VerdictSchema)!.AsObject();
         var properties = schema["properties"]!.AsObject();
+        var assessment = JsonNode.Parse("""
+            {"type":"object","properties":{"verdict":{"type":"string","enum":["pass","fail","unknown","not-applicable"]},
+             "reason":{"type":"string"}},"required":["verdict","reason"],"additionalProperties":false}
+            """)!;
+        var assessments = new JsonObject();
+        foreach (var area in new[] { "implementation", "verification", "report" }) assessments[area] = assessment.DeepClone();
+        properties["assessments"] = new JsonObject { ["type"] = "object", ["properties"] = assessments,
+            ["required"] = new JsonArray("implementation", "verification", "report"), ["additionalProperties"] = false };
+        schema["required"]!.AsArray().Add("assessments");
         properties["proof"] = JsonNode.Parse(ProofSchema);
         var claim = JsonNode.Parse(ProofSchema)!.AsObject();
         // nothing-to-do is a statement about the whole step, not an individual constraint.
@@ -29,6 +40,16 @@ public sealed partial class Reviewer
         };
         requirement["properties"]!["requirement"] = new JsonObject { ["type"] = "string" };
         requirement["properties"]!["scope"] = new JsonObject { ["type"] = "string" };
+        requirement["properties"]!["verification"] = JsonNode.Parse("""
+            {"type":"object","properties":{
+              "verdict":{"type":"string","enum":["pass","fail","unknown","not-applicable"]},
+              "reason":{"type":"string"},"detects":{"type":"string"},
+              "assertions":{"type":"array","items":{"type":"object","properties":{
+                "source_id":{"type":"string"},"fragment_id":{"type":"string"}},
+                "required":["source_id","fragment_id"],"additionalProperties":false}}},
+             "required":["verdict","reason","detects","assertions"],"additionalProperties":false}
+            """);
+        requirement["required"]!.AsArray().Add("verification");
         requirement["properties"]!["global"] = new JsonObject { ["type"] = "boolean" };
         foreach (var name in new[] { "requirement", "scope", "global", "prohibitions" }) requirement["required"]!.AsArray().Add(name);
         claim["properties"]!["requirements"] = new JsonObject { ["type"] = "array", ["items"] = requirement };
@@ -36,7 +57,33 @@ public sealed partial class Reviewer
         properties["claims"] = new JsonObject { ["type"] = "array", ["items"] = claim };
         // Anthropic's structured-output subset rejects maxItems. Enforce the limit when parsing.
         properties["need_evidence"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "integer" } };
-        foreach (var name in new[] { "proof", "claims", "need_evidence" }) schema["required"]!.AsArray().Add(name);
+        properties["command_reports"] = JsonNode.Parse("""
+            {"type":"array","items":{"type":"object","properties":{
+              "source_id":{"type":"string"},"source_type":{"type":"string","enum":["saved-file","worker-report"]},
+              "fragment_id":{"type":"string"},"call":{"type":"integer"},
+              "exit_code":{"type":"integer"},"scope":{"type":"string"},
+              "occurrence":{"type":"string","enum":["first","last","specific"]}},
+              "required":["source_id","source_type","fragment_id","call","exit_code","scope","occurrence"],"additionalProperties":false}}
+            """);
+        properties["report_checks"] = JsonNode.Parse("""
+            {"type":"array","items":{"type":"object","properties":{
+              "source_id":{"type":"string"},"fragment_id":{"type":"string"},
+              "kind":{"type":"string","enum":["observed","inferred","requirement-map"]},
+              "verdict":{"type":"string","enum":["pass","fail","unknown","not-applicable"]},
+              "reason":{"type":"string"},"calls":{"type":"array","items":{"type":"integer"}},
+              "obligation_ids":{"type":"array","items":{"type":"string"}}},
+              "required":["source_id","fragment_id","kind","verdict","reason","calls","obligation_ids"],"additionalProperties":false}}
+            """);
+        properties["repairs"] = JsonNode.Parse("""
+            {"type":"array","items":{"type":"object","properties":{
+              "findings":{"type":"array","items":{"type":"string"}},
+              "target":{"type":"string","enum":["source","work"]},
+              "source_id":{"type":"string"},"fragment_id":{"type":"string"},
+              "defect":{"type":"string"},"change":{"type":"string"},
+              "obligation_ids":{"type":"array","items":{"type":"string"}}},
+              "required":["findings","target","source_id","fragment_id","defect","change","obligation_ids"],"additionalProperties":false}}
+            """);
+        foreach (var name in new[] { "proof", "claims", "need_evidence", "command_reports", "report_checks", "repairs" }) schema["required"]!.AsArray().Add(name);
         return schema.ToJsonString();
     }
 
@@ -47,9 +94,30 @@ public sealed partial class Reviewer
         IChatProvider provider, string model, CancellationToken ct, string? workspaceRoot = null,
         Func<int, int, string?>? beforeRetry = null, ReviewMode mode = ReviewMode.Execution)
     {
-        var instruction = (mode == ReviewMode.Content ? ContentGuidance : ExecutionGuidance)
+        var instruction = ReviewRepairContract.Guidance + SemanticReviewAudit.Guidance + (mode == ReviewMode.Content ? ContentGuidance : ExecutionGuidance)
             + "\nIndependently assess whether the evidence shows the objective was met: " + ProofGuidance
-            + "\nReturn ONLY one JSON object with verdict, notes, proof, claims, need_evidence. "
+            + "\nReturn ONLY one JSON object with verdict, notes, assessments, proof, claims, need_evidence, command_reports, report_checks, repairs. "
+            + "assessments independently evaluates implementation, verification and report, each as {verdict,reason}. "
+            + "verdict is pass, fail, unknown or not-applicable. Explain each assessment against the CURRENT scope and original requirements. "
+            + "For implementation inspect actual behavior/content; for verification inspect whether the tests would detect violations, "
+            + "including all relevant inputs/elements and required negative cases, not just whether a process returned zero. "
+            + "For report compare requirement labels, command order, initial failures, corrections, mutation and restoration against "
+            + "the engine-owned command history and current files. Do not excuse an incorrect O-ID mapping as private report terminology. "
+            + "A later success cannot erase an earlier failure. Test names must describe the actual assertions. "
+            + "Use not-applicable only with a scope-based explanation, not to waive an applicable requirement. "
+            + "For fail, give the worker a concrete defect and required correction, without prescribing unrelated changes. "
+            + "For unknown, explain the missing evidence; do not ask the worker to repair imagined defects. "
+            + "command_reports must list EACH command outcome assertion in saved reports and the worker message: "
+            + "{evidence_id,call,exit_code,scope,occurrence}. Select evidence_id from the displayed fragments "
+            + "using its integer number. Never reproduce a quote manually. "
+            + "Cite saved-document fragments for documents, worker-message fragments for the worker message. "
+            + "Select the fragment containing the assertion, cite the corresponding command, and record the exit code CLAIMED BY "
+            + "THE REPORT, not the code you wish it had claimed. occurrence=first for initial/first runs, last for final/latest, "
+            + "otherwise specific. scope is the referenced step (S1 etc.) or run for whole-run history. "
+            + "Include failures and their corrections: a later pass does not make the initial run pass. "
+            + "Use [] only when no command outcomes are asserted in either visible source type. "
+            + "Check saved requirement tables against the original source-unit meanings: O-IDs are not test IDs. "
+            + "A mislabeled O-ID is a report defect; request correction of the table, not unrelated code changes. "
             + "proof is {shown,calls,what} for the step objective. claims contains {id,scope,shown,calls,what} "
             + "for EVERY request obligation ID exactly once. Each claim also requires requirements: an array of "
             + "{requirement,scope,global,shown,calls,what}. Decompose the source unit by MEANING in the context of "
@@ -91,15 +159,33 @@ public sealed partial class Reviewer
             + "If more evidence is needed, put at most four original call IDs in need_evidence; otherwise []. "
             + "Never cite a hidden call until its requested evidence has been displayed. Omitted evidence is unknown, not proof of absence. "
             + "If still uncertain after clarification, verdict=fail and explain the missing evidence. "
-            + "A plain pass without both proof and obligation claims is incomplete.";
-        string Prompt(EvidenceView view) => BuildExecutionUserPrompt(title, report, view.Text, artifacts, files)
-            + obligations.Describe();
+            + "A plain pass without both proof and obligation claims is incomplete. "
+            + "Exception: if the engine requests ONLY missing requirement-map assessments during clarification, "
+            + "follow that narrower completion schema and return only report_checks and repairs. "
+            + "The engine retains the original verdict/claims and validates the merged result.";
+        if (obligations.FinalReview)
+            instruction += "\nThis is the FINAL RUN REVIEW: the step-deferral rules above no longer apply. "
+                + "Use scope run for every claim and requirement. Resolve all previously deferred parts against "
+                + "the entire original request, current files and the newly numbered run evidence. "
+                + "Historical assignments do not exempt any requirement; unproven parts remain no. "
+                + "An earlier step PASS or a green success check cannot stand in for the missing evidence.";
+        var references = new ReviewReferences();
+        var sources = new ReviewSources(report, references);
+        string Prompt(EvidenceView view)
+        {
+            references.BeginView();
+            sources = new ReviewSources(report, references);
+            var body = BuildExecutionUserPrompt(title, report, sources.AddEvidence(view.Text), artifacts, files, sources: sources);
+            return body + "\nEngine-owned command history (IDs belong to this evidence view; omissions are unknown):\n"
+                + view.CommandHistory() + sources.Describe() + obligations.Describe();
+        }
         var messages = new List<ChatMessage> { ChatMessage.System(instruction), ChatMessage.User(Prompt(evidence)) };
         var prompt = 0;
         var output = 0;
         int? cached = null, created = null;
         string problem = "reviewer did not return a combined verdict and proof";
         var outputTruncated = false;
+        ReviewMappingCompletion? mappingCompletion = null;
         for (var attempt = 0; attempt < 2; attempt++)
         {
             if (attempt > 0 && beforeRetry?.Invoke(prompt, output) is { } spent)
@@ -108,8 +194,9 @@ public sealed partial class Reviewer
             try
             {
                 var request = new ChatRequest(model, messages, Temperature: 0,
-                    ResponseSchema: CombinedSchema, Purpose: GenerationPurpose.Review,
-                    OutputTokenLimit: (int)Math.Min(32768L, (2048L + 256L * obligations.Items.Count) * (outputTruncated ? 2 : 1)));
+                    ResponseSchema: mappingCompletion is null ? CombinedWireSchema : ReviewMappingCompletion.Schema, Purpose: GenerationPurpose.Review,
+                    OutputTokenLimit: (int)Math.Min(32768L, (4096L + 512L * obligations.Items.Count
+                        + Math.Min(8192L, sources.VisibleCharacters / 8L)) * (outputTruncated ? 2 : 1)));
                 completion = await provider.CompleteAsync(GenerationAllowance.Fit(request, provider), ct);
             }
             catch (OperationCanceledException) { throw; }
@@ -122,18 +209,45 @@ public sealed partial class Reviewer
             output += completion.CompletionTokens ?? 0;
             cached = TokenCounts.Add(cached, completion.CachedPromptTokens);
             created = TokenCounts.Add(created, completion.CacheCreationPromptTokens);
-            var answer = completion.Message.Content ?? "";
+            var rawAnswer = completion.Message.Content ?? "";
+            string answer;
+            try
+            {
+                answer = references.Decode(rawAnswer);
+                if (mappingCompletion is not null) answer = mappingCompletion.Merge(answer);
+            }
+            catch (Exception ex) when (ex is FormatException or InvalidOperationException or System.Text.Json.JsonException)
+            {
+                problem = ex.Message;
+                messages.Add(ChatMessage.Assistant(rawAnswer));
+                messages.Add(ChatMessage.User(problem + "\nReturn the corrected full response using displayed integer evidence IDs." + sources.Describe()));
+                continue;
+            }
+            answer = ReviewScopeNormalization.Apply(answer, obligations);
             outputTruncated = completion.FinishReason is "length" or "max_tokens";
             if (outputTruncated) problem = "combined review reached its output token limit; keep claim explanations concise";
             if (!outputTruncated && completion.Message.ToolCalls is not { Count: > 0 })
             {
-                var errors = CombinedReviewValidation.Errors(answer, obligations, evidence);
+                var errors = CombinedReviewValidation.Errors(answer, obligations, evidence).ToList();
+                errors.AddRange(ReportCommandAudit.Errors(answer, evidence, sources, obligations));
+                if (errors.Count == 0)
+                    errors.AddRange(SemanticReviewAudit.Errors(answer, evidence, sources, obligations));
+                if (errors.Count == 0)
+                    errors.AddRange(ReviewRepairContract.Errors(answer, sources, obligations));
                 if (errors.Count > 0)
                 {
                     problem = "Combined review response has structural errors:\n" + string.Join("\n", errors.Select(e => "- " + e));
-                    messages.Add(ChatMessage.Assistant(answer));
-                    messages.Add(ChatMessage.User(problem + "\nCorrect all listed fields in one complete response using the supplied schema. "
-                        + "Reassess scope against the request; do not change evidence or invent citations to obtain a pass."));
+                    messages.Add(ChatMessage.Assistant(rawAnswer));
+                    if (attempt == 0 && errors.All(e => e.StartsWith("$.report_checks: missing requirement-map assessment for ", StringComparison.Ordinal))
+                        && ReviewRepairContract.Errors(answer, sources, obligations).Count == 0)
+                    {
+                        mappingCompletion = new ReviewMappingCompletion(answer, references);
+                        messages.Add(ChatMessage.User(mappingCompletion.Instruction));
+                    }
+                    else
+                        messages.Add(ChatMessage.User(references.Diagnostic(problem) + "\nCorrect all listed fields in one complete response using the supplied schema. "
+                            + "Reassess scope against the request; do not change evidence or invent citations to obtain a pass."
+                            + sources.Describe()));
                     continue;
                 }
             }
@@ -159,10 +273,20 @@ public sealed partial class Reviewer
                         messages[1] = ChatMessage.User(Prompt(evidence));
                     }
                 }
-                else if (!result.Review.Pass)
-                    return result.Review with { PromptTokens = prompt, CompletionTokens = output, CachedPromptTokens = cached, CacheCreationPromptTokens = created };
                 else if (result.Proof is { } proof && result.Claims is { } claims)
                 {
+                    if (SemanticReviewAudit.Outcome(answer) is { } semantic)
+                        return result.Review with { Pass = false, Notes = semantic.Reason,
+                            RepairAdvice = semantic.Unknown ? null : ReviewRepairContract.Render(answer, sources, obligations),
+                            IncompleteReason = semantic.Unknown ? semantic.Reason : null,
+                            PromptTokens = prompt, CompletionTokens = output, CachedPromptTokens = cached,
+                            CacheCreationPromptTokens = created };
+                    if (!result.Review.Pass)
+                        return result.Review with { PromptTokens = prompt, CompletionTokens = output, CachedPromptTokens = cached, CacheCreationPromptTokens = created };
+                    if (ReportCommandAudit.Contradiction(answer, evidence, sources) is { } contradiction)
+                        return result.Review with { Pass = false, Notes = contradiction,
+                            PromptTokens = prompt, CompletionTokens = output, CachedPromptTokens = cached,
+                            CacheCreationPromptTokens = created };
                     var audit = ProofAudit.Check(proof, evidence, workspaceRoot);
                     if (proof.Calls.Any(id => evidence.Cited(id) is null) && audit.Sound)
                         audit = new(false, "proof cites a call not shown in the evidence");
@@ -177,7 +301,7 @@ public sealed partial class Reviewer
                         Soundness = audit, Obligations = claims };
                 }
             }
-            messages.Add(ChatMessage.Assistant(answer));
+            messages.Add(ChatMessage.Assistant(rawAnswer));
             messages.Add(ChatMessage.User(problem + ". Return the complete combined JSON object using the supplied schema. "
                 + "Include proof and every obligation ID, and judge only the evidence now displayed. No more evidence requests."));
         }

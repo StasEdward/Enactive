@@ -75,7 +75,7 @@ public sealed class CopyFileTool : ITool
             if (File.Exists(destination) || pendingDestination is not null)
                 return ToolResults.Fail(
                     $"'{to}' already exists. Copying onto it would destroy it — choose another name, "
-                    + "or delete that file deliberately first.");
+                    + "or restore its contents with an allowed write/edit operation.");
 
             // BYTES, streamed, never decoded. The whole point of this tool is that the content does
             // not pass through anything that could shorten or re-encode it - not the model's

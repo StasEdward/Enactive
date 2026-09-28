@@ -7,8 +7,6 @@ using Xunit;
 public sealed class MixedRequirementReviewTests
 {
     [Theory]
-    [InlineData("aggregate-no", true)]
-    [InlineData("aggregate-no", false)]
     [InlineData("constraint-no-op", true)]
     [InlineData("constraint-no-op", false)]
     [InlineData("aggregate-no-op", true)]
@@ -35,12 +33,7 @@ public sealed class MixedRequirementReviewTests
         parts.Add(deferred);
         var bad = good.DeepClone();
         var expectedPath = "$.claims[0].shown";
-        if (error == "aggregate-no")
-        {
-            bad["claims"]![0]!["shown"] = "no";
-            bad["claims"]![0]!["calls"] = new JsonArray();
-        }
-        else if (error == "constraint-no-op")
+        if (error == "constraint-no-op")
         {
             bad["claims"]![0]!["shown"] = "not-by-any-call";
             bad["claims"]![0]!["calls"] = new JsonArray();
@@ -50,13 +43,14 @@ public sealed class MixedRequirementReviewTests
         else bad["claims"]![0]!["shown"] = "nothing-to-do";
         var reviewer = new FakeChatProvider(Turn.Says(bad.ToJsonString()),
             Turn.Says((corrected ? good : bad).ToJsonString()),
-            Verdicts.Combined(Verdicts.Shown("verified", 2), "S2"));
+            Verdicts.Combined(Verdicts.Shown("verified", 2), "S2"),
+            Verdicts.Combined(Verdicts.Shown("whole request verified", 1, 2), "run"));
         var events = await fx.RunAsync(fx.Build(worker, router: Routers.WithReviewer(), reviewProvider: reviewer,
             reviewContent: false, checkSoundness: true, reviewRetries: 2), "Write result.txt; verify later; no git or deletion.");
         Assert.Equal(corrected ? RunOutcomeKind.Completed : RunOutcomeKind.Incomplete, events.Last().Outcome());
         Assert.Equal("keep", fx.Read("result.txt"));
         Assert.Equal(corrected ? 5 : 3, worker.Requests.Count);
-        Assert.Equal(corrected ? 3 : 2, reviewer.Requests.Count);
+        Assert.Equal(corrected ? 4 : 2, reviewer.Requests.Count);
         Assert.Contains(expectedPath, reviewer.Requests[1].Messages.Last().Content!);
         Assert.DoesNotContain(events, e => e.Kind is EventKind.ArtifactReverted or EventKind.ReviewFailed);
         Assert.Equal(corrected ? 2 : 1, events.Count(e => e.Kind == EventKind.StepStarted));

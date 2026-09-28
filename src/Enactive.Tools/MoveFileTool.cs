@@ -77,7 +77,7 @@ public sealed class MoveFileTool : ITool
             if (File.Exists(destination) || await ctx.Artifacts.TryReadPendingAsync(to, ct) is not null)
                 return ToolResults.Fail(
                     $"'{to}' already exists. Moving onto it would destroy it — choose another name, "
-                    + "or delete that file deliberately first.");
+                    + "or restore its contents with an allowed write/edit operation.");
 
             // BYTES, not text. This read the file with ReadAllTextAsync and wrote UTF-8 back, which
             // is not a move: a PNG or a zip came out with every invalid UTF-8 byte replaced by U+FFFD,

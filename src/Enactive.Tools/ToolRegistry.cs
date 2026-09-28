@@ -41,6 +41,30 @@ public sealed class ToolRegistry : IToolRegistry
         if (!_tools.TryGetValue(call.Name, out var tool))
             return ToolResults.Unreadable($"There is no tool called '{call.Name}'. Nothing ran.");
 
+        if (ctx.Context?.Restrictions.Any(r => r.Effect == ForbiddenTaskEffect.FileDeletion) == true
+            && RecordedOperations.DeletesFiles(call, tool.Definition))
+            return ToolResults.Unreadable("Refused by the original task's no-deletion restriction. Nothing ran. "
+                + "Approval does not override this restriction. Restore contents using an allowed write/edit operation; do not delete the file.")
+                with { WorkspaceEffect = WorkspaceEffect.None, Metadata = new Dictionary<string, object?> { ["taskConstraintRefusal"] = true } };
+
+        string? policyError = null;
+        if (ctx.Context?.ActionPolicy is { } policy)
+        {
+            if (!policy.AllowedTools.Contains(tool.Definition.Name, StringComparer.Ordinal))
+                policyError = "Tool is not in allowed_tools.";
+            else if (tool.Definition.Kind == ToolKind.Command
+                && tool.Definition.CommandPolicy == CommandPolicySyntax.PowerShell
+                && tool is ICommandPolicyValidator validator)
+                policyError = await validator.ValidatePolicyAsync(call.ArgumentsJson, policy, ctx.Context.Restrictions, ct);
+            else if (!policy.Allows(call, tool.Definition))
+                policyError = "Command is outside the allowed families or contains unsupported shell syntax.";
+        }
+        if (policyError is not null)
+            return ToolResults.Unreadable("Refused by the task action policy. Nothing ran. " + policyError
+                + " Choose an allowed tool/command; approval cannot override the task contract.",
+                metadata: new Dictionary<string, object?> { ["taskConstraintRefusal"] = true })
+                with { WorkspaceEffect = WorkspaceEffect.None };
+
         var revision = _revisions.GetOrAdd(ctx.WorkspaceId, _ => new Revision());
         var pending = tool.Definition.WorkspaceEffect != WorkspaceEffect.None;
         if (pending)

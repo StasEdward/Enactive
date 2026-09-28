@@ -165,8 +165,14 @@ public sealed class AHandoverCarriesWhatWasMeasuredTests
         using var fx = new EngineFixture();
         fx.Write("Prod.cs", Production);
         var provider = Breakage("for /L %i in (1,1,120) do @echo output line %i");
+        // Exercise tail preservation, not the exact prompt-size boundary. Leave room for the
+        // handover request itself while still triggering it after the measured 8000-token turn.
+        provider.Window = 12_000;
+        provider.HandoverAt = 65;
 
-        await fx.RunAsync(fx.Build(provider, EngineFixture.Role("developer")), "check the tests catch it");
+        var events = await fx.RunAsync(fx.Build(provider, EngineFixture.Role("developer")), "check the tests catch it");
+        Assert.True(provider.Requests.SelectMany(r => r.Messages).Any(
+            m => m.Content?.Contains("started again from your own notes", StringComparison.Ordinal) == true), events.Text());
 
         var resumed = Resumed(provider);
         Assert.Contains("output line 120", resumed, StringComparison.Ordinal);

@@ -9,6 +9,67 @@ using Xunit;
 
 public sealed class CombinedReviewTests
 {
+    [Fact]
+    public async Task Missing_semantic_assessment_is_repaired_by_reviewer_before_verdict()
+    {
+        var good = Verdicts.Combined(Verdicts.Shown("verified", 1), "run");
+        var bad = JsonNode.Parse(good.Text!)!;
+        bad["assessments"]!.AsObject().Remove("verification");
+        var provider = new FakeChatProvider(Turn.Says(bad.ToJsonString()), good);
+        var result = await Review(provider);
+        Assert.True(result.Pass);
+        Assert.Contains("$.assessments.verification", provider.Requests[1].Messages.Last().Content!);
+    }
+
+    [Fact]
+    public async Task Unknown_assessment_does_not_become_worker_rejection_even_with_top_level_fail()
+    {
+        var answer = JsonNode.Parse(Verdicts.Combined(Verdicts.Shown("verified", 1), "run").Text!)!;
+        answer["verdict"] = "fail";
+        answer["assessments"]!["verification"]!["verdict"] = "unknown";
+        answer["assessments"]!["verification"]!["reason"] = "Test file not shown";
+        var provider = new FakeChatProvider(Turn.Says(answer.ToJsonString()));
+        var result = await Review(provider);
+        Assert.Contains("Test file not shown", result.IncompleteReason!);
+        Assert.Null(result.RepairAdvice);
+        Assert.Single(provider.Requests);
+    }
+
+    [Theory]
+    [InlineData("proof", ActionOutcome.Succeeded, null)]
+    [InlineData("claim", ActionOutcome.Succeeded, 0)]
+    [InlineData("requirement", ActionOutcome.Failed, null)]
+    [InlineData("requirement", ActionOutcome.Refused, 1)]
+    public async Task Invalid_negative_test_references_are_reviewer_contract_errors(
+        string location, ActionOutcome outcome, int? exit)
+    {
+        var journal = new ExecutionJournal();
+        journal.Record(1, "custom_tool", "{}", outcome, "result", exitCode: exit);
+        var bad = JsonNode.Parse(Verdicts.Combined(Verdicts.Shown("negative check", 1), "run").Text!)!;
+        var path = location switch
+        {
+            "proof" => "$.proof",
+            "claim" => "$.claims[0]",
+            _ => "$.claims[0].requirements[0]"
+        };
+        var target = location switch
+        {
+            "proof" => bad["proof"]!,
+            "claim" => bad["claims"]![0]!,
+            _ => bad["claims"]![0]!["requirements"]![0]!
+        };
+        target["shown"] = "expected-failure";
+        var rejected = JsonNode.Parse(Verdicts.Combined(Verdicts.NotShown("Required failure was not observed"), "run").Text!)!;
+        rejected["verdict"] = "fail";
+        rejected["notes"] = "Required failure was not observed";
+        var provider = new FakeChatProvider(Turn.Says(bad.ToJsonString()), Turn.Says(rejected.ToJsonString()));
+        var result = await Review(provider, journal.Describe());
+        Assert.False(result.Pass); // Repairing the contract need not change the result to pass.
+        Assert.Null(result.IncompleteReason);
+        Assert.Equal(2, provider.Requests.Count);
+        Assert.Contains(path + ".calls[0]", provider.Requests[1].Messages.Last().Content!);
+    }
+
     [Theory]
     [InlineData("proof", true)]
     [InlineData("claim", true)]
@@ -97,7 +158,8 @@ public sealed class CombinedReviewTests
         Assert.True(result.Soundness!.Sound);
         Assert.Equal(2, provider.Requests.Count);
         var correction = provider.Requests[1].Messages.Last().Content!;
-        Assert.Contains("$.claims[0].shown", correction);
+        // An explicit non-evidentiary deferral is now normalized; the mixed scope is still invalid.
+        Assert.DoesNotContain("$.claims[0].shown", correction);
         Assert.Contains("$.claims[0].scope", correction);
         Assert.Contains("$.claims[1].requirements[0].shown", correction);
         Assert.Contains("$.claims[1].requirements[0].calls", correction);

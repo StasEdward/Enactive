@@ -33,7 +33,7 @@ public sealed class RunCompositionRefactorTests
         var worker = EngineFixture.WorkerWith("write_file");
         var resources = new RunEngineResources(new SingleProviderFactory(provider), models,
             new StaticWorkerProvider([worker], worker.Id),
-            new ToolRegistry(EngineFixture.ShippedTools()), artifacts, fx.Workspace, new Planner(),
+            new ToolRegistry(EngineFixture.ShippedTools()), artifacts, fx.Workspace, new Planner(checksAuditEnabled: false),
             new PermissionEngine(), fx.Decisions, PermissionPolicy.PermissiveDefault,
             new Services(), new ModelRouter(models));
         var events = await fx.RunAsync(RunEngineComposition.Build(resources, options), "Write result.txt");

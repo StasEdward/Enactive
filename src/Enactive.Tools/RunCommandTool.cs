@@ -20,7 +20,7 @@ public sealed class RunCommandTool : ITool
                    + "in 'expectedExitCodes' before running - do that when the exit code is part of the answer "
                    + "you want (a test runner reporting failing tests), never to excuse a command that was "
                    + "supposed to succeed.",
-        JsonSchema: Schema, Kind: ToolKind.Command, RunsSuccessChecks: true);
+        JsonSchema: Schema, Kind: ToolKind.Command, RunsSuccessChecks: true, CommandPolicy: CommandPolicySyntax.SimpleCommand);
 
     public PermissionLevel RequiredLevel => PermissionLevel.Execute;
 

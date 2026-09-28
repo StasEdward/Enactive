@@ -39,6 +39,7 @@ public sealed class SuccessCriteriaTests
     [InlineData(CriterionOrigin.Proposed, true, RunOutcomeKind.Completed)]
     [InlineData(CriterionOrigin.Declared, false, RunOutcomeKind.Completed)]
     [InlineData(CriterionOrigin.Proposed, false, RunOutcomeKind.Completed)]
+    [InlineData(CriterionOrigin.Requested, true, RunOutcomeKind.Incomplete)]
     public async Task Approval_explains_the_actual_effect_of_skipping_a_check(
         CriterionOrigin origin, bool required, RunOutcomeKind expectedOutcome)
     {

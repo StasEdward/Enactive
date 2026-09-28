@@ -79,10 +79,10 @@ public sealed partial class Orchestrator
                 await publish(scope.Ev(EventKind.ErrorObserved, prefix + unavailable, stepNumber));
                 return;
             }
-            if (assessed.Review.Pass) return;
+            if (assessed.Review.Pass) { session.ObserveReview(assessed.Review); return; }
             if (attempt < attempts)
             {
-                RetryAfterReview(step.Messages, assessed.Review.Notes, stepNumber is null ? "the work" : "this step");
+                RetryAfterReview(step.Messages, assessed.Review.RepairAdvice ?? assessed.Review.Notes, stepNumber is null ? "the work" : "this step");
                 continue;
             }
             // Preserve the two hosts' existing terminal wording.

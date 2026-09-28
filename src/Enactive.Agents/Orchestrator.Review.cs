@@ -28,6 +28,25 @@ using Enactive.Core.Workers;
 
 public sealed partial class Orchestrator
 {
+    private async Task<ReviewResult> ReconcileRunAsync(RunSession session, RunModels models, CancellationToken ct)
+    {
+        if (session.Scope.Budget.TurnExhausted is { } spent)
+            return new(false, spent) { BudgetExhausted = spent };
+        try
+        {
+            var files = new List<WrittenFile>();
+            foreach (var store in session.Stores) files.AddRange(await ReadWrittenAsync(store, ct));
+            var current = files.DistinctBy(f => f.RelativePath, StringComparer.OrdinalIgnoreCase).ToArray();
+            return await InScopeAsync(session.Scope.RunId, session.Scope.TaskId, null,
+                () => _stepReview.ReconcileAsync(string.Join("\n", session.Digest),
+                    session.RunEvidence().Describe(maxChars: _evidenceBudget),
+                    current.Select(f => f.RelativePath).ToArray(), current, session.Obligations!,
+                    models.ReviewProvider!, models.ReviewModel, ct, session.Scope.Budget.TurnExhaustedAfter));
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex) { return new(false, ex.Message) { IncompleteReason = "Final review unavailable: " + ex.Message }; }
+    }
+
     private sealed record AttemptReview(ReviewResult Review, bool ProofRejected = false, string? BudgetExhausted = null);
 
     /// <summary>

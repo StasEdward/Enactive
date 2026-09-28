@@ -519,6 +519,27 @@ public sealed partial class Orchestrator : IOrchestrator
             yield break;
         }
 
+        if (_planner.ChecksAuditEnabled)
+        {
+            yield return scope.Ev(EventKind.ReviewRequested, "Planner is checking final criteria against the original request before execution…");
+            plan = await InScopeAsync(runId, taskId, null, () => PlanCheckReview.RunAsync(plan with { Checks = CriteriaFor(plan) }, intent.RawText,
+                intent.Context, models.PlanProvider, models.Plan.Model, budget,
+                _generationBudgets.For(GenerationPurpose.Planning), ct, preserveCriteria: resume is not null || _successCriteria.Count > 0 || !_proposeChecks, tools: _tools.Definitions));
+            yield return scope.Usage(WorkEventPayload.WorkPurpose.Plan, models.Plan,
+                plan.PromptTokens, plan.CompletionTokens, cached: plan.CachedPromptTokens, created: plan.CacheCreationPromptTokens);
+            if (plan.IncompleteReason is { } contractFailure)
+            {
+                yield return scope.Ev(EventKind.ErrorObserved, contractFailure);
+                yield return scope.Terminal(RunOutcomeKind.Incomplete, contractFailure, _ => "Verification contract unresolved; no work started.");
+                yield break;
+            }
+            foreach (var check in plan.Checks)
+                yield return scope.Ev(EventKind.ContextAssembled,
+                    $"Final check ({check.Origin}): {check.Command} — {check.PlanningReason}");
+        }
+
+        intent = intent with { Context = intent.Context with { Restrictions = plan.Restrictions, ActionPolicy = plan.ActionPolicy } };
+
         // A plan nobody could read is not a decision to do one thing. The two were the same value
         // and the same title until now, so a genuine multi-step request that arrived back as prose
         // became one unplanned action under a heading cut from the request - and the run showed
@@ -540,18 +561,28 @@ public sealed partial class Orchestrator : IOrchestrator
                 ChatMessage.User(BuildUserPrompt(intent))
             };
 
+        if (resume is not null && (plan.ActionPolicy is not null || plan.Restrictions.Count > 0))
+            messages.Add(ChatMessage.User("Restored task action contract (approval cannot widen it): "
+                + JsonSerializer.Serialize(new { plan.ActionPolicy, plan.Restrictions })));
+
+        if (resume is null && plan.Checks.Any(c => c.PlanningReason is not null))
+            messages.Add(ChatMessage.User("Final verification contract approved during planning:\n"
+                + System.Text.Json.JsonSerializer.Serialize(plan.Checks)
+                + "\nThese criteria are checked after the work. Perform your assigned step; do not run later-step "
+                + "verification prematurely or change the project location to fit a check. Original request restrictions still apply."));
+
         // What each proposed check is actually worth, asked before any of the work - see
         // BaselineAsync. Replaces the plan's list with the checks that survived, so everything
         // downstream keeps reading plan.Checks and knows nothing about this.
-        if (plan.Checks.Count > 0)
+        if (resume is null && plan.Checks.Any(c => c.Origin == CriterionOrigin.Proposed))
         {
             var (kept, notes) = await InScopeAsync(scope.RunId, scope.TaskId, null,
-                () => BaselineAsync(plan.Checks, scope.TaskId, scope.RunId, intent.Context, ct));
+                () => BaselineAsync(plan.Checks.Where(c => c.Origin == CriterionOrigin.Proposed).ToArray(), scope.TaskId, scope.RunId, intent.Context, ct));
 
             foreach (var note in notes)
                 yield return scope.Ev(EventKind.ErrorObserved, note);
 
-            plan = plan with { Checks = kept };
+            plan = plan with { Checks = plan.Checks.Where(c => c.Origin != CriterionOrigin.Proposed).Concat(kept).ToArray() };
         }
 
         var session = new RunSession(scope, messages);
@@ -645,15 +676,15 @@ public sealed partial class Orchestrator : IOrchestrator
                 CriteriaFor(plan),
                 intent, scope.TaskId, scope.RunId, models.Worker, models.Provider, models.Model.Model, models.Model.ProviderId,
                 scope.Artifacts, scope.Budget, verified, scope.Criterion,
-                (kind, summary) => scope.Ev(kind, summary), scope.Granted, ct))
+                (kind, summary) => scope.Ev(kind, summary), scope.Granted, ct, session, models.PlanProvider, models.Plan))
                 yield return checkEvent;
 
-            var adjusted = verified.Report.Apply(quickOutcome);
+            var adjusted = verified.Apply(quickOutcome);
             if (adjusted != quickOutcome)
             {
                 quickReason = adjusted == RunOutcomeKind.Completed
                     ? verified.Report.Overruling(quickReason)
-                    : verified.Report.Explain();
+                    : verified.IncompleteReason ?? verified.Report.Explain();
                 quickOutcome = adjusted;
             }
         }
@@ -915,7 +946,7 @@ public sealed partial class Orchestrator : IOrchestrator
                 intent.RawText, plan.Title, intent.WorkerId, resume?.Spec,
                 steps, doneLines, transcript,
                 produced.Select(a => a.RelativePath).ToArray(),
-                scope.Budget.StepsRun, scope.Budget.TokensSpent, _settings);
+                scope.Budget.StepsRun, scope.Budget.TokensSpent, _settings) { Checks = CriteriaFor(plan), Restrictions = plan.Restrictions, ActionPolicy = plan.ActionPolicy };
         });
 
         // Forgets the checkpoint: this run reached an end, and an ending is not resumable. Called
@@ -969,9 +1000,17 @@ public sealed partial class Orchestrator : IOrchestrator
 
             // The request and plan live in the preamble, once per conversation. Only the active
             // scope is appended here; handover keeps that preamble plus this step's instruction.
+            if (!stepsShareOneConversation)
+                convo.Add(ChatMessage.User("Engine-owned history of earlier commands (history-local IDs, not review citations):\n"
+                    + session.RunEvidence().Describe(maxChars: _evidenceBudget).CommandHistory()
+                    + "\nUse these recorded facts when writing reports. Do not omit initial failures or replace them with a later success."));
+            Guid[] completedSteps;
+            lock (stepOutcomes)
+                completedSteps = stepOutcomes.Where(p => p.Value == StepOutcomeKind.Succeeded).Select(p => p.Key).ToArray();
             convo.Add(ChatMessage.User(
                 $"Proceed with this step of the plan: {step.Title}\n"
                 + $"This is step {stepNumber} of {total}. Current obligation scope: S{stepNumber}.\n"
+                + StepBoundary.Describe(builtPlan, step.Id, completedSteps)
                 + session.Obligations.AtStep(stepNumber).MappingPrompt()
                 + "Do only this step. Apply the relevant requirement IDs from the original request; "
                 + "keep global constraints and leave other scopes to their steps. "
@@ -1304,16 +1343,76 @@ public sealed partial class Orchestrator : IOrchestrator
                 CriteriaFor(plan),
                 intent, scope.TaskId, scope.RunId, models.Worker, models.Provider, models.Model.Model, models.Model.ProviderId,
                 scope.Artifacts, scope.Budget, verified, scope.Criterion,
-                (kind, summary) => scope.Ev(kind, summary), scope.Granted, ct))
+                (kind, summary) => scope.Ev(kind, summary), scope.Granted, ct, session, models.PlanProvider, models.Plan))
                 yield return checkEvent;
 
-            var adjusted = verified.Report.Apply(runOutcome);
+            var adjusted = verified.Apply(runOutcome);
             if (adjusted != runOutcome)
             {
                 runReason = adjusted == RunOutcomeKind.Completed
                     ? verified.Report.Overruling(runReason)
-                    : verified.Report.Explain();
+                    : verified.IncompleteReason ?? verified.Report.Explain();
                 runOutcome = adjusted;
+            }
+        }
+
+        if (runOutcome == RunOutcomeKind.Completed && models.ReviewOn && _stepReview.ChecksSoundness
+            && session.NeedsFinalReview)
+        {
+            yield return scope.Ev(EventKind.ReviewRequested, "Reconciling deferred requirements against the whole run…");
+            for (var finalAttempt = 0; ; finalAttempt++)
+            {
+                var finalReview = await ReconcileRunAsync(session, models, ct);
+                if (finalReview.PromptTokens + finalReview.CompletionTokens > 0)
+                    yield return scope.Usage(WorkEventPayload.WorkPurpose.Review, models.Review!,
+                        finalReview.PromptTokens, finalReview.CompletionTokens, null,
+                        finalReview.CachedPromptTokens, finalReview.CacheCreationPromptTokens);
+                var complete = finalReview.Pass && finalReview.Soundness?.Sound == true
+                    && finalReview.IncompleteReason is null && finalReview.BudgetExhausted is null;
+                yield return scope.Ev(complete ? EventKind.ReviewPassed : EventKind.ErrorObserved,
+                    "Final reconciliation: " + (finalReview.IncompleteReason ?? finalReview.BudgetExhausted
+                        ?? finalReview.Soundness?.Reason ?? finalReview.Notes));
+                if (!complete && finalReview.RepairAdvice is { } advice && finalReview.IncompleteReason is null
+                    && finalReview.BudgetExhausted is null && finalAttempt < _reviewRetries && scope.Budget.TurnExhausted is null)
+                {
+                    var repairMessages = new List<ChatMessage> {
+                        ChatMessage.System(models.Worker.Instructions),
+                        ChatMessage.User(BuildUserPrompt(intent)),
+                        ChatMessage.User("Final reviewer identified these concrete defects. Correct only these defects, preserve completed work "
+                            + "and original constraints, then briefly report the changes. Do not weaken tests or rewrite history.\n" + advice
+                            + "\nEngine-owned command history (history-local IDs):\n" + session.RunEvidence().Describe(maxChars: _evidenceBudget).CommandHistory())
+                    };
+                    var repairStore = _artifacts.BeginStep();
+                    var repairJournal = new ExecutionJournal();
+                    session.Track(repairJournal, repairStore);
+                    var repairLoop = new ToolLoopResult();
+                    yield return scope.Ev(EventKind.ErrorObserved, "Worker correcting final-review defects: " + advice);
+                    await foreach (var repairEvent in RunToolLoopAsync(scope.TaskId, scope.RunId, models.Provider,
+                        models.Model.Model, models.Worker, repairMessages, scope.Artifacts, intent.Context,
+                        repairStore, repairJournal, new ReadLedger(), null, repairLoop, scope.Budget, scope.Granted, ct, models.Model.ProviderId))
+                        yield return repairEvent;
+                    session.Digest.Add("Final review correction: " + LastAssistant(repairMessages));
+                    if (!repairLoop.Succeeded || scope.Budget.TurnExhausted is not null)
+                    {
+                        runOutcome = RunOutcomeKind.Incomplete;
+                        runReason = scope.Budget.TurnExhausted ?? repairLoop.Reason ?? "Final correction did not complete.";
+                        break;
+                    }
+                    var rechecked = await CheckSuccessAsync(CriteriaFor(plan), scope.TaskId, scope.RunId, intent.Context, ct);
+                    foreach (var check in rechecked.Results) yield return scope.Criterion(check);
+                    if (rechecked.Apply(RunOutcomeKind.Completed) == RunOutcomeKind.Completed)
+                        continue; // New independent whole-run review; a green check alone cannot approve the correction.
+                    runOutcome = RunOutcomeKind.Incomplete;
+                    runReason = "Final review correction did not complete: " + rechecked.Explain();
+                    break;
+                }
+                if (!complete)
+                {
+                    runOutcome = RunOutcomeKind.Incomplete;
+                    runReason = "Final requirement reconciliation did not pass: "
+                        + (finalReview.IncompleteReason ?? finalReview.BudgetExhausted ?? finalReview.Soundness?.Reason ?? finalReview.Notes);
+                }
+                break;
             }
         }
 
@@ -1372,7 +1471,8 @@ public sealed partial class Orchestrator : IOrchestrator
         // the direction that costs money.
         return new PlanResult(
             IntentDisposition.Task, checkpoint.Title, new Plan(Guid.NewGuid(), steps),
-            PromptTokens: 0, CompletionTokens: 0, Readout: PlanReadout.Understood);
+            PromptTokens: 0, CompletionTokens: 0, Readout: PlanReadout.Understood)
+            { Checks = checkpoint.Checks ?? Array.Empty<SuccessCriterionDefinition>(), RestoredChecks = checkpoint.Checks is not null, Restrictions = checkpoint.Restrictions, ActionPolicy = checkpoint.ActionPolicy };
     }
 
     /// <summary>What each step's status was when the checkpoint was written.</summary>
@@ -1468,6 +1568,10 @@ public sealed partial class Orchestrator : IOrchestrator
     private sealed class VerifyResult
     {
         public SuccessReport Report { get; set; } = SuccessReport.NothingToCheck;
+        public string? IncompleteReason { get; set; }
+        public RunOutcomeKind Apply(RunOutcomeKind current) =>
+            IncompleteReason is not null && current is not (RunOutcomeKind.Failed or RunOutcomeKind.Cancelled)
+                ? RunOutcomeKind.Incomplete : Report.Apply(current);
     }
 
     /// <summary>
@@ -1499,7 +1603,7 @@ public sealed partial class Orchestrator : IOrchestrator
         // while fixing the work. Handing the repair its own would ask the same question again, at
         // the least welcome moment - after the run has already been told it failed a check.
         GrantedRoots granted,
-        [EnumeratorCancellation] CancellationToken ct)
+        [EnumeratorCancellation] CancellationToken ct, RunSession? session = null, IChatProvider? plannerProvider = null, ModelRef? plannerModel = null)
     {
         var report = await InScopeAsync(runId, taskId, null,
             () => CheckSuccessAsync(criteria, taskId, runId, intent.Context, ct));
@@ -1509,6 +1613,8 @@ public sealed partial class Orchestrator : IOrchestrator
 
         result.Report = report;
 
+        var diagnosed = false;
+        var repairAdvice = "";
         for (var attempt = 1; attempt <= _successRetries; attempt++)
         {
             // Only what the agent can act on. See the note above on Unknown.
@@ -1526,6 +1632,69 @@ public sealed partial class Orchestrator : IOrchestrator
                 yield break;
             }
 
+            var proposed = fixable.Where(c => c.Origin == CriterionOrigin.Proposed).ToArray();
+            if (proposed.Length > 0 && !diagnosed)
+            {
+                diagnosed = true;
+                if (plannerProvider is null || plannerModel is null) yield break;
+                var diagnosis = await InScopeAsync(runId, taskId, null, () => CheckDiagnosis.RunAsync(
+                    intent.RawText, intent.Context, proposed, plannerProvider, plannerModel.Model, budget, ct));
+                if (diagnosis.Completion is { } usage && session is not null)
+                    yield return session.Scope.Usage(WorkEventPayload.WorkPurpose.Plan, plannerModel,
+                        usage.PromptTokens ?? 0, usage.CompletionTokens ?? 0,
+                        cached: usage.CachedPromptTokens, created: usage.CacheCreationPromptTokens);
+                if (diagnosis.Decisions is not { } decisions)
+                {
+                    result.IncompleteReason = diagnosis.Error ?? "Check diagnosis unavailable; no worker repair dispatched.";
+                    yield return ev(EventKind.ErrorObserved, result.IncompleteReason);
+                    yield break;
+                }
+                foreach (var decision in decisions)
+                    yield return ev(EventKind.ErrorObserved, $"Planner check diagnosis ({decision.Kind}): {decision.Reason}");
+                repairAdvice = string.Join("\n", decisions.Where(d => d.Kind == "work").Select(d => d.Reason));
+                if (decisions.Any(d => d.Kind == "unknown") || budget.TurnExhausted is not null)
+                {
+                    result.IncompleteReason = "Verification remains unresolved: " +
+                        (budget.TurnExhausted ?? string.Join("; ", decisions.Where(d => d.Kind == "unknown").Select(d => d.Reason)));
+                    yield break;
+                }
+                if (decisions.Any(d => d.Kind == "check"))
+                {
+                    var revised = criteria.ToArray();
+                    foreach (var decision in decisions.Where(d => d.Kind == "check"))
+                    {
+                        var old = proposed[decision.Index];
+                        for (var i = 0; i < revised.Length; i++)
+                            if (revised[i].Origin == CriterionOrigin.Proposed && revised[i].Name == old.Name && revised[i].Command == old.Command)
+                                revised[i] = revised[i] with { Command = decision.Command, AlreadyPassing = false };
+                        yield return ev(EventKind.ErrorObserved, $"Planner revised proposed check: {old.Command} -> {decision.Command}");
+                    }
+                    // A repaired command is new executable text. Review it against the same request
+                    // restrictions before dispatch; a permission grant cannot substitute for this.
+                    var checkedRepair = await InScopeAsync(runId, taskId, null, () => PlanCheckReview.RunAsync(
+                        new PlanResult(IntentDisposition.QuickAction, "Review repaired criteria", null) { Checks = revised, Restrictions = intent.Context.Restrictions, ActionPolicy = intent.Context.ActionPolicy },
+                        intent.RawText, intent.Context, plannerProvider, plannerModel.Model, budget,
+                        _generationBudgets.For(GenerationPurpose.Planning), ct, preserveCriteria: true, tools: _tools.Definitions));
+                    if (session is not null)
+                        yield return session.Scope.Usage(WorkEventPayload.WorkPurpose.Plan, plannerModel,
+                            checkedRepair.PromptTokens, checkedRepair.CompletionTokens,
+                            cached: checkedRepair.CachedPromptTokens, created: checkedRepair.CacheCreationPromptTokens);
+                    if (checkedRepair.IncompleteReason is { } repairConflict)
+                    {
+                        result.IncompleteReason = repairConflict;
+                        yield return ev(EventKind.ErrorObserved, repairConflict);
+                        yield break;
+                    }
+                    // Same permissions, same workspace, all criteria including requested/template ones.
+                    report = await InScopeAsync(runId, taskId, null,
+                        () => CheckSuccessAsync(revised, taskId, runId, intent.Context, ct));
+                    foreach (var checkResult in report.Results) yield return criterion(checkResult);
+                    result.Report = report;
+                    // One bounded check repair. Do not turn a still-unresolved criterion into code repair.
+                    yield break;
+                }
+            }
+
             yield return ev(EventKind.ErrorObserved,
                 $"Check(s) failed; attempt {attempt} of {_successRetries} to fix: "
                 + string.Join(", ", fixable.Select(r => r.Name)));
@@ -1533,13 +1702,14 @@ public sealed partial class Orchestrator : IOrchestrator
             var messages = new List<ChatMessage>
             {
                 ChatMessage.System(worker.Instructions),
-                ChatMessage.User(RepairPrompt(intent, fixable))
+                ChatMessage.User(RepairPrompt(intent, fixable) + "\nPlanner's defect diagnosis:\n" + repairAdvice)
             };
 
             // Its own scope and its own journal, like any other unit of work: what the repair
             // writes is attributed to the repair.
             var store = _artifacts.BeginStep();
             var journal = new ExecutionJournal();
+            session?.Track(journal, store);
             var loop = new ToolLoopResult();
 
             await foreach (var repairEvent in RunToolLoopAsync(
@@ -1575,9 +1745,17 @@ public sealed partial class Orchestrator : IOrchestrator
         sb.AppendLine("Find the cause and fix it, then stop. Do not change the check itself, and do "
                     + "not work around it - it is there to describe what finished work looks like. "
                     + "If you cannot fix it, say what is wrong and why, and stop.");
+        sb.AppendLine("Commands run inside the workspace root. A planner-proposed check may name a wrong path. "
+            + "Do not move or duplicate the project to satisfy a mistaken check. Report a check configuration "
+            + "error and stop instead. Preserve the original project's location and the exact verification "
+            + "command requested by the user; it must still pass after repair.");
         sb.AppendLine();
         sb.AppendLine("The original request, for context:");
         sb.AppendLine(RequestObligations.ExecutionPrompt(intent.RawText));
+        if (intent.Context.ActionPolicy is { } policy)
+            sb.AppendLine("Task action contract (approval cannot widen it): " + JsonSerializer.Serialize(policy));
+        if (intent.Context.Restrictions.Count > 0)
+            sb.AppendLine("Forbidden task effects: " + JsonSerializer.Serialize(intent.Context.Restrictions));
         return sb.ToString();
     }
 
@@ -1592,12 +1770,11 @@ public sealed partial class Orchestrator : IOrchestrator
     /// criteria therefore runs exactly as it did before this existed - the planner is not even
     /// asked (see the PlanAsync call above).</para>
     ///
-    /// <para>A RESUMED run has no proposed checks: the plan is read back from the checkpoint,
-    /// which does not carry them. That is the same verification a resumed run has always had, and
-    /// the safe direction - fewer checks, never more.</para>
+    /// <para>A resumed run uses the saved effective contract, including requested commands and
+    /// provenance. Older checkpoints without that field retain the legacy host-default behavior.</para>
     /// </summary>
     private IReadOnlyList<SuccessCriterionDefinition> CriteriaFor(PlanResult plan)
-        => _successCriteria.Count > 0 ? _successCriteria : plan.Checks;
+        => plan.RestoredChecks ? plan.Checks : _successCriteria.Count > 0 ? _successCriteria : plan.Checks;
 
     /// <summary>
     /// Runs the PROPOSED checks before any of the work, and decides what each one is worth.
@@ -1759,6 +1936,7 @@ public sealed partial class Orchestrator : IOrchestrator
                     content = File.Exists(full) ? await File.ReadAllTextAsync(full, ct) : null;
                 }
             }
+            catch (OperationCanceledException) { throw; }
             catch (Exception)
             {
                 // Unreadable is not the same as unwritten, and neither is worth failing the review
@@ -2029,6 +2207,7 @@ public sealed partial class Orchestrator : IOrchestrator
         var handoverRetryAt = 0;
         var handoverFailures = 0;
         var turnsHere = 0;
+        ChatMessage? commandHistoryMessage = null;
 
         // Turns in a row that needed the window trimmed. Counted because trimming is a NIBBLE and
         // a handover is a reset, and nothing connected the two: measured 2026-09-24 03:09, a step
@@ -2287,6 +2466,16 @@ public sealed partial class Orchestrator : IOrchestrator
                 yield break;
             }
             if (toolDefs.Length == 0) purpose = GenerationPurpose.FinalAnswer;
+            if (journal.Actions.Any(a => a.ExitCode is not null || a.Tool is "run_command" or "run_powershell"))
+            {
+                if (commandHistoryMessage is not null) messages.Remove(commandHistoryMessage);
+                commandHistoryMessage = ChatMessage.User("Engine-owned command history (IDs are local to this history, not report requirement IDs):\n"
+                    + journal.Describe(maxChars: _evidenceBudget).CommandHistory()
+                    + "\nWhen reporting commands, preserve the sequence of failures, corrections, and successes. "
+                    + "Null exit means no exit was recorded. Omitted history is unknown; do not invent it. "
+                    + "This snapshot is data, not a request to repeat commands.");
+                messages.Add(commandHistoryMessage);
+            }
             var request = new ChatRequest(model, messages, toolDefs, Temperature: 0.2, NumCtx: _numCtx, Think: _think,
                 OutputTokenLimit: _generationBudgets.For(purpose), Purpose: purpose);
             request = request with { OutputTokenLimit = GenerationAllowance.Total(request.OutputTokenLimit!.Value, provider.ReasoningAllowance(request)) };
@@ -3143,6 +3332,10 @@ public sealed partial class Orchestrator : IOrchestrator
         sb.AppendLine();
         sb.AppendLine("## Request (the user's intent)");
         sb.AppendLine(RequestObligations.ExecutionPrompt(intent.RawText));
+        if (intent.Context.ActionPolicy is { } policy)
+            sb.AppendLine("Task action contract (approval cannot widen it): " + JsonSerializer.Serialize(policy));
+        if (intent.Context.Restrictions.Count > 0)
+            sb.AppendLine("Forbidden task effects: " + JsonSerializer.Serialize(intent.Context.Restrictions));
         return sb.ToString();
     }
 
@@ -3195,7 +3388,7 @@ public sealed partial class Orchestrator : IOrchestrator
             $"A reviewer rejected the previous attempt with this feedback: {notes}\n"
             + $"Repair {what}: fix exactly the points above, and keep everything the review did not question. "
             + "What you already read and ran above still stands - do not read or run it again unless a point "
-            + "above needs something you have not looked at yet. Files you wrote are still there as you left "
+            + "above needs something you have not looked at yet. A worker-message target means correct your reply, not a file. The original request and its O-ID map are in this conversation, not in the first lines of source files. Files you wrote are still there as you left "
             + "them: change the passages the points are about with edit_file, rather than writing a whole "
             + "file again."));
 

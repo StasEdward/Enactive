@@ -145,11 +145,12 @@ public sealed class ExecutionJournalTests
 
         Assert.Contains(events, e => e.Kind == EventKind.ContextTrimmed);
 
-        // The transcript no longer holds it...
+        // Even after trimming, the engine-owned history restores the command facts for the worker.
         var lastWorkerPrompt = string.Join("\n", worker.Requests[^1].Messages.Select(m => m.Content ?? ""));
-        Assert.DoesNotContain("MARKER_ONE", lastWorkerPrompt, StringComparison.Ordinal);
+          Assert.Contains("Engine-owned command history", lastWorkerPrompt, StringComparison.Ordinal);
+          Assert.Contains("MARKER_ONE", lastWorkerPrompt, StringComparison.Ordinal);
 
-        // ...and the reviewer was shown it anyway.
+        // The reviewer independently receives the same journal facts.
         Assert.Contains("MARKER_ONE", PromptOf(reviewer), StringComparison.Ordinal);
     }
 

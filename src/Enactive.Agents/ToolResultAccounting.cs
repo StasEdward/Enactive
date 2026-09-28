@@ -42,7 +42,8 @@ internal sealed class ToolResultAccounting(IToolRegistry tools, StepProgress pro
 
         journal.Record(
             stepNo, call.Name, Compact(call.ArgumentsJson),
-            result.Success ? ActionOutcome.Succeeded
+            result.Metadata.ContainsKey("taskConstraintRefusal") ? ActionOutcome.Refused
+                : result.Success ? ActionOutcome.Succeeded
                 : result.IsAnswer ? ActionOutcome.Answered
                 : ActionOutcome.Failed,
             result.Success ? result.Output : failure,

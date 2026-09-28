@@ -9,6 +9,13 @@ using Enactive.Core.Tools;
 internal sealed class StepReview(IReviewer reviewer, IToolRegistry tools, string workspaceRoot,
     int evidenceBudget, bool reviewContent, bool checkSoundness)
 {
+    internal bool ChecksSoundness => checkSoundness;
+    internal Task<ReviewResult> ReconcileAsync(string report, EvidenceView evidence,
+        IReadOnlyList<string> artifacts, IReadOnlyList<WrittenFile> files, RequestObligations obligations,
+        IChatProvider provider, string model, CancellationToken ct, Func<int, int, string?> beforeRetry)
+        => reviewer.ReviewWithProofAsync("Final reconciliation of the original request", report, evidence,
+            artifacts, files, obligations.ForFinalReview(), provider, model, ct, workspaceRoot, beforeRetry);
+
     internal async Task<(ReviewResult Result, ReviewMode Mode)> ExecuteAsync(
         string title, string report, ExecutionJournal journal, int evidenceStart, int stepStart,
         IReadOnlyList<string> artifacts, IReadOnlyList<WrittenFile> written,

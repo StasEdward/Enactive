@@ -14,7 +14,7 @@ using Enactive.Core.Tools;
 /// script), so NO shell quoting is involved at all — the model just writes the script. Windows uses
 /// powershell.exe; elsewhere it tries pwsh.
 /// </summary>
-public sealed class RunPowerShellTool : ITool
+public sealed class RunPowerShellTool : ITool, ICommandPolicyValidator
 {
     private const int TimeoutSeconds = 90;
 
@@ -30,7 +30,10 @@ public sealed class RunPowerShellTool : ITool
                    + "A non-zero exit code is a FAILURE unless you declared it in 'expectedExitCodes' before running - "
                    + "do that when the exit code is part of the answer you want (a test runner reporting failing tests), "
                    + "never to excuse a script that was supposed to succeed.",
-        JsonSchema: Schema, Kind: ToolKind.Command);
+        JsonSchema: Schema, Kind: ToolKind.Command, CommandPolicy: CommandPolicySyntax.PowerShell);
+
+    public Task<string?> ValidatePolicyAsync(string argumentsJson, TaskActionPolicy policy, IReadOnlyList<TaskRestriction> restrictions, CancellationToken ct)
+        => PowerShellPolicy.ValidateAsync(argumentsJson, policy, restrictions, ct);
 
     public PermissionLevel RequiredLevel => PermissionLevel.Execute;
 

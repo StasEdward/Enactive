@@ -19,10 +19,39 @@ internal sealed class RunSession(RunScope scope, List<ChatMessage> messages)
     public List<string> Reasons { get; } = new();
     private ExecutionJournal? _sharedJournal;
     private ReadLedger? _sharedReads;
+    private readonly object _evidenceGate = new();
+    private readonly HashSet<ExecutionJournal> _journals = new();
+    private readonly List<IArtifactScope> _stores = new();
+    public bool NeedsFinalReview { get; private set; }
+    public void ObserveReview(ReviewResult review)
+    {
+        if (review.Obligations is not { } claims) return;
+        lock (_evidenceGate)
+            NeedsFinalReview |= claims.Any(c => c.Proof.Kind == ProofClaimKind.NotShown
+                || c.Requirements?.Any(r => r.Proof.Kind == ProofClaimKind.NotShown) == true);
+    }
+    public void Track(ExecutionJournal journal, IArtifactScope store)
+    {
+        lock (_evidenceGate) { _journals.Add(journal); _stores.Add(store); }
+    }
+    public IReadOnlyList<IArtifactScope> Stores { get { lock (_evidenceGate) return _stores.ToArray(); } }
+    public ExecutionJournal RunEvidence()
+    {
+        var result = new ExecutionJournal(spansSteps: true);
+        lock (_evidenceGate)
+        {
+            foreach (var action in _journals.SelectMany(j => j.Actions).OrderBy(a => a.At))
+                result.Record(action.Step, action.Tool, action.Arguments, action.Outcome, action.Output,
+                    action.WorkspaceEffect, action.ChangedPaths, action.ExitCode, action.FileDeletion);
+            if (_resumed) result.NotePriorTranscript();
+        }
+        return result;
+    }
+    private bool _resumed;
 
     public void ConfigurePlan(bool sharedConversation, RunCheckpoint? resume)
     {
-        if (resume is not null) Digest.AddRange(resume.Digest);
+        if (resume is not null) { Digest.AddRange(resume.Digest); NeedsFinalReview = _resumed = true; }
         if (!sharedConversation) return;
         _sharedJournal = new ExecutionJournal(spansSteps: true);
         _sharedReads = new ReadLedger();
@@ -33,6 +62,7 @@ internal sealed class RunSession(RunScope scope, List<ChatMessage> messages)
         IReadOnlyList<ChatMessage>? restartFrom = null)
     {
         var journal = _sharedJournal ?? new ExecutionJournal();
+        Track(journal, store);
         var start = journal.Mark();
         return new(conversation, store, journal, _sharedReads ?? new ReadLedger(),
             _sharedJournal is null ? start : 0, start, restartFrom);

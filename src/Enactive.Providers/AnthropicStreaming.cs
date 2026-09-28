@@ -96,6 +96,7 @@ public sealed partial class AnthropicProvider
             if (!stopped || openBlocks.Count != 0 || finish is null)
                 throw StreamEnd.Unfinished(_descriptor.Id, "complete content blocks, stop_reason and message_stop");
             yield return new UsageDelta(prompt, output, cached) { CacheCreationPromptTokens = created };
+            RequireCompletedTurn(finish);
             yield return new FinishDelta(finish);
         }
         finally

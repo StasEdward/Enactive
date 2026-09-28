@@ -99,6 +99,8 @@ public sealed record WorkContext(
     IReadOnlyList<string> RecentChanges,
     EnvironmentInfo? Environment = null)
 {
+    public Enactive.Core.Tools.TaskActionPolicy? ActionPolicy { get; init; }
+    public IReadOnlyList<Enactive.Core.Tools.TaskRestriction> Restrictions { get; init; } = [];
     /// <summary>
     /// What this project already knows: decisions the user made, and how earlier runs ended. Newest
     /// LAST, already bounded by whoever assembled the context.

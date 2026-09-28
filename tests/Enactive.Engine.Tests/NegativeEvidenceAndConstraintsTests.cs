@@ -30,8 +30,11 @@ public sealed class NegativeEvidenceAndConstraintsTests
         Assert.Equal(outcome, journal.Actions[0].Outcome);
     }
 
-    [Fact]
-    public async Task Failed_mutation_then_restored_pass_does_not_restart_worker()
+    [Theory]
+    [InlineData("valid")]
+    [InlineData("corrected")]
+    [InlineData("uncorrected")]
+    public async Task Failed_mutation_then_restored_pass_does_not_restart_worker(string response)
     {
         using var fx = new EngineFixture();
         var script = OperatingSystem.IsWindows() ? "check.cmd" : "check.sh";
@@ -44,13 +47,26 @@ public sealed class NegativeEvidenceAndConstraintsTests
             Turn.Says("""{"disposition":"quick_action","title":"negative test and restore","steps":[]}"""),
             Write(1), Run(), Write(0), Run(), Turn.Says("Observed requested failure, restored and passed"));
         var answer = Answer();
-        var reviewer = new FakeChatProvider(Turn.Says(answer.ToJsonString()));
+        var bad = answer.DeepClone();
+        bad["claims"]![0]!["requirements"]![1]!["calls"] = new JsonArray(1, 2, 3, 4);
+        var reviewer = response == "valid"
+            ? new FakeChatProvider(Turn.Says(answer.ToJsonString()))
+            : new FakeChatProvider(Turn.Says(bad.ToJsonString()),
+                Turn.Says((response == "corrected" ? answer : bad).ToJsonString()));
         var events = await fx.RunAsync(fx.Build(worker, router: Routers.WithReviewer(), reviewProvider: reviewer,
             checkSoundness: true, reviewContent: false, reviewRetries: 1),
             "Demonstrate a failing command, restore it and run successfully.");
-        Assert.Equal(RunOutcomeKind.Completed, events.Last().Outcome());
+        Assert.Equal(response == "uncorrected" ? RunOutcomeKind.Incomplete : RunOutcomeKind.Completed, events.Last().Outcome());
         Assert.Equal(6, worker.Requests.Count);
-        Assert.Single(reviewer.Requests);
+        Assert.Equal(response == "valid" ? 1 : 2, reviewer.Requests.Count);
+        if (response != "valid")
+        {
+            var correction = reviewer.Requests[1].Messages.Last().Content!;
+            foreach (var index in new[] { 0, 2, 3 })
+                Assert.Contains($"$.claims[0].requirements[1].calls[{index}]", correction);
+            Assert.DoesNotContain("$.claims[0].requirements[1].calls[1]", correction);
+        }
+        Assert.Contains("exit", fx.Read(script)); // The worker's restored file survives an incomplete review.
         Assert.DoesNotContain(events, e => e.Kind is EventKind.ReviewFailed or EventKind.ArtifactReverted);
         Assert.Contains("[process exit=1]", reviewer.Requests[0].Messages[1].Content!);
     }

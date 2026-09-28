@@ -36,9 +36,52 @@ public sealed class EvidenceView
     /// <summary>Whether an ID exists, without exposing evidence that has not been shown.</summary>
     public bool ContainsAction(int number) => number >= 1 && number <= Actions.Count;
 
+    /// <summary>Position of the same command within a step or whole run. Returns only an ID;
+    /// hidden payloads remain unavailable for positive citations.</summary>
+    public int? CommandOccurrence(int number, int? step, bool last)
+    {
+        if (!ContainsAction(number)) return null;
+        var target = Actions[number - 1];
+        string Identity(ExecutedAction action)
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(action.Arguments);
+                foreach (var field in new[] { "command", "script" })
+                    if (doc.RootElement.ValueKind == JsonValueKind.Object
+                        && doc.RootElement.TryGetProperty(field, out var value) && value.ValueKind == JsonValueKind.String)
+                        return action.Tool + "\0" + value.GetString();
+            }
+            catch (JsonException) { }
+            return action.Tool + "\0" + action.Arguments;
+        }
+        var key = Identity(target);
+        var ids = Actions.Select((a, index) => (a, id: index + 1))
+            .Where(x => x.a.Outcome != ActionOutcome.Refused && (step is null || x.a.Step == step)
+                && Identity(x.a) == key).Select(x => (int?)x.id);
+        return last ? ids.LastOrDefault() : ids.FirstOrDefault();
+    }
+
     /// <summary>Resolve only a call whose numbered entry was included in Text.</summary>
     public ExecutedAction? Cited(int number)
         => VisibleActionIds.Contains(number) ? Actions[number - 1] : null;
+
+    /// <summary>Engine-owned command facts, with IDs from this evidence view, never inferred from prose.
+    /// Missing exits remain null. Bounded omissions are explicit and do not grant citation access.</summary>
+    public string CommandHistory()
+    {
+        var commands = Actions.Select((a, i) => (a, id: i + 1))
+            .Where(x => x.a.ExitCode is not null || x.a.Tool is "run_command" or "run_powershell").ToArray();
+        var visible = commands.Where(x => VisibleActionIds.Contains(x.id)).TakeLast(64).ToArray();
+        return JsonSerializer.Serialize(new {
+            priorHistoryUnavailable = HasPriorTranscript,
+            omittedCommands = commands.Length - visible.Length,
+            calls = visible.Select(x => new { call = x.id, step = x.a.Step, tool = x.a.Tool,
+                arguments = x.a.Arguments.Length <= 1024 ? x.a.Arguments : x.a.Arguments[..1024],
+                argumentsTruncated = x.a.Arguments.Length > 1024,
+                outcome = x.a.Outcome.ToString(), exitCode = x.a.ExitCode })
+        });
+    }
 
     /// <summary>Addressed evidence retrieval, preserving the original numbering and explicit truncation.</summary>
     public EvidenceView Expand(IReadOnlyList<int> requested, int budget = 12000)

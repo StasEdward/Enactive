@@ -30,7 +30,7 @@ public sealed class OrchestratorSeamsTests
         var models = new ModelResolver();
         var resources = new RunEngineResources(new SingleProviderFactory(provider), models,
             new StaticWorkerProvider([worker], worker.Id), new ToolRegistry(EngineFixture.ShippedTools()),
-            fx.Artifacts, fx.Workspace, new Planner(), new PermissionEngine(), fx.Decisions,
+            fx.Artifacts, fx.Workspace, new Planner(checksAuditEnabled: false), new PermissionEngine(), fx.Decisions,
             PermissionPolicy.PermissiveDefault, new Services(), Routers.WithReviewer(),
             new OrchestratorServices(reviewer, success));
         var criteria = new[] { new SuccessCriterionDefinition("check", "must never execute") };
@@ -65,7 +65,7 @@ public sealed class OrchestratorSeamsTests
         var models = new ModelResolver();
         var resources = new RunEngineResources(new SingleProviderFactory(provider), models,
             new StaticWorkerProvider([worker], worker.Id), new ToolRegistry(EngineFixture.ShippedTools()),
-            fx.Artifacts, fx.Workspace, new Planner(), new PermissionEngine(), fx.Decisions,
+            fx.Artifacts, fx.Workspace, new Planner(checksAuditEnabled: false), new PermissionEngine(), fx.Decisions,
             PermissionPolicy.PermissiveDefault, new Services(), new ModelRouter(models),
             new OrchestratorServices(Handover: handover));
         var options = RunEngineOptions.Capture(new AppSettings { ProposeChecks = false, CheckSoundness = false });

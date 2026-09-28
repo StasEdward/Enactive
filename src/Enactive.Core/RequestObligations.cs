@@ -12,6 +12,13 @@ public sealed record RequestObligations(
 {
     /// <summary>Planner assignments of source units, not proof that all their parts are complete.</summary>
     public IReadOnlyDictionary<string, IReadOnlyList<string>>? ScopeMap { get; init; }
+    public bool FinalReview { get; init; }
+
+    public RequestObligations ForFinalReview() => this with {
+        CurrentScope = "run", FinalReview = true,
+        Scopes = Scopes.Concat(new[] { new KeyValuePair<string, string>("run", "Entire completed run") })
+            .GroupBy(p => p.Key).ToDictionary(g => g.Key, g => g.Last().Value)
+    };
 
     public static RequestObligations ForPlan(string request, Plan plan)
     {
@@ -28,17 +35,18 @@ public sealed record RequestObligations(
     /// <summary>A shared assignment permits verification here of a requirement implemented elsewhere.
     /// Deferrals remain deferrals; membership never proves completion.</summary>
     public string EvidenceScope(string id, string scope, ProofClaimKind kind)
-        => kind is ProofClaimKind.Shown or ProofClaimKind.NotByAnyCall or ProofClaimKind.ExpectedFailure
+        => !FinalReview && (kind is ProofClaimKind.Shown or ProofClaimKind.NotByAnyCall or ProofClaimKind.ExpectedFailure)
             && ScopeMap?.TryGetValue(id, out var owners) == true
             && owners.Contains(CurrentScope) && owners.Contains(scope) ? CurrentScope : scope;
 
     public string MappingPrompt() => ScopeMap is null ? "" :
         "\nShared requirement-to-step map (fixed by the plan):\n" + JsonSerializer.Serialize(ScopeMap)
-        + "\nCurrent scope: " + CurrentScope
+        + (FinalReview ? "\nHistorical assignments only; all requirements are now assessed in scope run.\n" :
+        "\nCurrent scope: " + CurrentScope
         + ". A source unit can apply to multiple steps: implement here or verify earlier implementation as this step requires. "
         + "Assess only the current contribution, not completion of the whole multi-step requirement. "
         + "An empty assignment means unspecified, NOT waived: use the original request and this step's objective. "
-        + "Global constraints apply in every step regardless of assignment. Do not invent a different ownership map.\n";
+        + "Global constraints apply in every step regardless of assignment. Do not invent a different ownership map.\n");
     public static RequestObligations Create(string request, string title = "Whole request", int? step = null,
         IReadOnlyList<string>? steps = null)
     {
@@ -78,12 +86,17 @@ public sealed record RequestObligations(
         }
         return "\nOriginal request (verbatim):\n" + request
             + "\n\nRequirement IDs (1-based source lines in the original request; a unit may contain multiple requirements):\n"
-            + index + "Apply the relevant requirements within the current scope; global constraints apply throughout.\n";
+            + index + "O-IDs identify source units, NOT tests. Preserve their meanings; quote source text in coverage tables. "
+            + "Apply the relevant requirements within the current scope; global constraints apply throughout.\n";
     }
 
     public string Describe() => "\nRequest obligations (verbatim source units; none omitted):\n"
         + JsonSerializer.Serialize(this, new JsonSerializerOptions { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping })
         + MappingPrompt()
+        + (FinalReview ? "\nFINAL RUN REVIEW: every requirement must now be resolved in scope run. "
+            + "Earlier step assignments are historical context, not permission to defer. Reconcile ALL parts of every "
+            + "source unit against the current files and run evidence. Previous step passes are not proof. "
+            + "Call IDs below are newly numbered for this entire run; do not reuse earlier review IDs.\n" : "")
         + "\nThese units may contain several requirements. Check every requirement within each unit, "
         + "including every file/test and exact commands. Their IDs are stable within this request. "
         + "Apply each to the current step's scope; do not substitute the step title for the original requirement.\n";
@@ -160,6 +173,8 @@ public static class ObligationAudit
             }
             if (effectiveScope != obligations.CurrentScope)
             {
+                if (obligations.FinalReview)
+                    return new(false, claim.Id + ": final review cannot defer an obligation to another step");
                 // A deferral is a scope judgement, not proof of completion elsewhere.
                 if (claim.Proof.Kind != ProofClaimKind.NotShown || claim.Proof.Calls.Count != 0)
                     return new(false, $"{claim.Id}: another step's obligation must be explicitly deferred, not claimed completed");

@@ -47,6 +47,9 @@ public sealed record PlanResult(
     /// </summary>
     public IReadOnlyList<SuccessCriterionDefinition> Checks { get; init; }
         = Array.Empty<SuccessCriterionDefinition>();
+    internal bool RestoredChecks { get; init; }
+    public Enactive.Core.Tools.TaskActionPolicy? ActionPolicy { get; init; }
+    public IReadOnlyList<Enactive.Core.Tools.TaskRestriction> Restrictions { get; init; } = [];
 }
 
 /// <summary>
@@ -88,6 +91,10 @@ public enum PlanReadout
 /// </summary>
 public sealed class Planner
 {
+    public Planner() { }
+    // Allows engine fixtures focused on later stages to supply an already-reviewed plan.
+    internal Planner(bool checksAuditEnabled) => ChecksAuditEnabled = checksAuditEnabled;
+    internal bool ChecksAuditEnabled { get; } = true;
     /// <param name="maxSteps">
     /// The run's own step budget, when it has one — <c>ExecutionLimits.MaxSteps</c> from the
     /// template. Told to the planner rather than approximated by a number written into the prompt:
@@ -251,6 +258,9 @@ public sealed class Planner
 
         if (!string.IsNullOrWhiteSpace(context.ProjectName))
             lines.Add($"Workspace: {context.ProjectName}");
+        lines.Add("All check commands execute INSIDE the workspace root. The workspace name is a label, "
+            + "not a directory prefix. Preserve exact commands and relative paths given in the request; "
+            + "do not prepend the workspace name. A missing target can be a mistaken check, not broken code.");
 
         if (!string.IsNullOrWhiteSpace(context.GitBranch))
             lines.Add($"Git branch: {context.GitBranch}");
@@ -375,7 +385,7 @@ public sealed class Planner
                 var plan = disposition == IntentDisposition.Task ? DagPlan.FromSpecs(specs) : null;
                 return new PlanResult(disposition, Truncate(title, 80), plan, Readout: readout)
                 {
-                    Checks = ParseChecks(root)
+                    Checks = ParseChecks(root, fallbackTitle)
                 };
             }
             catch (JsonException)
@@ -400,12 +410,11 @@ public sealed class Planner
     /// <summary>
     /// The checks the planner proposed, read strictly.
     ///
-    /// <para><b>Only the name and the command are taken from the model.</b> The other two fields a
-    /// criterion has are exactly the two ways to write a check that cannot fail — an expected exit
-    /// code that is not zero, and <c>required: false</c> — so they are not read at all. A proposed
-    /// check passes on 0 and is required, or it is not a check.</para>
+    /// <para>Suggestions are required and expect zero. Explicit user checks carry a verbatim
+    /// request passage and may describe an expected negative result. Extracting the user's intent
+    /// remains the planner's semantic responsibility; source membership is checked in code.</para>
     /// </summary>
-    private static IReadOnlyList<SuccessCriterionDefinition> ParseChecks(JsonElement root)
+    private static IReadOnlyList<SuccessCriterionDefinition> ParseChecks(JsonElement root, string request)
     {
         if (!root.TryGetProperty("checks", out var checks) || checks.ValueKind != JsonValueKind.Array)
             return Array.Empty<SuccessCriterionDefinition>();
@@ -425,10 +434,20 @@ public sealed class Planner
                 continue;
 
             var name = Text(el, "name");
+            var quote = Text(el, "request_quote");
+            if (!string.IsNullOrWhiteSpace(quote)
+                && (!request.Contains(quote, StringComparison.Ordinal)
+                    || !quote.Contains(command!.Trim(), StringComparison.Ordinal)))
+                throw new JsonException("A requested check must quote its exact command from the original request.");
+            var expectedExit = !string.IsNullOrWhiteSpace(quote)
+                && el.TryGetProperty("expectedExitCode", out var code) && code.ValueKind == JsonValueKind.Number
+                && code.TryGetInt32(out var exit) ? exit : 0;
             found.Add(new SuccessCriterionDefinition(
                 Name: string.IsNullOrWhiteSpace(name) ? Truncate(command!, 40) : Truncate(name!, 60),
                 Command: command!.Trim(),
-                Origin: CriterionOrigin.Proposed));
+                ExpectedExitCode: expectedExit,
+                Origin: string.IsNullOrWhiteSpace(quote) ? CriterionOrigin.Proposed : CriterionOrigin.Requested)
+                { RequestQuote = string.IsNullOrWhiteSpace(quote) ? null : quote });
         }
 
         return found;
@@ -581,6 +600,13 @@ public sealed class Planner
         " Also return \"checks\": up to 4 shell commands that would PROVE this request has been "
         + "carried out, or [] when nothing about it can be proved by running something. Shape: "
         + "\"checks\":[{\"name\":\"short name\",\"command\":\"...\"}]. "
+        + "For a verification command EXPLICITLY REQUIRED by the user, add request_quote containing the "
+        + "verbatim instruction and exact command. Do not mark examples, prohibited commands, setup actions "
+        + "or your own suggestions as requested checks. Preserve requested commands exactly, including flags. "
+        + "Use expectedExitCode only when that same quoted user instruction explicitly requires a nonzero "
+        + "verification outcome; otherwise expectedExitCode=0. "
+        + "For suggested checks omit request_quote. Every check starts in the current workspace root; "
+        + "you cannot choose a different working directory. Never prefix paths with the workspace label. "
         + "EACH ONE IS RUN BY run_command, which is cmd.exe on Windows and /bin/sh elsewhere - the "
         + "host is named above the request, and a check written for the wrong one of those simply "
         + "never runs. On Windows, cmd.exe has no PowerShell cmdlets (Select-String, Get-Content, "
@@ -588,7 +614,7 @@ public sealed class Planner
         + "git, npm), or findstr, or wrap PowerShell explicitly as "
         + "powershell -NoProfile -Command \"...\". "
         + "THE EXIT CODE IS THE WHOLE VERDICT: 0 means done, anything else means not done, and "
-        + "nothing reads the output. Every check is run BEFORE the work as well as after, so write "
+        + "nothing reads the output. Requested checks run only after work. Proposed checks run BEFORE the work as well as after, so write "
         + "each one to FAIL now and PASS once the request is satisfied - one that already passes is "
         + "recorded as proving nothing. That also rules out commands that cannot fail: never "
         + "propose echo, cd, dir, ls, type, cat or exit. Use the project's own real commands, the "

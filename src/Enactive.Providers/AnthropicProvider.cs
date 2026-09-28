@@ -200,24 +200,36 @@ public sealed partial class AnthropicProvider : IChatProvider
     }
 
     private readonly ConcurrentDictionary<string, bool> NoStructuredOutput = new(StringComparer.Ordinal);
+    // Scoped to this endpoint/configuration instance, never a global model-name assumption.
+    private readonly ConcurrentDictionary<string, bool> NoTemperature = new(StringComparer.Ordinal);
 
     private async Task<HttpResponseMessage> SendConfiguredAsync(ChatRequest request, bool stream, CancellationToken ct)
     {
-        var includeTemperature = true;
+        var includeTemperature = !NoTemperature.ContainsKey(request.Model);
+        var temperatureRejected = false;
         int? learnedCap = null;
         var wantedSchema = request.ResponseSchema is { Length: > 0 };
+        var schemaTooComplex = false;
         var includeSchema = wantedSchema && !NoStructuredOutput.ContainsKey(request.Model);
         var maxTokens = OutputTokenBudget.Resolve(request, _descriptor, DefaultMaxTokens,
             ModelCaps.TryGetValue(request.Model, out var known) ? known : null)!.Value;
         for (var attempt = 0; ; attempt++)
         {
-            using var message = BuildHttpRequest(request, stream, includeTemperature, maxTokens, includeSchema);
+            // Preserve the requested format even when the server cannot enforce this grammar.
+            // This retry does not change the caller's request or bypass its domain validator.
+            var wireRequest = wantedSchema && !includeSchema
+                ? request with { Messages = request.Messages.Concat(new[] {
+                    ChatMessage.System("Return only JSON conforming to this response schema. "
+                        + "The application validates the complete response: " + request.ResponseSchema) }).ToArray() }
+                : request;
+            using var message = BuildHttpRequest(wireRequest, stream, includeTemperature, maxTokens, includeSchema);
             var response = stream
                 ? await ProviderDeadline.HeadersAsync(_http, message, _descriptor.StreamIdleTimeoutSeconds, ct)
                 : await _http.SendAsync(message, HttpCompletionOption.ResponseContentRead, ct);
             if (response.IsSuccessStatusCode)
             {
-                if (wantedSchema && !includeSchema) NoStructuredOutput[request.Model] = true;
+                if (temperatureRejected) NoTemperature[request.Model] = true;
+                if (wantedSchema && !includeSchema && !schemaTooComplex) NoStructuredOutput[request.Model] = true;
                 if (learnedCap is { } confirmedCap) ModelCaps[request.Model] = confirmedCap;
                 return response;
             }
@@ -227,9 +239,17 @@ public sealed partial class AnthropicProvider : IChatProvider
                 if (attempt < 3 && response.StatusCode == System.Net.HttpStatusCode.BadRequest)
                 {
                     if (includeTemperature && request.Temperature is not null && IsTemperatureDeprecated(body))
-                    { includeTemperature = false; continue; }
+                    { includeTemperature = false; temperatureRejected = true; continue; }
                     if (TryParseMaxTokensCap(body, maxTokens, out var cap))
                     { maxTokens = cap; learnedCap = cap; continue; }
+                    if (includeSchema && IsGrammarTooComplex(body))
+                    {
+                        _log.Warn(LogSource.Llm, "Anthropic rejected the response grammar as too complex; retrying this request with the schema in the prompt. Local response validation remains required.",
+                            category: _descriptor.Id);
+                        schemaTooComplex = true;
+                        includeSchema = false;
+                        continue;
+                    }
                     if (includeSchema && (OpenAiCompatibleProvider.UnsupportedField(body, "output_config", "json_schema")
                         || OpenAiCompatibleProvider.UnsupportedField(body, "output_config.format", "json_schema")
                         || OpenAiCompatibleProvider.UnsupportedField(body, "schema", "structured output")))
@@ -241,9 +261,34 @@ public sealed partial class AnthropicProvider : IChatProvider
             }
         }
     }
+    private static bool IsGrammarTooComplex(string body)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(body);
+            return document.RootElement.TryGetProperty("error", out var error)
+                && error.ValueKind == JsonValueKind.Object
+                && error.TryGetProperty("type", out var type) && type.GetString() == "invalid_request_error"
+                && error.TryGetProperty("message", out var message) && message.ValueKind == JsonValueKind.String
+                && message.GetString()!.StartsWith("The compiled grammar is too large", StringComparison.OrdinalIgnoreCase);
+        }
+        catch (JsonException) { return false; }
+        catch (InvalidOperationException) { return false; }
+    }
+
     private static bool IsTemperatureDeprecated(string body)
-        => body.Contains("temperature", StringComparison.OrdinalIgnoreCase)
-           && body.Contains("deprecated", StringComparison.OrdinalIgnoreCase);
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(body);
+            var error = document.RootElement.GetProperty("error");
+            return error.GetProperty("type").GetString() == "invalid_request_error"
+                && error.GetProperty("message").GetString() is { } message
+                && message.Trim().Equals("`temperature` is deprecated for this model.", StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException or KeyNotFoundException)
+        { return false; }
+    }
 
     /// <summary>
     /// Detects the "max_tokens above the model's cap" 400 and extracts the allowed maximum. The message
@@ -294,6 +339,7 @@ public sealed partial class AnthropicProvider : IChatProvider
         }
 
         var finish = root.TryGetProperty("stop_reason", out var sr) && sr.ValueKind == JsonValueKind.String ? sr.GetString() : null;
+        RequireCompletedTurn(finish);
 
         // ── What the turn actually cost ──────────────────────────────────────
         //
@@ -325,6 +371,17 @@ public sealed partial class AnthropicProvider : IChatProvider
         return new ChatCompletion(
             new ChatMessage(ChatRole.Assistant, contentText, toolCalls),
             finish, promptTokens, outputTokens, CachedPromptTokens: cached) { CacheCreationPromptTokens = created };
+    }
+
+    private static void RequireCompletedTurn(string? finish)
+    {
+        // Resuming requires replaying all server-tool/thinking blocks unchanged. Our text/tool
+        // transcript cannot do that; do not silently turn this suspended response into success.
+        if (finish == "pause_turn")
+            throw new InvalidDataException("Anthropic returned pause_turn: the turn is incomplete. "
+                + "Continuation with server-tool content blocks is not supported by this adapter.");
+        if (finish == "refusal")
+            throw new InvalidDataException("Anthropic refused the response (stop_reason=refusal).");
     }
 
     /// <summary>One turn on the wire: a role and its content blocks.</summary>
