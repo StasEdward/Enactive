@@ -121,6 +121,52 @@ public sealed class PlanCheckReviewTests
         Assert.Equal(7, actual.ExpectedExitCode);
     }
 
+    /// <summary>
+    /// A locked criterion is kept exactly as supplied, so the origin label on the answer's copy of it
+    /// decides nothing. Runs ee6cf56a and f8e875bf (2026-09-28) ended before any work because the
+    /// planner, shown "Origin":0 for a template's check, called it "proposed" - twice. The four
+    /// answers are in plan-check-corpus; this is the same thing, small.
+    /// </summary>
+    [Theory]
+    [InlineData("proposed")]
+    [InlineData("requested")]
+    [InlineData("declared")]
+    public async Task A_locked_criterion_is_kept_whatever_the_answer_calls_its_origin(string label)
+    {
+        var original = new SuccessCriterionDefinition("verify", "verify", 7, Required: false);
+        var answer = JsonSerializer.Serialize(new {
+            sources = new[] { new { id = "O001", assessment = "Permitted final verification" } },
+            checks = new[] { new { name = "verify", command = "verify", origin = label,
+                request_quote = label == "requested" ? "not in the request" : null, expectedExitCode = 7, reason = "Kept" } },
+            action_policy = (object?)null, forbidden_effects = Array.Empty<object>(), unresolved = (string?)null
+        });
+        var result = await PlanCheckReview.RunAsync(new(IntentDisposition.QuickAction, "work", null) { Checks = [original] },
+            "Verify offline", new(null, "workspace", null, null, null, [], []), new FakeChatProvider(Turn.Says(answer)), "strong",
+            new(ExecutionLimits.None, DateTimeOffset.UtcNow), 4096, default, preserveCriteria: true);
+
+        Assert.Null(result.IncompleteReason);
+        var kept = Assert.Single(result.Checks);
+        Assert.Equal(CriterionOrigin.Declared, kept.Origin);
+        Assert.Null(kept.RequestQuote);
+        Assert.Equal(7, kept.ExpectedExitCode);
+    }
+
+    /// <summary>The planner is shown each check's origin in the words its answer uses - not an enum's number.</summary>
+    [Fact]
+    public async Task The_planner_is_shown_a_checks_origin_by_name()
+    {
+        var provider = new FakeChatProvider(Turn.Says("{}"), Turn.Says("{}"));
+        await PlanCheckReview.RunAsync(new(IntentDisposition.QuickAction, "work", null) {
+                Checks = [new("Builds", "build"), new("verify", "verify", Origin: CriterionOrigin.Proposed)] },
+            "Verify offline", new(null, "workspace", null, null, null, [], []), provider, "strong",
+            new(ExecutionLimits.None, DateTimeOffset.UtcNow), 4096, default, preserveCriteria: true);
+
+        var shown = provider.Requests[0].Messages[^1].Content!;
+        Assert.Contains("\"origin\":\"declared\"", shown, StringComparison.Ordinal);
+        Assert.Contains("\"origin\":\"proposed\"", shown, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"Origin\":", shown, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task Budget_stops_contract_clarification()
     {

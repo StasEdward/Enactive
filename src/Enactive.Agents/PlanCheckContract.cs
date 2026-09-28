@@ -115,13 +115,19 @@ internal static class PlanCheckContract
             var exit = item.GetProperty("expectedExitCode").GetInt32();
             var quote = item.GetProperty("request_quote");
             string? text = null;
-            if (origin == "requested")
+            if (preserveCriteria)
+            {
+                // Locked: every supplied criterion is kept exactly as it was, provenance included
+                // (see below), so the label on the answer's copy of it decides nothing - and is not
+                // judged. Judging it refused the runs of 2026-09-28 over a word the planner had not
+                // been shown. Name, command and exit code still have to match.
+            }
+            else if (origin == "requested")
             {
                 text = Required(item, "request_quote");
                 if (!request.Contains(text, StringComparison.Ordinal) || !text.Contains(command, StringComparison.Ordinal))
                     throw new JsonException("Requested commands require exact original request provenance.");
             }
-            else if (preserveCriteria && origin == "declared" && quote.ValueKind == JsonValueKind.Null) { }
             else if (origin != "proposed" || quote.ValueKind != JsonValueKind.Null || exit != 0)
                 throw new JsonException("Proposed checks require null provenance and exit 0.");
             checks.Add(new(name, command, exit, Origin: origin == "requested" ? CriterionOrigin.Requested
@@ -135,7 +141,7 @@ internal static class PlanCheckContract
             foreach (var original in inputs.Checks)
             {
                 var match = remaining.FindIndex(c => c.Name == original.Name && c.Command == original.Command
-                    && c.Origin == original.Origin && c.ExpectedExitCode == original.ExpectedExitCode);
+                    && c.ExpectedExitCode == original.ExpectedExitCode);
                 if (match < 0) throw new JsonException("Locked criterion omitted or changed; report unresolved instead.");
                 checks.Add(original with { PlanningReason = remaining[match].PlanningReason });
                 remaining.RemoveAt(match);

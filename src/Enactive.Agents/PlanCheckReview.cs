@@ -50,7 +50,12 @@ internal static class PlanCheckReview
                 + "A document/explanation may correctly have checks=[]; do not invent shell checks merely to have one."),
             ChatMessage.User(Planner.Where(context) + RequestObligations.ExecutionPrompt(request)
                 + "\nPlan and draft final criteria:\n" + JsonSerializer.Serialize(new {
-                    plan.Title, steps = plan.Plan?.Steps.Select(s => new { s.Title, s.ObligationIds }), checks = plan.Checks,
+                    plan.Title, steps = plan.Plan?.Steps.Select(s => new { s.Title, s.ObligationIds }),
+                    // Origin by NAME, in the answer's own words. Serialized as it was, a template's check
+                    // reached the planner as "Origin":0 while a locked review demanded origin=declared
+                    // back; on 2026-09-28 it guessed "proposed", twice, and both runs ended there.
+                    checks = plan.Checks.Select(c => new { c.Name, c.Command, c.ExpectedExitCode, c.Required,
+                        origin = c.Origin.ToString().ToLowerInvariant(), c.AlreadyPassing, c.RequestQuote, c.PlanningReason }),
                     existingRestrictions = plan.Restrictions, actionPolicy = plan.ActionPolicy,
                     tools = tools?.Select(t => new { t.Name, kind = t.Kind.ToString(), commandPolicy = t.CommandPolicy.ToString() })
                 }))
