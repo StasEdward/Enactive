@@ -77,6 +77,34 @@ public static class FanOut
         return (plan with { Steps = steps }, dropped);
     }
 
+    /// <summary>
+    /// A plan that will make one document from a step's items without saying so: a step done for each item
+    /// with no report, something after it building on its results, and a file the run's criteria name. The
+    /// step to declare it on, the path, and what to tell the planner - or null when the plan is consistent.
+    ///
+    /// <para>Run dd7ca94b, 2026-09-28: the planner was told about "report" and wrote a "compile" step
+    /// instead; the first page step found no report and created it; the next could not change it. A document
+    /// assembled from item results has to be declared, so it can be reserved and written by the engine.</para>
+    /// </summary>
+    public static (int Step, string Path, string Diagnostic)? MissingReport(Plan plan, IReadOnlyList<PlannedCriterion> criteria)
+    {
+        var deliverables = criteria
+            .Where(c => c.Kind.Trim().ToLowerInvariant() is "file_exists" or "file_contains" && !string.IsNullOrWhiteSpace(c.Path))
+            .Select(c => c.Path!.Replace('\\', '/').Trim().TrimStart('.', '/')).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        if (deliverables.Length == 0) return null;
+        for (var i = 0; i < plan.Steps.Count; i++)
+        {
+            var step = plan.Steps[i];
+            if (step.ForEach is null || step.Report is not null || !plan.Steps.Any(s => s.DependsOn.Contains(step.Id))) continue;
+            return (i, deliverables[0],
+                $"Step {i} (\"{step.Title}\") is done for each item, a later step builds on its results, and the run delivers "
+                + $"{string.Join(", ", deliverables)}. Declare the document the items' results make on that step - "
+                + $"\"report\":\"{deliverables[0]}\" - so the engine assembles it from every item's recorded result and no step "
+                + "edits it; the step after the items hands on a \"summary\" instead of writing the file.");
+        }
+        return null;
+    }
+
     /// <summary>The items a source handed on, in order, each once. None when it handed nothing on.</summary>
     public static IReadOnlyList<string> Items(StepOutput? source, string field)
         => source?.Value(field) is { ValueKind: JsonValueKind.Array } list

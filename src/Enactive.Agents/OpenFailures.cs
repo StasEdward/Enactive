@@ -90,7 +90,18 @@ internal sealed class OpenFailures
     /// amount of other work makes it not have broken.</para>
     /// </summary>
     private IReadOnlyCollection<string> Forgiven
-        => _anythingChanged ? _neverHappened.Keys : Array.Empty<string>();
+        => _anythingChanged || _handedOn ? _neverHappened.Keys : Array.Empty<string>();
+
+    /// <summary>
+    /// The step handed its result on as values, and the engine accepted it. That is the step having DONE
+    /// what it is for, as much as writing a file is - more, where writing was not its to do. Run dd7ca94b,
+    /// 2026-09-28: a page step's edit of the shared report was cut at the limit (never ran), a second was
+    /// refused, the step handed its findings on as it had been told to - and was failed for the first.
+    /// A call that RAN and failed is never forgiven by this; only calls that never happened.
+    /// </summary>
+    public void HandedOn() => _handedOn = true;
+
+    private bool _handedOn;
 
     public int Count
         => _byCall.Keys.Count(k => !Forgiven.Contains(k))

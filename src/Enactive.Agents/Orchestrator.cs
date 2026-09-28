@@ -590,6 +590,47 @@ public sealed partial class Orchestrator : IOrchestrator
                 yield return scope.Ev(EventKind.ErrorObserved, "The corrected plan was incomplete or not a task DAG. No steps ran.");
         }
 
+        // A document made from a step's items has to be declared, so the engine can reserve and assemble it.
+        // Asked of the planner once; if the corrected plan still leaves it out, the engine declares it - the
+        // path is the one the run's criteria name, which no item's step may write in any case.
+        if (resume is null && _dynamicSteps && _stepOutputs && plan.Plan is { } undeclared
+            && FanOut.MissingReport(undeclared, plan.PlannedCriteria) is { } missing)
+        {
+            yield return scope.Ev(EventKind.ContextAssembled, missing.Diagnostic + " Asking the planner to declare it.");
+            var before = plan;
+            string? unclear = budget.TurnExhausted;
+            if (unclear is null)
+            {
+                try
+                {
+                    ct.ThrowIfCancellationRequested();
+                    plan = await InScopeAsync(runId, taskId, null, () => _planner.ReplanAsync(
+                        intent.RawText, intent.Context, plan, missing.Diagnostic, models.PlanProvider, models.Plan.Model, ct,
+                        _limits.MaxSteps, _proposeChecks && _successCriteria.Count == 0, RunawayCeiling, _generationBudgets.For(GenerationPurpose.Planning),
+                        _stepOutputs, _typedCriteria, _dynamicSteps));
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex) { unclear = "the planner could not be asked: " + ex.Message; }
+                if (unclear is null && plan.PromptTokens + plan.CompletionTokens > 0)
+                    yield return scope.Usage(WorkEventPayload.WorkPurpose.Plan, models.Plan,
+                        plan.PromptTokens, plan.CompletionTokens, cached: plan.CachedPromptTokens, created: plan.CacheCreationPromptTokens);
+            }
+            // A correction that is not a readable plan, or no plan at all, does not replace the one that was.
+            if (unclear is not null || plan.Readout == PlanReadout.Unreadable || plan.Plan is null || PlanValidation.Error(plan.Plan) is not null)
+                plan = before;
+            if (FanOut.MissingReport(plan.Plan!, plan.PlannedCriteria) is { } still)
+            {
+                var steps = plan.Plan!.Steps.ToArray();
+                steps[still.Step] = steps[still.Step] with { Report = still.Path };
+                plan = plan with { Plan = plan.Plan with { Steps = steps } };
+                yield return scope.Ev(EventKind.ContextAssembled,
+                    $"The plan still left it undeclared{(unclear is null ? "" : $" ({unclear})")}: the engine declares '{still.Path}' "
+                    + $"the report of step {still.Step} (\"{steps[still.Step].Title}\"), and assembles it from the items' results.");
+            }
+            else
+                yield return scope.Ev(EventKind.ContextAssembled, "The planner declared the report.");
+        }
+
         // A quick action that stopped at a question is carried on AS the quick action it was, from
         // the position it stopped at. Planned again, the same request can come back as steps, and
         // the position - kept for the quick action - would then be found by nothing, and the work
@@ -3917,6 +3958,7 @@ public sealed partial class Orchestrator : IOrchestrator
                     {
                         outputSlot.Accept(verdict);
                         outputSlot.LastRefused = null;
+                        openFailures.HandedOn();
                         // What the step had shown for each item it hands a result on for, recorded now
                         // and by the engine (Phase 5.1): later, only this counts as coverage.
                         outputSlot.Items = EvidenceCoverage.Gather(outputSchema, verdict.Values!, reads, journal.Actions, _tools.Definitions,
