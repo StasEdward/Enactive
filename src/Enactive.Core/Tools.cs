@@ -14,6 +14,9 @@ using Enactive.Core.Permissions;
 /// ParallelRead explicitly promises concurrent read safety, including with the same tool instance;
 /// it is honoured only with None effects, Observe permission and no required approval.
 /// RunsSuccessChecks opts into command:string input and exitCode metadata; it is not permission.
+/// OnceOnly marks an action outside the workspace that cannot be taken back - a message sent, a post
+/// published - so doing it twice is doing two things: a task carried on does not repeat one it has
+/// already taken with the same arguments (see TaskProgress).
 /// </summary>
 public sealed record ToolDefinition(string Name, string Description, string JsonSchema,
     WorkspaceEffect WorkspaceEffect = WorkspaceEffect.Unknown,
@@ -24,7 +27,8 @@ public sealed record ToolDefinition(string Name, string Description, string Json
     ToolKind Kind = ToolKind.Unknown,
     FileCoverageBehavior FileCoverage = FileCoverageBehavior.None,
     bool RunsSuccessChecks = false,
-    CommandPolicySyntax CommandPolicy = CommandPolicySyntax.None);
+    CommandPolicySyntax CommandPolicy = CommandPolicySyntax.None,
+    bool OnceOnly = false);
 
 /// <summary>Trusted command-policy adapter. None refuses command tools under an allowlist.</summary>
 public enum CommandPolicySyntax { None, SimpleCommand, PowerShell }

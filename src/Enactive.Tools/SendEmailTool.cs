@@ -68,7 +68,9 @@ public sealed class SendEmailTool(MailAccount account) : ITool
               + "write the file first and attach it, rather than pasting its contents into the body."
             : "Send an email. NOT AVAILABLE in this workspace: no SMTP account is configured, so "
               + "any call will be refused. Say so in your report rather than calling it.",
-        JsonSchema: Schema);
+        JsonSchema: Schema,
+        // A sent message cannot be unsent, and sending it again is a second message.
+        OnceOnly: true);
 
     /// <summary>
     /// Execute, not Autonomous. Sending is not installing or deploying, and a run allowed to

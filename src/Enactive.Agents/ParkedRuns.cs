@@ -9,6 +9,10 @@ public static class ParkedRuns
     /// The step boundary to carry the task on from: its latest resumable checkpoint. Null for a run
     /// that never had one - a quick action has no steps to stop between - and such a task is started
     /// again under the SAME task id, which is what lets the recorded answer find its question.
+    ///
+    /// <para>Either way the step that asked is NOT done again from its beginning: it is carried on
+    /// from the position it stopped at, with everything it had done standing (TaskProgress). The
+    /// boundary only decides which steps are already behind the run.</para>
     /// </summary>
     public static async Task<RunCheckpoint?> CheckpointForAsync(IRunCheckpointStore store, Guid taskId, CancellationToken ct)
         => (await store.LoadAllAsync(ct))

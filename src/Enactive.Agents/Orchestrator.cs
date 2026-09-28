@@ -117,6 +117,8 @@ public sealed partial class Orchestrator : IOrchestrator
     private readonly LedgeredDecisions _ledgered;
     private readonly DecisionLedger _ledger;
     private readonly BaselineStore _baselines;
+    // Where a task's steps stopped at questions, and the once-only actions it has taken - see TaskProgress.
+    private readonly TaskProgress _progress;
     private readonly PermissionPolicy _policy;
     private readonly IServiceProvider _services;
     private readonly IModelRouter _router;
@@ -279,6 +281,7 @@ public sealed partial class Orchestrator : IOrchestrator
         _permissions = permissions;
         _ledger = new DecisionLedger(workspace.RootPath);
         _baselines = new BaselineStore(workspace.RootPath);
+        _progress = new TaskProgress(workspace.RootPath);
         _ledgered = new LedgeredDecisions(decisions, _ledger);
         _decisions = _ledgered;
         _policy = policy;
@@ -385,6 +388,7 @@ public sealed partial class Orchestrator : IOrchestrator
         }
         _ledger.Forget(taskId);
         _baselines.Forget(taskId);
+        _progress.Forget(taskId);
     }
 
     /// <param name="resume">
@@ -562,6 +566,18 @@ public sealed partial class Orchestrator : IOrchestrator
             }
             if (plan.Readout == PlanReadout.Unreadable)
                 yield return scope.Ev(EventKind.ErrorObserved, "The corrected plan was incomplete or not a task DAG. No steps ran.");
+        }
+
+        // A quick action that stopped at a question is carried on AS the quick action it was, from
+        // the position it stopped at. Planned again, the same request can come back as steps, and
+        // the position - kept for the quick action - would then be found by nothing, and the work
+        // done from the start. The planning itself is kept: the task's restrictions and checks come
+        // out of it, and they apply to the carried-on run as to the first.
+        if (resume is null && plan.Disposition != IntentDisposition.QuickAction && _progress.HasParked(taskId, null))
+        {
+            plan = plan with { Disposition = IntentDisposition.QuickAction, Plan = null };
+            yield return scope.Ev(EventKind.ContextAssembled,
+                "Carried on as the quick action it was when it stopped at a question, not re-planned into steps.");
         }
 
         // Validate before baseline checks, worker dispatch, or checkpoint writes can have effects.
@@ -2520,6 +2536,32 @@ public sealed partial class Orchestrator : IOrchestrator
         // can be estimated on top of a real count rather than instead of one.
         var sizeAtLastPrompt = 0;
 
+        // Where this loop's own actions begin in the journal, which may be the run's: a step that
+        // stops at a question keeps what IT did, not what the steps before it did.
+        var loopMark = journal.Mark();
+
+        // Carried on from where it stopped at a question, rather than done again from its beginning:
+        // the conversation as it stood - every call made and what it answered - and the record of
+        // what was done. The calls of that turn that never ran are answered as not run, so the model
+        // makes the one that asked again, through the ordinary gate, which now has its answer.
+        if (_progress.TakeParked(taskId, stepNo) is { } parkedAt)
+        {
+            messages.Clear();
+            messages.AddRange(parkedAt.Messages);
+            foreach (var done in parkedAt.Actions)
+                journal.Record(done.Step, done.Tool, done.Arguments, done.Outcome, done.Output, done.WorkspaceEffect,
+                    done.ChangedPaths, done.ExitCode, done.FileDeletion, done.Origin);
+            foreach (var waiting in parkedAt.Pending)
+                messages.Add(ChatMessage.Tool(waiting.Id,
+                    "NOT CARRIED OUT: the run stopped here to wait for a decision, and it has now been answered. "
+                    + "Everything above this point was done and stands - do not do it again. If this call is still "
+                    + "what the work needs, make it again exactly as before."));
+            loopMark = journal.Mark();
+            yield return Ev(EventKind.ContextAssembled,
+                $"Carried on from where it stopped at a question: {parkedAt.Actions.Count} earlier call(s) stand and are not "
+                + $"repeated; {parkedAt.Pending.Count} call(s) that were waiting are to be made again.");
+        }
+
         for (var iteration = 1; iteration <= RunawayCeiling; iteration++)
         {
             if (runBudget.TurnExhausted is { } turnSpent)
@@ -3170,6 +3212,11 @@ public sealed partial class Orchestrator : IOrchestrator
             for (var callIndex = 0; callIndex < toolCalls.Count; callIndex++)
             {
                 var call = toolCalls[callIndex];
+
+                // The step's place, written down as it stops at a question nobody is here to answer:
+                // the conversation so far, what this loop did, and this call with the rest of its turn.
+                void ParkHere() => _progress.Park(taskId, new ParkedPosition(stepNo, messages.ToArray(),
+                    journal.Actions.Skip(loopMark).ToArray(), toolCalls.Skip(callIndex).ToArray()));
                 if (readResults.Count == 0 && CanRunRead(call))
                 {
                     var group = toolCalls.Skip(callIndex).Take(ParallelToolReads.Limit)
@@ -3195,6 +3242,21 @@ public sealed partial class Orchestrator : IOrchestrator
                     continue;
                 }
 
+                // An action that cannot be taken back, which this task has already taken with exactly
+                // these arguments - in an attempt that stopped, or a process that died - is not taken
+                // again, and not asked about again. The model is given what it answered the first time.
+                if (_tools.DefinitionOf(call.Name)?.OnceOnly == true && _progress.DoneBefore(taskId, call) is { } already)
+                {
+                    const string notAgain = "already done earlier in this task, with the same arguments; not repeated";
+                    journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Refused, notAgain);
+                    yield return Decided(call.Name, allowed: false, $"{call.Name}: {notAgain}");
+                    messages.Add(ChatMessage.Tool(call.Id,
+                        $"ALREADY DONE: this exact {call.Name} was carried out earlier in this task, at "
+                        + $"{already.At.ToLocalTime():yyyy-MM-dd HH:mm}, and cannot be taken back - it was NOT done again. "
+                        + $"What it answered then: {already.Output ?? "(nothing)"}"));
+                    continue;
+                }
+
                 // ── Permission gate: allow / ask / deny ──────────────────────
                 var gate = toolAccess.Evaluate(EffectivePolicyFor(worker), call.Name, offer);
 
@@ -3207,7 +3269,9 @@ public sealed partial class Orchestrator : IOrchestrator
                             $"Approve tool '{call.Name}'? {Compact(call.ArgumentsJson)}");
 
                         var decisionRequest = toolAccess.Approval(call, taskId, runId, _workspace.RootPath);
-                        var outcome = await ToolAccess.AskAsync(_decisions, _decisionGate, decisionRequest, ct);
+                        DecisionOutcome outcome;
+                        try { outcome = await ToolAccess.AskAsync(_decisions, _decisionGate, decisionRequest, ct); }
+                        catch (DecisionPendingException) { ParkHere(); throw; }
                         approved = string.Equals(outcome.OptionId, "allow", StringComparison.OrdinalIgnoreCase);
                         // Says WHO answered. A standing approval and a person clicking Allow used to
                         // produce the same line, separated only by how long it took.
@@ -3327,7 +3391,8 @@ public sealed partial class Orchestrator : IOrchestrator
                         Action: new BoundAction(
                             runId, call.Id, call.Name, call.ArgumentsJson, _workspace.RootPath));
 
-                    geography = await ToolAccess.AskAsync(_decisions, _decisionGate, geographyRequest, ct);
+                    try { geography = await ToolAccess.AskAsync(_decisions, _decisionGate, geographyRequest, ct); }
+                    catch (DecisionPendingException) { ParkHere(); throw; }
 
                     var keepOut = string.Equals(geography.OptionId, "deny", StringComparison.OrdinalIgnoreCase);
                     var forRun = string.Equals(geography.OptionId, "run", StringComparison.OrdinalIgnoreCase);
@@ -3384,6 +3449,10 @@ public sealed partial class Orchestrator : IOrchestrator
                 var invocation = readResult ?? await ToolInvocation.ExecuteAsync(call, _tools, CallContext(), ct);
                 var result = invocation.Value;
                 var failure = accounting.Record(call, invocation);
+                // Written the moment it is done, not at a boundary: a process that dies next must
+                // still know this was sent.
+                if (result.Success && !result.DidNotRun && _tools.DefinitionOf(call.Name)?.OnceOnly == true)
+                    _progress.RecordDone(taskId, call, result.Output);
 
                 yield return result.Success
                     ? Ev(EventKind.ToolResult, $"{call.Name} -> ok: {result.Output}")
