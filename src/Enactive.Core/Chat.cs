@@ -51,7 +51,10 @@ public sealed record ChatRequest(
     // Hard output ceiling (for example, the remaining context window). Must be positive when set.
     // Unlike MaxTokens, this never raises a smaller configured output budget.
     int? OutputTokenLimit = null,
-    GenerationPurpose? Purpose = null)
+    GenerationPurpose? Purpose = null,
+    // The answer must be a call to one of Tools, not text (OpenAI-style tool_choice "required"). A request:
+    // an adapter that cannot say it ignores it, and the caller copes with a reply that is text anyway.
+    bool RequireToolCall = false)
 {
     /// <summary>Live run budget for transport retry boundaries; never part of the wire request.</summary>
     [System.Text.Json.Serialization.JsonIgnore]

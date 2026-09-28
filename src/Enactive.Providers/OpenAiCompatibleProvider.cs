@@ -262,6 +262,8 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
             payload["temperature"] = temperature;
         if (request.Tools is { Count: > 0 } tools)
             payload["tools"] = tools.Select(ToWireTool).ToArray();
+        if (request.RequireToolCall && request.Tools is { Count: > 0 })
+            payload["tool_choice"] = "required";
 
         // The request wins over the provider's configured default; neither was being sent at all, so
         // the "Max tokens" field in the provider editor did nothing on this adapter. A provider that

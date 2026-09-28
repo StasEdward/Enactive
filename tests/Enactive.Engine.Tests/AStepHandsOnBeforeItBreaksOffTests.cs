@@ -110,6 +110,94 @@ public sealed class AStepHandsOnBeforeItBreaksOffTests
         Assert.Contains(events, e => e.Summary.Contains("Handover note not written (attempt 1 of 2): the model called read_file instead of writing it", StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// Run 16d57849: asked in text at three fresh starts and once more, the step read on each time. The turn after
+    /// a fresh start, while nothing has been handed on, offers the hand-over only and requires a call; then every
+    /// tool is back.
+    /// </summary>
+    [Fact]
+    public async Task The_turn_after_a_fresh_start_offers_only_the_hand_over_until_something_is_handed_on()
+    {
+        using var fx = new EngineFixture { StepOutputs = true };
+        var provider = new FakeChatProvider(
+            Turn.Says(OneStep),
+            Read(fx, 1, 3_000), Read(fx, 2, 9_000),
+            Turn.Says("# Note to self - claims 1 and 2 checked."),
+            Turn.Calls1(StepOutputContract.ToolName, """{"findings":"claims 1-2 right; 3 not checked"}""", "s1"),
+            Read(fx, 3, 3_000),
+            Turn.Says("Done.")) { Window = 40_000, HandoverAt = 75, Working = 8_000 };
+
+        var events = await fx.RunAsync(fx.Build(provider, EngineFixture.Role("developer")), "check the claims");
+
+        var forced = provider.Requests.Single(r => r.RequireToolCall);
+        Assert.Equal([StepOutputContract.ToolName], forced.Tools!.Select(t => t.Name));
+        var after = provider.Requests[provider.Requests.IndexOf(forced) + 1];
+        Assert.False(after.RequireToolCall);
+        Assert.Contains(after.Tools!, t => t.Name == "read_file");
+        Assert.True(events.Has(EventKind.TaskCompleted), events.Text());
+    }
+
+    [Fact]
+    public async Task Text_or_another_call_on_that_turn_does_not_end_the_step_or_run()
+    {
+        using var fx = new EngineFixture { StepOutputs = true };
+        var provider = new FakeChatProvider(
+            Turn.Says(OneStep),
+            Read(fx, 1, 3_000), Read(fx, 2, 9_000),
+            Turn.Says("# Note to self - claims 1 and 2 checked."),
+            Turn.Calls1("read_file", """{"path":"claim1.md"}""", "x1"),                  // not the hand-over: not run
+            Turn.Calls1(StepOutputContract.ToolName, """{"findings":"claims 1-2 right"}""", "s1"),
+            Turn.Says("Done.")) { Window = 40_000, HandoverAt = 75, Working = 8_000 };
+
+        var events = await fx.RunAsync(fx.Build(provider, EngineFixture.Role("developer")), "check the claims");
+
+        Assert.True(events.Any(e => e.Kind == EventKind.ToolResult
+                                     && e.Summary.StartsWith("read_file -> not run: this turn is for submit_step_output only", StringComparison.Ordinal)), events.Text());
+        Assert.True(events.Has(EventKind.TaskCompleted), events.Text());
+
+        using var fx2 = new EngineFixture { StepOutputs = true };
+        var provider2 = new FakeChatProvider(
+            Turn.Says(OneStep),
+            Read(fx2, 1, 3_000), Read(fx2, 2, 9_000),
+            Turn.Says("# Note to self - claims 1 and 2 checked."),
+            Turn.Says("I will keep checking."),                                              // text: the step carries on
+            Turn.Calls1(StepOutputContract.ToolName, """{"findings":"claims 1-2 right"}""", "s1"),
+            Turn.Says("Done.")) { Window = 40_000, HandoverAt = 75, Working = 8_000 };
+
+        var events2 = await fx2.RunAsync(fx2.Build(provider2, EngineFixture.Role("developer")), "check the claims");
+
+        Assert.Contains(events2, e => e.Summary.Contains("was answered with text; the step carries on", StringComparison.Ordinal));
+        Assert.Contains(events2, e => e.Kind == EventKind.StepOutputRecorded);
+    }
+
+    [Fact]
+    public void An_openai_compatible_provider_is_asked_for_a_call()
+    {
+        var handler = new CapturingHandler();
+        using var http = new System.Net.Http.HttpClient(handler);
+        var provider = new Enactive.Providers.OpenAiCompatibleProvider(http,
+            new Enactive.Core.Providers.ProviderDescriptor("p", "p", Enactive.Core.Providers.ProviderKind.OpenAiCompatible, "http://test.invalid/v1", null, []));
+        try
+        {
+            provider.CompleteAsync(new ChatRequest("m", [ChatMessage.User("hi")],
+                [StepOutputContract.Tool(new Enactive.Core.Tasks.StepOutputSchema("s", 1,
+                    [new Enactive.Core.Tasks.StepOutputField("x", Enactive.Core.Tasks.StepOutputFieldType.Text, "x", Required: true)]))],
+                RequireToolCall: true), default).GetAwaiter().GetResult();
+        }
+        catch (Exception) { /* the reply is not the point */ }
+        Assert.Contains("\"tool_choice\":\"required\"", handler.Body, StringComparison.Ordinal);
+    }
+
+    private sealed class CapturingHandler : System.Net.Http.HttpMessageHandler
+    {
+        public string Body { get; private set; } = "";
+        protected override async Task<System.Net.Http.HttpResponseMessage> SendAsync(System.Net.Http.HttpRequestMessage request, CancellationToken ct)
+        {
+            Body = await request.Content!.ReadAsStringAsync(ct);
+            return new(System.Net.HttpStatusCode.BadRequest) { Content = new System.Net.Http.StringContent("{}") };
+        }
+    }
+
     [Fact]
     public async Task A_step_with_nothing_to_hand_on_is_not_asked_to()
     {

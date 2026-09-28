@@ -3328,6 +3328,11 @@ public sealed partial class Orchestrator : IOrchestrator
         var handoverRetryAt = 0;
         // Whether a step with no fresh start left has been asked to hand its result on now - once.
         var askedToHandOnNow = false;
+        // The next turn offers the step's hand-over and nothing else, and asks for a call. Text did not do it:
+        // run 16d57849's step was asked to hand on at each of three fresh starts and once more with no fresh
+        // start left, and read on each time - the page it had already checked, a settings file eight
+        // thousand characters at a time. One turn, then every tool is back.
+        var handOnOnly = false;
         var handoverFailures = 0;
         var turnsHere = 0;
         ChatMessage? commandHistoryMessage = null;
@@ -3532,6 +3537,7 @@ public sealed partial class Orchestrator : IOrchestrator
                 && !askedToHandOnNow)
             {
                 askedToHandOnNow = true;
+                handOnOnly = true;
                 messages.Add(ChatMessage.User(
                     "The conversation is full again and this step has no fresh start left. Hand on your result NOW with "
                     + $"{StepOutputContract.ToolName}, from what you have established - say plainly what you have not checked - "
@@ -3684,6 +3690,7 @@ public sealed partial class Orchestrator : IOrchestrator
                         messages.RemoveRange(kept, messages.Count - kept);
                     }
                     SayWhatIsNotOffered();
+                    handOnOnly = outputSchema is not null && outputSlot is { Values: null };
                     messages.Add(ChatMessage.User(
                         $"You have been working on this for {iteration - 1} turn(s) and the "
                         + "conversation was getting long, so it has been started again from "
@@ -3791,8 +3798,15 @@ public sealed partial class Orchestrator : IOrchestrator
                     commandHistorySnapshot = snapshot;
                 }
             }
-            var request = new ChatRequest(model, messages, toolDefs, Temperature: 0.2, NumCtx: _numCtx, Think: _think,
-                OutputTokenLimit: _generationBudgets.For(purpose), Purpose: purpose);
+            var forcedThisTurn = handOnOnly && outputSchema is not null;
+            handOnOnly = false;
+            var request = new ChatRequest(model, messages,
+                forcedThisTurn ? toolDefs.Where(d => d.Name == StepOutputContract.ToolName).ToArray() : toolDefs,
+                Temperature: 0.2, NumCtx: _numCtx, Think: _think,
+                OutputTokenLimit: _generationBudgets.For(purpose), Purpose: purpose, RequireToolCall: forcedThisTurn);
+            if (forcedThisTurn)
+                yield return Ev(EventKind.ContextAssembled,
+                    $"This turn offers only {StepOutputContract.ToolName}: the step has handed nothing on, and is to now.");
             request = request with { OutputTokenLimit = GenerationAllowance.Total(request.OutputTokenLimit!.Value, provider.ReasoningAllowance(request)) };
 
             // Does this provider apply a hard window to prompt AND generation together? Only Ollama
@@ -4061,6 +4075,14 @@ public sealed partial class Orchestrator : IOrchestrator
             // is what a provider's prefix cache serves, so keeping it costs far less than it looks.
             messages.Add(new ChatMessage(ChatRole.Assistant, replyText, toolCalls));
 
+            if (toolCalls is null && forcedThisTurn)
+            {
+                messages.Add(ChatMessage.User($"Nothing was handed on. Carry on with the step, and hand its result on with "
+                    + $"{StepOutputContract.ToolName} when you have it."));
+                yield return Ev(EventKind.ContextAssembled, $"The turn for {StepOutputContract.ToolName} was answered with text; the step carries on.");
+                continue;
+            }
+
             if (toolCalls is null)
             {
                 if (described is not null && !repairRequested)
@@ -4241,6 +4263,19 @@ public sealed partial class Orchestrator : IOrchestrator
                 // the conversation so far, what this loop did, and this call with the rest of its turn.
                 void ParkHere() => _progress.Park(taskId, new ParkedPosition(stepNo, messages.ToArray(),
                     journal.Actions.Skip(loopMark).ToArray(), toolCalls.Skip(callIndex).ToArray()));
+
+                // A turn that offered only the hand-over: anything else is answered, not run.
+                if (forcedThisTurn && call.Name != StepOutputContract.ToolName)
+                {
+                    yield return Invoked(call);
+                    var onlyHandOn = $"this turn is for {StepOutputContract.ToolName} only. Hand on what you have "
+                        + "established first; every tool is back on the next turn.";
+                    journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Refused, onlyHandOn, WorkspaceEffect.None);
+                    openFailures.RefusedByRule(call);
+                    messages.Add(ChatMessage.Tool(call.Id, "NOT RUN: " + onlyHandOn));
+                    yield return Ev(EventKind.ToolResult, $"{call.Name} -> not run: {onlyHandOn}");
+                    continue;
+                }
 
                 // A search of the tools offered on request: what it finds is listed from the next turn.
                 if (toolsOnRequest is not null && call.Name == ToolBudget.FindToolName)
