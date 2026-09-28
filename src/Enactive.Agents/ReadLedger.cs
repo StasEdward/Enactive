@@ -32,7 +32,6 @@ internal sealed class ReadLedger
     /// <summary>How much of one file this step has seen, counting from line 1.</summary>
     private sealed class Coverage
     {
-        public int Contiguous;   // the highest line reached without a gap from line 1
         public int Total;        // the file's line count, as the read reported it
         public bool TotalKnown = true;
 
@@ -40,6 +39,48 @@ internal sealed class ReadLedger
         // when it says where to read on. Such a line is never "seen", so a file holding one is
         // never read in full, and the advice for it must not be "read from that line" again.
         public readonly HashSet<int> TooLong = new();
+
+        // Every window seen, merged: sorted, disjoint, and not touching. It used to be one number -
+        // the highest line reached without a gap FROM LINE 1 - and a window that began beyond it was
+        // thrown away. So 401-518 and then 1-400, which is the whole file, counted as 1-400, and a
+        // whole-file write of a file read in full was refused. The order a file is read in is the
+        // model's business; what was seen is the engine's, and it aggregates the ranges itself.
+        private readonly List<(int From, int To)> _seen = new();
+
+        public void Clear() => _seen.Clear();
+
+        public void Add(int from, int to)
+        {
+            if (to < from) return;
+            _seen.Add((from, to));
+            _seen.Sort((a, b) => a.From.CompareTo(b.From));
+            var merged = new List<(int From, int To)>();
+            foreach (var range in _seen)
+                if (merged.Count > 0 && range.From <= merged[^1].To + 1)
+                    merged[^1] = (merged[^1].From, Math.Max(merged[^1].To, range.To));
+                else
+                    merged.Add(range);
+            _seen.Clear();
+            _seen.AddRange(merged);
+        }
+
+        /// <summary>The highest line reached without a gap from line 1 - where reading must go on from.</summary>
+        public int Contiguous => _seen.Count > 0 && _seen[0].From <= 1 ? _seen[0].To : 0;
+
+        /// <summary>The lines not seen, as ranges, up to <see cref="Total"/>.</summary>
+        public IReadOnlyList<(int From, int To)> Unseen()
+        {
+            var gaps = new List<(int From, int To)>();
+            var next = 1;
+            foreach (var (from, to) in _seen)
+            {
+                if (from > next) gaps.Add((next, Math.Min(from - 1, Total)));
+                next = Math.Max(next, to + 1);
+                if (next > Total) break;
+            }
+            if (next <= Total) gaps.Add((next, Total));
+            return gaps.Where(g => g.From <= g.To).ToArray();
+        }
     }
 
     private readonly Dictionary<string, Coverage> _files =
@@ -50,7 +91,7 @@ internal sealed class ReadLedger
     {
         foreach (var coverage in _files.Values)
         {
-            coverage.Contiguous = 0;
+            coverage.Clear();
             coverage.TooLong.Clear();
         }
     }
@@ -128,7 +169,7 @@ internal sealed class ReadLedger
                 var entry = CoverageOf(file.Path);
                 entry.Total = file.TotalLines;
                 entry.TotalKnown = file.TotalLinesKnown;
-                entry.Contiguous = Math.Max(entry.Contiguous, file.LinesShownWhole);
+                entry.Add(1, file.LinesShownWhole);
             }
             return;
         }
@@ -156,10 +197,9 @@ internal sealed class ReadLedger
         if (Int(result, "tooLongLine") is { } tooLong)
             coverage.TooLong.Add(tooLong);
 
-        // A window that starts at or before the first line not yet seen extends the run; one that
-        // starts beyond it leaves a hole, and a hole is exactly what makes a rewrite unsafe.
-        if (from <= coverage.Contiguous + 1)
-            coverage.Contiguous = Math.Max(coverage.Contiguous, to);
+        // Every window counts, in whatever order it came. A hole between windows is still a hole,
+        // and a hole is exactly what makes a rewrite unsafe.
+        coverage.Add(from, to);
     }
 
     /// <summary>
@@ -187,10 +227,11 @@ internal sealed class ReadLedger
                  + "Use edit_file to change an exact passage without replacing unread content, "
                  + "or read the whole file before a whole-file write.";
 
-        if (coverage.Total <= 0 || coverage.Contiguous >= coverage.Total)
-            return null;   // read in full, in one window or several
+        var unseen = coverage.Unseen();
+        if (coverage.Total <= 0 || unseen.Count == 0)
+            return null;   // read in full, in one window or several, in any order
 
-        var next = coverage.Contiguous + 1;
+        var next = unseen[0].From;
 
         // The same cursor read_file gave - except where read_file itself stepped over the line
         // because it cannot show it. Sending the model back there returns the same cut forever.
@@ -198,6 +239,18 @@ internal sealed class ReadLedger
             return $"'{path}' has a line ({next}) longer than read_file can show, so this step has not "
                  + "seen the whole file and a whole-file write would replace what it has not read. "
                  + "Change it with edit_file, which replaces one exact passage and leaves the rest alone.";
+
+        // Windows read out of order, with a hole left between them: name the holes, not "read from
+        // line 1" - the lines on either side were seen.
+        if (unseen.Count > 1 || (unseen[0].From > 1 && unseen[0].To < coverage.Total))
+        {
+            var missing = unseen.Sum(g => g.To - g.From + 1);
+            var ranges = string.Join(", ", unseen.Select(g => g.From == g.To ? $"{g.From}" : $"{g.From}-{g.To}"));
+            return $"This step has not seen line(s) {ranges} of {coverage.Total} in '{path}', so a whole-file "
+                 + $"write would replace {missing} line(s) it has never seen with whatever it happens to produce.\n"
+                 + $"Either use edit_file, which replaces one exact passage and leaves the rest alone, or read "
+                 + $"what is missing first: read_file with \"offset\": {next}.";
+        }
 
         if (coverage.Contiguous == 0)
             return $"This step has seen '{path}' only as an excerpt, not whole ({coverage.Total} lines), so a "
