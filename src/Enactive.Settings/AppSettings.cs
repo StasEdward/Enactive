@@ -398,6 +398,11 @@ public sealed partial class AppSettings
     // runs show it helps - it changes the planner's prompt and what a declared step needs to finish.
     public bool StepOutputs { get; set; }
 
+    // Phase 3: the planner may state acceptance criteria as types the engine checks itself -
+    // file_exists, file_contains, tests_pass - added to, never instead of, the run's own criteria.
+    // Off until runs show it helps.
+    public bool TypedCriteria { get; set; }
+
     // Put a rejected step's files back to how they were before it ran. Without this the gate stops
     // only the REPORT: the run says Failed while the rejected document stays in the workspace, which
     // is the version someone is most likely to open next. A file changed since the step wrote it is
@@ -863,6 +868,7 @@ public sealed partial class AppSettings
         KeepRuns = KeepRuns,
         ProposeChecks = ProposeChecks,
         StepOutputs = StepOutputs,
+        TypedCriteria = TypedCriteria,
         Bindings = Bindings.Clone(),
         RemoteAccess = RemoteAccess.Clone(),
         Smtp = Smtp.Clone(),

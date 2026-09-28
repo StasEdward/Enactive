@@ -46,6 +46,38 @@ public sealed record SuccessCriterionDefinition(
     public string? RequestQuote { get; init; }
     /// <summary>Planner's explanation of final-check suitability and compliance with request constraints.</summary>
     public string? PlanningReason { get; init; }
+
+    /// <summary>
+    /// What this criterion checks, as a TYPE the engine understands rather than a command it runs
+    /// (Phase 3). Null for a command check. <see cref="Command"/> then holds a readable form of it,
+    /// for the report; the engine does not run it.
+    /// </summary>
+    public TypedCriterion? Typed { get; init; }
+}
+
+/// <summary>The kinds of criterion a planner may state as a type (Phase 3). Each is one the engine can decide on its own.</summary>
+public enum TypedCriterionKind
+{
+    /// <summary>A file is there - and, unless said otherwise, not empty. Decided by the engine, no shell.</summary>
+    FileExists,
+
+    /// <summary>A file holds a given text. Decided by the engine, no shell.</summary>
+    FileContains,
+
+    /// <summary>The workspace's tests pass - through the ecosystem that recognises it, as a command check.</summary>
+    TestsPass
+}
+
+/// <summary>A planner-stated criterion, once validated: its kind and what it is about.</summary>
+public sealed record TypedCriterion(
+    TypedCriterionKind Kind,
+    string? Path = null,
+    bool NonEmpty = true,
+    string? Text = null,
+    string? Target = null)
+{
+    /// <summary>Whether the engine decides it itself, rather than by running a command.</summary>
+    public bool InEngine => Kind is TypedCriterionKind.FileExists or TypedCriterionKind.FileContains;
 }
 
 /// <summary>

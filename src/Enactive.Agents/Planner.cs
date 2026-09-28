@@ -47,6 +47,12 @@ public sealed record PlanResult(
     /// </summary>
     public IReadOnlyList<SuccessCriterionDefinition> Checks { get; init; }
         = Array.Empty<SuccessCriterionDefinition>();
+
+    /// <summary>
+    /// The criteria the planner stated as types (Phase 3), as it wrote them - not yet accepted. The
+    /// engine validates them against the workspace and drops what it cannot check (TypedCriteria).
+    /// </summary>
+    public IReadOnlyList<PlannedCriterion> PlannedCriteria { get; init; } = [];
     internal bool RestoredChecks { get; init; }
     public Enactive.Core.Tools.TaskActionPolicy? ActionPolicy { get; init; }
     public IReadOnlyList<Enactive.Core.Tools.TaskRestriction> Restrictions { get; init; } = [];
@@ -110,11 +116,11 @@ public sealed class Planner
         string request, WorkContext context, IChatProvider provider, string model,
         CancellationToken ct, int? maxSteps = null, bool proposeChecks = false,
         int? turnCeiling = null, int outputBudget = 4096,
-        Func<int, int, string?>? beforeRetry = null, bool stepOutputs = false)
+        Func<int, int, string?>? beforeRetry = null, bool stepOutputs = false, bool typedCriteria = false)
     {
         var messages = new List<ChatMessage>
         {
-            ChatMessage.System(SystemPromptFor(maxSteps, proposeChecks, turnCeiling, stepOutputs)),
+            ChatMessage.System(SystemPromptFor(maxSteps, proposeChecks, turnCeiling, stepOutputs, typedCriteria)),
             ChatMessage.User(Where(context) + Enactive.Core.Execution.RequestObligations.ExecutionPrompt(request))
         };
 
@@ -192,7 +198,8 @@ public sealed class Planner
     /// <summary>One structural repair attempt. Never falls back to execution of an unplanned action.</summary>
     internal async Task<PlanResult> ReplanAsync(string request, WorkContext context, PlanResult invalid,
         string diagnostic, IChatProvider provider, string model, CancellationToken ct,
-        int? maxSteps, bool proposeChecks, int turnCeiling, int outputBudget = 4096, bool stepOutputs = false)
+        int? maxSteps, bool proposeChecks, int turnCeiling, int outputBudget = 4096, bool stepOutputs = false,
+        bool typedCriteria = false)
     {
         var steps = invalid.Plan!.Steps;
         var indices = steps.Select((step, index) => (step.Id, index)).GroupBy(x => x.Id)
@@ -211,7 +218,7 @@ public sealed class Planner
         });
         ChatMessage[] messages =
         [
-            ChatMessage.System(SystemPromptFor(maxSteps, proposeChecks, turnCeiling, stepOutputs)),
+            ChatMessage.System(SystemPromptFor(maxSteps, proposeChecks, turnCeiling, stepOutputs, typedCriteria)),
             ChatMessage.User(Where(context) + Enactive.Core.Execution.RequestObligations.ExecutionPrompt(request)),
             ChatMessage.Assistant(prior),
             ChatMessage.User("The entire plan was rejected before execution: " + diagnostic
@@ -390,7 +397,8 @@ public sealed class Planner
                 var plan = disposition == IntentDisposition.Task ? DagPlan.FromSpecs(specs) : null;
                 return new PlanResult(disposition, Truncate(title, 80), plan, Readout: readout)
                 {
-                    Checks = ParseChecks(root, fallbackTitle)
+                    Checks = ParseChecks(root, fallbackTitle),
+                    PlannedCriteria = TypedCriteria.Read(root)
                 };
             }
             catch (JsonException)
@@ -524,6 +532,13 @@ public sealed class Planner
     /// How a step declares what it hands on as values (Phase 2). Short on purpose: the contract itself
     /// reaches the worker through the tool made from it, not through this prompt.
     /// </summary>
+    /// <summary>How the planner states criteria as types (Phase 3); sent only when they are on (amendment E).</summary>
+    internal const string TypedCriteriaPrompt =
+        " Also state what finished work looks like as \"criteria\":[...] the engine checks itself: "
+        + "{\"kind\":\"file_exists\",\"path\":\"relative/path\"} (add \"non_empty\":false if it may be empty), "
+        + "{\"kind\":\"file_contains\",\"path\":\"...\",\"text\":\"exact text\"}, {\"kind\":\"tests_pass\"}. "
+        + "Only what the request makes certain; [] when nothing is.";
+
     internal const string StepOutputsPrompt =
         " A step whose RESULT later steps must use as data (pages to process, files found, names, counts) declares it: "
         + "\"output\":{\"<field>\":{\"type\":\"path[]\",\"description\":\"...\",\"maxItems\":12}}; types: text, string, integer, "
@@ -595,9 +610,12 @@ public sealed class Planner
     /// (<c>Orchestrator.RunawayCeiling</c>). Null leaves the paragraph out entirely.
     /// </param>
     internal static string SystemPromptFor(int? maxSteps, bool proposeChecks = false, int? turnCeiling = null,
-        bool stepOutputs = false)
+        bool stepOutputs = false, bool typedCriteria = false)
     {
         var prompt = SystemPrompt;
+
+        if (typedCriteria)
+            prompt += TypedCriteriaPrompt;
 
         // Sent only when step outputs are on (amendment E: every paragraph says when it is NOT sent).
         if (stepOutputs)

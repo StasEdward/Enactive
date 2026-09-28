@@ -415,6 +415,9 @@ public sealed class EngineFixture : IDisposable
     /// <summary>Phase 2 step outputs. Off, as shipped, unless a test is about them.</summary>
     public bool StepOutputs { get; set; }
 
+    /// <summary>Phase 3 typed criteria. Off, as shipped, unless a test is about them.</summary>
+    public bool TypedCriteria { get; set; }
+
     /// <summary>
     /// Invokes a tool the way the engine does: a fresh context over this fixture's workspace, with
     /// this fixture's journalled artifact store unless the caller hands in a step's own.
@@ -627,7 +630,7 @@ public sealed class EngineFixture : IDisposable
             settings: settings,
             checkSoundness: checkSoundness,
             ecosystems: EcosystemsOverride,
-            stepOutputs: StepOutputs);
+            stepOutputs: StepOutputs, typedCriteria: TypedCriteria);
     }
 
     /// <summary>Runs one intent to completion and returns every event it produced.</summary>

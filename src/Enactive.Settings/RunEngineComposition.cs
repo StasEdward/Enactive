@@ -18,13 +18,13 @@ public sealed record RunEngineOptions(
     int ReviewRetries, int SuccessRetries, bool ProposeChecks, int? NumCtx,
     GenerationBudgets GenerationBudgets, RepairConsultation RepairConsultation,
     bool DisableThinking, int MaxParallelSteps, int EvidenceBudget, bool AllowImplicitToolCalls,
-    bool ReviewContent, bool CheckSoundness, bool RevertRejectedSteps, bool StepOutputs = false)
+    bool ReviewContent, bool CheckSoundness, bool RevertRejectedSteps, bool StepOutputs = false, bool TypedCriteria = false)
 {
     public static RunEngineOptions Capture(AppSettings settings) => new(
         settings.ReviewRetries, settings.SuccessRetries, settings.ProposeChecks, settings.NumCtx,
         settings.GenerationBudgets, settings.RepairConsultation, settings.DisableThinking,
         settings.MaxParallelSteps, settings.EvidenceBudget, settings.AllowImplicitToolCalls,
-        settings.ReviewContent, settings.CheckSoundness, settings.RevertRejectedSteps, settings.StepOutputs);
+        settings.ReviewContent, settings.CheckSoundness, settings.RevertRejectedSteps, settings.StepOutputs, settings.TypedCriteria);
 }
 
 /// <summary>Host-owned resources and policy. Their lifetime remains with the caller.</summary>
@@ -54,5 +54,5 @@ public static class RunEngineComposition
             // The kinds of project the engine can build for its own "no new build errors" check.
             // A new kind is a new IEcosystem here; nothing in the orchestrator changes.
             ecosystems: [new DotnetEcosystem()],
-            stepOutputs: options.StepOutputs);
+            stepOutputs: options.StepOutputs, typedCriteria: options.TypedCriteria);
 }

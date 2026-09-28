@@ -203,6 +203,7 @@ public sealed partial class Orchestrator : IOrchestrator
     private readonly IReadOnlyList<SuccessCriterionDefinition> _successCriteria;
     private readonly IReadOnlyList<IEcosystem> _ecosystems;
     private readonly bool _stepOutputs;
+    private readonly bool _typedCriteria;
     private readonly ISuccessEvaluator _successEvaluator;
 
     /// <summary>
@@ -265,9 +266,13 @@ public sealed partial class Orchestrator : IOrchestrator
         // Phase 2: whether the planner may declare what a step hands on as values, and steps must
         // then hand it on with submit_step_output. Off by default - it changes the planner's prompt
         // and what every such step must do to finish, and is to be switched on by evidence.
-        bool stepOutputs = false)
+        bool stepOutputs = false,
+        // Phase 3: whether the planner may state acceptance criteria as types the engine checks
+        // itself. Off by default: it changes the planner's prompt, and is to be switched on by evidence.
+        bool typedCriteria = false)
     {
         _stepOutputs = stepOutputs;
+        _typedCriteria = typedCriteria;
         _ecosystems = ecosystems ?? Array.Empty<IEcosystem>();
         // The machine's own store unless a test points it somewhere temporary. Defaulted rather
         // than required because a run that never writes outside the workspace never touches it, and
@@ -512,7 +517,7 @@ public sealed partial class Orchestrator : IOrchestrator
                         intent.RawText, intent.Context, models.PlanProvider, models.Plan.Model, ct,
                         _limits.MaxSteps, _proposeChecks && _successCriteria.Count == 0,
                         turnCeiling: RunawayCeiling, outputBudget: _generationBudgets.For(GenerationPurpose.Planning),
-                        stepOutputs: _stepOutputs,
+                        stepOutputs: _stepOutputs, typedCriteria: _typedCriteria,
                         beforeRetry: budget.TurnExhaustedAfter));
         }
         catch (RetryBudgetExceededException ex)
@@ -557,7 +562,7 @@ public sealed partial class Orchestrator : IOrchestrator
                     plan = await InScopeAsync(runId, taskId, null, () => _planner.ReplanAsync(
                         intent.RawText, intent.Context, plan, defect, models.PlanProvider, models.Plan.Model, ct,
                         _limits.MaxSteps, _proposeChecks && _successCriteria.Count == 0, RunawayCeiling, _generationBudgets.For(GenerationPurpose.Planning),
-                        _stepOutputs));
+                        _stepOutputs, _typedCriteria));
                 }
                 catch (OperationCanceledException) { throw; }
                 catch (Exception ex) { replanFailure = "Plan repair failed: " + ex.Message; }
@@ -616,6 +621,23 @@ public sealed partial class Orchestrator : IOrchestrator
             }
             yield return scope.Terminal(RunOutcomeKind.Incomplete, invalidPlan, _ => "Plan validation failed; no steps were started.");
             yield break;
+        }
+
+        // The criteria the planner stated as types (Phase 3), validated against this workspace. Only ever
+        // added to what the run already has - the system's own checks and the person's and template's
+        // criteria stay, whatever the planner says (3.4) - and one the engine cannot check is dropped
+        // with its reason, never a reason for the run to fail (3.2).
+        if (_typedCriteria && resume is null && plan.PlannedCriteria.Count > 0)
+        {
+            var (accepted, dropped) = TypedCriteria.Validate(plan.PlannedCriteria, _workspace.RootPath, _ecosystems);
+            foreach (var why in dropped)
+                yield return scope.Ev(EventKind.ErrorObserved, why);
+            if (accepted.Count > 0)
+            {
+                plan = plan with { Checks = [.. plan.Checks, .. accepted] };
+                yield return scope.Ev(EventKind.ContextAssembled, "Planner criteria accepted: "
+                    + string.Join("; ", accepted.Select(c => c.Command)));
+            }
         }
 
         if (_planner.ChecksAuditEnabled)
@@ -1979,7 +2001,9 @@ public sealed partial class Orchestrator : IOrchestrator
                     {
                         var old = proposed[decision.Index];
                         for (var i = 0; i < revised.Length; i++)
-                            if (revised[i].Origin == CriterionOrigin.Proposed && revised[i].Name == old.Name && revised[i].Command == old.Command)
+                            // A typed criterion is not a command to rewrite: what it checks is its type.
+                            if (revised[i].Origin == CriterionOrigin.Proposed && revised[i].Typed is null
+                                && revised[i].Name == old.Name && revised[i].Command == old.Command)
                                 revised[i] = revised[i] with { Command = decision.Command, AlreadyPassing = false };
                         yield return ev(EventKind.ErrorObserved, $"Planner revised proposed check: {old.Command} -> {decision.Command}");
                     }
@@ -2090,7 +2114,11 @@ public sealed partial class Orchestrator : IOrchestrator
     /// provenance. Older checkpoints without that field retain the legacy host-default behavior.</para>
     /// </summary>
     private IReadOnlyList<SuccessCriterionDefinition> CriteriaFor(PlanResult plan)
-        => plan.RestoredChecks ? plan.Checks : _successCriteria.Count > 0 ? _successCriteria : plan.Checks;
+        => plan.RestoredChecks ? plan.Checks
+            // The template's criteria, and the planner's typed ones added to them - never instead (3.4).
+            : _successCriteria.Count > 0 ? [.. _successCriteria, .. plan.Checks.Where(c => c.Typed is not null
+                && !_successCriteria.Any(d => d.Name == c.Name && d.Command == c.Command))]
+            : plan.Checks;
 
     /// <summary>
     /// Runs the PROPOSED checks before any of the work, and decides what each one is worth.

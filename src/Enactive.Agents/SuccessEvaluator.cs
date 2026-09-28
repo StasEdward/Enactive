@@ -60,6 +60,12 @@ public sealed class SuccessEvaluator : ISuccessEvaluator
         Guid taskId,
         CancellationToken ct)
     {
+        // A criterion stated as a type the engine understands is decided by the engine: no shell,
+        // no command to guess, the same on every platform (Phase 3). A test criterion is a command,
+        // and goes the ordinary way below.
+        if (criterion.Typed is { InEngine: true })
+            return TypedCriteria.Evaluate(criterion, context.WorkspaceRoot);
+
         CriterionResult Unknown(string why)
             => new(criterion.Name, criterion.Command, criterion.Required,
                    CriterionOutcome.Unknown, null, why, criterion.Origin, criterion.AlreadyPassing);

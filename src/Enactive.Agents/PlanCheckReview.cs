@@ -17,6 +17,11 @@ internal static class PlanCheckReview
         IChatProvider provider, string model, RunBudget budget, int outputBudget, CancellationToken ct,
         bool preserveCriteria = false, IReadOnlyList<ToolDefinition>? tools = null, string? workspaceRoot = null)
     {
+        // Criteria the engine decides itself are not commands, and are not this review's: nothing in
+        // them can run, so nothing in them can break the task's restrictions. Set aside, and put back
+        // after, so a review answered with a list of commands cannot lose them (Phase 3.4).
+        var decidedByTheEngine = plan.Checks.Where(c => c.Typed is { InEngine: true }).ToArray();
+        plan = plan with { Checks = plan.Checks.Where(c => c.Typed is not { InEngine: true }).ToArray() };
         var inputs = new PlanCheckInputs(request, plan.Checks, plan.Restrictions, plan.ActionPolicy,
             tools?.Select(t => new PlanCheckTool(t.Name, t.Kind, t.CommandPolicy)).ToArray(), preserveCriteria);
         var messages = new List<ChatMessage>
@@ -98,7 +103,7 @@ internal static class PlanCheckReview
                     break;
                 }
                 return Result(budget.TurnExhaustedAfter(prompt, output)) with {
-                    Checks = contract.Checks, Restrictions = contract.Restrictions, ActionPolicy = contract.ActionPolicy };
+                    Checks = [.. contract.Checks, .. decidedByTheEngine], Restrictions = contract.Restrictions, ActionPolicy = contract.ActionPolicy };
             }
             catch (Exception ex) when (PlanCheckContract.IsRefusal(ex))
             {
@@ -113,7 +118,7 @@ internal static class PlanCheckReview
         }
         return Result(problem ?? "Verification contract review incomplete.");
 
-        PlanResult Result(string? error) => plan with { PromptTokens = prompt, CompletionTokens = output,
+        PlanResult Result(string? error) => plan with { Checks = [.. plan.Checks, .. decidedByTheEngine], PromptTokens = prompt, CompletionTokens = output,
             CachedPromptTokens = cached, CacheCreationPromptTokens = created, IncompleteReason = error };
     }
 }
