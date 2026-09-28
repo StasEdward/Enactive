@@ -588,13 +588,16 @@ public static class WorkEventPayload
     /// these; nothing has to take the sentence apart.
     /// </summary>
     public static string CriterionPayload(
-        string name, string outcome, bool required, int? exitCode)
+        string name, string outcome, bool required, int? exitCode, string origin = "Declared")
         => System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, object?>
         {
             ["criterion"] = name,
             ["outcome"] = outcome,
             ["required"] = required,
-            ["exitCode"] = exitCode
+            ["exitCode"] = exitCode,
+            // Who asked for the check. Without it a reader of the values could not tell the engine's
+            // own look at the files from a check a person or the planner wrote.
+            ["origin"] = origin
         }, PayloadJson);
 
     /// <summary>The criterion outcome this event carries, or null when it carries none.</summary>

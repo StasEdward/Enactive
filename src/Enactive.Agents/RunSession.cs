@@ -41,8 +41,12 @@ internal sealed class RunSession(RunScope scope, List<ChatMessage> messages)
         lock (_evidenceGate)
         {
             foreach (var action in _journals.SelectMany(j => j.Actions).OrderBy(a => a.At))
+                // Every field, origin included. Copied without it, the run's evidence called every
+                // call Native, and the per-model count of how calls arrived - the one ToolCallOrigin
+                // exists to give - would have read the run-wide journal and seen only native calls.
                 result.Record(action.Step, action.Tool, action.Arguments, action.Outcome, action.Output,
-                    action.WorkspaceEffect, action.ChangedPaths, action.ExitCode, action.FileDeletion);
+                    action.WorkspaceEffect, action.ChangedPaths, action.ExitCode, action.FileDeletion,
+                    action.Origin);
             if (_resumed) result.NotePriorTranscript();
         }
         return result;

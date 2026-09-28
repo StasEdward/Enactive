@@ -37,7 +37,7 @@ public sealed class FinalRequirementReviewTests
         Assert.Equal(repairs ? "corrected" : "before", fx.Read("result.txt"));
         Assert.Equal(repairs ? 7 : 5, worker.Requests.Count);
         Assert.Equal(repairs ? 4 : 3, reviewer.Requests.Count);
-        Assert.Equal(repairs ? 2 : 1, events.Count(e => e.Kind == EventKind.CriterionEvaluated));
+        Assert.Equal(repairs ? 2 : 1, events.Count(e => e.IsCheck()));
         if (repairs) Assert.Contains("Specific defect", worker.Requests[5].Messages.Last().Content!);
         Assert.DoesNotContain(events, e => e.Kind == EventKind.ArtifactReverted);
     }

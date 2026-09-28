@@ -63,6 +63,8 @@ public sealed class RunShapeTests
                 "ToolResult",
                 "ArtifactProduced",
                 "AssistantDelta",
+                // The engine's own look at the file the run wrote.
+                "CriterionEvaluated",
                 "TaskCompleted"
             },
             Shape(events));
@@ -113,6 +115,8 @@ public sealed class RunShapeTests
                 "ArtifactProduced#2",
                 "AssistantDelta#2",
                 "StepCompleted#2",
+                "CriterionEvaluated",
+                "CriterionEvaluated",
                 "TaskCompleted"
             },
             Shape(events));

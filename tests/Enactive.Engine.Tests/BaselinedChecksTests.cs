@@ -100,7 +100,7 @@ public sealed class BaselinedChecksTests
             fx.Build(Worker("exit /b 0"), EngineFixture.Role("developer")),
             "write notes.md");
 
-        var checks = events.Where(e => e.Kind == EventKind.CriterionEvaluated).ToArray();
+        var checks = events.Where(e => e.IsCheck()).ToArray();
 
         Assert.Single(checks);
         Assert.Equal("Passed", checks[0].CriterionOutcomeName());
@@ -131,7 +131,7 @@ public sealed class BaselinedChecksTests
 
         // It survived to the end and was judged there - as Unknown, which blocks nothing because
         // nobody asked for it.
-        var check = Assert.Single(events.Where(e => e.Kind == EventKind.CriterionEvaluated).ToArray());
+        var check = Assert.Single(events.Where(e => e.IsCheck()).ToArray());
         Assert.Equal("Unknown", check.CriterionOutcomeName());
         Assert.False(events.Has(EventKind.TaskFailed), events.Text());
     }
@@ -150,7 +150,7 @@ public sealed class BaselinedChecksTests
             fx.Build(Worker("dir notes.md"), EngineFixture.Role("developer")),
             "write notes.md");
 
-        var check = Assert.Single(events.Where(e => e.Kind == EventKind.CriterionEvaluated).ToArray());
+        var check = Assert.Single(events.Where(e => e.IsCheck()).ToArray());
 
         Assert.Equal("Passed", check.CriterionOutcomeName());
         Assert.DoesNotContain(events, e => (e.Summary ?? "").Contains("already passes",

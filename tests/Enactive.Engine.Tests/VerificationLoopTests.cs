@@ -41,7 +41,7 @@ public sealed class VerificationLoopTests
         => new(name, OperatingSystem.IsWindows() ? $"cmd /c exit {exitCode}" : $"exit {exitCode}", 0, required);
 
     private static int Checks(List<WorkEvent> events)
-        => events.Count(e => e.Kind == EventKind.CriterionEvaluated);
+        => events.Count(e => e.IsCheck());
 
     [Fact]
     public async Task Success_repair_still_respects_the_token_budget()

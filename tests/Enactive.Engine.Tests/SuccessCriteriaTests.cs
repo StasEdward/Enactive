@@ -67,7 +67,7 @@ public sealed class SuccessCriteriaTests
         }
         if (!required)
             Assert.Contains("optional", detail);
-        Assert.Equal("Unknown", Assert.Single(events, e => e.Kind == EventKind.CriterionEvaluated)
+        Assert.Equal("Unknown", Assert.Single(events, e => e.IsCheck())
             .CriterionOutcomeName());
         Assert.Equal(expectedOutcome, Terminal(events).Outcome());
     }
@@ -129,7 +129,7 @@ public sealed class SuccessCriteriaTests
             });
 
         var events = await fx.RunAsync(orchestrator, "do the thing");
-        var checks = events.Where(e => e.Kind == EventKind.CriterionEvaluated).ToArray();
+        var checks = events.Where(e => e.IsCheck()).ToArray();
 
         Assert.Equal(2, checks.Length);
         Assert.Equal("Passed", checks[0].CriterionOutcomeName());
@@ -155,7 +155,7 @@ public sealed class SuccessCriteriaTests
         var terminal = Terminal(events);
 
         Assert.Equal(RunOutcomeKind.Completed, terminal.Outcome());
-        Assert.Contains(events, e => e.Kind == EventKind.CriterionEvaluated);
+        Assert.Contains(events, e => e.IsCheck());
     }
 
     /// <summary>A criterion may expect a non-zero code: 'git diff --exit-code' means something by
@@ -195,7 +195,7 @@ public sealed class SuccessCriteriaTests
         var events = await fx.RunAsync(orchestrator, "do the thing");
 
         Assert.Equal(RunOutcomeKind.Failed, Terminal(events).Outcome());
-        Assert.DoesNotContain(events, e => e.Kind == EventKind.CriterionEvaluated);
+        Assert.DoesNotContain(events, e => e.IsCheck());
     }
 
     [Fact]
@@ -206,7 +206,7 @@ public sealed class SuccessCriteriaTests
         var events = await fx.RunAsync(fx.Build(ClaimsSuccess()), "do the thing");
 
         Assert.Equal(RunOutcomeKind.Completed, Terminal(events).Outcome());
-        Assert.DoesNotContain(events, e => e.Kind == EventKind.CriterionEvaluated);
+        Assert.DoesNotContain(events, e => e.IsCheck());
     }
 
     // ── the rules, without the engine ───────────────────────────────────────

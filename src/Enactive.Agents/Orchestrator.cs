@@ -680,6 +680,9 @@ public sealed partial class Orchestrator : IOrchestrator
                 yield return checkEvent;
 
             var adjusted = verified.Apply(quickOutcome);
+            // The same rule as a planned run's: checks may not promote past a missing verdict.
+            if (adjusted == RunOutcomeKind.Completed && quickResult.Kind == StepOutcomeKind.DoneUnverified)
+                adjusted = quickOutcome;
             if (adjusted != quickOutcome)
             {
                 quickReason = adjusted == RunOutcomeKind.Completed
@@ -688,6 +691,9 @@ public sealed partial class Orchestrator : IOrchestrator
                 quickOutcome = adjusted;
             }
         }
+
+        foreach (var check in ProducedFilesNow(scope, session))
+            yield return scope.Criterion(check);
 
         var quickNet = quickOutcome == RunOutcomeKind.Completed
             ? await NetChangedAsync(quickChanges, quickBefore, ct)
@@ -1361,6 +1367,14 @@ public sealed partial class Orchestrator : IOrchestrator
                 yield return checkEvent;
 
             var adjusted = verified.Apply(runOutcome);
+            // Checks may not promote a run past a MISSING verdict. They still ran, are still in the
+            // report, and can still fail the run - but a step whose work was never confirmed keeps it
+            // short of Completed. nothingWasSkipped above used to guarantee this, because such a step
+            // skipped everything after it; a DoneUnverified step releases its dependents, so nothing
+            // is skipped and that guard no longer fires. Without this, the promotion measured on
+            // 2026-09-21 - a run called done on "the file exists" - would come back by another road.
+            if (adjusted == RunOutcomeKind.Completed && outcomes.Contains(StepOutcomeKind.DoneUnverified))
+                adjusted = runOutcome;
             if (adjusted != runOutcome)
             {
                 runReason = adjusted == RunOutcomeKind.Completed
@@ -1430,6 +1444,11 @@ public sealed partial class Orchestrator : IOrchestrator
                 break;
             }
         }
+
+        // Last, so it describes the workspace as the run leaves it: after every step, every check
+        // and the final review have had their turn to change it.
+        foreach (var check in ProducedFilesNow(scope, session))
+            yield return scope.Criterion(check);
 
         // This run reached an end, whatever kind of end. Nothing here is resumable any more, and a
         // checkpoint left behind would offer to redo work that is finished.
@@ -1508,6 +1527,15 @@ public sealed partial class Orchestrator : IOrchestrator
         => new(Guid.NewGuid(), ArtifactKind.FileSet, relativePath, relativePath);
 
     /// <summary>How a finished step is named on its card.</summary>
+    /// <summary>What became of every file this run produced, as the engine sees it now. See ProducedFiles.</summary>
+    private IReadOnlyList<CriterionResult> ProducedFilesNow(RunScope scope, RunSession session)
+    {
+        ArtifactRef[] produced;
+        lock (scope.Artifacts) produced = scope.Artifacts.ToArray();
+        return ProducedFiles.Check(produced, _artifacts.PendingPaths, _workspace.RootPath,
+            session.RunEvidence().Actions);
+    }
+
     private static string Word(StepOutcomeKind kind) => kind switch
     {
         StepOutcomeKind.Succeeded => "done",

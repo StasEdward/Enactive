@@ -29,7 +29,19 @@ public enum CriterionOrigin
     Proposed,
 
     /// <summary>Extracted as an exact command explicitly requested by the user, with source text retained.</summary>
-    Requested
+    Requested,
+
+    /// <summary>
+    /// The engine checked this itself, from what the run produced - no command, no model, and no
+    /// person asked for it. It is always a report, never a verdict: such a check is not required, so
+    /// it can neither hold a run back nor be the proof that lets one through.
+    ///
+    /// <para>The second half is the lesson of 2026-09-21: a run was once called finished on the
+    /// strength of "the file exists and is not empty", about a file the run had merely begun. What
+    /// the engine can see for itself - that a file is where the run left it - is worth saying in
+    /// every report. It is not worth trusting as proof that the work is right.</para>
+    /// </summary>
+    System
 }
 
 /// <summary>How one criterion came out.</summary>
@@ -93,7 +105,10 @@ public sealed record CriterionResult(
         var code = ExitCode is { } c ? $" (exit {c})" : "";
         var already = AlreadyPassing ? "  [was already passing before the work]" : "";
         var why = string.IsNullOrWhiteSpace(Detail) ? "" : $"\n    {Detail!.Trim()}";
-        return $"{head}{code} — {Name}: {Command}{(Required ? "" : "  [optional]")}{already}{why}";
+        // A system check is not "optional" - nobody could have made it required. It is the engine's own
+        // observation, and says so.
+        var mark = Origin == CriterionOrigin.System ? "  [engine check]" : Required ? "" : "  [optional]";
+        return $"{head}{code} — {Name}: {Command}{mark}{already}{why}";
     }
 }
 

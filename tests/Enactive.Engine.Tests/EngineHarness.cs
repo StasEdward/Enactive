@@ -719,6 +719,15 @@ public static class EventAssertions
 
     public static IEnumerable<WorkEvent> OfKind(this IEnumerable<WorkEvent> events, EventKind kind)
         => events.Where(e => e.Kind == kind);
+
+    /// <summary>
+    /// A check somebody asked for - a person, the planner, the request - and not the engine's own
+    /// look at the files it produced, which every run that writes a file now ends with. Tests that
+    /// count the checks a run was given count these.
+    /// </summary>
+    public static bool IsCheck(this WorkEvent e)
+        => e.Kind == EventKind.CriterionEvaluated
+           && !(e.PayloadJson?.Contains("\"origin\":\"System\"", StringComparison.Ordinal) ?? false);
 }
 
 /// <summary>Which line endings a file is written with. The product ships on Windows; both are real.</summary>
