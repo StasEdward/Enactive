@@ -161,9 +161,8 @@ public sealed partial class Reviewer
             + "Never cite a hidden call until its requested evidence has been displayed. Omitted evidence is unknown, not proof of absence. "
             + "If still uncertain after clarification, verdict=fail and explain the missing evidence. "
             + "A plain pass without both proof and obligation claims is incomplete. "
-            + "Exception: if the engine requests ONLY missing requirement-map assessments during clarification, "
-            + "follow that narrower completion schema and return only report_checks and repairs. "
-            + "The engine retains the original verdict/claims and validates the merged result.";
+            + "Exception: when the engine asks during clarification for only some parts of the answer, return "
+            + "exactly those parts; it keeps the rest of your answer and validates the merged result.";
         if (obligations.FinalReview)
             instruction += "\nThis is the FINAL RUN REVIEW: the step-deferral rules above no longer apply. "
                 + "Use scope run for every claim and requirement. Resolve all previously deferred parts against "
@@ -187,6 +186,8 @@ public sealed partial class Reviewer
         string problem = "reviewer did not return a combined verdict and proof";
         var outputTruncated = false;
         ReviewMappingCompletion? mappingCompletion = null;
+        // Amendment G: a refusal about parts is corrected by those parts; see ReviewSectionRepair.
+        ReviewSectionRepair? sectionRepair = null;
         for (var attempt = 0; attempt < 2; attempt++)
         {
             if (attempt > 0 && beforeRetry?.Invoke(prompt, output) is { } spent)
@@ -195,7 +196,8 @@ public sealed partial class Reviewer
             try
             {
                 var request = new ChatRequest(model, messages, Temperature: 0,
-                    ResponseSchema: mappingCompletion is null ? CombinedWireSchema : ReviewMappingCompletion.Schema, Purpose: GenerationPurpose.Review,
+                    ResponseSchema: mappingCompletion is not null ? ReviewMappingCompletion.Schema
+                        : sectionRepair?.Schema ?? CombinedWireSchema, Purpose: GenerationPurpose.Review,
                     OutputTokenLimit: (int)Math.Min(32768L, (4096L + 512L * obligations.Items.Count
                         + Math.Min(8192L, sources.VisibleCharacters / 8L)) * (outputTruncated ? 2 : 1)));
                 completion = await provider.CompleteAsync(GenerationAllowance.Fit(request, provider), ct);
@@ -216,6 +218,7 @@ public sealed partial class Reviewer
             {
                 answer = references.Decode(rawAnswer);
                 if (mappingCompletion is not null) answer = mappingCompletion.Merge(answer);
+                else if (sectionRepair is not null) answer = sectionRepair.Merge(answer);
             }
             catch (Exception ex) when (ex is FormatException or InvalidOperationException or System.Text.Json.JsonException)
             {
@@ -244,6 +247,11 @@ public sealed partial class Reviewer
                     {
                         mappingCompletion = new ReviewMappingCompletion(answer, references);
                         messages.Add(ChatMessage.User(mappingCompletion.Instruction));
+                    }
+                    else if (ReviewSectionRepair.For(decoded, errors) is { } parts)
+                    {
+                        sectionRepair = parts;
+                        messages.Add(ChatMessage.User(parts.Instruction(references.Diagnostic(problem)) + sources.Describe()));
                     }
                     else
                         messages.Add(ChatMessage.User(references.Diagnostic(problem) + "\nCorrect all listed fields in one complete response using the supplied schema. "
