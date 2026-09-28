@@ -52,18 +52,26 @@ public static class EvidenceCoverage
     /// For every item of every results field in a submission, what the step had shown for it: recorded
     /// when the result is handed on, from the step's own reads and calls.
     /// </summary>
+    /// <summary>The field name evidence is recorded under when it is for the step's own items, not a results field.</summary>
+    internal const string OwnItems = "*";
+
     internal static IReadOnlyList<ItemEvidence> Gather(StepOutputSchema schema, JsonObject values, ReadLedger reads,
-        IReadOnlyList<ExecutedAction> actions, IEnumerable<ToolDefinition> tools)
+        IReadOnlyList<ExecutedAction> actions, IEnumerable<ToolDefinition> tools, IReadOnlyList<string>? stepItems = null)
     {
         var commands = tools.Where(t => t.Kind == ToolKind.Command).Select(t => t.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var succeeded = actions.Where(a => a.Outcome == ActionOutcome.Succeeded && a.Tool != StepOutputContract.ToolName)
             .Select(a => (a.Tool, Named: StringsIn(a.Arguments))).ToArray();
 
         var items = new List<ItemEvidence>();
-        foreach (var field in schema.Fields.Where(f => f.Type == StepOutputFieldType.Results))
+        // A step for some items: what it hands on is their result, and the evidence is recorded for them.
+        var fields = schema.Fields.Where(f => f.Type == StepOutputFieldType.Results)
+            .Select(f => (Name: f.Name, Items: values[f.Name] is JsonObject r ? r.Select(p => p.Key).ToArray() : []))
+            .ToList();
+        if (fields.Count == 0 && stepItems is { Count: > 0 })
+            fields.Add((OwnItems, stepItems.ToArray()));
+        foreach (var field in fields)
         {
-            if (values[field.Name] is not JsonObject results) continue;
-            foreach (var (item, _) in results)
+            foreach (var item in field.Items)
             {
                 var complete = new List<EvidenceKind>();
                 var (whole, gap) = reads.SeenWhole(item);
@@ -131,8 +139,12 @@ public static class EvidenceCoverage
         if (typed.Evidence == EvidenceKind.FileRead && list.Type != StepOutputFieldType.PathList)
             return "a file read needs items that are paths (path[])";
         var map = plan.Steps[results].Output?.Fields.FirstOrDefault(f => f.Name == typed.ResultsField);
-        if (map is null || map.Type != StepOutputFieldType.Results)
+        // A step done for each item of the same list gives each item a step of its own, so what that step
+        // hands on IS the item's result, whatever type its field is (run 2508838d: "findings", text).
+        var perItem = plan.Steps[results].ForEach is { } each && each.Step == source && each.Field == typed.SourceField;
+        if (map is null || (map.Type != StepOutputFieldType.Results && !perItem))
             return $"step {results} declares no results output '{typed.ResultsField}'";
+        if (perItem) return null;
 
         // The results step must be able to see the items: it depends on the source, directly or not.
         var byId = plan.Steps.Select((s, i) => (s.Id, i)).ToDictionary(x => x.Id, x => x.i);
@@ -169,9 +181,12 @@ public static class EvidenceCoverage
 
         var kind = typed.Evidence ?? EvidenceKind.Call;
         var holder = all.FirstOrDefault(o => o.StepNo == typed.ResultsStep + 1);
+        var evidence = holder?.Items?.Where(i => i.Field == typed.ResultsField || i.Field == OwnItems).ToArray() ?? [];
+        // A results object names its items; a step done for each item has handed on for exactly the items
+        // whose steps recorded evidence at the hand-over - the join carries only the steps that finished.
         var results = holder?.Value(typed.ResultsField!) is { ValueKind: JsonValueKind.Object } map
-            ? map.EnumerateObject().Select(p => p.Name).ToArray() : [];
-        var evidence = holder?.Items?.Where(i => i.Field == typed.ResultsField).ToArray() ?? [];
+            ? map.EnumerateObject().Select(p => p.Name).ToArray()
+            : evidence.Where(e => e.Field == OwnItems).Select(e => e.Item).ToArray();
 
         var uncovered = new List<string>();
         foreach (var item in items)

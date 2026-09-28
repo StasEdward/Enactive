@@ -3917,7 +3917,8 @@ public sealed partial class Orchestrator : IOrchestrator
                         outputSlot.LastRefused = null;
                         // What the step had shown for each item it hands a result on for, recorded now
                         // and by the engine (Phase 5.1): later, only this counts as coverage.
-                        outputSlot.Items = EvidenceCoverage.Gather(outputSchema, verdict.Values!, reads, journal.Actions, _tools.Definitions);
+                        outputSlot.Items = EvidenceCoverage.Gather(outputSchema, verdict.Values!, reads, journal.Actions, _tools.Definitions,
+                            boundary is { ForItem: true } ? boundary.Items : null);
                         var unbacked = EvidenceCoverage.Unbacked(outputSlot.Items);
                         handed = $"Accepted as this step's output (revision {outputSlot.Revision}); the steps after it receive "
                             + "these values." + (verdict.Notes.Count > 0 ? " " + string.Join(" ", verdict.Notes) : "")
