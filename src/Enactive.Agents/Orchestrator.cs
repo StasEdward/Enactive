@@ -4258,7 +4258,8 @@ public sealed partial class Orchestrator : IOrchestrator
             // Window pressure is still handled - by Transcript.Elide, which drops the arguments and
             // results of OLD exchanges together and always spares the newest ones. Unchanged history
             // is what a provider's prefix cache serves, so keeping it costs far less than it looks.
-            messages.Add(new ChatMessage(ChatRole.Assistant, replyText, toolCalls));
+            messages.Add(new ChatMessage(ChatRole.Assistant, replyText, toolCalls)
+                { Reasoning = reasoningBuilder.Length > 0 ? reasoningBuilder.ToString() : null });
 
             // A step that has said it is done and repeats a call it has already made, with nothing changed since, is
             // done - not stuck. Run fba4d6, 2026-09-29: "S3 done - all 133 tests passed", and the same test run

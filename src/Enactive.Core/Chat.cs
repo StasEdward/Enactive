@@ -13,6 +13,13 @@ public sealed record ChatMessage(
     string? ToolCallId = null,
     string? Name = null)
 {
+    /// <summary>
+    /// What the model reasoned before this turn of its own, where the provider returned it apart from the answer. Kept
+    /// with the turn so a provider that is told to can send it back (<c>ProviderDescriptor.SendReasoningBack</c>): a
+    /// model trained to use its earlier reasoning (Qwen3.6 preserve_thinking) otherwise starts each turn from nothing.
+    /// </summary>
+    public string? Reasoning { get; init; }
+
     public static ChatMessage System(string content) => new(ChatRole.System, content);
     public static ChatMessage User(string content) => new(ChatRole.User, content);
     public static ChatMessage Assistant(string? content, IReadOnlyList<ToolCall>? toolCalls = null)

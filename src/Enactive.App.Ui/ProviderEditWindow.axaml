@@ -54,6 +54,11 @@
                 <TextBox Text="{Binding CompletionTimeoutText}" PlaceholderText="900" />
                 <TextBlock Classes="label" Text="Extra generation tokens for reasoning" />
                 <TextBox Text="{Binding ReasoningAllowanceText}" PlaceholderText="blank = profile default; 0 = no extra allowance" />
+                <TextBlock Classes="label" Text="Temperature" />
+                <TextBox Text="{Binding TemperatureText}"
+                         PlaceholderText="blank = the engine's (0.2 worker, 0 review); a number; server = send none, the server's own applies" />
+                <CheckBox IsChecked="{Binding SendReasoningBack}"
+                          Content="Send the model's reasoning back with its earlier turns (Qwen3.6 preserve_thinking, llama.cpp --reasoning-preserve)" />
                 <TextBlock Classes="label" Text="Effort (Anthropic: low, medium, high, xhigh, max)" />
                 <TextBox Text="{Binding EffortText}" PlaceholderText="blank = the model's default (Sonnet 5: high)" />
                 <TextBlock Classes="label" Text="Context window (tokens)" />

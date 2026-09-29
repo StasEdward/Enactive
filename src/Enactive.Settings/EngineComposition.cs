@@ -149,7 +149,11 @@ public static class EngineComposition
             p.AnswerReserveTokens,
             p.HandoverAtPercent, p.StreamIdleTimeoutSeconds, p.OpenAiReasoningProfile, p.OllamaKeepAliveSeconds, p.CompletionTimeoutSeconds, p.ReasoningTokenAllowance,
             p.WorkingContextTokens,
-            string.IsNullOrWhiteSpace(p.Effort) ? null : p.Effort.Trim().ToLowerInvariant())).ToList();
+            string.IsNullOrWhiteSpace(p.Effort) ? null : p.Effort.Trim().ToLowerInvariant(),
+            double.TryParse(p.Temperature?.Trim(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var t)
+                && t is >= 0 and <= 2 ? t : null,
+            string.Equals(p.Temperature?.Trim(), "server", StringComparison.OrdinalIgnoreCase),
+            p.SendReasoningBack)).ToList();
 
     /// <summary>
     /// The configured team, or the built-in one when a person has never edited it. Global

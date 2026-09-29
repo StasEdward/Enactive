@@ -151,7 +151,7 @@ public sealed partial class AnthropicProvider : IChatProvider
                 payload["system"] = new object[] { system };
             }
 
-            if (includeTemperature && request.Temperature is { } temperature)
+            if (includeTemperature && _descriptor.TemperatureFor(request) is { } temperature)
                 payload["temperature"] = temperature;
 
             if (request.Tools is { Count: > 0 } tools)

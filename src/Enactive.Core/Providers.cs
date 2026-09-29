@@ -44,7 +44,17 @@ public sealed record ProviderDescriptor(
     /// </summary>
     int? WorkingContextTokens = null,
     /// <summary>How hard the model is asked to work (Anthropic <c>output_config.effort</c>). See <c>ProviderConfig.Effort</c>.</summary>
-    string? Effort = null);
+    string? Effort = null,
+    /// <summary>The temperature this provider's models are asked for, in place of the engine's. See <c>ProviderConfig.Temperature</c>.</summary>
+    double? Temperature = null,
+    /// <summary>Send no temperature at all: the server's own setting applies. See <c>ProviderConfig.Temperature</c>.</summary>
+    bool ServerTemperature = false,
+    /// <summary>Send the model's reasoning back with its earlier turns. See <c>ProviderConfig.SendReasoningBack</c>.</summary>
+    bool SendReasoningBack = false)
+{
+    /// <summary>The temperature to send for this request: none, where the server decides; this provider's; or the engine's.</summary>
+    public double? TemperatureFor(ChatRequest request) => ServerTemperature ? null : Temperature ?? request.Temperature;
+}
 
 /// <summary>Talks to an LLM. Implementations live in Enactive.Providers (transport stays out of Core).</summary>
 public interface IChatProvider

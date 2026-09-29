@@ -258,7 +258,7 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
         // Sent only while streaming, and only until an endpoint refuses it - see NoStreamUsage.
         if (stream && includeUsage)
             payload["stream_options"] = new Dictionary<string, object?> { ["include_usage"] = true };
-        if (!_descriptor.OpenAiReasoningProfile && request.Temperature is { } temperature)
+        if (!_descriptor.OpenAiReasoningProfile && _descriptor.TemperatureFor(request) is { } temperature)
             payload["temperature"] = temperature;
         if (request.Tools is { Count: > 0 } tools)
             payload["tools"] = tools.Select(ToWireTool).ToArray();
@@ -378,20 +378,30 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
         if (m.Role == ChatRole.Tool)
             return new { role = "tool", tool_call_id = m.ToolCallId ?? "", content = m.Content ?? "" };
 
+        // The model's reasoning goes back with its turn only where this provider is told to send it (Qwen3.6
+        // preserve_thinking, llama.cpp --reasoning-preserve); elsewhere a field a server does not expect stays out.
+        var reasoning = _descriptor.SendReasoningBack && m.Role == ChatRole.Assistant && !string.IsNullOrEmpty(m.Reasoning)
+            ? m.Reasoning : null;
+
         if (m.ToolCalls is { Count: > 0 } calls)
         {
-            return new
+            var withCalls = new Dictionary<string, object?>
             {
-                role = "assistant",
-                content = m.Content ?? "",
-                tool_calls = calls.Select(tc => new
+                ["role"] = "assistant",
+                ["content"] = m.Content ?? "",
+                ["tool_calls"] = calls.Select(tc => new
                 {
                     id = tc.Id,
                     type = "function",
                     function = new { name = tc.Name, arguments = tc.ArgumentsJson }
                 }).ToArray()
             };
+            if (reasoning is not null) withCalls["reasoning_content"] = reasoning;
+            return withCalls;
         }
+
+        if (reasoning is not null)
+            return new Dictionary<string, object?> { ["role"] = "assistant", ["content"] = m.Content ?? "", ["reasoning_content"] = reasoning };
 
         return new { role = _descriptor.OpenAiReasoningProfile && m.Role == ChatRole.System
             ? "developer" : RoleString(m.Role), content = m.Content ?? "" };

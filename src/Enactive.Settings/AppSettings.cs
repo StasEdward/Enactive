@@ -111,6 +111,22 @@ public sealed class ProviderConfig
     /// </summary>
     public string? Effort { get; set; }
 
+    /// <summary>
+    /// The temperature this provider's models are asked for. Blank: the engine's own (0.2 for a worker, 0 for review and
+    /// planning). A number: that, for every request. "server": none is sent, and the server's own setting applies - for a
+    /// local server started with the model maker's sampling parameters (llama.cpp --temp): the engine's value in a request
+    /// replaces the server's, so without this the server's is never used (run fba4d6, 2026-09-29: --temperature 0.6 on
+    /// the server, 0.2 in every request).
+    /// </summary>
+    public string? Temperature { get; set; }
+
+    /// <summary>
+    /// Send the model's reasoning back with its earlier turns (reasoning_content), for a model trained to use it - Qwen3.6
+    /// with preserve_thinking, llama.cpp --reasoning-preserve. Off: the reasoning is read and logged, and never sent back,
+    /// as before. A server that preserves reasoning has nothing to preserve unless the client sends it.
+    /// </summary>
+    public bool SendReasoningBack { get; set; }
+
     public ProviderConfig Clone() => new()
     {
         Id = Id,
@@ -131,7 +147,9 @@ public sealed class ProviderConfig
         AnswerReserveTokens = AnswerReserveTokens,
         HandoverAtPercent = HandoverAtPercent,
         WorkingContextTokens = WorkingContextTokens,
-        Effort = Effort
+        Effort = Effort,
+        Temperature = Temperature,
+        SendReasoningBack = SendReasoningBack
     };
 }
 
