@@ -492,7 +492,8 @@ public sealed class ExecutionJournal
         // result - a report shown in full elsewhere - kept its slice, and room in the budget went unused.
         var spare = maxChars - header.Length - note.Length - Cost(calls, shown);
         var room = MinOutputChars * kept + Math.Max(0, spare);
-        var allowance = Fair(shown.ToDictionary(i => i, i => AnswerText(slice[i]).Length), room);
+        var texts = Unrepeated(shown.ToDictionary(i => i, i => AnswerText(slice[i])));
+        var allowance = Fair(texts.ToDictionary(p => p.Key, p => p.Value.Length), room);
 
         var sb = new StringBuilder(header).AppendLine().Append(note);
         var outputsTruncated = false;
@@ -501,7 +502,7 @@ public sealed class ExecutionJournal
         foreach (var i in shown)
         {
             sb.AppendLine(calls[i]);
-            sb.Append("<- ").AppendLine(Answer(slice[i], allowance[i], out var shortened));
+            sb.Append("<- ").AppendLine(Answer(texts[i], allowance[i], out var shortened));
             outputsTruncated |= shortened;
             argumentsTruncated |= slice[i].Arguments?.Length > MaxArguments;
         }
@@ -633,9 +634,37 @@ public sealed class ExecutionJournal
         return given;
     }
 
-    private static string Answer(ExecutedAction action, int budget, out bool truncated)
+    /// <summary>A result this long or longer is not printed twice.</summary>
+    private const int RepeatedChars = 400;
+
+    /// <summary>
+    /// A result whose whole text is inside another result shown - the same file read twice, a file handed on
+    /// and then read - is printed once. The other says where it is, so the call is still listed and can still
+    /// be cited. Run 3d2446, 2026-09-29: a report of 3,000 characters was shown twice in one review, once as the
+    /// file the step handed on and once as the next step's read of it, and the two copies split its share of
+    /// the budget so that the middle was cut out of both. Only the same text: a file that changed between two
+    /// reads is shown both times, since what changed is the point.
+    /// </summary>
+    private static Dictionary<int, string> Unrepeated(Dictionary<int, string> texts)
     {
-        var text = AnswerText(action);
+        var flat = texts.ToDictionary(p => p.Key, p => p.Value.Replace("\r\n", "\n").Trim());
+        var result = new Dictionary<int, string>(texts);
+        var printed = new HashSet<int>();
+        // The longest first: a result that contains another is the one kept whole. Of two the same, the earlier.
+        foreach (var i in texts.Keys.OrderByDescending(i => flat[i].Length).ThenBy(i => i))
+        {
+            var holder = flat[i].Length < RepeatedChars ? null
+                : printed.Where(j => flat[j].Contains(flat[i], StringComparison.Ordinal)).Cast<int?>().FirstOrDefault();
+            if (holder is { } j)
+                result[i] = $"(the same {flat[i].Length:N0} characters as in the result of [{j + 1}] - shown there, not repeated here)";
+            else
+                printed.Add(i);
+        }
+        return result;
+    }
+
+    private static string Answer(string text, int budget, out bool truncated)
+    {
         truncated = text.Length > budget;
         return truncated ? HeadAndTail(text, budget) : text;
     }

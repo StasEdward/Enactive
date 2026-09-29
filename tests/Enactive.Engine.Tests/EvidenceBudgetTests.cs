@@ -200,6 +200,42 @@ public sealed class EvidenceBudgetTests
         Assert.Single(System.Text.RegularExpressions.Regex.Matches(evidence, "characters not shown here"));
     }
 
+    /// <summary>
+    /// Run 3d2446, 2026-09-29: a report of 3,000 characters shown twice in one review - once as the file a step
+    /// handed on, once as the next step's read of it - and the two copies split its share, so the middle was cut
+    /// out of both. The same text is printed once; the other call is still listed, and says where it is.
+    /// </summary>
+    [Fact]
+    public void The_same_text_is_shown_once_and_the_other_call_says_where()
+    {
+        var report = string.Join("\n", Enumerable.Range(1, 60).Select(i => $"Wiki page {i}: {i * 3} links, {i % 4} broken"));
+        var journal = Journal(
+            ("run_command", """{"command":"check links"}""", "60 pages checked"),
+            ("engine_opened_handed_file", """{"field":"report","path":"links.md"}""", "HANDED ON as its 'report' - 'links.md', how it is NOW:\n" + report),
+            ("read_file", """{"path":"links.md"}""", report));
+
+        var evidence = journal.Describe(maxChars: 6_000).Text;
+
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(evidence, "Wiki page 37: 111 links"));
+        Assert.Contains($"[3] -> read_file", evidence, StringComparison.Ordinal);
+        Assert.Contains($"(the same {report.Length:N0} characters as in the result of [2] - shown there, not repeated here)", evidence, StringComparison.Ordinal);
+        Assert.DoesNotContain("characters not shown here", evidence, StringComparison.Ordinal);     // one copy fits whole
+    }
+
+    /// <summary>A file that changed between two reads is shown both times: what changed is the point.</summary>
+    [Fact]
+    public void A_file_that_changed_between_reads_is_shown_both_times()
+    {
+        var before = string.Join("\n", Enumerable.Range(1, 30).Select(i => $"Wiki page {i}: {i * 3} links, {i % 4} broken"));
+        var after = before.Replace("Wiki page 7: 21 links, 3 broken", "Wiki page 7: 21 links, 0 broken", StringComparison.Ordinal);
+        var evidence = Journal(("read_file", """{"path":"links.md"}""", before), ("read_file", """{"path":"links.md"}""", after))
+            .Describe(maxChars: 6_000).Text;
+
+        Assert.Contains("Wiki page 7: 21 links, 3 broken", evidence, StringComparison.Ordinal);
+        Assert.Contains("Wiki page 7: 21 links, 0 broken", evidence, StringComparison.Ordinal);
+        Assert.DoesNotContain("not repeated here", evidence, StringComparison.Ordinal);
+    }
+
     // ── what must not change ────────────────────────────────────────────────
 
     [Fact]
