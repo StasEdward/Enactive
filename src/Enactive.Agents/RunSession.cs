@@ -40,6 +40,9 @@ internal sealed class RunSession(RunScope scope, List<ChatMessage> messages)
     private readonly HashSet<ExecutionJournal> _journals = new();
     private readonly List<IArtifactScope> _stores = new();
     public bool NeedsFinalReview { get; private set; }
+
+    /// <summary>What the step reviews left open - "could not tell" - for the task review (Phase 9).</summary>
+    public List<OpenItem> OpenItems { get; } = new();
     public void ObserveReview(ReviewResult review)
     {
         if (review.Obligations is not { } claims) return;

@@ -210,6 +210,7 @@ public sealed partial class Orchestrator : IOrchestrator
     private readonly bool _dynamicSteps;
     private readonly bool _validateWaves;
     private readonly bool _reportBlocked;
+    private readonly bool _taskReview;
     private readonly string _waveStore;
     private readonly FanOutLimits _fanOut;
     private readonly ISuccessEvaluator _successEvaluator;
@@ -290,8 +291,12 @@ public sealed partial class Orchestrator : IOrchestrator
         string? waveStore = null,
         // Phase 7.2: the step may say it cannot go on (report_blocked). Advisory; the engine's own detection of
         // blocks does not depend on it. Off by default, like the phases before it: it is one more tool offered.
-        bool reportBlocked = false)
+        bool reportBlocked = false,
+        // Phase 9: a run short of Completed only on steps DONE, NOT VERIFIED is reviewed as a whole. Off here, on in
+        // the application's settings (AppSettings.TaskReview).
+        bool taskReview = false)
     {
+        _taskReview = taskReview;
         _validateWaves = validateWaves;
         _reportBlocked = reportBlocked;
         _waveStore = waveStore ?? WaveCapture.DefaultStore();
@@ -2267,10 +2272,12 @@ public sealed partial class Orchestrator : IOrchestrator
         // is all it ever claimed.
         var nothingWasSkipped = !outcomes.Contains(StepOutcomeKind.Skipped);
 
+        VerifyResult? verification = null;
         if (runOutcome == RunOutcomeKind.Completed
             || (runOutcome == RunOutcomeKind.Incomplete && nothingWasSkipped))
         {
             var verified = new VerifyResult();
+            verification = verified;
             await foreach (var checkEvent in VerifyAsync(
                 CriteriaFor(plan),
                 intent, scope.TaskId, scope.RunId, models.Worker, models.Provider, models.Model.Model, models.Model.ProviderId,
@@ -2296,8 +2303,40 @@ public sealed partial class Orchestrator : IOrchestrator
             }
         }
 
+        // Phase 9: the run reviewed as a whole, where it is short of Completed only because some steps' reviews could
+        // not establish everything (DONE, NOT VERIFIED) - nothing failed, nothing was rejected, skipped or blocked, no
+        // limit was hit, and none of the engine's own checks held it back. A later step may have shown what an earlier
+        // one could not; the task review is shown the whole run and answers each open question on cited evidence.
+        IReadOnlyList<CriterionResult>? finalChecks = null;
+        if (_taskReview && models.ReviewOn && runOutcome == RunOutcomeKind.Incomplete && !cycle && limitReason is null
+            && outcomes.Length > 0 && outcomes.All(o => o is StepOutcomeKind.Succeeded or StepOutcomeKind.DoneUnverified)
+            && outcomes.Contains(StepOutcomeKind.DoneUnverified)
+            && verification is not null && verification.IncompleteReason is null && verification.Report.Blocking.Count == 0
+            && scope.Budget.TurnExhausted is null)
+        {
+            finalChecks = [.. ProducedFilesNow(scope, session), .. await BuildRegressionNowAsync(scope, session, intent.Context, ct)];
+            var input = TaskReviewInputOf(scheduler, stepNumbers, stepOutcomes, session, scope, verification, finalChecks);
+            yield return scope.Ev(EventKind.ReviewRequested,
+                $"Task review: judging the run as a whole - {input.Open.Count} question(s) its steps left open…");
+            var judged = await InScopeAsync(scope.RunId, scope.TaskId, null, () => TaskReview.RunAsync(input,
+                models.ReviewProvider!, models.ReviewModel, scope.Budget.TurnExhaustedAfter, ct));
+            if (judged.PromptTokens + judged.CompletionTokens > 0)
+                yield return scope.Usage(WorkEventPayload.WorkPurpose.Review, models.Review!, judged.PromptTokens, judged.CompletionTokens,
+                    null, judged.CachedPromptTokens, judged.CacheCreationPromptTokens);
+            foreach (var (item, verdict, why) in judged.Items)
+                yield return scope.Ev(EventKind.ContextAssembled, $"[{item.Step}] {item.Label}: {verdict} by the task review - {why}", item.Step);
+            if (judged.Outcome is { } decided)
+            {
+                yield return scope.Ev(decided == RunOutcomeKind.Completed ? EventKind.ReviewPassed : EventKind.ReviewFailed, judged.Reason);
+                runOutcome = decided;
+                runReason = judged.Reason;
+            }
+            else
+                yield return scope.Ev(EventKind.ErrorObserved, $"Task review unavailable ({judged.Reason}); the outcome stays as the steps left it.");
+        }
+
         if (runOutcome == RunOutcomeKind.Completed && models.ReviewOn && _stepReview.ChecksSoundness
-            && session.NeedsFinalReview)
+            && session.NeedsFinalReview && finalChecks is null)
         {
             yield return scope.Ev(EventKind.ReviewRequested, "Reconciling deferred requirements against the whole run…");
             for (var finalAttempt = 0; ; finalAttempt++)
@@ -2359,9 +2398,9 @@ public sealed partial class Orchestrator : IOrchestrator
 
         // Last, so it describes the workspace as the run leaves it: after every step, every check
         // and the final review have had their turn to change it.
-        foreach (var check in ProducedFilesNow(scope, session))
-            yield return scope.Criterion(check);
-        foreach (var check in await BuildRegressionNowAsync(scope, session, intent.Context, ct))
+        // Already taken for a task review, the workspace unchanged since: reported as taken, not run again.
+        finalChecks ??= [.. ProducedFilesNow(scope, session), .. await BuildRegressionNowAsync(scope, session, intent.Context, ct)];
+        foreach (var check in finalChecks)
             yield return scope.Criterion(check);
 
         // This run reached an end, whatever kind of end. Nothing here is resumable any more, and a
@@ -2579,6 +2618,54 @@ public sealed partial class Orchestrator : IOrchestrator
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception) { return []; }   // an instrument; the run it observes matters more
+    }
+
+    /// <summary>What the task review is shown (Phase 9): assembled by the engine from its own records, never the transcript.</summary>
+    private TaskReviewInput TaskReviewInputOf(DagScheduler scheduler, System.Collections.Concurrent.ConcurrentDictionary<Guid, int> stepNumbers,
+        Dictionary<Guid, StepOutcomeKind> stepOutcomes, RunSession session, RunScope scope, VerifyResult verification,
+        IReadOnlyList<CriterionResult> finalChecks)
+    {
+        static string Clip(string text, int max) => text.Length <= max ? text : text[..max] + "…";
+        var steps = scheduler.Steps.Select(s => (Step: s, No: stepNumbers.TryGetValue(s.Id, out var n) ? n : 0)).OrderBy(x => x.No).ToArray();
+        Dictionary<Guid, StepOutcomeKind> outcomes;
+        lock (stepOutcomes) outcomes = new(stepOutcomes);
+        var plan = steps.Select(x => $"[{x.No}] {x.Step.Title} - "
+            + (outcomes.TryGetValue(x.Step.Id, out var o) ? Word(o) : "not run")
+            + (session.ReasonOf.TryGetValue(x.Step.Id, out var why) ? ": " + Clip(why, 600) : "")).ToArray();
+        var outputs = session.Outputs.Values.OrderBy(o => o.StepNo).Select(o => $"[{o.StepNo}] {o.Step}: {Clip(o.ValuesJson, 4_000)}").ToArray();
+        var checks = verification.Report.Results.Concat(finalChecks)
+            .Select(r => $"{r.Outcome.ToString().ToUpperInvariant()}: {r.Name}" + (string.IsNullOrWhiteSpace(r.Detail) ? "" : " - " + Clip(r.Detail, 600)))
+            .ToArray();
+
+        List<OpenItem> open;
+        lock (session.OpenItems) open = [.. session.OpenItems];
+        // A step left unconfirmed with nothing itemised (a resumed run, a review that returned nothing) is one question.
+        foreach (var (step, no) in steps.Where(x => outcomes.GetValueOrDefault(x.Step.Id) == StepOutcomeKind.DoneUnverified
+                                                  && open.All(i => i.Step != x.No)))
+            open.Add(new OpenItem(no, step.Title, "the step's work",
+                "it ended DONE, NOT VERIFIED" + (session.ReasonOf.TryGetValue(step.Id, out var r) ? ": " + r : ""), []));
+
+        ArtifactRef[] produced;
+        lock (scope.Artifacts) produced = scope.Artifacts.ToArray();
+        var files = new List<(string, string)>();
+        var room = TaskReview.MaxFilesChars;
+        foreach (var path in produced.Select(a => a.RelativePath.Replace('\\', '/')).Distinct(StringComparer.OrdinalIgnoreCase)
+                     .Where(p => !p.StartsWith(WorkspaceGuard.ScratchPrefix + "/", StringComparison.OrdinalIgnoreCase)))
+        {
+            var full = Path.Combine(_workspace.RootPath, path);
+            if (!File.Exists(full)) continue;
+            string text;
+            try { text = File.ReadAllText(full); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { continue; }
+            var shown = text.Length <= Math.Min(TaskReview.MaxFileChars, room) ? text
+                : Shortening.HeadAndTail(text, Math.Max(1_000, Math.Min(TaskReview.MaxFileChars, room)));
+            if (room <= 0) { files.Add((path, "(not shown: the room for files is spent)")); continue; }
+            files.Add((path, shown));
+            room -= shown.Length;
+        }
+
+        return new TaskReviewInput(session.Obligations!, plan, outputs, checks, files,
+            session.RunEvidence().Describe(maxChars: Math.Max(_evidenceBudget, TaskReview.EvidenceChars)), open);
     }
 
     private IReadOnlyList<CriterionResult> ProducedFilesNow(RunScope scope, RunSession session)

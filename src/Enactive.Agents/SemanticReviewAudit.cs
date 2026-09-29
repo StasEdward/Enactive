@@ -165,6 +165,35 @@ internal static partial class SemanticReviewAudit
     [System.Text.RegularExpressions.GeneratedRegex(@"[A-Za-z0-9_.\-/\\]*[A-Za-z0-9_\-]\.[A-Za-z][A-Za-z0-9]{0,7}\b")]
     private static partial System.Text.RegularExpressions.Regex FileName();
 
+    /// <summary>
+    /// What the reviewer could not establish, as items - the label, its reason, and the calls it named described as
+    /// the calls themselves (tool and arguments), because their numbers belong to this review's evidence and mean
+    /// nothing in another (Phase 9: the task review is shown them as open questions).
+    /// </summary>
+    internal static IReadOnlyList<OpenItem> UnknownItems(string answer, EvidenceView evidence, int step, string stepTitle)
+    {
+        if (ModelText.ExtractJsonObject(ModelText.StripThink(answer)) is not { } json) return [];
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            var found = Arr(root, "claims").SelectMany(c => Arr(c, "requirements"))
+                    .Select(r => (Label: Str(r, "requirement"), Check: r.ValueKind == JsonValueKind.Object && r.TryGetProperty("verification", out var v) ? v : default))
+                .Concat(Arr(root, "report_checks").Select(c => (Label: (string?)("Report " + Str(c, "source_id") + "/" + Str(c, "fragment_id")), Check: c)))
+                .Concat(root.TryGetProperty("assessments", out var a) && a.ValueKind == JsonValueKind.Object
+                    ? a.EnumerateObject().Select(p => (Label: (string?)p.Name, Check: p.Value)) : [])
+                .Where(c => c.Check.ValueKind == JsonValueKind.Object && Str(c.Check, "verdict") == "unknown");
+            return found.Select(c => new OpenItem(step, stepTitle, c.Label ?? "unlabelled", Str(c.Check, "reason") ?? "",
+                    Arr(c.Check, "calls").Where(id => id.ValueKind == JsonValueKind.Number && id.TryGetInt32(out _))
+                        .Select(id => evidence.Cited(id.GetInt32())).OfType<ExecutedAction>()
+                        .Select(x => Clip($"{x.Tool} {x.Arguments}", 200)).ToArray()))
+                .ToArray();
+        }
+        catch (JsonException) { return []; }
+    }
+
+    private static string Clip(string text, int max) => text.Length <= max ? text : text[..max] + "…";
+
     internal static Finding? Outcome(string answer)
     {
         using var doc = JsonDocument.Parse(ModelText.ExtractJsonObject(ModelText.StripThink(answer))!);

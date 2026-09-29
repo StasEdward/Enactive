@@ -90,6 +90,13 @@ public sealed partial class Orchestrator
                 var verdictMissing = assessed.BudgetExhausted is not null || assessed.Review.VerdictUnavailable;
                 // Why, as a code: a reviewer that said it could not tell is not a review that failed to
                 // be processed, and neither is a verdict against the work (a prohibition it broke).
+                // What it could not tell is kept, item by item, for the task review (Phase 9); a verdict that is
+                // missing altogether is one item: whether this step's work is done at all.
+                if (verdictMissing && stepNumber is { } open)
+                    lock (session.OpenItems)
+                        session.OpenItems.AddRange(assessed.Review.Unknowns is { Count: > 0 } unknowns
+                            ? unknowns.Select(u => u with { Step = open, StepTitle = title })
+                            : [new OpenItem(open, title, "the step's work", "its review returned no verdict: " + unavailable, [])]);
                 result.Set(verdictMissing ? StepOutcomeKind.DoneUnverified : StepOutcomeKind.Incomplete, unavailable,
                     !verdictMissing ? OutcomeCause.ReviewRejected
                     : assessed.BudgetExhausted is null && assessed.Review.Undecided ? OutcomeCause.ReviewUndecided

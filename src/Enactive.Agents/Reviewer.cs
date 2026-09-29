@@ -52,6 +52,9 @@ public sealed record ReviewResult(
     /// could not be used at all. Both leave the verdict missing; they are different reasons.
     /// </summary>
     public bool Undecided { get; init; }
+
+    /// <summary>What it could not tell, item by item, when <see cref="Undecided"/> - for the task review (Phase 9).</summary>
+    public IReadOnlyList<OpenItem>? Unknowns { get; init; }
     /// <summary>Concrete semantic defects, distinct from malformed review or unavailable evidence.</summary>
     public string? RepairAdvice { get; init; }
 

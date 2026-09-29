@@ -452,6 +452,10 @@ public sealed partial class AppSettings
     // see without it. Off until runs show a local model uses it for real blocks and not for hard work.
     public bool ReportBlocked { get; set; }
 
+    // Phase 9: a run short of Completed only because some steps could not be confirmed is reviewed as a whole - the
+    // task review answers each open question on the run's evidence. On: it can only move the outcome on cited evidence.
+    public bool TaskReview { get; set; } = true;
+
     // Put a rejected step's files back to how they were before it ran. Without this the gate stops
     // only the REPORT: the run says Failed while the rejected document stays in the workspace, which
     // is the version someone is most likely to open next. A file changed since the step wrote it is
@@ -924,6 +928,7 @@ public sealed partial class AppSettings
         MaxFanOutDepth = MaxFanOutDepth,
         ValidateWaves = ValidateWaves,
         ReportBlocked = ReportBlocked,
+        TaskReview = TaskReview,
         Bindings = Bindings.Clone(),
         RemoteAccess = RemoteAccess.Clone(),
         Smtp = Smtp.Clone(),

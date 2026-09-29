@@ -348,6 +348,7 @@ public sealed partial class Reviewer
                             // "Unknown" is the reviewer saying it could not tell - no verdict, not a bad one.
                             VerdictUnavailable = semantic.Unknown,
                             Undecided = semantic.Unknown,
+                            Unknowns = semantic.Unknown ? SemanticReviewAudit.UnknownItems(answer, evidence, 0, "") : null,
                             PromptTokens = prompt, CompletionTokens = output, CachedPromptTokens = cached,
                             CacheCreationPromptTokens = created };
                     if (!result.Review.Pass)

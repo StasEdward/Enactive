@@ -116,6 +116,9 @@ public sealed class CapsAnnounceThemselvesTests
         // The places a step cites, opened by the engine for its review: a long range and a long line say they were cut.
         ["CitedPlaces.MaxLines"] = nameof(ACitedPlaceIsOpenedByTheEngineTests.A_long_range_and_a_long_line_say_they_were_cut),
         ["CitedPlaces.MaxLineChars"] = nameof(ACitedPlaceIsOpenedByTheEngineTests.A_long_range_and_a_long_line_say_they_were_cut),
+        ["TaskReview.MaxFileChars"] = nameof(TheRunIsReviewedAsAWholeTests.What_the_task_review_is_shown_says_where_it_was_cut),
+        ["TaskReview.MaxFilesChars"] = nameof(TheRunIsReviewedAsAWholeTests.What_the_task_review_is_shown_says_where_it_was_cut),
+        ["TaskReview.EvidenceChars"] = nameof(TheRunIsReviewedAsAWholeTests.What_the_task_review_is_shown_says_where_it_was_cut),
         ["TypedCriteria.MaxHandedChars"] = nameof(AResultFileTheRequestDoesNotNameTests.A_long_handed_file_says_how_much_was_not_shown)
     };
 
