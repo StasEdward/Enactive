@@ -75,7 +75,7 @@ internal static partial class CitedPlaces
             // Each quote to the one place it is written beside - see Nearest. Run f45e14, 2026-09-29: every quote on
             // a line was checked against every place on it, and a findings line citing five files and quoting six
             // things came back as a column of "NOT in", each a quote checked against a file it was never about. The
-            // reviewer, shown the end of each result, rejected work whose every citation was right - twice.
+            // reviewer, shown the end of each result, rejected the step twice on quotes matched to the wrong places.
             var quotes = Quote().Matches(line).Cast<Match>()
                 .Where(q => !(q.Groups["quote"].Value.Contains(':') && Cite().IsMatch(q.Groups["quote"].Value)))  // the place itself, in backticks
                 .ToArray();
@@ -95,8 +95,13 @@ internal static partial class CitedPlaces
                 var resolved = Resolve(path, root, () => all ??= files());
                 string? how = null;
                 // A name several files share, told apart by the quote written beside it: the one candidate whose cited
-                // lines - those lines, not the lines around them - hold it. Never a guess: none or several, none is opened.
-                if (resolved.Path is null && resolved.Candidates.Count > 1 && mine.Length > 0)
+                // lines - those lines, not the lines around them - hold it. Never a guess: none or several, none is opened;
+                // and more candidates than are looked through, none either - one match among those looked at says nothing
+                // about the rest.
+                if (resolved.Path is null && resolved.Candidates.Count > MaxCandidates && mine.Length > 0)
+                    resolved = resolved with { Why = resolved.Why + $" More than {MaxCandidates} files have that name, so the engine did not "
+                        + "look for the quote beside it in them to tell them apart." };
+                else if (resolved.Path is null && resolved.Candidates.Count > 1 && mine.Length > 0)
                 {
                     var holding = resolved.Candidates.Where(f => mine.Any(q => Holds(root, f, q, first, last))).ToArray();
                     if (holding.Length == 1)
@@ -165,6 +170,12 @@ internal static partial class CitedPlaces
     /// Not a cut of anything shown: a quote further off than this is not checked against any place.
     /// </summary>
     private const int QuoteReach = 80;
+
+    /// <summary>
+    /// How many files sharing a cited name are opened to find the one that holds the quote beside it. More, and
+    /// none is chosen, and the observation says why.
+    /// </summary>
+    internal const int MaxCandidates = 50;
 
     /// <summary>
     /// The place a quote is written beside: the one nearest to it on its line. None - and the quote is checked
@@ -240,7 +251,7 @@ internal static partial class CitedPlaces
 
         var ending = "/" + path;
         var matches = files().Where(f => f.EndsWith(ending, StringComparison.OrdinalIgnoreCase)
-                                         || string.Equals(f, path, StringComparison.OrdinalIgnoreCase)).Take(50).ToArray();
+                                         || string.Equals(f, path, StringComparison.OrdinalIgnoreCase)).ToArray();
         return matches.Length switch
         {
             1 => (matches[0], null, []),

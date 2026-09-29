@@ -7,7 +7,7 @@ using Xunit;
 /// <summary>
 /// Run f45e14, 2026-09-29, a wiki checked against its code: a step's findings named five places and quoted six things
 /// on one line, and every quote was checked against every place - a column of "NOT in", each a quote held against a
-/// file it was never about. Every citation was right; the step was rejected twice. A quote is now checked only against
+/// file it was never about. The step was rejected twice on quotes matched to the wrong places. A quote is now checked only against
 /// the place it is written beside, a file name several files share is told apart by that quote, "not found" says it is
 /// not a verdict on the claim, and after a correction the earlier findings are history and the account of the fix is
 /// not checked as a claim. Deliberately not code a reviewer would know: a wiki's settings and its two hosts.
@@ -96,6 +96,40 @@ public sealed class AQuoteIsCheckedOnlyWhereItIsWrittenTests
         Assert.Contains("opened none of them", none, StringComparison.Ordinal);
     }
 
+    /// <summary>Two of three files with the quote at the cited line: neither is chosen.</summary>
+    [Fact]
+    public void Two_files_holding_the_quote_at_the_cited_line_are_not_told_apart()
+    {
+        using var fx = new EngineFixture();
+        fx.Write("wiki/a/index.md", "# Settings\nsee the owner key\n");
+        fx.Write("wiki/b/index.md", "# Pages\nnothing here\n");
+        fx.Write("wiki/c/index.md", "# Owner\nsee the owner key\n");
+
+        var observed = At(fx, "the page says `see the owner key` (index.md:2)", "index.md:2");
+
+        Assert.Contains("'index.md' names more than one file", observed, StringComparison.Ordinal);
+        Assert.DoesNotContain("determined by the quote", observed, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// More files with the name than are looked through: none is chosen, and it says why - a match among the files
+    /// looked at says nothing about the rest. The first and the last of 51 hold the quote.
+    /// </summary>
+    [Fact]
+    public void More_files_with_the_name_than_are_looked_through_are_not_told_apart()
+    {
+        using var fx = new EngineFixture();
+        var count = CitedPlaces.MaxCandidates + 1;
+        for (var i = 1; i <= count; i++)
+            fx.Write($"wiki/p{i:D3}/index.md", i == 1 || i == count ? "# Page\nsee the owner key\n" : "# Page\nnothing here\n");
+
+        var observed = At(fx, "the page says `see the owner key` (index.md:2)", "index.md:2");
+
+        Assert.Contains("'index.md' names more than one file", observed, StringComparison.Ordinal);
+        Assert.Contains($"More than {CitedPlaces.MaxCandidates} files have that name, so the engine did not look for the quote", observed, StringComparison.Ordinal);
+        Assert.DoesNotContain("determined by the quote", observed, StringComparison.Ordinal);
+    }
+
     /// <summary>A name several files share, with no quote tied to it, is not told apart at all.</summary>
     [Fact]
     public void Without_a_quote_tied_to_it_a_shared_name_is_not_resolved()
@@ -149,5 +183,34 @@ public sealed class AQuoteIsCheckedOnlyWhereItIsWrittenTests
         // The old place: once, as history - not opened again from "replaced core/Settings.cs:2 by ...".
         Assert.Single(System.Text.RegularExpressions.Regex.Matches(second, @"engine_opened_cited_place \{""cited"":""core/Settings.cs:2""\}"));
         Assert.DoesNotContain("not found word for word in core/Settings.cs", second, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A first result that cited nothing leaves no finding behind to tell a correction by. The result handed on is what
+    /// is checked at every attempt, so the account of the fix - naming an old place - is still not opened as a claim.
+    /// </summary>
+    [Fact]
+    public async Task A_first_result_citing_nothing_does_not_let_the_account_of_the_fix_be_checked()
+    {
+        using var fx = Workspace();
+        fx.StepOutputs = true;
+        fx.ShortReview = true;
+        var worker = new FakeChatProvider(
+            [Turn.Says("""{"disposition":"task","title":"wiki","steps":[{"title":"Check the settings page","dependsOn":[],"output":{"findings":{"type":"text","description":"what the page gets wrong"}}}]}"""),
+             Turn.Calls1(StepOutputContract.ToolName, """{"findings":"The page is wrong about where the pages come from."}""", "s1"),
+             Turn.Says("Checked the page."),
+             Turn.Calls1(StepOutputContract.ToolName, """{"findings":"The page is wrong: the pages come from `settings.Pages` (hosts/desk/Program.cs:3)."}""", "s2"),
+             Turn.Says("Corrected: the claim I had put on core/Settings.cs:2 is at hosts/desk/Program.cs:3.")]) { WhenExhausted = Turn.Says("Done.") };
+        var reviewer = new FakeChatProvider(
+            Turn.Says("""{"verdict":"fail","reason":"the findings name no place in the code","calls":[],"files":[]}"""),
+            Turn.Says("""{"verdict":"pass","reason":"the findings cite the right line","calls":[1],"files":[]}"""));
+
+        var events = await fx.RunAsync(fx.Build(worker, EngineFixture.Role("developer"), router: Routers.WithReviewer(), reviewProvider: reviewer,
+            checkSoundness: true), "check the settings page of the wiki");
+
+        Assert.True(events.Has(EventKind.TaskCompleted), events.Text());
+        var second = string.Join("\n", reviewer.Requests[1].Messages.Select(m => m.Content));
+        Assert.Contains("Quoted beside it: `settings.Pages` - at line 3.", second, StringComparison.Ordinal);
+        Assert.DoesNotContain("""engine_opened_cited_place {"cited":"core/Settings.cs:2"}""", second, StringComparison.Ordinal);
     }
 }

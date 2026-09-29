@@ -82,15 +82,15 @@ public sealed partial class Orchestrator
         // own observations, so the reviewer judges a claim about "Program.cs:223" against line 223 and not
         // against whatever part of the file the step happened to read and the evidence happened to keep.
         //
-        // Reviewed before, this is a correction. What the engine found at the places the earlier report cited is history
-        // now, and said to be; and where the step hands on a result, that result is what is checked - its closing
-        // message is an account of the correction, "replaced Program.cs:113 by the full path", whose old place is not a
-        // claim any more. Run f45e14, 2026-09-29: the second review was shown the first review's "NOT in" beside the new
-        // ones, and the old place again from the account of the fix, and read them all as the current citations.
-        var corrected = journal.MarkHistorical(evidenceStart, CitedPlaces.ToolName, CitedPlaces.Historical) > 0
-                        || journal.Actions.Skip(evidenceStart).Any(a => a.Tool == CitedPlaces.ToolName);
-        var cited = CitedPlaces.Observe(corrected && handedOn is not null ? handedOn : LastAssistant(messages) + "\n" + (handedOn ?? ""),
-            _workspace.RootPath, () => CitedPlaces.Sweep(_workspace.RootPath));
+        // Where the step hands on a result, that result is what is checked, at every attempt: its closing message is its
+        // account of the work - after a correction, "replaced Program.cs:113 by the full path", whose old place is not a
+        // claim any more - and whether this is a correction is not something the places found so far can tell (a first
+        // result that cited nothing leaves none). What the engine found for an earlier review is history, and said to be.
+        // Run f45e14, 2026-09-29: the second review was shown the first review's "NOT in" beside the new ones, and the old
+        // place again from the account of the fix, and read them all as the current citations.
+        journal.MarkHistorical(evidenceStart, CitedPlaces.ToolName, CitedPlaces.Historical);
+        var cited = CitedPlaces.Observe(handedOn ?? LastAssistant(messages), _workspace.RootPath,
+            () => CitedPlaces.Sweep(_workspace.RootPath));
         foreach (var (place, observed) in cited)
             journal.Record(stepNumber, CitedPlaces.ToolName, JsonSerializer.Serialize(new { cited = place }),
                 ActionOutcome.Succeeded, observed, WorkspaceEffect.None, origin: ToolCallOrigin.Engine);
