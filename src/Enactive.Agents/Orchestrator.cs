@@ -979,7 +979,8 @@ public sealed partial class Orchestrator : IOrchestrator
 
         foreach (var check in ProducedFilesNow(scope, session))
             yield return scope.Criterion(check);
-        foreach (var check in await BuildRegressionNowAsync(scope, session, intent.Context, ct))
+        foreach (var check in await BuildRegressionNowAsync(scope, session, intent.Context, ct,
+                     session.Builds.Count > 0 ? await NetChangedAsync(quickChanges, quickBefore, ct) : null))
             yield return scope.Criterion(check);
 
         var quickNet = quickOutcome == RunOutcomeKind.Completed
@@ -2357,7 +2358,8 @@ public sealed partial class Orchestrator : IOrchestrator
             && verification is not null && verification.IncompleteReason is null && verification.Report.Blocking.Count == 0
             && scope.Budget.TurnExhausted is null)
         {
-            finalChecks = [.. ProducedFilesNow(scope, session), .. await BuildRegressionNowAsync(scope, session, intent.Context, ct)];
+            finalChecks = [.. ProducedFilesNow(scope, session), .. await BuildRegressionNowAsync(scope, session, intent.Context, ct,
+                session.Builds.Count > 0 ? await NetChangedAsync(workspaceChanges, beforeRun, ct) : null)];
             var input = TaskReviewInputOf(scheduler, stepNumbers, stepOutcomes, session, scope, verification, finalChecks);
             yield return scope.Ev(EventKind.ReviewRequested,
                 $"Task review: judging the run as a whole - {input.Open.Count} question(s) its steps left open…");
@@ -2443,7 +2445,8 @@ public sealed partial class Orchestrator : IOrchestrator
         // Last, so it describes the workspace as the run leaves it: after every step, every check
         // and the final review have had their turn to change it.
         // Already taken for a task review, the workspace unchanged since: reported as taken, not run again.
-        finalChecks ??= [.. ProducedFilesNow(scope, session), .. await BuildRegressionNowAsync(scope, session, intent.Context, ct)];
+        finalChecks ??= [.. ProducedFilesNow(scope, session), .. await BuildRegressionNowAsync(scope, session, intent.Context, ct,
+                session.Builds.Count > 0 ? await NetChangedAsync(workspaceChanges, beforeRun, ct) : null)];
         foreach (var check in finalChecks)
             yield return scope.Criterion(check);
 
@@ -2623,8 +2626,10 @@ public sealed partial class Orchestrator : IOrchestrator
     /// The build again, where the run can have changed what it reports, compared with the build
     /// before the work. Nothing when there was no baseline or nothing the build depends on changed.
     /// </summary>
+    /// <param name="measured">What differs on disk from the run's start to now, where that was measured: it, not the
+    /// commands' unknown effects, says whether a build could have changed (BuildRegression.Touched).</param>
     private async Task<IReadOnlyList<CriterionResult>> BuildRegressionNowAsync(RunScope scope, RunSession session,
-        WorkContext context, CancellationToken ct)
+        WorkContext context, CancellationToken ct, NetChanges? measured = null)
     {
         if (session.Builds.Count == 0) return [];
         try
@@ -2632,7 +2637,7 @@ public sealed partial class Orchestrator : IOrchestrator
             ArtifactRef[] produced;
             lock (scope.Artifacts) produced = scope.Artifacts.ToArray();
             var actions = session.RunEvidence().Actions;
-            var due = session.Builds.Where(b => BuildRegression.Touched(b.Ecosystem, produced, actions)).ToArray();
+            var due = session.Builds.Where(b => BuildRegression.Touched(b.Ecosystem, produced, actions, measured?.Changed.ToArray())).ToArray();
             if (due.Length == 0) return [];
 
             // The last wave's builds, when nothing a build reads has changed since: the same builds again

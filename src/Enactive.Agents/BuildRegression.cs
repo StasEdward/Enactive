@@ -131,11 +131,19 @@ internal static class BuildRegression
     /// Whether the run can have changed what this ecosystem's build reports: it wrote a file the
     /// ecosystem owns, or it ran a call whose writes are not recorded by file - a command can change
     /// anything. A run that only wrote documentation is not rebuilt, as the plan says.
+    /// <para>Where the workspace was measured from the run's start to now (<paramref name="measured"/>: every path
+    /// that differs), that measurement answers for the commands instead: a command changed the build only if a file
+    /// the ecosystem owns is among them. Run 1ec9e8, 2026-09-29: fourteen <c>Get-PSDrive</c> calls for a disk report
+    /// had the solution built and tested again, the measurement showing that no file of it had changed. Without a
+    /// measurement - a resumed run, steps at once - a command is still taken to have changed anything.</para>
     /// </summary>
-    internal static bool Touched(IEcosystem ecosystem, IEnumerable<ArtifactRef> produced, IEnumerable<ExecutedAction> actions)
+    internal static bool Touched(IEcosystem ecosystem, IEnumerable<ArtifactRef> produced, IEnumerable<ExecutedAction> actions,
+        IReadOnlyCollection<string>? measured = null)
         => produced.Any(a => ecosystem.Owns(a.RelativePath))
-           || actions.Any(a => a.Outcome != ActionOutcome.Refused && a.WorkspaceEffect != WorkspaceEffect.None
-                               && a.ChangedPaths is not { Count: > 0 });
+           || (measured is not null
+               ? measured.Any(ecosystem.Owns)
+               : actions.Any(a => a.Outcome != ActionOutcome.Refused && a.WorkspaceEffect != WorkspaceEffect.None
+                                  && a.ChangedPaths is not { Count: > 0 }));
 
     /// <summary>
     /// Whether a result is worth a second run before it is believed: tests that passed and fail now can be

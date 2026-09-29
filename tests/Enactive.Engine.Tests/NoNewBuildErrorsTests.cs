@@ -129,6 +129,61 @@ public sealed class NoNewBuildErrorsTests
         Assert.Empty(BuildChecks(events));
     }
 
+    /// <summary>
+    /// Run 1ec9e8: a command's effect is unknown, so fourteen commands that only read the disks had the build run
+    /// again. What the workspace measures from the run's start answers for them now: a command that changed nothing
+    /// the build reads is not rebuilt...
+    /// </summary>
+    [Fact]
+    public async Task A_command_that_changed_nothing_the_build_reads_is_not_rebuilt()
+    {
+        using var fx = Wiki();
+        var worker = new FakeChatProvider(
+            Turn.Says(QuickAction),
+            Turn.Calls1("run_command", """{"command":"echo a note> notes.txt"}""", "c1"),
+            Turn.Says("Wrote a note."));
+
+        var events = await fx.RunAsync(fx.Build(worker, EngineFixture.Role("developer")), "write a note");
+
+        Assert.True(fx.Exists("notes.txt"), events.Text());
+        Assert.Empty(BuildChecks(events));
+    }
+
+    /// <summary>The same for a plan of steps, measured from the first step's start.</summary>
+    [Fact]
+    public async Task A_planned_run_of_commands_that_changed_nothing_the_build_reads_is_not_rebuilt()
+    {
+        using var fx = Wiki();
+        var worker = new FakeChatProvider(
+            Turn.Says("""{"disposition":"task","title":"notes","steps":[{"title":"Look","dependsOn":[]},{"title":"Write the note","dependsOn":[0]}]}"""),
+            Turn.Calls1("run_command", """{"command":"type lint-report.txt"}""", "c1"),
+            Turn.Says("Looked."),
+            Turn.Calls1("run_command", """{"command":"echo a note> notes.txt"}""", "c2"),
+            Turn.Says("Wrote a note.")) { WhenExhausted = Turn.Says("Done.") };
+
+        var events = await fx.RunAsync(fx.Build(worker, EngineFixture.Role("developer")), "look and write a note");
+
+        Assert.True(events.Has(EventKind.TaskCompleted), events.Text());
+        Assert.True(fx.Exists("notes.txt"));
+        Assert.Empty(BuildChecks(events));
+    }
+
+    /// <summary>...and one that changed a file the build reads is.</summary>
+    [Fact]
+    public async Task A_command_that_changed_a_file_the_build_reads_is_rebuilt()
+    {
+        using var fx = Wiki();
+        fx.Write("pages/home.page", "# Home");
+        var worker = new FakeChatProvider(
+            Turn.Says(QuickAction),
+            Turn.Calls1("run_command", """{"command":"echo # Home again> pages\\home.page"}""", "c1"),
+            Turn.Says("Changed the page."));
+
+        var events = await fx.RunAsync(fx.Build(worker, EngineFixture.Role("developer")), "change the home page");
+
+        Assert.Single(BuildChecks(events));
+    }
+
     /// <summary>A workspace no ecosystem recognises pays nothing: no baseline, no build.</summary>
     [Fact]
     public async Task A_workspace_no_ecosystem_recognises_gets_no_build_at_all()
