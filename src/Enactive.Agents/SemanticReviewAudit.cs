@@ -125,6 +125,27 @@ internal static class SemanticReviewAudit
         TimeSpan.FromMilliseconds(100)).Select(m => m.Value).ToHashSet(StringComparer.Ordinal);
 
     internal sealed record Finding(bool Unknown, string Reason);
+    /// <summary>
+    /// The calls the reviewer named for what it could not establish - the "calls" of every report check and
+    /// verification whose verdict is unknown - when there is no concrete failure beside them.
+    /// </summary>
+    internal static IReadOnlyList<int> UnknownCalls(string answer)
+    {
+        if (ModelText.ExtractJsonObject(ModelText.StripThink(answer)) is not { } json) return [];
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            var checks = Arr(root, "report_checks")
+                .Concat(Arr(root, "claims").SelectMany(c => Arr(c, "requirements"))
+                    .Select(r => r.ValueKind == JsonValueKind.Object && r.TryGetProperty("verification", out var v) ? v : default));
+            return checks.Where(c => c.ValueKind == JsonValueKind.Object && Str(c, "verdict") == "unknown")
+                .SelectMany(c => Arr(c, "calls")).Where(id => id.ValueKind == JsonValueKind.Number && id.TryGetInt32(out _))
+                .Select(id => id.GetInt32()).Distinct().ToArray();
+        }
+        catch (JsonException) { return []; }
+    }
+
     internal static Finding? Outcome(string answer)
     {
         using var doc = JsonDocument.Parse(ModelText.ExtractJsonObject(ModelText.StripThink(answer))!);

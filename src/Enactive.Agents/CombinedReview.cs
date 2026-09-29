@@ -193,6 +193,8 @@ public sealed partial class Reviewer
         // like any round (beforeRetry below).
         var rounds = 2;
         IReadOnlyList<string>? refusedByParts = null;
+        // Once per review: what the reviewer could not establish because the evidence was cut, shown whole.
+        var unknownsExpanded = false;
         for (var attempt = 0; attempt < rounds; attempt++)
         {
             if (attempt > 0 && beforeRetry?.Invoke(prompt, output) is { } spent)
@@ -306,6 +308,34 @@ public sealed partial class Reviewer
                 }
                 else if (result.Proof is { } proof && result.Claims is { } claims)
                 {
+                    // "Unknown" over evidence the ENGINE cut is the engine's gap, not the work's. Run feed29, 2026-09-29:
+                    // two steps passed on everything but one claim each - per-class coverage in a 50,000-character
+                    // XML whose middle the evidence view had cut - and ended DONE, NOT VERIFIED; the reviewer named
+                    // the calls, and did not ask for them. The engine shows those calls whole, once, and asks again.
+                    // Only more evidence: what is still unknown after it stays unknown.
+                    if (!unknownsExpanded && evidence.IsTruncated
+                        && SemanticReviewAudit.Outcome(answer) is { Unknown: true }
+                        && SemanticReviewAudit.UnknownCalls(answer).Where(evidence.ContainsAction).Distinct()
+                            .Take(MaxUnknownCalls).ToArray() is { Length: > 0 } unclear)
+                    {
+                        unknownsExpanded = true;
+                        EvidenceView? expanded = null;
+                        try { expanded = evidence.Expand(unclear, UnknownEvidenceBudget); }
+                        catch (ArgumentException) { }
+                        if (expanded is not null)
+                        {
+                            evidence = expanded;
+                            messages[1] = ChatMessage.User(Prompt(evidence));
+                            rounds = Math.Max(rounds, attempt + 2);
+                            messages.Add(ChatMessage.Assistant(rawAnswer));
+                            messages.Add(ChatMessage.User(
+                                $"Some of what you marked unknown rests on call(s) {string.Join(", ", unclear)}, whose output the evidence "
+                                + "had cut. The engine now shows them whole, under \"Additional requested evidence\". Reassess what you "
+                                + "could not establish against it - pass, fail, or still unknown - and return the complete combined JSON "
+                                + "object using the supplied schema. No more evidence requests." + sources.Describe()));
+                            continue;
+                        }
+                    }
                     if (SemanticReviewAudit.Outcome(answer) is { } semantic)
                         return result.Review with { Pass = false, Notes = semantic.Reason,
                             RepairAdvice = semantic.Unknown ? null : ReviewRepairContract.Render(answer, sources, obligations),
@@ -344,6 +374,11 @@ public sealed partial class Reviewer
         return new(false, problem + " after clarification", prompt, output)
             { CachedPromptTokens = cached, CacheCreationPromptTokens = created, IncompleteReason = problem + " after clarification", VerdictUnavailable = true };
     }
+
+    /// <summary>How many calls an "unknown" may be answered with, and how much of them is shown - more than an
+    /// ordinary request (12,000), because what was cut is usually one long output.</summary>
+    internal const int MaxUnknownCalls = 4;
+    internal const int UnknownEvidenceBudget = 64_000;
 
     private sealed record Combined(ReviewResult Review, ProofClaim? Proof, IReadOnlyList<ObligationClaim>? Claims, IReadOnlyList<int> NeedEvidence);
     private static Combined? ReadCombined(string text)
