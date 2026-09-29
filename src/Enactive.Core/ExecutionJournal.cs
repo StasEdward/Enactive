@@ -511,8 +511,7 @@ public sealed class ExecutionJournal
         // result - a report shown in full elsewhere - kept its slice, and room in the budget went unused.
         var spare = maxChars - header.Length - note.Length - Cost(calls, shown);
         var room = MinOutputChars * kept + Math.Max(0, spare);
-        var texts = Unrepeated(shown.ToDictionary(i => i, i => AnswerText(slice[i])));
-        var allowance = Fair(texts.ToDictionary(p => p.Key, p => p.Value.Length), room);
+        var (texts, allowance) = Unrepeated(shown.ToDictionary(i => i, i => AnswerText(slice[i])), room);
 
         var sb = new StringBuilder(header).AppendLine().Append(note);
         var outputsTruncated = false;
@@ -664,22 +663,36 @@ public sealed class ExecutionJournal
     /// the budget so that the middle was cut out of both. Only the same text: a file that changed between two
     /// reads is shown both times, since what changed is the point.
     /// </summary>
-    private static Dictionary<int, string> Unrepeated(Dictionary<int, string> texts)
+    private static (Dictionary<int, string> Texts, Dictionary<int, int> Allowance) Unrepeated(Dictionary<int, string> texts, int room)
     {
-        var flat = texts.ToDictionary(p => p.Key, p => p.Value.Replace("\r\n", "\n").Trim());
-        var result = new Dictionary<int, string>(texts);
+        static string Flat(string text) => text.Replace("\r\n", "\n").Trim();
+        var flat = texts.ToDictionary(p => p.Key, p => Flat(p.Value));
+        var holders = new Dictionary<int, int>();
         var printed = new HashSet<int>();
         // The longest first: a result that contains another is the one kept whole. Of two the same, the earlier.
         foreach (var i in texts.Keys.OrderByDescending(i => flat[i].Length).ThenBy(i => i))
         {
             var holder = flat[i].Length < RepeatedChars ? null
                 : printed.Where(j => flat[j].Contains(flat[i], StringComparison.Ordinal)).Cast<int?>().FirstOrDefault();
-            if (holder is { } j)
-                result[i] = $"(the same {flat[i].Length:N0} characters as in the result of [{j + 1}] - shown there, not repeated here)";
-            else
-                printed.Add(i);
+            if (holder is { } j) holders[i] = j;
+            else printed.Add(i);
         }
-        return result;
+
+        // Only while the text is still there to be seen where it is said to be. The room is shared after, and a holder
+        // that does not fit is cut in the middle: a result found in the middle of a long one would be cut out of it, and
+        // "shown there" would promise what is not (code review of engeen_v4, P2). Such a one is printed after all, and
+        // the room shared again, until every "shown there" is true.
+        while (true)
+        {
+            var result = new Dictionary<int, string>(texts);
+            foreach (var (i, j) in holders)
+                result[i] = $"(the same {flat[i].Length:N0} characters as in the result of [{j + 1}] - shown there, not repeated here)";
+            var allowance = Fair(result.ToDictionary(p => p.Key, p => p.Value.Length), room);
+            var lost = holders.Where(h => !Flat(Answer(result[h.Value], allowance[h.Value], out _)).Contains(flat[h.Key], StringComparison.Ordinal))
+                .Select(h => h.Key).ToArray();
+            if (lost.Length == 0) return (result, allowance);
+            foreach (var i in lost) holders.Remove(i);
+        }
     }
 
     private static string Answer(string text, int budget, out bool truncated)

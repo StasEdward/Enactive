@@ -222,6 +222,29 @@ public sealed class EvidenceBudgetTests
         Assert.DoesNotContain("characters not shown here", evidence, StringComparison.Ordinal);     // one copy fits whole
     }
 
+    /// <summary>
+    /// Code review of engeen_v4, P2: a short result found in the middle of a long one was replaced by "shown there" -
+    /// and then the long one was cut in the middle to fit, so the short one was shown nowhere. It is repeated only
+    /// where it is still there to be seen.
+    /// </summary>
+    [Fact]
+    public void A_result_found_where_the_other_is_cut_is_shown_itself()
+    {
+        var measured = string.Join("\n", Enumerable.Range(1, 20).Select(i => $"link {i}: /wiki/page-{i} -> 200 OK"));
+        var journal = Journal(
+            ("read_file", """{"path":"crawl.log"}""", new string('a', 10_000) + "\n" + measured + "\n" + new string('z', 10_000)),
+            ("run_command", """{"command":"check links"}""", measured));
+
+        var evidence = journal.Describe(maxChars: 3_000).Text;
+
+        Assert.InRange(measured.Length, RepeatedCharsForTest, 1_000);
+        Assert.Contains(measured, evidence, StringComparison.Ordinal);
+        Assert.DoesNotContain("not repeated here", evidence, StringComparison.Ordinal);
+        Assert.True(evidence.Length <= 3_000, $"{evidence.Length} characters");
+    }
+
+    private const int RepeatedCharsForTest = 400;
+
     /// <summary>A file that changed between two reads is shown both times: what changed is the point.</summary>
     [Fact]
     public void A_file_that_changed_between_reads_is_shown_both_times()
