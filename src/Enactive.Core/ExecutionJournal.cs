@@ -313,6 +313,25 @@ public sealed class ExecutionJournal
     }
 
     /// <summary>
+    /// Marks what the engine observed for an earlier review as history, from <paramref name="from"/> on: its
+    /// output becomes <paramref name="note"/>. The call stays listed and citable; what it said, about a report
+    /// that has since been replaced, no longer reads as a finding about the current one.
+    /// </summary>
+    /// <returns>How many were marked.</returns>
+    public int MarkHistorical(int from, string tool, string note)
+    {
+        var marked = 0;
+        lock (_gate)
+            for (var i = Math.Max(0, from); i < _actions.Count; i++)
+                if (_actions[i].Tool == tool && _actions[i].Origin == ToolCallOrigin.Engine && _actions[i].Output != note)
+                {
+                    _actions[i] = _actions[i] with { Output = note };
+                    marked++;
+                }
+        return marked;
+    }
+
+    /// <summary>
     /// Says, once and for the rest of the run, that the conversation this journal describes began
     /// before the journal did.
     ///

@@ -81,8 +81,16 @@ public sealed partial class Orchestrator
         // The places the report and the handed-on result cite, opened by the engine now and recorded as its
         // own observations, so the reviewer judges a claim about "Program.cs:223" against line 223 and not
         // against whatever part of the file the step happened to read and the evidence happened to keep.
-        var cited = CitedPlaces.Observe(LastAssistant(messages) + "\n" + (handedOn ?? ""), _workspace.RootPath,
-            () => CitedPlaces.Sweep(_workspace.RootPath));
+        //
+        // Reviewed before, this is a correction. What the engine found at the places the earlier report cited is history
+        // now, and said to be; and where the step hands on a result, that result is what is checked - its closing
+        // message is an account of the correction, "replaced Program.cs:113 by the full path", whose old place is not a
+        // claim any more. Run f45e14, 2026-09-29: the second review was shown the first review's "NOT in" beside the new
+        // ones, and the old place again from the account of the fix, and read them all as the current citations.
+        var corrected = journal.MarkHistorical(evidenceStart, CitedPlaces.ToolName, CitedPlaces.Historical) > 0
+                        || journal.Actions.Skip(evidenceStart).Any(a => a.Tool == CitedPlaces.ToolName);
+        var cited = CitedPlaces.Observe(corrected && handedOn is not null ? handedOn : LastAssistant(messages) + "\n" + (handedOn ?? ""),
+            _workspace.RootPath, () => CitedPlaces.Sweep(_workspace.RootPath));
         foreach (var (place, observed) in cited)
             journal.Record(stepNumber, CitedPlaces.ToolName, JsonSerializer.Serialize(new { cited = place }),
                 ActionOutcome.Succeeded, observed, WorkspaceEffect.None, origin: ToolCallOrigin.Engine);

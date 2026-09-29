@@ -42,10 +42,10 @@ public sealed class ACitedPlaceIsOpenedByTheEngineTests
         using var fx = Workspace();
         // Line 1 is shown with the two lines either side of it; the quote is on line 4.
         var elsewhere = Assert.Single(Observe(fx, "src/Console/Program.cs:1 sets `Timeout.InfiniteTimeSpan`")).Observed;
-        Assert.Contains("Quoted beside it: `Timeout.InfiniteTimeSpan` - NOT at the cited place; it is at line 4.", elsewhere, StringComparison.Ordinal);
+        Assert.Contains("Quoted beside it: `Timeout.InfiniteTimeSpan` - not in the cited line 1; found word for word at line 4.", elsewhere, StringComparison.Ordinal);
 
         var nowhere = Assert.Single(Observe(fx, "src/Settings.cs:3 sets `Retries = 5`")).Observed;
-        Assert.Contains("Quoted beside it: `Retries = 5` - NOT in src/Settings.cs.", nowhere, StringComparison.Ordinal);
+        Assert.Contains("Quoted beside it: `Retries = 5` - not found word for word in src/Settings.cs. That does not make the claim false", nowhere, StringComparison.Ordinal);
     }
 
     [Fact]
