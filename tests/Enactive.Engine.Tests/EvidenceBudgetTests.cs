@@ -170,6 +170,36 @@ public sealed class EvidenceBudgetTests
         Assert.Contains("Build succeeded", evidence, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// Run 596a05, 2026-09-29: nine calls in equal slices of about 400 characters each. Three disk tables of
+    /// 500-700 characters were cut in the middle - the rows the report's totals came from - while short results
+    /// left their slices unused and one long result took a whole slice. A result shorter than a fair share is
+    /// now shown whole, and the long one takes what is left.
+    /// </summary>
+    [Fact]
+    public void A_short_result_is_shown_whole_and_the_long_one_takes_what_is_left()
+    {
+        static string Table(string prefix) => string.Join("\n", Enumerable.Range(1, 20).Select(i => $"{prefix}{i}:  {i * 111.11,8:F2} GB {i * 4.4,5:F1} %"));
+        var tables = new[] { Table("A"), Table("B"), Table("C") };
+        var journal = Journal(
+            ("run_command", """{"command":"volumes"}""", tables[0]),
+            ("run_command", """{"command":"disks"}""", tables[1]),
+            ("run_command", """{"command":"drives"}""", tables[2]),
+            ("create_directory", """{"path":"out"}""", "'out' already exists."),
+            ("write_file", """{"path":"out/report.md"}""", "Created new file 'out/report.md'."),
+            ("read_file", """{"path":"out/report.md"}""", new string('R', 4_000)));
+
+        var evidence = journal.Describe(maxChars: 4_000).Text;
+
+        Assert.All(tables, t => Assert.InRange(t.Length, 500, 700));
+        Assert.True(evidence.Length <= 4_000, $"{evidence.Length} characters");
+        foreach (var table in tables)
+            Assert.Contains(table, evidence, StringComparison.Ordinal);
+        Assert.Contains("'out' already exists.", evidence, StringComparison.Ordinal);
+        Assert.Contains("characters not shown here", evidence, StringComparison.Ordinal);     // the long one, and only it
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(evidence, "characters not shown here"));
+    }
+
     // ── what must not change ────────────────────────────────────────────────
 
     [Fact]

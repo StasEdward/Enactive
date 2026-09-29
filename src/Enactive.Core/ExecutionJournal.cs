@@ -485,10 +485,14 @@ public sealed class ExecutionJournal
                 : $"… {dropped} call(s) of this step are not shown here ({Ranges(hidden)}): the oldest reads and lookups go "
                   + "first; a command that ran, and what the engine observed itself, are kept longest.\n";
 
-        // What is left over, shared EQUALLY. Equal rather than first-come is the whole point: the
-        // old behaviour was first-come, and one README took all of it.
+        // What is left over, shared FAIRLY. Not first-come - the old behaviour, and one README took all
+        // of it - and not in equal slices either: a result shorter than its slice is shown whole, and
+        // what it did not use goes to the longer ones. Run 596a05, 2026-09-29: nine calls in equal slices
+        // of about 400 characters cut three disk tables of 500-700 each in the middle, while the one long
+        // result - a report shown in full elsewhere - kept its slice, and room in the budget went unused.
         var spare = maxChars - header.Length - note.Length - Cost(calls, shown);
-        var each = MinOutputChars + Math.Max(0, spare) / kept;
+        var room = MinOutputChars * kept + Math.Max(0, spare);
+        var allowance = Fair(shown.ToDictionary(i => i, i => AnswerText(slice[i]).Length), room);
 
         var sb = new StringBuilder(header).AppendLine().Append(note);
         var outputsTruncated = false;
@@ -497,7 +501,7 @@ public sealed class ExecutionJournal
         foreach (var i in shown)
         {
             sb.AppendLine(calls[i]);
-            sb.Append("<- ").AppendLine(Answer(slice[i], each, out var shortened));
+            sb.Append("<- ").AppendLine(Answer(slice[i], allowance[i], out var shortened));
             outputsTruncated |= shortened;
             argumentsTruncated |= slice[i].Arguments?.Length > MaxArguments;
         }
@@ -611,9 +615,33 @@ public sealed class ExecutionJournal
             return Math.Max(0, _actions.Count - Math.Max(0, from));
     }
 
+    /// <summary>
+    /// Room shared out so that every result shorter than a fair share is shown whole, and what those
+    /// leave goes, in equal parts, to the ones longer than it - never less than an equal part each.
+    /// </summary>
+    private static Dictionary<int, int> Fair(IReadOnlyDictionary<int, int> lengths, int room)
+    {
+        var given = new Dictionary<int, int>();
+        var left = lengths.Count;
+        foreach (var (i, length) in lengths.OrderBy(p => p.Value).ThenBy(p => p.Key))
+        {
+            var share = room / left;
+            given[i] = Math.Min(length, share);
+            room -= given[i];
+            left--;
+        }
+        return given;
+    }
+
     private static string Answer(ExecutedAction action, int budget, out bool truncated)
     {
-        var text = action.Outcome switch
+        var text = AnswerText(action);
+        truncated = text.Length > budget;
+        return truncated ? HeadAndTail(text, budget) : text;
+    }
+
+    private static string AnswerText(ExecutedAction action)
+        => action.Outcome switch
         {
             ActionOutcome.Refused => "REFUSED: " + (action.Output ?? "not permitted"),
             ActionOutcome.Failed => "ERROR: " + (action.Output ?? "failed"),
@@ -622,10 +650,6 @@ public sealed class ExecutionJournal
             ActionOutcome.Answered => "NOTHING THERE: " + (action.Output ?? "nothing to return"),
             _ => action.Output ?? "OK"
         };
-
-        truncated = text.Length > budget;
-        return truncated ? HeadAndTail(text, budget) : text;
-    }
 
     /// <summary>
     /// A shortened result: the START and the END of it, with the cut marked between them.
