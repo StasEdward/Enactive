@@ -279,7 +279,11 @@ public sealed partial class Reviewer : IReviewer
         string stepTitle, string coderOutput, string executionEvidence, IReadOnlyList<string> artifacts,
         IReadOnlyList<WrittenFile>? changes = null, string? request = null, ReviewSources? sources = null)
     {
-        var files = artifacts.Count == 0 ? "(none)" : string.Join(", ", artifacts);
+        // Said to be the engine's record, not a line of the report. Run a7a8cf, 2026-09-29: a read-only step's review
+        // was left undecided over "Files changed: (none)", taken for "a report-level footer statement without a
+        // corresponding visible diff" - it was the engine's own list, unlabelled.
+        var files = (artifacts.Count == 0 ? "none" : string.Join(", ", artifacts))
+            + " - recorded by the ENGINE from this step's own file-tool calls, not taken from the agent's report";
 
         // What the step CHANGED, whichever tool changed it. A step that runs commands AND writes -
         // a disk check that saves a report, an analysis that writes its findings - used to get only

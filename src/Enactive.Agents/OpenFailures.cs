@@ -160,6 +160,13 @@ internal sealed class OpenFailures
     public void Failed(ToolCall call, string? error, bool didNotRun = false, string? asTool = null)
     {
         var key = Key(call);
+
+        // Scratch is not the work: it is kept out of review, of the workspace comparison and of rollback, and a
+        // call on it that did not go through leaves the work as it was. Run a7a8cf, 2026-09-29: a step wrote four
+        // tests, saw all 133 pass, was refused a whole-file rewrite of its own scratch notes (read only in part),
+        // wrote a new notes file instead - and ended INCOMPLETE on the refused one, its two dependents skipped.
+        if ((EditOf(call)?.Path ?? FileNamedBy(call)) is { } onFile && IsScratch(onFile))
+            return;
         _byCall[key] = Line(call, error);
 
         // Asked FIRST, because it is the strongest thing known about the call: whatever the
@@ -202,6 +209,12 @@ internal sealed class OpenFailures
     /// <summary>The permission refusals still keeping the step unfinished: not forgiven, not made good.</summary>
     public IReadOnlyList<string> OpenRefusals
         => _refused.Where(r => _byCall.ContainsKey(r.Key) && !Forgiven.Contains(r.Key)).Select(r => r.Value).ToArray();
+
+    private static bool IsScratch(string path)
+    {
+        return ShellLookup.Normal(path.Replace('\\', '/'))
+            .StartsWith(Enactive.Core.Context.WorkspaceGuard.ScratchPrefix + "/", StringComparison.OrdinalIgnoreCase);
+    }
 
     /// <summary>The file a call that never happened was aimed at, where it named one - see <see cref="RefusedByRule"/>.</summary>
     private readonly Dictionary<string, string> _neverHappenedAt = new(StringComparer.Ordinal);
