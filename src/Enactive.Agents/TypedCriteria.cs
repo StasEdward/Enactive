@@ -16,6 +16,10 @@ public sealed record PlannedCriterion(string Kind, string? Path, bool NonEmpty, 
 
     /// <summary>The plan position of the step it was written inside, or null when it was stated for the whole plan.</summary>
     public int? Step { get; init; }
+
+    // file_exists / file_contains over the file a step handed on: {"path_from":{"step":3,"field":"report"}}
+    public int? PathFromStep { get; init; }
+    public string? PathFromField { get; init; }
 }
 
 /// <summary>
@@ -80,12 +84,13 @@ public static class TypedCriteria
             }
             var (sourceStep, sourceField) = Ref("source");
             var (resultsStep, resultsField) = Ref("results");
+            var (pathFromStep, pathFromField) = Ref("path_from");
             read.Add(new PlannedCriterion(Text("kind") ?? "", Text("path"),
                 !(item.ValueKind == JsonValueKind.Object && item.TryGetProperty("non_empty", out var ne) && ne.ValueKind == JsonValueKind.False),
                 Text("text"), Text("target"), item.GetRawText())
             {
                 SourceStep = sourceStep, SourceField = sourceField, ResultsStep = resultsStep, ResultsField = resultsField,
-                Evidence = Text("evidence"), Step = owner
+                Evidence = Text("evidence"), Step = owner, PathFromStep = pathFromStep, PathFromField = pathFromField
             });
         }
         return read;
@@ -111,6 +116,17 @@ public static class TypedCriteria
                 case "file_exists":
                 case "file_contains":
                     var contains = c.Kind.Trim().Equals("file_contains", StringComparison.OrdinalIgnoreCase);
+                    // The file a step hands on, rather than a name fixed in the plan.
+                    if (c.PathFromStep is not null || c.PathFromField is not null)
+                    {
+                        if (HandedPathInvalid(c, plan) is { } notHanded) { Drop(c, notHanded); break; }
+                        if (contains && string.IsNullOrEmpty(c.Text)) { Drop(c, "it names no text to look for"); break; }
+                        var handed = new TypedCriterion(contains ? TypedCriterionKind.FileContains : TypedCriterionKind.FileExists,
+                            NonEmpty: c.NonEmpty, Text: c.Text, PathFromStep: c.PathFromStep, PathFromField: c.PathFromField);
+                        accepted.Add(new SuccessCriterionDefinition(Name(handed), Describe(handed), 0, Required: true,
+                            Origin: CriterionOrigin.Proposed) { Typed = handed, Step = c.Step });
+                        break;
+                    }
                     if (string.IsNullOrWhiteSpace(c.Path)) { Drop(c, "it names no path"); break; }
                     if (Inside(workspaceRoot, c.Path) is null) { Drop(c, "its path is not inside the workspace"); break; }
                     if (contains && string.IsNullOrEmpty(c.Text)) { Drop(c, "it names no text to look for"); break; }
@@ -157,6 +173,61 @@ public static class TypedCriteria
         return (accepted, dropped);
     }
 
+    /// <summary>Why a path_from criterion cannot be checked in this plan, or null when it can.</summary>
+    private static string? HandedPathInvalid(PlannedCriterion c, Enactive.Core.Tasks.Plan? plan)
+    {
+        if (c.PathFromStep is not { } step || string.IsNullOrWhiteSpace(c.PathFromField))
+            return "its path_from names no step and field";
+        if (plan is null || step < 0 || step >= plan.Steps.Count)
+            return $"path_from names step {step}, which is not in the plan";
+        if (plan.Steps[step].Output?.Fields.FirstOrDefault(f => f.Name == c.PathFromField) is not { } field)
+            return $"step {step} declares no output field '{c.PathFromField}' to hand the path on in";
+        return field.Type == Enactive.Core.Tasks.StepOutputFieldType.Path ? null
+            : $"step {step}'s '{c.PathFromField}' is not a path (it is {Enactive.Core.Tasks.StepOutputSchema.NameOf(field.Type)})";
+    }
+
+    /// <summary>
+    /// A file criterion over the file a step HANDED ON: the path its accepted output gave in the field, checked as
+    /// any file criterion. No output, or no path in it, fails - and says which.
+    /// </summary>
+    public static CriterionResult EvaluateHanded(SuccessCriterionDefinition criterion, IEnumerable<Enactive.Core.Tasks.StepOutput> handed,
+        string workspaceRoot)
+    {
+        var typed = criterion.Typed!;
+        CriterionResult Failed(string detail)
+            => new(criterion.Name, criterion.Command, criterion.Required, CriterionOutcome.Failed, null, detail, criterion.Origin, criterion.AlreadyPassing);
+        var output = handed.Where(o => o.StepNo == typed.PathFromStep + 1).OrderByDescending(o => o.Revision).FirstOrDefault();
+        if (output is null)
+            return Failed($"step {typed.PathFromStep + 1} handed on no result, so there is no '{typed.PathFromField}' to check.");
+        string? path;
+        try
+        {
+            using var doc = JsonDocument.Parse(output.ValuesJson);
+            path = doc.RootElement.TryGetProperty(typed.PathFromField!, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+        }
+        catch (JsonException) { path = null; }
+        if (string.IsNullOrWhiteSpace(path))
+            return Failed($"step {typed.PathFromStep + 1} handed on no path in '{typed.PathFromField}'.");
+        var result = Evaluate(criterion with { Typed = typed with { Path = path } }, workspaceRoot);
+        return result with { Detail = $"'{path}', handed on by step {typed.PathFromStep + 1} as '{typed.PathFromField}'"
+                                      + (string.IsNullOrWhiteSpace(result.Detail) ? "." : ": " + result.Detail) };
+    }
+
+    internal const int MaxHandedChars = 12_000;
+
+    /// <summary>The file a step handed on as a checked result, as the reviewer is shown it: whole, or its head.</summary>
+    internal static string ShowHanded(string path, string field, string workspaceRoot)
+    {
+        var heading = $"HANDED ON by this step as its '{field}' - '{path}', how it is NOW:";
+        if (Inside(workspaceRoot, path) is not { } full) return heading + "\n(the path is not inside the workspace)";
+        if (!File.Exists(full)) return heading + "\n(no such file)";
+        string text;
+        try { text = File.ReadAllText(full); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return heading + $"\n(it could not be read: {ex.Message})"; }
+        return text.Length <= MaxHandedChars ? heading + "\n" + text
+            : heading + "\n" + text[..MaxHandedChars] + $"\n[... {text.Length - MaxHandedChars} more characters not shown]";
+    }
+
     /// <summary>A file criterion, decided by the engine: on disk, as the run leaves it.</summary>
     public static CriterionResult Evaluate(SuccessCriterionDefinition criterion, string workspaceRoot)
     {
@@ -192,15 +263,22 @@ public static class TypedCriteria
     /// was checked only after the run, and the run failed on it).
     /// </summary>
     internal static IReadOnlyList<CriterionResult> OfStep(IEnumerable<SuccessCriterionDefinition> criteria, int planIndex, string workspaceRoot)
-        => criteria.Where(c => c.Step == planIndex && c.Typed?.Kind is TypedCriterionKind.FileExists or TypedCriterionKind.FileContains)
+        => criteria.Where(c => c.Step == planIndex && c.Typed is { Kind: TypedCriterionKind.FileExists or TypedCriterionKind.FileContains, PathFromStep: null })
             .Select(c => Evaluate(c, workspaceRoot)).ToArray();
 
-    private static string Name(TypedCriterion typed) => typed.Kind == TypedCriterionKind.FileContains
-        ? $"{typed.Path} says what it should" : $"{typed.Path} exists";
+    private static string Name(TypedCriterion typed)
+    {
+        var file = typed.PathFromStep is { } step ? $"the file step {step + 1} hands on as '{typed.PathFromField}'" : typed.Path;
+        return typed.Kind == TypedCriterionKind.FileContains ? $"{file} says what it should" : $"{file} exists";
+    }
 
-    private static string Describe(TypedCriterion typed) => typed.Kind == TypedCriterionKind.FileContains
-        ? $"file_contains {typed.Path} \"{typed.Text}\""
-        : $"file_exists {typed.Path}" + (typed.NonEmpty ? " (not empty)" : "");
+    private static string Describe(TypedCriterion typed)
+    {
+        var file = typed.PathFromStep is { } step ? $"<step {step + 1}'s {typed.PathFromField}>" : typed.Path;
+        return typed.Kind == TypedCriterionKind.FileContains
+            ? $"file_contains {file} \"{typed.Text}\""
+            : $"file_exists {file}" + (typed.NonEmpty ? " (not empty)" : "");
+    }
 
     private static EcosystemTargets? Detect(IEcosystem ecosystem, string root)
     {

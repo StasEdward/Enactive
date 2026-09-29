@@ -59,7 +59,7 @@ public sealed partial class Orchestrator
         IWorkspaceChanges? changes, WorkspaceSnapshot? before, string request,
         Func<WorkEvent, ValueTask> publish, CancellationToken ct, IReadOnlyList<string>? planSteps = null,
         RequestObligations? obligations = null, string? handedOn = null,
-        IReadOnlyList<SuccessCriterionDefinition>? stepCriteria = null)
+        IReadOnlyList<SuccessCriterionDefinition>? stepCriteria = null, System.Text.Json.Nodes.JsonObject? handedValues = null)
     {
         var prefix = stepNumber is { } number ? $"[{number}] " : "";
         ValueTask Emit(EventKind kind, string summary) => publish(scope.Ev(kind, prefix + summary, stepNumber));
@@ -90,6 +90,17 @@ public sealed partial class Orchestrator
                 + string.Join("\n", checkedNow.Select(r => $"- {r.Name}: {(r.Outcome == CriterionOutcome.Passed ? "PASS" : r.Outcome == CriterionOutcome.Failed ? "FAIL" : "NOT CHECKED")}"
                     + (string.IsNullOrWhiteSpace(r.Detail) ? "" : $" - {r.Detail}"))),
                 WorkspaceEffect.None, origin: ToolCallOrigin.Engine);
+        // The file this step handed on as the result a criterion checks: the engine decides that it is there,
+        // the reviewer decides whether it is what was asked - so it is shown whole, as it is now, even when the
+        // step wrote none of it (run 68f92f: an earlier run's report, handed on as this run's).
+        if (stepCriteria is { Count: > 0 } && stepNumber is { } handingNo && handedValues is not null)
+            foreach (var field in stepCriteria.Where(c => c.Typed?.PathFromStep == handingNo - 1)
+                         .Select(c => c.Typed!.PathFromField!).Distinct(StringComparer.Ordinal))
+                if (handedValues[field] is System.Text.Json.Nodes.JsonValue v && v.TryGetValue<string>(out var handedPath)
+                    && !string.IsNullOrWhiteSpace(handedPath))
+                    journal.Record(stepNumber, "engine_opened_handed_file", JsonSerializer.Serialize(new { field, path = handedPath }),
+                        ActionOutcome.Succeeded, TypedCriteria.ShowHanded(handedPath, field, _workspace.RootPath),
+                        WorkspaceEffect.None, origin: ToolCallOrigin.Engine);
 
         if (cited.Count > 0)
             await Emit(EventKind.ContextAssembled,

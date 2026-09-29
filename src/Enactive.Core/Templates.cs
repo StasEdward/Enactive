@@ -94,13 +94,17 @@ public sealed record TypedCriterion(
     string? SourceField = null,
     int? ResultsStep = null,
     string? ResultsField = null,
-    Enactive.Core.Tasks.EvidenceKind? Evidence = null)
+    Enactive.Core.Tasks.EvidenceKind? Evidence = null,
+    // A file criterion whose file is the one a step HANDED ON (a path field of its output), not a name the plan
+    // fixed. For a result the request names no file for: the name is the work's, and the check follows it.
+    int? PathFromStep = null,
+    string? PathFromField = null)
 {
     /// <summary>Whether the engine decides it itself from the workspace, rather than by running a command.</summary>
     public bool InEngine => Kind is TypedCriterionKind.FileExists or TypedCriterionKind.FileContains;
 
     /// <summary>Whether it is decided from what this run's steps handed on - so only the run can decide it.</summary>
-    public bool FromRun => Kind is TypedCriterionKind.EvidenceCoversAll;
+    public bool FromRun => Kind is TypedCriterionKind.EvidenceCoversAll || PathFromStep is not null;
 }
 
 /// <summary>

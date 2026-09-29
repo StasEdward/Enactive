@@ -1462,7 +1462,7 @@ public sealed partial class Orchestrator : IOrchestrator
                 Boundary = boundary, WithholdUnchecked = itemOf?.Report is not null,
                 // Only a step of the plan as planned: an item's step has no position of its own in the planner's list.
                 Criteria = step.ExpandedFrom is null
-                    ? CriteriaFor(plan).Where(c => c.Step == stepNumber - 1).ToArray()
+                    ? CriteriaFor(plan).Where(c => c.Step == stepNumber - 1 || c.Typed?.PathFromStep == stepNumber - 1).ToArray()
                     : []
             };
 
@@ -2661,6 +2661,22 @@ public sealed partial class Orchestrator : IOrchestrator
                     foreach (var decision in decisions.Where(d => d.Kind == "check"))
                     {
                         var old = proposed[decision.Index];
+                        // A criterion the engine decides itself cannot be replaced by a command: what it checks is its
+                        // type. Said, with the planner's reason and the original kept - it used to be skipped without a
+                        // word, and the run failed on a criterion the planner had just called wrong (run 68f92f).
+                        if (revised.FirstOrDefault(c => c.Origin == CriterionOrigin.Proposed && c.Typed is not null
+                                && c.Name == old.Name && c.Command == old.Command) is { } typedOld)
+                        {
+                            var notApplied = new ContractRevision(++result.Revisions, DateTimeOffset.UtcNow, "planner", decision.Reason,
+                                typedOld, typedOld with { Command = decision.Command, Typed = null }, CriterionStrength.Incomparable,
+                                "the criterion is decided by the engine from the workspace, and a command is a different kind of check",
+                                Applied: false, DecidedBy: "engine");
+                            yield return new WorkEvent(Guid.NewGuid(), taskId, runId, DateTimeOffset.UtcNow, EventKind.ContractRevised,
+                                $"Correction not applied: '{old.Name}' is decided by the engine, and the planner proposed a command in its "
+                                + $"place ({decision.Command}). The original criterion stands, and so does its result. Planner's reason: {decision.Reason}",
+                                WorkEventPayload.ContractRevisionPayload(notApplied));
+                            continue;
+                        }
                         for (var i = 0; i < revised.Length; i++)
                         {
                             // A typed criterion is not a command to rewrite: what it checks is its type.
@@ -2966,7 +2982,9 @@ public sealed partial class Orchestrator : IOrchestrator
             var results = new List<CriterionResult>(criteria.Count);
             var next = 0;
             foreach (var c in criteria)
-                results.Add(c.Typed is { FromRun: true } ? EvidenceCoverage.Evaluate(c, handed) : others.Results[next++]);
+                results.Add(c.Typed is { FromRun: true } typedFromRun
+                    ? typedFromRun.PathFromStep is not null ? TypedCriteria.EvaluateHanded(c, handed, _workspace.RootPath) : EvidenceCoverage.Evaluate(c, handed)
+                    : others.Results[next++]);
             return new SuccessReport(results);
         }
 

@@ -115,7 +115,8 @@ public sealed class CapsAnnounceThemselvesTests
         ["LogPayload.MaxEntryBytes"] = nameof(BoundedWireLoggingTests.Wire_capture_is_optional_and_bounded_without_changing_the_answer),
         // The places a step cites, opened by the engine for its review: a long range and a long line say they were cut.
         ["CitedPlaces.MaxLines"] = nameof(ACitedPlaceIsOpenedByTheEngineTests.A_long_range_and_a_long_line_say_they_were_cut),
-        ["CitedPlaces.MaxLineChars"] = nameof(ACitedPlaceIsOpenedByTheEngineTests.A_long_range_and_a_long_line_say_they_were_cut)
+        ["CitedPlaces.MaxLineChars"] = nameof(ACitedPlaceIsOpenedByTheEngineTests.A_long_range_and_a_long_line_say_they_were_cut),
+        ["TypedCriteria.MaxHandedChars"] = nameof(AResultFileTheRequestDoesNotNameTests.A_long_handed_file_says_how_much_was_not_shown)
     };
 
     /// <summary>

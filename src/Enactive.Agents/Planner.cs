@@ -584,6 +584,11 @@ public sealed class Planner
         + "such as a shared interface, a schema or a project file - may add \"critical\":true: it then runs alone and the "
         + "engine builds and tests right after it. Use it rarely; it takes the step out of parallel work.";
 
+    /// <summary>A result file the request names no path for: the step names it, and the check follows (run 68f92f).</summary>
+    internal const string HandedPathPrompt =
+        " When the request names no file for a result, do not invent a name: the step that makes it declares "
+        + "\"output\":{\"report\":{\"type\":\"path\"}}, and the check is {\"kind\":\"file_exists\",\"path_from\":{\"step\":3,\"field\":\"report\"}}.";
+
     internal const string StepOutputsPrompt =
         " A step whose RESULT later steps must use as data (pages to process, files found, names, counts) declares it: "
         + "\"output\":{\"<field>\":{\"type\":\"path[]\",\"description\":\"...\",\"maxItems\":12}}; types: text, string, integer, "
@@ -668,7 +673,7 @@ public sealed class Planner
             prompt += StepOutputsPrompt;
 
         if (stepOutputs && typedCriteria)
-            prompt += CoverageCriterionPrompt;
+            prompt += CoverageCriterionPrompt + HandedPathPrompt;
 
         if (stepOutputs && dynamicSteps)
             prompt += DynamicStepsPrompt;
