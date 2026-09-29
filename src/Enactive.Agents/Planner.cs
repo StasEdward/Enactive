@@ -284,6 +284,8 @@ public sealed class Planner
         if (!string.IsNullOrWhiteSpace(context.GitBranch))
             lines.Add($"Git branch: {context.GitBranch}");
 
+        lines.Add(LocalTime.Line());
+
         if (context.Environment is { } env)
             lines.AddRange(env.Summary().Split('\n', StringSplitOptions.RemoveEmptyEntries)
                               .Select(l => l.Trim()));

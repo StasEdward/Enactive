@@ -5391,6 +5391,7 @@ public sealed partial class Orchestrator : IOrchestrator
         sb.AppendLine("## Context (provided by the application)");
         sb.AppendLine($"Workspace root: {_workspace.RootPath}");
         sb.AppendLine($"Workspace name: {_workspace.Name}");
+        sb.AppendLine(LocalTime.Line() + " - a date or time you write comes from this or from the system, never from memory.");
         if (context.GitBranch is { } branch)
             sb.AppendLine($"Git branch: {branch}");
         if (context.Environment is { } env)

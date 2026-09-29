@@ -81,6 +81,8 @@ internal static class StepVerdictReview
     {
         var sb = new StringBuilder();
         sb.AppendLine("The request the run is for (context - this step does a part of it):").AppendLine(input.Request).AppendLine();
+        sb.AppendLine(LocalTime.Line() + " - a date or time the work states is judged against this, not against what you remember.");
+        sb.AppendLine();
         sb.AppendLine(input.StepNumber is { } no ? $"THIS STEP ({no}): {input.StepTitle}" : $"THE WORK: {input.StepTitle}");
         if (input.OtherSteps.Count > 0)
             sb.AppendLine("Other steps of the plan (theirs, not this step's): " + string.Join("; ", input.OtherSteps));
