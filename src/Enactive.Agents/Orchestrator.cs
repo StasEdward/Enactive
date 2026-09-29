@@ -1459,7 +1459,11 @@ public sealed partial class Orchestrator : IOrchestrator
                     readOnly: step.ReadOnly);
             var attemptState = session.BeginStep(convo, store, restartFrom, step.Output, ownConversation) with
             {
-                Boundary = boundary, WithholdUnchecked = itemOf?.Report is not null
+                Boundary = boundary, WithholdUnchecked = itemOf?.Report is not null,
+                // Only a step of the plan as planned: an item's step has no position of its own in the planner's list.
+                Criteria = step.ExpandedFrom is null
+                    ? CriteriaFor(plan).Where(c => c.Step == stepNumber - 1).ToArray()
+                    : []
             };
 
             // The workspace as this step found it. Taken once, before the first attempt: a retry
@@ -3170,7 +3174,9 @@ public sealed partial class Orchestrator : IOrchestrator
         // What this step must hand on as values, and where what it hands on is kept (Phase 2).
         StepOutputSchema? outputSchema = null, StepOutputSlot? outputSlot = null,
         // What this step may change, and whether tools that cannot be checked against it are kept from it.
-        WriteBoundary? boundary = null, bool withholdUnchecked = false)
+        WriteBoundary? boundary = null, bool withholdUnchecked = false,
+        // The file criteria the plan attached to this step: checked when it ends, and the step told once what fails.
+        IReadOnlyList<SuccessCriterionDefinition>? stepCriteria = null)
     {
         // An async iterator cannot return a value, so the caller passes in the slot the loop fills.
         // Without it "how did this end" existed only as English inside an event, and every consumer
@@ -3344,6 +3350,8 @@ public sealed partial class Orchestrator : IOrchestrator
         // start left, and read on each time - the page it had already checked, a settings file eight
         // thousand characters at a time. One turn, then every tool is back.
         var handOnOnly = false;
+        // Whether this step has been told, once, that a criterion the plan attached to it fails.
+        var criteriaNudged = false;
         var handoverFailures = 0;
         var turnsHere = 0;
         ChatMessage? commandHistoryMessage = null;
@@ -4162,6 +4170,26 @@ public sealed partial class Orchestrator : IOrchestrator
                     foreach (var path in openFailures.Settle(p => contents.GetValueOrDefault(p)))
                         yield return Ev(EventKind.ContextAssembled,
                             $"An edit of {path} that did not apply is settled: the file holds the text it was to put there.");
+                }
+
+                // A criterion the plan attached to THIS step, decided by the engine as the step ends - not after the
+                // run, when nothing can be done about it. Run 68f92f: the last step was to write the coverage report
+                // the plan named, found the previous run's report under another name, said nothing needed doing, and
+                // the run failed on the missing file five seconds later. Once, as an ordinary turn; nothing is taken
+                // from prose, and what still fails after it is shown to the reviewer as the engine's own finding.
+                if (!criteriaNudged && stepCriteria is { Count: > 0 } && stepNo is { } planNo
+                    && TypedCriteria.OfStep(stepCriteria, planNo - 1, _workspace.RootPath)
+                        .Where(r => r.Outcome == CriterionOutcome.Failed).ToArray() is { Length: > 0 } failing)
+                {
+                    criteriaNudged = true;
+                    messages.Add(ChatMessage.User("Before this step ends: the plan checks this step's work, and the engine finds "
+                        + (failing.Length == 1 ? "this fails" : "these fail") + ":\n"
+                        + string.Join("\n", failing.Select(r => $"- {r.Name}: {r.Detail}"))
+                        + "\nMake the work meet " + (failing.Length == 1 ? "it" : "them") + " - the path and the text are the plan's, "
+                        + "not a suggestion - or say plainly why that cannot be done."));
+                    yield return Ev(EventKind.ContextAssembled, $"The plan's criteria for this step fail as it ends: "
+                        + string.Join("; ", failing.Select(r => $"{r.Name} ({r.Detail})")) + ". The step is told, once.");
+                    continue;
                 }
 
                 // A step that was to hand its result on and has not is reminded ONCE, before any verdict -

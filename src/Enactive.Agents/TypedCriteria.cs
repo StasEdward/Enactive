@@ -13,6 +13,9 @@ public sealed record PlannedCriterion(string Kind, string? Path, bool NonEmpty, 
     public int? ResultsStep { get; init; }
     public string? ResultsField { get; init; }
     public string? Evidence { get; init; }
+
+    /// <summary>The plan position of the step it was written inside, or null when it was stated for the whole plan.</summary>
+    public int? Step { get; init; }
 }
 
 /// <summary>
@@ -42,16 +45,30 @@ public static class TypedCriteria
         // also puts them. They were read only at the top, so a plan that put "covers_all" and
         // "file_exists" in its steps lost both without a word (run 80c951, 2026-09-28): not accepted,
         // not dropped, not mentioned. A criterion stated twice is one criterion.
+        // The step a criterion was written inside is kept: its file criteria are checked when that step ends.
+        // Stated twice - in a step and at the top - it is one criterion, in its first place, and it keeps its step.
         var items = new List<JsonElement>();
+        var ownedBy = new Dictionary<string, int>(StringComparer.Ordinal);
         if (root.TryGetProperty("criteria", out var top) && top.ValueKind == JsonValueKind.Array)
             items.AddRange(top.EnumerateArray());
         if (root.TryGetProperty("steps", out var steps) && steps.ValueKind == JsonValueKind.Array)
+        {
+            var index = 0;
             foreach (var step in steps.EnumerateArray())
+            {
                 if (step.ValueKind == JsonValueKind.Object && step.TryGetProperty("criteria", out var own) && own.ValueKind == JsonValueKind.Array)
-                    items.AddRange(own.EnumerateArray());
+                    foreach (var item in own.EnumerateArray())
+                    {
+                        items.Add(item);
+                        ownedBy.TryAdd(JsonSerializer.Serialize(item), index);
+                    }
+                index++;
+            }
+        }
         var read = new List<PlannedCriterion>();
         foreach (var item in items.DistinctBy(i => JsonSerializer.Serialize(i)))
         {
+            int? owner = ownedBy.TryGetValue(JsonSerializer.Serialize(item), out var o) ? o : null;
             string? Text(string name) => item.ValueKind == JsonValueKind.Object && item.TryGetProperty(name, out var v)
                 && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
             (int? Step, string? Field) Ref(string name)
@@ -68,7 +85,7 @@ public static class TypedCriteria
                 Text("text"), Text("target"), item.GetRawText())
             {
                 SourceStep = sourceStep, SourceField = sourceField, ResultsStep = resultsStep, ResultsField = resultsField,
-                Evidence = Text("evidence")
+                Evidence = Text("evidence"), Step = owner
             });
         }
         return read;
@@ -100,7 +117,7 @@ public static class TypedCriteria
                     var typed = new TypedCriterion(contains ? TypedCriterionKind.FileContains : TypedCriterionKind.FileExists,
                         Path: c.Path, NonEmpty: c.NonEmpty, Text: c.Text);
                     accepted.Add(new SuccessCriterionDefinition(Name(typed), Describe(typed), 0, Required: true,
-                        Origin: CriterionOrigin.Proposed) { Typed = typed });
+                        Origin: CriterionOrigin.Proposed) { Typed = typed, Step = c.Step });
                     break;
 
                 case "tests_pass":
@@ -168,6 +185,15 @@ public static class TypedCriteria
             return Result(CriterionOutcome.Unknown, $"'{typed.Path}' could not be read: {ex.Message}");
         }
     }
+
+    /// <summary>
+    /// The file criteria of one step, as they stand now - the ones the engine decides by itself, cheaply, from the
+    /// workspace. What a step is checked on when it ends (run 68f92f: a report file the plan named on the last step
+    /// was checked only after the run, and the run failed on it).
+    /// </summary>
+    internal static IReadOnlyList<CriterionResult> OfStep(IEnumerable<SuccessCriterionDefinition> criteria, int planIndex, string workspaceRoot)
+        => criteria.Where(c => c.Step == planIndex && c.Typed?.Kind is TypedCriterionKind.FileExists or TypedCriterionKind.FileContains)
+            .Select(c => Evaluate(c, workspaceRoot)).ToArray();
 
     private static string Name(TypedCriterion typed) => typed.Kind == TypedCriterionKind.FileContains
         ? $"{typed.Path} says what it should" : $"{typed.Path} exists";

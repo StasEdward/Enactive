@@ -58,7 +58,8 @@ public sealed partial class Orchestrator
         IArtifactScope store, RunScope scope, RunModels models, int? stepNumber,
         IWorkspaceChanges? changes, WorkspaceSnapshot? before, string request,
         Func<WorkEvent, ValueTask> publish, CancellationToken ct, IReadOnlyList<string>? planSteps = null,
-        RequestObligations? obligations = null, string? handedOn = null)
+        RequestObligations? obligations = null, string? handedOn = null,
+        IReadOnlyList<SuccessCriterionDefinition>? stepCriteria = null)
     {
         var prefix = stepNumber is { } number ? $"[{number}] " : "";
         ValueTask Emit(EventKind kind, string summary) => publish(scope.Ev(kind, prefix + summary, stepNumber));
@@ -81,6 +82,15 @@ public sealed partial class Orchestrator
         foreach (var (place, observed) in cited)
             journal.Record(stepNumber, CitedPlaces.ToolName, JsonSerializer.Serialize(new { cited = place }),
                 ActionOutcome.Succeeded, observed, WorkspaceEffect.None, origin: ToolCallOrigin.Engine);
+        // What the plan checks this step on, decided by the engine now - a fact for the reviewer, not a judgement.
+        if (stepCriteria is { Count: > 0 } && stepNumber is { } planNo
+            && TypedCriteria.OfStep(stepCriteria, planNo - 1, _workspace.RootPath) is { Count: > 0 } checkedNow)
+            journal.Record(stepNumber, "engine_checked_step_criteria", "{}", ActionOutcome.Succeeded,
+                "Checked by the engine when this step was reviewed - the criteria the plan attached to this step:\n"
+                + string.Join("\n", checkedNow.Select(r => $"- {r.Name}: {(r.Outcome == CriterionOutcome.Passed ? "PASS" : r.Outcome == CriterionOutcome.Failed ? "FAIL" : "NOT CHECKED")}"
+                    + (string.IsNullOrWhiteSpace(r.Detail) ? "" : $" - {r.Detail}"))),
+                WorkspaceEffect.None, origin: ToolCallOrigin.Engine);
+
         if (cited.Count > 0)
             await Emit(EventKind.ContextAssembled,
                 $"Opened {cited.Count} place(s) the step's report and result cite, for the review: {string.Join(", ", cited.Select(c => c.Cited))}");

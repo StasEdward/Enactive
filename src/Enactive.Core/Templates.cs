@@ -53,6 +53,12 @@ public sealed record SuccessCriterionDefinition(
     /// for the report; the engine does not run it.
     /// </summary>
     public TypedCriterion? Typed { get; init; }
+
+    /// <summary>
+    /// The plan position (0-based) of the step the planner attached this criterion to, or null for one stated for
+    /// the whole run. A file criterion of a step is checked when that step ends, not only when the run does.
+    /// </summary>
+    public int? Step { get; init; }
 }
 
 /// <summary>The kinds of criterion a planner may state as a type (Phase 3). Each is one the engine can decide on its own.</summary>
