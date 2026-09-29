@@ -71,7 +71,8 @@ public sealed class ToolRegistry : IToolRegistry
             lock (revision) { revision.Pending++; revision.Version++; }
         try
         {
-            var result = await tool.InvokeAsync(call.ArgumentsJson, ctx, ct);
+            // Declared types, not strings (ArgumentTypes); the call is recorded as the model sent it.
+            var result = await tool.InvokeAsync(ArgumentTypes.Coerce(tool.Definition.JsonSchema, call.ArgumentsJson), ctx, ct);
             var effect = result.DidNotRun ? WorkspaceEffect.None
                 : result.WorkspaceEffect ?? (result.Success || tool.Definition.WorkspaceEffect == WorkspaceEffect.None
                     ? tool.Definition.WorkspaceEffect : WorkspaceEffect.Unknown);

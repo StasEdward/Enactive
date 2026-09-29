@@ -274,7 +274,7 @@ public sealed class OllamaNativeProvider : IChatProvider
     {
         if (m.Role == ChatRole.Tool)
             {
-            var result = new Dictionary<string, object?> { ["role"] = "tool", ["content"] = m.Content ?? "" };
+            var result = new Dictionary<string, object?> { ["role"] = "tool", ["content"] = ControlMarkup.Neutral(m.Content) };
             if (!string.IsNullOrWhiteSpace(toolName)) result["tool_name"] = toolName;
             return result;
         }
@@ -297,7 +297,7 @@ public sealed class OllamaNativeProvider : IChatProvider
             };
         }
 
-        return new { role = RoleString(m.Role), content = m.Content ?? "" };
+        return new { role = RoleString(m.Role), content = m.Role == ChatRole.User ? ControlMarkup.Neutral(m.Content) : m.Content ?? "" };
     }
 
     private static string RoleString(ChatRole role) => role switch

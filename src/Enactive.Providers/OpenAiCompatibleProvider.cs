@@ -376,7 +376,7 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
     private object ToWire(ChatMessage m)
     {
         if (m.Role == ChatRole.Tool)
-            return new { role = "tool", tool_call_id = m.ToolCallId ?? "", content = m.Content ?? "" };
+            return new { role = "tool", tool_call_id = m.ToolCallId ?? "", content = ControlMarkup.Neutral(m.Content) };
 
         // The model's reasoning goes back with its turn only where this provider is told to send it (Qwen3.6
         // preserve_thinking, llama.cpp --reasoning-preserve); elsewhere a field a server does not expect stays out.
@@ -404,7 +404,7 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
             return new Dictionary<string, object?> { ["role"] = "assistant", ["content"] = m.Content ?? "", ["reasoning_content"] = reasoning };
 
         return new { role = _descriptor.OpenAiReasoningProfile && m.Role == ChatRole.System
-            ? "developer" : RoleString(m.Role), content = m.Content ?? "" };
+            ? "developer" : RoleString(m.Role), content = m.Role == ChatRole.User ? ControlMarkup.Neutral(m.Content) : m.Content ?? "" };
     }
 
     private static string RoleString(ChatRole role) => role switch
