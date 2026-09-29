@@ -136,7 +136,10 @@ public enum ReviewMode
     Execution,
 
     /// <summary>Is what was written actually true? For steps whose only output is content.</summary>
-    Content
+    Content,
+
+    /// <summary>Does the step meet the semantic criteria its plan set - those and nothing else (Phase 1.4)?</summary>
+    Criteria
 }
 
 /// <summary>

@@ -120,11 +120,11 @@ public sealed class Planner
         CancellationToken ct, int? maxSteps = null, bool proposeChecks = false,
         int? turnCeiling = null, int outputBudget = 4096,
         Func<int, int, string?>? beforeRetry = null, bool stepOutputs = false, bool typedCriteria = false,
-        bool dynamicSteps = false, bool validateWaves = false)
+        bool dynamicSteps = false, bool validateWaves = false, bool semanticCriteria = false)
     {
         var messages = new List<ChatMessage>
         {
-            ChatMessage.System(SystemPromptFor(maxSteps, proposeChecks, turnCeiling, stepOutputs, typedCriteria, dynamicSteps, validateWaves)),
+            ChatMessage.System(SystemPromptFor(maxSteps, proposeChecks, turnCeiling, stepOutputs, typedCriteria, dynamicSteps, validateWaves, semanticCriteria)),
             ChatMessage.User(Where(context) + Enactive.Core.Execution.RequestObligations.ExecutionPrompt(request))
         };
 
@@ -203,7 +203,7 @@ public sealed class Planner
     internal async Task<PlanResult> ReplanAsync(string request, WorkContext context, PlanResult invalid,
         string diagnostic, IChatProvider provider, string model, CancellationToken ct,
         int? maxSteps, bool proposeChecks, int turnCeiling, int outputBudget = 4096, bool stepOutputs = false,
-        bool typedCriteria = false, bool dynamicSteps = false, bool validateWaves = false)
+        bool typedCriteria = false, bool dynamicSteps = false, bool validateWaves = false, bool semanticCriteria = false)
     {
         var steps = invalid.Plan!.Steps;
         var indices = steps.Select((step, index) => (step.Id, index)).GroupBy(x => x.Id)
@@ -226,7 +226,7 @@ public sealed class Planner
         }, new JsonSerializerOptions { DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull });
         ChatMessage[] messages =
         [
-            ChatMessage.System(SystemPromptFor(maxSteps, proposeChecks, turnCeiling, stepOutputs, typedCriteria, dynamicSteps, validateWaves)),
+            ChatMessage.System(SystemPromptFor(maxSteps, proposeChecks, turnCeiling, stepOutputs, typedCriteria, dynamicSteps, validateWaves, semanticCriteria)),
             ChatMessage.User(Where(context) + Enactive.Core.Execution.RequestObligations.ExecutionPrompt(request)),
             ChatMessage.Assistant(prior),
             ChatMessage.User("The entire plan was rejected before execution: " + diagnostic
@@ -564,6 +564,13 @@ public sealed class Planner
     /// The coverage criterion (Phase 5.1), sent only when both criteria and step outputs are on: it
     /// is stated over declared outputs, and a planner that cannot declare them cannot use it.
     /// </summary>
+    /// <summary>Phase 1.4: what only judgement can decide, stated on the step - and the step is judged against it alone.</summary>
+    internal const string SemanticCriterionPrompt =
+        " What only judgement can decide about a step's result - a report says what the work found, an explanation is right - "
+        + "that step's criteria state as {\"kind\":\"semantic\",\"text\":\"<one checkable statement about the result>\","
+        + "\"evidence\":[\"file_read\"|\"command\"|\"call\"]}: the reviewer judges the step on these alone, citing evidence of "
+        + "those kinds. What a check can decide (a file exists, tests pass) is not semantic.";
+
     internal const string CoverageCriterionPrompt =
         " When a step names items (path[] or string[]) and a later step must handle EACH of them, that later step declares "
         + "an output of TYPE results - \"output\":{\"notes\":{\"type\":\"results\"}} (one entry per item; not \"text\") - and the criteria add "
@@ -664,7 +671,8 @@ public sealed class Planner
     /// (<c>Orchestrator.RunawayCeiling</c>). Null leaves the paragraph out entirely.
     /// </param>
     internal static string SystemPromptFor(int? maxSteps, bool proposeChecks = false, int? turnCeiling = null,
-        bool stepOutputs = false, bool typedCriteria = false, bool dynamicSteps = false, bool validateWaves = false)
+        bool stepOutputs = false, bool typedCriteria = false, bool dynamicSteps = false, bool validateWaves = false,
+        bool semanticCriteria = false)
     {
         var prompt = SystemPrompt;
 
@@ -677,6 +685,9 @@ public sealed class Planner
 
         if (stepOutputs && typedCriteria)
             prompt += CoverageCriterionPrompt + HandedPathPrompt;
+
+        if (typedCriteria && semanticCriteria)
+            prompt += SemanticCriterionPrompt;
 
         if (stepOutputs && dynamicSteps)
             prompt += DynamicStepsPrompt;

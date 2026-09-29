@@ -19,7 +19,8 @@ public sealed record RunEngineOptions(
     GenerationBudgets GenerationBudgets, RepairConsultation RepairConsultation,
     bool DisableThinking, int MaxParallelSteps, int EvidenceBudget, bool AllowImplicitToolCalls,
     bool ReviewContent, bool CheckSoundness, bool RevertRejectedSteps, bool StepOutputs = false, bool TypedCriteria = false,
-    bool DynamicSteps = false, FanOutLimits? FanOut = null, bool ValidateWaves = false, bool ReportBlocked = false, bool TaskReview = false)
+    bool DynamicSteps = false, FanOutLimits? FanOut = null, bool ValidateWaves = false, bool ReportBlocked = false, bool TaskReview = false,
+    bool SemanticCriteria = false)
 {
     public static RunEngineOptions Capture(AppSettings settings) => new(
         settings.ReviewRetries, settings.SuccessRetries, settings.ProposeChecks, settings.NumCtx,
@@ -27,7 +28,7 @@ public sealed record RunEngineOptions(
         settings.MaxParallelSteps, settings.EvidenceBudget, settings.AllowImplicitToolCalls,
         settings.ReviewContent, settings.CheckSoundness, settings.RevertRejectedSteps, settings.StepOutputs, settings.TypedCriteria,
         settings.DynamicSteps, new FanOutLimits(settings.MaxStepsPerExpansion, settings.MaxTotalSteps, settings.MaxFanOutDepth),
-        settings.ValidateWaves, settings.ReportBlocked, settings.TaskReview);
+        settings.ValidateWaves, settings.ReportBlocked, settings.TaskReview, settings.SemanticCriteria);
 }
 
 /// <summary>Host-owned resources and policy. Their lifetime remains with the caller.</summary>
@@ -59,5 +60,5 @@ public static class RunEngineComposition
             ecosystems: [new DotnetEcosystem()],
             stepOutputs: options.StepOutputs, typedCriteria: options.TypedCriteria,
             dynamicSteps: options.DynamicSteps, fanOut: options.FanOut, validateWaves: options.ValidateWaves,
-            reportBlocked: options.ReportBlocked, taskReview: options.TaskReview);
+            reportBlocked: options.ReportBlocked, taskReview: options.TaskReview, semanticCriteria: options.SemanticCriteria);
 }

@@ -78,7 +78,14 @@ public enum TypedCriterionKind
     /// required kind (Phase 5.1). Decided by the engine from the run's step outputs - not from any
     /// step's account of how much it covered.
     /// </summary>
-    EvidenceCoversAll
+    EvidenceCoversAll,
+
+    /// <summary>
+    /// What only judgement can decide about a step's result - that a report says what the work found, that an
+    /// explanation is right (Phase 1.4, 5.2). Judged by the reviewer and by nothing else, criterion by criterion, each
+    /// verdict citing evidence of the kinds the criterion allows; never run, and never checked at the end of the run.
+    /// </summary>
+    Semantic
 }
 
 /// <summary>A planner-stated criterion, once validated: its kind and what it is about.</summary>
@@ -98,7 +105,9 @@ public sealed record TypedCriterion(
     // A file criterion whose file is the one a step HANDED ON (a path field of its output), not a name the plan
     // fixed. For a result the request names no file for: the name is the work's, and the check follows it.
     int? PathFromStep = null,
-    string? PathFromField = null)
+    string? PathFromField = null,
+    // Semantic: the kinds of evidence a verdict on it may cite (5.2). Null or empty: any of them.
+    IReadOnlyList<Enactive.Core.Tasks.EvidenceKind>? Kinds = null)
 {
     /// <summary>Whether the engine decides it itself from the workspace, rather than by running a command.</summary>
     public bool InEngine => Kind is TypedCriterionKind.FileExists or TypedCriterionKind.FileContains;

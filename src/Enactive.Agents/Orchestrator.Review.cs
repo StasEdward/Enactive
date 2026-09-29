@@ -63,7 +63,7 @@ public sealed partial class Orchestrator
         Func<WorkEvent, ValueTask> publish, CancellationToken ct, IReadOnlyList<string>? planSteps = null,
         RequestObligations? obligations = null, string? handedOn = null,
         IReadOnlyList<SuccessCriterionDefinition>? stepCriteria = null, System.Text.Json.Nodes.JsonObject? handedValues = null,
-        IReadOnlyList<BuildBaseline>? measuredBefore = null)
+        IReadOnlyList<BuildBaseline>? measuredBefore = null, ReadLedger? reads = null)
     {
         var prefix = stepNumber is { } number ? $"[{number}] " : "";
         ValueTask Emit(EventKind kind, string summary) => publish(scope.Ev(kind, prefix + summary, stepNumber));
@@ -119,10 +119,23 @@ public sealed partial class Orchestrator
         if (cited.Count > 0)
             await Emit(EventKind.ContextAssembled,
                 $"Opened {cited.Count} place(s) the step's report and result cite, for the review: {string.Join(", ", cited.Select(c => c.Cited))}");
-        var (review, mode) = await ReviewAsync(
-            title, messages, journal, evidenceStart, stepStart, scope.Artifacts, store,
-            models.ReviewProvider!, models.ReviewModel, ct, changes, before, request,
-            obligations ?? RequestObligations.Create(request, title, stepNumber, planSteps), scope.Budget.TurnExhaustedAfter);
+        // Phase 1.4: a step whose plan set semantic criteria is judged against those, and only those - its report is
+        // a claim, and each verdict stands on evidence of a kind the criterion allows. A step without them is reviewed
+        // as it always was.
+        var (review, mode) = _semanticCriteria && stepNumber is { } judgedNo
+            && stepCriteria?.Where(c => c.Typed?.Kind == TypedCriterionKind.Semantic).ToArray() is { Length: > 0 } judged
+            ? (await CriteriaReview.RunAsync(
+                    new CriteriaReviewInput(title, judgedNo, LastAssistant(messages), handedOn,
+                        await StepFilesNowAsync(changes, before, journal, stepStart, store, ct),
+                        journal.Describe(evidenceStart, _evidenceBudget),
+                        obligations ?? RequestObligations.Create(request, title, stepNumber, planSteps)),
+                    judged, (action, kind) => Admits(action, kind, reads), models.ReviewProvider!, models.ReviewModel,
+                    scope.Budget.TurnExhaustedAfter, ct),
+                ReviewMode.Criteria)
+            : await ReviewAsync(
+                title, messages, journal, evidenceStart, stepStart, scope.Artifacts, store,
+                models.ReviewProvider!, models.ReviewModel, ct, changes, before, request,
+                obligations ?? RequestObligations.Create(request, title, stepNumber, planSteps), scope.Budget.TurnExhaustedAfter);
         await Usage(review.PromptTokens, review.CompletionTokens, review.CachedPromptTokens, review.CacheCreationPromptTokens);
         if (review.BudgetExhausted is { } reviewSpent)
             return new(review, BudgetExhausted: reviewSpent);
@@ -144,6 +157,62 @@ public sealed partial class Orchestrator
 
         await Emit(EventKind.ReviewFailed, "FAIL (soundness): " + proven.Reason);
         return new(new ReviewResult(false, proven.Reason), ProofRejected: true);
+    }
+
+    /// <summary>
+    /// Whether a recorded call is evidence of a kind (Phase 5.2): a read that covered its file WHOLE (1.3) or the
+    /// engine's own observation, a command that ran, a call that succeeded. No tool is named: what a call is comes
+    /// from its definition and its record.
+    /// </summary>
+    private bool Admits(ExecutedAction action, EvidenceKind kind, ReadLedger? reads) => kind switch
+    {
+        EvidenceKind.Command => action.ExitCode is not null && action.Outcome != ActionOutcome.Refused,
+        EvidenceKind.Call => action.Outcome == ActionOutcome.Succeeded,
+        EvidenceKind.FileRead => action.Origin == ToolCallOrigin.Engine
+            || (action.Outcome == ActionOutcome.Succeeded
+                && _tools.DefinitionOf(action.Tool)?.FileCoverage == FileCoverageBehavior.Read
+                && PathsIn(action.Arguments).Any(p => reads?.SeenWhole(p).Whole == true)),
+        _ => false
+    };
+
+    private static IEnumerable<string> PathsIn(string arguments)
+    {
+        var found = new List<string>();
+        try
+        {
+            using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(arguments) ? "{}" : arguments);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object) return found;
+            if (doc.RootElement.TryGetProperty("path", out var one) && one.ValueKind == JsonValueKind.String) found.Add(one.GetString()!);
+            if (doc.RootElement.TryGetProperty("paths", out var many) && many.ValueKind == JsonValueKind.Array)
+                found.AddRange(many.EnumerateArray().Where(p => p.ValueKind == JsonValueKind.String).Select(p => p.GetString()!));
+        }
+        catch (JsonException) { }
+        return found;
+    }
+
+    private const int CriteriaFileChars = 16_000;
+
+    /// <summary>The files this step wrote, as they are now - whole where they fit, and said to be in part where not.</summary>
+    private async Task<IReadOnlyList<(string Path, string Text, bool Whole)>> StepFilesNowAsync(IWorkspaceChanges? changes,
+        WorkspaceSnapshot? before, ExecutionJournal journal, int stepStart, IArtifactScope store, CancellationToken ct)
+    {
+        var paths = new List<string>();
+        if (changes is not null && before is not null
+            && await MeasuredChangesAsync(changes, before, journal.Actions.Skip(stepStart).ToArray(), ct) is { } measured)
+            paths.AddRange(measured.Select(w => w.RelativePath));
+        paths.AddRange((await ReadWrittenAsync(store, ct)).Select(w => w.RelativePath));
+        var files = new List<(string, string, bool)>();
+        foreach (var path in paths.Select(p => p.Replace('\\', '/')).Distinct(StringComparer.OrdinalIgnoreCase)
+                     .Where(p => !p.StartsWith(WorkspaceGuard.ScratchPrefix + "/", StringComparison.OrdinalIgnoreCase)))
+        {
+            var full = Path.Combine(_workspace.RootPath, path);
+            if (!File.Exists(full)) continue;
+            string text;
+            try { text = await File.ReadAllTextAsync(full, ct); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { continue; }
+            files.Add(text.Length <= CriteriaFileChars ? (path, text, true) : (path, Shortening.HeadAndTail(text, CriteriaFileChars), false));
+        }
+        return files;
     }
 
     /// <summary>

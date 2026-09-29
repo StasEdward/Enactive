@@ -456,6 +456,10 @@ public sealed partial class AppSettings
     // task review answers each open question on the run's evidence. On: it can only move the outcome on cited evidence.
     public bool TaskReview { get; set; } = true;
 
+    // Phase 1.4: the planner may set a step semantic criteria (needs TypedCriteria), and a step that has them is judged
+    // against those alone, each verdict citing evidence of the kinds the criterion allows. Off until runs show it.
+    public bool SemanticCriteria { get; set; }
+
     // Put a rejected step's files back to how they were before it ran. Without this the gate stops
     // only the REPORT: the run says Failed while the rejected document stays in the workspace, which
     // is the version someone is most likely to open next. A file changed since the step wrote it is
@@ -929,6 +933,7 @@ public sealed partial class AppSettings
         ValidateWaves = ValidateWaves,
         ReportBlocked = ReportBlocked,
         TaskReview = TaskReview,
+        SemanticCriteria = SemanticCriteria,
         Bindings = Bindings.Clone(),
         RemoteAccess = RemoteAccess.Clone(),
         Smtp = Smtp.Clone(),

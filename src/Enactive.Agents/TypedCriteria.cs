@@ -14,6 +14,9 @@ public sealed record PlannedCriterion(string Kind, string? Path, bool NonEmpty, 
     public string? ResultsField { get; init; }
     public string? Evidence { get; init; }
 
+    /// <summary>Every evidence kind it names, whether written as one ("file_read") or a list (["file_read","command"]).</summary>
+    public IReadOnlyList<string> EvidenceList { get; init; } = [];
+
     /// <summary>The plan position of the step it was written inside, or null when it was stated for the whole plan.</summary>
     public int? Step { get; init; }
 
@@ -40,7 +43,11 @@ public sealed record PlannedCriterion(string Kind, string? Path, bool NonEmpty, 
 public static class TypedCriteria
 {
     /// <summary>What the planner may write, in its words.</summary>
-    internal static readonly string[] Kinds = ["file_exists", "file_contains", "tests_pass", "covers_all"];
+    internal static readonly string[] Kinds = ["file_exists", "file_contains", "tests_pass", "covers_all", "semantic"];
+
+    /// <summary>A semantic criterion shorter than this says nothing a reviewer could hold a result to.</summary>
+    internal const int MinSemanticText = 10;
+    internal const int MaxSemanticText = 400;
 
     /// <summary>The planner's "criteria" list, read leniently: whatever is there is kept for validation to judge.</summary>
     public static IReadOnlyList<PlannedCriterion> Read(JsonElement root)
@@ -90,7 +97,12 @@ public static class TypedCriteria
                 Text("text"), Text("target"), item.GetRawText())
             {
                 SourceStep = sourceStep, SourceField = sourceField, ResultsStep = resultsStep, ResultsField = resultsField,
-                Evidence = Text("evidence"), Step = owner, PathFromStep = pathFromStep, PathFromField = pathFromField
+                Evidence = Text("evidence"), Step = owner, PathFromStep = pathFromStep, PathFromField = pathFromField,
+                EvidenceList = item.ValueKind == JsonValueKind.Object && item.TryGetProperty("evidence", out var ev)
+                    ? ev.ValueKind == JsonValueKind.Array
+                        ? ev.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString()!).ToArray()
+                        : ev.ValueKind == JsonValueKind.String ? [ev.GetString()!] : []
+                    : []
             });
         }
         return read;
@@ -103,7 +115,9 @@ public static class TypedCriteria
     /// </summary>
     public static (IReadOnlyList<SuccessCriterionDefinition> Accepted, IReadOnlyList<string> Dropped) Validate(
         IReadOnlyList<PlannedCriterion> planned, string workspaceRoot, IReadOnlyList<IEcosystem> ecosystems,
-        Enactive.Core.Tasks.Plan? plan = null)
+        Enactive.Core.Tasks.Plan? plan = null,
+        // Phase 1.4: semantic criteria are accepted only where the run judges them (SemanticCriteria).
+        bool semantic = false)
     {
         var accepted = new List<SuccessCriterionDefinition>();
         var dropped = new List<string>();
@@ -162,7 +176,18 @@ public static class TypedCriteria
                     break;
 
                 case "semantic":
-                    Drop(c, "a semantic criterion is the reviewer's to judge, and is not a type the engine checks");
+                    if (!semantic) { Drop(c, "a semantic criterion is the reviewer's to judge, and is not a type the engine checks"); break; }
+                    var said = c.Text?.Trim() ?? "";
+                    if (said.Length < MinSemanticText) { Drop(c, "it states nothing a result could be held to"); break; }
+                    if (said.Length > MaxSemanticText) { Drop(c, $"it is longer than {MaxSemanticText} characters - one checkable statement, not a specification"); break; }
+                    if (c.Step is null) { Drop(c, "a semantic criterion is judged with the step whose work it is about - state it on that step"); break; }
+                    var kinds = c.EvidenceList.Select(k => (Named: k, Kind: EvidenceCoverage.KindNamed(k))).ToArray();
+                    if (kinds.FirstOrDefault(k => k.Kind is null) is { Named: { } unknownKind })
+                    { Drop(c, $"'{unknownKind}' is not an evidence kind (file_read, command, call)"); break; }
+                    var judged = new TypedCriterion(TypedCriterionKind.Semantic, Text: said,
+                        Kinds: kinds.Select(k => k.Kind!.Value).Distinct().ToArray());
+                    accepted.Add(new SuccessCriterionDefinition(Name(judged), Describe(judged), 0, Required: true,
+                        Origin: CriterionOrigin.Proposed) { Typed = judged, Step = c.Step });
                     break;
 
                 default:
@@ -275,12 +300,20 @@ public static class TypedCriteria
 
     private static string Name(TypedCriterion typed)
     {
+        if (typed.Kind == TypedCriterionKind.Semantic)
+            return "judged: " + (typed.Text!.Length <= 80 ? typed.Text : typed.Text[..80] + "…");
         var file = typed.PathFromStep is { } step ? $"the file step {step + 1} hands on as '{typed.PathFromField}'" : typed.Path;
         return typed.Kind == TypedCriterionKind.FileContains ? $"{file} says what it should" : $"{file} exists";
     }
 
+    /// <summary>The evidence kinds a semantic criterion allows, in its own words.</summary>
+    internal static string KindsOf(TypedCriterion typed)
+        => typed.Kinds is { Count: > 0 } kinds ? string.Join(", ", kinds.Select(EvidenceCoverage.NameOf)) : "file_read, command, call";
+
     private static string Describe(TypedCriterion typed)
     {
+        if (typed.Kind == TypedCriterionKind.Semantic)
+            return $"semantic \"{typed.Text}\" (evidence: {KindsOf(typed)})";
         var file = typed.PathFromStep is { } step ? $"<step {step + 1}'s {typed.PathFromField}>" : typed.Path;
         return typed.Kind == TypedCriterionKind.FileContains
             ? $"file_contains {file} \"{typed.Text}\""

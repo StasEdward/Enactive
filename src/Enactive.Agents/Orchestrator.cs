@@ -211,6 +211,7 @@ public sealed partial class Orchestrator : IOrchestrator
     private readonly bool _validateWaves;
     private readonly bool _reportBlocked;
     private readonly bool _taskReview;
+    private readonly bool _semanticCriteria;
 
     /// <summary>Per run: when it began and what earlier runs had written - so a read of their files says whose they are.</summary>
     private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, EarlierRunsView> _earlierRuns = new();
@@ -297,9 +298,13 @@ public sealed partial class Orchestrator : IOrchestrator
         bool reportBlocked = false,
         // Phase 9: a run short of Completed only on steps DONE, NOT VERIFIED is reviewed as a whole. Off here, on in
         // the application's settings (AppSettings.TaskReview).
-        bool taskReview = false)
+        bool taskReview = false,
+        // Phase 1.4: the planner may set a step semantic criteria, and a step that has them is judged against those only.
+        // Off by default: it changes what a step's review is.
+        bool semanticCriteria = false)
     {
         _taskReview = taskReview;
+        _semanticCriteria = semanticCriteria;
         _validateWaves = validateWaves;
         _reportBlocked = reportBlocked;
         _waveStore = waveStore ?? WaveCapture.DefaultStore();
@@ -563,7 +568,8 @@ public sealed partial class Orchestrator : IOrchestrator
                         _limits.MaxSteps, _proposeChecks && _successCriteria.Count == 0,
                         turnCeiling: RunawayCeiling, outputBudget: _generationBudgets.For(GenerationPurpose.Planning),
                         stepOutputs: _stepOutputs, typedCriteria: _typedCriteria,
-                        beforeRetry: budget.TurnExhaustedAfter, dynamicSteps: _dynamicSteps, validateWaves: _validateWaves));
+                        beforeRetry: budget.TurnExhaustedAfter, dynamicSteps: _dynamicSteps, validateWaves: _validateWaves,
+                        semanticCriteria: _semanticCriteria));
         }
         catch (RetryBudgetExceededException ex)
         {
@@ -607,7 +613,7 @@ public sealed partial class Orchestrator : IOrchestrator
                     plan = await InScopeAsync(runId, taskId, null, () => _planner.ReplanAsync(
                         intent.RawText, intent.Context, plan, defect, models.PlanProvider, models.Plan.Model, ct,
                         _limits.MaxSteps, _proposeChecks && _successCriteria.Count == 0, RunawayCeiling, _generationBudgets.For(GenerationPurpose.Planning),
-                        _stepOutputs, _typedCriteria, _dynamicSteps, _validateWaves));
+                        _stepOutputs, _typedCriteria, _dynamicSteps, _validateWaves, _semanticCriteria));
                 }
                 catch (OperationCanceledException) { throw; }
                 catch (Exception ex) { replanFailure = "Plan repair failed: " + ex.Message; }
@@ -642,7 +648,7 @@ public sealed partial class Orchestrator : IOrchestrator
                     plan = await InScopeAsync(runId, taskId, null, () => _planner.ReplanAsync(
                         intent.RawText, intent.Context, plan, missing.Diagnostic, models.PlanProvider, models.Plan.Model, ct,
                         _limits.MaxSteps, _proposeChecks && _successCriteria.Count == 0, RunawayCeiling, _generationBudgets.For(GenerationPurpose.Planning),
-                        _stepOutputs, _typedCriteria, _dynamicSteps, _validateWaves));
+                        _stepOutputs, _typedCriteria, _dynamicSteps, _validateWaves, _semanticCriteria));
                 }
                 catch (OperationCanceledException) { throw; }
                 catch (Exception ex) { unclear = "the planner could not be asked: " + ex.Message; }
@@ -722,7 +728,8 @@ public sealed partial class Orchestrator : IOrchestrator
         // with its reason, never a reason for the run to fail (3.2).
         if (_typedCriteria && resume is null && plan.PlannedCriteria.Count > 0)
         {
-            var (accepted, dropped) = TypedCriteria.Validate(plan.PlannedCriteria, _workspace.RootPath, _ecosystems, plan.Plan);
+            var (accepted, dropped) = TypedCriteria.Validate(plan.PlannedCriteria, _workspace.RootPath, _ecosystems, plan.Plan,
+                semantic: _semanticCriteria);
             foreach (var why in dropped)
                 yield return scope.Ev(EventKind.ErrorObserved, why);
             if (accepted.Count > 0)
@@ -3208,6 +3215,10 @@ public sealed partial class Orchestrator : IOrchestrator
         // What this run's steps handed on: a coverage criterion is decided from it and from nothing else.
         IEnumerable<StepOutput>? outputs = null)
     {
+        // A semantic criterion is judged with its step, by its reviewer, and by nothing else (Phase 1.4): it is not a
+        // command, and there is nothing here that could decide it.
+        if (criteria.Any(c => c.Typed?.Kind == TypedCriterionKind.Semantic))
+            criteria = criteria.Where(c => c.Typed?.Kind != TypedCriterionKind.Semantic).ToArray();
         if (criteria.Count == 0)
             return SuccessReport.NothingToCheck;
 
