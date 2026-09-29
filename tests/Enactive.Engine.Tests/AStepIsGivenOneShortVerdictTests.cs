@@ -22,10 +22,13 @@ public sealed class AStepIsGivenOneShortVerdictTests
 
     private static Turn Fail(string reason) => Turn.Says($$"""{"verdict":"fail","reason":"{{reason}}","calls":[],"files":[]}""");
 
-    private static async Task<(List<WorkEvent> Events, FakeChatProvider Worker, FakeChatProvider Reviewer)> Run(bool shortReview, Turn[] reviews,
-        params Turn[] more)
+    private static Task<(List<WorkEvent> Events, FakeChatProvider Worker, FakeChatProvider Reviewer)> Run(bool shortReview, Turn[] reviews,
+        params Turn[] more) => Run(shortReview, false, reviews, more);
+
+    private static async Task<(List<WorkEvent> Events, FakeChatProvider Worker, FakeChatProvider Reviewer)> Run(bool shortReview,
+        bool derivedFigures, Turn[] reviews, params Turn[] more)
     {
-        using var fx = new EngineFixture { ShortReview = shortReview };
+        using var fx = new EngineFixture { ShortReview = shortReview, CheckDerivedFigures = derivedFigures };
         fx.Write("disks.txt", "C: 120 GB free of 500 GB");
         var worker = new FakeChatProvider(
             [Turn.Says(Plan),
@@ -96,6 +99,22 @@ public sealed class AStepIsGivenOneShortVerdictTests
         Assert.Contains("review rejected: review not passed: the report is still empty", reason, StringComparison.Ordinal);
         Assert.Contains("[2] Check the report", reason, StringComparison.Ordinal);
         Assert.Contains("- skipped", reason, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Run 1ec9e8: a total the worker added in its head was 70 GB short, and the step reviews passed it with every row in
+    /// front of them. Switched on, the review is told to work such a figure out itself; off, it is not.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_derived_figure_is_worked_out_by_the_review_when_switched_on(bool on)
+    {
+        var (_, _, reviewer) = await Run(true, on, [Pass(), Pass("the report matches the listing", 3)]);
+
+        var instruction = reviewer.Requests[0].Messages[0].Content!;
+        Assert.Equal(on, instruction.Contains("a total, a difference, a percentage, an average - is a claim too", StringComparison.Ordinal));
+        Assert.Equal(on, instruction.Contains("work it out from the values the calls show, and fail it if it is wrong", StringComparison.Ordinal));
     }
 
     [Fact]

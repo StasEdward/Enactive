@@ -464,6 +464,10 @@ public sealed partial class AppSettings
     // every step is and the engine's checks are green. Off: the earlier review of every sentence, and a final review.
     public bool ShortReview { get; set; } = true;
 
+    // The step review works out a total, a difference, a percentage the work derived from other figures, and fails a
+    // wrong one - a worker adds in its head, and a reviewer shown every row passed a wrong sum (run 1ec9e8).
+    public bool CheckDerivedFigures { get; set; } = true;
+
     // Put a rejected step's files back to how they were before it ran. Without this the gate stops
     // only the REPORT: the run says Failed while the rejected document stays in the workspace, which
     // is the version someone is most likely to open next. A file changed since the step wrote it is
@@ -939,6 +943,7 @@ public sealed partial class AppSettings
         TaskReview = TaskReview,
         SemanticCriteria = SemanticCriteria,
         ShortReview = ShortReview,
+        CheckDerivedFigures = CheckDerivedFigures,
         Bindings = Bindings.Clone(),
         RemoteAccess = RemoteAccess.Clone(),
         Smtp = Smtp.Clone(),

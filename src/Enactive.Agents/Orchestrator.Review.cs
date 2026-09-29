@@ -141,7 +141,7 @@ public sealed partial class Orchestrator
                             LastAssistant(messages), handedOn,
                             await StepFilesNowAsync(changes, before, journal, stepStart, store, ct),
                             journal.Describe(evidenceStart, _evidenceBudget)),
-                        models.ReviewProvider!, models.ReviewModel, scope.Budget.TurnExhaustedAfter, ct),
+                        models.ReviewProvider!, models.ReviewModel, scope.Budget.TurnExhaustedAfter, ct, _checkDerivedFigures),
                     ReviewMode.Step)
             : await ReviewAsync(
                 title, messages, journal, evidenceStart, stepStart, scope.Artifacts, store,

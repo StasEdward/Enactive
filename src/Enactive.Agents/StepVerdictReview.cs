@@ -38,10 +38,28 @@ internal static class StepVerdictReview
         detail its purpose does not depend on.
         """;
 
+    /// <summary>
+    /// Run 1ec9e8, 2026-09-29: a disk report said "Total capacity: ~12 231 GB - 38.1 %"; its rows add up to 12 301.18 GB
+    /// and 37.9 %. No call had computed a total - the worker added in its head - and three step reviews passed it with
+    /// every row in front of them. Measured on ten recorded reviews of three runs, each twice, and the corrected report
+    /// three times: told to work a derived figure out, the reviewer failed both steps that carried the wrong total, with the
+    /// sum, and passed everything else; told that such a figure counts only where a call computed it, it passed the
+    /// wrong total as "simple sums, consistent with what was measured".
+    /// </summary>
+    private const string DerivedFigures = """
+
+        A figure the work derives from other figures - a total, a difference, a percentage, an average - is a claim too:
+        work it out from the values the calls show, and fail it if it is wrong. Rounding, a change of units, and figures
+        copied as they are from a call's output are not derived.
+        """;
+
     public static async Task<ReviewResult> RunAsync(StepVerdictInput input, IChatProvider provider, string model,
-        Func<int, int, string?>? beforeRetry, CancellationToken ct)
+        Func<int, int, string?>? beforeRetry, CancellationToken ct, bool checkDerivedFigures = false)
     {
-        var messages = new List<ChatMessage> { ChatMessage.System(Instruction), ChatMessage.User(Prompt(input)) };
+        var messages = new List<ChatMessage>
+        {
+            ChatMessage.System(checkDerivedFigures ? Instruction + DerivedFigures : Instruction), ChatMessage.User(Prompt(input))
+        };
         int prompt = 0, output = 0;
         int? cached = null, created = null;
         for (var attempt = 0; attempt < 2; attempt++)

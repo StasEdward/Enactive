@@ -213,6 +213,7 @@ public sealed partial class Orchestrator : IOrchestrator
     private readonly bool _taskReview;
     private readonly bool _semanticCriteria;
     private readonly bool _shortReview;
+    private readonly bool _checkDerivedFigures;
 
     /// <summary>Per run: when it began and what earlier runs had written - so a read of their files says whose they are.</summary>
     private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, EarlierRunsView> _earlierRuns = new();
@@ -305,9 +306,13 @@ public sealed partial class Orchestrator : IOrchestrator
         bool semanticCriteria = false,
         // One short verdict per step (StepVerdictReview), and the task done when every step is - no review of the whole
         // run after it. Off here, on in the application's settings; off, the step review is the one before.
-        bool shortReview = false)
+        bool shortReview = false,
+        // The short step review works out a total, a difference, a percentage the work derived, and fails a wrong one
+        // (StepVerdictReview.DerivedFigures). Off here, on in the application's settings.
+        bool checkDerivedFigures = false)
     {
         _shortReview = shortReview;
+        _checkDerivedFigures = checkDerivedFigures;
         _taskReview = taskReview;
         _semanticCriteria = semanticCriteria;
         _validateWaves = validateWaves;
