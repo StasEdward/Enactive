@@ -215,6 +215,10 @@ public sealed partial class Orchestrator : IOrchestrator
     private readonly bool _shortReview;
     private readonly bool _checkDerivedFigures;
 
+    /// <summary>One per conversation, kept with the conversation itself: steps that share one, and a hand-over that
+    /// refills it, are compared with the request before them (PrefixCacheWatch).</summary>
+    private readonly ConditionalWeakTable<List<ChatMessage>, PrefixCacheWatch> _cacheWatches = new();
+
     /// <summary>Per run: when it began and what earlier runs had written - so a read of their files says whose they are.</summary>
     private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, EarlierRunsView> _earlierRuns = new();
     private readonly string _waveStore;
@@ -4323,6 +4327,8 @@ public sealed partial class Orchestrator : IOrchestrator
             // Measured against what this request actually is, so the next estimate uses the model's
             // real ratio rather than the pessimistic default.
             var sizeAtRequest = Transcript.Size(messages) + toolsOverhead;
+            var cacheWatch = _cacheWatches.GetValue(messages, _ => new PrefixCacheWatch());
+            cacheWatch.Sending(messages);
 
             var turn = new ModelTurn();
             await foreach (var delta in provider.StreamChatAsync(request, ct))
@@ -4346,6 +4352,8 @@ public sealed partial class Orchestrator : IOrchestrator
                     yield return Usage(
                         usage.PromptTokens ?? 0, usage.CompletionTokens ?? 0,
                         usage.CachedPromptTokens, usage.CacheCreationPromptTokens);
+                    if (cacheWatch.Observed(usage.PromptTokens, usage.CachedPromptTokens, usage.PromptTokensIncludeCache) is { } cacheNote)
+                        yield return Ev(EventKind.ContextAssembled, cacheNote);
                 }
                 else
                 {
