@@ -769,15 +769,22 @@ public sealed partial class Orchestrator : IOrchestrator
                     [new("allow", "Go on, with the final checks as planned"), new("without", "Go on, without final checks"),
                      new("deny", "Stop - no work starts")],
                     RecommendedOptionId: "without",
-                    FullDetail: $"The review of the final checks said: {unsettled}\n\nThe checks as planned:\n{CheckLines(plan.Checks)}\n\n"
+                    FullDetail: $"The review of the final checks said: {unsettled}\n\nThe checks as planned:\n{CheckLines(CriteriaFor(plan))}\n\n"
                         + "Going on without final checks runs none of these commands; each step is still reviewed, and the engine's own "
                         + "checks (the build, the tests, the files produced) still run.");
                 yield return scope.Ev(EventKind.DecisionRequested, $"{question.Topic}: {unsettled}");
                 var settled = await ToolAccess.AskAsync(_decisions, _decisionGate, question, ct);
                 yield return scope.Ev(EventKind.DecisionResolved, $"Final checks: {settled.OptionId}"
                     + (settled.Because is { } because ? $" ({because})" : ""));
+                // "Without" is the contract from here on - for the run, its checkpoint and its end: the template's checks are
+                // dropped with the planner's, and nothing adds them back (CriteriaFor reads a settled contract as it is). The
+                // card promised that none of these commands runs; a template's check that still ran would break that promise.
                 if (string.Equals(settled.OptionId, "without", StringComparison.OrdinalIgnoreCase))
-                    plan = plan with { Checks = plan.Checks.Where(c => c.Typed is { InEngine: true } or { FromRun: true }).ToArray() };
+                    plan = plan with
+                    {
+                        Checks = CriteriaFor(plan).Where(c => c.Typed is { InEngine: true } or { FromRun: true }).ToArray(),
+                        RestoredChecks = true
+                    };
                 else if (!string.Equals(settled.OptionId, "allow", StringComparison.OrdinalIgnoreCase))
                     plan = plan with { IncompleteReason = "Unresolved verification contract: " + unsettled };
             }

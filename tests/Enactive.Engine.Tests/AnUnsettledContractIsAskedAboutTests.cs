@@ -4,6 +4,7 @@ using System.Text.Json;
 using Enactive.Agents;
 using Enactive.Core.Events;
 using Enactive.Core.Permissions;
+using Enactive.Core.Templates;
 using Enactive.Core.Tools;
 using Xunit;
 
@@ -34,7 +35,8 @@ public sealed class AnUnsettledContractIsAskedAboutTests
          "unresolved":"Uploading the report cannot be verified by a command"}
         """;
 
-    private static async Task<(List<WorkEvent> Events, Commands Commands, EngineFixture Fx)> Run(string answer)
+    private static async Task<(List<WorkEvent> Events, Commands Commands, EngineFixture Fx)> Run(string answer,
+        IReadOnlyList<SuccessCriterionDefinition>? template = null)
     {
         var fx = new EngineFixture { PlannerOverride = new Planner() };
         fx.Decisions.Answer = answer;
@@ -44,7 +46,7 @@ public sealed class AnUnsettledContractIsAskedAboutTests
             Turn.Says(Unsettled));
         var worker = new FakeChatProvider(Turn.Calls1("write_file", """{"path":"report.txt","content":"C: 120 GB free"}"""), Turn.Says("Written."));
         var events = await fx.RunAsync(fx.Build(new MapProviderFactory(worker, (Routers.PlannerProviderId, planner)),
-            router: Routers.WithPlannerOn()), "Write a disk report.");
+            router: Routers.WithPlannerOn(), successCriteria: template), "Write a disk report.");
         return (events, commands, fx);
     }
 
@@ -59,6 +61,22 @@ public sealed class AnUnsettledContractIsAskedAboutTests
         Assert.Contains("Uploading the report cannot be verified by a command", asked.Detail, StringComparison.Ordinal);
         Assert.True(fx.Exists("report.txt"));
         Assert.DoesNotContain("check-upload", commands.Seen);
+        Assert.True(events.Has(EventKind.TaskCompleted), events.Text());
+    }
+
+    /// <summary>
+    /// "Without" is the contract from then on - a template's checks included. The card says none of the commands runs;
+    /// a template's check was added back by the criteria the run is judged by, and ran (code review, 2026-09-29).
+    /// </summary>
+    [Fact]
+    public async Task Without_final_checks_a_templates_check_does_not_run_either()
+    {
+        var (events, commands, fx) = await Run("without", [new("uploaded by the template", "template-upload-check")]);
+        using var _ = fx;
+
+        Assert.Contains("template-upload-check", Assert.Single(fx.Decisions.Requests).FullDetail, StringComparison.Ordinal);
+        Assert.True(fx.Exists("report.txt"));
+        Assert.DoesNotContain("template-upload-check", commands.Seen);
         Assert.True(events.Has(EventKind.TaskCompleted), events.Text());
     }
 
