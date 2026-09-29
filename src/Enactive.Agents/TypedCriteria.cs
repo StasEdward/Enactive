@@ -175,16 +175,23 @@ public static class TypedCriteria
 
     /// <summary>Why a path_from criterion cannot be checked in this plan, or null when it can.</summary>
     private static string? HandedPathInvalid(PlannedCriterion c, Enactive.Core.Tasks.Plan? plan)
+        => HandedPathInvalid(c.PathFromStep, c.PathFromField, plan);
+
+    internal static string? HandedPathInvalid(int? pathFromStep, string? pathFromField, Enactive.Core.Tasks.Plan? plan)
     {
-        if (c.PathFromStep is not { } step || string.IsNullOrWhiteSpace(c.PathFromField))
+        if (pathFromStep is not { } step || string.IsNullOrWhiteSpace(pathFromField))
             return "its path_from names no step and field";
         if (plan is null || step < 0 || step >= plan.Steps.Count)
             return $"path_from names step {step}, which is not in the plan";
-        if (plan.Steps[step].Output?.Fields.FirstOrDefault(f => f.Name == c.PathFromField) is not { } field)
-            return $"step {step} declares no output field '{c.PathFromField}' to hand the path on in";
+        if (plan.Steps[step].Output?.Fields.FirstOrDefault(f => f.Name == pathFromField) is not { } field)
+            return $"step {step} declares no output field '{pathFromField}' to hand the path on in";
         return field.Type == Enactive.Core.Tasks.StepOutputFieldType.Path ? null
-            : $"step {step}'s '{c.PathFromField}' is not a path (it is {Enactive.Core.Tasks.StepOutputSchema.NameOf(field.Type)})";
+            : $"step {step}'s '{pathFromField}' is not a path (it is {Enactive.Core.Tasks.StepOutputSchema.NameOf(field.Type)})";
     }
+
+    /// <summary>The same criterion over another file: named and described anew, everything else as it was.</summary>
+    internal static SuccessCriterionDefinition Rebuild(SuccessCriterionDefinition criterion, TypedCriterion typed)
+        => criterion with { Name = Name(typed), Command = Describe(typed), Typed = typed };
 
     /// <summary>
     /// A file criterion over the file a step HANDED ON: the path its accepted output gave in the field, checked as
@@ -287,7 +294,7 @@ public static class TypedCriteria
     }
 
     /// <summary>The full path, when the relative one stays inside the workspace; null otherwise.</summary>
-    private static string? Inside(string root, string path)
+    internal static string? Inside(string root, string path)
     {
         if (string.IsNullOrWhiteSpace(path) || System.IO.Path.IsPathRooted(path)) return null;
         try

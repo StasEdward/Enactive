@@ -721,6 +721,8 @@ public sealed partial class Orchestrator : IOrchestrator
                 yield return scope.Terminal(RunOutcomeKind.Incomplete, contractFailure, _ => "Verification contract unresolved; no work started.");
                 yield break;
             }
+            foreach (var note in plan.ContractNotes)
+                yield return scope.Ev(EventKind.ContextAssembled, note);
             foreach (var check in plan.Checks)
                 yield return scope.Ev(EventKind.ContextAssembled,
                     $"Final check ({check.Origin}): {check.Command} — {check.PlanningReason}");

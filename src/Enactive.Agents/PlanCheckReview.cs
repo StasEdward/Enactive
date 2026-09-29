@@ -20,8 +20,11 @@ internal static class PlanCheckReview
         // Criteria the engine decides itself are not commands, and are not this review's: nothing in
         // them can run, so nothing in them can break the task's restrictions. Set aside, and put back
         // after, so a review answered with a list of commands cannot lose them (Phase 3.4).
-        var decidedByTheEngine = plan.Checks.Where(c => c.Typed is { InEngine: true }).ToArray();
-        plan = plan with { Checks = plan.Checks.Where(c => c.Typed is not { InEngine: true }).ToArray() };
+        // They are shown to it in their own typed form, with where each file's name came from, and it may
+        // correct what the plan chose - within EngineCriteriaReview's limits - but never turn one into a command.
+        var decidedByTheEngine = plan.Checks.Where(c => c.Typed is not null).ToArray();
+        plan = plan with { Checks = plan.Checks.Where(c => c.Typed is null).ToArray() };
+        var reviewsEngineCriteria = !preserveCriteria && decidedByTheEngine.Length > 0;
         var inputs = new PlanCheckInputs(request, plan.Checks, plan.Restrictions, plan.ActionPolicy,
             tools?.Select(t => new PlanCheckTool(t.Name, t.Kind, t.CommandPolicy)).ToArray(), preserveCriteria);
         var messages = new List<ChatMessage>
@@ -61,10 +64,13 @@ internal static class PlanCheckReview
                     // back; on 2026-09-28 it guessed "proposed", twice, and both runs ended there.
                     checks = plan.Checks.Select(c => new { c.Name, c.Command, c.ExpectedExitCode, c.Required,
                         origin = c.Origin.ToString().ToLowerInvariant(), c.AlreadyPassing, c.RequestQuote, c.PlanningReason }),
+                    engineCriteria = reviewsEngineCriteria ? EngineCriteriaReview.Show(decidedByTheEngine, request, workspaceRoot) : null,
                     existingRestrictions = plan.Restrictions, actionPolicy = plan.ActionPolicy,
                     tools = tools?.Select(t => new { t.Name, kind = t.Kind.ToString(), commandPolicy = t.CommandPolicy.ToString() })
                 }))
         };
+        if (reviewsEngineCriteria)
+            messages[0] = ChatMessage.System(messages[0].Content + EngineCriteriaReview.Prompt);
         if (preserveCriteria)
             messages[0] = ChatMessage.System(messages[0].Content +
                 "\nThis is a LOCKED criteria review (template, resume, or proposed repair). Return every supplied criterion "
@@ -102,8 +108,12 @@ internal static class PlanCheckReview
                     problem = "Unresolved verification contract: " + unresolved;
                     break;
                 }
+                var (engineCriteria, notes) = reviewsEngineCriteria
+                    ? EngineCriteriaReview.Apply(decidedByTheEngine, answer, request, workspaceRoot, plan.Plan)
+                    : (decidedByTheEngine, []);
                 return Result(budget.TurnExhaustedAfter(prompt, output)) with {
-                    Checks = [.. contract.Checks, .. decidedByTheEngine], Restrictions = contract.Restrictions, ActionPolicy = contract.ActionPolicy };
+                    Checks = [.. contract.Checks, .. engineCriteria], Restrictions = contract.Restrictions, ActionPolicy = contract.ActionPolicy,
+                    ContractNotes = notes };
             }
             catch (Exception ex) when (PlanCheckContract.IsRefusal(ex))
             {

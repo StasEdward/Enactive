@@ -54,6 +54,9 @@ public sealed record PlanResult(
     /// </summary>
     public IReadOnlyList<PlannedCriterion> PlannedCriteria { get; init; } = [];
     internal bool RestoredChecks { get; init; }
+
+    /// <summary>What the contract review changed in the criteria the engine decides, or refused to change, said.</summary>
+    public IReadOnlyList<string> ContractNotes { get; init; } = [];
     public Enactive.Core.Tools.TaskActionPolicy? ActionPolicy { get; init; }
     public IReadOnlyList<Enactive.Core.Tools.TaskRestriction> Restrictions { get; init; } = [];
 }
