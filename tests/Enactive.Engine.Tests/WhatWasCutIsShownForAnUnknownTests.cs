@@ -23,16 +23,65 @@ public sealed class WhatWasCutIsShownForAnUnknownTests
         return journal.Describe(0, 6000);
     }
 
-    private static Turn Answer(string verdict)
+    private static Turn Answer(string verdict, bool namesTheCall = true, int proofCall = 1)
     {
-        var answer = JsonNode.Parse(Verdicts.Combined(Verdicts.Shown("inventory listed", 1), "run").Text!)!;
+        var answer = JsonNode.Parse(Verdicts.Combined(Verdicts.Shown("inventory listed", proofCall), "run").Text!)!;
         answer["report_checks"] = new JsonArray(new JsonObject {
             ["source_id"] = "worker-report", ["fragment_id"] = "F1", ["kind"] = "observed",
             ["verdict"] = verdict, ["reason"] = verdict == "unknown"
-                ? "The count for shelf 17 is in the part of the listing that was cut" : "The listing shows shelf 17 with 42 boxes",
-            ["calls"] = new JsonArray(1), ["obligation_ids"] = new JsonArray()
+                ? "The count for shelf 17 is in the part of inventory/shelves.txt that was cut" : "The listing shows shelf 17 with 42 boxes",
+            ["calls"] = namesTheCall ? new JsonArray(1) : new JsonArray(), ["obligation_ids"] = new JsonArray()
         });
         return Turn.Says(answer.ToJsonString());
+    }
+
+    private static EvidenceView Shelves(string middle = Middle)
+    {
+        var journal = new ExecutionJournal();
+        journal.Record(1, "read_file", """{"path":"inventory/shelves.txt"}""", ActionOutcome.Succeeded,
+            new string('a', 20_000) + "\n" + middle + "\n" + new string('z', 20_000));
+        return journal.Describe(0, 6000);
+    }
+
+    /// <summary>
+    /// Run 341c2f: the review was being corrected by parts when the calls were shown, and the parts kept were the
+    /// report checks - the unknowns themselves. A whole answer is asked for after the calls are shown.
+    /// </summary>
+    [Fact]
+    public async Task A_correction_by_parts_pending_does_not_keep_the_old_unknowns()
+    {
+        var provider = new FakeChatProvider(Answer("unknown", proofCall: 99), Answer("unknown"), Answer("pass"));
+
+        var result = await Review(provider, LongListing());
+
+        Assert.True(result.Pass, result.Notes);
+        Assert.Equal(3, provider.Requests.Count);
+        Assert.Contains("Additional requested evidence", provider.Requests[2].Messages[1].Content!, StringComparison.Ordinal);
+    }
+
+    /// <summary>Shown as text, as the model saw it: not as a JSON document where every Cyrillic letter is six characters.</summary>
+    [Fact]
+    public async Task What_is_shown_is_the_text_as_it_was()
+    {
+        const string shelf = "Полка 17: 42 коробки";
+        var provider = new FakeChatProvider(Answer("unknown"), Answer("pass"));
+
+        await Review(provider, Shelves(shelf));
+
+        Assert.Contains(shelf, provider.Requests[1].Messages[1].Content!, StringComparison.Ordinal);
+        Assert.DoesNotContain(@"\u041F", provider.Requests[1].Messages[1].Content!, StringComparison.Ordinal);
+    }
+
+    /// <summary>Run 341c2f, step 2: the unknown named the file and no call; the shown read of that file stands for it.</summary>
+    [Fact]
+    public async Task An_unknown_that_names_a_file_and_no_call_is_shown_the_read_of_that_file()
+    {
+        var provider = new FakeChatProvider(Answer("unknown", namesTheCall: false), Answer("pass"));
+
+        var result = await Review(provider, Shelves());
+
+        Assert.True(result.Pass, result.Notes);
+        Assert.Contains(Middle, provider.Requests[1].Messages[1].Content!, StringComparison.Ordinal);
     }
 
     private static Task<ReviewResult> Review(FakeChatProvider provider, EvidenceView evidence)

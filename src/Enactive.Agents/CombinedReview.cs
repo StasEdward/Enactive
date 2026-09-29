@@ -315,7 +315,7 @@ public sealed partial class Reviewer
                     // Only more evidence: what is still unknown after it stays unknown.
                     if (!unknownsExpanded && evidence.IsTruncated
                         && SemanticReviewAudit.Outcome(answer) is { Unknown: true }
-                        && SemanticReviewAudit.UnknownCalls(answer).Where(evidence.ContainsAction).Distinct()
+                        && SemanticReviewAudit.UnknownCalls(answer, evidence).Where(evidence.ContainsAction).Distinct()
                             .Take(MaxUnknownCalls).ToArray() is { Length: > 0 } unclear)
                     {
                         unknownsExpanded = true;
@@ -325,6 +325,10 @@ public sealed partial class Reviewer
                         if (expanded is not null)
                         {
                             evidence = expanded;
+                            // A whole answer is asked for, and read as one: a correction by parts still pending would
+                            // keep the old report checks - the very unknowns this is for (run 341c2f, 2026-09-29).
+                            sectionRepair = null;
+                            mappingCompletion = null;
                             messages[1] = ChatMessage.User(Prompt(evidence));
                             rounds = Math.Max(rounds, attempt + 2);
                             messages.Add(ChatMessage.Assistant(rawAnswer));

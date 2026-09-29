@@ -6,7 +6,7 @@ using Enactive.Core.Execution;
 using Enactive.Core.Providers;
 
 /// <summary>Validates references and routes explicit semantic findings; does not prove semantic completeness.</summary>
-internal static class SemanticReviewAudit
+internal static partial class SemanticReviewAudit
 {
     internal const string Guidance = """
         Every claims[].requirements[] includes verification={verdict,reason,detects,assertions:[{evidence_id}]}.
@@ -129,22 +129,41 @@ internal static class SemanticReviewAudit
     /// The calls the reviewer named for what it could not establish - the "calls" of every report check and
     /// verification whose verdict is unknown - when there is no concrete failure beside them.
     /// </summary>
-    internal static IReadOnlyList<int> UnknownCalls(string answer)
+    /// <param name="evidence">
+    /// Where an unknown names no call but names a FILE, the shown calls whose arguments name that file stand for it.
+    /// Run 341c2f, 2026-09-29: "the coverage figures come from coverage-report.md, whose numeric portion was cut" -
+    /// with calls: [] - and the read of that file was in the evidence, cut.
+    /// </param>
+    internal static IReadOnlyList<int> UnknownCalls(string answer, EvidenceView? evidence = null)
     {
         if (ModelText.ExtractJsonObject(ModelText.StripThink(answer)) is not { } json) return [];
         try
         {
             using var doc = JsonDocument.Parse(json);
             var root = doc.RootElement;
-            var checks = Arr(root, "report_checks")
+            var unknown = Arr(root, "report_checks")
                 .Concat(Arr(root, "claims").SelectMany(c => Arr(c, "requirements"))
-                    .Select(r => r.ValueKind == JsonValueKind.Object && r.TryGetProperty("verification", out var v) ? v : default));
-            return checks.Where(c => c.ValueKind == JsonValueKind.Object && Str(c, "verdict") == "unknown")
-                .SelectMany(c => Arr(c, "calls")).Where(id => id.ValueKind == JsonValueKind.Number && id.TryGetInt32(out _))
+                    .Select(r => r.ValueKind == JsonValueKind.Object && r.TryGetProperty("verification", out var v) ? v : default))
+                .Concat(root.TryGetProperty("assessments", out var a) && a.ValueKind == JsonValueKind.Object
+                    ? a.EnumerateObject().Select(p => p.Value) : [])
+                .Where(c => c.ValueKind == JsonValueKind.Object && Str(c, "verdict") == "unknown").ToArray();
+            var named = unknown.SelectMany(c => Arr(c, "calls")).Where(id => id.ValueKind == JsonValueKind.Number && id.TryGetInt32(out _))
                 .Select(id => id.GetInt32()).Distinct().ToArray();
+            if (named.Length > 0 || evidence is null) return named;
+            var files = unknown.Select(c => Str(c, "reason") ?? "")
+                .SelectMany(reason => FileName().Matches(reason).Select(m => m.Value.Replace('\\', '/')))
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            return files.Length == 0 ? []
+                : evidence.VisibleActionIds.OrderBy(id => id)
+                    .Where(id => evidence.Cited(id) is { } call
+                                 && files.Any(f => call.Arguments.Replace("\\\\", "/").Replace('\\', '/').Contains(f, StringComparison.OrdinalIgnoreCase)))
+                    .ToArray();
         }
         catch (JsonException) { return []; }
     }
+
+    [System.Text.RegularExpressions.GeneratedRegex(@"[A-Za-z0-9_.\-/\\]*[A-Za-z0-9_\-]\.[A-Za-z][A-Za-z0-9]{0,7}\b")]
+    private static partial System.Text.RegularExpressions.Regex FileName();
 
     internal static Finding? Outcome(string answer)
     {

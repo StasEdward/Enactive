@@ -117,7 +117,12 @@ public sealed class EvidenceView
         {
             if (room < 256) break;
             var action = Actions[id - 1];
-            var entry = JsonSerializer.Serialize(action);
+            // As text, the way the model saw it - not as a JSON document. Serialized, every character outside ASCII
+            // became a six-character escape: run 341c2f, 2026-09-29, a Russian report came to 18,864 characters of
+            // \u0410\u043D... and was cut again inside the room it was expanded into.
+            var entry = $"{action.Tool} {action.Arguments}"
+                        + (action.ExitCode is { } exit ? $" [process exit={exit}]" : "")
+                        + "\n" + (action.Output ?? "(no output)");
             cut |= entry.Length > room;
             var shown = entry.Length <= room ? entry : entry[..(room / 2)]
                 + "\n[evidence excerpt truncated]\n" + entry[^(room / 2)..];
