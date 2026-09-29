@@ -50,6 +50,9 @@ public sealed record CheckpointStep(
 
     /// <summary>Runs alone and is validated as soon as it ends (Phase 6).</summary>
     public bool Critical { get; init; }
+
+    /// <summary>Only looks, and changes no file.</summary>
+    public bool ReadOnly { get; init; }
 }
 
 /// <summary>A step of a wave not yet validated, and what it changed as the engine recorded it.</summary>

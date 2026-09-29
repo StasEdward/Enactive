@@ -59,8 +59,23 @@ public static class ShellLookup
         return paths.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
-    /// <summary>How two tools' paths are compared: separators and a leading "./" are spelling.</summary>
-    public static string Normal(string path) => path.Replace('\\', '/').Trim().TrimStart('.', '/').TrimEnd('/');
+    /// <summary>
+    /// How two tools' paths are compared: separators and a leading "./" are spelling. Only "./" and "/" come off the
+    /// front - not a dot that is part of a name: it trimmed every leading dot, and ".enactive/scratch" became
+    /// "enactive/scratch", a path that is not there (found 2026-09-29, when a read-only step's scratch notes were
+    /// refused as a change to the work).
+    /// </summary>
+    public static string Normal(string path)
+    {
+        var p = path.Replace('\\', '/').Trim();
+        while (true)
+        {
+            if (p.StartsWith("./", StringComparison.Ordinal)) p = p[2..];
+            else if (p.StartsWith('/')) p = p[1..];
+            else break;
+        }
+        return p == "." ? "" : p.TrimEnd('/');
+    }
 
     private static string? Command(string? argumentsJson)
     {

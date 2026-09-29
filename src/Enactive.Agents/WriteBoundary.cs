@@ -31,8 +31,20 @@ internal sealed class WriteBoundary(
     IReadOnlyList<string>? items,
     Func<IReadOnlySet<string>> owned,
     Action<string> own,
-    IReadOnlyCollection<string>? deliverables = null)
+    IReadOnlyCollection<string>? deliverables = null,
+    bool readOnly = false)
 {
+    /// <summary>
+    /// What a step planned as read-only is told when it tries to change a file. Run 014ad0a9, 2026-09-29: "Analyze
+    /// code and existing test coverage" made 53 edits to test files and one to the application's own markup,
+    /// fixing tests that had failed before the run, and sixteen minutes later had not begun the analysis.
+    /// </summary>
+    internal const string ReadOnlyRefusal = "this step was planned as read-only: it looks and reports, and changes no file. "
+        + "Hand on what you found; the steps after it make the changes. (.enactive/scratch is still yours for notes and logs.)";
+
+    /// <summary>Whether this step was planned to change nothing.</summary>
+    public bool ReadOnly => readOnly;
+
     private readonly Dictionary<string, List<string>> _creating = new(StringComparer.Ordinal);
 
     /// <summary>Whether this is the boundary of a step for one item (and not only the reserved documents).</summary>
@@ -52,6 +64,8 @@ internal sealed class WriteBoundary(
             if (reserved.Contains(rel, StringComparer.OrdinalIgnoreCase))
                 return $"'{rel}' is written by the engine from the steps' recorded results, and no step changes it. "
                        + $"Hand what you found on with {StepOutputContract.ToolName}.";
+            if (readOnly && !rel.StartsWith(WorkspaceGuard.ScratchPrefix + "/", StringComparison.OrdinalIgnoreCase))
+                return $"'{rel}' was not changed: " + ReadOnlyRefusal;
             if (items is null) continue;
 
             string full;

@@ -58,6 +58,12 @@ public sealed record PlanStep(
     /// nothing beside it, and is validated the moment it ends. Declared by the planner, never guessed.
     /// </summary>
     public bool Critical { get; init; }
+
+    /// <summary>
+    /// A step that only looks - reads, searches, lists, analyses, runs checks to see where things stand - and
+    /// changes no file (Phase 6.1). Declared by the planner; the engine refuses its file changes.
+    /// </summary>
+    public bool ReadOnly { get; init; }
 }
 
 /// <summary>Where a step's items come from: a list field of an earlier step's output, by its plan position (0-based).</summary>
@@ -100,6 +106,7 @@ public sealed record PlanStepSpec(
     public ForEachSource? ForEach { get; init; }
     public string? Report { get; init; }
     public bool Critical { get; init; }
+    public bool ReadOnly { get; init; }
 }
 
 /// <summary>
@@ -132,7 +139,7 @@ public static class DagPlan
 
             steps.Add(new PlanStep(ids[i], specs[i].Title, StepStatus.Pending, deps, specs[i].Complexity)
                 { ObligationIds = specs[i].ObligationIds, Output = specs[i].Output, ForEach = specs[i].ForEach, Report = specs[i].Report,
-                  Critical = specs[i].Critical });
+                  Critical = specs[i].Critical, ReadOnly = specs[i].ReadOnly });
         }
         return new Plan(Guid.NewGuid(), steps);
     }

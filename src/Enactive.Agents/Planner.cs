@@ -217,7 +217,8 @@ public sealed class Planner
                 output = s.Output is { } declared ? OutputJson(declared) : null,
                 forEach = s.ForEach is { } each ? new { step = each.Step, field = each.Field } : null,
                 report = s.Report,
-                critical = s.Critical ? true : (bool?)null
+                critical = s.Critical ? true : (bool?)null,
+                readOnly = s.ReadOnly ? true : (bool?)null
             })
         }, new JsonSerializerOptions { DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull });
         ChatMessage[] messages =
@@ -387,7 +388,8 @@ public sealed class Planner
                                 ForEach = ParseForEach(el),
                                 Report = el.TryGetProperty("report", out var report) && report.ValueKind == JsonValueKind.String
                                     && !string.IsNullOrWhiteSpace(report.GetString()) ? report.GetString() : null,
-                                Critical = el.TryGetProperty("critical", out var critical) && critical.ValueKind == JsonValueKind.True
+                                Critical = el.TryGetProperty("critical", out var critical) && critical.ValueKind == JsonValueKind.True,
+                                ReadOnly = el.TryGetProperty("readOnly", out var readOnly) && readOnly.ValueKind == JsonValueKind.True
                             });
                         }
                     }
@@ -607,6 +609,7 @@ public sealed class Planner
         (exact API/command syntax, versions/configuration) that cannot be read from this workspace.
         LENGTH IS NOT COMPLEXITY: boilerplate and reports based on tool results stay normal.
         No more than TWO steps may be "complex".
+        A step that only looks (reads, analyses, runs tests) and changes no file: "readOnly":true.
         """;
 
     /// <summary>

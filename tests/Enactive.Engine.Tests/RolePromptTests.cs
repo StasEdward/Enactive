@@ -80,7 +80,9 @@ public sealed class RolePromptTests
     {
         var planner = Planner.SystemPromptFor(12, turnCeiling: 250);
         Assert.DoesNotContain("STRONGLY prefer", planner);
-        Assert.True(Words(planner) < 350, $"Planner grew to {Words(planner)} words.");
+        // 360, from 350: "readOnly" (2026-09-29) is one line a planner cannot do without - an analysis step
+        // that is not told it may not write spent sixteen minutes fixing tests nobody asked it to fix.
+        Assert.True(Words(planner) < 360, $"Planner grew to {Words(planner)} words.");
         Assert.True(Words(Reviewer.ExecutionGuidance) < 330,
             $"Execution reviewer grew to {Words(Reviewer.ExecutionGuidance)} words.");
         // Output protocol stays separate from the shared guidance used by combined review.

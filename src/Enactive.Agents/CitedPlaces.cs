@@ -69,7 +69,7 @@ internal static partial class CitedPlaces
         {
             if (found.Count >= MaxPlaces) return found;
             var cited = m.Value.Trim();
-            var path = m.Groups["path"].Value.Replace('\\', '/').TrimStart('.', '/');
+            var path = ShellLookup.Normal(m.Groups["path"].Value);
             if (!int.TryParse(m.Groups["line"].Value, out var first) || first < 1) continue;
             var last = m.Groups["end"].Success && int.TryParse(m.Groups["end"].Value, out var e) && e >= first ? e : first;
             if (!seen.Add($"{path}:{first}-{last}")) continue;

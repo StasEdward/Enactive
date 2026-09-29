@@ -1245,7 +1245,7 @@ public sealed partial class Orchestrator : IOrchestrator
                         Result = session.Outputs.TryGetValue(s.Id, out var handed) ? handed : null,
                         ForEach = s.ForEach, Items = s.Items, ExpandedFrom = s.ExpandedFrom, Joins = s.Joins, NotExpanded = s.NotExpanded,
                         Record = session.Records.TryGetValue(s.Id, out var record) ? record : null,
-                        Report = s.Report, Critical = s.Critical,
+                        Report = s.Report, Critical = s.Critical, ReadOnly = s.ReadOnly,
                         Owned = s.ExpandedFrom is null ? null : _progress.OwnedBy(scope.TaskId, s.Id) is { Count: > 0 } owned ? owned.ToArray() : null
                     })
                 .ToArray();
@@ -1369,6 +1369,11 @@ public sealed partial class Orchestrator : IOrchestrator
                 $"Proceed with this step of the plan: {step.Title}\n"
                 + $"This is step {stepNumber} of {total}. Current obligation scope: S{stepNumber}.\n"
                 + FanOut.Instruction(step, scheduler.Steps)
+                + (step.ReadOnly
+                    ? "This step is READ-ONLY: look, run what shows where things stand, and report - change no file, "
+                      + "with the file tools or with a command. The steps after it make the changes; notes and logs go to "
+                      + ".enactive/scratch.\n"
+                    : "")
                 + StepBoundary.Describe(Current(), step.Id, completedSteps, unverifiedSteps)
                 + session.Obligations.AtStep(stepNumber).MappingPrompt()
                 + "Do only this step. Apply the relevant requirement IDs from the original request; "
@@ -1441,11 +1446,17 @@ public sealed partial class Orchestrator : IOrchestrator
             var itemOf = step.ExpandedFrom is { } parent ? planNow.FirstOrDefault(s => s.Id == parent) : null;
             if (FanOut.ScopeNote(step, planNow) is { } scopeNote)
                 session.ScopeNotes[stepNumber] = scopeNote;
+            // A step planned to change nothing is judged as one: what it changed is outside its plan.
+            if (step.ReadOnly)
+                session.ScopeNotes[stepNumber] = (session.ScopeNotes.GetValueOrDefault(stepNumber) is { } before ? before + " " : "")
+                    + "It was planned as READ-ONLY: it looks and reports, and changes no file (scratch excepted). A change it "
+                    + "made to the work - by a command, since its file tools refuse - is outside its plan, and says so.";
             // The files the run's criteria are about: its result, which no single item's step makes.
             var deliverables = CriteriaFor(plan).Select(c => c.Typed?.Path).OfType<string>().Select(ShellLookup.Normal).ToArray();
-            var boundary = reserved.Length == 0 && step.ExpandedFrom is null ? null
+            var boundary = reserved.Length == 0 && step.ExpandedFrom is null && !step.ReadOnly ? null
                 : new WriteBoundary(_workspace.RootPath, reserved, step.ExpandedFrom is null ? null : step.Items ?? [],
-                    () => _progress.OwnedBy(scope.TaskId, step.Id), path => _progress.Own(scope.TaskId, step.Id, path), deliverables);
+                    () => _progress.OwnedBy(scope.TaskId, step.Id), path => _progress.Own(scope.TaskId, step.Id, path), deliverables,
+                    readOnly: step.ReadOnly);
             var attemptState = session.BeginStep(convo, store, restartFrom, step.Output, ownConversation) with
             {
                 Boundary = boundary, WithholdUnchecked = itemOf?.Report is not null
@@ -2287,7 +2298,7 @@ public sealed partial class Orchestrator : IOrchestrator
                 {
                     ObligationIds = s.ObligationIds, Output = s.Output,
                     ForEach = s.ForEach, Items = s.Items, ExpandedFrom = s.ExpandedFrom, Joins = s.Joins, NotExpanded = s.NotExpanded,
-                    Report = s.Report, Critical = s.Critical
+                    Report = s.Report, Critical = s.Critical, ReadOnly = s.ReadOnly
                 })
             .ToArray();
 
