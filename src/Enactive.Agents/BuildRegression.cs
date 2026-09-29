@@ -135,15 +135,19 @@ internal static class BuildRegression
     /// that differs), that measurement answers for the commands instead: a command changed the build only if a file
     /// the ecosystem owns is among them. Run 1ec9e8, 2026-09-29: fourteen <c>Get-PSDrive</c> calls for a disk report
     /// had the solution built and tested again, the measurement showing that no file of it had changed. Without a
-    /// measurement - a resumed run, steps at once - a command is still taken to have changed anything.</para>
+    /// measurement - a resumed run, steps at once - a command is still taken to have changed anything; and with one, so
+    /// it is where a file the ecosystem owns lies outside it (<paramref name="unmeasured"/>).</para>
     /// </summary>
     internal static bool Touched(IEcosystem ecosystem, IEnumerable<ArtifactRef> produced, IEnumerable<ExecutedAction> actions,
-        IReadOnlyCollection<string>? measured = null)
+        IReadOnlyCollection<string>? measured = null, IReadOnlyCollection<string>? unmeasured = null)
         => produced.Any(a => ecosystem.Owns(a.RelativePath))
-           || (measured is not null
-               ? measured.Any(ecosystem.Owns)
-               : actions.Any(a => a.Outcome != ActionOutcome.Refused && a.WorkspaceEffect != WorkspaceEffect.None
-                                  && a.ChangedPaths is not { Count: > 0 }));
+           || measured?.Any(ecosystem.Owns) == true
+           // A command's effect is unknown: the measurement answers for it only over what it measured. A file the
+           // ecosystem owns that it did not cover - ignored by git, say - may have been changed without it showing
+           // (code review of engeen_v4, P2); then, and without a measurement at all, a command may have changed anything.
+           || (actions.Any(a => a.Outcome != ActionOutcome.Refused && a.WorkspaceEffect != WorkspaceEffect.None
+                                && a.ChangedPaths is not { Count: > 0 })
+               && (measured is null || unmeasured?.Any(ecosystem.Owns) == true));
 
     /// <summary>
     /// Whether a result is worth a second run before it is believed: tests that passed and fail now can be

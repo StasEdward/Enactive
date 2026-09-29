@@ -2649,7 +2649,10 @@ public sealed partial class Orchestrator : IOrchestrator
             ArtifactRef[] produced;
             lock (scope.Artifacts) produced = scope.Artifacts.ToArray();
             var actions = session.RunEvidence().Actions;
-            var due = session.Builds.Where(b => BuildRegression.Touched(b.Ecosystem, produced, actions, measured?.Changed.ToArray())).ToArray();
+            // What the measurement did not cover, or - where that cannot be said - no measurement at all.
+            var unmeasured = measured is null ? null : Unmeasured(measured);
+            var changed = unmeasured is null ? null : measured!.Changed.ToArray();
+            var due = session.Builds.Where(b => BuildRegression.Touched(b.Ecosystem, produced, actions, changed, unmeasured)).ToArray();
             if (due.Length == 0) return [];
 
             // The last wave's builds, when nothing a build reads has changed since: the same builds again
@@ -5329,6 +5332,37 @@ public sealed partial class Orchestrator : IOrchestrator
                 : $"(completed, no files changed; {string.Join("; ", parts)})";
 
         return $"(completed; {string.Join("; ", parts)})";
+    }
+
+    /// <summary>
+    /// The workspace's files the measurement did not cover - ignored by git, most often - leaving out the folders a build
+    /// writes and tools keep (bin, obj, node_modules...), which are no build's input. Null - nothing taken as covered -
+    /// where the workspace is too big to list or cannot be read.
+    /// </summary>
+    private IReadOnlyCollection<string>? Unmeasured(NetChanges measured)
+    {
+        const int MaxListed = 200_000;
+        var skipped = new HashSet<string>(WorkspaceGuard.SkippedFolders, StringComparer.OrdinalIgnoreCase);
+        var outside = new List<string>();
+        var listed = 0;
+        var pending = new Stack<string>([_workspace.RootPath]);
+        try
+        {
+            while (pending.Count > 0)
+            {
+                var dir = pending.Pop();
+                foreach (var sub in Directory.EnumerateDirectories(dir))
+                    if (!skipped.Contains(Path.GetFileName(sub))) pending.Push(sub);
+                foreach (var file in Directory.EnumerateFiles(dir))
+                {
+                    if (++listed > MaxListed) return null;
+                    var key = PathKey(Path.GetRelativePath(_workspace.RootPath, file));
+                    if (!measured.Measured.Contains(key)) outside.Add(key);
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return null; }
+        return outside;
     }
 
     /// <summary>What a run changed from its start to its end, and which files that measurement covered.</summary>

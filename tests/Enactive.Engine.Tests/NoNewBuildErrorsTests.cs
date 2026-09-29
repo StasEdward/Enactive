@@ -184,6 +184,71 @@ public sealed class NoNewBuildErrorsTests
         Assert.Single(BuildChecks(events));
     }
 
+    private static void Git(string root, params string[] args)
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo("git") { WorkingDirectory = root, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
+        foreach (var a in args) psi.ArgumentList.Add(a);
+        using var p = System.Diagnostics.Process.Start(psi)!;
+        p.StandardOutput.ReadToEnd();
+        p.StandardError.ReadToEnd();
+        p.WaitForExit();
+    }
+
+    /// <summary>The wiki under git, with a page git ignores - one the build reads all the same.</summary>
+    private static EngineFixture IgnoredPage()
+    {
+        var fx = Wiki();
+        fx.Write(".gitignore", "generated.page\n");
+        fx.Write("generated.page", "# Generated\n");
+        Git(fx.Root, "init", "-q");
+        Git(fx.Root, "config", "user.email", "t@example.com");
+        Git(fx.Root, "config", "user.name", "t");
+        Git(fx.Root, "add", "-A");
+        Git(fx.Root, "commit", "-q", "-m", "start");
+        return fx;
+    }
+
+    /// <summary>
+    /// Code review of engeen_v4, P2: under git the measurement leaves out what git ignores, so a command that changed
+    /// an ignored page the build reads showed no change, and the build was not run again. Where a file the ecosystem
+    /// owns lies outside the measurement, a command is still taken to have changed it.
+    /// </summary>
+    [Fact]
+    public async Task A_command_where_the_measurement_does_not_look_is_rebuilt()
+    {
+        using var fx = IgnoredPage();
+        var worker = new FakeChatProvider(
+            Turn.Says(QuickAction),
+            Turn.Calls1("run_command", """{"command":"echo # Generated again> generated.page"}""", "c1"),
+            Turn.Says("Regenerated the page."));
+
+        var events = await fx.RunAsync(fx.Build(worker, EngineFixture.Role("developer")), "regenerate the page");
+
+        Assert.Single(BuildChecks(events));
+    }
+
+    /// <summary>...while one that changed nothing the build reads, in the same workspace, is still measured and not rebuilt -
+    /// here as elsewhere, only where the ignored page is not the ecosystem's.</summary>
+    [Fact]
+    public async Task Under_git_a_command_that_changed_nothing_the_build_reads_is_not_rebuilt()
+    {
+        using var fx = Wiki();
+        Git(fx.Root, "init", "-q");
+        Git(fx.Root, "config", "user.email", "t@example.com");
+        Git(fx.Root, "config", "user.name", "t");
+        Git(fx.Root, "add", "-A");
+        Git(fx.Root, "commit", "-q", "-m", "start");
+        var worker = new FakeChatProvider(
+            Turn.Says(QuickAction),
+            Turn.Calls1("run_command", """{"command":"echo a note> notes.txt"}""", "c1"),
+            Turn.Says("Wrote a note."));
+
+        var events = await fx.RunAsync(fx.Build(worker, EngineFixture.Role("developer")), "write a note");
+
+        Assert.True(fx.Exists("notes.txt"), events.Text());
+        Assert.Empty(BuildChecks(events));
+    }
+
     /// <summary>A workspace no ecosystem recognises pays nothing: no baseline, no build.</summary>
     [Fact]
     public async Task A_workspace_no_ecosystem_recognises_gets_no_build_at_all()
