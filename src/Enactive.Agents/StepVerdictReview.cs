@@ -139,10 +139,12 @@ internal static class StepVerdictReview
         if (reason.Length == 0) errors.Add("reason is empty");
         var shown = input.Files.Select(f => f.Path).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var cited = 0;
+        var didNotRun = new List<int>();
         foreach (var call in Arr("calls").Where(x => x.ValueKind == JsonValueKind.Number && x.TryGetInt32(out _)).Select(x => x.GetInt32()))
         {
-            if (input.Evidence.Cited(call) is null) errors.Add($"call {call} is not in the evidence shown");
-            else cited++;
+            if (input.Evidence.Cited(call) is not { } action) errors.Add($"call {call} is not in the evidence shown");
+            else if (Shows(action)) cited++;
+            else didNotRun.Add(call);
         }
         foreach (var file in Arr("files").Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString()!))
         {
@@ -155,13 +157,33 @@ internal static class StepVerdictReview
         }
         // A step that made no call and wrote nothing has nothing to cite; anything else passes on what shows it.
         var anythingToCite = input.Evidence.VisibleActionIds.Count > 0 || input.Files.Count > 0;
-        if (verdict == "pass" && cited == 0 && anythingToCite) errors.Add("a pass cites the calls or files that show the step done");
+        if (verdict == "pass" && cited == 0 && anythingToCite)
+            errors.Add(didNotRun.Count > 0
+                ? $"a pass cites the calls or files that show the step done; {string.Join(", ", didNotRun.Select(n => $"[{n}]"))} "
+                  + "did not run or did not do what it was called for (refused, or a tool that failed), so it shows nothing done"
+                : "a pass cites the calls or files that show the step done");
         if (errors.Count > 0) return (null, errors);
 
         return verdict == "pass"
             ? (new ReviewResult(true, reason), [])
             : (new ReviewResult(false, reason) { RepairAdvice = reason }, []);
     }
+
+    /// <summary>
+    /// Whether a call can show a step done. Code review of engeen_v4, P1: a pass citing only a refused send_email was
+    /// accepted - a call being in the list is not the call having happened. One that was refused never ran; a tool
+    /// that failed without running a process (a mail not sent, an edit that did not apply) did not do what it was called
+    /// for. A process that ran shows what it showed, whatever its exit code: a failure can be the very result asked for
+    /// (a test that must fail before the fix), and whether it is, is the reviewer's to say - as it was the earlier
+    /// review's "expected-failure".
+    /// </summary>
+    private static bool Shows(ExecutedAction action)
+        => action.Outcome switch
+        {
+            ActionOutcome.Refused => false,
+            ActionOutcome.Failed => action.ExitCode is not null,
+            _ => true
+        };
 
     /// <summary>Whether the evidence names this path - as written, with either slash, or escaped in a call's JSON.</summary>
     private static bool Mentioned(string path, string evidence)
