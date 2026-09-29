@@ -212,6 +212,7 @@ public sealed partial class Orchestrator : IOrchestrator
     private readonly bool _reportBlocked;
     private readonly bool _taskReview;
     private readonly bool _semanticCriteria;
+    private readonly bool _shortReview;
 
     /// <summary>Per run: when it began and what earlier runs had written - so a read of their files says whose they are.</summary>
     private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, EarlierRunsView> _earlierRuns = new();
@@ -301,8 +302,12 @@ public sealed partial class Orchestrator : IOrchestrator
         bool taskReview = false,
         // Phase 1.4: the planner may set a step semantic criteria, and a step that has them is judged against those only.
         // Off by default: it changes what a step's review is.
-        bool semanticCriteria = false)
+        bool semanticCriteria = false,
+        // One short verdict per step (StepVerdictReview), and the task done when every step is - no review of the whole
+        // run after it. Off here, on in the application's settings; off, the step review is the one before.
+        bool shortReview = false)
     {
+        _shortReview = shortReview;
         _taskReview = taskReview;
         _semanticCriteria = semanticCriteria;
         _validateWaves = validateWaves;
@@ -2324,7 +2329,7 @@ public sealed partial class Orchestrator : IOrchestrator
         // limit was hit, and none of the engine's own checks held it back. A later step may have shown what an earlier
         // one could not; the task review is shown the whole run and answers each open question on cited evidence.
         IReadOnlyList<CriterionResult>? finalChecks = null;
-        if (_taskReview && models.ReviewOn && runOutcome == RunOutcomeKind.Incomplete && !cycle && limitReason is null
+        if (_taskReview && !_shortReview && models.ReviewOn && runOutcome == RunOutcomeKind.Incomplete && !cycle && limitReason is null
             && outcomes.Length > 0 && outcomes.All(o => o is StepOutcomeKind.Succeeded or StepOutcomeKind.DoneUnverified)
             && outcomes.Contains(StepOutcomeKind.DoneUnverified)
             && verification is not null && verification.IncompleteReason is null && verification.Report.Blocking.Count == 0
@@ -2351,7 +2356,8 @@ public sealed partial class Orchestrator : IOrchestrator
                 yield return scope.Ev(EventKind.ErrorObserved, $"Task review unavailable ({judged.Reason}); the outcome stays as the steps left it.");
         }
 
-        if (runOutcome == RunOutcomeKind.Completed && models.ReviewOn && _stepReview.ChecksSoundness
+        // With a short verdict per step, each step answers for its own part and nothing is deferred to the end.
+        if (runOutcome == RunOutcomeKind.Completed && models.ReviewOn && _stepReview.ChecksSoundness && !_shortReview
             && session.NeedsFinalReview && finalChecks is null)
         {
             yield return scope.Ev(EventKind.ReviewRequested, "Reconciling deferred requirements against the whole run…");

@@ -139,7 +139,10 @@ public enum ReviewMode
     Content,
 
     /// <summary>Does the step meet the semantic criteria its plan set - those and nothing else (Phase 1.4)?</summary>
-    Criteria
+    Criteria,
+
+    /// <summary>One short verdict: did the step do what it is for, and is its report true (StepVerdictReview)?</summary>
+    Step
 }
 
 /// <summary>

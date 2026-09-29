@@ -35,7 +35,8 @@ public sealed class OrchestratorSeamsTests
             new OrchestratorServices(reviewer, success));
         var criteria = new[] { new SuccessCriterionDefinition("check", "must never execute") };
         var options = RunEngineOptions.Capture(new AppSettings
-            { ProposeChecks = false, CheckSoundness = false, SuccessRetries = 0, ReviewRetries = 0 });
+            // The injected step reviewer is the one the earlier review goes through; the short verdict is its own call.
+            { ProposeChecks = false, CheckSoundness = false, SuccessRetries = 0, ReviewRetries = 0, ShortReview = false });
         var events = await fx.RunAsync(RunEngineComposition.Build(resources, options, successCriteria: criteria), "answer");
         Assert.Equal(RunOutcomeKind.Completed, events.Last().Outcome());
         Assert.Equal(1, reviewer.Calls);

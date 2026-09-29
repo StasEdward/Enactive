@@ -460,6 +460,10 @@ public sealed partial class AppSettings
     // against those alone, each verdict citing evidence of the kinds the criterion allows. Off until runs show it.
     public bool SemanticCriteria { get; set; }
 
+    // One short verdict per step - done, and its report true, on what the calls and files show - and the task done when
+    // every step is and the engine's checks are green. Off: the earlier review of every sentence, and a final review.
+    public bool ShortReview { get; set; } = true;
+
     // Put a rejected step's files back to how they were before it ran. Without this the gate stops
     // only the REPORT: the run says Failed while the rejected document stays in the workspace, which
     // is the version someone is most likely to open next. A file changed since the step wrote it is
@@ -934,6 +938,7 @@ public sealed partial class AppSettings
         ReportBlocked = ReportBlocked,
         TaskReview = TaskReview,
         SemanticCriteria = SemanticCriteria,
+        ShortReview = ShortReview,
         Bindings = Bindings.Clone(),
         RemoteAccess = RemoteAccess.Clone(),
         Smtp = Smtp.Clone(),

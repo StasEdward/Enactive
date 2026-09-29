@@ -132,6 +132,17 @@ public sealed partial class Orchestrator
                     judged, (action, kind) => Admits(action, kind, reads), models.ReviewProvider!, models.ReviewModel,
                     scope.Budget.TurnExhaustedAfter, ct),
                 ReviewMode.Criteria)
+            // The user's model (2026-09-29): one short verdict per step - done, and its report true? - and the task is
+            // done when every step is. The review of every sentence of a report stays behind the switch, to compare.
+            : _shortReview
+                ? (await StepVerdictReview.RunAsync(
+                        new StepVerdictInput(request, title, stepNumber,
+                            planSteps?.Where((_, i) => stepNumber is not { } n || i != n - 1).ToArray() ?? [],
+                            LastAssistant(messages), handedOn,
+                            await StepFilesNowAsync(changes, before, journal, stepStart, store, ct),
+                            journal.Describe(evidenceStart, _evidenceBudget)),
+                        models.ReviewProvider!, models.ReviewModel, scope.Budget.TurnExhaustedAfter, ct),
+                    ReviewMode.Step)
             : await ReviewAsync(
                 title, messages, journal, evidenceStart, stepStart, scope.Artifacts, store,
                 models.ReviewProvider!, models.ReviewModel, ct, changes, before, request,

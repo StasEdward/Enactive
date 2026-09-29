@@ -424,6 +424,7 @@ public sealed class EngineFixture : IDisposable
     public bool ReportBlocked { get; set; }
     public bool TaskReview { get; set; }
     public bool SemanticCriteria { get; set; }
+    public bool ShortReview { get; set; }
 
     /// <summary>Where wave captures are kept: beside this fixture's folder, never in the machine's own store.</summary>
     public string WaveStore => Root + "-waves";
@@ -644,7 +645,7 @@ public sealed class EngineFixture : IDisposable
             checkSoundness: checkSoundness,
             ecosystems: EcosystemsOverride,
             stepOutputs: StepOutputs, typedCriteria: TypedCriteria, dynamicSteps: DynamicSteps, fanOut: FanOut, validateWaves: ValidateWaves,
-            waveStore: WaveStore, reportBlocked: ReportBlocked, taskReview: TaskReview, semanticCriteria: SemanticCriteria);
+            waveStore: WaveStore, reportBlocked: ReportBlocked, taskReview: TaskReview, semanticCriteria: SemanticCriteria, shortReview: ShortReview);
     }
 
     /// <summary>Runs one intent to completion and returns every event it produced.</summary>
