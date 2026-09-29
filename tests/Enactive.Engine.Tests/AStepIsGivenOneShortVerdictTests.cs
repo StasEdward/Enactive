@@ -84,6 +84,20 @@ public sealed class AStepIsGivenOneShortVerdictTests
         Assert.Equal(StepOutcomeKind.DoneUnverified, events.First(e => e.Kind == EventKind.StepCompleted).StepOutcome());
     }
 
+    /// <summary>Not complete is said as a list: every step not confirmed, with the part of the request it answers for.</summary>
+    [Fact]
+    public async Task What_is_not_complete_is_listed()
+    {
+        var (events, _, _) = await Run(true, [Fail("the report is empty"), Fail("the report is still empty")]);
+
+        Assert.Equal(RunOutcomeKind.Failed, events.Last().Outcome());
+        var reason = events.Last().OutcomeReason()!;
+        Assert.StartsWith("Not complete - [1] Write the disk report", reason, StringComparison.Ordinal);
+        Assert.Contains("review rejected: review not passed: the report is still empty", reason, StringComparison.Ordinal);
+        Assert.Contains("[2] Check the report", reason, StringComparison.Ordinal);
+        Assert.Contains("- skipped", reason, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task Off_the_step_review_is_the_one_before()
     {

@@ -2434,6 +2434,13 @@ public sealed partial class Orchestrator : IOrchestrator
         var runNet = runOutcome == RunOutcomeKind.Completed
             ? await NetChangedAsync(workspaceChanges, beforeRun, ct)
             : null;
+        // What is not complete, named - every step not confirmed, with the parts of the request it answers for, and
+        // every check that failed - instead of the first reason any step happened to give (the user's model: "no -
+        // list concretely what is not finished").
+        if (_shortReview && runOutcome is RunOutcomeKind.Failed or RunOutcomeKind.Incomplete
+            && NotComplete(scheduler, stepNumbers, stepOutcomes, session, verification, finalChecks) is { Length: > 0 } open)
+            runReason = "Not complete - " + string.Join("; ", open) + (limitReason is null ? "" : $" ({limitReason})");
+
         RecordWhatThisRunWrote(scope, intent);
         yield return scope.Terminal(runOutcome, runReason,
             artifacts => SummarizeArtifacts(artifacts, runNet, _artifacts.PendingPaths, _workspace.RootPath));
@@ -2689,6 +2696,30 @@ public sealed partial class Orchestrator : IOrchestrator
 
         return new TaskReviewInput(session.Obligations!, plan, outputs, checks, files,
             session.RunEvidence().Describe(maxChars: Math.Max(_evidenceBudget, TaskReview.EvidenceChars)), open);
+    }
+
+    /// <summary>Each thing that keeps a run from Completed, as a line: a step not confirmed, a check that failed.</summary>
+    private static string[] NotComplete(DagScheduler scheduler, System.Collections.Concurrent.ConcurrentDictionary<Guid, int> stepNumbers,
+        Dictionary<Guid, StepOutcomeKind> stepOutcomes, RunSession session, VerifyResult? verification, IReadOnlyList<CriterionResult>? finalChecks)
+    {
+        static string Clip(string text, int max) => text.Length <= max ? text : text[..max] + "…";
+        Dictionary<Guid, StepOutcomeKind> outcomes;
+        lock (stepOutcomes) outcomes = new(stepOutcomes);
+        var lines = new List<string>();
+        foreach (var step in scheduler.Steps.OrderBy(s => stepNumbers.TryGetValue(s.Id, out var n) ? n : int.MaxValue))
+        {
+            if (outcomes.TryGetValue(step.Id, out var outcome) && outcome == StepOutcomeKind.Succeeded) continue;
+            var no = stepNumbers.TryGetValue(step.Id, out var number) ? number : 0;
+            var parts = step.ObligationIds is { Count: > 0 } ids ? $" ({string.Join(", ", ids)})" : "";
+            var said = outcomes.ContainsKey(step.Id) ? Word(outcome) : "not run";
+            var why = session.ReasonOf.TryGetValue(step.Id, out var reason) && !string.IsNullOrWhiteSpace(reason) ? ": " + Clip(reason, 300) : "";
+            lines.Add($"[{no}] {step.Title}{parts} - {said}{why}");
+        }
+        if (verification?.IncompleteReason is { } unverified) lines.Add(Clip(unverified, 300));
+        foreach (var check in (verification?.Report.Blocking ?? []).Concat((finalChecks ?? []).Where(c => c.Outcome == CriterionOutcome.Failed)))
+            lines.Add($"check '{check.Name}' {check.Outcome.ToString().ToLowerInvariant()}"
+                      + (string.IsNullOrWhiteSpace(check.Detail) ? "" : ": " + Clip(check.Detail, 200)));
+        return lines.Distinct().ToArray();
     }
 
     /// <summary>What this run wrote, recorded as it leaves it, for the runs after it - see EarlierRuns.</summary>
