@@ -211,6 +211,9 @@ public sealed partial class Orchestrator : IOrchestrator
     private readonly bool _validateWaves;
     private readonly bool _reportBlocked;
     private readonly bool _taskReview;
+
+    /// <summary>Per run: when it began and what earlier runs had written - so a read of their files says whose they are.</summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, EarlierRunsView> _earlierRuns = new();
     private readonly string _waveStore;
     private readonly FanOutLimits _fanOut;
     private readonly ISuccessEvaluator _successEvaluator;
@@ -449,6 +452,11 @@ public sealed partial class Orchestrator : IOrchestrator
     {
         var runId = Guid.NewGuid();
         var taskId = intent.Id;
+        // What earlier runs left in the workspace, as this run finds it - see EarlierRuns.
+        _earlierRuns[runId] = new EarlierRunsView(DateTimeOffset.UtcNow, EarlierRuns.Load(_workspace.RootPath));
+        // A run that ended before its end was recorded (planning refused, cancelled) leaves its entry; a day is long enough.
+        foreach (var stale in _earlierRuns.Where(e => e.Value.StartedAt < DateTimeOffset.UtcNow.AddDays(-1)).Select(e => e.Key).ToArray())
+            _earlierRuns.TryRemove(stale, out _);
 
         // This scope covers only the code up to the first yield: an async iterator resumes on its
         // CONSUMER's execution context, so an AsyncLocal set here is gone from the next segment on.
@@ -943,6 +951,7 @@ public sealed partial class Orchestrator : IOrchestrator
         var quickNet = quickOutcome == RunOutcomeKind.Completed
             ? await NetChangedAsync(quickChanges, quickBefore, ct)
             : null;
+        RecordWhatThisRunWrote(scope, intent);
         yield return scope.Terminal(quickOutcome, quickReason,
             artifacts => SummarizeArtifacts(artifacts, quickNet, _artifacts.PendingPaths, _workspace.RootPath));
     }
@@ -2412,6 +2421,7 @@ public sealed partial class Orchestrator : IOrchestrator
         var runNet = runOutcome == RunOutcomeKind.Completed
             ? await NetChangedAsync(workspaceChanges, beforeRun, ct)
             : null;
+        RecordWhatThisRunWrote(scope, intent);
         yield return scope.Terminal(runOutcome, runReason,
             artifacts => SummarizeArtifacts(artifacts, runNet, _artifacts.PendingPaths, _workspace.RootPath));
     }
@@ -2666,6 +2676,15 @@ public sealed partial class Orchestrator : IOrchestrator
 
         return new TaskReviewInput(session.Obligations!, plan, outputs, checks, files,
             session.RunEvidence().Describe(maxChars: Math.Max(_evidenceBudget, TaskReview.EvidenceChars)), open);
+    }
+
+    /// <summary>What this run wrote, recorded as it leaves it, for the runs after it - see EarlierRuns.</summary>
+    private void RecordWhatThisRunWrote(RunScope scope, Intent intent)
+    {
+        ArtifactRef[] produced;
+        lock (scope.Artifacts) produced = scope.Artifacts.ToArray();
+        EarlierRuns.Record(_workspace.RootPath, scope.RunId, DateTimeOffset.UtcNow, intent.RawText, produced.Select(a => a.RelativePath));
+        _earlierRuns.TryRemove(scope.RunId, out _);
     }
 
     private IReadOnlyList<CriterionResult> ProducedFilesNow(RunScope scope, RunSession session)
@@ -5010,6 +5029,17 @@ public sealed partial class Orchestrator : IOrchestrator
                 if (readResult is null) yield return Invoked(call);
 
                 var invocation = readResult ?? await ToolInvocation.ExecuteAsync(call, _tools, CallContext(), ct);
+                // A read of what an earlier run left is told as that, to the model and in the evidence alike: its account
+                // of what it found then, not a measurement of now (run 341c2f: an old report's figures handed on as found).
+                if (invocation.Value.Success && _tools.DefinitionOf(call.Name)?.FileCoverage == FileCoverageBehavior.Read
+                    && _earlierRuns.TryGetValue(runId, out var earlierView)
+                    && ReadLedger.PathsRead(call, invocation.Value)
+                        .Select(p => EarlierRuns.NoteFor(_workspace.RootPath, p, earlierView)).OfType<string>().ToArray() is { Length: > 0 } earlierNotes)
+                {
+                    invocation = invocation with { Value = invocation.Value with
+                        { Output = (invocation.Value.Output ?? "") + "\n" + string.Join("\n", earlierNotes) } };
+                    yield return Ev(EventKind.ContextAssembled, "Read what an earlier run left: " + string.Join(" ", earlierNotes));
+                }
                 var result = invocation.Value;
                 var failure = accounting.Record(call, invocation);
                 if (result.Success) boundary?.Succeeded(call);

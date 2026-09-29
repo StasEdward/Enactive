@@ -127,6 +127,12 @@ internal sealed class ReadLedger
         return coverage;
     }
 
+    /// <summary>The files a successful read showed: those its result names, or else the path it was given.</summary>
+    internal static IReadOnlyList<string> PathsRead(ToolCall call, ToolResult result)
+        => Meta(result, "files") is IEnumerable<FileCoverage> many
+            ? many.Select(f => f.Path).ToArray()
+            : PathsNamedBy(call, "path").ToArray();
+
     private static IEnumerable<string> PathsNamedBy(ToolCall call, params string[] names)
     {
         var found = new List<string>();
