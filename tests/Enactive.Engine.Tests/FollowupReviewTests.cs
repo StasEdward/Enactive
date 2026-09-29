@@ -265,8 +265,11 @@ public sealed class FollowupReviewTests
         Assert.Contains(events, e => e.Kind == EventKind.ToolResult && e.Summary.Contains("failed"));
         Assert.DoesNotContain(events, e => e.Kind == EventKind.TaskCompleted);
 
+        // Not done - and, since everything it looked for is missing, BLOCKED on that input (Phase 7), with the
+        // file named: somebody can put it there and run it again.
         var terminal = events.Last(e => e.Kind is EventKind.TaskCompleted or EventKind.TaskFailed);
-        Assert.Equal(RunOutcomeKind.Incomplete, terminal.Outcome());
+        Assert.Equal(RunOutcomeKind.Blocked, terminal.Outcome());
+        Assert.Contains("missing.txt", terminal.OutcomeReason(), StringComparison.Ordinal);
     }
 
     // Retrying the same call and getting it to work IS recovery — that must still be a clean run,

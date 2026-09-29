@@ -69,7 +69,9 @@ public sealed class PermissionOutcomeTests
             "write the report");
 
         Assert.NotEmpty(fx.Decisions.Requests);
-        Assert.Equal(RunOutcomeKind.Incomplete, Terminal(events).Outcome());
+        // Not done: blocked on the permission it was refused (Phase 7) - which somebody can give.
+        Assert.Equal(RunOutcomeKind.Blocked, Terminal(events).Outcome());
+        Assert.Contains("needs a permission it was refused", Terminal(events).OutcomeReason(), StringComparison.Ordinal);
         Assert.False(fx.Exists("report.md"));
     }
 

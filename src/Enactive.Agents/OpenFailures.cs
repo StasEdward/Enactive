@@ -186,6 +186,23 @@ internal sealed class OpenFailures
             _namedNothing[key] = Kind(call.Name);
     }
 
+    /// <summary>
+    /// A call refused PERMISSION - by a person, or by this run's policy (Phase 7). A call that never happened,
+    /// like any other refusal; kept apart so that a step which ends with one still open can be said to be
+    /// blocked on a permission, which somebody can give, rather than merely unfinished.
+    /// </summary>
+    public void Refused(ToolCall call, string why)
+    {
+        Failed(call, why, didNotRun: true);
+        _refused[Key(call)] = Line(call, why);
+    }
+
+    private readonly Dictionary<string, string> _refused = new(StringComparer.Ordinal);
+
+    /// <summary>The permission refusals still keeping the step unfinished: not forgiven, not made good.</summary>
+    public IReadOnlyList<string> OpenRefusals
+        => _refused.Where(r => _byCall.ContainsKey(r.Key) && !Forgiven.Contains(r.Key)).Select(r => r.Value).ToArray();
+
     /// <summary>The file a call that never happened was aimed at, where it named one - see <see cref="RefusedByRule"/>.</summary>
     private readonly Dictionary<string, string> _neverHappenedAt = new(StringComparer.Ordinal);
 

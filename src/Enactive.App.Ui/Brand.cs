@@ -222,6 +222,8 @@ internal static class Brand
         "failed" or "error" => PhaseKind.Failed,
         // Never wrote a final status: the run stopped somewhere nobody watched.
         "incomplete" => PhaseKind.Open,
+        // Waiting for its cause to be put right, then resumed (Phase 7).
+        "blocked" => PhaseKind.Open,
         "cancelled" or "canceled" or "idle" or "" => PhaseKind.Idle,
         _ => PhaseKind.Running
     };

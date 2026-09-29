@@ -55,7 +55,9 @@ public sealed class DagScheduler
         foreach (var s in _steps)
         {
             var status = restore.TryGetValue(s.Id, out var stored) ? stored : StepStatus.Pending;
-            _status[s.Id] = status is StepStatus.Running or StepStatus.Ready ? StepStatus.Pending : status;
+            // A BLOCKED step comes back Pending too (Phase 7): what stopped it may have been put right, and a
+            // resumed run finds out by doing it again - it is blocked again, and says so, if not.
+            _status[s.Id] = status is StepStatus.Running or StepStatus.Ready or StepStatus.Blocked ? StepStatus.Pending : status;
         }
 
         CascadeSkips();
@@ -239,6 +241,37 @@ public sealed class DagScheduler
             }
         }
         return abandoned;
+    }
+
+    /// <summary>
+    /// Marks the step blocked (Phase 7) and blocks every Pending step that (transitively) waits on it - not
+    /// skipped: they have not failed and nothing they need has, and a resumed run does them. A step that also
+    /// waits on one that FAILED is skipped as before; that does not come back.
+    /// </summary>
+    public IReadOnlyList<PlanStep> MarkBlocked(Guid id)
+    {
+        lock (_gate)
+        {
+            if (_status.ContainsKey(id))
+                _status[id] = StepStatus.Blocked;
+            CascadeSkips();
+            var blocked = new List<PlanStep>();
+            var changed = true;
+            while (changed)
+            {
+                changed = false;
+                foreach (var s in _steps)
+                {
+                    if (_status[s.Id] != StepStatus.Pending
+                        || !s.DependsOn.Any(dep => _status.TryGetValue(dep, out var st) && st == StepStatus.Blocked))
+                        continue;
+                    _status[s.Id] = StepStatus.Blocked;
+                    blocked.Add(s);
+                    changed = true;
+                }
+            }
+            return blocked;
+        }
     }
 
     /// <summary>Marks the step failed and cascade-skips every step that (transitively) depends on it.</summary>

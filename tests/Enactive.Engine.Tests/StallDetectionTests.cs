@@ -132,7 +132,7 @@ public sealed class StallDetectionTests
         Assert.Equal(4, events.Count(e => e.Kind == EventKind.ToolInvoked));
 
         // And it is still not a success: the failures were never resolved, which is a different
-        // guard doing its own job.
-        Assert.Equal(RunOutcomeKind.Incomplete, events.Last().Outcome());
+        // guard doing its own job. Nothing it looked for was there, so it is blocked on that (Phase 7).
+        Assert.Equal(RunOutcomeKind.Blocked, events.Last().Outcome());
     }
 }

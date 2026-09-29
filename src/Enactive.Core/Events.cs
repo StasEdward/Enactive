@@ -106,7 +106,14 @@ public enum RunOutcomeKind
     /// carries on from there once somebody answers. Not an ending: nothing about the work is known
     /// to be wrong or unfinished, only that it cannot go on without somebody.
     /// </summary>
-    NeedsUser
+    NeedsUser,
+
+    /// <summary>
+    /// Stopped at a condition the run cannot remove itself - a permission not given, an input not there, a step
+    /// that says it cannot go on (Phase 7). Each blocked step is named with its cause; the checkpoint and the
+    /// answers given so far are kept, and once the cause is removed the SAME run carries on from the blocked steps.
+    /// </summary>
+    Blocked
 }
 
 /// <summary>How one unit of work ended. Aggregated into a <see cref="RunOutcomeKind"/>.</summary>
@@ -144,7 +151,15 @@ public enum StepOutcomeKind
     ///
     /// <para>Last in the list so no number already written anywhere changes meaning.</para>
     /// </summary>
-    DoneUnverified
+    DoneUnverified,
+
+    /// <summary>
+    /// Stopped at something the step cannot remove itself (Phase 7): a permission it was refused, an input that
+    /// is not there, a step it waits on that is blocked, or - as the step's own advisory report - something only a
+    /// person can give. Not done and not failed: nothing about the work is known to be wrong. The cause is recorded
+    /// (<c>OutcomeCause.Blocked*</c>), the run keeps its checkpoint, and a resumed run does the step again.
+    /// </summary>
+    Blocked
 }
 
 /// <summary>

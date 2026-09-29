@@ -28,7 +28,8 @@ public static class InboxLines
         // used to be missing from it, so a run that was stopped part-way filed itself as a "result"
         // — the same lie as a green status pill over an abandoned job. The runner's own comment
         // said "anything that is not a completed run"; the code listed two of the three.
-        var kind = status is "Failed" or "Incomplete" or "Cancelled" ? "error"
+        // BLOCKED with them: it waits for something only a person can put right, and says what (Phase 7).
+        var kind = status is "Failed" or "Incomplete" or "Cancelled" or "Blocked" ? "error"
                  : decisions > 0 ? "decision"
                  : "result";
 

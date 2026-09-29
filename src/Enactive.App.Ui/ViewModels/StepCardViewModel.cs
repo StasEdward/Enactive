@@ -150,6 +150,17 @@ internal sealed class StepCardViewModel : ObservableObject
         SetStatus("not verified", Brand.StepUnverified);
     }
 
+    /// <summary>
+    /// The step is BLOCKED (Phase 7): stopped at something the run cannot remove itself - a permission, an input,
+    /// a step it waits on. Amber, like waiting for an answer: nothing went wrong in it, and it is done again once the
+    /// cause is put right and the run resumed.
+    /// </summary>
+    public void SetBlocked()
+    {
+        FlushPendingNote();
+        SetStatus("blocked", Brand.Warning);
+    }
+
     public void SetActivity(string text) => Activity = text;
 
     /// <summary>

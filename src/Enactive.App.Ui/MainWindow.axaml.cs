@@ -920,6 +920,12 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                             doneCard?.SetSkipped();
                             doneCard?.SetActivity(stepSays);
                         }
+                        else if (stepOutcome == StepOutcomeKind.Blocked)
+                        {
+                            // Before wasFailed too: a blocked step has not failed; it waits for its cause.
+                            doneCard?.SetBlocked();
+                            doneCard?.SetActivity(stepSays);
+                        }
                         else if (stepOutcome == StepOutcomeKind.DoneUnverified)
                         {
                             // Checked before wasFailed, which counts anything short of Succeeded as a
@@ -1068,6 +1074,11 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                         {
                             _currentCard?.SetDone();
                             _currentCard?.SetActivity("Done");
+                        }
+                        else if (outcome == RunOutcomeKind.Blocked)
+                        {
+                            _currentCard?.SetBlocked();
+                            _currentCard?.SetActivity(outcome.ToString());
                         }
                         else
                         {

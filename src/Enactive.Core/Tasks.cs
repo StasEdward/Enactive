@@ -4,7 +4,9 @@ namespace Enactive.Core.Tasks;
 public enum IntentDisposition { QuickAction, Task }
 
 /// <summary>Status of a single plan step.</summary>
-public enum StepStatus { Pending, Ready, Running, Done, Skipped, Failed }
+// Blocked (Phase 7): stopped at something the run cannot remove itself. Last, so stored names and numbers keep
+// their meaning; a resumed run gives it back as Pending - the cause may be gone, and it is the run's to find out.
+public enum StepStatus { Pending, Ready, Running, Done, Skipped, Failed, Blocked }
 
 /// <summary>
 /// How hard a step is, as judged by the planner. Drives per-step model auto-routing: Trivial steps can run

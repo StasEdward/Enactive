@@ -53,6 +53,9 @@ public sealed record CheckpointStep(
 
     /// <summary>Only looks, and changes no file.</summary>
     public bool ReadOnly { get; init; }
+
+    /// <summary>Every time this step was blocked, oldest first (Phase 7) - kept, so a resume loses no attempt.</summary>
+    public IReadOnlyList<Enactive.Core.Tasks.StepBlock>? Blocks { get; init; }
 }
 
 /// <summary>A step of a wave not yet validated, and what it changed as the engine recorded it.</summary>

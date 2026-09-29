@@ -110,6 +110,11 @@ internal static class RunReplay
                 card.SetActivity("Skipped — a dependency failed");
                 return;
 
+            case StepOutcomeKind.Blocked:
+                card.SetBlocked();
+                card.SetActivity(RunOutcomeWords.StepActivity(StepOutcomeKind.Blocked, segment.Note));
+                return;
+
             case StepOutcomeKind.DoneUnverified:
                 card.SetUnverified();
                 card.SetActivity(RunOutcomeWords.StepActivity(StepOutcomeKind.DoneUnverified, segment.Note));

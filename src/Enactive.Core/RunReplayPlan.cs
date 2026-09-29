@@ -170,6 +170,7 @@ public static class RunReplayPlan
         {
             RunOutcomeKind.Completed => StepOutcomeKind.Succeeded,
             RunOutcomeKind.Incomplete or RunOutcomeKind.NeedsUser => StepOutcomeKind.Incomplete,
+            RunOutcomeKind.Blocked => StepOutcomeKind.Blocked,
             _ => StepOutcomeKind.Failed
         };
 

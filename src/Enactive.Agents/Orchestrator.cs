@@ -206,6 +206,7 @@ public sealed partial class Orchestrator : IOrchestrator
     private readonly bool _typedCriteria;
     private readonly bool _dynamicSteps;
     private readonly bool _validateWaves;
+    private readonly bool _reportBlocked;
     private readonly string _waveStore;
     private readonly FanOutLimits _fanOut;
     private readonly ISuccessEvaluator _successEvaluator;
@@ -283,9 +284,13 @@ public sealed partial class Orchestrator : IOrchestrator
         // attributed to the step that made it. Off by default: it runs builds the run did not run before.
         bool validateWaves = false,
         // Where a wave's files are kept for a resume - outside every workspace. A test points it somewhere temporary.
-        string? waveStore = null)
+        string? waveStore = null,
+        // Phase 7.2: the step may say it cannot go on (report_blocked). Advisory; the engine's own detection of
+        // blocks does not depend on it. Off by default, like the phases before it: it is one more tool offered.
+        bool reportBlocked = false)
     {
         _validateWaves = validateWaves;
+        _reportBlocked = reportBlocked;
         _waveStore = waveStore ?? WaveCapture.DefaultStore();
         _stepOutputs = stepOutputs;
         _typedCriteria = typedCriteria;
@@ -382,6 +387,7 @@ public sealed partial class Orchestrator : IOrchestrator
     {
         var events = run.GetAsyncEnumerator(ct);
         var runId = Guid.Empty;
+        RunOutcomeKind? ended = null;
         try
         {
             while (true)
@@ -408,6 +414,8 @@ public sealed partial class Orchestrator : IOrchestrator
                 }
 
                 runId = current!.RunId;
+                if (current.Kind is EventKind.TaskCompleted or EventKind.TaskFailed)
+                    ended = current.Outcome();
                 yield return current;
             }
         }
@@ -415,6 +423,9 @@ public sealed partial class Orchestrator : IOrchestrator
         {
             await events.DisposeAsync();
         }
+        // A blocked run has not ended (Phase 7.3): the answers it was given, its baseline and its place are
+        // what it carries on with once the cause is put right.
+        if (ended == RunOutcomeKind.Blocked) yield break;
         _ledger.Forget(taskId);
         _baselines.Forget(taskId);
         _progress.Forget(taskId);
@@ -890,6 +901,8 @@ public sealed partial class Orchestrator : IOrchestrator
 
         var quickOutcome = RunOutcomeOf(new[] { quickResult.Kind });
         var quickReason = quickResult.Reason;
+        if (quickOutcome == RunOutcomeKind.Blocked)
+            quickReason = $"Blocked - {quickResult.Reason}. Put that right and run it again.";
 
         if (quickOutcome is RunOutcomeKind.Completed or RunOutcomeKind.Incomplete)
         {
@@ -1116,6 +1129,35 @@ public sealed partial class Orchestrator : IOrchestrator
         // its reason belongs to the run that produced it.
         var stepReasons = session.Reasons;
 
+        // Every time a step was blocked, oldest first, across resumes (Phase 7.3): a resume loses no attempt, and
+        // the step done again is told what stopped it before.
+        var blockHistory = (resume?.Steps ?? [])
+            .Where(s => s.Blocks is { Count: > 0 })
+            .ToDictionary(s => s.Id, s => s.Blocks!.ToList());
+        void RecordBlock(Guid id, OutcomeCause cause, string reason)
+        {
+            lock (blockHistory)
+            {
+                if (!blockHistory.TryGetValue(id, out var list)) blockHistory[id] = list = [];
+                list.Add(new StepBlock(DateTimeOffset.UtcNow, cause, reason));
+            }
+        }
+
+        // A step it depends on was to hand a result on and has none: there is nothing for it to work from.
+        string? MissingInputOf(PlanStep step)
+        {
+            var steps = scheduler.Steps;
+            var missing = step.DependsOn
+                .Select(d => steps.FirstOrDefault(s => s.Id == d))
+                // Not a join: it hands on what its items came to, however few - and a report written about items that
+                // did not finish is still a report (amendment D).
+                .Where(d => d is { Output: not null, ExpandedFrom: null, ForEach: null, Joins: false } && !session.Outputs.ContainsKey(d.Id))
+                .Select(d => $"step {(stepNumbers.TryGetValue(d!.Id, out var n) ? n : 0)} ('{d.Title}') was to hand on "
+                    + string.Join(", ", d.Output!.Fields.Select(f => f.Name)) + " and did not")
+                .ToArray();
+            return missing.Length == 0 ? null : string.Join("; ", missing) + ", so this step has nothing to work from";
+        }
+
         // Seeded on a resume, so the run's outcome accounts for the steps it INHERITED and not only
         // the ones it ran itself: a resume of a plan whose first step failed must not be able to
         // report Completed on the strength of the steps after it.
@@ -1219,6 +1261,12 @@ public sealed partial class Orchestrator : IOrchestrator
         using var checkpointWriter = new RunCheckpointWriter(_checkpoints,
             message => Publish(scope.Ev(EventKind.ErrorObserved, message)));
 
+        IReadOnlyList<StepBlock>? BlocksOf(Guid id)
+        {
+            lock (blockHistory)
+                return blockHistory.TryGetValue(id, out var list) ? list.ToArray() : null;
+        }
+
         Task CheckpointAsync() => checkpointWriter.SaveAsync(() =>
         {
             string[] doneLines;
@@ -1248,6 +1296,7 @@ public sealed partial class Orchestrator : IOrchestrator
                         ForEach = s.ForEach, Items = s.Items, ExpandedFrom = s.ExpandedFrom, Joins = s.Joins, NotExpanded = s.NotExpanded,
                         Record = session.Records.TryGetValue(s.Id, out var record) ? record : null,
                         Report = s.Report, Critical = s.Critical, ReadOnly = s.ReadOnly,
+                        Blocks = BlocksOf(s.Id),
                         Owned = s.ExpandedFrom is null ? null : _progress.OwnedBy(scope.TaskId, s.Id) is { Count: > 0 } owned ? owned.ToArray() : null
                     })
                 .ToArray();
@@ -1367,6 +1416,14 @@ public sealed partial class Orchestrator : IOrchestrator
             var itemsMessage = ItemsAccount(step);
             if (itemsMessage is not null)
                 convo.Add(itemsMessage);
+            // Blocked before in this run, and resumed since (Phase 7.3): told what stopped it, so it looks
+            // whether that still holds rather than finding it out again from nothing.
+            // Not for having waited behind another step: that one is done now, or this one would not be running.
+            if (BlocksOf(step.Id)?.Where(b => b.Cause != OutcomeCause.BlockedDependency).ToArray() is { Length: > 0 } blockedBefore)
+                convo.Add(ChatMessage.User("This step was BLOCKED earlier in this run, and the run has been resumed since:\n"
+                    + string.Join("\n", blockedBefore.TakeLast(3).Select(b => $"- {b.At.ToLocalTime():yyyy-MM-dd HH:mm}: {b.Reason}"
+                        + (b.ByEngine ? "" : " (the step's own report)")))
+                    + "\nCheck first whether that still holds. If it does not, do the step; if it does, say so and why."));
             convo.Add(ChatMessage.User(
                 $"Proceed with this step of the plan: {step.Title}\n"
                 + $"This is step {stepNumber} of {total}. Current obligation scope: S{stepNumber}.\n"
@@ -1479,6 +1536,17 @@ public sealed partial class Orchestrator : IOrchestrator
                 runBoundaryCaptured = true;
             }
 
+            if (MissingInputOf(step) is { } missing)
+            {
+                // Blocked before it starts (Phase 7.1): a step it depends on was to hand a result on and did not,
+                // so there is nothing for this one to work from - and asking a model to try anyway is how work
+                // gets made up.
+                stepResult.Set(StepOutcomeKind.Blocked, missing, OutcomeCause.BlockedInput);
+                outcome = StepOutcomeKind.Blocked;
+                outcomeReason = missing;
+                await Emit(EventKind.ErrorObserved, "Blocked before it starts: " + missing);
+            }
+            else
             try
             {
                 await RunAttemptsAsync(session, attemptState, models, stepProvider, stepRef,
@@ -1572,6 +1640,29 @@ public sealed partial class Orchestrator : IOrchestrator
                 // step that had finished. Taken here it records the truth, and a dependent released
                 // a moment ago shows as Running - which is also the truth, and which the restoring
                 // scheduler knows to turn back into Pending.
+                await CheckpointAsync();
+                return;
+            }
+
+            // Blocked (Phase 7): not done and not failed. What waits on it is blocked with it - not skipped, because
+            // nothing it needs has failed - and all of it is done again when the run is resumed.
+            if (outcome == StepOutcomeKind.Blocked)
+            {
+                RecordBlock(step.Id, outcome == stepResult.Kind ? stepResult.Cause : OutcomeCause.BlockedInput, outcomeReason ?? "blocked");
+                var waiting = scheduler.MarkBlocked(step.Id);
+                await EmitStepDone($"[{stepNumber}/{total}] {step.Title} — BLOCKED"
+                    + (string.IsNullOrWhiteSpace(outcomeReason) ? "" : ": " + outcomeReason), stepNumber, outcome, outcomeReason);
+                foreach (var held in waiting)
+                {
+                    var heldNo = stepNumbers.TryGetValue(held.Id, out var hn) ? hn : 0;
+                    var waitsFor = $"waits for step {stepNumber}, which is blocked";
+                    lock (stepOutcomes)
+                        stepOutcomes[held.Id] = StepOutcomeKind.Blocked;
+                    Note(held.Id, StepOutcomeKind.Blocked, OutcomeCause.BlockedDependency, waitsFor, null);
+                    RecordBlock(held.Id, OutcomeCause.BlockedDependency, waitsFor);
+                    await EmitStepDone($"[{heldNo}/{total}] {held.Title} — blocked ({waitsFor})",
+                        heldNo > 0 ? heldNo : null, StepOutcomeKind.Blocked, waitsFor);
+                }
                 await CheckpointAsync();
                 return;
             }
@@ -2125,6 +2216,18 @@ public sealed partial class Orchestrator : IOrchestrator
             runOutcome = RunOutcomeKind.Incomplete;
 
         var runReason = ExplainOutcome(outcomes, reasons, cycle, limitReason);
+        // A blocked run leads with what blocks it - each step blocked for a cause of its own, not the ones only
+        // waiting behind them - and with what to do about it.
+        if (runOutcome == RunOutcomeKind.Blocked)
+        {
+            var causes = scheduler.Steps
+                .Where(s => BlocksOf(s.Id) is { Count: > 0 } b && b[^1].Cause != OutcomeCause.BlockedDependency
+                            && stepOutcomes.GetValueOrDefault(s.Id) == StepOutcomeKind.Blocked)
+                .Select(s => $"[{(stepNumbers.TryGetValue(s.Id, out var n) ? n : 0)}] {s.Title}: {BlocksOf(s.Id)![^1].Reason}")
+                .ToArray();
+            runReason = "Blocked - " + string.Join("; ", causes) + ". Put that right and resume this run: it carries on from the "
+                + "blocked step(s)" + (ExplainOutcome(outcomes, [], cycle, limitReason) is { } tally ? $" ({tally})." : ".");
+        }
 
         // The last word, and the only one in the run that is not somebody's opinion.
         //
@@ -2255,8 +2358,10 @@ public sealed partial class Orchestrator : IOrchestrator
             yield return scope.Criterion(check);
 
         // This run reached an end, whatever kind of end. Nothing here is resumable any more, and a
-        // checkpoint left behind would offer to redo work that is finished.
-        await ForgetCheckpointAsync();
+        // checkpoint left behind would offer to redo work that is finished. Except a BLOCKED run (Phase 7): it
+        // has not ended, it waits - and its checkpoint is what it carries on from.
+        if (runOutcome != RunOutcomeKind.Blocked)
+            await ForgetCheckpointAsync();
 
         var runNet = runOutcome == RunOutcomeKind.Completed
             ? await NetChangedAsync(workspaceChanges, beforeRun, ct)
@@ -2477,6 +2582,17 @@ public sealed partial class Orchestrator : IOrchestrator
             session.RunEvidence().Actions);
     }
 
+    /// <summary>
+    /// A block the engine can see in what the step left open (Phase 7.1): a permission it was refused and nothing
+    /// made good, or - its whole record - lookups that found nothing. Null when what is open is something else.
+    /// </summary>
+    private static (OutcomeCause Cause, string Reason)? EngineBlock(OpenFailures open)
+        => open.OpenRefusals is { Count: > 0 } refused
+            ? (OutcomeCause.BlockedPermission, "needs a permission it was refused: " + string.Join("; ", refused))
+            : open.NothingButMisses
+                ? (OutcomeCause.BlockedInput, "none of what the step looked for is there: " + open.Describe())
+                : null;
+
     private static string Word(StepOutcomeKind kind) => kind switch
     {
         StepOutcomeKind.Succeeded => "done",
@@ -2484,6 +2600,7 @@ public sealed partial class Orchestrator : IOrchestrator
         StepOutcomeKind.Incomplete => "incomplete",
         StepOutcomeKind.Skipped => "skipped",
         StepOutcomeKind.DoneUnverified => "done, not verified",
+        StepOutcomeKind.Blocked => "blocked",
         _ => "failed"
     };
 
@@ -2499,6 +2616,11 @@ public sealed partial class Orchestrator : IOrchestrator
 
         if (steps.Any(s => s is StepOutcomeKind.Failed or StepOutcomeKind.ReviewRejected))
             return RunOutcomeKind.Failed;
+
+        // After a failure, before everything short of it: nothing is known to be wrong, and the run is not over -
+        // it waits for its cause to be put right, and then carries on (Phase 7).
+        if (steps.Contains(StepOutcomeKind.Blocked))
+            return RunOutcomeKind.Blocked;
 
         // DoneUnverified with them: its work was done, but a run is Completed only on verdicts that
         // were actually given. Left out of this line it would fall through to Completed - a run
@@ -3310,6 +3432,7 @@ public sealed partial class Orchestrator : IOrchestrator
         // The step's own hand-over, when the plan declared what it hands on. Not in the registry: it
         // belongs to this step, and is made from the schema it will be checked against.
         if (outputSchema is not null) toolDefs = [.. toolDefs, StepOutputContract.Tool(outputSchema)];
+        if (_reportBlocked) toolDefs = [.. toolDefs, AgentBlocked.Tool];
 
         // Withheld VISIBLY. A run that quietly cannot use git and does not say so is a worse
         // failure than the one above: the report would name a plan that could never have worked,
@@ -3372,6 +3495,9 @@ public sealed partial class Orchestrator : IOrchestrator
         var handOnOnly = false;
         // Whether this step has been told, once, that a criterion the plan attached to it fails.
         var criteriaNudged = false;
+        // The step's own report that it cannot go on (Phase 7.2), once it has made one: the turn's other calls
+        // are answered, not run, and the step ends blocked when the turn does.
+        string? reportedBlocked = null;
         var handoverFailures = 0;
         var turnsHere = 0;
         ChatMessage? commandHistoryMessage = null;
@@ -4237,6 +4363,16 @@ public sealed partial class Orchestrator : IOrchestrator
                 {
                     var unresolved = openFailures.Describe();
 
+                    // Blocked, not unfinished (Phase 7.1), where the engine can see why: a permission it was refused
+                    // and nothing made good, or nothing it looked for there at all. Both are for a person to put
+                    // right, and the run carries on from here once they have.
+                    if (EngineBlock(openFailures) is { } block)
+                    {
+                        yield return Ev(EventKind.ErrorObserved, "Blocked: " + block.Reason);
+                        loopResult.Set(StepOutcomeKind.Blocked, block.Reason, block.Cause);
+                        yield break;
+                    }
+
                     // Two different things end a step here, and saying which one is the difference
                     // between a person fixing a broken command and a person checking a path.
                     yield return Ev(EventKind.ErrorObserved, openFailures.NothingButMisses
@@ -4333,6 +4469,42 @@ public sealed partial class Orchestrator : IOrchestrator
                     openFailures.RefusedByRule(call);
                     messages.Add(ChatMessage.Tool(call.Id, "NOT RUN: " + onlyHandOn));
                     yield return Ev(EventKind.ToolResult, $"{call.Name} -> not run: {onlyHandOn}");
+                    continue;
+                }
+
+                // A step that has said it cannot go on does nothing more in this turn.
+                if (reportedBlocked is not null)
+                {
+                    yield return Invoked(call);
+                    const string afterReport = "the step has reported it is blocked; nothing after that report is carried out.";
+                    journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Refused, afterReport, WorkspaceEffect.None);
+                    openFailures.RefusedByRule(call);
+                    messages.Add(ChatMessage.Tool(call.Id, "NOT RUN: " + afterReport));
+                    yield return Ev(EventKind.ToolResult, $"{call.Name} -> not run: {afterReport}");
+                    continue;
+                }
+
+                // The step's word that it cannot go on (Phase 7.2): recorded as its word. The step ends when the turn does.
+                if (_reportBlocked && call.Name == AgentBlocked.ToolName)
+                {
+                    yield return Invoked(call);
+                    var (blockReason, blockNeeds, notAReport) = AgentBlocked.Read(call.ArgumentsJson);
+                    string recorded;
+                    if (notAReport is not null)
+                    {
+                        recorded = "Not recorded: " + notAReport;
+                        journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Refused, recorded, WorkspaceEffect.None);
+                        yield return Ev(EventKind.ToolResult, $"{call.Name} -> failed: {recorded}");
+                    }
+                    else
+                    {
+                        reportedBlocked = AgentBlocked.Line(blockReason!, blockNeeds);
+                        recorded = "Recorded: this step ends here as BLOCKED - not done - and the run stops for a person to remove "
+                            + "the cause; then this step is done again.";
+                        journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Succeeded, recorded, WorkspaceEffect.None);
+                        yield return Ev(EventKind.ToolResult, $"{call.Name} -> ok: {reportedBlocked}");
+                    }
+                    messages.Add(ChatMessage.Tool(call.Id, recorded));
                     continue;
                 }
 
@@ -4510,7 +4682,7 @@ public sealed partial class Orchestrator : IOrchestrator
                         // the resolution, and the policy's "no" is a door that will not open, which
                         // the model is told below to walk around. Either way there is no residue,
                         // so it stops counting once the step has changed something. See Forgiven.
-                        openFailures.Failed(call, why, didNotRun: true);
+                        openFailures.Refused(call, why);
                         journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson),
                                        ActionOutcome.Refused, why);
 
@@ -4733,6 +4905,18 @@ public sealed partial class Orchestrator : IOrchestrator
                           + "you are finished, say so.]";
 
                 messages.Add(ChatMessage.Tool(call.Id, reply));
+            }
+
+            // Advisory: what the engine finds itself is recorded as the cause, with the step's word beside it;
+            // only where the engine sees nothing is the step's word the cause - and recorded as its word.
+            if (reportedBlocked is not null)
+            {
+                var (blockCause, blockWhy) = EngineBlock(openFailures) is { } found
+                    ? (found.Cause, found.Reason + "; " + reportedBlocked)
+                    : (OutcomeCause.BlockedReported, reportedBlocked);
+                yield return Ev(EventKind.ErrorObserved, "Blocked: " + blockWhy);
+                loopResult.Set(StepOutcomeKind.Blocked, blockWhy, blockCause);
+                yield break;
             }
         }
 

@@ -274,9 +274,9 @@ public sealed class ParallelStepTests
             """;
 
         var provider = new ByStepChatProvider(plan)
-            .Step("Bad",
-                Turn.Calls1("read_file", """{"path":"nowhere.txt"}""", "miss"),
-                Turn.Says("I could not find it."))
+            // A reply with nothing in it fails the step. Not a lookup that found nothing: that is a missing input,
+            // and a step with nothing but those is BLOCKED, not failed (Phase 7).
+            .Step("Bad", Turn.Says(""))
             .Step("Good", Writes("good.txt", "fine"), Turn.Says("Good done."))
             .Step("After the bad one", Turn.Says("Should never run."));
 
@@ -290,7 +290,7 @@ public sealed class ParallelStepTests
         var skipped = Assert.Single(StepsDone(events), e => e.Summary.Contains("After the bad one"));
         Assert.Equal(StepOutcomeKind.Skipped, skipped.StepOutcome());
 
-        Assert.Equal(RunOutcomeKind.Incomplete, events.Last().Outcome());
+        Assert.Equal(RunOutcomeKind.Failed, events.Last().Outcome());
     }
 
     /// <summary>
@@ -477,7 +477,7 @@ public sealed class ParallelStepTests
         foreach (var title in titles)
             provider.Step(title,
                 title == "Branch 5"
-                    ? Turn.Calls1("read_file", """{"path":"nowhere.txt"}""", "miss")
+                    ? Turn.Says("")                                          // fails - see the test above
                     : Writes(title.Replace(' ', '-').ToLowerInvariant() + ".txt", title),
                 Turn.Says($"{title} done."));
 
@@ -497,7 +497,7 @@ public sealed class ParallelStepTests
             Assert.True(fixture.Exists(title.Replace(' ', '-').ToLowerInvariant() + ".txt"));
         }
 
-        Assert.Equal(RunOutcomeKind.Incomplete, events.Last().Outcome());
+        Assert.Equal(RunOutcomeKind.Failed, events.Last().Outcome());
     }
 
     // ── N1, in the configuration it exists for ──────────────────────────────

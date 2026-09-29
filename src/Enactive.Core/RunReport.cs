@@ -32,6 +32,9 @@ public static class RunReport
         // Not a failure and not unfinished work: a question is waiting for somebody. A pipeline
         // may want to notify rather than alert, and it can only do that if the code is its own.
         RunOutcomeKind.NeedsUser => 3,
+        // Its own too, for the same reason: something outside the run - a permission, a missing input - is
+        // waiting for somebody to put it right, and then the same run is resumed.
+        RunOutcomeKind.Blocked => 4,
         _ => 1
     };
 

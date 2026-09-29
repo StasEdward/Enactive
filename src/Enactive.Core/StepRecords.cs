@@ -38,7 +38,32 @@ public enum OutcomeCause
     ReviewUndecided,
 
     /// <summary>A join: some of the steps for its items did not finish.</summary>
-    ItemsUnfinished
+    ItemsUnfinished,
+
+    // Blocked (Phase 7), by what. The first three the ENGINE found; the last the step itself said, and it is advisory.
+
+    /// <summary>A call the step needed was refused - by a person, or by this run's permission policy - and nothing replaced it.</summary>
+    BlockedPermission,
+
+    /// <summary>What the step needed to work from is not there: a result a step it depends on did not hand on, or every thing it looked for.</summary>
+    BlockedInput,
+
+    /// <summary>A step it depends on is blocked.</summary>
+    BlockedDependency,
+
+    /// <summary>The step reported that it cannot go on, and why (report_blocked). Its word, recorded as its word.</summary>
+    BlockedReported
+}
+
+/// <summary>
+/// One time a step was blocked (Phase 7): when, by what, and why. Kept across a resume, so the attempts a step
+/// has had are not lost when the run carries on - and the step, done again, is told what stopped it before.
+/// </summary>
+public sealed record StepBlock(DateTimeOffset At, OutcomeCause Cause, string Reason)
+{
+    /// <summary>Found by the engine, rather than said by the step.</summary>
+    [JsonIgnore]
+    public bool ByEngine => Cause != OutcomeCause.BlockedReported;
 }
 
 /// <summary>What a step's accepted result is worth - its own field, not folded into the outcome.</summary>

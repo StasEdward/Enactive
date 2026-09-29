@@ -701,6 +701,11 @@ if (finished is not null)
 // The record is already in hand here, so it is handed over rather than looked up again.
 await FileScheduledOutcome(finished);
 
+// A blocked run is not over (Phase 7): it kept its checkpoint, and says how to carry it on.
+if (outcome == RunOutcomeKind.Blocked)
+    Console.WriteLine("The run is blocked. Put the cause right (see above), then run with --resume to carry on "
+        + "from the blocked step(s); with --approve allow if what blocks it is a refused permission.");
+
 // One line, last, in a shape something other than a person can read.
 //
 // The report above is for reading; this is for a scenario runner deciding what happened. The exit

@@ -46,6 +46,7 @@ public static class RunOutcomeWords
             StepOutcomeKind.ReviewRejected => "Rejected by the reviewer",
             StepOutcomeKind.Incomplete => "Incomplete",
             StepOutcomeKind.DoneUnverified => "Done, not verified",
+            StepOutcomeKind.Blocked => "Blocked",
             _ => "Failed"
         };
 
@@ -82,10 +83,12 @@ public static class RunOutcomeWords
         // Counted, or a run held short of Completed by nothing else would explain itself with
         // nothing at all.
         var unverified = steps.Count(s => s == StepOutcomeKind.DoneUnverified);
+        var blocked = steps.Count(s => s == StepOutcomeKind.Blocked);
 
         if (failed > 0) counts.Add($"{failed} step(s) failed");
         if (rejected > 0) counts.Add($"{rejected} step(s) rejected by the reviewer");
         if (incomplete > 0) counts.Add($"{incomplete} step(s) did not finish");
+        if (blocked > 0) counts.Add($"{blocked} step(s) blocked");
         if (unverified > 0) counts.Add($"{unverified} step(s) done but not verified");
         if (skipped > 0) counts.Add($"{skipped} step(s) skipped");
         if (cycle) counts.Add("the plan had unresolvable dependencies");

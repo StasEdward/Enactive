@@ -421,6 +421,7 @@ public sealed class EngineFixture : IDisposable
     /// <summary>Phase 5.3 steps for each item. Off, as shipped, unless a test is about them.</summary>
     public bool DynamicSteps { get; set; }
     public bool ValidateWaves { get; set; }
+    public bool ReportBlocked { get; set; }
 
     /// <summary>Where wave captures are kept: beside this fixture's folder, never in the machine's own store.</summary>
     public string WaveStore => Root + "-waves";
@@ -641,7 +642,7 @@ public sealed class EngineFixture : IDisposable
             checkSoundness: checkSoundness,
             ecosystems: EcosystemsOverride,
             stepOutputs: StepOutputs, typedCriteria: TypedCriteria, dynamicSteps: DynamicSteps, fanOut: FanOut, validateWaves: ValidateWaves,
-            waveStore: WaveStore);
+            waveStore: WaveStore, reportBlocked: ReportBlocked);
     }
 
     /// <summary>Runs one intent to completion and returns every event it produced.</summary>

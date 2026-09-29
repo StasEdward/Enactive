@@ -430,6 +430,10 @@ public sealed partial class AppSettings
     // until runs show it helps: it runs builds, and trial builds when something broke.
     public bool ValidateWaves { get; set; }
 
+    // Phase 7.2: a step may say it cannot go on (report_blocked) - advisory; the engine finds the blocks it can
+    // see without it. Off until runs show a local model uses it for real blocks and not for hard work.
+    public bool ReportBlocked { get; set; }
+
     // Put a rejected step's files back to how they were before it ran. Without this the gate stops
     // only the REPORT: the run says Failed while the rejected document stays in the workspace, which
     // is the version someone is most likely to open next. A file changed since the step wrote it is
@@ -901,6 +905,7 @@ public sealed partial class AppSettings
         MaxTotalSteps = MaxTotalSteps,
         MaxFanOutDepth = MaxFanOutDepth,
         ValidateWaves = ValidateWaves,
+        ReportBlocked = ReportBlocked,
         Bindings = Bindings.Clone(),
         RemoteAccess = RemoteAccess.Clone(),
         Smtp = Smtp.Clone(),
