@@ -3,6 +3,7 @@ namespace Enactive.Tools;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Enactive.Core.Context;
 using Enactive.Core.Execution;
 using Enactive.Core.Tools;
@@ -13,7 +14,7 @@ using Enactive.Core.Tools;
 /// stdout/stderr + exit code, times out, and never throws — a missing binary or failure becomes a
 /// ToolResult, not an exception.
 /// </summary>
-internal static class ProcessExec
+internal static partial class ProcessExec
 {
     /// <summary>
     /// What every process-running tool decodes a child's redirected stdout/stderr as. Told
@@ -190,7 +191,7 @@ internal static class ProcessExec
     public static ToolResult BuildResult(
         string what, int exitCode, string stdout, string stderr,
         IReadOnlyCollection<int>? allowedExitCodes = null, bool declarable = false,
-        bool outputCutShort = false, string? commandLine = null)
+        bool outputCutShort = false, string? commandLine = null, string? workspaceRoot = null)
     {
         var combined = stdout;
         if (stderr.Length > 0)
@@ -213,7 +214,10 @@ internal static class ProcessExec
         // past the cut - then spent eight turns trying to pipe the output into a file and died on
         // the stall guard. ExecutionJournal fixed exactly this on 2026-09-07 for the REVIEWER and
         // the rule stayed private to it; the model that ran the command still got head-only.
+        var whole = combined;
         combined = Shortening.ToFit(combined, MaxOutputChars);
+        if (whole.Length > MaxOutputChars && workspaceRoot is not null && Kept(whole, combined, workspaceRoot) is { } kept)
+            combined += kept;
 
         if (outputCutShort)
             combined += "\n… (the command finished, but something it started is still running and "
@@ -546,7 +550,53 @@ internal static class ProcessExec
 
         return BuildResult(
             fileName, process.ExitCode, stdout.ToString(), stderr.ToString(), allowedExitCodes,
-            outputCutShort: outcome.OutputCutShort);
+            outputCutShort: outcome.OutputCutShort, workspaceRoot: workingDir);
+    }
+
+    /// <summary>Where the whole output of a command that did not fit is kept, in the worker's own area.</summary>
+    internal const string KeptOutputFolder = WorkspaceGuard.ScratchPrefix + "/output";
+
+    /// <summary>How many kept outputs are left in <see cref="KeptOutputFolder"/>; older ones are removed.</summary>
+    private const int KeptOutputs = 50;
+
+    [GeneratedRegex(@"\n… \([^\n)]* characters not shown here; the end follows\) …\n")]
+    private static partial Regex NotShownNotice();
+
+    /// <summary>
+    /// The whole output of a command, kept where the step can read it, and where to read the part it was not shown.
+    ///
+    /// <para>A command's output reaches the model as its start and its end. The middle was simply gone: the only way
+    /// to see it was to run the command again, which printed the same thing and was cut the same way - a loop a weak
+    /// model does not get out of. The whole of it now goes to a file in the worker's own area, and the cut says which
+    /// lines were not shown and the read_file call that shows them (the idea from Unsloth Studio's tool-result
+    /// spill; nothing of its code). Null where the file cannot be written: the cut stands as it was.</para>
+    /// </summary>
+    private static string? Kept(string whole, string shown, string workspaceRoot)
+    {
+        var notice = NotShownNotice().Match(shown);
+        if (!notice.Success) return null;
+        try
+        {
+            var folder = WorkspaceGuard.ResolveInside(workspaceRoot, KeptOutputFolder);
+            Directory.CreateDirectory(folder);
+            var name = $"{DateTime.Now:yyyyMMdd-HHmmss}-{Guid.NewGuid():N}"[..22] + ".txt";
+            File.WriteAllText(Path.Combine(folder, name), whole, new UTF8Encoding(false));
+            foreach (var old in new DirectoryInfo(folder).GetFiles("*.txt").OrderByDescending(f => f.Name).Skip(KeptOutputs))
+                try { old.Delete(); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+
+            // Lines as read_file counts them: the head ends part-way into line `first`, the tail begins part-way into
+            // line `last`; both are read again, so nothing between the two is missed.
+            var head = shown[..notice.Index];
+            var tail = shown[(notice.Index + notice.Length)..];
+            var first = head.Count(c => c == '\n') + 1;
+            var last = whole[..(whole.Length - tail.Length)].Count(c => c == '\n') + 1;
+            var lines = whole.Count(c => c == '\n') + 1;
+            var path = KeptOutputFolder + "/" + name;
+            return $"\n… (the whole output, {lines} lines, is kept in {path}. Lines {first}-{last} are the part not "
+                 + $"shown here; read them with read_file {{\"path\":\"{path}\",\"offset\":{first},\"limit\":{last - first + 1}}} "
+                 + "instead of running the command again, which would be cut the same way.)";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException) { return null; }
     }
 
     private static void StopOutputReaders(Process process)

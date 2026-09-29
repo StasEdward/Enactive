@@ -178,7 +178,7 @@ public sealed class RunPowerShellTool : ITool, ICommandPolicyValidator
         return ProcessExec.BuildResult(
             "PowerShell", process.ExitCode, CliXml.ToText(stdout.ToString()), errors,
             expected, declarable: true,
-            outputCutShort: outcome.OutputCutShort, commandLine: script);
+            outputCutShort: outcome.OutputCutShort, commandLine: script, workspaceRoot: ctx.WorkspaceRoot);
     }
 
     private static readonly string Schema = $$"""

@@ -134,7 +134,7 @@ public sealed class RunCommandTool : ITool
 
         var result = ProcessExec.BuildResult(
             "Command", process.ExitCode, stdout.ToString(), stderr.ToString(), expected,
-            declarable: true, outputCutShort: outcome.OutputCutShort, commandLine: command);
+            declarable: true, outputCutShort: outcome.OutputCutShort, commandLine: command, workspaceRoot: ctx.WorkspaceRoot);
         if (result.DidNotRun && OperatingSystem.IsWindows()
             && Environment.GetEnvironmentVariable("NoDefaultCurrentDirectoryInExePath") is not null)
             result = result with { Error = result.Error + " Windows current-directory executable lookup is disabled "
