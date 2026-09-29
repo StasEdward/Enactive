@@ -3327,7 +3327,10 @@ public sealed partial class Orchestrator : IOrchestrator
         // The file criteria the plan attached to this step: checked when it ends, and the step told once what fails.
         IReadOnlyList<SuccessCriterionDefinition>? stepCriteria = null,
         // The hand-over as the whole run offers it, the same for every step - see StepOutputContract.RunTool.
-        ToolDefinition? submitTool = null)
+        ToolDefinition? submitTool = null,
+        // Whether a reviewer judges this step when it ends: calls still open after the step was told of them then go
+        // to it, marked, instead of ending the step unfinished (amendment A).
+        bool reviewed = false)
     {
         // An async iterator cannot return a value, so the caller passes in the slot the loop fills.
         // Without it "how did this end" existed only as English inside an event, and every consumer
@@ -3510,6 +3513,10 @@ public sealed partial class Orchestrator : IOrchestrator
         // The step's own report that it cannot go on (Phase 7.2), once it has made one: the turn's other calls
         // are answered, not run, and the step ends blocked when the turn does.
         string? reportedBlocked = null;
+        // Amendment A: told once which calls are still open; what is still open after it, if a reviewer is to judge
+        // the step, goes to it marked - the text of it, so a call that fails afterwards is not waved through.
+        var openCallsNudged = false;
+        string? openCallsForReview = null;
         var handoverFailures = 0;
         var turnsHere = 0;
         ChatMessage? commandHistoryMessage = null;
@@ -4401,7 +4408,7 @@ public sealed partial class Orchestrator : IOrchestrator
                 // A final answer only settles the step if the actions behind it actually worked. The
                 // model saying "Done" over a failed read is the exact shape the follow-up review
                 // caught reporting green.
-                if (openFailures.Count > 0)
+                if (openFailures.Count > 0 && openFailures.Describe() != openCallsForReview)
                 {
                     var unresolved = openFailures.Describe();
 
@@ -4415,18 +4422,52 @@ public sealed partial class Orchestrator : IOrchestrator
                         yield break;
                     }
 
-                    // Two different things end a step here, and saying which one is the difference
-                    // between a person fixing a broken command and a person checking a path.
-                    yield return Ev(EventKind.ErrorObserved, openFailures.NothingButMisses
-                        ? $"Finished with nothing done: all {openFailures.Count} lookup(s) this step "
-                          + "made found nothing, and nothing else was tried: " + unresolved
-                        : $"Finished without resolving {openFailures.Count} tool call(s) that did not "
-                          + "go through: " + unresolved);
+                    // Told once, before any verdict (amendment A). Run 0cf51c, 2026-09-29: a command written for bash
+                    // failed under cmd.exe, the step ran it again rightly spelled two seconds later and it passed, and
+                    // the step - never told the first was still open - ended INCOMPLETE on it, two steps skipped.
+                    if (!openCallsNudged)
+                    {
+                        openCallsNudged = true;
+                        messages.Add(ChatMessage.User("Before this step ends: "
+                            + (openFailures.Count == 1 ? "this call" : $"these {openFailures.Count} calls")
+                            + " did not go through, and nothing since has made "
+                            + (openFailures.Count == 1 ? "it" : "them") + " good:\n" + unresolved
+                            + "\nMake each good - run it again, corrected - or, if this step's result does not depend on it, "
+                            + "say so and why in your closing message."));
+                        yield return Ev(EventKind.ContextAssembled, $"The step is told, once, of {openFailures.Count} call(s) still open: {unresolved}");
+                        continue;
+                    }
 
-                    loopResult.Set(StepOutcomeKind.Incomplete, openFailures.NothingButMisses
-                        ? "nothing found and nothing done: " + unresolved
-                        : "unresolved tool call: " + unresolved);
-                    yield break;
+                    // Still open, and a reviewer is to judge the step: it goes to the review with them named, as the
+                    // engine's own finding - the reviewer decides whether the result stands without them. Without a
+                    // reviewer, nothing can, and the step is unfinished as before.
+                    if (reviewed)
+                    {
+                        openCallsForReview = unresolved;
+                        journal.Record(stepNo, "engine_open_calls", "{}", ActionOutcome.Succeeded,
+                            "Checked by the engine as this step ended: calls that did not go through and that nothing made good, "
+                            + "after the step was told of them once:\n" + unresolved
+                            + "\nJudge whether the step's result stands without them. A result that depends on one of them is not "
+                            + "shown to be done; one that does not - a mistyped command made good by a different one - may stand.",
+                            WorkspaceEffect.None, origin: ToolCallOrigin.Engine);
+                        yield return Ev(EventKind.ErrorObserved, $"Finished with {openFailures.Count} call(s) not made good, after being "
+                            + "told once: " + unresolved + " - the review decides whether the result stands without them.");
+                    }
+                    else
+                    {
+                        // Two different things end a step here, and saying which one is the difference
+                        // between a person fixing a broken command and a person checking a path.
+                        yield return Ev(EventKind.ErrorObserved, openFailures.NothingButMisses
+                            ? $"Finished with nothing done: all {openFailures.Count} lookup(s) this step "
+                              + "made found nothing, and nothing else was tried: " + unresolved
+                            : $"Finished without resolving {openFailures.Count} tool call(s) that did not "
+                              + "go through: " + unresolved);
+
+                        loopResult.Set(StepOutcomeKind.Incomplete, openFailures.NothingButMisses
+                            ? "nothing found and nothing done: " + unresolved
+                            : "unresolved tool call: " + unresolved);
+                        yield break;
+                    }
                 }
 
                 // A step that was to hand its result on as values and has not: told once, with the
