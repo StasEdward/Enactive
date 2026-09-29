@@ -22,8 +22,12 @@ using Enactive.Core.Tools;
 /// </summary>
 public static class Transcript
 {
-    /// <summary>What is left where a tool call's arguments were. Valid JSON, because it is still sent as arguments.</summary>
+    /// <summary>What is left where a tool call's arguments were, when nothing is known of how the call went. Valid JSON,
+    /// because it is still sent as arguments.</summary>
     public const string ElidedArguments = """{"_elided":"arguments dropped to fit the context window"}""";
+
+    /// <summary>The key every elided argument set carries, whatever else it says.</summary>
+    private const string ElidedKey = "_elided";
 
     // What a tool call is remembered as: exactly what the model sent. It was shortened at record
     // time from 2026-09-22 to 2026-09-24, and every form of that misled the model about its own work
@@ -126,13 +130,14 @@ public static class Transcript
 
         if (message.Role == ChatRole.Assistant && message.ToolCalls is { Count: > 0 } calls)
         {
-            if (calls.All(c => c.ArgumentsJson == ElidedArguments))
+            // A receipt only where it is shorter than what it replaces: eliding a short call would grow the conversation.
+            var receipts = calls.Select(c => IsElided(c.ArgumentsJson) ? c
+                : Receipt(c, ReplyTo(messages, index, c.Id)) is { } receipt && receipt.Length < c.ArgumentsJson.Length
+                    ? c with { ArgumentsJson = receipt } : c).ToArray();
+            if (receipts.SequenceEqual(calls))
                 return false;
 
-            messages[index] = message with
-            {
-                ToolCalls = calls.Select(c => c with { ArgumentsJson = ElidedArguments }).ToArray()
-            };
+            messages[index] = message with { ToolCalls = receipts };
             return true;
         }
 
@@ -140,6 +145,55 @@ public static class Transcript
     }
 
     private const string ElidedResultMarker = "[earlier tool result:";
+
+    private static bool IsElided(string argumentsJson)
+        => argumentsJson.Contains("\"" + ElidedKey + "\"", StringComparison.Ordinal);
+
+    /// <summary>The reply a call got, among the messages after it - read before it is elided in turn.</summary>
+    private static string? ReplyTo(List<ChatMessage> messages, int callAt, string callId)
+    {
+        for (var i = callAt + 1; i < messages.Count && messages[i].Role == ChatRole.Tool; i++)
+            if (messages[i].ToolCallId == callId)
+                return messages[i].Content;
+        return null;
+    }
+
+    /// <summary>
+    /// What is left where one call's arguments were: how much the model sent, whether the call ran, and - for a
+    /// call that wrote a file - which file now holds it. Measured elsewhere (Unsloth Studio's compaction receipts): a
+    /// bare "dropped" reads as the write having failed, and a model then does it again; a receipt that reads like the
+    /// tool's answer is quoted back as one. So it says the call ran and where its work is, that it is not output, and
+    /// it does not ask for anything to be read again.
+    /// </summary>
+    internal static string Receipt(ToolCall call, string? reply)
+    {
+        var size = call.ArgumentsJson.Length;
+        string? path = null;
+        try
+        {
+            using var doc = JsonDocument.Parse(call.ArgumentsJson);
+            if (doc.RootElement.ValueKind == JsonValueKind.Object
+                && doc.RootElement.TryGetProperty("path", out var p) && p.ValueKind == JsonValueKind.String)
+                path = p.GetString();
+        }
+        catch (JsonException) { }
+
+        var didNotRun = reply is null ? (bool?)null
+            : reply.StartsWith("ERROR", StringComparison.Ordinal) || reply.StartsWith("NOT RUN", StringComparison.Ordinal)
+              || reply.StartsWith("ALREADY DONE", StringComparison.Ordinal);
+        // Short on purpose: a receipt stays in the window every turn after, in place of a stub of forty characters.
+        var said = didNotRun switch
+        {
+            true => $"{size} chars you sent; this call did not run or did not apply",
+            false when path is not null => $"{size} chars you sent, already written; the file holds them. Not tool output",
+            false => $"{size} chars you sent; the call ran. Not tool output",
+            null => "arguments dropped to fit the context window"
+        };
+        var receipt = new Dictionary<string, string>();
+        if (path is not null) receipt["path"] = path;
+        receipt[ElidedKey] = said;
+        return JsonSerializer.Serialize(receipt);
+    }
 }
 
 /// <summary>

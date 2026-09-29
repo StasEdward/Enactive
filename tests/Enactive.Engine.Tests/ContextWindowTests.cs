@@ -105,7 +105,50 @@ public sealed class ContextWindowTests
 
         Assert.Equal(2, changed);
         Assert.True(Transcript.Size(messages) <= 1000);
-        Assert.Equal(Transcript.ElidedArguments, messages.Single(m => m.ToolCalls is { Count: > 0 }).ToolCalls![0].ArgumentsJson);
+        Assert.Equal("""{"_elided":"20000 chars you sent; the call ran. Not tool output"}""",
+            messages.Single(m => m.ToolCalls is { Count: > 0 }).ToolCalls![0].ArgumentsJson);
+    }
+
+    /// <summary>
+    /// What is left where arguments were says how the call went. A bare "dropped" read as the write having failed, and a
+    /// model then did it again (Unsloth Studio's compaction receipts, reviewed 2026-09-30). Deliberately not code: a wiki page.
+    /// </summary>
+    [Fact]
+    public void A_receipt_says_the_page_was_written_and_keeps_its_path()
+    {
+        var page = new string('p', 5_000);
+        var messages = new List<ChatMessage>
+        {
+            ChatMessage.System("You are a developer agent."), ChatMessage.User("write the wiki pages"),
+            AssistantCall("write_file", $$"""{"path":"wiki/home.md","content":"{{page}}"}""", "w1"),
+            ToolResult("w1", "Created new file 'wiki/home.md' (5000 bytes)."),
+            AssistantCall("write_file", $$"""{"path":"wiki/nav.md","content":"{{page}}"}""", "w2"),
+            ToolResult("w2", "ERROR: the tool 'write_file' is not permitted for this run and will not become permitted."),
+        };
+
+        Transcript.Elide(messages, targetChars: 1_000, keepRecent: 0);
+
+        var calls = messages.Where(m => m.ToolCalls is { Count: > 0 }).Select(m => m.ToolCalls![0].ArgumentsJson).ToArray();
+        Assert.Equal("""{"path":"wiki/home.md","_elided":"5036 chars you sent, already written; the file holds them. Not tool output"}""", calls[0]);
+        Assert.Equal("""{"path":"wiki/nav.md","_elided":"5035 chars you sent; this call did not run or did not apply"}""", calls[1]);
+        foreach (var call in calls)
+            using (var doc = System.Text.Json.JsonDocument.Parse(call)) { }
+    }
+
+    /// <summary>A call shorter than its receipt is left as it was: eliding it would grow the conversation.</summary>
+    [Fact]
+    public void A_call_shorter_than_its_receipt_is_left_alone()
+    {
+        var messages = new List<ChatMessage>
+        {
+            ChatMessage.System("You are a developer agent."), ChatMessage.User("check the page"),
+            AssistantCall("read_file", """{"path":"a.md"}""", "r1"), ToolResult("r1", new string('x', 4_000)),
+        };
+
+        Transcript.Elide(messages, targetChars: 200, keepRecent: 0);
+
+        Assert.Equal("""{"path":"a.md"}""", messages[2].ToolCalls![0].ArgumentsJson);
+        Assert.StartsWith("[earlier tool result:", messages[3].Content, StringComparison.Ordinal);
     }
 
     // The stub replaces arguments, which are still sent as arguments — so it has to be valid JSON.
