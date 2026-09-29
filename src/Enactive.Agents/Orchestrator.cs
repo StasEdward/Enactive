@@ -107,6 +107,9 @@ public sealed partial class Orchestrator : IOrchestrator
     private readonly IWorkspaceChangesFactory _workspaceChanges;
     private readonly IChatProviderFactory _providers;
     private readonly IWorkerProvider _workers;
+
+    /// <summary>The runs already told which registered tools no role names - see ToolReach; once a run is enough.</summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, byte> _toldUnnamedTools = new();
     private readonly IToolRegistry _tools;
     private readonly IArtifactStore _artifacts;
     private readonly WorkspaceInfo _workspace;
@@ -3475,9 +3478,11 @@ public sealed partial class Orchestrator : IOrchestrator
         // not worth a word. A tool NO role names has no configuration in which it can ever be used,
         // and this codebase has now met that five times inside its own registry and twice outside
         // it, every time by symptom rather than by message. See ToolReach.
+        // Once a run: it is about the team, not the step, and said again at every step and every attempt it was
+        // eleven identical warnings in one run (fba4d6, 2026-09-29) that read as eleven problems.
         if (ToolReach.Unnamed(_tools.Definitions.Select(d => d.Name),
                               _workers.All.Select(w => w.ToolAllowlist))
-            is { } unnamedSentence)
+            is { } unnamedSentence && _toldUnnamedTools.TryAdd(runId, 0))
             yield return Ev(EventKind.ErrorObserved, unnamedSentence);
 
         // The tool schemas are sent with every request and are not part of the message list, so they

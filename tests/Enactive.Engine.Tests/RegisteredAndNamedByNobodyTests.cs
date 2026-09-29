@@ -134,4 +134,20 @@ public sealed class RegisteredAndNamedByNobodyTests
 
         Assert.Contains("registered and named by no role", events.Text(), StringComparison.Ordinal);
     }
+
+    /// <summary>Once a run, not at every step: it is about the team (run fba4d6: eleven identical warnings in one run).</summary>
+    [Fact]
+    public async Task A_run_of_several_steps_says_it_once()
+    {
+        using var fx = new EngineFixture();
+        var alone = EngineFixture.WorkerWith("write_file", "read_file");
+        var worker = new ByStepChatProvider("""
+            {"disposition":"task","title":"notes","steps":[{"title":"First note","dependsOn":[]},{"title":"Second note","dependsOn":[0]}]}
+            """);
+
+        var events = await fx.RunAsync(fx.Build(worker, alone, team: new[] { alone }), "write two notes");
+
+        Assert.Single(events, e => e.Summary.Contains("registered and named by no role", StringComparison.Ordinal));
+        Assert.Equal(2, events.Count(e => e.Kind == EventKind.StepCompleted));
+    }
 }
