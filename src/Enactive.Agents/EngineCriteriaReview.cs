@@ -24,6 +24,7 @@ internal static class EngineCriteriaReview
         + "provenance says where each file name came from. Return engine_criteria:[{id,decision,reason,path,path_from}] for any you change: "
         + "decision keep; drop (only one whose name the plan chose, with the reason); path (the corrected path, for a name the plan chose wrongly); "
         + "path_from {step,field} (the result's file is the one that step hands on in a path field of its output - for a result the request names no file for). "
+        + "A step is named by its index in the plan's steps as shown, counted from 0 - the same as in path_from - and its title is beside it. "
         + "A criterion named by the request is kept as it is. One you do not return is kept.";
 
     private static string Norm(string path) => path.Replace('\\', '/').TrimStart('.', '/');
@@ -32,9 +33,11 @@ internal static class EngineCriteriaReview
         => new string(Path.GetFileNameWithoutExtension(name).Where(char.IsLetterOrDigit).ToArray()).ToLowerInvariant();
 
     /// <summary>Where the file's name came from, as the engine can tell.</summary>
-    internal static string Provenance(TypedCriterion typed, string request)
+    internal static string Provenance(TypedCriterion typed, string request, Enactive.Core.Tasks.Plan? plan = null)
     {
-        if (typed.PathFromStep is { } step) return $"handed on by step {step} as '{typed.PathFromField}'";
+        if (typed.PathFromStep is { } step)
+            return $"handed on by the step at index {step}" + (TitleAt(plan, step) is { } title ? $" ('{title}')" : "")
+                   + $" as '{typed.PathFromField}'";
         if (typed.Path is not { } path) return ChosenByPlan;
         var norm = Norm(path);
         var text = request.Replace('\\', '/');
@@ -43,7 +46,13 @@ internal static class EngineCriteriaReview
     }
 
     /// <summary>The criteria as the review is shown them, with the engine's facts about each.</summary>
-    internal static IReadOnlyList<object> Show(IReadOnlyList<SuccessCriterionDefinition> criteria, string request, string? root)
+    private static string? TitleAt(Enactive.Core.Tasks.Plan? plan, int index)
+        => plan is not null && index >= 0 && index < plan.Steps.Count ? plan.Steps[index].Title : null;
+
+    // Run 148e77, 2026-09-29: the review was shown path_from {step:3} beside a list of steps with no numbers, took
+    // it as counted from 1, and "corrected" it to a step that does not exist. The index and the title, together.
+    internal static IReadOnlyList<object> Show(IReadOnlyList<SuccessCriterionDefinition> criteria, string request, string? root,
+        Enactive.Core.Tasks.Plan? plan = null)
         => criteria.Select((c, i) =>
         {
             var t = c.Typed!;
@@ -65,8 +74,9 @@ internal static class EngineCriteriaReview
             return (object)new
             {
                 id = $"E{i + 1}", kind = t.Kind.ToString(), t.Path,
-                path_from = t.PathFromStep is { } s ? new { step = s, field = t.PathFromField } : null,
-                t.Text, t.NonEmpty, step = c.Step, provenance = Provenance(t, request), onDiskNow = there
+                path_from = t.PathFromStep is { } s ? new { step = s, stepTitle = TitleAt(plan, s), field = t.PathFromField } : null,
+                t.Text, t.NonEmpty, step = c.Step, stepTitle = c.Step is { } own ? TitleAt(plan, own) : null,
+                provenance = Provenance(t, request, plan), onDiskNow = there
             };
         }).ToArray();
 

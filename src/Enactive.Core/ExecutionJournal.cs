@@ -450,28 +450,39 @@ public sealed class ExecutionJournal
         // How many can be shown AT ALL. Each costs its call line plus the floor under its output -
         // budgeting the call lines alone was the first version of this and it overran by a factor of
         // twelve, because the floor is paid per action whether or not there is room for it.
-        var kept = slice.Length;
-        var dropped = 0;
-        while (kept > 1 && header.Length + Cost(calls, kept) > maxChars)
+        //
+        // The oldest go first - but not a command that ran, and not what the engine observed itself: those
+        // go last, oldest first, and only when nothing else is left to give up. Run 148e77, 2026-09-29: a step
+        // read ten files, ran the test suite (129 of 129 passed), then searched sixteen times; the budget kept
+        // the searches, dropped the one test run as "the 19 oldest calls", and the reviewer failed the step
+        // twice for claiming a test run "not among the displayed calls". A process that ran and exited is the
+        // strongest evidence a step has, and a read or a search is the easiest to give up.
+        var shown = new SortedSet<int>(Enumerable.Range(0, slice.Length));
+        foreach (var i in Enumerable.Range(0, slice.Length).OrderBy(i => KeptLongest(slice[i]) ? 1 : 0).ThenBy(i => i))
         {
-            kept--;
-            dropped++;
+            if (shown.Count <= 1 || header.Length + Cost(calls, shown) <= maxChars) break;
+            shown.Remove(i);
         }
+        var kept = shown.Count;
+        var dropped = slice.Length - kept;
+        var hidden = Enumerable.Range(0, slice.Length).Where(i => !shown.Contains(i)).ToArray();
 
-        var note = dropped > 0
-            ? $"… the {dropped} oldest call(s) of this step are not shown here.\n"
-            : "";
+        var note = dropped == 0 ? ""
+            : hidden.Length == hidden[^1] + 1 && !hidden.Any(i => KeptLongest(slice[i]))
+                ? $"… the {dropped} oldest call(s) of this step are not shown here.\n"
+                : $"… {dropped} call(s) of this step are not shown here ({Ranges(hidden)}): the oldest reads and lookups go "
+                  + "first; a command that ran, and what the engine observed itself, are kept longest.\n";
 
         // What is left over, shared EQUALLY. Equal rather than first-come is the whole point: the
         // old behaviour was first-come, and one README took all of it.
-        var spare = maxChars - header.Length - note.Length - Cost(calls, kept);
+        var spare = maxChars - header.Length - note.Length - Cost(calls, shown);
         var each = MinOutputChars + Math.Max(0, spare) / kept;
 
         var sb = new StringBuilder(header).AppendLine().Append(note);
         var outputsTruncated = false;
         var argumentsTruncated = false;
 
-        for (var i = slice.Length - kept; i < slice.Length; i++)
+        foreach (var i in shown)
         {
             sb.AppendLine(calls[i]);
             sb.Append("<- ").AppendLine(Answer(slice[i], each, out var shortened));
@@ -480,7 +491,7 @@ public sealed class ExecutionJournal
         }
 
         return new EvidenceView(sb.ToString().TrimEnd(), slice,
-            Enumerable.Range(dropped + 1, kept), outputsTruncated, argumentsTruncated, resumed);
+            shown.Select(i => i + 1), outputsTruncated, argumentsTruncated, resumed);
     }
 
     /// <summary>
@@ -515,11 +526,32 @@ public sealed class ExecutionJournal
         }
     }
 
-    /// <summary>The least the newest <paramref name="kept"/> actions can be shown in.</summary>
-    private static int Cost(string[] calls, int kept)
+    /// <summary>
+    /// Kept in the evidence longest: a process that ran and exited, and what the engine observed itself. Neither
+    /// is a tool name - an exit code is a fact about any command, and an observation's origin is the engine's.
+    /// </summary>
+    private static bool KeptLongest(ExecutedAction action)
+        => action.ExitCode is not null || action.Origin == ToolCallOrigin.Engine;
+
+    /// <summary>1-based call numbers as ranges: "[1]-[18], [21]".</summary>
+    private static string Ranges(IReadOnlyList<int> zeroBased)
+    {
+        var parts = new List<string>();
+        for (var i = 0; i < zeroBased.Count;)
+        {
+            var j = i;
+            while (j + 1 < zeroBased.Count && zeroBased[j + 1] == zeroBased[j] + 1) j++;
+            parts.Add(i == j ? $"[{zeroBased[i] + 1}]" : $"[{zeroBased[i] + 1}]-[{zeroBased[j] + 1}]");
+            i = j + 1;
+        }
+        return string.Join(", ", parts);
+    }
+
+    /// <summary>The least the actions at <paramref name="shown"/> can be shown in.</summary>
+    private static int Cost(string[] calls, IEnumerable<int> shown)
     {
         var total = 0;
-        for (var i = calls.Length - kept; i < calls.Length; i++)
+        foreach (var i in shown)
             // The call, "<- ", the floor under its output, and the notice that says it was shortened -
             // which has to be paid for or the budget is a number the result does not obey.
             total += calls[i].Length + 1 + MinOutputChars + 4 + ShortenedNoticeChars;

@@ -47,6 +47,9 @@ public sealed partial class Orchestrator
         catch (Exception ex) { return new(false, ex.Message) { IncompleteReason = "Final review unavailable: " + ex.Message }; }
     }
 
+    /// <summary>The name the engine's own measurement before the work is recorded under - no tool the model can call.</summary>
+    internal const string MeasuredBeforeTool = "engine_measured_before_the_work";
+
     private sealed record AttemptReview(ReviewResult Review, bool ProofRejected = false, string? BudgetExhausted = null);
 
     /// <summary>
@@ -59,7 +62,8 @@ public sealed partial class Orchestrator
         IWorkspaceChanges? changes, WorkspaceSnapshot? before, string request,
         Func<WorkEvent, ValueTask> publish, CancellationToken ct, IReadOnlyList<string>? planSteps = null,
         RequestObligations? obligations = null, string? handedOn = null,
-        IReadOnlyList<SuccessCriterionDefinition>? stepCriteria = null, System.Text.Json.Nodes.JsonObject? handedValues = null)
+        IReadOnlyList<SuccessCriterionDefinition>? stepCriteria = null, System.Text.Json.Nodes.JsonObject? handedValues = null,
+        IReadOnlyList<BuildBaseline>? measuredBefore = null)
     {
         var prefix = stepNumber is { } number ? $"[{number}] " : "";
         ValueTask Emit(EventKind kind, string summary) => publish(scope.Ev(kind, prefix + summary, stepNumber));
@@ -82,6 +86,16 @@ public sealed partial class Orchestrator
         foreach (var (place, observed) in cited)
             journal.Record(stepNumber, CitedPlaces.ToolName, JsonSerializer.Serialize(new { cited = place }),
                 ActionOutcome.Succeeded, observed, WorkspaceEffect.None, origin: ToolCallOrigin.Engine);
+        // What the ENGINE measured before any work: the build and the tests, run by it and read by it. A fact for the
+        // reviewer, once per step. Run 148e77, 2026-09-29: the engine's own test run said 129 passed; the step said
+        // "129 tests", its breakdown by file counted 103 test methods, and the reviewer - never shown the engine's
+        // number - failed the step for an arithmetic error that was a theory's cases.
+        if (measuredBefore is { Count: > 0 } && measuredBefore.Where(b => b.Taken).ToArray() is { Length: > 0 } taken
+            && !journal.Actions.Skip(evidenceStart).Any(a => a.Tool == MeasuredBeforeTool))
+            journal.Record(stepNumber, MeasuredBeforeTool, "{}", ActionOutcome.Succeeded,
+                "Measured by the engine itself before any work in this run - its own runs, not the step's claims. They say where "
+                + "things stood BEFORE the work, not after it:\n" + string.Join("\n", taken.Select(b => "- " + b.Describe())),
+                WorkspaceEffect.None, origin: ToolCallOrigin.Engine);
         // What the plan checks this step on, decided by the engine now - a fact for the reviewer, not a judgement.
         if (stepCriteria is { Count: > 0 } && stepNumber is { } planNo
             && TypedCriteria.OfStep(stepCriteria, planNo - 1, _workspace.RootPath) is { Count: > 0 } checkedNow)

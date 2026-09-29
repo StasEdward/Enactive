@@ -558,7 +558,7 @@ public sealed partial class Reviewer : IReviewer
         // and says the rule "belongs in the reviewer's instructions, where it is said ONCE". It was
         // said once, in the execution reviewer's, and this pass never got it.
         + "The evidence may be SHORTENED: a long result keeps its start and its end with the cut "
-        + "marked between them, and a note may say the oldest calls are not listed at all. Neither "
+        + "marked between them, and a note may say some calls - the oldest reads and lookups first - are not listed at all. Neither "
         + "is an absence. Cite a call whose result was cut exactly as you would any other, and "
         + "never answer \"no\" because what would have shown it is in a part you were not shown.";
 
