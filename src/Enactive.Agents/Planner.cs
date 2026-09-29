@@ -57,6 +57,9 @@ public sealed record PlanResult(
 
     /// <summary>What the contract review changed in the criteria the engine decides, or refused to change, said.</summary>
     public IReadOnlyList<string> ContractNotes { get; init; } = [];
+
+    /// <summary>The contract review could not settle the final checks, and nothing it said is about a restriction: a person decides.</summary>
+    public string? Unsettled { get; init; }
     public Enactive.Core.Tools.TaskActionPolicy? ActionPolicy { get; init; }
     public IReadOnlyList<Enactive.Core.Tools.TaskRestriction> Restrictions { get; init; } = [];
 }

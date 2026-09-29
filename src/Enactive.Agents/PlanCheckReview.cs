@@ -15,7 +15,10 @@ internal static class PlanCheckReview
     internal const int MaxFinalChecks = PlanCheckContract.MaxFinalChecks;
     internal static async Task<PlanResult> RunAsync(PlanResult plan, string request, WorkContext context,
         IChatProvider provider, string model, RunBudget budget, int outputBudget, CancellationToken ct,
-        bool preserveCriteria = false, IReadOnlyList<ToolDefinition>? tools = null, string? workspaceRoot = null)
+        bool preserveCriteria = false, IReadOnlyList<ToolDefinition>? tools = null, string? workspaceRoot = null,
+        // Before the work: an unsettled contract without a restriction it could be about goes to a person (Unsettled),
+        // instead of stopping the run. A repair after a failure stays strict.
+        bool askWhenUnsettled = false)
     {
         // Criteria the engine decides itself are not commands, and are not this review's: nothing in
         // them can run, so nothing in them can break the task's restrictions. Set aside, and put back
@@ -105,8 +108,18 @@ internal static class PlanCheckReview
                 var contract = PlanCheckContract.Validate(answer, complete, inputs);
                 if (contract.Unresolved is { } unresolved)
                 {
-                    problem = "Unresolved verification contract: " + unresolved;
-                    break;
+                    // Not settled. Where there is a restriction it can be about - a ban on deleting files, an allowlist
+                    // of tools or commands, one established before - that is a stop. Without one, it is for a person
+                    // to decide (Phase 1.8: an ambiguity nothing can resolve is NeedsUser), not for the review alone:
+                    // twice on 2026-09-29 a run was stopped before its first step because "sending an email cannot be
+                    // verified by a command" and a test command's two exit codes did not fit one field.
+                    if (!askWhenUnsettled || contract.Restrictions.Count > 0 || contract.ActionPolicy is not null
+                        || inputs.Restrictions.Count > 0 || inputs.ActionPolicy is not null)
+                    {
+                        problem = "Unresolved verification contract: " + unresolved;
+                        break;
+                    }
+                    return Result(budget.TurnExhaustedAfter(prompt, output)) with { Unsettled = unresolved };
                 }
                 var (engineCriteria, notes) = reviewsEngineCriteria
                     ? EngineCriteriaReview.Apply(decidedByTheEngine, answer, request, workspaceRoot, plan.Plan)

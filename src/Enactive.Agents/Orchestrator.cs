@@ -751,9 +751,31 @@ public sealed partial class Orchestrator : IOrchestrator
             plan = await InScopeAsync(runId, taskId, null, () => PlanCheckReview.RunAsync(plan with { Checks = CriteriaFor(plan) }, intent.RawText,
                 intent.Context, models.PlanProvider, models.Plan.Model, budget,
                 _generationBudgets.For(GenerationPurpose.Planning), ct, preserveCriteria: resume is not null || _successCriteria.Count > 0 || !_proposeChecks, tools: _tools.Definitions,
-                workspaceRoot: _workspace.RootPath));
+                workspaceRoot: _workspace.RootPath, askWhenUnsettled: true));
             yield return scope.Usage(WorkEventPayload.WorkPurpose.Plan, models.Plan,
                 plan.PromptTokens, plan.CompletionTokens, cached: plan.CachedPromptTokens, created: plan.CacheCreationPromptTokens);
+
+            // The final checks could not be settled, and nothing is about a restriction: the person decides. With nobody to
+            // ask the answer is no, and no work starts - as before; asked, the work can go on, with the checks as planned or
+            // with none of them (the steps are reviewed and the engine's own checks run either way).
+            if (plan.Unsettled is { } unsettled)
+            {
+                var question = new DecisionRequest(taskId, "The final checks could not be settled before the work", unsettled,
+                    [new("allow", "Go on, with the final checks as planned"), new("without", "Go on, without final checks"),
+                     new("deny", "Stop - no work starts")],
+                    RecommendedOptionId: "without",
+                    FullDetail: $"The review of the final checks said: {unsettled}\n\nThe checks as planned:\n{CheckLines(plan.Checks)}\n\n"
+                        + "Going on without final checks runs none of these commands; each step is still reviewed, and the engine's own "
+                        + "checks (the build, the tests, the files produced) still run.");
+                yield return scope.Ev(EventKind.DecisionRequested, $"{question.Topic}: {unsettled}");
+                var settled = await ToolAccess.AskAsync(_decisions, _decisionGate, question, ct);
+                yield return scope.Ev(EventKind.DecisionResolved, $"Final checks: {settled.OptionId}"
+                    + (settled.Because is { } because ? $" ({because})" : ""));
+                if (string.Equals(settled.OptionId, "without", StringComparison.OrdinalIgnoreCase))
+                    plan = plan with { Checks = plan.Checks.Where(c => c.Typed is { InEngine: true } or { FromRun: true }).ToArray() };
+                else if (!string.Equals(settled.OptionId, "allow", StringComparison.OrdinalIgnoreCase))
+                    plan = plan with { IncompleteReason = "Unresolved verification contract: " + unsettled };
+            }
             if (plan.IncompleteReason is { } contractFailure)
             {
                 yield return scope.Ev(EventKind.ErrorObserved, contractFailure);
