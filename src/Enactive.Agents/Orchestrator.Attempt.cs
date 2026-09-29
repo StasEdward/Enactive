@@ -23,7 +23,7 @@ public sealed partial class Orchestrator
             models.Worker, step.Messages, scope.Artifacts, context, step.Store, step.Journal, step.Reads,
             stepNumber, result, scope.Budget, scope.Granted, ct, model.ProviderId,
             step.RestartFrom, changes, before, attemptOrigin, step.Output, step.OutputSlot, step.Boundary, step.WithholdUnchecked,
-            step.Criteria))
+            step.Criteria, step.SubmitTool))
             await publish(ev);
         if (!models.ReviewOn || !result.Succeeded) return null;
         return await ReviewAttemptAsync(title, step.Messages, step.Journal, step.EvidenceStart,

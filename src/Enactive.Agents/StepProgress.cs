@@ -86,6 +86,13 @@ internal sealed class StepProgress
     private static string RepeatIdentity(ToolCall call, long version)
         => CallIdentity.Of(call) + "\0#" + version.ToString(CultureInfo.InvariantCulture);
 
+    /// <summary>
+    /// Whether every call is one this step has already made, with nothing it has changed since - without recording
+    /// anything. Asked before <see cref="Advanced"/>, which records.
+    /// </summary>
+    public bool OnlyRepeats(IReadOnlyList<ToolCall> calls)
+        => calls.Count > 0 && calls.All(call => _seen.Contains(Identity(call)));
+
     /// <summary>Records one turn's calls and says whether any of them was new.</summary>
     public bool Advanced(IReadOnlyList<ToolCall> calls)
     {

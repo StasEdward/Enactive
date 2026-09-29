@@ -87,6 +87,60 @@ internal static class StepOutputContract
             json.ToJsonString(), WorkspaceEffect: WorkspaceEffect.None, Kind: ToolKind.Unknown);
     }
 
+    /// <summary>
+    /// The hand-over as every step of one run is offered it: the same tool, the same bytes, from the first step to the
+    /// last. Tools are rendered at the head of the prompt, so a list that changes between steps - a step with a
+    /// declared output, then one without - makes a server re-read the whole conversation after them (run fba4d6,
+    /// 2026-09-29: 46,000 tokens again at the start of step 2, and a step with nothing to hand on, looking for the
+    /// hand-over it had used before, ran the same test suite four times). Every field any step of the plan hands on,
+    /// with its limits (C.6); what THIS step must send is in its instruction and is checked against its own contract,
+    /// as before. Null when no step of the plan hands anything on.
+    /// </summary>
+    internal static ToolDefinition? RunTool(IEnumerable<StepOutputSchema?> schemas)
+    {
+        var all = schemas.OfType<StepOutputSchema>().ToArray();
+        if (all.Length == 0) return null;
+        var properties = new JsonObject();
+        var described = new List<string>();
+        foreach (var field in all.SelectMany(s => s.Fields))
+        {
+            var wire = WireType(field);
+            if (properties[field.Name] is { } seen)
+            {
+                // The same name with another shape in another step: its type is left to the step's own contract.
+                if (seen.ToJsonString() != wire.ToJsonString())
+                    properties[field.Name] = new JsonObject { ["description"] = "see the step's instruction" };
+            }
+            else properties[field.Name] = wire;
+            var line = Describe(field);
+            if (!described.Contains(line)) described.Add(line);
+        }
+        properties["evidence"] = new JsonObject
+        {
+            ["type"] = "array", ["items"] = new JsonObject { ["type"] = "integer" },
+            ["description"] = "Optional: the numbers [n] of the calls that show this result."
+        };
+        var json = new JsonObject { ["type"] = "object", ["properties"] = properties, ["additionalProperties"] = true };
+        return new ToolDefinition(ToolName,
+            "Hand over a step's result as values, for the steps after it - they receive these values, not your closing message. "
+            + "A step that hands values on is told its fields in its instruction: send those, and only those. Fields the steps of this "
+            + $"plan hand on: {string.Join("; ", described)}. Optionally evidence: the numbers [n] of the calls that show it. "
+            + "Call it when the step's work is done; call it again to correct it - the last accepted submission counts. "
+            + "A step told it hands nothing on does not call it: it ends with a short closing message.",
+            json.ToJsonString(), WorkspaceEffect: WorkspaceEffect.None, Kind: ToolKind.Unknown);
+    }
+
+    /// <summary>What a step is told about its own hand-over, in its instruction - the part the run-wide tool cannot say.</summary>
+    internal static string Instruction(StepOutputSchema schema)
+        => $"This step hands its result on with {ToolName}: {string.Join("; ", schema.Fields.Select(Describe))}. "
+           + (schema.Fields.Where(f => f.Required).Select(f => f.Name).ToArray() is { Length: > 0 } required
+               ? $"Required: {string.Join(", ", required)}. " : "")
+           + "Call it when the step's work is done.\n";
+
+    /// <summary>What a step with nothing to hand on is told, where the run offers the hand-over to others.</summary>
+    internal static string NothingToHandOn
+        => $"This step hands nothing on as values: it ends with a short closing message, not with {ToolName}.\n";
+
     private static string Describe(StepOutputField field)
     {
         var limit = field switch

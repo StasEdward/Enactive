@@ -989,6 +989,8 @@ public sealed partial class Orchestrator : IOrchestrator
         var scheduler = resume is null
             ? new DagScheduler(builtPlan)
             : new DagScheduler(builtPlan, StatusesOf(resume));
+        // The hand-over every step of this run is offered - one tool, the same bytes throughout (StepOutputContract.RunTool).
+        var runSubmitTool = StepOutputContract.RunTool(builtPlan.Steps.Select(s => s.Output));
         // Step numbers are PLAN positions, not a dispatch counter. The UI resolves an event to its
         // step card by this number, and its cards come from the plan in plan order; as soon as
         // readiness order differs from plan order (any real DAG, and every parallel run) a dispatch
@@ -1428,6 +1430,8 @@ public sealed partial class Orchestrator : IOrchestrator
                 $"Proceed with this step of the plan: {step.Title}\n"
                 + $"This is step {stepNumber} of {total}. Current obligation scope: S{stepNumber}.\n"
                 + FanOut.Instruction(step, scheduler.Steps)
+                + (step.Output is { } handsOn ? StepOutputContract.Instruction(handsOn)
+                    : runSubmitTool is not null ? StepOutputContract.NothingToHandOn : "")
                 + (step.ReadOnly
                     ? "This step is READ-ONLY: look, run what shows where things stand, and report - change no file, "
                       + "with the file tools or with a command. The steps after it make the changes; notes and logs go to "
@@ -1518,7 +1522,7 @@ public sealed partial class Orchestrator : IOrchestrator
                     readOnly: step.ReadOnly);
             var attemptState = session.BeginStep(convo, store, restartFrom, step.Output, ownConversation) with
             {
-                Boundary = boundary, WithholdUnchecked = itemOf?.Report is not null,
+                Boundary = boundary, WithholdUnchecked = itemOf?.Report is not null, SubmitTool = runSubmitTool,
                 // Only a step of the plan as planned: an item's step has no position of its own in the planner's list.
                 Criteria = step.ExpandedFrom is null
                     ? CriteriaFor(plan).Where(c => c.Step == stepNumber - 1 || c.Typed?.PathFromStep == stepNumber - 1).ToArray()
@@ -3318,7 +3322,9 @@ public sealed partial class Orchestrator : IOrchestrator
         // What this step may change, and whether tools that cannot be checked against it are kept from it.
         WriteBoundary? boundary = null, bool withholdUnchecked = false,
         // The file criteria the plan attached to this step: checked when it ends, and the step told once what fails.
-        IReadOnlyList<SuccessCriterionDefinition>? stepCriteria = null)
+        IReadOnlyList<SuccessCriterionDefinition>? stepCriteria = null,
+        // The hand-over as the whole run offers it, the same for every step - see StepOutputContract.RunTool.
+        ToolDefinition? submitTool = null)
     {
         // An async iterator cannot return a value, so the caller passes in the slot the loop fills.
         // Without it "how did this end" existed only as English inside an event, and every consumer
@@ -3431,7 +3437,8 @@ public sealed partial class Orchestrator : IOrchestrator
         var toolDefs = _tools.Definitions.Where(d => offer.Offered.Contains(d.Name)).ToArray();
         // The step's own hand-over, when the plan declared what it hands on. Not in the registry: it
         // belongs to this step, and is made from the schema it will be checked against.
-        if (outputSchema is not null) toolDefs = [.. toolDefs, StepOutputContract.Tool(outputSchema)];
+        if (submitTool is not null) toolDefs = [.. toolDefs, submitTool];
+        else if (outputSchema is not null) toolDefs = [.. toolDefs, StepOutputContract.Tool(outputSchema)];
         if (_reportBlocked) toolDefs = [.. toolDefs, AgentBlocked.Tool];
 
         // Withheld VISIBLY. A run that quietly cannot use git and does not say so is a worse
@@ -3501,8 +3508,8 @@ public sealed partial class Orchestrator : IOrchestrator
         var handoverFailures = 0;
         var turnsHere = 0;
         ChatMessage? commandHistoryMessage = null;
-        // The snapshot that message carries, so an unchanged one is left where it is.
-        string? commandHistorySnapshot = null;
+        // The last command that history has shown: what comes after it is added, and nothing before it is moved.
+        int commandHistoryShownTo = 0;
 
         // Turns in a row that needed the window trimmed. Counted because trimming is a NIBBLE and
         // a handover is a reset, and nothing connected the two: measured 2026-09-24 03:09, a step
@@ -3950,23 +3957,36 @@ public sealed partial class Orchestrator : IOrchestrator
                 // a request to repeat commands", identical because no command had run between the
                 // reads. The model wrote the same 1,710-character answer four times over and the
                 // step was stopped as stuck, with its finding already written in that answer.
-                var snapshot = journal.Describe(maxChars: _evidenceBudget).CommandHistory();
-                if (snapshot != commandHistorySnapshot)
+                //
+                // And CONTINUED, never moved. It used to be taken out of where it stood and put back at the end, and
+                // everything after the old place changed: run feed29, 2026-09-29, a local server re-read 30,000
+                // tokens of a step's conversation for one new command. Now the commands since the last history are
+                // added after it; the history already there stays where it is. A conversation started again (a
+                // handover) has lost it, and gets the whole history once more.
+                if (commandHistoryMessage is not null && !messages.Any(m => ReferenceEquals(m, commandHistoryMessage)))
+                    commandHistoryShownTo = 0;
+                var view = journal.Describe(maxChars: _evidenceBudget);
+                if (view.LastCommand() > commandHistoryShownTo)
                 {
-                    if (commandHistoryMessage is not null) messages.Remove(commandHistoryMessage);
-                    commandHistoryMessage = ChatMessage.User("Engine-owned command history (IDs are local to this history, not report requirement IDs):\n"
-                        + snapshot
+                    var continued = commandHistoryShownTo > 0;
+                    commandHistoryMessage = ChatMessage.User((continued
+                            ? "Engine-owned command history, continued - the commands since the last history above:\n"
+                            : "Engine-owned command history (IDs are local to this history, not report requirement IDs):\n")
+                        + view.CommandHistory(after: commandHistoryShownTo)
                         + "\nWhen reporting commands, preserve the sequence of failures, corrections, and successes. "
                         + "Null exit means no exit was recorded. Omitted history is unknown; do not invent it. "
                         + "This snapshot is data, not a request to repeat commands.");
                     messages.Add(commandHistoryMessage);
-                    commandHistorySnapshot = snapshot;
+                    commandHistoryShownTo = view.LastCommand();
                 }
             }
             var forcedThisTurn = handOnOnly && outputSchema is not null;
             handOnOnly = false;
             var request = new ChatRequest(model, messages,
-                forcedThisTurn ? toolDefs.Where(d => d.Name == StepOutputContract.ToolName).ToArray() : toolDefs,
+                // The whole list even on the turn that is for the hand-over: a list cut to one tool for one turn is two
+                // re-reads of the conversation, in and out. RequireToolCall asks for a call; anything but the hand-over
+                // is answered, not run (below).
+                toolDefs,
                 Temperature: 0.2, NumCtx: _numCtx, Think: _think,
                 OutputTokenLimit: _generationBudgets.For(purpose), Purpose: purpose, RequireToolCall: forcedThisTurn);
             if (forcedThisTurn)
@@ -4239,6 +4259,22 @@ public sealed partial class Orchestrator : IOrchestrator
             // results of OLD exchanges together and always spares the newest ones. Unchanged history
             // is what a provider's prefix cache serves, so keeping it costs far less than it looks.
             messages.Add(new ChatMessage(ChatRole.Assistant, replyText, toolCalls));
+
+            // A step that has said it is done and repeats a call it has already made, with nothing changed since, is
+            // done - not stuck. Run fba4d6, 2026-09-29: "S3 done - all 133 tests passed", and the same test run
+            // attached, four turns running; its reasoning said "I need to stop repeating", and the step was stopped as
+            // stuck, the report step after it skipped. The repeat is not run - it would say what it said - and the step
+            // ends on its message by the ordinary road: the same end-of-step checks, and the review.
+            if (!forcedThisTurn && !string.IsNullOrWhiteSpace(replyText) && toolCalls is { Count: > 0 } && progress.OnlyRepeats(toolCalls))
+            {
+                foreach (var call in toolCalls)
+                    messages.Add(ChatMessage.Tool(call.Id, "NOT RUN: this exact call already ran in this step, and nothing has "
+                        + "changed since - its result is above. The step ends with your message."));
+                yield return Ev(EventKind.ContextAssembled, "The step said it was done and repeated "
+                    + string.Join("; ", toolCalls.Select(c => $"{c.Name} {Compact(c.ArgumentsJson)}"))
+                    + ", which it had already made with nothing changed since: not run, and the step ends on its message.");
+                toolCalls = null;
+            }
 
             if (toolCalls is null && forcedThisTurn)
             {
@@ -4561,6 +4597,17 @@ public sealed partial class Orchestrator : IOrchestrator
                         yield return Ev(EventKind.ToolResult, $"{call.Name} -> failed: {handed}");
                     }
                     messages.Add(ChatMessage.Tool(call.Id, handed));
+                    continue;
+                }
+                // The run offers the hand-over to every step; one with nothing to hand on is told so, and nothing is stored.
+                if (outputSchema is null && submitTool is not null && call.Name == StepOutputContract.ToolName)
+                {
+                    yield return Invoked(call);
+                    const string nothing = "Nothing was stored: this step hands nothing on as values. Finish it now with a short "
+                        + "closing message - no further tool calls.";
+                    journal.Record(stepNo, call.Name, Compact(call.ArgumentsJson), ActionOutcome.Succeeded, nothing, WorkspaceEffect.None);
+                    messages.Add(ChatMessage.Tool(call.Id, nothing));
+                    yield return Ev(EventKind.ToolResult, $"{call.Name} -> ok: {nothing}");
                     continue;
                 }
                 // A document the engine assembles, looked at by a step for one item: answered by the engine,

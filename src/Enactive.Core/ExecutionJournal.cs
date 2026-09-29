@@ -82,10 +82,10 @@ public sealed class EvidenceView
 
     /// <summary>Engine-owned command facts, with IDs from this evidence view, never inferred from prose.
     /// Missing exits remain null. Bounded omissions are explicit and do not grant citation access.</summary>
-    public string CommandHistory()
+    /// <param name="after">Only the commands after this call number - for a history that is continued, not rewritten.</param>
+    public string CommandHistory(int after = 0)
     {
-        var commands = Actions.Select((a, i) => (a, id: i + 1))
-            .Where(x => x.a.ExitCode is not null || x.a.Tool is "run_command" or "run_powershell").ToArray();
+        var commands = Commands().Where(x => x.id > after).ToArray();
         var visible = commands.Where(x => VisibleActionIds.Contains(x.id)).TakeLast(64).ToArray();
         return JsonSerializer.Serialize(new {
             priorHistoryUnavailable = HasPriorTranscript,
@@ -96,6 +96,13 @@ public sealed class EvidenceView
                 outcome = x.a.Outcome.ToString(), exitCode = x.a.ExitCode })
         });
     }
+
+    private IEnumerable<(ExecutedAction a, int id)> Commands()
+        => Actions.Select((a, i) => (a, id: i + 1))
+            .Where(x => x.a.ExitCode is not null || x.a.Tool is "run_command" or "run_powershell");
+
+    /// <summary>The number of the last command in this view, or 0 when there is none.</summary>
+    public int LastCommand() => Commands().Select(x => x.id).DefaultIfEmpty(0).Max();
 
     /// <summary>Addressed evidence retrieval, preserving the original numbering and explicit truncation.</summary>
     public EvidenceView Expand(IReadOnlyList<int> requested, int budget = 12000)

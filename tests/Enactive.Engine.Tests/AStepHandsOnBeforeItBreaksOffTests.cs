@@ -112,8 +112,8 @@ public sealed class AStepHandsOnBeforeItBreaksOffTests
 
     /// <summary>
     /// Run 16d57849: asked in text at three fresh starts and once more, the step read on each time. The turn after
-    /// a fresh start, while nothing has been handed on, offers the hand-over only and requires a call; then every
-    /// tool is back.
+    /// a fresh start, while nothing has been handed on, requires a call and runs only the hand-over; then the step
+    /// carries on as before.
     /// </summary>
     [Fact]
     public async Task The_turn_after_a_fresh_start_offers_only_the_hand_over_until_something_is_handed_on()
@@ -130,7 +130,10 @@ public sealed class AStepHandsOnBeforeItBreaksOffTests
         var events = await fx.RunAsync(fx.Build(provider, EngineFixture.Role("developer")), "check the claims");
 
         var forced = provider.Requests.Single(r => r.RequireToolCall);
-        Assert.Equal([StepOutputContract.ToolName], forced.Tools!.Select(t => t.Name));
+        // The list itself is not cut to one tool (run fba4d6: a list that changes for one turn is the conversation
+        // read again, in and out): a call is required, and anything but the hand-over is answered, not run.
+        Assert.Contains(forced.Tools!, t => t.Name == StepOutputContract.ToolName);
+        Assert.Equal(forced.Tools!.Select(t => t.Name), provider.Requests[provider.Requests.IndexOf(forced) - 1].Tools!.Select(t => t.Name));
         var after = provider.Requests[provider.Requests.IndexOf(forced) + 1];
         Assert.False(after.RequireToolCall);
         Assert.Contains(after.Tools!, t => t.Name == "read_file");

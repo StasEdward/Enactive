@@ -113,6 +113,9 @@ internal sealed record StepAttemptState(
     /// <summary>Whether tools the boundary cannot check are kept from this step (a step whose results the engine assembles).</summary>
     public bool WithholdUnchecked { get; init; }
 
+    /// <summary>The hand-over as the whole run offers it (see StepOutputContract.RunTool), or null for a run without one.</summary>
+    public Enactive.Core.Tools.ToolDefinition? SubmitTool { get; init; }
+
     /// <summary>The criteria the plan attached to this step, checked when it ends (file criteria only).</summary>
     public IReadOnlyList<Enactive.Core.Templates.SuccessCriterionDefinition> Criteria { get; init; } = [];
 }
