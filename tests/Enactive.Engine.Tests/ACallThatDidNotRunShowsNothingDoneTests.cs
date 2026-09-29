@@ -69,3 +69,54 @@ public sealed class ACallThatDidNotRunShowsNothingDoneTests
         Assert.False(result!.Pass);
     }
 }
+
+/// <summary>
+/// Code review of engeen_v4, 2026-09-29, P2: the short step review took any answer whose JSON read cleanly - one cut off
+/// at its length limit, or one that called for a tool, included - as the verdict. Neither is a finished one: it goes
+/// back once, and with no finished answer after that the verdict is unavailable. Deliberately not code: a mail.
+/// </summary>
+public sealed class AnUnfinishedReviewIsNoVerdictTests
+{
+    private static StepVerdictInput Input()
+    {
+        var journal = new Enactive.Core.Execution.ExecutionJournal();
+        journal.Record(1, "send_email", "{}", Enactive.Core.Execution.ActionOutcome.Succeeded, "Sent to the owner with 1 attachment");
+        return new StepVerdictInput("send the report", "Send the report", 1, [], "Sent.", null, [], journal.Describe());
+    }
+
+    private const string PassJson = """{"verdict":"pass","reason":"the mail was sent","calls":[1],"files":[]}""";
+
+    private static Task<ReviewResult> Review(params Turn[] turns)
+        => StepVerdictReview.RunAsync(Input(), new FakeChatProvider(turns), "reviewer", null, CancellationToken.None);
+
+    /// <summary>THE ONE THAT MATTERS: a pass cut off at its length limit is sent back, not taken.</summary>
+    [Fact]
+    public async Task A_pass_cut_off_at_its_length_is_sent_back()
+    {
+        var provider = new FakeChatProvider(Turn.Says(PassJson) with { FinishReason = "length" }, Turn.Says(PassJson));
+        var result = await StepVerdictReview.RunAsync(Input(), provider, "reviewer", null, CancellationToken.None);
+
+        Assert.True(result.Pass);
+        Assert.Equal(2, provider.Requests.Count);
+        Assert.Contains("cut off at its length limit", provider.Requests[1].Messages.Last().Content, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Cut_off_twice_is_no_verdict()
+    {
+        var result = await Review(Turn.Says(PassJson) with { FinishReason = "max_tokens" }, Turn.Says(PassJson) with { FinishReason = "length" });
+
+        Assert.False(result.Pass);
+        Assert.True(result.VerdictUnavailable);
+    }
+
+    [Fact]
+    public async Task An_answer_that_calls_a_tool_is_no_verdict_either()
+    {
+        var call = new Enactive.Core.Tools.ToolCall("t1", "read_file", """{"path":"report.md"}""");
+        var result = await Review(new Turn(PassJson, [call]), new Turn(PassJson, [call]));
+
+        Assert.False(result.Pass);
+        Assert.True(result.VerdictUnavailable);
+    }
+}

@@ -84,7 +84,14 @@ internal static class StepVerdictReview
             cached = TokenCounts.Add(cached, completion.CachedPromptTokens);
             created = TokenCounts.Add(created, completion.CacheCreationPromptTokens);
             var answer = completion.Message.Content ?? "";
-            var (result, errors) = Read(answer, input);
+            // An answer cut off at its length, or one that called for a tool, is not a finished verdict, however whole the
+            // JSON in it looks - the earlier review took neither as final (code review of engeen_v4, P2).
+            var unfinished = completion.FinishReason is "length" or "max_tokens"
+                ? "your answer was cut off at its length limit; return the JSON object alone, with a short reason"
+                : completion.Message.ToolCalls is { Count: > 0 }
+                    ? "no tools are offered here; return the JSON object alone"
+                    : null;
+            var (result, errors) = unfinished is null ? Read(answer, input) : (null, [unfinished]);
             if (errors.Count == 0 && result is not null)
                 return result with { PromptTokens = prompt, CompletionTokens = output, CachedPromptTokens = cached, CacheCreationPromptTokens = created };
             messages.Add(ChatMessage.Assistant(answer));
