@@ -79,6 +79,45 @@ public sealed class AStepIsGivenOneShortVerdictTests
         Assert.Contains("call 99 is not in the evidence shown", reviewer.Requests[1].Messages.Last().Content, StringComparison.Ordinal);
     }
 
+    private static Turn PassCiting(string file, int call = 3)
+        => Turn.Says($$"""{"verdict":"pass","reason":"the report is right","calls":[{{call}}],"files":["{{file}}"]}""");
+
+    /// <summary>
+    /// Every disk run of 2026-09-29: the step that mailed the report cited it - a file an earlier step wrote, not shown to
+    /// this step's review - was told "not among the FILES shown", and answered the same pass again. A file the calls
+    /// shown work with counts for nothing but costs no second round.
+    /// </summary>
+    [Fact]
+    public async Task A_file_the_calls_work_with_but_the_step_did_not_write_costs_no_second_round()
+    {
+        var (events, _, reviewer) = await Run(true, [Pass(), PassCiting("report.md")]);
+
+        Assert.True(events.Has(EventKind.TaskCompleted), events.Text());
+        Assert.Equal(2, reviewer.Requests.Count);
+    }
+
+    /// <summary>A file no call mentions at all may be one the step never made: that still goes back.</summary>
+    [Fact]
+    public async Task A_file_no_call_mentions_still_goes_back()
+    {
+        var (events, _, reviewer) = await Run(true, [Pass(), PassCiting("summary.md"), Pass(call: 3)]);
+
+        Assert.True(events.Has(EventKind.TaskCompleted), events.Text());
+        Assert.Equal(3, reviewer.Requests.Count);
+        Assert.Contains("'summary.md' is not among the FILES shown", reviewer.Requests[2].Messages.Last().Content, StringComparison.Ordinal);
+    }
+
+    /// <summary>A pass whose only citation is such a file has shown nothing: it goes back too.</summary>
+    [Fact]
+    public async Task A_pass_citing_only_a_file_not_shown_still_goes_back()
+    {
+        var (_, _, reviewer) = await Run(true,
+            [Pass(), Turn.Says("""{"verdict":"pass","reason":"the report is right","calls":[],"files":["report.md"]}"""), Pass(call: 3)]);
+
+        Assert.Equal(3, reviewer.Requests.Count);
+        Assert.Contains("a pass cites the calls or files that show the step done", reviewer.Requests[2].Messages.Last().Content, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task A_review_that_cannot_answer_leaves_the_step_unconfirmed()
     {

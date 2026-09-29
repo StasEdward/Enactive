@@ -2,6 +2,7 @@ namespace Enactive.Agents;
 
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Enactive.Core.Chat;
 using Enactive.Core.Execution;
 using Enactive.Core.Providers;
@@ -145,8 +146,12 @@ internal static class StepVerdictReview
         }
         foreach (var file in Arr("files").Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString()!))
         {
-            if (!shown.Contains(file)) errors.Add($"'{file}' is not among the FILES shown");
-            else cited++;
+            if (shown.Contains(file)) cited++;
+            // A file the calls shown work with - the attachment of a mail, a page an earlier step wrote - that this step
+            // did not write: not shown, so it counts for nothing, but it is not a mistake worth a second round. In every
+            // disk run of 2026-09-29 the step that mailed the report cited it, was told "not among the FILES shown", and
+            // answered the same pass again without it. A file no call mentions at all still goes back.
+            else if (!Mentioned(file, input.Evidence.Text)) errors.Add($"'{file}' is not among the FILES shown");
         }
         // A step that made no call and wrote nothing has nothing to cite; anything else passes on what shows it.
         var anythingToCite = input.Evidence.VisibleActionIds.Count > 0 || input.Files.Count > 0;
@@ -156,5 +161,16 @@ internal static class StepVerdictReview
         return verdict == "pass"
             ? (new ReviewResult(true, reason), [])
             : (new ReviewResult(false, reason) { RepairAdvice = reason }, []);
+    }
+
+    /// <summary>Whether the evidence names this path - as written, with either slash, or escaped in a call's JSON.</summary>
+    private static bool Mentioned(string path, string evidence)
+    {
+        var plain = path.Trim().Replace('\\', '/');
+        if (plain.StartsWith("./", StringComparison.Ordinal)) plain = plain[2..];
+        if (plain.Length == 0) return false;
+        // Not part of a longer name: "report.md" is not mentioned by "old_report.md" or "docs/report.md.bak".
+        return new[] { plain, plain.Replace('/', '\\'), plain.Replace("/", @"\\") }.Distinct().Any(form =>
+            Regex.IsMatch(evidence, @"(?<![\w.\-])" + Regex.Escape(form) + @"(?![\w\-]|\.\w)", RegexOptions.IgnoreCase));
     }
 }
