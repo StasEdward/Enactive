@@ -13,13 +13,13 @@
     },
     {
       "id": "every-drive-named",
-      "about": "Every fixed drive in use on this machine, by its letter, as 'C:'.",
+      "about": "Every fixed disk volume of this machine, by its letter, as 'C:'. Volumes, not every drive letter: a network share or a cloud drive mapped to a letter (Z:, O: on the machine it ran on, 2026-09-30) is not a disk of the computer, and a run that reported the disks' volumes without them was judged wrong.",
       "kind": "file_contains",
       "glob": "**/*.{md,txt}",
       "exclude": [ "README.md", ".enactive/**" ],
       "patternsFrom": {
         "shell": "powershell",
-        "command": "Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Used -gt 0 } | ForEach-Object { '\\b' + $_.Name + ':' }"
+        "command": "Get-Volume | Where-Object { $_.DriveLetter -and $_.DriveType -eq 'Fixed' -and $_.Size -gt 0 } | ForEach-Object { '\\b' + $_.DriveLetter + ':' }"
       }
     }
   ]
