@@ -36,37 +36,47 @@ public sealed class WhoChangedTheFileTests
         }
     }
 
+    // The short review answers in its own form; a pass cites a call it was shown.
+    private static FakeChatProvider Reviewer(bool shortReview) => new()
+    {
+        WhenExhausted = shortReview ? Turn.Says("""{"verdict":"pass","reason":"done","calls":[1],"files":[]}""") : Verdicts.Pass()
+    };
+
     private static string PromptOf(FakeChatProvider reviewer)
         => string.Join("\n", reviewer.Requests.SelectMany(r => r.Messages).Select(m => m.Content ?? ""));
 
-    private static async Task<string> Review(params Turn[] work)
+    private static async Task<string> Review(bool shortReview, params Turn[] work)
     {
-        using var fx = new EngineFixture();
+        using var fx = new EngineFixture { ShortReview = shortReview };
         fx.Write("notes.md", "somebody's notes");
         fx.Decisions.Answer = "allow";
         fx.ToolsOverride = EngineFixture.ShippedTools().Append(new Outsider(fx.Root)).ToArray();
         var worker = new FakeChatProvider([Turn.Says(QuickPlan), .. work, Turn.Says("Done.")]);
-        var reviewer = new FakeChatProvider { WhenExhausted = Verdicts.Pass() };
+        var reviewer = Reviewer(shortReview);
         await fx.RunAsync(fx.Build(worker, EngineFixture.WorkerWith("peek", "delete_file", "run_command"),
             router: Routers.WithReviewer(), reviewProvider: reviewer), "look around");
         return PromptOf(reviewer);
     }
 
     /// <summary>THE ONE THAT MATTERS: the step only read, and the file went. The review is told it was not the step.</summary>
-    [Fact]
-    public async Task A_file_removed_outside_the_run_while_the_step_only_read_is_not_the_steps()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_file_removed_outside_the_run_while_the_step_only_read_is_not_the_steps(bool shortReview)
     {
-        var prompt = await Review(Turn.Calls1("peek", "{}", "p1"));
+        var prompt = await Review(shortReview, Turn.Calls1("peek", "{}", "p1"));
 
         Assert.Contains("DELETED while this step ran, but NOT by this step", prompt, StringComparison.Ordinal);
         Assert.DoesNotContain("DELETED by this step", prompt, StringComparison.Ordinal);
     }
 
     /// <summary>A step's own file tool removed it: that is the step's, and says so, as before.</summary>
-    [Fact]
-    public async Task A_file_the_step_deleted_itself_is_the_steps()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_file_the_step_deleted_itself_is_the_steps(bool shortReview)
     {
-        var prompt = await Review(Turn.Calls1("delete_file", """{"path":"notes.md"}""", "d1"));
+        var prompt = await Review(shortReview, Turn.Calls1("delete_file", """{"path":"notes.md"}""", "d1"));
 
         Assert.Contains("DELETED by this step.", prompt, StringComparison.Ordinal);
     }
@@ -75,10 +85,12 @@ public sealed class WhoChangedTheFileTests
     /// The step ran a command, whose writes are not recorded by file: the engine cannot tell the
     /// command from the outside, and says exactly that rather than picking either.
     /// </summary>
-    [Fact]
-    public async Task When_the_step_ran_a_command_the_engine_says_it_cannot_tell()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task When_the_step_ran_a_command_the_engine_says_it_cannot_tell(bool shortReview)
     {
-        var prompt = await Review(Turn.Calls1("run_command", """{"command":"echo hello"}""", "c1"),
+        var prompt = await Review(shortReview, Turn.Calls1("run_command", """{"command":"echo hello"}""", "c1"),
             Turn.Calls1("peek", "{}", "p1"));
 
         Assert.Contains("DELETED while this step ran, by no file tool of it (a command it ran can have done it", prompt, StringComparison.Ordinal);

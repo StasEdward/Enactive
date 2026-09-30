@@ -18,6 +18,12 @@ public sealed class TheReviewSeesWhatTheStepChangedTests
 {
     private const string QuickPlan = """{"disposition":"quick_action","title":"do it"}""";
 
+    // The short review answers in its own form; a pass cites a call it was shown.
+    private static FakeChatProvider Reviewer(bool shortReview) => new()
+    {
+        WhenExhausted = shortReview ? Turn.Says("""{"verdict":"pass","reason":"done","calls":[1],"files":[]}""") : Verdicts.Pass()
+    };
+
     private static string PromptOf(FakeChatProvider reviewer)
         => string.Join("\n", reviewer.Requests.SelectMany(r => r.Messages).Select(m => m.Content ?? ""));
 
@@ -46,33 +52,40 @@ public sealed class TheReviewSeesWhatTheStepChangedTests
     /// THE ONE THAT MATTERS for everything that is not a wiki: a file written by a COMMAND, in a step
     /// that ran commands, reaches the review as a diff.
     /// </summary>
-    [Fact]
-    public async Task A_change_made_by_a_command_reaches_the_review()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_change_made_by_a_command_reaches_the_review(bool shortReview)
     {
-        using var fx = new EngineFixture();
+        using var fx = new EngineFixture { ShortReview = shortReview };
         Repository(fx, "# Report\n\n## Page 1\nfine\n");
 
         var worker = new FakeChatProvider(
             Turn.Says(QuickPlan),
             Turn.Calls1("run_command", """{"command":"echo appended-by-a-command>>report.md"}""", "c1"),
             Turn.Says("Appended the finding."));
-        var reviewer = new FakeChatProvider { WhenExhausted = Verdicts.Pass() };
+        var reviewer = Reviewer(shortReview);
 
         await fx.RunAsync(fx.Build(worker, router: Routers.WithReviewer(), reviewProvider: reviewer), "append it");
 
         var prompt = PromptOf(reviewer);
-        Assert.Contains("What CHANGED in the workspace while this step ran", prompt, StringComparison.Ordinal);
+        Assert.Contains(shortReview ? "--- report.md - CHANGED while this step ran" : "What CHANGED in the workspace while this step ran",
+            prompt, StringComparison.Ordinal);
         Assert.Contains("+appended-by-a-command", prompt, StringComparison.Ordinal);
+        if (shortReview)                                                   // a short file: what changed, and the file it is in
+            Assert.Contains("--- as it is now, whole:", prompt, StringComparison.Ordinal);
     }
 
     /// <summary>
     /// The measured case: a step appends to a LONG report through the file tools and runs no command.
     /// The review is shown the appended section, as a diff, not the report's opening.
     /// </summary>
-    [Fact]
-    public async Task An_append_to_a_long_report_is_reviewed_by_what_was_appended()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task An_append_to_a_long_report_is_reviewed_by_what_was_appended(bool shortReview)
     {
-        using var fx = new EngineFixture();
+        using var fx = new EngineFixture { ShortReview = shortReview };
         var body = string.Join("\n", Enumerable.Range(1, 200).Select(i => $"line {i}: " + new string('x', 80)));
         Repository(fx, "# Report\n\n" + body + "\n");
 
@@ -80,7 +93,7 @@ public sealed class TheReviewSeesWhatTheStepChangedTests
             Turn.Says(QuickPlan),
             Turn.Calls1("write_file", """{"path":"report.md","content":"## Pages 4-6\nFINDING-FROM-THIS-STEP\n","append":true}""", "w1"),
             Turn.Says("Appended pages 4-6."));
-        var reviewer = new FakeChatProvider { WhenExhausted = Verdicts.Pass() };
+        var reviewer = Reviewer(shortReview);
 
         await fx.RunAsync(fx.Build(worker, router: Routers.WithReviewer(), reviewProvider: reviewer), "append it");
 
@@ -93,16 +106,18 @@ public sealed class TheReviewSeesWhatTheStepChangedTests
     }
 
     /// <summary>Outside git there is no "before", but a file a command created is still shown whole.</summary>
-    [Fact]
-    public async Task Outside_git_a_file_a_command_created_is_shown()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Outside_git_a_file_a_command_created_is_shown(bool shortReview)
     {
-        using var fx = new EngineFixture();
+        using var fx = new EngineFixture { ShortReview = shortReview };
 
         var worker = new FakeChatProvider(
             Turn.Says(QuickPlan),
             Turn.Calls1("run_command", """{"command":"echo disk-report-line>disks.txt"}""", "c1"),
             Turn.Says("Saved the disk report."));
-        var reviewer = new FakeChatProvider { WhenExhausted = Verdicts.Pass() };
+        var reviewer = Reviewer(shortReview);
 
         await fx.RunAsync(fx.Build(worker, router: Routers.WithReviewer(), reviewProvider: reviewer), "check the disks");
 
@@ -112,20 +127,23 @@ public sealed class TheReviewSeesWhatTheStepChangedTests
     }
 
     /// <summary>THE BOUNDARY. A step that changed nothing is not told it changed something.</summary>
-    [Fact]
-    public async Task A_step_that_changed_nothing_has_no_changes_section()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_step_that_changed_nothing_has_no_changes_section(bool shortReview)
     {
-        using var fx = new EngineFixture();
+        using var fx = new EngineFixture { ShortReview = shortReview };
         Repository(fx, "# Report\n");
 
         var worker = new FakeChatProvider(
             Turn.Says(QuickPlan),
             Turn.Calls1("run_command", """{"command":"echo just looking"}""", "c1"),
             Turn.Says("Looked."));
-        var reviewer = new FakeChatProvider { WhenExhausted = Verdicts.Pass() };
+        var reviewer = Reviewer(shortReview);
 
         await fx.RunAsync(fx.Build(worker, router: Routers.WithReviewer(), reviewProvider: reviewer), "look");
 
         Assert.DoesNotContain("What CHANGED in the workspace", PromptOf(reviewer), StringComparison.Ordinal);
+        Assert.DoesNotContain("--- report.md", PromptOf(reviewer), StringComparison.Ordinal);
     }
 }

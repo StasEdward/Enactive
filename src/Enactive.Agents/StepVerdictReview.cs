@@ -8,9 +8,13 @@ using Enactive.Core.Execution;
 using Enactive.Core.Providers;
 
 /// <summary>What a step's verdict review is shown - all of it assembled by the engine.</summary>
+/// <summary>A file a step changed, as a review is shown it: <paramref name="Heading"/> says what the text is, when it is not
+/// simply the file - a diff, a deletion, who changed it. <paramref name="Whole"/>: the file as it is now is in the text whole.</summary>
+internal sealed record ShownFile(string Path, string Text, bool Whole, string? Heading = null);
+
 internal sealed record StepVerdictInput(
     string Request, string StepTitle, int? StepNumber, IReadOnlyList<string> OtherSteps, string Report, string? HandedOn,
-    IReadOnlyList<(string Path, string Text, bool Whole)> Files, EvidenceView Evidence,
+    IReadOnlyList<ShownFile> Files, EvidenceView Evidence,
     // What the step is, from the plan (FanOut.ScopeNote, a read-only plan): the item it is for and the document the engine
     // assembles, or that it changes nothing. The earlier review was told; this one was not (code review of the move to
     // one short review, 2026-09-30) - and a step for one item was failed for "no findings file" in run d91b6a45.
@@ -138,9 +142,9 @@ internal static class StepVerdictReview
         sb.AppendLine("REPORT - the worker's claim:").AppendLine(input.Report).AppendLine();
         if (input.HandedOn is { Length: > 0 } handed)
             sb.AppendLine("HANDED ON by the step (accepted values):").AppendLine(handed).AppendLine();
-        sb.AppendLine("FILES this step wrote, as they are now:");
-        foreach (var (path, text, whole) in input.Files)
-            sb.AppendLine($"--- {path}{(whole ? "" : " (shown in part)")}").AppendLine(text);
+        sb.AppendLine("FILES this step changed:");
+        foreach (var file in input.Files)
+            sb.AppendLine($"--- {file.Path}{(file.Whole ? "" : " (shown in part)")}{(file.Heading is { } heading ? " - " + heading : "")}").AppendLine(file.Text);
         if (input.Files.Count == 0) sb.AppendLine("(none)");
         sb.AppendLine();
         sb.AppendLine("TOOL CALLS (cite them by [n]):").AppendLine(input.Evidence.Text);

@@ -12,7 +12,7 @@ using Enactive.Core.Tools;
 /// <summary>What the step's criteria review is shown, beside the criteria: all of it assembled by the engine.</summary>
 internal sealed record CriteriaReviewInput(
     string StepTitle, int StepNumber, string Report, string? HandedOn,
-    IReadOnlyList<(string Path, string Text, bool Whole)> Files, EvidenceView Evidence,
+    IReadOnlyList<ShownFile> Files, EvidenceView Evidence,
     RequestObligations Obligations);
 
 /// <summary>
@@ -91,9 +91,9 @@ internal static class CriteriaReview
         sb.AppendLine("REPORT - the worker's claim, not evidence:").AppendLine(input.Report).AppendLine();
         if (input.HandedOn is { Length: > 0 } handed)
             sb.AppendLine("HANDED ON by the step (accepted values):").AppendLine(handed).AppendLine();
-        sb.AppendLine("FILES this step wrote, as they are now:");
-        foreach (var (path, text, whole) in input.Files)
-            sb.AppendLine($"--- {path}{(whole ? "" : " (shown in part - not whole)")}").AppendLine(text);
+        sb.AppendLine("FILES this step changed:");
+        foreach (var file in input.Files)
+            sb.AppendLine($"--- {file.Path}{(file.Whole ? "" : " (shown in part - not whole)")}{(file.Heading is { } heading ? " - " + heading : "")}").AppendLine(file.Text);
         if (input.Files.Count == 0) sb.AppendLine("(none)");
         sb.AppendLine();
         sb.AppendLine("TOOL CALLS (cite them by [n]):").AppendLine(input.Evidence.Text);

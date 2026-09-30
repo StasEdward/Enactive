@@ -214,25 +214,72 @@ public sealed partial class Orchestrator
 
     private const int CriteriaFileChars = 16_000;
 
-    /// <summary>The files this step wrote, as they are now - whole where they fit, and said to be in part where not.</summary>
-    private async Task<IReadOnlyList<(string Path, string Text, bool Whole)>> StepFilesNowAsync(IWorkspaceChanges? changes,
+    /// <summary>
+    /// What this step changed, for the short review and the criteria review: each file as a diff with the file as it is
+    /// now where it fits, a new file whole, a deletion as a deletion - and who changed it, from the journal. The paths
+    /// alone read back as they are now dropped a deleted file without a word and showed a one-line edit to a long file as
+    /// its head and tail (code review of the move to one short review, 2026-09-30); the earlier review was shown all of it.
+    /// </summary>
+    private async Task<IReadOnlyList<ShownFile>> StepFilesNowAsync(IWorkspaceChanges? changes,
         WorkspaceSnapshot? before, ExecutionJournal journal, int stepStart, IArtifactScope store, CancellationToken ct)
     {
-        var paths = new List<string>();
+        var files = new List<ShownFile>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var shared = store.SharedWithAnotherStep;
+        string Shared(string path) => shared.Any(s => string.Equals(s.Replace('\\', '/'), path, StringComparison.OrdinalIgnoreCase))
+            ? " Another step running at the same time also wrote it: what is shown is the two together." : "";
+        static bool Scratch(string path) => path.StartsWith(WorkspaceGuard.ScratchPrefix + "/", StringComparison.OrdinalIgnoreCase);
+        (string Text, bool Whole)? Now(string? text)
+            => text is null ? null : text.Length <= CriteriaFileChars ? (text, true) : (Shortening.HeadAndTail(text, CriteriaFileChars), false);
+
         if (changes is not null && before is not null
-            && await MeasuredChangesAsync(changes, before, journal.Actions.Skip(stepStart).ToArray(), ct) is { } measured)
-            paths.AddRange(measured.Select(w => w.RelativePath));
-        paths.AddRange((await ReadWrittenAsync(store, ct)).Select(w => w.RelativePath));
-        var files = new List<(string, string, bool)>();
-        foreach (var path in paths.Select(p => p.Replace('\\', '/')).Distinct(StringComparer.OrdinalIgnoreCase)
-                     .Where(p => !p.StartsWith(WorkspaceGuard.ScratchPrefix + "/", StringComparison.OrdinalIgnoreCase)))
+            && await changes.TakeAsync(ct) is { } after && await changes.CompareAsync(before, after, ct) is { } found)
         {
-            var full = Path.Combine(_workspace.RootPath, path);
-            if (!File.Exists(full)) continue;
-            string text;
-            try { text = await File.ReadAllTextAsync(full, ct); }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { continue; }
-            files.Add(text.Length <= CriteriaFileChars ? (path, text, true) : (path, Shortening.HeadAndTail(text, CriteriaFileChars), false));
+            var actions = journal.Actions.Skip(stepStart).ToArray();
+            foreach (var change in found)
+            {
+                var path = change.Path.Replace('\\', '/');
+                if (Scratch(path) || !seen.Add(path)) continue;
+                var by = ChangeAuthorship.By(ChangeAuthorship.Of(change.Path, change.OldPath, actions));
+                var renamed = change.Kind == FileChangeKind.Renamed ? $"RENAMED from {change.OldPath}, and " : "";
+                if (change.Kind == FileChangeKind.Deleted)
+                {
+                    files.Add(new(path, "(it is not there now)", false, $"DELETED{by}.{Shared(path)}"));
+                    continue;
+                }
+                if (change.Binary)
+                {
+                    files.Add(new(path, "(a binary file - its contents are not shown)", false, $"{renamed}CHANGED{by} (binary).{Shared(path)}"));
+                    continue;
+                }
+                var now = Now(await ReadOrNullAsync(path, ct));
+                if (change.Kind == FileChangeKind.Added)
+                    files.Add(new(path, now?.Text ?? "(could not be read back)", now?.Whole == true, $"NEW FILE, created{by}.{Shared(path)}"));
+                else if (change.Diff is { } diff)
+                {
+                    var hunks = Hunks(diff);
+                    if (hunks.Length > CriteriaFileChars) hunks = Shortening.HeadAndTail(hunks, CriteriaFileChars);
+                    files.Add(now is { Whole: true } whole
+                        ? new(path, hunks + "\n--- as it is now, whole:\n" + whole.Text, true,
+                            $"{renamed}CHANGED{by} - a unified diff ('+' added, '-' removed, ' ' unchanged), then the file as it is now.{Shared(path)}")
+                        : new(path, hunks, false,
+                            $"{renamed}CHANGED{by} - a unified diff ('+' added, '-' removed, ' ' unchanged); the file is too long to show whole as well.{Shared(path)}"));
+                }
+                else
+                    files.Add(new(path, now?.Text ?? "(could not be read back)", now?.Whole == true,
+                        $"{renamed}CHANGED{by}. There is no record of how it was before (not a git repository), so this is how it is now.{Shared(path)}"));
+            }
+        }
+        // What the step wrote where the comparison does not look - a file git ignores - or with no comparison at all.
+        foreach (var path in store.TouchedPaths.Select(p => p.Replace('\\', '/')))
+        {
+            if (Scratch(path) || !seen.Add(path)) continue;
+            string? text;
+            try { text = await store.TryReadPendingAsync(path, ct) ?? await ReadOrNullAsync(path, ct); }   // a staged run holds it in memory
+            catch (Exception ex) when (ex is not OperationCanceledException) { text = null; }
+            files.Add(Now(text) is { } now
+                ? new(path, now.Text, now.Whole, Shared(path) is { Length: > 0 } both ? both.TrimStart() : null)
+                : new(path, "(it is not there now, or could not be read back)", false, $"Written by this step.{Shared(path)}"));
         }
         return files;
     }
