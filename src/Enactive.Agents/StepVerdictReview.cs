@@ -37,7 +37,15 @@ internal static class StepVerdictReview
         show it. fail: say concretely what is not done, not true, or not shown - so the worker can put it right.
         Judge this step only: what the other steps are for is theirs. Do not fail a step on style, on wording, or on a
         detail its purpose does not depend on.
+        A change the step made that the request did not ask for is not a detail. Where the request says to leave something
+        alone, or limits what the work may change, a step that changed it fails - name the change - however right the
+        change itself may be.
         """;
+
+    // The last paragraph of the instruction: benchmark scenario build-error, 2026-09-30. "Add Median; leave the rest of the
+    // code alone" - the worker also fixed another file's error, and the review passed it as "out of scope but harmless",
+    // twice. Measured on the twenty step reviews of both benchmark runs, each twice, with and without it: the review of
+    // that step went from pass to fail (2 of 2), naming the change; no other review failed because of it.
 
     /// <summary>
     /// Run 1ec9e8, 2026-09-29: a disk report said "Total capacity: ~12 231 GB - 38.1 %"; its rows add up to 12 301.18 GB

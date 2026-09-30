@@ -156,6 +156,20 @@ public sealed class AStepIsGivenOneShortVerdictTests
         Assert.Equal(on, instruction.Contains("work it out from the values the calls show, and fail it if it is wrong", StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// Benchmark scenario build-error, 2026-09-30: a change the request did not ask for, to what it said to leave alone,
+    /// passed as "out of scope but harmless". The review is told that is not a detail.
+    /// </summary>
+    [Fact]
+    public async Task The_review_is_told_a_change_the_request_did_not_ask_for_is_not_a_detail()
+    {
+        var (_, _, reviewer) = await Run(true, [Pass(), Pass("the report matches the listing", 3)]);
+
+        var instruction = reviewer.Requests[0].Messages[0].Content!;
+        Assert.Contains("A change the step made that the request did not ask for is not a detail", instruction, StringComparison.Ordinal);
+        Assert.Contains("a step that changed it fails - name the change", instruction, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task Off_the_step_review_is_the_one_before()
     {
