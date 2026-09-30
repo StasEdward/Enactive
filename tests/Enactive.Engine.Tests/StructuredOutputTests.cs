@@ -280,7 +280,7 @@ public sealed class StructuredOutputTests
     [Fact]
     public async Task The_review_request_carries_the_schema()
     {
-        using var fx = new EngineFixture();
+        using var fx = new EngineFixture { ShortReview = false };
 
         var agent = new FakeChatProvider(
             Turn.Says("""{"disposition":"quick_action","title":"do the thing"}"""),
@@ -325,7 +325,7 @@ public sealed class StructuredOutputTests
     [Fact]
     public async Task A_provider_that_ignores_the_schema_still_fails_closed()
     {
-        using var fx = new EngineFixture();
+        using var fx = new EngineFixture { ShortReview = false };
 
         var agent = new FakeChatProvider(
             Turn.Says("""{"disposition":"quick_action","title":"do the thing"}"""),

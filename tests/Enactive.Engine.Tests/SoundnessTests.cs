@@ -226,7 +226,7 @@ public sealed class SoundnessTests
     [Fact]
     public async Task A_true_report_of_an_unsupported_conclusion_no_longer_passes()
     {
-        using var fx = new EngineFixture();
+        using var fx = new EngineFixture { ShortReview = false };
 
         var worker = new FakeChatProvider(Turn.Says(OneStepPlan), RunsTests())
         {
@@ -248,7 +248,7 @@ public sealed class SoundnessTests
     [Fact]
     public async Task A_step_whose_proof_holds_up_passes()
     {
-        using var fx = new EngineFixture();
+        using var fx = new EngineFixture { ShortReview = false };
 
         var worker = new FakeChatProvider(Turn.Says(OneStepPlan), RunsTests())
         {
@@ -274,7 +274,7 @@ public sealed class SoundnessTests
     [Fact]
     public async Task A_yes_that_cites_a_call_nobody_made_still_fails()
     {
-        using var fx = new EngineFixture();
+        using var fx = new EngineFixture { ShortReview = false };
 
         var worker = new FakeChatProvider(Turn.Says(OneStepPlan), RunsTests())
         {
@@ -311,7 +311,7 @@ public sealed class SoundnessTests
     [Fact]
     public async Task A_step_that_ran_nothing_is_asked_like_any_other_and_may_pass()
     {
-        using var fx = new EngineFixture();
+        using var fx = new EngineFixture { ShortReview = false };
 
         // No tool calls: the step answers in text.
         var worker = new FakeChatProvider(Turn.Says(OneStepPlan))
@@ -344,7 +344,7 @@ public sealed class SoundnessTests
     [Fact]
     public async Task A_step_that_ran_nothing_cannot_report_that_nothing_needed_doing()
     {
-        using var fx = new EngineFixture();
+        using var fx = new EngineFixture { ShortReview = false };
 
         var worker = new FakeChatProvider(Turn.Says(OneStepPlan))
         {
@@ -397,7 +397,7 @@ public sealed class SoundnessTests
     [Fact]
     public async Task An_unsound_step_is_told_why_and_gets_another_go()
     {
-        using var fx = new EngineFixture();
+        using var fx = new EngineFixture { ShortReview = false };
 
         // Two attempts, each one call and a closing sentence. The retry KEEPS the transcript for an
         // execution review, so the second attempt's evidence still holds the first attempt's call —
@@ -433,7 +433,7 @@ public sealed class SoundnessTests
     [Fact]
     public async Task A_proof_pass_that_never_answers_does_not_pass_the_step()
     {
-        using var fx = new EngineFixture();
+        using var fx = new EngineFixture { ShortReview = false };
 
         var worker = new FakeChatProvider(Turn.Says(OneStepPlan), RunsTests())
         {

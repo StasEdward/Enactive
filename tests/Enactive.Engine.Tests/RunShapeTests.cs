@@ -222,7 +222,7 @@ public sealed class RunShapeTests
     [Fact]
     public async Task A_reviewed_step_that_passes_both_questions()
     {
-        using var fx = new EngineFixture();
+        using var fx = new EngineFixture { ShortReview = false };
 
         const string plan = """
             {"disposition":"task","title":"one step",

@@ -13,7 +13,7 @@ public sealed class MixedRequirementReviewTests
     [InlineData("aggregate-no-op", false)]
     public async Task Mixed_source_unit_errors_are_corrected_without_undoing_work(string error, bool corrected)
     {
-        using var fx = new EngineFixture();
+        using var fx = new EngineFixture { ShortReview = false };
         var worker = new FakeChatProvider(
             Turn.Says("""{"disposition":"task","title":"write then verify","steps":[{"title":"Write","dependsOn":[]},{"title":"Verify","dependsOn":[0]}]}"""),
             Turn.Calls1("write_file", """{"path":"result.txt","content":"keep"}"""), Turn.Says("written"),

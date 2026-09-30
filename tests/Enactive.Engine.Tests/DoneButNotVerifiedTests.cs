@@ -73,7 +73,7 @@ public sealed class DoneButNotVerifiedTests
         // And what did NOT change: no verdict is not a pass, so the run is not Completed, and it says
         // why rather than nothing.
         Assert.False(events.Has(EventKind.TaskCompleted), events.Text());
-        Assert.Contains(events, e => e.Summary.Contains("done but not verified", StringComparison.Ordinal));
+        Assert.Contains(events, e => e.Summary.Contains("[2] Write two - done, not verified", StringComparison.Ordinal));
 
         // The middle card says what it is, with the reason the verdict was missing.
         var middle = events.Last(e => e.Kind == EventKind.StepCompleted && e.StepNo() == 2);

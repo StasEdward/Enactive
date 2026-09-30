@@ -82,7 +82,7 @@ public sealed class CombinedReviewTests
     [InlineData("empty", false)]
     public async Task Citation_errors_are_repaired_by_reviewer_without_reexecuting_or_reverting_work(string location, bool corrected)
     {
-        using var fx = new EngineFixture();
+        using var fx = new EngineFixture { ShortReview = false };
         var worker = new FakeChatProvider(
             Turn.Says("""{"disposition":"quick_action","title":"write","steps":[]}"""),
             Turn.Calls1("write_file", """{"path":"result.txt","content":"keep"}"""), Turn.Says("done"));
@@ -126,7 +126,7 @@ public sealed class CombinedReviewTests
     [InlineData(false)]
     public async Task Scope_correction_stays_with_reviewer_and_preserves_worker_output(bool corrected)
     {
-        using var fx = new EngineFixture();
+        using var fx = new EngineFixture { ShortReview = false };
         var worker = new FakeChatProvider(
             Turn.Says("""{"disposition":"quick_action","title":"write","steps":[]}"""),
             Turn.Calls1("write_file", """{"path":"result.txt","content":"preserve me"}"""), Turn.Says("done"));
@@ -218,7 +218,7 @@ public sealed class CombinedReviewTests
     [Fact]
     public async Task Incomplete_review_keeps_the_workers_files()
     {
-        using var fx = new EngineFixture();
+        using var fx = new EngineFixture { ShortReview = false };
         var worker = new FakeChatProvider(
             Turn.Says("""{"disposition":"quick_action","title":"write","steps":[]}"""),
             Turn.Calls1("write_file", """{"path":"result.txt","content":"preserve me"}"""), Turn.Says("done"));
@@ -373,7 +373,7 @@ public sealed class CombinedReviewTests
     [Fact]
     public async Task Planner_worker_and_reviewer_share_lossless_ids_including_late_constraints()
     {
-        using var fx = new EngineFixture();
+        using var fx = new EngineFixture { ShortReview = false };
         var request = new string('x', 5000) + "\nUse EXACT_COMMAND for every test.";
         var obligations = RequestObligations.Create(request);
         Assert.Equal(request, string.Concat(obligations.Items.Select(o => o.Text)));

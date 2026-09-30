@@ -108,7 +108,7 @@ public sealed class VisibleProofEvidenceTests
     [InlineData(100, true)]
     public async Task The_orchestrator_audits_the_same_evidence_that_the_reviewer_received(int citation, bool sound)
     {
-        using var fx = new EngineFixture();
+        using var fx = new EngineFixture { ShortReview = false };
         // A hundred DIFFERENT reads: the same read a hundred times in one turn is now run once.
         for (var i = 1; i <= 100; i++) fx.Write($"a{i}.txt", "content");
         var worker = new FakeChatProvider(

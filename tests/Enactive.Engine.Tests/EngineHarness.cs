@@ -52,6 +52,12 @@ public sealed record Turn(
     // turn that has ONLY this is the shape that used to arrive as an inexplicable silence.
     string? Thinking = null)
 {
+    /// <summary>
+    /// The same answer, put as the request asks for it: the text in its place - null keeps the turn as it is. What a test means ("the review
+    /// passes") outlives the form one review answers in; see <see cref="Verdicts.Pass"/>.
+    /// </summary>
+    public Func<ChatRequest, string?>? Adapt { get; init; }
+
     public static Turn Says(string text) => new(text);
 
     /// <summary>A turn spent entirely on reasoning: tokens generated, nothing delivered.</summary>
@@ -127,7 +133,10 @@ public sealed class FakeChatProvider : IChatProvider
     public Func<ChatRequest, Turn?>? Answering { get; set; }
 
     private Turn Next(ChatRequest request)
-        => Answering?.Invoke(request) ?? (_script.Count > 0 ? _script.Dequeue() : WhenExhausted);
+    {
+        var turn = Answering?.Invoke(request) ?? (_script.Count > 0 ? _script.Dequeue() : WhenExhausted);
+        return turn.Adapt?.Invoke(request) is { } text ? turn with { Text = text } : turn;
+    }
 
     public async IAsyncEnumerable<ChatStreamEvent> StreamChatAsync(
         ChatRequest request,
@@ -267,11 +276,52 @@ public static class Verdicts
     public const string ProviderId = "review";
     public const string Model = "reviewer-model";
 
+    /// <summary>
+    /// A fail. Asked by the short step review (StepVerdictReview), it is that review's fail, the notes its reason.
+    /// </summary>
     public static Turn Fail(string notes = "the evidence does not support the claim")
-        => Turn.Says($$"""{"verdict":"fail","notes":"{{notes}}"}""");
+        => Turn.Says($$"""{"verdict":"fail","notes":"{{notes}}"}""") with
+        {
+            Adapt = r => IsStepVerdict(r) ? ShortVerdict("fail", notes, [], []) : null
+        };
 
+    /// <summary>
+    /// A pass. Asked by the short step review, it is that review's pass, citing what it was shown: the calls, or where
+    /// there are none, the files - a pass there must cite what shows the step done, and the test means only "it passes".
+    /// </summary>
     public static Turn Pass(string notes = "looks right")
-        => Turn.Says($$"""{"verdict":"pass","notes":"{{notes}}"}""");
+        => Turn.Says($$"""{"verdict":"pass","notes":"{{notes}}"}""") with
+        {
+            Adapt = r => IsStepVerdict(r) ? ShortPass(r, notes) : null
+        };
+
+    /// <summary>Whether the request is the short step review's.</summary>
+    public static bool IsStepVerdict(ChatRequest request)
+        => request.Messages.Count > 0 && request.Messages[0].Content?.StartsWith("You check one step of a run", StringComparison.Ordinal) == true;
+
+    public static string ShortVerdict(string verdict, string reason, IEnumerable<int> calls, IEnumerable<string> files)
+        => new System.Text.Json.Nodes.JsonObject
+        {
+            ["verdict"] = verdict, ["reason"] = reason,
+            ["calls"] = new System.Text.Json.Nodes.JsonArray(calls.Select(c => (System.Text.Json.Nodes.JsonNode)c).ToArray()),
+            ["files"] = new System.Text.Json.Nodes.JsonArray(files.Select(f => (System.Text.Json.Nodes.JsonNode)f).ToArray())
+        }.ToJsonString();
+
+    /// <summary>A short pass citing every call the review was shown, or, where it was shown none, every file.</summary>
+    public static string ShortPass(ChatRequest request, string reason)
+    {
+        var asked = request.Messages.Count > 1 ? request.Messages[1].Content ?? "" : "";
+        var at = asked.IndexOf("TOOL CALLS (cite them by [n]):", StringComparison.Ordinal);
+        var calls = at < 0 ? [] : System.Text.RegularExpressions.Regex.Matches(asked[at..], @"(?m)^\[(\d+)\][^\n]*? -> ")
+            .Select(m => int.Parse(m.Groups[1].Value)).Distinct().ToArray();
+        var files = new List<string>();
+        var from = asked.IndexOf("FILES this step changed:", StringComparison.Ordinal);
+        if (calls.Length == 0 && from >= 0)
+            foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(
+                         asked[from..(at < 0 ? asked.Length : at)], @"(?m)^--- (.+?)(?: \(shown in part\))?(?: - [^\r\n]*)?\r?$"))
+                if (!m.Groups[1].Value.StartsWith("as it is now", StringComparison.Ordinal)) files.Add(m.Groups[1].Value);
+        return ShortVerdict("pass", reason, calls, files);
+    }
 
     // ── the proof pass ──────────────────────────────────────────────────────
     //
@@ -424,7 +474,8 @@ public sealed class EngineFixture : IDisposable
     public bool ReportBlocked { get; set; }
     public bool TaskReview { get; set; }
     public bool SemanticCriteria { get; set; }
-    public bool ShortReview { get; set; }
+    /// <summary>One short verdict per step, as shipped (AppSettings.ShortReview). A test of the earlier review sets it false.</summary>
+    public bool ShortReview { get; set; } = true;
     public bool CheckDerivedFigures { get; set; }
 
     /// <summary>Where wave captures are kept: beside this fixture's folder, never in the machine's own store.</summary>

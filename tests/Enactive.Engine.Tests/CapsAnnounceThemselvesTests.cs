@@ -491,7 +491,7 @@ public sealed class CapsAnnounceThemselvesTests
     [Fact]
     public async Task A_files_real_size_reaches_the_reviewer_from_a_real_run()
     {
-        using var fx = new EngineFixture();
+        using var fx = new EngineFixture { ShortReview = false };
 
         var page = string.Join('\n', Enumerable.Range(0, 500)
             .Select(i => $"  <li class=\"nav-item\" data-index=\"{i}\">Menu entry number {i}</li>"));

@@ -73,7 +73,7 @@ public sealed class ReviewRepairContractTests
     [Fact]
     public async Task Message_only_repair_reaches_worker_as_message_target_without_extra_file_changes()
     {
-        using var fx = new EngineFixture();
+        using var fx = new EngineFixture { ShortReview = false };
         var worker = new FakeChatProvider(
             Turn.Says("""{"disposition":"quick_action","title":"write"}"""),
             Turn.Calls1("write_file", """{"path":"record.txt","content":"one"}"""),

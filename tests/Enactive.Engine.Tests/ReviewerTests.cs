@@ -104,7 +104,7 @@ public sealed class ContentReviewTests
     [Fact]
     public async Task A_step_that_only_writes_is_reviewed_on_its_content()
     {
-        using var fx = new EngineFixture();
+        using var fx = new EngineFixture { ShortReview = false };
         var worker = new FakeChatProvider(
             Turn.Says("""{"disposition":"quick_action","title":"write a guide"}"""),
             Turn.Calls1("write_file", """{"path":"guide.md","content":"Install libmkfailover-dev."}"""),
@@ -128,7 +128,7 @@ public sealed class ContentReviewTests
     [Fact]
     public async Task A_step_that_ran_a_command_is_still_reviewed_on_execution()
     {
-        using var fx = new EngineFixture();
+        using var fx = new EngineFixture { ShortReview = false };
         var command = OperatingSystem.IsWindows() ? "echo hello" : "echo hello";
 
         var worker = new FakeChatProvider(
@@ -187,7 +187,7 @@ public sealed class ContentReviewTests
     [Fact]
     public async Task A_step_that_only_copied_a_file_is_reviewed_on_execution()
     {
-        using var fx = new EngineFixture();
+        using var fx = new EngineFixture { ShortReview = false };
         fx.Write("notes.md", "Install libmkfailover-dev.\n");
 
         var worker = new FakeChatProvider(
@@ -217,7 +217,7 @@ public sealed class ContentReviewTests
     public async Task A_step_that_only_relocated_a_file_is_reviewed_on_execution(
         string tool, string arguments)
     {
-        using var fx = new EngineFixture();
+        using var fx = new EngineFixture { ShortReview = false };
         fx.Write("notes.md", "Install libmkfailover-dev.\n");
 
         var worker = new FakeChatProvider(
@@ -251,7 +251,7 @@ public sealed class ContentReviewTests
     [Fact]
     public async Task A_step_that_wrote_and_then_moved_is_still_reviewed_on_its_content()
     {
-        using var fx = new EngineFixture();
+        using var fx = new EngineFixture { ShortReview = false };
 
         var worker = new FakeChatProvider(
             Turn.Says("""{"disposition":"quick_action","title":"write then file it"}"""),
@@ -276,7 +276,7 @@ public sealed class ContentReviewTests
     [Fact]
     public async Task Content_review_can_be_switched_off()
     {
-        using var fx = new EngineFixture();
+        using var fx = new EngineFixture { ShortReview = false };
         var worker = new FakeChatProvider(
             Turn.Says("""{"disposition":"quick_action","title":"write a guide"}"""),
             Turn.Calls1("write_file", """{"path":"guide.md","content":"anything at all"}"""),
@@ -296,7 +296,7 @@ public sealed class ContentReviewTests
     [Fact]
     public async Task Only_the_final_version_of_a_file_is_reviewed()
     {
-        using var fx = new EngineFixture();
+        using var fx = new EngineFixture { ShortReview = false };
         var worker = new FakeChatProvider(
             Turn.Says("""{"disposition":"quick_action","title":"draft then fix"}"""),
             Turn.Calls1("write_file", """{"path":"g.md","content":"FIRST DRAFT"}""", "c1"),

@@ -52,6 +52,10 @@ public sealed class RetryEvidenceTests
     private static string EvidenceIn(ChatRequest request)
     {
         var prompt = request.Messages.Last().Content ?? "";
+        // The short step review: its calls, to the end of the prompt.
+        const string calls = "TOOL CALLS (cite them by [n]):";
+        if (prompt.IndexOf(calls, StringComparison.Ordinal) is var at and >= 0)
+            return prompt[(at + calls.Length)..];
         const string opens = "the agent's own words above may be wrong or invented):";
         const string closes = "Files changed:";
 
@@ -168,7 +172,7 @@ public sealed class RetryEvidenceTests
     [Fact]
     public async Task A_discarded_draft_stays_out_of_the_evidence()
     {
-        using var fx = new EngineFixture();
+        using var fx = new EngineFixture { ShortReview = false };
 
         var agent = new FakeChatProvider(
             Turn.Says(QuickAction),
@@ -226,11 +230,12 @@ public sealed class RetryEvidenceTests
                 .Where(f => !evidence.Contains(f, StringComparison.Ordinal))
                 .ToArray();
 
-            var verdict = !evidence.Contains(_required, StringComparison.Ordinal)
-                ? $$"""{"verdict":"fail","notes":"it never actually read {{_required}}"}"""
-                : missing.Length == 0
-                ? """{"verdict":"pass","notes":"the evidence is there"}"""
-                : $$"""{"verdict":"fail","notes":"claimed but not shown in the evidence: {{string.Join(", ", missing)}}"}""";
+            var fail = !evidence.Contains(_required, StringComparison.Ordinal)
+                ? $"it never actually read {_required}"
+                : missing.Length == 0 ? null : $"claimed but not shown in the evidence: {string.Join(", ", missing)}";
+            var verdict = Verdicts.IsStepVerdict(request)
+                ? fail is null ? Verdicts.ShortPass(request, "the evidence is there") : Verdicts.ShortVerdict("fail", fail, [], [])
+                : fail is null ? """{"verdict":"pass","notes":"the evidence is there"}""" : $$"""{"verdict":"fail","notes":"{{fail}}"}""";
 
             return Task.FromResult(new ChatCompletion(
                 new ChatMessage(ChatRole.Assistant, verdict, null), "stop", 100, 20, null));

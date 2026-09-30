@@ -66,7 +66,7 @@ public sealed class ToolPurposeTests
     [InlineData(ToolKind.Command, true)]
     public async Task Review_mode_uses_declared_purpose_for_renamed_tool(ToolKind kind, bool executionReview)
     {
-        using var fx = new EngineFixture();
+        using var fx = new EngineFixture { ShortReview = false };
         var inner = new WriteFileTool();
         fx.ToolsOverride = [new Alias(inner, inner.Definition with { Name = "custom_action", Kind = kind })];
         var provider = new FakeChatProvider(

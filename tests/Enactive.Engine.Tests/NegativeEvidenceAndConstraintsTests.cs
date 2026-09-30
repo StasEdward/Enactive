@@ -36,7 +36,7 @@ public sealed class NegativeEvidenceAndConstraintsTests
     [InlineData("uncorrected")]
     public async Task Failed_mutation_then_restored_pass_does_not_restart_worker(string response)
     {
-        using var fx = new EngineFixture();
+        using var fx = new EngineFixture { ShortReview = false };
         var script = OperatingSystem.IsWindows() ? "check.cmd" : "check.sh";
         var command = OperatingSystem.IsWindows() ? "check.cmd" : "sh check.sh";
         Turn Write(int code) => Turn.Calls1("write_file", JsonSerializer.Serialize(new {
@@ -87,7 +87,7 @@ public sealed class NegativeEvidenceAndConstraintsTests
     [Fact]
     public async Task Historical_constraint_violation_cannot_disappear_in_a_retry()
     {
-        using var fx = new EngineFixture();
+        using var fx = new EngineFixture { ShortReview = false };
         var worker = new FakeChatProvider(
             Turn.Says("""{"disposition":"quick_action","title":"restore","steps":[]}"""),
             Turn.Calls1("write_file", """{"path":"a.txt","content":"original"}"""),

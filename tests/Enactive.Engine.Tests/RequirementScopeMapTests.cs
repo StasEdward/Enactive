@@ -76,7 +76,7 @@ public sealed class RequirementScopeMapTests
     [Fact]
     public async Task Planner_worker_and_reviewer_share_mapping_across_implementation_and_verification()
     {
-        using var fx = new EngineFixture();
+        using var fx = new EngineFixture { ShortReview = false };
         var worker = new FakeChatProvider(
             Turn.Says("""{"disposition":"task","title":"Implement and verify","steps":[{"title":"Implement","dependsOn":[],"obligations":["O001"]},{"title":"Verify","dependsOn":[0],"obligations":["O001"]}]}"""),
             Turn.Calls1("write_file", """{"path":"result.txt","content":"correct"}"""), Turn.Says("Implemented"),

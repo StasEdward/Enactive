@@ -16,7 +16,7 @@ public sealed class FinalRequirementReviewTests
     [InlineData("implementation", "unknown", false, false)]
     public async Task Final_semantic_defect_is_repaired_by_worker_and_reviewed_again(string area, string verdict, bool repairs, bool corrected)
     {
-        using var fx = new EngineFixture();
+        using var fx = new EngineFixture { ShortReview = false };
         var worker = new FakeChatProvider(
             Turn.Says("""{"disposition":"task","title":"write and verify","steps":[{"title":"write","dependsOn":[]},{"title":"verify","dependsOn":[0]}]}"""),
             Turn.Calls1("write_file", """{"path":"result.txt","content":"before"}"""), Turn.Says("written"),
@@ -63,7 +63,7 @@ public sealed class FinalRequirementReviewTests
     [InlineData(1, "malformed")]
     public async Task Deferred_parts_must_be_reconciled_after_all_steps(int parallelism, string final)
     {
-        using var fx = new EngineFixture();
+        using var fx = new EngineFixture { ShortReview = false };
         var worker = new FakeChatProvider(
             Turn.Says("""{"disposition":"task","title":"write and verify","steps":[{"title":"write","dependsOn":[]},{"title":"verify","dependsOn":[0]}]}"""),
             Turn.Calls1("write_file", """{"path":"result.txt","content":"keep"}"""), Turn.Says("written"),
@@ -134,7 +134,7 @@ public sealed class FinalRequirementReviewTests
     [Fact]
     public async Task Final_review_obeys_remaining_budget_and_preserves_completed_files()
     {
-        using var fx = new EngineFixture();
+        using var fx = new EngineFixture { ShortReview = false };
         var worker = new FakeChatProvider(
             Turn.Says("""{"disposition":"task","title":"write and verify","steps":[{"title":"write","dependsOn":[]},{"title":"verify","dependsOn":[0]}]}"""),
             Turn.Calls1("write_file", """{"path":"result.txt","content":"keep"}"""), Turn.Says("written"),

@@ -276,13 +276,15 @@ public sealed class VerdictByStepProvider : IChatProvider
     {
         var title = TitleOf(request);
 
+        Turn turn;
         lock (_gate)
         {
             _asked.Add(title ?? "(unknown)");
-            return title is not null && _verdicts.TryGetValue(title, out var verdict)
+            turn = title is not null && _verdicts.TryGetValue(title, out var verdict)
                 ? verdict
                 : Otherwise;
         }
+        return turn.Adapt?.Invoke(request) is { } text ? turn with { Text = text } : turn;
     }
 
     private static string? TitleOf(ChatRequest request)
@@ -292,6 +294,10 @@ public sealed class VerdictByStepProvider : IChatProvider
         foreach (var message in request.Messages)
         {
             var content = message.Content;
+            // The short step review names its step on a line of its own: "THIS STEP (n): title".
+            if (content is not null && System.Text.RegularExpressions.Regex.Match(content, @"(?m)^THIS STEP \(\d+\): ([^\r\n]+)")
+                    is { Success: true } named)
+                return named.Groups[1].Value.Trim();
             if (content is null || !content.StartsWith(marker, StringComparison.Ordinal))
                 continue;
 

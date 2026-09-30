@@ -52,7 +52,7 @@ public sealed class TheRunIsReviewedAsAWholeTests
 
     private static async Task<(List<WorkEvent> Events, FakeChatProvider Reviewer)> Run(bool taskReview, params Turn[] reviews)
     {
-        using var fx = new EngineFixture { TaskReview = taskReview };
+        using var fx = new EngineFixture { ShortReview = false, TaskReview = taskReview };
         fx.Write("stock/shelf17.txt", "shelf 17: 42 boxes");
         var worker = new ByStepChatProvider(Plan)
             .Step("Count the boxes", Turn.Calls1("read_file", """{"path":"stock/shelf17.txt"}""", "r1"), Turn.Says("Shelf 17 holds 42 boxes."))
@@ -122,7 +122,7 @@ public sealed class TheRunIsReviewedAsAWholeTests
     [Fact]
     public async Task What_the_task_review_is_shown_says_where_it_was_cut()
     {
-        using var fx = new EngineFixture { TaskReview = true };
+        using var fx = new EngineFixture { ShortReview = false, TaskReview = true };
         fx.Write("stock/shelf17.txt", "shelf 17: 42 boxes\n" + new string('x', 30_000));
         var big = new string('y', 15_000);
         var worker = new ByStepChatProvider(Plan)

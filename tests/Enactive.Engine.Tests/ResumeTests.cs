@@ -32,7 +32,7 @@ public sealed class ResumeTests
     [Fact]
     public async Task Requirement_assignments_survive_checkpoint_and_are_used_by_resumed_review()
     {
-        using var fx = new EngineFixture();
+        using var fx = new EngineFixture { ShortReview = false };
         var store = new RecordingCheckpointStore();
         var worker = new FakeChatProvider(
             Turn.Says("""{"disposition":"task","title":"Implement and verify","steps":[{"title":"Implement","dependsOn":[],"obligations":["O001"]},{"title":"Verify","dependsOn":[0],"obligations":["O001"]}]}"""),

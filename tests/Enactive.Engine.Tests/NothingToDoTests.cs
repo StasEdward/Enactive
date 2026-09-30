@@ -167,7 +167,7 @@ public sealed class NothingToDoTests
     [Fact]
     public async Task A_step_with_nothing_to_change_no_longer_fails_the_run()
     {
-        using var fx = new EngineFixture();
+        using var fx = new EngineFixture { ShortReview = false };
         fx.Write("README.md", "# The project\nIt does what the code does.\n");
 
         var worker = new FakeChatProvider(
@@ -207,7 +207,7 @@ public sealed class NothingToDoTests
     [Fact]
     public async Task A_step_that_changed_a_file_cannot_claim_there_was_nothing_to_do()
     {
-        using var fx = new EngineFixture();
+        using var fx = new EngineFixture { ShortReview = false };
         fx.Write("README.md", "# The project\nstale\n");
 
         var worker = new FakeChatProvider(

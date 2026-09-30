@@ -311,7 +311,9 @@ public sealed class RevertOnRejectTests
             return Task.FromResult(new Enactive.Core.Chat.ChatCompletion(
                 new Enactive.Core.Chat.ChatMessage(
                     Enactive.Core.Chat.ChatRole.Assistant,
-                    """{"verdict":"fail","notes":"invented syntax"}""",
+                    Verdicts.IsStepVerdict(request)
+                        ? Verdicts.ShortVerdict("fail", "invented syntax", [], [])
+                        : """{"verdict":"fail","notes":"invented syntax"}""",
                     null),
                 "stop", null, null));
         }

@@ -180,7 +180,8 @@ public sealed class RunOutcomeWordsTests
 
         Assert.NotNull(reason);
         Assert.Contains(Down, reason!, StringComparison.Ordinal);
-        Assert.Contains("step(s) skipped", reason, StringComparison.Ordinal);
+        // Each step that is not done, by name, and what became of it - the second skipped for the first.
+        Assert.Contains("[2] Correct drifted README statements - skipped", reason, StringComparison.Ordinal);
     }
 
     // ── the card under the title ────────────────────────────────────────────
