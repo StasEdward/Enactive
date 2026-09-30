@@ -203,10 +203,12 @@ public sealed partial class Orchestrator
             => text is null ? null : text.Length <= CriteriaFileChars ? (text, true) : (Shortening.HeadAndTail(text, CriteriaFileChars), false);
 
         var compared = false;
+        IReadOnlySet<string>? measured = null;
         if (changes is not null && before is not null
             && await changes.TakeAsync(ct) is { } after && await changes.CompareAsync(before, after, ct) is { } found)
         {
             compared = true;
+            measured = await changes.PathsAsync(after, ct);
             var actions = journal.Actions.Skip(stepStart).ToArray();
             foreach (var change in found)
             {
@@ -246,11 +248,20 @@ public sealed partial class Orchestrator
         foreach (var path in store.TouchedPaths.Select(p => p.Replace('\\', '/')))
         {
             if (Scratch(path) || !seen.Add(path)) continue;
-            string? text;
-            try { text = await store.TryReadPendingAsync(path, ct) ?? await ReadOrNullAsync(path, ct); }   // a staged run holds it in memory
+            string? pending = null, text;
+            try { text = (pending = await store.TryReadPendingAsync(path, ct)) ?? await ReadOrNullAsync(path, ct); }   // a staged run holds it in memory
             catch (Exception ex) when (ex is not OperationCanceledException) { text = null; }
+            // Measured, and no change in it: the step wrote it and it is as it was. Benchmark build-error, 2026-09-30: a step
+            // put back a file the request said to leave alone; shown it as "written where the comparison does not look",
+            // the review took it for a change left in it and called the true report false.
+            if (compared && pending is null && measured?.Contains(path) == true && Now(text) is { } asItWas)
+            {
+                files.Add(new(path, asItWas.Text, asItWas.Whole,
+                    $"WRITTEN by this step, and now just as it was before the step began.{Shared(path)}"));
+                continue;
+            }
             // Run 16d57849: a report the step wrote into a folder git ignores was never shown to the review at all.
-            var where = compared ? " where the workspace comparison does not look (a file git ignores, or a folder it skips)" : "";
+            var where = compared && text is not null ? " where the workspace comparison does not look (a file git ignores, or a folder it skips)" : "";
             files.Add(Now(text) is { } now
                 ? new(path, now.Text, now.Whole, $"WRITTEN by this step{where} - how it is now.{Shared(path)}")
                 : new(path, "(it is not there now, or could not be read back)", false, $"WRITTEN by this step{where}.{Shared(path)}"));

@@ -101,6 +101,36 @@ public sealed class TheReviewSeesWhatTheStepChangedTests
         Assert.DoesNotContain("line 1: ", prompt, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// Benchmark build-error, 2026-09-30: a step put back a file the request said to leave alone. Shown as "written where
+    /// the comparison does not look", the review took it for a change left in it and called the true report false. A file
+    /// the step wrote and left as it was is said to be as it was - and one git ignores is still said to be out of its sight.
+    /// </summary>
+    [Fact]
+    public async Task A_file_the_step_wrote_and_put_back_is_said_to_be_as_it_was()
+    {
+        using var fx = new EngineFixture();
+        Repository(fx, "# Report\nfine\n");
+        fx.Write(".gitignore", "out/\n");
+        Git(fx.Root, "add", "-A");
+        Git(fx.Root, "commit", "-q", "-m", "ignore");
+
+        var worker = new FakeChatProvider(
+            Turn.Says(QuickPlan),
+            Turn.Calls1("write_file", """{"path":"report.md","content":"# Report\nchanged\n"}""", "w1"),
+            Turn.Calls1("write_file", """{"path":"report.md","content":"# Report\nfine\n"}""", "w2"),
+            Turn.Calls1("write_file", """{"path":"out/notes.md","content":"IGNORED-NOTE"}""", "w3"),
+            Turn.Says("Put report.md back as it was; notes in out/."));
+        var reviewer = Reviewer();
+
+        await fx.RunAsync(fx.Build(worker, router: Routers.WithReviewer(), reviewProvider: reviewer), "leave the report alone");
+
+        var prompt = PromptOf(reviewer);
+        Assert.Contains("--- report.md - WRITTEN by this step, and now just as it was before the step began.", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("report.md - WRITTEN by this step where the workspace comparison does not look", prompt, StringComparison.Ordinal);
+        Assert.Contains("--- out/notes.md - WRITTEN by this step where the workspace comparison does not look", prompt, StringComparison.Ordinal);
+    }
+
     /// <summary>Outside git there is no "before", but a file a command created is still shown whole.</summary>
     [Fact]
     public async Task Outside_git_a_file_a_command_created_is_shown()

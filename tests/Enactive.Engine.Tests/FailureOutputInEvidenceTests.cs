@@ -51,9 +51,9 @@ public sealed class FailureOutputInEvidenceTests
     private static string EvidenceIn(FakeChatProvider reviewer)
     {
         var prompt = Assert.Single(reviewer.Requests).Messages.Last().Content ?? "";
-        const string opens = "the agent's own words above may be wrong or invented):";
+        const string opens = "TOOL CALLS (cite them by [n]):";
         var from = prompt.IndexOf(opens, StringComparison.Ordinal);
-        Assert.True(from >= 0, "not an execution review prompt:\n" + prompt);
+        Assert.True(from >= 0, "not a step review prompt:\n" + prompt);
         return prompt[(from + opens.Length)..];
     }
 
