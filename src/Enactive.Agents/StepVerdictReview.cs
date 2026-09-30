@@ -53,12 +53,19 @@ internal static class StepVerdictReview
         show it. fail: say concretely what is not done, not true, or not shown - so the worker can put it right.
         A fail where what the step made - its files, its changes - is right as it is, and only the report or the way the
         work was done is not, adds "work_stands":true: the files are then kept if the step is rejected.
+        A step that reports nothing needed doing - the file already right, nothing broken - has done its part only where a
+        call it made shows it looked and found so; with no such call, it fails.
         Judge this step only: what the other steps are for is theirs. Do not fail a step on style, on wording, or on a
         detail its purpose does not depend on.
         A change the step made that the request did not ask for is not a detail. Where the request says to leave something
         alone, or limits what the work may change, a step that changed it fails - name the change - however right the
         change itself may be.
         """;
+
+    // "Nothing needed doing": the earlier review's "nothing-to-do" answer, believed only with the calls that looked
+    // (Proof.cs) - a finding rests on having looked. A step with no calls needs no citation for a pass here, so the rule
+    // is the review's to apply; that it changed nothing, the review sees in the files it is shown (code review of the
+    // move to one short review, 2026-09-30).
 
     // The last paragraph of the instruction: benchmark scenario build-error, 2026-09-30. "Add Median; leave the rest of the
     // code alone" - the worker also fixed another file's error, and the review passed it as "out of scope but harmless",

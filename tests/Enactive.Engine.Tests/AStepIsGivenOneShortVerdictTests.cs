@@ -170,6 +170,17 @@ public sealed class AStepIsGivenOneShortVerdictTests
         Assert.Contains("a step that changed it fails - name the change", instruction, StringComparison.Ordinal);
     }
 
+    /// <summary>The earlier review believed "nothing needed doing" only with the calls that looked; so is this one told.</summary>
+    [Fact]
+    public async Task The_review_is_told_nothing_to_do_rests_on_a_call_that_looked()
+    {
+        var (_, _, reviewer) = await Run(true, [Pass(), Pass("the report matches the listing", 3)]);
+
+        var instruction = reviewer.Requests[0].Messages[0].Content!;
+        Assert.Contains("A step that reports nothing needed doing", instruction, StringComparison.Ordinal);
+        Assert.Contains("call it made shows it looked and found so; with no such call, it fails.", instruction, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task Off_the_step_review_is_the_one_before()
     {
