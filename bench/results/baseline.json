@@ -1,8 +1,8 @@
 {
-  "stamp": "20261001-000611-697bbc9",
-  "commit": "697bbc9",
+  "stamp": "20261001-003941-fd406a1",
+  "commit": "fd406a1",
   "dirty": false,
-  "at": "2026-10-01T00:18:04.0970903+03:00",
+  "at": "2026-10-01T00:51:52.7425721+03:00",
   "results": [
     {
       "scenario": "build-error",
@@ -11,31 +11,31 @@
       "truthHolds": true,
       "verdict": "right PASS",
       "exitCode": 0,
-      "wallSeconds": 84.2737023,
+      "wallSeconds": 65.6142019,
       "note": null,
       "metrics": {
         "outcome": "Completed",
         "reason": "",
-        "seconds": 83.7444702,
+        "seconds": 65.0590586,
         "steps": 0,
         "stepOutcomes": {},
         "reviewsPassed": 1,
         "reviewsFailed": 1,
-        "toolCalls": 11,
+        "toolCalls": 8,
         "tokensByPurpose": {
           "plan": {
-            "in": 5934,
-            "out": 491,
+            "in": 5922,
+            "out": 791,
             "cached": 0
           },
           "execute": {
-            "in": 96790,
-            "out": 2310,
-            "cached": 91256
+            "in": 65639,
+            "out": 1430,
+            "cached": 63229
           },
           "review": {
-            "in": 13586,
-            "out": 686,
+            "in": 13261,
+            "out": 708,
             "cached": 0
           }
         },
@@ -43,8 +43,8 @@
         "trims": 0,
         "cacheBreaks": 0,
         "cacheRewrites": 0,
-        "tokensIn": 116310,
-        "tokensOut": 3487
+        "tokensIn": 84822,
+        "tokensOut": 2929
       },
       "checks": [
         {
@@ -75,7 +75,7 @@
           "outOf": null
         }
       ],
-      "workspace": "C:\\Users\\user\\AppData\\Local\\Temp\\enactive-bench\\20261001-000611-697bbc9\\build-error"
+      "workspace": "C:\\Users\\user\\AppData\\Local\\Temp\\enactive-bench\\20261001-003941-fd406a1\\build-error"
     },
     {
       "scenario": "disk-report",
@@ -84,31 +84,33 @@
       "truthHolds": true,
       "verdict": "right PASS",
       "exitCode": 0,
-      "wallSeconds": 93.0159054,
+      "wallSeconds": 98.487691,
       "note": null,
       "metrics": {
         "outcome": "Completed",
         "reason": "",
-        "seconds": 92.5697081,
-        "steps": 0,
-        "stepOutcomes": {},
-        "reviewsPassed": 1,
-        "reviewsFailed": 0,
-        "toolCalls": 5,
+        "seconds": 98.0285434,
+        "steps": 2,
+        "stepOutcomes": {
+          "Succeeded": 2
+        },
+        "reviewsPassed": 2,
+        "reviewsFailed": 1,
+        "toolCalls": 7,
         "tokensByPurpose": {
           "plan": {
-            "in": 4802,
-            "out": 828,
-            "cached": 3272
+            "in": 5630,
+            "out": 984,
+            "cached": 2188
           },
           "execute": {
-            "in": 28703,
-            "out": 2812,
-            "cached": 25048
+            "in": 87603,
+            "out": 2211,
+            "cached": 81579
           },
           "review": {
-            "in": 4371,
-            "out": 654,
+            "in": 8818,
+            "out": 993,
             "cached": 0
           }
         },
@@ -116,15 +118,15 @@
         "trims": 0,
         "cacheBreaks": 0,
         "cacheRewrites": 0,
-        "tokensIn": 37876,
-        "tokensOut": 4294
+        "tokensIn": 102051,
+        "tokensOut": 4188
       },
       "checks": [
         {
           "id": "report-written",
           "kind": "file_exists",
           "passed": true,
-          "detail": "1 file(s): disk-report.md",
+          "detail": "1 file(s): disk-report.txt",
           "required": true,
           "found": null,
           "outOf": null
@@ -133,13 +135,13 @@
           "id": "every-drive-named",
           "kind": "file_contains",
           "passed": true,
-          "detail": "all 3 pattern(s) in disk-report.md",
+          "detail": "all 3 pattern(s) in disk-report.txt",
           "required": true,
           "found": null,
           "outOf": null
         }
       ],
-      "workspace": "C:\\Users\\user\\AppData\\Local\\Temp\\enactive-bench\\20261001-000611-697bbc9\\disk-report"
+      "workspace": "C:\\Users\\user\\AppData\\Local\\Temp\\enactive-bench\\20261001-003941-fd406a1\\disk-report"
     },
     {
       "scenario": "missing-input",
@@ -148,31 +150,31 @@
       "truthHolds": true,
       "verdict": "right PASS",
       "exitCode": 0,
-      "wallSeconds": 38.9894492,
+      "wallSeconds": 43.0393337,
       "note": null,
       "metrics": {
         "outcome": "Completed",
         "reason": "",
-        "seconds": 38.5271934,
+        "seconds": 42.5829356,
         "steps": 0,
         "stepOutcomes": {},
         "reviewsPassed": 1,
         "reviewsFailed": 0,
-        "toolCalls": 12,
+        "toolCalls": 11,
         "tokensByPurpose": {
           "plan": {
-            "in": 5439,
-            "out": 758,
+            "in": 5433,
+            "out": 700,
             "cached": 3272
           },
           "execute": {
-            "in": 61203,
-            "out": 867,
-            "cached": 59303
+            "in": 54984,
+            "out": 945,
+            "cached": 52972
           },
           "review": {
-            "in": 2829,
-            "out": 151,
+            "in": 3195,
+            "out": 133,
             "cached": 0
           }
         },
@@ -180,8 +182,8 @@
         "trims": 0,
         "cacheBreaks": 0,
         "cacheRewrites": 0,
-        "tokensIn": 69471,
-        "tokensOut": 1776
+        "tokensIn": 63612,
+        "tokensOut": 1778
       },
       "checks": [
         {
@@ -230,7 +232,7 @@
           "outOf": null
         }
       ],
-      "workspace": "C:\\Users\\user\\AppData\\Local\\Temp\\enactive-bench\\20261001-000611-697bbc9\\missing-input"
+      "workspace": "C:\\Users\\user\\AppData\\Local\\Temp\\enactive-bench\\20261001-003941-fd406a1\\missing-input"
     },
     {
       "scenario": "setup-step",
@@ -239,33 +241,33 @@
       "truthHolds": true,
       "verdict": "right PASS",
       "exitCode": 0,
-      "wallSeconds": 83.4939268,
+      "wallSeconds": 148.7888702,
       "note": null,
       "metrics": {
         "outcome": "Completed",
         "reason": "",
-        "seconds": 83.0388041,
+        "seconds": 148.3144288,
         "steps": 2,
         "stepOutcomes": {
           "Succeeded": 2
         },
         "reviewsPassed": 2,
-        "reviewsFailed": 0,
-        "toolCalls": 12,
+        "reviewsFailed": 1,
+        "toolCalls": 16,
         "tokensByPurpose": {
           "plan": {
-            "in": 7413,
-            "out": 1507,
-            "cached": 2188
+            "in": 7494,
+            "out": 1534,
+            "cached": 3502
           },
           "execute": {
-            "in": 107251,
-            "out": 1571,
-            "cached": 97087
+            "in": 149659,
+            "out": 3528,
+            "cached": 139742
           },
           "review": {
-            "in": 6987,
-            "out": 533,
+            "in": 11542,
+            "out": 668,
             "cached": 0
           }
         },
@@ -273,8 +275,8 @@
         "trims": 0,
         "cacheBreaks": 0,
         "cacheRewrites": 0,
-        "tokensIn": 121651,
-        "tokensOut": 3611
+        "tokensIn": 168695,
+        "tokensOut": 5730
       },
       "checks": [
         {
@@ -314,7 +316,7 @@
           "outOf": null
         }
       ],
-      "workspace": "C:\\Users\\user\\AppData\\Local\\Temp\\enactive-bench\\20261001-000611-697bbc9\\setup-step"
+      "workspace": "C:\\Users\\user\\AppData\\Local\\Temp\\enactive-bench\\20261001-003941-fd406a1\\setup-step"
     },
     {
       "scenario": "test-coverage",
@@ -323,33 +325,33 @@
       "truthHolds": true,
       "verdict": "right PASS",
       "exitCode": 0,
-      "wallSeconds": 294.3936832,
+      "wallSeconds": 255.6126423,
       "note": null,
       "metrics": {
         "outcome": "Completed",
         "reason": "",
-        "seconds": 293.9504049,
-        "steps": 4,
+        "seconds": 255.1490201,
+        "steps": 3,
         "stepOutcomes": {
-          "Succeeded": 4
+          "Succeeded": 3
         },
-        "reviewsPassed": 4,
+        "reviewsPassed": 3,
         "reviewsFailed": 0,
-        "toolCalls": 23,
+        "toolCalls": 24,
         "tokensByPurpose": {
           "plan": {
-            "in": 5336,
-            "out": 1209,
+            "in": 6145,
+            "out": 1916,
             "cached": 3502
           },
           "execute": {
-            "in": 324590,
-            "out": 8318,
-            "cached": 309466
+            "in": 307955,
+            "out": 6591,
+            "cached": 293455
           },
           "review": {
-            "in": 29200,
-            "out": 911,
+            "in": 22140,
+            "out": 823,
             "cached": 0
           }
         },
@@ -357,8 +359,8 @@
         "trims": 0,
         "cacheBreaks": 0,
         "cacheRewrites": 0,
-        "tokensIn": 359126,
-        "tokensOut": 10438
+        "tokensIn": 336240,
+        "tokensOut": 9330
       },
       "checks": [
         {
@@ -392,13 +394,13 @@
           "id": "report-written",
           "kind": "file_exists",
           "passed": true,
-          "detail": "1 file(s): coverage-report.md",
+          "detail": "1 file(s): test-coverage-report.md",
           "required": true,
           "found": null,
           "outOf": null
         }
       ],
-      "workspace": "C:\\Users\\user\\AppData\\Local\\Temp\\enactive-bench\\20261001-000611-697bbc9\\test-coverage"
+      "workspace": "C:\\Users\\user\\AppData\\Local\\Temp\\enactive-bench\\20261001-003941-fd406a1\\test-coverage"
     },
     {
       "scenario": "wiki-drift",
@@ -407,12 +409,12 @@
       "truthHolds": true,
       "verdict": "right PASS",
       "exitCode": 0,
-      "wallSeconds": 109.4644751,
+      "wallSeconds": 110.8230707,
       "note": null,
       "metrics": {
         "outcome": "Completed",
         "reason": "",
-        "seconds": 109.008912,
+        "seconds": 110.3528275,
         "steps": 4,
         "stepOutcomes": {
           "Succeeded": 4
@@ -422,18 +424,18 @@
         "toolCalls": 16,
         "tokensByPurpose": {
           "plan": {
-            "in": 6159,
-            "out": 2724,
+            "in": 6058,
+            "out": 1696,
             "cached": 3502
           },
           "execute": {
-            "in": 88021,
-            "out": 2676,
-            "cached": 81476
+            "in": 82167,
+            "out": 2522,
+            "cached": 75489
           },
           "review": {
-            "in": 6753,
-            "out": 460,
+            "in": 6961,
+            "out": 444,
             "cached": 0
           }
         },
@@ -441,8 +443,8 @@
         "trims": 0,
         "cacheBreaks": 0,
         "cacheRewrites": 0,
-        "tokensIn": 100933,
-        "tokensOut": 5860
+        "tokensIn": 95186,
+        "tokensOut": 4662
       },
       "checks": [
         {
@@ -482,7 +484,7 @@
           "outOf": null
         }
       ],
-      "workspace": "C:\\Users\\user\\AppData\\Local\\Temp\\enactive-bench\\20261001-000611-697bbc9\\wiki-drift"
+      "workspace": "C:\\Users\\user\\AppData\\Local\\Temp\\enactive-bench\\20261001-003941-fd406a1\\wiki-drift"
     }
   ]
 }
