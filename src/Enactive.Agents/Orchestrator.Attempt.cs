@@ -31,7 +31,7 @@ public sealed partial class Orchestrator
             publish, ct, planSteps, stepNumber is { } number && session.Obligations?.AtStep(number) is { } at
                 ? at with { ScopeNote = session.ScopeNotes.GetValueOrDefault(number) } : null,
             step.OutputSlot.Values is { } handed ? CitedPlaces.TextOf(handed) : null, step.Criteria, step.OutputSlot.Values,
-            session.Builds, step.Reads);
+            session.Builds, step.Reads, context.Restrictions);
     }
     /// <summary>One retry lifecycle for quick and DAG. Transcript, journal and read coverage stay
     /// together; provider fallback is one-shot and does not consume a review attempt.</summary>

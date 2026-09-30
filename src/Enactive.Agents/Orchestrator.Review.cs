@@ -63,7 +63,8 @@ public sealed partial class Orchestrator
         Func<WorkEvent, ValueTask> publish, CancellationToken ct, IReadOnlyList<string>? planSteps = null,
         RequestObligations? obligations = null, string? handedOn = null,
         IReadOnlyList<SuccessCriterionDefinition>? stepCriteria = null, System.Text.Json.Nodes.JsonObject? handedValues = null,
-        IReadOnlyList<BuildBaseline>? measuredBefore = null, ReadLedger? reads = null)
+        IReadOnlyList<BuildBaseline>? measuredBefore = null, ReadLedger? reads = null,
+        IReadOnlyList<TaskRestriction>? restrictions = null)
     {
         var prefix = stepNumber is { } number ? $"[{number}] " : "";
         ValueTask Emit(EventKind kind, string summary) => publish(scope.Ev(kind, prefix + summary, stepNumber));
@@ -151,7 +152,8 @@ public sealed partial class Orchestrator
                             await StepFilesNowAsync(changes, before, journal, stepStart, store, ct),
                             journal.Describe(evidenceStart, _evidenceBudget), obligations?.ScopeNote,
                             obligations?.Owned().Select(o => $"{o.Unit.Id}: {o.Unit.Text.Trim()}"
-                                + (o.AlsoTo.Count > 0 ? $" (also given to step {string.Join(", ", o.AlsoTo.Select(scope => scope.TrimStart('S')))})" : "")).ToArray()),
+                                + (o.AlsoTo.Count > 0 ? $" (also given to step {string.Join(", ", o.AlsoTo.Select(scope => scope.TrimStart('S')))})" : "")).ToArray(),
+                            restrictions),
                         models.ReviewProvider!, models.ReviewModel, scope.Budget.TurnExhaustedAfter, ct, _checkDerivedFigures),
                     ReviewMode.Step)
             : await ReviewAsync(

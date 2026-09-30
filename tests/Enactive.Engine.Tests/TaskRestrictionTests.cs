@@ -9,6 +9,8 @@ using Enactive.Core.Execution;
 using Enactive.Core.Tasks;
 using Enactive.Core.Templates;
 using Enactive.Core.Permissions;
+using Enactive.Core.Providers;
+using Enactive.Core.Workers;
 using Enactive.Core.Tools;
 using Enactive.Tools;
 using Xunit;
@@ -124,5 +126,34 @@ public sealed class TaskRestrictionTests
         Assert.Equal("restored", fx.Read("a.txt"));
         Assert.Contains(worker.Requests.SelectMany(r => r.Messages), m => m.Content?.Contains("no-deletion restriction") == true);
         Assert.DoesNotContain(events, e => e.Kind == EventKind.ArtifactReverted);
+    }
+
+    /// <summary>
+    /// The earlier step review classified a ban on deletion again and failed the step in code on a recorded one; the short
+    /// review is told the ban the check of the plan found, beside every deletion it is now shown.
+    /// </summary>
+    [Fact]
+    public async Task The_short_review_is_told_what_the_request_forbids()
+    {
+        using var fx = new EngineFixture { PlannerOverride = new Planner(), ShortReview = true };
+        fx.Write("a.txt", "original");
+        var planner = new FakeChatProvider(
+            Turn.Says("""{"disposition":"quick_action","title":"restore"}"""),
+            Turn.Says("""{"sources":[{"id":"O001","assessment":"Restore without deletion"}],"checks":[],"action_policy":null,"forbidden_effects":[{"effect":"file-deletion","source_quote":"Do not delete files."}],"unresolved":null}"""));
+        var worker = new FakeChatProvider(Turn.Calls1("write_file", """{"path":"a.txt","content":"restored"}"""), Turn.Says("restored"));
+        var reviewer = new FakeChatProvider { WhenExhausted = Turn.Says("""{"verdict":"pass","reason":"restored","calls":[1],"files":[]}""") };
+        var router = new ModelRouter(new ModelResolver(), new Dictionary<ModelPurpose, ModelRef>
+        {
+            [ModelPurpose.Plan] = new(Routers.PlannerProviderId, "plan-model"),
+            [ModelPurpose.Review] = new(Verdicts.ProviderId, Verdicts.Model)
+        });
+
+        var events = await fx.RunAsync(fx.Build(
+            new MapProviderFactory(worker, (Routers.PlannerProviderId, planner), (Verdicts.ProviderId, reviewer)),
+            worker: EngineFixture.WorkerWith("write_file"), router: router), "Do not delete files. Restore a.txt.");
+
+        Assert.Equal(RunOutcomeKind.Completed, events.Last().Outcome());
+        Assert.Contains(reviewer.Requests.SelectMany(r => r.Messages),
+            m => m.Content?.Contains("The request forbids deleting files (\"Do not delete files.\")", StringComparison.Ordinal) == true);
     }
 }

@@ -6,6 +6,7 @@ using System.Text.RegularExpressions;
 using Enactive.Core.Chat;
 using Enactive.Core.Execution;
 using Enactive.Core.Providers;
+using Enactive.Core.Tools;
 
 /// <summary>What a step's verdict review is shown - all of it assembled by the engine.</summary>
 /// <summary>A file a step changed, as a review is shown it: <paramref name="Heading"/> says what the text is, when it is not
@@ -21,7 +22,11 @@ internal sealed record StepVerdictInput(
     string? ScopeNote = null,
     // The lines of the request the plan gives this step. The earlier review judged each step against them; this one saw
     // the title alone, and a line the title did not name was judged by no one (code review of the move, 2026-09-30).
-    IReadOnlyList<string>? Owns = null);
+    IReadOnlyList<string>? Owns = null,
+    // What the request forbids, as the check of the plan found it (TaskRestriction): the earlier review classified it
+    // again and failed the step in code on a recorded deletion; the tools refuse the ones they recognise, and this
+    // review, shown every deletion now, is told the rule (code review of the move to one short review, 2026-09-30).
+    IReadOnlyList<TaskRestriction>? Forbidden = null);
 
 /// <summary>
 /// One short verdict on one step: did the worker do what this step was for, and is what it reported true? Pass or fail,
@@ -133,6 +138,10 @@ internal static class StepVerdictReview
         sb.AppendLine(input.StepNumber is { } no ? $"THIS STEP ({no}): {input.StepTitle}" : $"THE WORK: {input.StepTitle}");
         if (input.ScopeNote is { Length: > 0 } scope)
             sb.AppendLine("What this step is, from the plan: " + scope);
+        foreach (var rule in input.Forbidden ?? [])
+            if (rule.Effect == ForbiddenTaskEffect.FileDeletion)
+                sb.AppendLine($"The request forbids deleting files (\"{rule.SourceQuote}\"): a step that deleted a file of the "
+                    + "workspace fails, whatever its reason - putting it back after does not undo that.");
         if (input.Owns is { Count: > 0 } owns)
         {
             sb.AppendLine("Lines of the request the plan gives this step - it does or checks its part of each; the step is not done while a part of one that is its own is not:");
