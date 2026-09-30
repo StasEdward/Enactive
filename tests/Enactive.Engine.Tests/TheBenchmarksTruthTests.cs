@@ -99,10 +99,9 @@ public sealed class TheBenchmarksTruthTests : IDisposable
     [Fact]
     public void Every_scenario_in_the_repository_loads()
     {
-        var root = AppContext.BaseDirectory;
-        while (root is not null && !Directory.Exists(Path.Combine(root, "bench", "scenarios"))) root = Path.GetDirectoryName(root);
-        Assert.NotNull(root);
-        var scenarios = Directory.GetDirectories(Path.Combine(root!, "bench", "scenarios")).Select(Scenario.Load).ToArray();
+        // The repository as the build recorded it: walking up from the test's own folder finds nothing when the build's
+        // output is elsewhere (CI's "--artifacts-path" under the runner's temp folder).
+        var scenarios = Directory.GetDirectories(Path.Combine(TestRepository.Root, "bench", "scenarios")).Select(Scenario.Load).ToArray();
 
         Assert.True(scenarios.Length >= 4);
         Assert.All(scenarios, s => Assert.True(Directory.Exists(s.FixtureFolder), s.Name));
