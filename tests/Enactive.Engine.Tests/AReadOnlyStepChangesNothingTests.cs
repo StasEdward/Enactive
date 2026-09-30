@@ -61,6 +61,8 @@ public sealed class AReadOnlyStepChangesNothingTests
 
         var firstReview = string.Join("\n", reviewer.Requests[0].Messages.Select(m => m.Content));
         Assert.Contains("It was planned as READ-ONLY", firstReview, StringComparison.Ordinal);
+        // A change the request asks for, done a step early, is not a failure of this step; one it does not ask for is.
+        Assert.Contains("A change the request asks for, made here instead of in a later step, does not fail this step", firstReview, StringComparison.Ordinal);
         var secondReview = string.Join("\n", reviewer.Requests[^1].Messages.Select(m => m.Content));
         Assert.DoesNotContain("It was planned as READ-ONLY", secondReview, StringComparison.Ordinal);
     }

@@ -1625,7 +1625,12 @@ public sealed partial class Orchestrator : IOrchestrator
             if (step.ReadOnly)
                 session.ScopeNotes[stepNumber] = (session.ScopeNotes.GetValueOrDefault(stepNumber) is { } before ? before + " " : "")
                     + "It was planned as READ-ONLY: it looks and reports, and changes no file (scratch excepted). A change it "
-                    + "made to the work - by a command, since its file tools refuse - is outside its plan, and says so.";
+                    + "made anyway - by a command, since its file tools refuse - its report must say. A change the request asks "
+                    + "for, made here instead of in a later step, does not fail this step; a change the request does not ask for "
+                    + "fails it, as it would any step.";
+            // Benchmark setup-step, 2026-09-30: step 1 of "run the tests, fix the setup, run them again" ran the setup
+            // script itself; told only that the change was "outside its plan", the review failed it twice, the steps
+            // after it were skipped and the run failed - with the work done and the tests green.
             // The files the run's criteria are about: its result, which no single item's step makes.
             var deliverables = CriteriaFor(plan).Select(c => c.Typed?.Path).OfType<string>().Select(ShellLookup.Normal).ToArray();
             var boundary = reserved.Length == 0 && step.ExpandedFrom is null && !step.ReadOnly ? null
