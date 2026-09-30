@@ -2335,11 +2335,13 @@ public sealed partial class Orchestrator : IOrchestrator
         // records - not with the first reason one item happened to give (run 4f1d97 led with a reviewer's
         // remark about one page of twelve).
         var itemSteps = scheduler.Steps.Where(s => s.ExpandedFrom is not null).ToArray();
+        string? itemsCameTo = null;
         if (itemSteps.Length > 0)
         {
             var byStatus = itemSteps.GroupBy(s => ItemReport.Status(session.Records.GetValueOrDefault(s.Id)))
                 .Select(g => $"{g.Count()} {g.Key.ToLowerInvariant()}");
-            reasons = [$"{itemSteps.Length} item step(s): {string.Join(", ", byStatus)}", .. reasons];
+            itemsCameTo = $"{itemSteps.Length} item step(s): {string.Join(", ", byStatus)}";
+            reasons = [itemsCameTo, .. reasons];
         }
 
         var runOutcome = RunOutcomeOf(outcomes);
@@ -2539,7 +2541,9 @@ public sealed partial class Orchestrator : IOrchestrator
         // list concretely what is not finished").
         if (_shortReview && runOutcome is RunOutcomeKind.Failed or RunOutcomeKind.Incomplete
             && NotComplete(scheduler, stepNumbers, stepOutcomes, session, verification, finalChecks) is { Length: > 0 } open)
-            runReason = "Not complete - " + string.Join("; ", open) + (limitReason is null ? "" : $" ({limitReason})");
+            // Led, as the other reasons are, by what the items came to (run 4f1d97).
+            runReason = "Not complete - " + string.Join("; ", itemsCameTo is null ? open : [itemsCameTo, .. open])
+                + (limitReason is null ? "" : $" ({limitReason})");
 
         RecordWhatThisRunWrote(scope, intent);
         yield return scope.Terminal(runOutcome, runReason,
@@ -2817,7 +2821,9 @@ public sealed partial class Orchestrator : IOrchestrator
             var no = stepNumbers.TryGetValue(step.Id, out var number) ? number : 0;
             var parts = step.ObligationIds is { Count: > 0 } ids ? $" ({string.Join(", ", ids)})" : "";
             var said = outcomes.ContainsKey(step.Id) ? Word(outcome) : "not run";
-            var why = session.ReasonOf.TryGetValue(step.Id, out var reason) && !string.IsNullOrWhiteSpace(reason) ? ": " + Clip(reason, 300) : "";
+            // A step's own reason, or the engine's record of it - a step joining items has only the record.
+            var reason = session.ReasonOf.GetValueOrDefault(step.Id) ?? session.Records.GetValueOrDefault(step.Id)?.Reason;
+            var why = !string.IsNullOrWhiteSpace(reason) ? ": " + Clip(reason, 300) : "";
             lines.Add($"[{no}] {step.Title}{parts} - {said}{why}");
         }
         if (verification?.IncompleteReason is { } unverified) lines.Add(Clip(unverified, 300));

@@ -234,9 +234,11 @@ public sealed partial class Orchestrator
         (string Text, bool Whole)? Now(string? text)
             => text is null ? null : text.Length <= CriteriaFileChars ? (text, true) : (Shortening.HeadAndTail(text, CriteriaFileChars), false);
 
+        var compared = false;
         if (changes is not null && before is not null
             && await changes.TakeAsync(ct) is { } after && await changes.CompareAsync(before, after, ct) is { } found)
         {
+            compared = true;
             var actions = journal.Actions.Skip(stepStart).ToArray();
             foreach (var change in found)
             {
@@ -279,9 +281,11 @@ public sealed partial class Orchestrator
             string? text;
             try { text = await store.TryReadPendingAsync(path, ct) ?? await ReadOrNullAsync(path, ct); }   // a staged run holds it in memory
             catch (Exception ex) when (ex is not OperationCanceledException) { text = null; }
+            // Run 16d57849: a report the step wrote into a folder git ignores was never shown to the review at all.
+            var where = compared ? " where the workspace comparison does not look (a file git ignores, or a folder it skips)" : "";
             files.Add(Now(text) is { } now
-                ? new(path, now.Text, now.Whole, Shared(path) is { Length: > 0 } both ? both.TrimStart() : null)
-                : new(path, "(it is not there now, or could not be read back)", false, $"Written by this step.{Shared(path)}"));
+                ? new(path, now.Text, now.Whole, $"WRITTEN by this step{where} - how it is now.{Shared(path)}")
+                : new(path, "(it is not there now, or could not be read back)", false, $"WRITTEN by this step{where}.{Shared(path)}"));
         }
         return files;
     }
