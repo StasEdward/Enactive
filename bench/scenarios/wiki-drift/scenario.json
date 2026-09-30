@@ -1,0 +1,37 @@
+{
+  "name": "wiki-drift",
+  "about": "The wiki-drift task on a small tool in Python, not .NET. Two pages, four discrepancies seeded (timeout 60 vs 30, $APP_HOME vs SYNC_HOME, --verbose vs --debug, batch default 1000 vs 500) beside four claims that are right. The truth is that all four are found; how many were found is the scenario's coverage.",
+  "request": "Сверь утверждения в Docs/wiki/ с кодом в app/. Работай по одной странице: прочитай страницу, найди в коде то, на что она ссылается, и запиши расхождения в Docs/DRIFT.md.",
+  "approve": "deny",
+  "expect": { "outcome": "Completed" },
+  "checks": [
+    {
+      "id": "drift-written",
+      "kind": "file_exists",
+      "glob": "Docs/DRIFT.md"
+    },
+    {
+      "id": "discrepancies-found",
+      "kind": "coverage",
+      "glob": "Docs/DRIFT.md",
+      "min": 4,
+      "items": [
+        { "id": "timeout-30", "pattern": "(?is)timeout.{0,300}\\b30\\b|\\b30\\b.{0,300}timeout" },
+        { "id": "env-SYNC_HOME", "pattern": "SYNC_HOME" },
+        { "id": "flag-debug", "pattern": "--debug" },
+        { "id": "batch-500", "pattern": "(?is)batch.{0,300}\\b1000\\b.{0,300}\\b500\\b|batch.{0,300}\\b500\\b.{0,300}\\b1000\\b|\\b1000\\b.{0,300}\\b500\\b.{0,300}batch" }
+      ]
+    },
+    {
+      "id": "code-unchanged",
+      "about": "A check of the wiki against the code changes neither.",
+      "kind": "unchanged",
+      "path": "app/config.py"
+    },
+    {
+      "id": "cli-unchanged",
+      "kind": "unchanged",
+      "path": "app/cli.py"
+    }
+  ]
+}

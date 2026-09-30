@@ -1,0 +1,36 @@
+{
+  "name": "test-coverage",
+  "about": "The real coverage request of 2026-09-29, on a small library whose tests cover adding only: Remove, CountOf of a missing item, Total and Kinds are untested. More tests are needed, they must pass, and a Markdown report is asked for.",
+  "request": "Проверь покрытие тестами проекта, если надо - допиши новые. В конце дай отчет в виде файла MD",
+  "approve": "allow",
+  "expect": { "outcome": "Completed" },
+  "checks": [
+    {
+      "id": "tests-pass",
+      "kind": "command",
+      "command": "dotnet test Shelf.sln -nologo",
+      "exitCode": 0,
+      "atLeast": { "regex": "Passed:\\s*(\\d+)", "value": 4 }
+    },
+    {
+      "id": "untested-members-now-tested",
+      "about": "The tests now call what was untested.",
+      "kind": "file_contains",
+      "glob": "Shelf.Tests/**/*.cs",
+      "exclude": [ "**/bin/**", "**/obj/**" ],
+      "patterns": [ "\\.Remove\\(", "\\.Total\\b" ]
+    },
+    {
+      "id": "library-unchanged",
+      "about": "Tests are added; the code under test is not rewritten to fit them.",
+      "kind": "unchanged",
+      "path": "Shelf/Inventory.cs"
+    },
+    {
+      "id": "report-written",
+      "kind": "file_exists",
+      "glob": "**/*.md",
+      "exclude": [ ".enactive/**", "**/bin/**", "**/obj/**", "**/TestResults/**" ]
+    }
+  ]
+}

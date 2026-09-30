@@ -1,0 +1,26 @@
+{
+  "name": "disk-report",
+  "about": "A short task on the machine itself, no code: read the disks, write a report. Reaches the step review and the engine's final checks in a few minutes. No mail: the real task sent one; a benchmark must not.",
+  "request": "проверь загруженность дисков на компе и сделай отчет в файле. Письмо не отправляй.",
+  "approve": "allow",
+  "expect": { "outcome": "Completed" },
+  "checks": [
+    {
+      "id": "report-written",
+      "kind": "file_exists",
+      "glob": "**/*.{md,txt}",
+      "exclude": [ "README.md", ".enactive/**" ]
+    },
+    {
+      "id": "every-drive-named",
+      "about": "Every fixed drive in use on this machine, by its letter, as 'C:'.",
+      "kind": "file_contains",
+      "glob": "**/*.{md,txt}",
+      "exclude": [ "README.md", ".enactive/**" ],
+      "patternsFrom": {
+        "shell": "powershell",
+        "command": "Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Used -gt 0 } | ForEach-Object { '\\b' + $_.Name + ':' }"
+      }
+    }
+  ]
+}

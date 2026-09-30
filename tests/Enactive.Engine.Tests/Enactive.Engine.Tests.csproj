@@ -42,6 +42,7 @@
     <ProjectReference Include="..\..\src\Enactive.Core\Enactive.Core.csproj" />
     <ProjectReference Include="..\Enactive.Mcp.TestServer\Enactive.Mcp.TestServer.csproj" />
     <ProjectReference Include="..\..\src\Enactive.Agents\Enactive.Agents.csproj" />
+    <ProjectReference Include="..\..\tools\Enactive.Bench\Enactive.Bench.csproj" />
     <ProjectReference Include="..\..\src\Enactive.Tools\Enactive.Tools.csproj" />
     <ProjectReference Include="..\..\src\Enactive.Workspace\Enactive.Workspace.csproj" />
     <ProjectReference Include="..\..\src\Enactive.Providers\Enactive.Providers.csproj" />

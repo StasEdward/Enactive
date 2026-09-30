@@ -1,0 +1,29 @@
+{
+  "name": "build-error",
+  "about": "A project that does not build before the work: Report.cs has an error of its own (CS0103, 'totl'). The task is elsewhere - add Median to Stats. The truth: Median is there, Report.cs is left alone, and the build fails with the one error it failed with before, no more. The run is Completed: the engine must not hold an error that was already there against the work.",
+  "request": "Добавь в класс Stats (Ledger/Stats.cs) метод Median(IReadOnlyList<double> values), возвращающий медиану; для пустого списка - ArgumentException, как у Average. Остальной код не трогай.",
+  "approve": "allow",
+  "expect": { "outcome": "Completed" },
+  "checks": [
+    {
+      "id": "median-added",
+      "kind": "file_contains",
+      "glob": "Ledger/Stats.cs",
+      "patterns": [ "Median\\s*\\(\\s*IReadOnlyList<double>", "ArgumentException" ]
+    },
+    {
+      "id": "broken-file-left-alone",
+      "kind": "unchanged",
+      "path": "Ledger/Report.cs"
+    },
+    {
+      "id": "same-one-error",
+      "about": "Still the one error it had before the work: CS0103 in Report.cs, and nothing new.",
+      "kind": "command",
+      "command": "dotnet build Ledger/Ledger.csproj -nologo",
+      "exitCode": 1,
+      "contains": [ "CS0103" ],
+      "equals": { "regex": "(\\d+) Error\\(s\\)", "value": 1 }
+    }
+  ]
+}
