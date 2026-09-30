@@ -121,7 +121,8 @@ public sealed class CapsAnnounceThemselvesTests
         ["TaskReview.EvidenceChars"] = nameof(TheRunIsReviewedAsAWholeTests.What_the_task_review_is_shown_says_where_it_was_cut),
         ["Orchestrator.CriteriaFileChars"] = nameof(AStepIsJudgedOnItsSemanticCriteriaTests.A_file_too_long_to_show_whole_says_so_and_does_not_count_as_read),
         ["TypedCriteria.MaxHandedChars"] = nameof(AResultFileTheRequestDoesNotNameTests.A_long_handed_file_says_how_much_was_not_shown),
-        ["ExecutionJournal.RepeatedChars"] = nameof(EvidenceBudgetTests.The_same_text_is_shown_once_and_the_other_call_says_where)
+        ["ExecutionJournal.RepeatedChars"] = nameof(EvidenceBudgetTests.The_same_text_is_shown_once_and_the_other_call_says_where),
+        ["FailingCheckReview.OutputTailChars"] = nameof(ACheckThatFailsBeforeTheWorkIsAskedAboutTests.A_long_output_is_shown_by_its_end_and_says_it_was_cut)
     };
 
     /// <summary>

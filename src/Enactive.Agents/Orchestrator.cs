@@ -843,11 +843,31 @@ public sealed partial class Orchestrator : IOrchestrator
         // downstream keeps reading plan.Checks and knows nothing about this.
         if (resume is null && plan.Checks.Any(c => c.Origin == CriterionOrigin.Proposed))
         {
-            var (kept, notes) = await InScopeAsync(scope.RunId, scope.TaskId, null,
+            var (kept, notes, failing) = await InScopeAsync(scope.RunId, scope.TaskId, null,
                 () => BaselineAsync(plan.Checks.Where(c => c.Origin == CriterionOrigin.Proposed).ToArray(), scope.TaskId, scope.RunId, intent.Context, ct));
 
             foreach (var note in notes)
                 yield return scope.Ev(EventKind.ErrorObserved, note);
+
+            // A proposed check that already fails before the work: does the request ask for what would make it pass?
+            // Asked once, of the planning model (FailingCheckReview); dropped where it does not, so the worker is not
+            // sent beyond the request to satisfy it.
+            if (failing.Count > 0 && _planner.ChecksAuditEnabled)
+            {
+                var decision = await InScopeAsync(scope.RunId, scope.TaskId, null, () => FailingCheckReview.RunAsync(intent.RawText, failing,
+                    models.PlanProvider, models.Plan.Model, budget, _generationBudgets.For(GenerationPurpose.Planning), ct));
+                if (decision.PromptTokens + decision.CompletionTokens > 0)
+                    yield return scope.Usage(WorkEventPayload.WorkPurpose.Plan, models.Plan, decision.PromptTokens, decision.CompletionTokens,
+                        cached: decision.CachedPromptTokens, created: decision.CacheCreationPromptTokens);
+                if (decision.Problem is { } problem)
+                    yield return scope.Ev(EventKind.ErrorObserved, $"Checks that already fail before the work were kept as planned: {problem}.");
+                foreach (var (check, reason) in decision.Dropped)
+                    yield return scope.Ev(EventKind.ContextAssembled, $"Final check '{check.Name}' ({check.Command}) already fails before any work, "
+                        + "and the request does not ask for what would make it pass - dropped"
+                        + (string.IsNullOrWhiteSpace(reason) ? "" : $": {reason}")
+                        + ". The engine's own checks still compare the build and tests with before the work.");
+                kept = kept.Where(c => decision.Dropped.All(d => !ReferenceEquals(d.Check, c))).ToArray();
+            }
 
             plan = plan with { Checks = plan.Checks.Where(c => c.Origin != CriterionOrigin.Proposed).Concat(kept).ToArray() };
         }
@@ -3200,7 +3220,8 @@ public sealed partial class Orchestrator : IOrchestrator
     /// paid only by runs that have checks, and the alternative is a green light on evidence that
     /// establishes nothing.</para>
     /// </summary>
-    private async Task<(IReadOnlyList<SuccessCriterionDefinition> Kept, IReadOnlyList<string> Notes)>
+    private async Task<(IReadOnlyList<SuccessCriterionDefinition> Kept, IReadOnlyList<string> Notes,
+            IReadOnlyList<(SuccessCriterionDefinition Check, CriterionResult Before)> Failing)>
         BaselineAsync(
             IReadOnlyList<SuccessCriterionDefinition> proposed,
             Guid taskId, Guid runId, WorkContext context, CancellationToken ct)
@@ -3220,11 +3241,11 @@ public sealed partial class Orchestrator : IOrchestrator
         var fromRun = proposed.Where(c => c.Typed is { FromRun: true }).ToArray();
         if (fromRun.Length > 0)
         {
-            var (keptNow, notesNow) = await BaselineAsync(proposed.Except(fromRun).ToArray(), taskId, runId, context, ct);
-            return ([.. keptNow, .. fromRun], notesNow);
+            var (keptNow, notesNow, failingNow) = await BaselineAsync(proposed.Except(fromRun).ToArray(), taskId, runId, context, ct);
+            return ([.. keptNow, .. fromRun], notesNow, failingNow);
         }
         if (proposed.Count == 0)
-            return ([], []);
+            return ([], [], []);
 
         SuccessReport report;
         try
@@ -3253,11 +3274,12 @@ public sealed partial class Orchestrator : IOrchestrator
             // The baseline is an improvement to the evidence, never a way for a run to fail. If it
             // cannot be taken, every check keeps the meaning it would have had before this existed.
             return (proposed, new[] { $"The checks could not be tried beforehand ({ex.Message}), "
-                                    + "so what each of them proves is not known." });
+                                    + "so what each of them proves is not known." }, []);
         }
 
         var kept = new List<SuccessCriterionDefinition>();
         var notes = new List<string>();
+        var failing = new List<(SuccessCriterionDefinition, CriterionResult)>();
 
         foreach (var result in report.Results)
         {
@@ -3267,6 +3289,7 @@ public sealed partial class Orchestrator : IOrchestrator
             {
                 case CriterionOutcome.Failed:
                     kept.Add(criterion);
+                    failing.Add((criterion, result));
                     break;
 
                 case CriterionOutcome.Passed:
@@ -3289,7 +3312,7 @@ public sealed partial class Orchestrator : IOrchestrator
             }
         }
 
-        return (kept, notes);
+        return (kept, notes, failing);
     }
 
     private async Task<SuccessReport> CheckSuccessAsync(
