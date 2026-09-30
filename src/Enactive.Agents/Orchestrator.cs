@@ -195,7 +195,6 @@ public sealed partial class Orchestrator : IOrchestrator
     private readonly bool _allowImplicitToolCalls;
 
     private readonly bool _revertRejectedSteps;
-    private readonly StepReview _stepReview;
     private readonly IHandover _handover;
 
     /// <summary>
@@ -210,9 +209,7 @@ public sealed partial class Orchestrator : IOrchestrator
     private readonly bool _dynamicSteps;
     private readonly bool _validateWaves;
     private readonly bool _reportBlocked;
-    private readonly bool _taskReview;
     private readonly bool _semanticCriteria;
-    private readonly bool _shortReview;
     private readonly bool _checkDerivedFigures;
 
     /// <summary>One per conversation, kept with the conversation itself: steps that share one, and a hand-over that
@@ -267,8 +264,6 @@ public sealed partial class Orchestrator : IOrchestrator
         int maxParallelSteps = 1,
         int evidenceBudget = ExecutionJournal.DefaultBudget,
         bool allowImplicitToolCalls = false,
-        bool reviewContent = true,
-        bool checkSoundness = true,
         bool revertRejectedSteps = true,
         IReadOnlyList<SuccessCriterionDefinition>? successCriteria = null,
         ExecutionLimits? limits = null,
@@ -302,22 +297,14 @@ public sealed partial class Orchestrator : IOrchestrator
         // Phase 7.2: the step may say it cannot go on (report_blocked). Advisory; the engine's own detection of
         // blocks does not depend on it. Off by default, like the phases before it: it is one more tool offered.
         bool reportBlocked = false,
-        // Phase 9: a run short of Completed only on steps DONE, NOT VERIFIED is reviewed as a whole. Off here, on in
-        // the application's settings (AppSettings.TaskReview).
-        bool taskReview = false,
         // Phase 1.4: the planner may set a step semantic criteria, and a step that has them is judged against those only.
         // Off by default: it changes what a step's review is.
         bool semanticCriteria = false,
-        // One short verdict per step (StepVerdictReview), and the task done when every step is - no review of the whole
-        // run after it. Off here, on in the application's settings; off, the step review is the one before.
-        bool shortReview = false,
         // The short step review works out a total, a difference, a percentage the work derived, and fails a wrong one
         // (StepVerdictReview.DerivedFigures). Off here, on in the application's settings.
         bool checkDerivedFigures = false)
     {
-        _shortReview = shortReview;
         _checkDerivedFigures = checkDerivedFigures;
-        _taskReview = taskReview;
         _semanticCriteria = semanticCriteria;
         _validateWaves = validateWaves;
         _reportBlocked = reportBlocked;
@@ -364,8 +351,6 @@ public sealed partial class Orchestrator : IOrchestrator
         // 1 = the original behaviour: one step at a time on one shared conversation.
         _maxParallelSteps = Math.Max(1, maxParallelSteps);
         _evidenceBudget = Math.Max(ExecutionJournal.MinimumBudget, evidenceBudget);
-        _stepReview = new StepReview(agents?.Reviewer ?? new Reviewer(), tools, workspace.RootPath,
-            _evidenceBudget, reviewContent, checkSoundness);
         _successEvaluator = agents?.SuccessEvaluator ?? new SuccessEvaluator();
         _handover = agents?.Handover ?? new Handover();
         _generationBudgets = generationBudgets ?? new();
@@ -686,7 +671,7 @@ public sealed partial class Orchestrator : IOrchestrator
         // Each step is judged against the lines of the request the plan gives it, and nothing judges the run as a whole
         // after them: a line no step is given is checked by no one. The planner is asked once, like the report above;
         // what it answers stands - a line it still gives no step is its judgement (a greeting, context), and is said.
-        if (resume is null && _shortReview && plan.Plan is { } assigning
+        if (resume is null && plan.Plan is { } assigning
             && RequestObligations.ForPlan(intent.RawText, assigning).Unassigned() is { Count: > 0 } ungiven)
         {
             var diagnostic = "Lines of the request no step is given: "
@@ -2424,105 +2409,9 @@ public sealed partial class Orchestrator : IOrchestrator
             }
         }
 
-        // Phase 9: the run reviewed as a whole, where it is short of Completed only because some steps' reviews could
-        // not establish everything (DONE, NOT VERIFIED) - nothing failed, nothing was rejected, skipped or blocked, no
-        // limit was hit, and none of the engine's own checks held it back. A later step may have shown what an earlier
-        // one could not; the task review is shown the whole run and answers each open question on cited evidence.
-        IReadOnlyList<CriterionResult>? finalChecks = null;
-        if (_taskReview && !_shortReview && models.ReviewOn && runOutcome == RunOutcomeKind.Incomplete && !cycle && limitReason is null
-            && outcomes.Length > 0 && outcomes.All(o => o is StepOutcomeKind.Succeeded or StepOutcomeKind.DoneUnverified)
-            && outcomes.Contains(StepOutcomeKind.DoneUnverified)
-            && verification is not null && verification.IncompleteReason is null && verification.Report.Blocking.Count == 0
-            && scope.Budget.TurnExhausted is null)
-        {
-            finalChecks = [.. ProducedFilesNow(scope, session), .. await BuildRegressionNowAsync(scope, session, intent.Context, ct,
-                session.Builds.Count > 0 ? await NetChangedAsync(workspaceChanges, beforeRun, ct) : null)];
-            var input = TaskReviewInputOf(scheduler, stepNumbers, stepOutcomes, session, scope, verification, finalChecks);
-            yield return scope.Ev(EventKind.ReviewRequested,
-                $"Task review: judging the run as a whole - {input.Open.Count} question(s) its steps left open…");
-            var judged = await InScopeAsync(scope.RunId, scope.TaskId, null, () => TaskReview.RunAsync(input,
-                models.ReviewProvider!, models.ReviewModel, scope.Budget.TurnExhaustedAfter, ct));
-            if (judged.PromptTokens + judged.CompletionTokens > 0)
-                yield return scope.Usage(WorkEventPayload.WorkPurpose.Review, models.Review!, judged.PromptTokens, judged.CompletionTokens,
-                    null, judged.CachedPromptTokens, judged.CacheCreationPromptTokens);
-            foreach (var (item, verdict, why) in judged.Items)
-                yield return scope.Ev(EventKind.ContextAssembled, $"[{item.Step}] {item.Label}: {verdict} by the task review - {why}", item.Step);
-            if (judged.Outcome is { } decided)
-            {
-                yield return scope.Ev(decided == RunOutcomeKind.Completed ? EventKind.ReviewPassed : EventKind.ReviewFailed, judged.Reason);
-                runOutcome = decided;
-                runReason = judged.Reason;
-            }
-            else
-                yield return scope.Ev(EventKind.ErrorObserved, $"Task review unavailable ({judged.Reason}); the outcome stays as the steps left it.");
-        }
-
-        // With a short verdict per step, each step answers for its own part and nothing is deferred to the end.
-        if (runOutcome == RunOutcomeKind.Completed && models.ReviewOn && _stepReview.ChecksSoundness && !_shortReview
-            && session.NeedsFinalReview && finalChecks is null)
-        {
-            yield return scope.Ev(EventKind.ReviewRequested, "Reconciling deferred requirements against the whole run…");
-            for (var finalAttempt = 0; ; finalAttempt++)
-            {
-                var finalReview = await ReconcileRunAsync(session, models, ct);
-                if (finalReview.PromptTokens + finalReview.CompletionTokens > 0)
-                    yield return scope.Usage(WorkEventPayload.WorkPurpose.Review, models.Review!,
-                        finalReview.PromptTokens, finalReview.CompletionTokens, null,
-                        finalReview.CachedPromptTokens, finalReview.CacheCreationPromptTokens);
-                var complete = finalReview.Pass && finalReview.Soundness?.Sound == true
-                    && finalReview.IncompleteReason is null && finalReview.BudgetExhausted is null;
-                yield return scope.Ev(complete ? EventKind.ReviewPassed : EventKind.ErrorObserved,
-                    "Final reconciliation: " + (finalReview.IncompleteReason ?? finalReview.BudgetExhausted
-                        ?? finalReview.Soundness?.Reason ?? finalReview.Notes));
-                if (!complete && finalReview.RepairAdvice is { } advice && finalReview.IncompleteReason is null
-                    && finalReview.BudgetExhausted is null && finalAttempt < _reviewRetries && scope.Budget.TurnExhausted is null)
-                {
-                    var repairMessages = new List<ChatMessage> {
-                        ChatMessage.System(models.Worker.Instructions),
-                        ChatMessage.User(BuildUserPrompt(intent)),
-                        ChatMessage.User("Final reviewer identified these concrete defects. Correct only these defects, preserve completed work "
-                            + "and original constraints, then briefly report the changes. Do not weaken tests or rewrite history.\n" + advice
-                            + "\nEngine-owned command history (history-local IDs):\n" + session.RunEvidence().Describe(maxChars: _evidenceBudget).CommandHistory())
-                    };
-                    var repairStore = _artifacts.BeginStep();
-                    var repairJournal = new ExecutionJournal();
-                    session.Track(repairJournal, repairStore);
-                    var repairLoop = new ToolLoopResult();
-                    yield return scope.Ev(EventKind.ErrorObserved, "Worker correcting final-review defects: " + advice);
-                    await foreach (var repairEvent in RunToolLoopAsync(scope.TaskId, scope.RunId, models.Provider,
-                        models.Model.Model, models.Worker, repairMessages, scope.Artifacts, intent.Context,
-                        repairStore, repairJournal, new ReadLedger(), null, repairLoop, scope.Budget, scope.Granted, ct, models.Model.ProviderId,
-                        attemptOrigin: ToolCallOrigin.Retry))
-                        yield return repairEvent;
-                    session.Digest.Add("Final review correction: " + LastAssistant(repairMessages));
-                    if (!repairLoop.Succeeded || scope.Budget.TurnExhausted is not null)
-                    {
-                        runOutcome = RunOutcomeKind.Incomplete;
-                        runReason = scope.Budget.TurnExhausted ?? repairLoop.Reason ?? "Final correction did not complete.";
-                        break;
-                    }
-                    var rechecked = await CheckSuccessAsync(CriteriaFor(plan), scope.TaskId, scope.RunId, intent.Context, ct, session.Outputs.Values);
-                    foreach (var check in rechecked.Results) yield return scope.Criterion(check);
-                    if (rechecked.Apply(RunOutcomeKind.Completed) == RunOutcomeKind.Completed)
-                        continue; // New independent whole-run review; a green check alone cannot approve the correction.
-                    runOutcome = RunOutcomeKind.Incomplete;
-                    runReason = "Final review correction did not complete: " + rechecked.Explain();
-                    break;
-                }
-                if (!complete)
-                {
-                    runOutcome = RunOutcomeKind.Incomplete;
-                    runReason = "Final requirement reconciliation did not pass: "
-                        + (finalReview.IncompleteReason ?? finalReview.BudgetExhausted ?? finalReview.Soundness?.Reason ?? finalReview.Notes);
-                }
-                break;
-            }
-        }
-
-        // Last, so it describes the workspace as the run leaves it: after every step, every check
-        // and the final review have had their turn to change it.
-        // Already taken for a task review, the workspace unchanged since: reported as taken, not run again.
-        finalChecks ??= [.. ProducedFilesNow(scope, session), .. await BuildRegressionNowAsync(scope, session, intent.Context, ct,
+        // Last, so it describes the workspace as the run leaves it: after every step and every check
+        // have had their turn to change it.
+        IReadOnlyList<CriterionResult> finalChecks = [.. ProducedFilesNow(scope, session), .. await BuildRegressionNowAsync(scope, session, intent.Context, ct,
                 session.Builds.Count > 0 ? await NetChangedAsync(workspaceChanges, beforeRun, ct) : null)];
         foreach (var check in finalChecks)
             yield return scope.Criterion(check);
@@ -2539,7 +2428,7 @@ public sealed partial class Orchestrator : IOrchestrator
         // What is not complete, named - every step not confirmed, with the parts of the request it answers for, and
         // every check that failed - instead of the first reason any step happened to give (the user's model: "no -
         // list concretely what is not finished").
-        if (_shortReview && runOutcome is RunOutcomeKind.Failed or RunOutcomeKind.Incomplete
+        if (runOutcome is RunOutcomeKind.Failed or RunOutcomeKind.Incomplete
             && NotComplete(scheduler, stepNumbers, stepOutcomes, session, verification, finalChecks) is { Length: > 0 } open)
             // Led, as the other reasons are, by what the items came to (run 4f1d97).
             runReason = "Not complete - " + string.Join("; ", itemsCameTo is null ? open : [itemsCameTo, .. open])
@@ -2757,54 +2646,6 @@ public sealed partial class Orchestrator : IOrchestrator
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception) { return []; }   // an instrument; the run it observes matters more
-    }
-
-    /// <summary>What the task review is shown (Phase 9): assembled by the engine from its own records, never the transcript.</summary>
-    private TaskReviewInput TaskReviewInputOf(DagScheduler scheduler, System.Collections.Concurrent.ConcurrentDictionary<Guid, int> stepNumbers,
-        Dictionary<Guid, StepOutcomeKind> stepOutcomes, RunSession session, RunScope scope, VerifyResult verification,
-        IReadOnlyList<CriterionResult> finalChecks)
-    {
-        static string Clip(string text, int max) => text.Length <= max ? text : text[..max] + "…";
-        var steps = scheduler.Steps.Select(s => (Step: s, No: stepNumbers.TryGetValue(s.Id, out var n) ? n : 0)).OrderBy(x => x.No).ToArray();
-        Dictionary<Guid, StepOutcomeKind> outcomes;
-        lock (stepOutcomes) outcomes = new(stepOutcomes);
-        var plan = steps.Select(x => $"[{x.No}] {x.Step.Title} - "
-            + (outcomes.TryGetValue(x.Step.Id, out var o) ? Word(o) : "not run")
-            + (session.ReasonOf.TryGetValue(x.Step.Id, out var why) ? ": " + Clip(why, 600) : "")).ToArray();
-        var outputs = session.Outputs.Values.OrderBy(o => o.StepNo).Select(o => $"[{o.StepNo}] {o.Step}: {Clip(o.ValuesJson, 4_000)}").ToArray();
-        var checks = verification.Report.Results.Concat(finalChecks)
-            .Select(r => $"{r.Outcome.ToString().ToUpperInvariant()}: {r.Name}" + (string.IsNullOrWhiteSpace(r.Detail) ? "" : " - " + Clip(r.Detail, 600)))
-            .ToArray();
-
-        List<OpenItem> open;
-        lock (session.OpenItems) open = [.. session.OpenItems];
-        // A step left unconfirmed with nothing itemised (a resumed run, a review that returned nothing) is one question.
-        foreach (var (step, no) in steps.Where(x => outcomes.GetValueOrDefault(x.Step.Id) == StepOutcomeKind.DoneUnverified
-                                                  && open.All(i => i.Step != x.No)))
-            open.Add(new OpenItem(no, step.Title, "the step's work",
-                "it ended DONE, NOT VERIFIED" + (session.ReasonOf.TryGetValue(step.Id, out var r) ? ": " + r : ""), []));
-
-        ArtifactRef[] produced;
-        lock (scope.Artifacts) produced = scope.Artifacts.ToArray();
-        var files = new List<(string, string)>();
-        var room = TaskReview.MaxFilesChars;
-        foreach (var path in produced.Select(a => a.RelativePath.Replace('\\', '/')).Distinct(StringComparer.OrdinalIgnoreCase)
-                     .Where(p => !p.StartsWith(WorkspaceGuard.ScratchPrefix + "/", StringComparison.OrdinalIgnoreCase)))
-        {
-            var full = Path.Combine(_workspace.RootPath, path);
-            if (!File.Exists(full)) continue;
-            string text;
-            try { text = File.ReadAllText(full); }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { continue; }
-            var shown = text.Length <= Math.Min(TaskReview.MaxFileChars, room) ? text
-                : Shortening.HeadAndTail(text, Math.Max(1_000, Math.Min(TaskReview.MaxFileChars, room)));
-            if (room <= 0) { files.Add((path, "(not shown: the room for files is spent)")); continue; }
-            files.Add((path, shown));
-            room -= shown.Length;
-        }
-
-        return new TaskReviewInput(session.Obligations!, plan, outputs, checks, files,
-            session.RunEvidence().Describe(maxChars: Math.Max(_evidenceBudget, TaskReview.EvidenceChars)), open);
     }
 
     /// <summary>Each thing that keeps a run from Completed, as a line: a step not confirmed, a check that failed.</summary>
@@ -3401,103 +3242,8 @@ public sealed partial class Orchestrator : IOrchestrator
             criteria, _tools, _permissions, _policy, _decisions, toolContext, taskId, ct);
     }
 
-    /// <summary>Per file, and in total — the same budget the reviewer prompt applies.</summary>
-    private const int MaxReviewFileChars = 8000;
 
-    /// <summary>
-    /// What this step actually changed, as it stands now: the store's own record of the paths, and
-    /// the current content of each. A path the step removed is reported as such rather than
-    /// silently skipped — "this file is gone" is exactly the sort of thing a reviewer should see.
-    /// </summary>
-    private async Task<IReadOnlyList<WrittenFile>> ReadWrittenAsync(
-        IArtifactScope store, CancellationToken ct)
-    {
-        var written = new List<WrittenFile>();
 
-        // Which of these the step does not have to itself. The journal has recorded the owner of
-        // every write since the revert needed it; nothing had ever asked the review.
-        var shared = store.SharedWithAnotherStep;
-
-        foreach (var path in store.TouchedPaths)
-        {
-            string? content;
-            try
-            {
-                // A staged run holds the proposal in memory; a direct one has it on disk.
-                content = await store.TryReadPendingAsync(path, ct);
-                if (content is null)
-                {
-                    var full = WorkspaceGuard.ResolveInside(_workspace.RootPath, path);
-                    content = File.Exists(full) ? await File.ReadAllTextAsync(full, ct) : null;
-                }
-            }
-            catch (OperationCanceledException) { throw; }
-            catch (Exception)
-            {
-                // Unreadable is not the same as unwritten, and neither is worth failing the review
-                // over: say what is known and let the reviewer judge with it.
-                content = null;
-            }
-
-            // The real size travels with the excerpt. Cutting here and saying nothing is what let a
-            // 414-line page be reviewed as its first 161 lines as though that were the whole thing.
-            var shown = content is null
-                ? "(this file was removed, or could not be read back)"
-                // The START and the END, as the reviewer shows it: cut here to the head alone, the
-                // reviewer's own head-and-tail had no tail left to take, and a step that APPENDED to
-                // a long file was judged on a part that could not contain what it wrote (run 5e5b51,
-                // 2026-09-24: "the pages 4-6 findings ... fall in the part not shown" - PASS).
-                : content.Length > MaxReviewFileChars ? Shortening.ToFit(content, MaxReviewFileChars) : content;
-
-            written.Add(new WrittenFile(
-                path, shown, content?.Length ?? shown.Length,
-                shared.Contains(path, StringComparer.OrdinalIgnoreCase)));
-        }
-
-        return written;
-    }
-
-    /// <summary>
-    /// What a step changed, as the reviewer is shown it - each file as a diff where one exists, a new
-    /// file whole, a deletion as a deletion. Null when the workspace could not be measured, and the
-    /// caller falls back to the store's record.
-    /// </summary>
-    private async Task<IReadOnlyList<WrittenFile>?> MeasuredChangesAsync(
-        IWorkspaceChanges changes, WorkspaceSnapshot before, IReadOnlyList<ExecutedAction> stepActions, CancellationToken ct)
-    {
-        if (await changes.TakeAsync(ct) is not { } after
-            || await changes.CompareAsync(before, after, ct) is not { } found)
-            return null;
-
-        var written = new List<WrittenFile>(found.Count);
-        foreach (var change in found)
-        {
-            // Who changed it, from the journal - the comparison says only THAT it changed.
-            var by = ChangeAuthorship.By(ChangeAuthorship.Of(change.Path, change.OldPath, stepActions));
-            var (content, heading) = change switch
-            {
-                { Kind: FileChangeKind.Deleted } =>
-                    ("(deleted)", $"DELETED{by}."),
-                { Binary: true } =>
-                    ("(a binary file - its contents are not shown)", $"CHANGED{by} (binary)."),
-                { Kind: FileChangeKind.Added } =>
-                    (await ReadNowAsync(change.Path, ct), $"NEW FILE, created{by} - its whole content:"),
-                { Diff: { } diff } =>
-                    (Hunks(diff),
-                     (change.Kind == FileChangeKind.Renamed ? $"RENAMED from {change.OldPath}, and " : "")
-                     + $"CHANGED{by} - a unified diff: '+' lines were added, '-' lines removed, "
-                     + "lines starting with a space are unchanged context:"),
-                _ =>
-                    (await ReadNowAsync(change.Path, ct),
-                     $"CHANGED{by}. There is no record of how it was before (the workspace is not "
-                     + "a git repository), so this is how it is NOW:")
-            };
-
-            written.Add(new WrittenFile(change.Path, content, content.Length, Heading: heading));
-        }
-
-        return written;
-    }
 
     /// <summary>A diff from its first hunk: the "diff --git" and index lines say nothing a reviewer needs.</summary>
     private static string Hunks(string diff)

@@ -18,17 +18,17 @@ public sealed record RunEngineOptions(
     int ReviewRetries, int SuccessRetries, bool ProposeChecks, int? NumCtx,
     GenerationBudgets GenerationBudgets, RepairConsultation RepairConsultation,
     bool DisableThinking, int MaxParallelSteps, int EvidenceBudget, bool AllowImplicitToolCalls,
-    bool ReviewContent, bool CheckSoundness, bool RevertRejectedSteps, bool StepOutputs = false, bool TypedCriteria = false,
-    bool DynamicSteps = false, FanOutLimits? FanOut = null, bool ValidateWaves = false, bool ReportBlocked = false, bool TaskReview = false,
-    bool SemanticCriteria = false, bool ShortReview = false, bool CheckDerivedFigures = false)
+    bool RevertRejectedSteps, bool StepOutputs = false, bool TypedCriteria = false,
+    bool DynamicSteps = false, FanOutLimits? FanOut = null, bool ValidateWaves = false, bool ReportBlocked = false,
+    bool SemanticCriteria = false, bool CheckDerivedFigures = false)
 {
     public static RunEngineOptions Capture(AppSettings settings) => new(
         settings.ReviewRetries, settings.SuccessRetries, settings.ProposeChecks, settings.NumCtx,
         settings.GenerationBudgets, settings.RepairConsultation, settings.DisableThinking,
         settings.MaxParallelSteps, settings.EvidenceBudget, settings.AllowImplicitToolCalls,
-        settings.ReviewContent, settings.CheckSoundness, settings.RevertRejectedSteps, settings.StepOutputs, settings.TypedCriteria,
+        settings.RevertRejectedSteps, settings.StepOutputs, settings.TypedCriteria,
         settings.DynamicSteps, new FanOutLimits(settings.MaxStepsPerExpansion, settings.MaxTotalSteps, settings.MaxFanOutDepth),
-        settings.ValidateWaves, settings.ReportBlocked, settings.TaskReview, settings.SemanticCriteria, settings.ShortReview,
+        settings.ValidateWaves, settings.ReportBlocked, settings.SemanticCriteria,
         settings.CheckDerivedFigures);
 }
 
@@ -53,7 +53,6 @@ public static class RunEngineComposition
             generationBudgets: options.GenerationBudgets, repairConsultation: options.RepairConsultation,
             disableThinking: options.DisableThinking, maxParallelSteps: options.MaxParallelSteps,
             evidenceBudget: options.EvidenceBudget, allowImplicitToolCalls: options.AllowImplicitToolCalls,
-            reviewContent: options.ReviewContent, checkSoundness: options.CheckSoundness,
             revertRejectedSteps: options.RevertRejectedSteps, checkpoints: checkpoints, settings: settings,
             successCriteria: successCriteria, limits: limits, agents: resources.Agents,
             // The kinds of project the engine can build for its own "no new build errors" check.
@@ -61,6 +60,6 @@ public static class RunEngineComposition
             ecosystems: [new DotnetEcosystem()],
             stepOutputs: options.StepOutputs, typedCriteria: options.TypedCriteria,
             dynamicSteps: options.DynamicSteps, fanOut: options.FanOut, validateWaves: options.ValidateWaves,
-            reportBlocked: options.ReportBlocked, taskReview: options.TaskReview, semanticCriteria: options.SemanticCriteria, shortReview: options.ShortReview,
+            reportBlocked: options.ReportBlocked, semanticCriteria: options.SemanticCriteria,
             checkDerivedFigures: options.CheckDerivedFigures);
 }

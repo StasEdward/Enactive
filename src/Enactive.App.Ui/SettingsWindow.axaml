@@ -427,20 +427,6 @@
                             </StackPanel>
 
                             <StackPanel Orientation="Horizontal" Spacing="6">
-                                <CheckBox IsChecked="{Binding ReviewContent}"
-                                          Content="Review what a step WROTE when it ran no commands" />
-                                <local:HintView Text="{x:Static core:SettingsAdvice.ReviewContent}"
-                                                VerticalAlignment="Center" />
-                            </StackPanel>
-
-                            <StackPanel Orientation="Horizontal" Spacing="6">
-                                <CheckBox IsChecked="{Binding CheckSoundness}"
-                                          Content="Ask a passed step what actually proved it" />
-                                <local:HintView Text="{x:Static core:SettingsAdvice.CheckSoundness}"
-                                                VerticalAlignment="Center" />
-                            </StackPanel>
-
-                            <StackPanel Orientation="Horizontal" Spacing="6">
                                 <CheckBox IsChecked="{Binding RevertRejectedSteps}"
                                           Content="Put a rejected step's files back to how they were" />
                                 <local:HintView Text="{x:Static core:SettingsAdvice.RevertRejectedSteps}"

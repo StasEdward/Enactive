@@ -91,6 +91,8 @@ public sealed class SettingsLoadTests : IDisposable
       "AllowImplicitToolCalls": false,
       "ReviewContent": true,
       "CheckSoundness": true,
+      "TaskReview": true,
+      "ShortReview": true,
       "ReviewRetries": 1,
       "ShellCommands": "Off",
       "CloseToTray": true
@@ -145,8 +147,8 @@ public sealed class SettingsLoadTests : IDisposable
         Assert.Equal(131072, settings.NumCtx);
         Assert.True(settings.DisableThinking);
         Assert.False(settings.AllowImplicitToolCalls);
-        Assert.True(settings.ReviewContent);
-        Assert.True(settings.CheckSoundness);
+        // ReviewContent, CheckSoundness, TaskReview and ShortReview switched the earlier step review, gone since
+        // 2026-09-30: a file that still has them loads, with no problem said (the test above), and they do nothing.
         Assert.Equal(1, settings.ReviewRetries);
     }
 

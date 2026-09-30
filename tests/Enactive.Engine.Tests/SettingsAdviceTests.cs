@@ -63,13 +63,11 @@ public sealed class SettingsAdviceTests
 
     /// <summary>
     /// The advice must not be the only place a cost is stated, but where it states one it has to be
-    /// specific. These four settings each cost an extra model call, and a person turning one on
+    /// specific. These settings each cost an extra model call, and a person turning one on
     /// without knowing that is the person who later asks why the bill moved.
     /// </summary>
     [Theory]
     [InlineData(nameof(SettingsAdvice.VerifyWrites))]
-    [InlineData(nameof(SettingsAdvice.ReviewContent))]
-    [InlineData(nameof(SettingsAdvice.CheckSoundness))]
     [InlineData(nameof(SettingsAdvice.ReviewRetries))]
     public void A_setting_that_costs_another_call_says_so(string setting)
     {

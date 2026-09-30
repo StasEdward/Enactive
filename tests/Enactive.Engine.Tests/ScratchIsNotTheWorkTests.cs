@@ -48,11 +48,4 @@ public sealed class ScratchIsNotTheWorkTests
         Assert.Equal(RunOutcomeKind.Incomplete, events.Last().Outcome());
     }
 
-    [Fact]
-    public void The_files_line_says_it_is_the_engines_record()
-    {
-        var prompt = Reviewer.BuildExecutionUserPrompt("look", "done", "(no tools were run in this step)", []);
-        Assert.Contains("Files changed: none - recorded by the ENGINE from this step's own file-tool calls, not taken from the agent's report",
-            prompt, StringComparison.Ordinal);
-    }
 }

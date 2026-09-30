@@ -22,13 +22,13 @@ public sealed class AStepIsGivenOneShortVerdictTests
 
     private static Turn Fail(string reason) => Turn.Says($$"""{"verdict":"fail","reason":"{{reason}}","calls":[],"files":[]}""");
 
-    private static Task<(List<WorkEvent> Events, FakeChatProvider Worker, FakeChatProvider Reviewer)> Run(bool shortReview, Turn[] reviews,
-        params Turn[] more) => Run(shortReview, false, reviews, more);
+    private static Task<(List<WorkEvent> Events, FakeChatProvider Worker, FakeChatProvider Reviewer)> Run(Turn[] reviews,
+        params Turn[] more) => Run(false, reviews, more);
 
-    private static async Task<(List<WorkEvent> Events, FakeChatProvider Worker, FakeChatProvider Reviewer)> Run(bool shortReview,
+    private static async Task<(List<WorkEvent> Events, FakeChatProvider Worker, FakeChatProvider Reviewer)> Run(
         bool derivedFigures, Turn[] reviews, params Turn[] more)
     {
-        using var fx = new EngineFixture { ShortReview = shortReview, CheckDerivedFigures = derivedFigures };
+        using var fx = new EngineFixture { CheckDerivedFigures = derivedFigures };
         fx.Write("disks.txt", "C: 120 GB free of 500 GB");
         var worker = new FakeChatProvider(
             [Turn.Says(Plan),
@@ -39,8 +39,7 @@ public sealed class AStepIsGivenOneShortVerdictTests
              Turn.Says("The report is right."),
              .. more]) { WhenExhausted = Turn.Says("Done.") };
         var reviewer = new FakeChatProvider(reviews);
-        var events = await fx.RunAsync(fx.Build(worker, EngineFixture.Role("developer"), router: Routers.WithReviewer(), reviewProvider: reviewer,
-            checkSoundness: true), "check the disks and write a report");
+        var events = await fx.RunAsync(fx.Build(worker, EngineFixture.Role("developer"), router: Routers.WithReviewer(), reviewProvider: reviewer), "check the disks and write a report");
         return (events, worker, reviewer);
     }
 
@@ -48,7 +47,7 @@ public sealed class AStepIsGivenOneShortVerdictTests
     [Fact]
     public async Task Every_step_passed_is_the_task_done()
     {
-        var (events, _, reviewer) = await Run(true, [Pass(), Pass("the report matches the listing", 3)]);
+        var (events, _, reviewer) = await Run([Pass(), Pass("the report matches the listing", 3)]);
 
         Assert.True(events.Has(EventKind.TaskCompleted), events.Text());
         Assert.Equal(2, reviewer.Requests.Count);                                                  // one per step, none after
@@ -63,7 +62,7 @@ public sealed class AStepIsGivenOneShortVerdictTests
     [Fact]
     public async Task A_fail_says_what_to_put_right_and_the_step_is_done_again()
     {
-        var (events, worker, _) = await Run(true, [Fail("the report does not say how big the disk is"), Pass(), Pass(call: 3)],
+        var (events, worker, _) = await Run([Fail("the report does not say how big the disk is"), Pass(), Pass(call: 3)],
             Turn.Calls1("write_file", """{"path":"report.md","content":"C: 120 GB free of 500 GB total"}""", "w2"), Turn.Says("Added the size."));
 
         Assert.True(events.Has(EventKind.TaskCompleted), events.Text());
@@ -73,7 +72,7 @@ public sealed class AStepIsGivenOneShortVerdictTests
     [Fact]
     public async Task A_pass_that_cites_nothing_shown_is_corrected()
     {
-        var (events, _, reviewer) = await Run(true, [Pass(call: 99), Pass(), Pass(call: 3)]);
+        var (events, _, reviewer) = await Run([Pass(call: 99), Pass(), Pass(call: 3)]);
 
         Assert.True(events.Has(EventKind.TaskCompleted), events.Text());
         Assert.Contains("call 99 is not in the evidence shown", reviewer.Requests[1].Messages.Last().Content, StringComparison.Ordinal);
@@ -90,7 +89,7 @@ public sealed class AStepIsGivenOneShortVerdictTests
     [Fact]
     public async Task A_file_the_calls_work_with_but_the_step_did_not_write_costs_no_second_round()
     {
-        var (events, _, reviewer) = await Run(true, [Pass(), PassCiting("report.md")]);
+        var (events, _, reviewer) = await Run([Pass(), PassCiting("report.md")]);
 
         Assert.True(events.Has(EventKind.TaskCompleted), events.Text());
         Assert.Equal(2, reviewer.Requests.Count);
@@ -100,7 +99,7 @@ public sealed class AStepIsGivenOneShortVerdictTests
     [Fact]
     public async Task A_file_no_call_mentions_still_goes_back()
     {
-        var (events, _, reviewer) = await Run(true, [Pass(), PassCiting("summary.md"), Pass(call: 3)]);
+        var (events, _, reviewer) = await Run([Pass(), PassCiting("summary.md"), Pass(call: 3)]);
 
         Assert.True(events.Has(EventKind.TaskCompleted), events.Text());
         Assert.Equal(3, reviewer.Requests.Count);
@@ -111,7 +110,7 @@ public sealed class AStepIsGivenOneShortVerdictTests
     [Fact]
     public async Task A_pass_citing_only_a_file_not_shown_still_goes_back()
     {
-        var (_, _, reviewer) = await Run(true,
+        var (_, _, reviewer) = await Run(
             [Pass(), Turn.Says("""{"verdict":"pass","reason":"the report is right","calls":[],"files":["report.md"]}"""), Pass(call: 3)]);
 
         Assert.Equal(3, reviewer.Requests.Count);
@@ -121,7 +120,7 @@ public sealed class AStepIsGivenOneShortVerdictTests
     [Fact]
     public async Task A_review_that_cannot_answer_leaves_the_step_unconfirmed()
     {
-        var (events, _, _) = await Run(true, [Turn.Says("looks fine"), Turn.Says("still fine"), Pass(call: 3)]);
+        var (events, _, _) = await Run([Turn.Says("looks fine"), Turn.Says("still fine"), Pass(call: 3)]);
 
         Assert.Equal(StepOutcomeKind.DoneUnverified, events.First(e => e.Kind == EventKind.StepCompleted).StepOutcome());
     }
@@ -130,7 +129,7 @@ public sealed class AStepIsGivenOneShortVerdictTests
     [Fact]
     public async Task What_is_not_complete_is_listed()
     {
-        var (events, _, _) = await Run(true, [Fail("the report is empty"), Fail("the report is still empty")]);
+        var (events, _, _) = await Run([Fail("the report is empty"), Fail("the report is still empty")]);
 
         Assert.Equal(RunOutcomeKind.Failed, events.Last().Outcome());
         var reason = events.Last().OutcomeReason()!;
@@ -149,7 +148,7 @@ public sealed class AStepIsGivenOneShortVerdictTests
     [InlineData(false)]
     public async Task A_derived_figure_is_worked_out_by_the_review_when_switched_on(bool on)
     {
-        var (_, _, reviewer) = await Run(true, on, [Pass(), Pass("the report matches the listing", 3)]);
+        var (_, _, reviewer) = await Run(on, [Pass(), Pass("the report matches the listing", 3)]);
 
         var instruction = reviewer.Requests[0].Messages[0].Content!;
         Assert.Equal(on, instruction.Contains("a total, a difference, a percentage, an average - is a claim too", StringComparison.Ordinal));
@@ -163,7 +162,7 @@ public sealed class AStepIsGivenOneShortVerdictTests
     [Fact]
     public async Task The_review_is_told_a_change_the_request_did_not_ask_for_is_not_a_detail()
     {
-        var (_, _, reviewer) = await Run(true, [Pass(), Pass("the report matches the listing", 3)]);
+        var (_, _, reviewer) = await Run([Pass(), Pass("the report matches the listing", 3)]);
 
         var instruction = reviewer.Requests[0].Messages[0].Content!;
         Assert.Contains("A change the step made that the request did not ask for is not a detail", instruction, StringComparison.Ordinal);
@@ -174,18 +173,11 @@ public sealed class AStepIsGivenOneShortVerdictTests
     [Fact]
     public async Task The_review_is_told_nothing_to_do_rests_on_a_call_that_looked()
     {
-        var (_, _, reviewer) = await Run(true, [Pass(), Pass("the report matches the listing", 3)]);
+        var (_, _, reviewer) = await Run([Pass(), Pass("the report matches the listing", 3)]);
 
         var instruction = reviewer.Requests[0].Messages[0].Content!;
         Assert.Contains("A step that reports nothing needed doing", instruction, StringComparison.Ordinal);
         Assert.Contains("call it made shows it looked and found so; with no such call, it fails.", instruction, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public async Task Off_the_step_review_is_the_one_before()
-    {
-        var (_, _, reviewer) = await Run(false, [Verdicts.Pass(), Verdicts.Pass()]);
-
-        Assert.DoesNotContain("THIS STEP (1)", string.Join("\n", reviewer.Requests[0].Messages.Select(m => m.Content)), StringComparison.Ordinal);
-    }
 }

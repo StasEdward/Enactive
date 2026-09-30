@@ -260,43 +260,6 @@ public sealed class StructuredOutputTests
 
     // ── the reviewer asks for one, and still does not trust it ──────────────
 
-    /// <summary>The reviewer asks every provider for the verdict shape.</summary>
-    [Fact]
-    public void The_reviewer_asks_for_the_verdict_shape()
-    {
-        Assert.Contains("verdict", Reviewer.VerdictSchema);
-        Assert.Contains("\"enum\"", Reviewer.VerdictSchema);
-        Assert.Contains("notes", Reviewer.VerdictSchema);
-
-        // It has to BE a schema, or every adapter quietly drops it.
-        var parsed = System.Text.Json.JsonDocument.Parse(Reviewer.VerdictSchema);
-        Assert.Equal(System.Text.Json.JsonValueKind.Object, parsed.RootElement.ValueKind);
-    }
-
-    /// <summary>
-    /// And it actually asks: the review request carries the schema, so a provider that can hold the
-    /// model to it gets the chance. Without this the constant above would be decoration.
-    /// </summary>
-    [Fact]
-    public async Task The_review_request_carries_the_schema()
-    {
-        using var fx = new EngineFixture { ShortReview = false };
-
-        var agent = new FakeChatProvider(
-            Turn.Says("""{"disposition":"quick_action","title":"do the thing"}"""),
-            Turn.Calls1("write_file", """{"path":"a.txt","content":"x"}"""),
-            Turn.Says("Done."));
-
-        var reviewer = new FakeChatProvider(Verdicts.Pass());
-
-        await fx.RunAsync(
-            fx.Build(agent, router: Routers.WithReviewer(), reviewProvider: reviewer),
-            "do the thing");
-
-        var review = Assert.Single(reviewer.Requests);
-        Assert.Equal(Reviewer.VerdictSchema, review.ResponseSchema);
-    }
-
     /// <summary>
     /// And the PLANNER does not, deliberately. §9c: the planner is the one place where the quality
     /// of the reasoning matters more than the shape of the answer, and constrained decoding on a
@@ -317,32 +280,4 @@ public sealed class StructuredOutputTests
         Assert.All(planner.Requests, r => Assert.Null(r.ResponseSchema));
     }
 
-    /// <summary>
-    /// The one that matters most. A provider that IGNORES the schema and answers prose is exactly
-    /// where this was before, and the reviewer must behave exactly as it did: re-ask, and on a
-    /// second unreadable answer fail closed. A schema makes the bad path rarer, never absent.
-    /// </summary>
-    [Fact]
-    public async Task A_provider_that_ignores_the_schema_still_fails_closed()
-    {
-        using var fx = new EngineFixture { ShortReview = false };
-
-        var agent = new FakeChatProvider(
-            Turn.Says("""{"disposition":"quick_action","title":"do the thing"}"""),
-            Turn.Calls1("write_file", """{"path":"a.txt","content":"x"}"""),
-            Turn.Says("Done."));
-
-        // Prose, twice - a model that was handed a schema and paid it no attention.
-        var reviewer = new FakeChatProvider(Turn.Says("Looks fine to me."))
-        {
-            WhenExhausted = Turn.Says("Still looks fine.")
-        };
-
-        var events = await fx.RunAsync(
-            fx.Build(agent, router: Routers.WithReviewer(), reviewProvider: reviewer),
-            "do the thing");
-
-        Assert.NotEqual(RunOutcomeKind.Completed, events.Last().Outcome());
-        Assert.Contains(events, e => (e.Summary ?? "").Contains("did not return a verdict"));
-    }
 }

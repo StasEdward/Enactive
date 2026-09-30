@@ -24,7 +24,7 @@ public sealed class RunCompositionRefactorTests
         var provider = new FakeChatProvider(
             Turn.Says("""{"disposition":"quick_action","title":"write","steps":[]}"""),
             Turn.Calls1("write_file", """{"path":"result.txt","content":"kept"}"""), Turn.Says("done"));
-        var settings = new AppSettings { ProposeChecks = false, CheckSoundness = false,
+        var settings = new AppSettings { ProposeChecks = false,
             GenerationBudgets = new(Action: 1234) };
         var options = RunEngineOptions.Capture(settings);
         settings.GenerationBudgets = new(Action: 9999);

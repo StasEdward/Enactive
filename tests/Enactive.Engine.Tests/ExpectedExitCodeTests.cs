@@ -245,19 +245,4 @@ public sealed class ExpectedExitCodeTests
         Assert.True(schema.RootElement.GetProperty("properties").TryGetProperty("expectedExitCodes", out _));
     }
 
-    /// <summary>
-    /// The reviewer is told too. Without this it reads "exit code 1" in the output and fails the
-    /// step by its own rule — which would put the run back exactly where it started.
-    /// </summary>
-    [Fact]
-    public void The_reviewer_is_told_what_a_declaration_does_and_does_not_excuse()
-    {
-        var instructions = Enactive.Agents.Reviewer.ExecutionSystemPrompt;
-
-        Assert.Contains("expectedExitCodes", instructions, StringComparison.Ordinal);
-        Assert.Contains("reporting, not", instructions, StringComparison.Ordinal);
-        // And what remains a finding.
-        Assert.Contains("a declaration that does not fit the command", instructions, StringComparison.Ordinal);
-        Assert.Contains("contradicts the output", instructions, StringComparison.Ordinal);
-    }
 }

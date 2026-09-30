@@ -44,19 +44,17 @@ public sealed class AReadOnlyStepChangesNothingTests
         Assert.DoesNotContain("This step is READ-ONLY", secondInstruction[secondInstruction.LastIndexOf("Proceed with this step", StringComparison.Ordinal)..], StringComparison.Ordinal);
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task The_reviewer_of_a_read_only_step_is_told_it_was_planned_to_change_nothing(bool shortReview)
+    [Fact]
+    public async Task The_reviewer_of_a_read_only_step_is_told_it_was_planned_to_change_nothing()
     {
-        using var fx = new EngineFixture { ShortReview = shortReview };
+        using var fx = new EngineFixture();
         fx.Write("invoices/a.txt", "total: 10");
         var worker = new FakeChatProvider(
             Turn.Says(Plan),
             Turn.Calls1("read_file", """{"path":"invoices/a.txt"}""", "r1"),
             Turn.Says("a.txt: the total should be 12."),
             Turn.Says("Nothing to correct after all."));
-        var reviewer = shortReview ? new FakeChatProvider(Turn.Says("""{"verdict":"pass","reason":"the step did its part","calls":[1],"files":[]}"""), Turn.Says("""{"verdict":"pass","reason":"the step did its part","calls":[1],"files":[]}""")) : new FakeChatProvider(Verdicts.Pass(), Verdicts.Pass());
+        var reviewer = new FakeChatProvider(Turn.Says("""{"verdict":"pass","reason":"the step did its part","calls":[1],"files":[]}"""), Turn.Says("""{"verdict":"pass","reason":"the step did its part","calls":[1],"files":[]}"""));
 
         await fx.RunAsync(fx.Build(worker, EngineFixture.Role("developer"), router: Routers.WithReviewer(), reviewProvider: reviewer),
             "check the invoices and correct the totals");

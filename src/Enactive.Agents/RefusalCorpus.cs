@@ -8,8 +8,7 @@ using System.Text.Json.Serialization;
 /// <summary>
 /// Where a validator's refusals are written down, one file each, with exactly what the validator
 /// saw - so the refusal can be replayed offline against the same validator instead of rediscovered
-/// by a run of several minutes. Shared by every validator that keeps a corpus: the combined review
-/// (<see cref="ReviewCorpus"/>) and the planner's verification contract (<see cref="PlanCheckCorpus"/>).
+/// by a run of several minutes. Kept by the planner's verification contract (<see cref="PlanCheckCorpus"/>).
 ///
 /// <para>Only refusals are kept. They are the blocker, they are rare, and a file per accepted answer
 /// would grow the workspace for nothing anybody replays.</para>

@@ -61,25 +61,6 @@ public sealed class ToolPurposeTests
     }
 
     [Theory]
-    [InlineData(ToolKind.Relocate, true)]
-    [InlineData(ToolKind.Unknown, false)]
-    [InlineData(ToolKind.Command, true)]
-    public async Task Review_mode_uses_declared_purpose_for_renamed_tool(ToolKind kind, bool executionReview)
-    {
-        using var fx = new EngineFixture { ShortReview = false };
-        var inner = new WriteFileTool();
-        fx.ToolsOverride = [new Alias(inner, inner.Definition with { Name = "custom_action", Kind = kind })];
-        var provider = new FakeChatProvider(
-            Turn.Says("""{"disposition":"quick_action","title":"work"}"""),
-            Turn.Calls1("custom_action", """{"path":"result.txt","content":"hello"}"""), Turn.Says("done"));
-        var reviewer = new FakeChatProvider() { WhenExhausted = Turn.Says("""{"verdict":"PASS","notes":"ok"}""") };
-        await fx.RunAsync(fx.Build(provider, EngineFixture.WorkerWith("custom_action"), reviewProvider: reviewer, router: Routers.WithReviewer()), "work");
-        Assert.NotEmpty(reviewer.Requests);
-        Assert.Equal(executionReview ? Reviewer.ExecutionSystemPrompt : Reviewer.ContentSystemPrompt,
-            reviewer.Requests[0].Messages[0].Content);
-    }
-
-    [Theory]
     [InlineData(0)]
     [InlineData(1)]
     [InlineData(2)]

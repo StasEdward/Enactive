@@ -135,7 +135,7 @@ public sealed class TaskRestrictionTests
     [Fact]
     public async Task The_short_review_is_told_what_the_request_forbids()
     {
-        using var fx = new EngineFixture { PlannerOverride = new Planner(), ShortReview = true };
+        using var fx = new EngineFixture { PlannerOverride = new Planner() };
         fx.Write("a.txt", "original");
         var planner = new FakeChatProvider(
             Turn.Says("""{"disposition":"quick_action","title":"restore"}"""),

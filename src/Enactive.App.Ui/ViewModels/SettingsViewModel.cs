@@ -141,8 +141,6 @@ internal sealed partial class SettingsViewModel : ObservableObject
     private bool _disableThinking;
     private bool _verifyWrites;
     private bool _allowImplicitToolCalls;
-    private bool _reviewContent;
-    private bool _checkSoundness;
     private string _reviewRetriesText = "1";
     private bool _revertRejectedSteps;
     private string _maxParallelStepsText;
@@ -304,8 +302,6 @@ internal sealed partial class SettingsViewModel : ObservableObject
         _disableThinking = _working.DisableThinking;
         _verifyWrites = _working.VerifyWrites;
         _allowImplicitToolCalls = _working.AllowImplicitToolCalls;
-        _reviewContent = _working.ReviewContent;
-        _checkSoundness = _working.CheckSoundness;
         _reviewRetriesText = _working.ReviewRetries.ToString();
         _revertRejectedSteps = _working.RevertRejectedSteps;
         _maxParallelStepsText = _working.MaxParallelSteps.ToString();
@@ -383,8 +379,6 @@ internal sealed partial class SettingsViewModel : ObservableObject
     public bool DisableThinking { get => _disableThinking; set => Set(ref _disableThinking, value); }
     public bool VerifyWrites { get => _verifyWrites; set => Set(ref _verifyWrites, value); }
     public bool AllowImplicitToolCalls { get => _allowImplicitToolCalls; set => Set(ref _allowImplicitToolCalls, value); }
-    public bool ReviewContent { get => _reviewContent; set => Set(ref _reviewContent, value); }
-    public bool CheckSoundness { get => _checkSoundness; set => Set(ref _checkSoundness, value); }
     public string ReviewRetriesText { get => _reviewRetriesText; set => Set(ref _reviewRetriesText, value); }
     public bool RevertRejectedSteps { get => _revertRejectedSteps; set => Set(ref _revertRejectedSteps, value); }
     public string MaxParallelStepsText { get => _maxParallelStepsText; set => Set(ref _maxParallelStepsText, value); }
@@ -571,8 +565,6 @@ internal sealed partial class SettingsViewModel : ObservableObject
         _working.DisableThinking = DisableThinking;
         _working.VerifyWrites = VerifyWrites;
         _working.AllowImplicitToolCalls = AllowImplicitToolCalls;
-        _working.ReviewContent = ReviewContent;
-        _working.CheckSoundness = CheckSoundness;
         // Clamped here as well as in the orchestrator: what is saved should be what will be used, or
         // the settings window shows one number while the engine quietly runs another.
         _working.ReviewRetries = int.TryParse(ReviewRetriesText.Trim(), out var r) ? Math.Clamp(r, 0, 5) : 1;

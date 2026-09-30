@@ -19,51 +19,6 @@ public sealed class TheReviewerSeesTheRequestTests
 
     // ── the prompt builders ──────────────────────────────────────────────────
 
-    [Fact]
-    public void An_execution_prompt_quotes_the_request_when_given()
-    {
-        var prompt = Reviewer.BuildExecutionUserPrompt(
-            "Write new tests in existing style", "Wrote 4 tests.", "-> dotnet test\n<- exit code 0",
-            NoArtifacts, request: "Run the tests with THAT command and no other.");
-
-        Assert.Contains("ORIGINAL REQUEST", prompt, StringComparison.Ordinal);
-        Assert.Contains("Run the tests with THAT command and no other.", prompt, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void A_content_prompt_quotes_the_request_when_given()
-    {
-        var files = new[] { new WrittenFile("guide.md", "Install the package.", 21) };
-
-        var prompt = Reviewer.BuildContentUserPrompt(
-            "Write the guide", "Wrote it.", files, request: "Every page must cite its source.");
-
-        Assert.Contains("Every page must cite its source.", prompt, StringComparison.Ordinal);
-    }
-
-    /// <summary>THE BOUNDARY. Nothing is invented when the caller has no request text.</summary>
-    [Fact]
-    public void Nothing_is_added_when_no_request_is_given()
-    {
-        var prompt = Reviewer.BuildExecutionUserPrompt(
-            "a step", "did it", "-> run_command\n<- exit code 0", NoArtifacts);
-
-        Assert.DoesNotContain("ORIGINAL REQUEST", prompt, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void A_huge_request_keeps_requirements_after_the_old_cutoff()
-    {
-        var huge = new string('x', 10_000) + "\nEvery new test must be checked by mutation.";
-
-        var prompt = Reviewer.BuildExecutionUserPrompt(
-            "a step", "did it", "-> run_command\n<- exit code 0", NoArtifacts, request: huge);
-
-        Assert.Contains("Every new test must be checked by mutation.", prompt, StringComparison.Ordinal);
-        Assert.Contains("O002", prompt);
-        Assert.DoesNotContain("cut here", prompt, StringComparison.Ordinal);
-    }
-
     // ── through a real run ───────────────────────────────────────────────────
 
     [Fact]

@@ -227,70 +227,22 @@ public sealed class MapProviderFactory : IChatProviderFactory
         => _byId.TryGetValue(providerId, out var provider) ? provider : _fallback;
 }
 
-/// <summary>A reviewer script: the verdict shape <see cref="Reviewer"/> parses.</summary>
+/// <summary>A reviewer script: the verdict shape <see cref="StepVerdictReview"/> reads.</summary>
 public static class Verdicts
 {
-    public static Turn Combined(Turn proof, string scope = "S1", params string[] ids)
-    {
-        var p = System.Text.Json.Nodes.JsonNode.Parse(proof.Text!)!;
-        var claims = new System.Text.Json.Nodes.JsonArray();
-        foreach (var id in ids.Length == 0 ? new[] { "O001" } : ids)
-        {
-            var claim = p.DeepClone().AsObject();
-            if (claim["shown"]!.GetValue<string>() == "nothing-to-do")
-                claim["shown"] = "yes"; // Whole-step no-op proof is separate from requirement evidence.
-            claim["id"] = id;
-            claim["scope"] = scope;
-            var requirement = claim.DeepClone().AsObject();
-            requirement.Remove("id");
-            requirement["requirement"] = "Requirement for " + id;
-            requirement["global"] = false;
-            requirement["verification"] = System.Text.Json.Nodes.JsonNode.Parse("""
-                {"verdict":"not-applicable","reason":"This fixture reviews work without a separate test obligation","detects":"","assertions":[]}
-                """);
-            requirement["prohibitions"] = new System.Text.Json.Nodes.JsonArray();
-            claim["requirements"] = new System.Text.Json.Nodes.JsonArray(requirement);
-            claims.Add(claim);
-        }
-        return Turn.Says(new System.Text.Json.Nodes.JsonObject {
-            ["verdict"] = "pass", ["notes"] = "checked", ["proof"] = p,
-            ["assessments"] = System.Text.Json.Nodes.JsonNode.Parse("""
-                {"implementation":{"verdict":"pass","reason":"Implementation checked"},
-                 "verification":{"verdict":"pass","reason":"Verification checked"},
-                 "report":{"verdict":"pass","reason":"Report checked"}}
-                """),
-            ["claims"] = claims, ["need_evidence"] = new System.Text.Json.Nodes.JsonArray(),
-            ["repairs"] = new System.Text.Json.Nodes.JsonArray(),
-            ["report_checks"] = new System.Text.Json.Nodes.JsonArray(),
-            ["command_reports"] = new System.Text.Json.Nodes.JsonArray()
-        }.ToJsonString());
-    }
-    public static System.Text.Json.Nodes.JsonObject Repair(string finding, string defect,
-        string change = "Correct the identified requirement", string source = "", string fragment = "")
-        => new() {
-            ["findings"] = new System.Text.Json.Nodes.JsonArray(finding),
-            ["target"] = source == "" ? "work" : "source", ["source_id"] = source, ["fragment_id"] = fragment,
-            ["defect"] = defect, ["change"] = change,
-            ["obligation_ids"] = new System.Text.Json.Nodes.JsonArray("O001")
-        };
     public const string ProviderId = "review";
     public const string Model = "reviewer-model";
 
-    /// <summary>
-    /// A fail. Asked by the short step review (StepVerdictReview), it is that review's fail, the notes its reason.
-    /// </summary>
+    /// <summary>A fail: the reason is the notes.</summary>
     public static Turn Fail(string notes = "the evidence does not support the claim")
-        => Turn.Says($$"""{"verdict":"fail","notes":"{{notes}}"}""") with
-        {
-            Adapt = r => IsStepVerdict(r) ? ShortVerdict("fail", notes, [], []) : null
-        };
+        => Turn.Says(ShortVerdict("fail", notes, [], []));
 
     /// <summary>
-    /// A pass. Asked by the short step review, it is that review's pass, citing what it was shown: the calls, or where
-    /// there are none, the files - a pass there must cite what shows the step done, and the test means only "it passes".
+    /// A pass, citing what the review was shown: the calls, or where there are none, the files. A pass must cite what
+    /// shows the step done, and a test that scripts one means only "it passes" - so it is put as the request asks.
     /// </summary>
     public static Turn Pass(string notes = "looks right")
-        => Turn.Says($$"""{"verdict":"pass","notes":"{{notes}}"}""") with
+        => Turn.Says(ShortVerdict("pass", notes, [], [])) with
         {
             Adapt = r => IsStepVerdict(r) ? ShortPass(r, notes) : null
         };
@@ -322,36 +274,6 @@ public static class Verdicts
                 if (!m.Groups[1].Value.StartsWith("as it is now", StringComparison.Ordinal)) files.Add(m.Groups[1].Value);
         return ShortVerdict("pass", reason, calls, files);
     }
-
-    // ── the proof pass ──────────────────────────────────────────────────────
-    //
-    // A second turn on the SAME provider, asked only of a step the verdict above already passed.
-    // A test that switches soundness on scripts a Pass and then one of these.
-
-    /// <summary>"The evidence shows it, and here is which call shows it."</summary>
-    public static Turn Shown(string what = "the command ran and succeeded", params int[] calls)
-        => Turn.Says($$"""
-            {"shown":"yes","calls":[{{string.Join(",", calls)}}],"what":"{{what}}"}
-            """);
-
-    /// <summary>"A call could have shown it, and none of these does." The defect this pass exists for.</summary>
-    public static Turn NotShown(string what = "the test named in the report is still failing")
-        => Turn.Says($$"""{"shown":"no","calls":[],"what":"{{what}}"}""");
-
-    /// <summary>"No tool call settles this." An analysis, a document, a judgement.</summary>
-    public static Turn NotByAnyCall(string what = "this step's work was reading and reasoning")
-        => Turn.Says($$"""{"shown":"not-by-any-call","calls":[],"what":"{{what}}"}""");
-
-    /// <summary>
-    /// "The objective was conditional and the calls show it did not need doing." Takes call numbers
-    /// like <see cref="Shown"/> and for the same reason: unlike NotByAnyCall this answer is audited,
-    /// because nothing needing doing is a finding.
-    /// </summary>
-    public static Turn NothingToDo(string what = "the file already says what the code does",
-                                   params int[] calls)
-        => Turn.Says($$"""
-            {"shown":"nothing-to-do","calls":[{{string.Join(",", calls)}}],"what":"{{what}}"}
-            """);
 }
 
 /// <summary>Model routing for a test: by default nothing is bound, so there is no reviewer.</summary>
@@ -472,10 +394,7 @@ public sealed class EngineFixture : IDisposable
     public bool DynamicSteps { get; set; }
     public bool ValidateWaves { get; set; }
     public bool ReportBlocked { get; set; }
-    public bool TaskReview { get; set; }
     public bool SemanticCriteria { get; set; }
-    /// <summary>One short verdict per step, as shipped (AppSettings.ShortReview). A test of the earlier review sets it false.</summary>
-    public bool ShortReview { get; set; } = true;
     public bool CheckDerivedFigures { get; set; }
 
     /// <summary>Where wave captures are kept: beside this fixture's folder, never in the machine's own store.</summary>
@@ -603,7 +522,6 @@ public sealed class EngineFixture : IDisposable
         IModelRouter? router = null,
         IChatProvider? reviewProvider = null,
         int reviewRetries = 1,
-        bool reviewContent = true,
         bool revertRejectedSteps = true,
         IReadOnlyList<SuccessCriterionDefinition>? successCriteria = null,
         ExecutionLimits? limits = null,
@@ -613,15 +531,14 @@ public sealed class EngineFixture : IDisposable
         int successRetries = 0,
         IRunCheckpointStore? checkpoints = null,
         RunSettings? settings = null,
-        bool checkSoundness = false,
         IReadOnlyList<Worker>? team = null)
         => Build(
             reviewProvider is null
                 ? new SingleProviderFactory(provider)
                 : new MapProviderFactory(provider, (Verdicts.ProviderId, reviewProvider)),
-            worker, policy, artifacts, allowImplicitToolCalls, router, reviewRetries, reviewContent,
+            worker, policy, artifacts, allowImplicitToolCalls, router, reviewRetries,
             revertRejectedSteps, successCriteria, limits, maxParallelSteps, evidenceBudget, successRetries,
-            decisions, checkpoints, settings, checkSoundness, team);
+            decisions, checkpoints, settings, team);
 
     public Orchestrator Build(
         IChatProviderFactory providers,
@@ -631,7 +548,6 @@ public sealed class EngineFixture : IDisposable
         bool allowImplicitToolCalls = false,
         IModelRouter? router = null,
         int reviewRetries = 1,
-        bool reviewContent = true,
         bool revertRejectedSteps = true,
         IReadOnlyList<SuccessCriterionDefinition>? successCriteria = null,
         ExecutionLimits? limits = null,
@@ -651,11 +567,6 @@ public sealed class EngineFixture : IDisposable
         // test written before resume existed expects.
         IRunCheckpointStore? checkpoints = null,
         RunSettings? settings = null,
-        // OFF by default here, unlike the shipping default. The proof pass is a SECOND call on the
-        // review provider, so leaving it on would silently add a turn to every review script in the
-        // suite - and a test that says nothing about soundness should get the shape it was written
-        // for. Same reasoning as successRetries above.
-        bool checkSoundness = false,
         // The whole TEAM, when a test needs to say what it is. Left out, the worker under test is
         // surrounded by the shipped roles - see TeamAround for why that is the honest default.
         IReadOnlyList<Worker>? team = null)
@@ -685,7 +596,6 @@ public sealed class EngineFixture : IDisposable
             router: router,
             reviewRetries: reviewRetries,
             allowImplicitToolCalls: allowImplicitToolCalls,
-            reviewContent: reviewContent,
             revertRejectedSteps: revertRejectedSteps,
             successCriteria: successCriteria,
             limits: limits,
@@ -694,10 +604,9 @@ public sealed class EngineFixture : IDisposable
             successRetries: successRetries,
             checkpoints: checkpoints,
             settings: settings,
-            checkSoundness: checkSoundness,
             ecosystems: EcosystemsOverride,
             stepOutputs: StepOutputs, typedCriteria: TypedCriteria, dynamicSteps: DynamicSteps, fanOut: FanOut, validateWaves: ValidateWaves,
-            waveStore: WaveStore, reportBlocked: ReportBlocked, taskReview: TaskReview, semanticCriteria: SemanticCriteria, shortReview: ShortReview, checkDerivedFigures: CheckDerivedFigures);
+            waveStore: WaveStore, reportBlocked: ReportBlocked, semanticCriteria: SemanticCriteria, checkDerivedFigures: CheckDerivedFigures);
     }
 
     /// <summary>Runs one intent to completion and returns every event it produced.</summary>

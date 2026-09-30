@@ -36,25 +36,6 @@ public static class SettingsAdvice
         "Reading a file back after writing catches a weak model inventing content. It's an extra "
         + "call per write, so turn it off when you mostly run strong models.";
 
-    public const string ReviewContent =
-        "A step that only writes a document has no exit code to check, so the ordinary review has "
-        + "nothing to look at and passes anything. With this on, the reviewer reads the text "
-        + "instead and fails invented package names, made-up command syntax, wrong ports and "
-        + "corrupted identifiers. Needs a Review model bound under AI · Phases; costs one reviewer "
-        + "call on the written text.";
-
-    public const string CheckSoundness =
-        "The reviewer checks whether a step's report is TRUE. A report can be true in every "
-        + "particular while its conclusion follows from none of it — a fix reported over a test "
-        + "that was already failing, and stayed failing, passes honestly and the run finishes "
-        + "green.\n\n"
-        + "This asks a second question: which calls SHOW the objective was met? The answer is a "
-        + "list of call numbers, and the engine looks them up rather than believing them — a call "
-        + "that was never made, or one that failed, does not prove anything. A step whose work was "
-        + "reading, analysing or writing has nothing to cite and is never held to it.\n\n"
-        + "Needs a Review model. Verdict and proof normally share one response; a second call is used "
-        + "only for clarification or additional evidence. Citation checks do not themselves prove semantic coverage.";
-
     public const string RevertRejectedSteps =
         "When the reviewer rejects a step for good, undo what it wrote. Otherwise the run says "
         + "Failed while the rejected version stays in your workspace — which is the one you would "
@@ -116,8 +97,6 @@ public static class SettingsAdvice
         (nameof(GlobalInstructions), GlobalInstructions),
         (nameof(DisableThinking), DisableThinking),
         (nameof(VerifyWrites), VerifyWrites),
-        (nameof(ReviewContent), ReviewContent),
-        (nameof(CheckSoundness), CheckSoundness),
         (nameof(RevertRejectedSteps), RevertRejectedSteps),
         (nameof(ReviewRetries), ReviewRetries),
         (nameof(AllowImplicitToolCalls), AllowImplicitToolCalls),

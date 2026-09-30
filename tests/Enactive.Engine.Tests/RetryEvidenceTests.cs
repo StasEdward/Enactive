@@ -165,36 +165,6 @@ public sealed class RetryEvidenceTests
     }
 
     /// <summary>
-    /// A CONTENT review is the other case and keeps its old behaviour: the rejected draft is
-    /// discarded from the transcript, so it leaves the evidence with it. Judging a rewrite against
-    /// the version it replaced is the failure that rule prevents, and this fix does not undo it.
-    /// </summary>
-    [Fact]
-    public async Task A_discarded_draft_stays_out_of_the_evidence()
-    {
-        using var fx = new EngineFixture { ShortReview = false };
-
-        var agent = new FakeChatProvider(
-            Turn.Says(QuickAction),
-            Turn.Calls1("write_file", """{"path":"g.md","content":"FIRST DRAFT"}"""),
-            Turn.Says("Wrote it."),
-            Turn.Calls1("write_file", """{"path":"g.md","content":"CORRECTED VERSION"}""", "c2"),
-            Turn.Says("Fixed it."));
-
-        var reviewer = new FakeChatProvider(Verdicts.Fail("that is wrong"), Verdicts.Pass());
-
-        await fx.RunAsync(
-            fx.Build(agent, EngineFixture.Role("writer"),
-                     router: Routers.WithReviewer(), reviewProvider: reviewer),
-            "write the guide");
-
-        var second = reviewer.Requests[1].Messages.Last().Content ?? "";
-
-        Assert.Contains("CORRECTED VERSION", second, StringComparison.Ordinal);
-        Assert.DoesNotContain("FIRST DRAFT", second, StringComparison.Ordinal);
-    }
-
-    /// <summary>
     /// A reviewer that applies both of the rules the one in the log applied, reading the prompt
     /// rather than following a script — so it cannot be satisfied by the fix merely having run.
     ///

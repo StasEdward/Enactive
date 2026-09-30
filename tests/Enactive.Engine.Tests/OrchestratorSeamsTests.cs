@@ -18,28 +18,24 @@ public sealed class OrchestratorSeamsTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Common_factory_uses_injected_reviewer_and_success_evaluator_for_quick_and_dag(bool dag)
+    public async Task Common_factory_uses_injected_success_evaluator_for_quick_and_dag(bool dag)
     {
         using var fx = new EngineFixture();
         var provider = new FakeChatProvider(Turn.Says(dag
             ? """{"disposition":"task","title":"work","steps":[{"title":"answer","dependsOn":[]}]}"""
             : """{"disposition":"quick_action","title":"answer","steps":[]}"""), Turn.Says("answer"));
-        var reviewer = new SpyReviewer();
         var success = new SpySuccess();
         var worker = EngineFixture.WorkerWith();
         var models = new ModelResolver();
         var resources = new RunEngineResources(new SingleProviderFactory(provider), models,
             new StaticWorkerProvider([worker], worker.Id), new ToolRegistry(EngineFixture.ShippedTools()),
             fx.Artifacts, fx.Workspace, new Planner(checksAuditEnabled: false), new PermissionEngine(), fx.Decisions,
-            PermissionPolicy.PermissiveDefault, new Services(), Routers.WithReviewer(),
-            new OrchestratorServices(reviewer, success));
+            PermissionPolicy.PermissiveDefault, new Services(), new ModelRouter(models),
+            new OrchestratorServices(success));
         var criteria = new[] { new SuccessCriterionDefinition("check", "must never execute") };
-        var options = RunEngineOptions.Capture(new AppSettings
-            // The injected step reviewer is the one the earlier review goes through; the short verdict is its own call.
-            { ProposeChecks = false, CheckSoundness = false, SuccessRetries = 0, ReviewRetries = 0, ShortReview = false });
+        var options = RunEngineOptions.Capture(new AppSettings { ProposeChecks = false, SuccessRetries = 0, ReviewRetries = 0 });
         var events = await fx.RunAsync(RunEngineComposition.Build(resources, options, successCriteria: criteria), "answer");
         Assert.Equal(RunOutcomeKind.Completed, events.Last().Outcome());
-        Assert.Equal(1, reviewer.Calls);
         Assert.True(success.Calls > 0);
         Assert.Equal(criteria, success.Criteria);
         // Only planning and worker use the real provider; injected components handle their phases.
@@ -69,76 +65,12 @@ public sealed class OrchestratorSeamsTests
             fx.Artifacts, fx.Workspace, new Planner(checksAuditEnabled: false), new PermissionEngine(), fx.Decisions,
             PermissionPolicy.PermissiveDefault, new Services(), new ModelRouter(models),
             new OrchestratorServices(Handover: handover));
-        var options = RunEngineOptions.Capture(new AppSettings { ProposeChecks = false, CheckSoundness = false });
+        var options = RunEngineOptions.Capture(new AppSettings { ProposeChecks = false });
         var events = await fx.RunAsync(RunEngineComposition.Build(resources, options), "Inspect the files");
         Assert.Equal(RunOutcomeKind.Completed, events.Last().Outcome());
         Assert.Equal(1, handover.Calls);
         Assert.Contains(provider.Requests.Last().Messages,
             m => m.Content?.Contains("injected handover facts", StringComparison.Ordinal) == true);
-    }
-
-    [Fact]
-    public async Task Review_mode_uses_current_step_but_evidence_keeps_prior_calls()
-    {
-        var journal = new ExecutionJournal();
-        journal.Record(1, "run_command", "build", ActionOutcome.Succeeded, "built");
-        journal.Record(2, "write_file", "a.txt", ActionOutcome.Succeeded, "saved");
-        var reviewer = new SpyReviewer();
-        var stage = Stage(reviewer);
-        var result = await stage.ExecuteAsync("write", "done", journal, 0, 1, ["a.txt"],
-            [new WrittenFile("a.txt", "text")], new FakeChatProvider(), "model", default, "original request");
-        Assert.Equal(ReviewMode.Content, result.Mode);
-        Assert.False(reviewer.Combined);
-        Assert.Contains("built", reviewer.Evidence);
-        Assert.Equal("original request", reviewer.Request);
-    }
-
-    [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public async Task Relocation_is_execution_review_and_soundness_switch_is_respected(bool soundness)
-    {
-        var journal = new ExecutionJournal();
-        journal.Record(1, "copy_file", "a.txt", ActionOutcome.Succeeded, "copied");
-        var reviewer = new SpyReviewer();
-        var result = await Stage(reviewer, soundness).ExecuteAsync("copy", "done", journal, 0, 0, ["a.txt"],
-            [new WrittenFile("a.txt", "existing text")], new FakeChatProvider(), "model", default);
-        Assert.Equal(ReviewMode.Execution, result.Mode);
-        Assert.Equal(soundness, reviewer.Combined);
-    }
-
-    [Fact]
-    public async Task Combined_review_receives_visible_evidence_obligations_and_retry_budget_callback()
-    {
-        var journal = new ExecutionJournal();
-        for (var i = 0; i < 100; i++)
-            journal.Record(i + 1, "run_command", "build", ActionOutcome.Succeeded, new string('x', 150));
-        var reviewer = new SpyReviewer();
-        var obligations = RequestObligations.Create("Run exact command", "build");
-        Func<int, int, string?> retry = (_, _) => "budget reached";
-        await Stage(reviewer).ExecuteAsync("build", "done", journal, 0, 0, [], [],
-            new FakeChatProvider(), "model", default, obligations: obligations, beforeRetry: retry);
-        Assert.NotNull(reviewer.View);
-        Assert.DoesNotContain(1, reviewer.View.VisibleActionIds);
-        Assert.Same(obligations, reviewer.Obligations);
-        Assert.Same(retry, reviewer.Retry);
-    }
-
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Review_exception_is_incomplete_but_cancellation_propagates(bool cancelled)
-    {
-        var reviewer = new SpyReviewer { Error = cancelled ? new OperationCanceledException() : new IOException("offline") };
-        var operation = Stage(reviewer).ExecuteAsync("work", "done", new ExecutionJournal(), 0, 0, [], [],
-            new FakeChatProvider(), "model", default);
-        if (cancelled) await Assert.ThrowsAsync<OperationCanceledException>(() => operation);
-        else
-        {
-            var result = await operation;
-            Assert.False(result.Result.Pass);
-            Assert.Contains("offline", result.Result.IncompleteReason);
-        }
     }
 
     [Theory]
@@ -204,9 +136,6 @@ public sealed class OrchestratorSeamsTests
         Assert.StartsWith(said, result.Describe(), StringComparison.Ordinal);
     }
 
-    private static StepReview Stage(IReviewer reviewer, bool soundness = true)
-        => new(reviewer, new ToolRegistry(EngineFixture.ShippedTools()), "workspace", 1200, true, soundness);
-
     private sealed class Services : IServiceProvider { public object? GetService(Type type) => null; }
 
     private sealed class SpySuccess : ISuccessEvaluator
@@ -219,31 +148,6 @@ public sealed class OrchestratorSeamsTests
         { Calls++; Criteria = criteria; return Task.FromResult(SuccessReport.NothingToCheck); }
     }
 
-    private sealed class SpyReviewer : IReviewer
-    {
-        public int Calls;
-        public bool Combined;
-        public Exception? Error;
-        public string? Evidence, Request;
-        public EvidenceView? View;
-        public RequestObligations? Obligations;
-        public Func<int, int, string?>? Retry;
-        private Task<ReviewResult> Answer()
-        {
-            Calls++;
-            return Error is null ? Task.FromResult(new ReviewResult(true, "verified")) : Task.FromException<ReviewResult>(Error);
-        }
-        public Task<ReviewResult> ReviewAsync(string stepTitle, string coderOutput, string executionEvidence,
-            IReadOnlyList<string> artifacts, IChatProvider provider, string model, CancellationToken ct,
-            ReviewMode mode = ReviewMode.Execution, IReadOnlyList<WrittenFile>? writtenFiles = null,
-            string? request = null, RequestObligations? obligations = null)
-        { Evidence = executionEvidence; Request = request; Obligations = obligations; return Answer(); }
-        public Task<ReviewResult> ReviewWithProofAsync(string title, string report, EvidenceView evidence,
-            IReadOnlyList<string> artifacts, IReadOnlyList<WrittenFile> files, RequestObligations obligations,
-            IChatProvider provider, string model, CancellationToken ct, string? workspaceRoot = null,
-            Func<int, int, string?>? beforeRetry = null, ReviewMode mode = ReviewMode.Execution)
-        { Combined = true; View = evidence; Obligations = obligations; Retry = beforeRetry; return Answer(); }
-    }
     private sealed class SpyHandover : IHandover
     {
         public int Calls;

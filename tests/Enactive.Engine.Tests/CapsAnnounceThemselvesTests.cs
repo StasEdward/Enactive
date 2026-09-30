@@ -60,9 +60,6 @@ public sealed class CapsAnnounceThemselvesTests
         ["RunawayReply.LongestLoopChars"] = "A_paragraph_coming_round_is_a_loop_too",
         ["RunawayReply.DistinctCharsInALoop"] = "Separators_and_tables_are_not_loops",
         ["WorkspaceChanges.MaxDiffCharsKept"] = "A_huge_diff_is_kept_to_a_limit_and_says_so",
-        ["Orchestrator.MaxReviewFileChars"] = nameof(A_files_real_size_reaches_the_reviewer_from_a_real_run),
-        ["Reviewer.MaxContentCharsPerFile"] = "An_excerpt_says_so_even_when_the_caller_did_the_cutting",
-        ["Reviewer.MaxContentCharsTotal"] = nameof(Files_dropped_for_the_review_budget_are_announced),
         // The user's own request, quoted for the reviewer - see TheReviewerSeesTheRequestTests.
         ["SuccessEvaluator.MaxDetailChars"] = nameof(A_criterions_output_says_how_much_of_it_is_shown),
         ["ProcessExec.MaxOutputChars"] = nameof(Command_output_past_the_cap_says_it_was_truncated),
@@ -116,9 +113,6 @@ public sealed class CapsAnnounceThemselvesTests
         // The places a step cites, opened by the engine for its review: a long range and a long line say they were cut.
         ["CitedPlaces.MaxLines"] = nameof(ACitedPlaceIsOpenedByTheEngineTests.A_long_range_and_a_long_line_say_they_were_cut),
         ["CitedPlaces.MaxLineChars"] = nameof(ACitedPlaceIsOpenedByTheEngineTests.A_long_range_and_a_long_line_say_they_were_cut),
-        ["TaskReview.MaxFileChars"] = nameof(TheRunIsReviewedAsAWholeTests.What_the_task_review_is_shown_says_where_it_was_cut),
-        ["TaskReview.MaxFilesChars"] = nameof(TheRunIsReviewedAsAWholeTests.What_the_task_review_is_shown_says_where_it_was_cut),
-        ["TaskReview.EvidenceChars"] = nameof(TheRunIsReviewedAsAWholeTests.What_the_task_review_is_shown_says_where_it_was_cut),
         ["Orchestrator.CriteriaFileChars"] = nameof(AStepIsJudgedOnItsSemanticCriteriaTests.A_file_too_long_to_show_whole_says_so_and_does_not_count_as_read),
         ["TypedCriteria.MaxHandedChars"] = nameof(AResultFileTheRequestDoesNotNameTests.A_long_handed_file_says_how_much_was_not_shown),
         ["ExecutionJournal.RepeatedChars"] = nameof(EvidenceBudgetTests.The_same_text_is_shown_once_and_the_other_call_says_where),
@@ -465,60 +459,4 @@ public sealed class CapsAnnounceThemselvesTests
         Assert.DoesNotContain("showing the first", SuccessEvaluator.Trim("error CS1002: ; expected"));
     }
 
-    /// <summary>Reviewer.MaxContentCharsTotal — the files that did not fit in the prompt at all.</summary>
-    [Fact]
-    public void Files_dropped_for_the_review_budget_are_announced()
-    {
-        var files = Enumerable.Range(0, 6)
-            .Select(i => new WrittenFile($"file{i}.md", new string('m', 7_000)))
-            .ToArray();
-
-        var prompt = Reviewer.BuildContentUserPrompt("Write six documents", "done", files);
-
-        Assert.Contains("further files omitted — the review budget was reached", prompt);
-
-        // A file left out entirely must not be quietly absent: the last one shown is announced as an
-        // excerpt, and the omission is stated. Silence here is a reviewer approving work it never saw.
-        Assert.DoesNotContain("file5.md", prompt);
-    }
-
-    /// <summary>
-    /// Orchestrator.MaxReviewFileChars, end to end — the second half of the 2026-09-07 defect and
-    /// the half no test covered. The prompt-side notice was fixed and tested; nothing checked that
-    /// the ORCHESTRATOR still hands over the file's real size, and it was the orchestrator's own cut
-    /// that made the notice impossible to fire in the first place.
-    /// </summary>
-    [Fact]
-    public async Task A_files_real_size_reaches_the_reviewer_from_a_real_run()
-    {
-        using var fx = new EngineFixture { ShortReview = false };
-
-        var page = string.Join('\n', Enumerable.Range(0, 500)
-            .Select(i => $"  <li class=\"nav-item\" data-index=\"{i}\">Menu entry number {i}</li>"));
-        Assert.True(page.Length > 20_000, "the page has to be past the review cap for this to mean anything");
-
-        var provider = new FakeChatProvider(
-            Turn.Says("""{"disposition":"quick_action","title":"write the page"}"""),
-            Turn.Calls1("write_file", System.Text.Json.JsonSerializer.Serialize(new
-            {
-                path = "index.html",
-                content = page
-            })),
-            Turn.Says("Wrote the page."));
-
-        var reviewer = new FakeChatProvider { WhenExhausted = Verdicts.Pass() };
-        var orchestrator = fx.Build(provider, EngineFixture.Role("developer"),
-            router: Routers.WithReviewer(), reviewProvider: reviewer);
-
-        await fx.RunAsync(orchestrator, "write the menu page");
-
-        var prompt = reviewer.Requests.Last().Messages.Last().Content ?? "";
-
-        Assert.Contains("END OF EXCERPT", prompt);
-        Assert.Contains(page.Length.ToString(), prompt);
-        // Reworded 2026-09-24 with the slice it describes: the excerpt is the start AND the
-        // end now, so "the rest was not shown" became "what is missing is the MIDDLE".
-        Assert.Contains("Nothing here is missing from the file itself", prompt);
-        Assert.Contains("the end of the file IS above", prompt);
-    }
 }

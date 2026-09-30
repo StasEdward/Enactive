@@ -90,38 +90,6 @@ public sealed class ModelBudgetReviewTests
     }
 
     [Fact]
-    public async Task Combined_review_budget_scales_with_claims_and_reports_no_context_as_incomplete()
-    {
-        var obligations = RequestObligations.Create(string.Join("\n", Enumerable.Range(1, 40).Select(i => $"Requirement {i}")));
-        var journal = new ExecutionJournal();
-        var provider = new FakeChatProvider(Turn.Says("invalid"), Turn.Says("invalid"));
-        var review = new Reviewer();
-        await review.ReviewWithProofAsync("title", "report", journal.Describe(), [], [], obligations, provider, "model", default);
-        Assert.All(provider.Requests, r =>
-        {
-            Assert.Equal(GenerationPurpose.Review, r.Purpose);
-            Assert.InRange(r.OutputTokenLimit!.Value, 40 * 512, 32768);
-        });
-        var tiny = new FakeChatProvider() { Window = 100 };
-        var result = await review.ReviewWithProofAsync("title", "report", journal.Describe(), [], [], obligations, tiny, "model", default);
-        Assert.NotNull(result.IncompleteReason);
-        Assert.Empty(tiny.Requests);
-    }
-
-    [Fact]
-    public async Task Truncated_combined_review_gets_one_larger_attempt_and_stays_incomplete()
-    {
-        var provider = new FakeChatProvider(new Turn("partial", FinishReason: "length"), new Turn("partial", FinishReason: "length"));
-        var result = await new Reviewer().ReviewWithProofAsync("title", "report", new ExecutionJournal().Describe(), [], [],
-            RequestObligations.Create("one obligation"), provider, "model", default);
-        Assert.Equal(2, provider.Requests.Count);
-        Assert.True(provider.Requests[1].OutputTokenLimit > provider.Requests[0].OutputTokenLimit);
-        Assert.All(provider.Requests, r => Assert.InRange(r.OutputTokenLimit!.Value, 4096, 32768));
-        Assert.False(result.Pass);
-        Assert.Contains("output token limit", result.IncompleteReason);
-    }
-
-    [Fact]
     public async Task Handover_does_not_spend_when_exhausted_or_out_of_context()
     {
         var provider = new FakeChatProvider(Turn.Says("note")) { Window = 100 };

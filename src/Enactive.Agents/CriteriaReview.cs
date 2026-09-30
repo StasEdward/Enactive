@@ -159,8 +159,7 @@ internal static class CriteriaReview
         if (unknown.Length > 0)
             return (new ReviewResult(false, lines)
             {
-                IncompleteReason = lines, VerdictUnavailable = true, Undecided = true,
-                Unknowns = unknown.Select(v => new OpenItem(input.StepNumber, input.StepTitle, v.C.Typed!.Text!, v.Why, [])).ToArray()
+                IncompleteReason = lines, VerdictUnavailable = true, Undecided = true
             }, []);
         return (new ReviewResult(true, lines), []);
     }

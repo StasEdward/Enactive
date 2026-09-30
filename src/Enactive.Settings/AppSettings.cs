@@ -379,21 +379,6 @@ public sealed partial class AppSettings
     // engine. Turn it on only for a weak local model that cannot emit structured tool calls at all.
     public bool AllowImplicitToolCalls { get; set; }
 
-    // When a step runs no commands and only writes text, review the TEXT instead of the (empty)
-    // execution evidence. Without this a configured reviewer passes anything such a step produces:
-    // there is no exit code in a document, so the execution question has no answer to give. Costs one
-    // reviewer call on the written content, which is why it is a switch — but it is on by default,
-    // because the alternative is a gate that silently checks nothing for every writing task.
-    public bool ReviewContent { get; set; } = true;
-
-    // Ask a step that PASSED review what actually proved it. The reviewer checks whether a report is
-    // TRUE against the evidence; a report can be true in every particular while its conclusion
-    // follows from none of it — a fix reported over a test that was already failing and stayed
-    // failing passes, honestly, and the run finishes green. This pass asks which calls SHOW the
-    // objective was met, and the engine looks those calls up rather than believing the answer.
-    // Costs one more Review-model call, and only for a step that actually ran something.
-    public bool CheckSoundness { get; set; } = true;
-
     // How many times a rejected step may be redone before the run gives up. 1 means two tries in
     // total, which is what the engine did when this number was hard-coded. It was worth exposing
     // because it is the dial between "the reviewer's feedback gets used" and "a weak model burns the
@@ -452,17 +437,11 @@ public sealed partial class AppSettings
     // see without it. Off until runs show a local model uses it for real blocks and not for hard work.
     public bool ReportBlocked { get; set; }
 
-    // Phase 9: a run short of Completed only because some steps could not be confirmed is reviewed as a whole - the
-    // task review answers each open question on the run's evidence. On: it can only move the outcome on cited evidence.
-    public bool TaskReview { get; set; } = true;
 
     // Phase 1.4: the planner may set a step semantic criteria (needs TypedCriteria), and a step that has them is judged
     // against those alone, each verdict citing evidence of the kinds the criterion allows. Off until runs show it.
     public bool SemanticCriteria { get; set; }
 
-    // One short verdict per step - done, and its report true, on what the calls and files show - and the task done when
-    // every step is and the engine's checks are green. Off: the earlier review of every sentence, and a final review.
-    public bool ShortReview { get; set; } = true;
 
     // The step review works out a total, a difference, a percentage the work derived from other figures, and fails a
     // wrong one - a worker adds in its head, and a reviewer shown every row passed a wrong sum (run 1ec9e8).
@@ -907,8 +886,6 @@ public sealed partial class AppSettings
         RepairConsultation = RepairConsultation with { },
         DisableThinking = DisableThinking,
         AllowImplicitToolCalls = AllowImplicitToolCalls,
-        ReviewContent = ReviewContent,
-        CheckSoundness = CheckSoundness,
         ReviewRetries = ReviewRetries,
         SuccessRetries = SuccessRetries,
         RevertRejectedSteps = RevertRejectedSteps,
@@ -940,9 +917,7 @@ public sealed partial class AppSettings
         MaxFanOutDepth = MaxFanOutDepth,
         ValidateWaves = ValidateWaves,
         ReportBlocked = ReportBlocked,
-        TaskReview = TaskReview,
         SemanticCriteria = SemanticCriteria,
-        ShortReview = ShortReview,
         CheckDerivedFigures = CheckDerivedFigures,
         Bindings = Bindings.Clone(),
         RemoteAccess = RemoteAccess.Clone(),

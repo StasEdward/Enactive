@@ -36,8 +36,7 @@ public sealed class AStepIsJudgedOnItsSemanticCriteriaTests
              Turn.Says("Counted and reported."),
              .. retry]);
         var reviewer = new FakeChatProvider(reviews);
-        var events = await fx.RunAsync(fx.Build(worker, EngineFixture.Role("developer"), router: Routers.WithReviewer(), reviewProvider: reviewer,
-            checkSoundness: true, reviewContent: false), "Count the boxes on shelf 17 and write a report.");
+        var events = await fx.RunAsync(fx.Build(worker, EngineFixture.Role("developer"), router: Routers.WithReviewer(), reviewProvider: reviewer), "Count the boxes on shelf 17 and write a report.");
         return (events, worker, reviewer);
     }
 
@@ -100,8 +99,7 @@ public sealed class AStepIsJudgedOnItsSemanticCriteriaTests
             Turn.Says("""{"criteria":[{"id":"C1","verdict":"pass","reason":"it shows it","calls":[1],"files":[]}]}"""),
             Turn.Says("""{"criteria":[{"id":"C1","verdict":"pass","reason":"it shows it","calls":[1],"files":[]}]}"""));
 
-        await fx.RunAsync(fx.Build(worker, EngineFixture.Role("developer"), router: Routers.WithReviewer(), reviewProvider: reviewer,
-            checkSoundness: true, reviewContent: false), "Count the boxes on shelf 17 and write a report.");
+        await fx.RunAsync(fx.Build(worker, EngineFixture.Role("developer"), router: Routers.WithReviewer(), reviewProvider: reviewer), "Count the boxes on shelf 17 and write a report.");
 
         Assert.Contains("a read counts only where it covered the file whole", reviewer.Requests[^1].Messages.Last().Content, StringComparison.Ordinal);
     }
@@ -117,8 +115,7 @@ public sealed class AStepIsJudgedOnItsSemanticCriteriaTests
         var cites = Turn.Says("""{"criteria":[{"id":"C1","verdict":"pass","reason":"it says so","calls":[],"files":["stock/report.md"]}]}""");
         var reviewer = new FakeChatProvider(cites, cites);
 
-        await fx.RunAsync(fx.Build(worker, EngineFixture.Role("developer"), router: Routers.WithReviewer(), reviewProvider: reviewer,
-            checkSoundness: true, reviewContent: false), "Count the boxes on shelf 17 and write a report.");
+        await fx.RunAsync(fx.Build(worker, EngineFixture.Role("developer"), router: Routers.WithReviewer(), reviewProvider: reviewer), "Count the boxes on shelf 17 and write a report.");
 
         var asked = reviewer.Requests[0].Messages[1].Content!;
         Assert.Contains("--- stock/report.md (shown in part - not whole)", asked, StringComparison.Ordinal);
@@ -127,9 +124,9 @@ public sealed class AStepIsJudgedOnItsSemanticCriteriaTests
     }
 
     [Fact]
-    public async Task Off_a_semantic_criterion_is_dropped_and_the_step_is_reviewed_as_before()
+    public async Task Off_a_semantic_criterion_is_dropped_and_the_step_has_its_short_review()
     {
-        var (events, _, reviewer) = await Run([Verdicts.Combined(Verdicts.Shown("counted", 1))], semantic: false);
+        var (events, _, reviewer) = await Run([Verdicts.Pass()], semantic: false);
 
         Assert.Contains(events, e => e.Summary.StartsWith("Planner criterion dropped - a semantic criterion is the reviewer's to judge", StringComparison.Ordinal));
         Assert.DoesNotContain("CRITERIA - judge these", string.Join("\n", reviewer.Requests[0].Messages.Select(m => m.Content)), StringComparison.Ordinal);

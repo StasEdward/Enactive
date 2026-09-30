@@ -162,7 +162,6 @@ public sealed class AQuoteIsCheckedOnlyWhereItIsWrittenTests
     {
         using var fx = Workspace();
         fx.StepOutputs = true;
-        fx.ShortReview = true;
         var worker = new FakeChatProvider(
             [Turn.Says("""{"disposition":"task","title":"wiki","steps":[{"title":"Check the settings page","dependsOn":[],"output":{"findings":{"type":"text","description":"what the page gets wrong"}}}]}"""),
              Turn.Calls1(StepOutputContract.ToolName, """{"findings":"The page is wrong: the pages come from `settings.Pages` (core/Settings.cs:2)."}""", "s1"),
@@ -173,8 +172,7 @@ public sealed class AQuoteIsCheckedOnlyWhereItIsWrittenTests
             Turn.Says("""{"verdict":"fail","reason":"settings.Pages is not at core/Settings.cs:2","calls":[],"files":[]}"""),
             Turn.Says("""{"verdict":"pass","reason":"the findings cite the right line","calls":[1],"files":[]}"""));
 
-        var events = await fx.RunAsync(fx.Build(worker, EngineFixture.Role("developer"), router: Routers.WithReviewer(), reviewProvider: reviewer,
-            checkSoundness: true), "check the settings page of the wiki");
+        var events = await fx.RunAsync(fx.Build(worker, EngineFixture.Role("developer"), router: Routers.WithReviewer(), reviewProvider: reviewer), "check the settings page of the wiki");
 
         Assert.True(events.Has(EventKind.TaskCompleted), events.Text());
         var second = string.Join("\n", reviewer.Requests[1].Messages.Select(m => m.Content));
@@ -194,7 +192,6 @@ public sealed class AQuoteIsCheckedOnlyWhereItIsWrittenTests
     {
         using var fx = Workspace();
         fx.StepOutputs = true;
-        fx.ShortReview = true;
         var worker = new FakeChatProvider(
             [Turn.Says("""{"disposition":"task","title":"wiki","steps":[{"title":"Check the settings page","dependsOn":[],"output":{"findings":{"type":"text","description":"what the page gets wrong"}}}]}"""),
              Turn.Calls1(StepOutputContract.ToolName, """{"findings":"The page is wrong about where the pages come from."}""", "s1"),
@@ -205,8 +202,7 @@ public sealed class AQuoteIsCheckedOnlyWhereItIsWrittenTests
             Turn.Says("""{"verdict":"fail","reason":"the findings name no place in the code","calls":[],"files":[]}"""),
             Turn.Says("""{"verdict":"pass","reason":"the findings cite the right line","calls":[1],"files":[]}"""));
 
-        var events = await fx.RunAsync(fx.Build(worker, EngineFixture.Role("developer"), router: Routers.WithReviewer(), reviewProvider: reviewer,
-            checkSoundness: true), "check the settings page of the wiki");
+        var events = await fx.RunAsync(fx.Build(worker, EngineFixture.Role("developer"), router: Routers.WithReviewer(), reviewProvider: reviewer), "check the settings page of the wiki");
 
         Assert.True(events.Has(EventKind.TaskCompleted), events.Text());
         var second = string.Join("\n", reviewer.Requests[1].Messages.Select(m => m.Content));

@@ -28,29 +28,10 @@ using Enactive.Core.Workers;
 
 public sealed partial class Orchestrator
 {
-    private async Task<ReviewResult> ReconcileRunAsync(RunSession session, RunModels models, CancellationToken ct)
-    {
-        if (session.Scope.Budget.TurnExhausted is { } spent)
-            return new(false, spent) { BudgetExhausted = spent };
-        try
-        {
-            var files = new List<WrittenFile>();
-            foreach (var store in session.Stores) files.AddRange(await ReadWrittenAsync(store, ct));
-            var current = files.DistinctBy(f => f.RelativePath, StringComparer.OrdinalIgnoreCase).ToArray();
-            return await InScopeAsync(session.Scope.RunId, session.Scope.TaskId, null,
-                () => _stepReview.ReconcileAsync(string.Join("\n", session.Digest),
-                    session.RunEvidence().Describe(maxChars: _evidenceBudget),
-                    current.Select(f => f.RelativePath).ToArray(), current, session.Obligations!,
-                    models.ReviewProvider!, models.ReviewModel, ct, session.Scope.Budget.TurnExhaustedAfter));
-        }
-        catch (OperationCanceledException) { throw; }
-        catch (Exception ex) { return new(false, ex.Message) { IncompleteReason = "Final review unavailable: " + ex.Message }; }
-    }
-
     /// <summary>The name the engine's own measurement before the work is recorded under - no tool the model can call.</summary>
     internal const string MeasuredBeforeTool = "engine_measured_before_the_work";
 
-    private sealed record AttemptReview(ReviewResult Review, bool ProofRejected = false, string? BudgetExhausted = null);
+    private sealed record AttemptReview(ReviewResult Review, string? BudgetExhausted = null);
 
     /// <summary>
     /// Shared review/proof phase of an attempt. Callers own retries, rollback, checkpoints and
@@ -142,9 +123,8 @@ public sealed partial class Orchestrator
                     scope.Budget.TurnExhaustedAfter, ct),
                 ReviewMode.Criteria)
             // The user's model (2026-09-29): one short verdict per step - done, and its report true? - and the task is
-            // done when every step is. The review of every sentence of a report stays behind the switch, to compare.
-            : _shortReview
-                ? (await StepVerdictReview.RunAsync(
+            // done when every step is.
+            : (await StepVerdictReview.RunAsync(
                         new StepVerdictInput(request, title, stepNumber,
                             planSteps?.Select((t, i) => (t, i)).Where(p => stepNumber is not { } n || p.i != n - 1)
                                 .Select(p => $"{p.i + 1}. {p.t}").ToArray() ?? [],
@@ -155,11 +135,7 @@ public sealed partial class Orchestrator
                                 + (o.AlsoTo.Count > 0 ? $" (also given to step {string.Join(", ", o.AlsoTo.Select(scope => scope.TrimStart('S')))})" : "")).ToArray(),
                             restrictions),
                         models.ReviewProvider!, models.ReviewModel, scope.Budget.TurnExhaustedAfter, ct, _checkDerivedFigures),
-                    ReviewMode.Step)
-            : await ReviewAsync(
-                title, messages, journal, evidenceStart, stepStart, scope.Artifacts, store,
-                models.ReviewProvider!, models.ReviewModel, ct, changes, before, request,
-                obligations ?? RequestObligations.Create(request, title, stepNumber, planSteps), scope.Budget.TurnExhaustedAfter);
+                    ReviewMode.Step);
         await Usage(review.PromptTokens, review.CompletionTokens, review.CachedPromptTokens, review.CacheCreationPromptTokens);
         if (review.BudgetExhausted is { } reviewSpent)
             return new(review, BudgetExhausted: reviewSpent);
@@ -172,15 +148,7 @@ public sealed partial class Orchestrator
 
         await Emit(EventKind.ReviewPassed,
             $"PASS ({mode} review){(string.IsNullOrEmpty(review.Notes) ? "" : ": " + review.Notes)}");
-        if (review.Soundness is not { } proven) return new(review);
-        if (proven.Sound)
-        {
-            await Emit(EventKind.ReviewPassed, "PASS (soundness): " + proven.Reason);
-            return new(review);
-        }
-
-        await Emit(EventKind.ReviewFailed, "FAIL (soundness): " + proven.Reason);
-        return new(new ReviewResult(false, proven.Reason), ProofRejected: true);
+        return new(review);
     }
 
     /// <summary>
@@ -290,62 +258,5 @@ public sealed partial class Orchestrator
         return files;
     }
 
-    /// <summary>
-    /// Asks the reviewer about the work just done. Shared by the QuickAction path and by a DAG step,
-    /// so a configured reviewer applies to both — it used to run for plan steps only, while the
-    /// planner was told to prefer QuickAction, which left most ordinary requests unreviewed.
-    ///
-    /// Fails CLOSED: a reviewer that cannot answer has not approved anything.
-    /// </summary>
-    private async Task<(ReviewResult Result, ReviewMode Mode)> ReviewAsync(
-        string title, List<ChatMessage> convo, ExecutionJournal journal, int evidenceStart,
-        int stepStart, List<ArtifactRef> artifacts, IArtifactScope store,
-        IChatProvider reviewProvider, string reviewModel, CancellationToken ct,
-        IWorkspaceChanges? changes = null, WorkspaceSnapshot? before = null,
-        // The user's own request, verbatim - see Reviewer.ReviewAsync's own parameter of this name.
-        string? request = null, RequestObligations? obligations = null,
-        Func<int, int, string?>? beforeRetry = null)
-    {
-        try
-        {
-            // Each file once. The reviewer is told which files the run changed so it can judge the
-            // report against them, and "README.md, README.md, README.md, README.md" says four
-            // things happened where one did.
-            string[] changed;
-            lock (artifacts)
-                changed = FilesTouched(artifacts);
-
-            var measured = changes is not null && before is not null
-                ? await MeasuredChangesAsync(changes, before, journal.Actions.Skip(stepStart).ToArray(), ct)
-                : null;
-            IReadOnlyList<WrittenFile> written = measured ?? await ReadWrittenAsync(store, ct);
-            // What the step wrote where the comparison does not look - a file git ignores, a folder it skips -
-            // is still the step's work. Run 16d57849: the report the step wrote, Docs/DRIFT_ollama.md, is ignored
-            // by git; the review saw none of it, and could not confirm "a full summary table" it had not been shown.
-            if (measured is not null)
-            {
-                var shown = measured.Select(w => w.RelativePath.Replace('\\', '/')).ToHashSet(StringComparer.OrdinalIgnoreCase);
-                var unmeasured = (await ReadWrittenAsync(store, ct))
-                    // Scratch stays out of review, as everywhere: helpers and logs, not the work.
-                    .Where(w => !shown.Contains(w.RelativePath.Replace('\\', '/'))
-                                && !w.RelativePath.Replace('\\', '/').StartsWith(WorkspaceGuard.ScratchPrefix + "/", StringComparison.OrdinalIgnoreCase))
-                    .Select(w => w with { Heading = "WRITTEN by this step where the workspace comparison does not look (a file git "
-                                                   + "ignores, or a folder it skips) - how it is NOW:" })
-                    .ToArray();
-                if (unmeasured.Length > 0) written = [.. measured, .. unmeasured];
-            }
-            return await _stepReview.ExecuteAsync(title, LastAssistant(convo), journal,
-                evidenceStart, stepStart, changed, written, reviewProvider, reviewModel, ct,
-                request, obligations, beforeRetry);
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            return StepReview.Failure(ex);
-        }
-    }
 
 }

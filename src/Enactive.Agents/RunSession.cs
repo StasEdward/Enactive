@@ -39,17 +39,7 @@ internal sealed class RunSession(RunScope scope, List<ChatMessage> messages)
     private readonly object _evidenceGate = new();
     private readonly HashSet<ExecutionJournal> _journals = new();
     private readonly List<IArtifactScope> _stores = new();
-    public bool NeedsFinalReview { get; private set; }
 
-    /// <summary>What the step reviews left open - "could not tell" - for the task review (Phase 9).</summary>
-    public List<OpenItem> OpenItems { get; } = new();
-    public void ObserveReview(ReviewResult review)
-    {
-        if (review.Obligations is not { } claims) return;
-        lock (_evidenceGate)
-            NeedsFinalReview |= claims.Any(c => c.Proof.Kind == ProofClaimKind.NotShown
-                || c.Requirements?.Any(r => r.Proof.Kind == ProofClaimKind.NotShown) == true);
-    }
     public void Track(ExecutionJournal journal, IArtifactScope store)
     {
         lock (_evidenceGate) { _journals.Add(journal); _stores.Add(store); }
@@ -75,7 +65,7 @@ internal sealed class RunSession(RunScope scope, List<ChatMessage> messages)
 
     public void ConfigurePlan(bool sharedConversation, RunCheckpoint? resume)
     {
-        if (resume is not null) { Digest.AddRange(resume.Digest); NeedsFinalReview = _resumed = true; }
+        if (resume is not null) { Digest.AddRange(resume.Digest); _resumed = true; }
         if (!sharedConversation) return;
         _sharedJournal = new ExecutionJournal(spansSteps: true);
         _sharedReads = new ReadLedger();

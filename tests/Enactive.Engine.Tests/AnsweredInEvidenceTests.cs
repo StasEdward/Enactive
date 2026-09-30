@@ -73,20 +73,6 @@ public sealed class AnsweredInEvidenceTests
         Assert.Contains("\"offset\":800", evidence, StringComparison.Ordinal);
     }
 
-    /// <summary>
-    /// The reviewer is told what the label means. Without this it reads an unfamiliar word next to a
-    /// call that produced no content and falls back on the rule it does know.
-    /// </summary>
-    [Fact]
-    public void The_reviewer_is_told_that_nothing_there_is_not_an_error()
-    {
-        var instructions = Enactive.Agents.Reviewer.ExecutionSystemPrompt;
-
-        Assert.Contains("NOTHING THERE", instructions, StringComparison.Ordinal);
-        Assert.Contains("is not an error", instructions, StringComparison.Ordinal);
-        Assert.Contains("not something the report has to account for", instructions, StringComparison.Ordinal);
-    }
-
     /// <summary>End to end: the reported step's evidence reaches the reviewer without an ERROR in it.</summary>
     [Fact]
     public async Task The_reported_step_is_reviewed_on_evidence_that_says_nothing_went_wrong()
@@ -149,17 +135,4 @@ public sealed class AnsweredInEvidenceTests
         Assert.DoesNotContain("ERROR", evidence, StringComparison.Ordinal);
     }
 
-    /// <summary>
-    /// The clauses this one sits beside are intact. Four now govern how the reviewer reads evidence,
-    /// and each was added because a run died without them.
-    /// </summary>
-    [Fact]
-    public void The_other_evidence_rules_are_still_there()
-    {
-        var instructions = Enactive.Agents.Reviewer.ExecutionSystemPrompt;
-
-        Assert.Contains("shortened result is still a call that HAPPENED", instructions, StringComparison.Ordinal);
-        Assert.Contains("agent's to choose", instructions, StringComparison.Ordinal);
-        Assert.Contains("expectedExitCodes", instructions, StringComparison.Ordinal);
-    }
 }

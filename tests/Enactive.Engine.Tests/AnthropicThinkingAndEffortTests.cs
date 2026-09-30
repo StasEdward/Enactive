@@ -61,7 +61,7 @@ public sealed class AnthropicThinkingAndEffortTests
         using var handler = new Reply(Response("""{"type":"text","text":"{}"}"""));
         using var http = new HttpClient(handler);
         await new AnthropicProvider(http, Descriptor(effort: "medium"))
-            .CompleteAsync(new ChatRequest("m", [ChatMessage.User("review")], ResponseSchema: Reviewer.CombinedSchema), default);
+            .CompleteAsync(new ChatRequest("m", [ChatMessage.User("review")], ResponseSchema: """{"type":"object","properties":{"verdict":{"type":"string"}}}"""), default);
 
         using var body = JsonDocument.Parse(handler.Bodies[0]);
         var config = body.RootElement.GetProperty("output_config");

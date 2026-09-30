@@ -21,12 +21,10 @@ public sealed class AnItemsStepIsJudgedAsOneItemTests
                    "output":{"findings":{"type":"results","description":"unused dependencies per module"}}}]}
         """;
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task The_reviewer_is_told_the_document_is_the_engines_and_reading_it_is_answered_not_failed(bool shortReview)
+    [Fact]
+    public async Task The_reviewer_is_told_the_document_is_the_engines_and_reading_it_is_answered_not_failed()
     {
-        using var fx = new EngineFixture { StepOutputs = true, DynamicSteps = true, ShortReview = shortReview };
+        using var fx = new EngineFixture { StepOutputs = true, DynamicSteps = true };
         fx.Write("src/Billing/Billing.csproj", "<Project />");
         var worker = new FakeChatProvider(
             Turn.Says(Plan),
@@ -35,7 +33,7 @@ public sealed class AnItemsStepIsJudgedAsOneItemTests
             Turn.Calls1("read_file", """{"path":"src/Billing/Billing.csproj"}""", "r2"),
             Turn.Calls1(StepOutputContract.ToolName, """{"findings":{"src/Billing":"no unused dependencies"}}""", "s1"),
             Turn.Says("Audited."));
-        var reviewer = shortReview ? new FakeChatProvider(Turn.Says("""{"verdict":"pass","reason":"the step did its part","calls":[1],"files":[]}"""), Turn.Says("""{"verdict":"pass","reason":"the step did its part","calls":[2],"files":[]}""")) : new FakeChatProvider(Verdicts.Pass(), Verdicts.Pass());
+        var reviewer = new FakeChatProvider(Turn.Says("""{"verdict":"pass","reason":"the step did its part","calls":[1],"files":[]}"""), Turn.Says("""{"verdict":"pass","reason":"the step did its part","calls":[2],"files":[]}"""));
 
         var events = await fx.RunAsync(
             fx.Build(worker, EngineFixture.Role("developer"), router: Routers.WithReviewer(), reviewProvider: reviewer),
@@ -71,12 +69,11 @@ public sealed class AnItemsStepIsJudgedAsOneItemTests
     }
 
     [Fact]
-    public void The_note_is_part_of_the_mapping_the_reviewer_reads_and_not_of_the_final_review()
+    public void The_note_is_part_of_the_mapping_the_step_reads()
     {
         var plan = new Plan(Guid.NewGuid(), [new PlanStep(Guid.NewGuid(), "a", StepStatus.Pending, []) { ObligationIds = ["O001"] }]);
         var at = RequestObligations.ForPlan("do it", plan).AtStep(1) with { ScopeNote = "it is done for one item - x" };
         Assert.Contains("What this step is, from the plan: it is done for one item - x", at.MappingPrompt(), StringComparison.Ordinal);
         Assert.DoesNotContain("What this step is", (at with { ScopeNote = null }).MappingPrompt(), StringComparison.Ordinal);
-        Assert.DoesNotContain("What this step is", at.ForFinalReview().MappingPrompt(), StringComparison.Ordinal);
     }
 }

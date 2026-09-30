@@ -343,17 +343,4 @@ public sealed class EvidenceBudgetTests
 
     // ── the instruction that goes with it ───────────────────────────────────
 
-    /// <summary>
-    /// The prompt has to say what a shortened result means, or the next reviewer makes the same
-    /// inference from the same shape. The fix is half in the evidence and half in the instruction.
-    /// </summary>
-    [Fact]
-    public void The_reviewer_is_told_that_a_shortened_result_is_not_a_missing_call()
-    {
-        var instructions = Enactive.Agents.Reviewer.ExecutionSystemPrompt;
-
-        Assert.Contains("omitted calls", instructions, StringComparison.Ordinal);
-        Assert.Contains("shortened result is still a call that HAPPENED", instructions, StringComparison.Ordinal);
-        Assert.Contains("Judge by the calls listed", instructions, StringComparison.Ordinal);
-    }
 }

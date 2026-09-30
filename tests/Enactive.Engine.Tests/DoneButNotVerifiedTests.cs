@@ -80,50 +80,6 @@ public sealed class DoneButNotVerifiedTests
         Assert.Contains("DONE, NOT VERIFIED", middle.Summary, StringComparison.Ordinal);
     }
 
-    /// <summary>
-    /// The safety half. A reviewer that DID reach a verdict ending the step - a prohibition the work
-    /// violated - must not be read as "no verdict", or a step that deleted what it was told not to
-    /// would release its dependents to build on that. Such a verdict also carries an IncompleteReason,
-    /// which is exactly why the flag, and not the reason, decides.
-    /// </summary>
-    [Fact]
-    public async Task A_violated_prohibition_is_a_verdict_and_is_never_read_as_a_missing_one()
-    {
-        var tools = new ToolRegistry(EngineFixture.ShippedTools());
-        var journal = new ExecutionJournal();
-        var accounting = new ToolResultAccounting(tools, new(tools.Definitions), new(tools.Definitions),
-            new(), journal, new(), false, 1, ToolCallOrigin.Native);
-        accounting.Record(new("delete", "run_command", """{"command":"del Intervals.cs"}"""),
-            new(ToolResults.Ok("operation completed"), 0, 1));
-        journal.Record(1, "write_file", "restore", ActionOutcome.Succeeded, "restored");
-
-        var answer = JsonNode.Parse(Verdicts.Combined(Verdicts.Shown("Restoration makes the deletion acceptable", 2), "run").Text!)!;
-        var part = answer["claims"]![0]!["requirements"]![0]!;
-        part["requirement"] = "Do not delete files";
-        part["global"] = true;
-        part["prohibitions"] = new JsonArray("file-deletion");
-
-        var result = await new Reviewer().ReviewWithProofAsync("restore", "done", journal.Describe(), [], [],
-            RequestObligations.Create("Do not delete files."), new FakeChatProvider(Turn.Says(answer.ToJsonString())),
-            "strong", default);
-
-        Assert.NotNull(result.IncompleteReason);
-        Assert.False(result.VerdictUnavailable);
-    }
-
-    /// <summary>The other side of the same flag: a reviewer that returned nothing readable IS missing a verdict.</summary>
-    [Fact]
-    public async Task A_reviewer_that_never_answers_readably_has_no_verdict()
-    {
-        var reviewer = new FakeChatProvider(Turn.Says("not json"), Turn.Says("still not json"));
-
-        var result = await new Reviewer().ReviewAsync("write", "Wrote it.", "no calls", [],
-            reviewer, "review", default);
-
-        Assert.NotNull(result.IncompleteReason);
-        Assert.True(result.VerdictUnavailable);
-    }
-
     [Fact]
     public void The_step_card_and_the_run_summary_both_name_it()
     {

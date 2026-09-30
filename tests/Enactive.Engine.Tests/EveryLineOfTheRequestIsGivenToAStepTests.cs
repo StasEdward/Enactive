@@ -23,15 +23,15 @@ public sealed class EveryLineOfTheRequestIsGivenToAStepTests
 
     private static Turn Pass(int call) => Turn.Says($$"""{"verdict":"pass","reason":"the file is written","calls":[{{call}}],"files":[]}""");
 
-    private static async Task<(List<WorkEvent> Events, FakeChatProvider Worker, FakeChatProvider Reviewer)> Run(bool shortReview, params Turn[] plans)
+    private static async Task<(List<WorkEvent> Events, FakeChatProvider Worker, FakeChatProvider Reviewer)> Run(params Turn[] plans)
     {
-        using var fx = new EngineFixture { ShortReview = shortReview };
+        using var fx = new EngineFixture();
         var worker = new FakeChatProvider(
             [.. plans,
              Turn.Calls1("write_file", """{"path":"a.txt","content":"one"}""", "w1"), Turn.Says("Written."),
              Turn.Calls1("write_file", """{"path":"b.txt","content":"two"}""", "w2"), Turn.Says("Written.")])
             { WhenExhausted = Turn.Says("Done.") };
-        var reviewer = shortReview ? new FakeChatProvider(Pass(1), Pass(2)) : new FakeChatProvider(Verdicts.Pass(), Verdicts.Pass());
+        var reviewer = new FakeChatProvider(Pass(1), Pass(2));
         var events = await fx.RunAsync(fx.Build(worker, EngineFixture.Role("developer"), router: Routers.WithReviewer(), reviewProvider: reviewer),
             Request);
         return (events, worker, reviewer);
@@ -40,7 +40,7 @@ public sealed class EveryLineOfTheRequestIsGivenToAStepTests
     [Fact]
     public async Task A_line_no_step_is_given_is_asked_about_once_and_the_review_is_shown_what_its_step_was_given()
     {
-        var (events, worker, reviewer) = await Run(true, Turn.Says(Plan("[]")), Turn.Says(Plan("""["O002"]""")));
+        var (events, worker, reviewer) = await Run(Turn.Says(Plan("[]")), Turn.Says(Plan("""["O002"]""")));
 
         var asked = string.Join("\n", worker.Requests[1].Messages.Select(m => m.Content));
         Assert.Contains("Lines of the request no step is given: O002.", asked, StringComparison.Ordinal);
@@ -56,7 +56,7 @@ public sealed class EveryLineOfTheRequestIsGivenToAStepTests
     [Fact]
     public async Task What_the_planner_answers_stands_and_a_line_it_still_gives_no_step_is_said()
     {
-        var (events, worker, _) = await Run(true, Turn.Says(Plan("[]")), Turn.Says(Plan("[]")));
+        var (events, worker, _) = await Run(Turn.Says(Plan("[]")), Turn.Says(Plan("[]")));
 
         Assert.Contains(events, e => e.Summary == "Given to no step, so judged by no step's review: O002.");
         Assert.Equal(1, worker.Requests.Count(r => r.Messages.Any(m => m.Content?.Contains("no step is given", StringComparison.Ordinal) == true)));
@@ -64,14 +64,11 @@ public sealed class EveryLineOfTheRequestIsGivenToAStepTests
     }
 
     [Fact]
-    public async Task A_plan_that_gives_every_line_or_the_review_of_the_whole_run_is_not_asked()
+    public async Task A_plan_that_gives_every_line_is_not_asked()
     {
-        var (given, worker, _) = await Run(true, Turn.Says(Plan("""["O002"]""")));
+        var (given, worker, _) = await Run(Turn.Says(Plan("""["O002"]""")));
         Assert.DoesNotContain(given, e => e.Summary.Contains("no step is given", StringComparison.Ordinal));
         Assert.DoesNotContain(worker.Requests, r => r.Messages.Any(m => m.Content?.Contains("no step is given", StringComparison.Ordinal) == true));
-
-        var (old, _, _) = await Run(false, Turn.Says(Plan("[]")));                                      // the final review reads them all
-        Assert.DoesNotContain(old, e => e.Summary.Contains("no step is given", StringComparison.Ordinal));
     }
 
     [Fact]

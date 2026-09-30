@@ -83,11 +83,6 @@ public sealed class RolePromptTests
         // 360, from 350: "readOnly" (2026-09-29) is one line a planner cannot do without - an analysis step
         // that is not told it may not write spent sixteen minutes fixing tests nobody asked it to fix.
         Assert.True(Words(planner) < 360, $"Planner grew to {Words(planner)} words.");
-        Assert.True(Words(Reviewer.ExecutionGuidance) < 330,
-            $"Execution reviewer grew to {Words(Reviewer.ExecutionGuidance)} words.");
-        // Output protocol stays separate from the shared guidance used by combined review.
-        Assert.Contains("\"verdict\"", Reviewer.ExecutionSystemPrompt);
-        Assert.DoesNotContain("\"verdict\"", Reviewer.ExecutionGuidance);
     }
 
     private static int Words(string text) => text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length;

@@ -10,22 +10,7 @@ using Enactive.Core.Tools;
 /// <summary>Trusted, host-supplied agents. Implementations may be called by parallel steps and
 /// must not retain mutable run state. Null entries select the normal production implementations.</summary>
 public sealed record OrchestratorServices(
-    IReviewer? Reviewer = null, ISuccessEvaluator? SuccessEvaluator = null, IHandover? Handover = null);
-
-public interface IReviewer
-{
-    Task<ReviewResult> ReviewAsync(
-        string stepTitle, string coderOutput, string executionEvidence, IReadOnlyList<string> artifacts,
-        IChatProvider provider, string model, CancellationToken ct,
-        ReviewMode mode = ReviewMode.Execution, IReadOnlyList<WrittenFile>? writtenFiles = null,
-        string? request = null, RequestObligations? obligations = null);
-
-    Task<ReviewResult> ReviewWithProofAsync(
-        string title, string report, EvidenceView evidence, IReadOnlyList<string> artifacts,
-        IReadOnlyList<WrittenFile> files, RequestObligations obligations,
-        IChatProvider provider, string model, CancellationToken ct, string? workspaceRoot = null,
-        Func<int, int, string?>? beforeRetry = null, ReviewMode mode = ReviewMode.Execution);
-}
+    ISuccessEvaluator? SuccessEvaluator = null, IHandover? Handover = null);
 
 public interface ISuccessEvaluator
 {

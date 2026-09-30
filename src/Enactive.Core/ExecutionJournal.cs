@@ -47,35 +47,6 @@ public sealed class EvidenceView
         => (Text, Actions, VisibleActionIds.OrderBy(id => id).ToArray(),
             OutputsTruncated, ArgumentsTruncated, HasPriorTranscript);
 
-    /// <summary>Whether an ID exists, without exposing evidence that has not been shown.</summary>
-    public bool ContainsAction(int number) => number >= 1 && number <= Actions.Count;
-
-    /// <summary>Position of the same command within a step or whole run. Returns only an ID;
-    /// hidden payloads remain unavailable for positive citations.</summary>
-    public int? CommandOccurrence(int number, int? step, bool last)
-    {
-        if (!ContainsAction(number)) return null;
-        var target = Actions[number - 1];
-        string Identity(ExecutedAction action)
-        {
-            try
-            {
-                using var doc = JsonDocument.Parse(action.Arguments);
-                foreach (var field in new[] { "command", "script" })
-                    if (doc.RootElement.ValueKind == JsonValueKind.Object
-                        && doc.RootElement.TryGetProperty(field, out var value) && value.ValueKind == JsonValueKind.String)
-                        return action.Tool + "\0" + value.GetString();
-            }
-            catch (JsonException) { }
-            return action.Tool + "\0" + action.Arguments;
-        }
-        var key = Identity(target);
-        var ids = Actions.Select((a, index) => (a, id: index + 1))
-            .Where(x => x.a.Outcome != ActionOutcome.Refused && (step is null || x.a.Step == step)
-                && Identity(x.a) == key).Select(x => (int?)x.id);
-        return last ? ids.LastOrDefault() : ids.FirstOrDefault();
-    }
-
     /// <summary>Resolve only a call whose numbered entry was included in Text.</summary>
     public ExecutedAction? Cited(int number)
         => VisibleActionIds.Contains(number) ? Actions[number - 1] : null;
@@ -473,7 +444,7 @@ public sealed class ExecutionJournal
                    + "belongs to still happened.";
 
         // Numbered from 1 WITHIN THIS SLICE, not within the run. The number is a handle for a
-        // reviewer that is asked to point at a call - see ProofAudit - and it can only point at what
+        // reviewer that is asked to point at a call - see StepVerdictReview - and it can only point at what
         // it was shown. A number that meant a position in the whole journal would refer to calls
         // this evidence does not contain, and an audit checking it would be checking the wrong list.
         var calls = slice.Select((a, i) => Call(a, i + 1, manySteps)).ToArray();
