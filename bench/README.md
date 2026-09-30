@@ -23,6 +23,8 @@ engine's own word — and compares the engine's outcome with that truth.
 | `test-coverage` | The coverage request on a small C# library: tests to add, a report to write. |
 | `wiki-drift` | Wiki against code, the code in Python: four seeded discrepancies to find (coverage). |
 | `build-error` | A C# project that does not build before the work: the work is elsewhere, the old error must not be held against it. |
+| `missing-input` | A report from a file that is not there until a script makes it (Python): a step meets a missing input part-way. |
+| `setup-step` | Tests that fail for want of a setup step, not a code fix (C#): the way through is to add the step, not to edit the tests. |
 
 ## Running
 

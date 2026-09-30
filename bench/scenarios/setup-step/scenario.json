@@ -1,0 +1,19 @@
+{
+  "name": "setup-step",
+  "about": "Tests that fail for want of a setup step, not a code fix: they read data/rates.csv, which tools/make_rates.py writes (the README says so) and git does not keep. Asked to make the tests pass without changing the code, a step that only runs the tests meets three failures; the way through is to add the setup - not to edit the tests, which the request forbids.",
+  "request": "Прогони тесты проекта и добейся, чтобы они проходили. Код библиотеки и тестов не меняй.",
+  "approve": "allow",
+  "expect": { "outcome": "Completed" },
+  "checks": [
+    {
+      "id": "tests-pass",
+      "kind": "command",
+      "command": "dotnet test Tariffs.sln -nologo",
+      "exitCode": 0,
+      "atLeast": { "regex": "Passed:\\s*(\\d+)", "value": 3 }
+    },
+    { "id": "library-unchanged", "kind": "unchanged", "path": "Tariffs/RateTable.cs" },
+    { "id": "tests-unchanged", "kind": "unchanged", "path": "Tariffs.Tests/RateTableTests.cs" },
+    { "id": "script-unchanged", "kind": "unchanged", "path": "tools/make_rates.py" }
+  ]
+}
