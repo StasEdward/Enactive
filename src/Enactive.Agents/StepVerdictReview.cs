@@ -48,6 +48,8 @@ internal static class StepVerdictReview
         You check one step of a run: did the worker do what this step is for, and is what it reported true?
         Judge from the evidence shown - the tool calls the engine recorded, and the files as they are now. The worker's
         report is its claim: a claim counts only where a call or a file shows it.
+        A call marked NOTHING THERE ran and answered - a file that is absent, a search that found nothing: it is no error, and
+        can be exactly what shows a step done.
         Return ONLY one JSON object: {"verdict":"pass"|"fail","reason":"...","calls":[n],"files":["path"]}
         pass: the step's purpose is done, and what the report says about it is true; cite the calls [n] and files that
         show it. fail: say concretely what is not done, not true, or not shown - so the worker can put it right.
@@ -61,6 +63,12 @@ internal static class StepVerdictReview
         alone, or limits what the work may change, a step that changed it fails - name the change - however right the
         change itself may be.
         """;
+
+    // NOTHING THERE: the journal's mark for a call that answered with an absence. The earlier review was told it is no
+    // error; this one was not (2026-10-01). Measured on the recorded short reviews since the move (43 with NOTHING THERE or
+    // expectedExitCodes in their evidence, then the four that differed three times more): no verdict made wrong by it, and
+    // of the four, 9 of 12 right with it against 7 of 12 without. The earlier review's word on expectedExitCodes was
+    // measured too, and left out: no recorded review needed it, and with it the four came to 8 of 12 either way.
 
     // "Nothing needed doing": the earlier review's "nothing-to-do" answer, believed only with the calls that looked
     // (Proof.cs) - a finding rests on having looked. A step with no calls needs no citation for a pass here, so the rule
