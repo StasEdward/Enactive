@@ -140,6 +140,10 @@ Include a focused regression test when fixing behavior, and update the relevant 
 
 Read the [architecture guide](Docs/wiki/Architecture.md) for the execution flow and project boundaries.
 
+## License
+
+Enactive is licensed under the [Apache License 2.0](LICENSE). Copyright 2026 Edward Stas.
+
 ---
 
 <p align="center"><strong>Bring your models. Bring your project. Build the environment where agents can do useful work.</strong></p>

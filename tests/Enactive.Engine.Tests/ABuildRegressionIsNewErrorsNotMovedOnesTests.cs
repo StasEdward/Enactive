@@ -21,25 +21,25 @@ using Xunit;
 /// </summary>
 public sealed class ABuildRegressionIsNewErrorsNotMovedOnesTests
 {
-    private const string Root = @"C:\Users\user\AppData\Local\Temp\claude\diagprobe";
+    private const string Root = @"C:\work\diagprobe";
     private static readonly DotnetEcosystem Dotnet = new();
 
     private const string MultiTargetOutput = """
-        C:\Users\user\AppData\Local\Temp\claude\diagprobe\Probe\Program.cs(2,19): error CS0103: The name 'missingName' does not exist in the current context [C:\Users\user\AppData\Local\Temp\claude\diagprobe\Probe\Probe.csproj::TargetFramework=net8.0]
-        C:\Users\user\AppData\Local\Temp\claude\diagprobe\Probe\Program.cs(2,19): error CS0103: The name 'missingName' does not exist in the current context [C:\Users\user\AppData\Local\Temp\claude\diagprobe\Probe\Probe.csproj::TargetFramework=net10.0]
-        C:\Users\user\AppData\Local\Temp\claude\diagprobe\Probe\Program.cs(2,19): error CS0103: The name 'missingName' does not exist in the current context [C:\Users\user\AppData\Local\Temp\claude\diagprobe\Probe\Probe.csproj::TargetFramework=net8.0]
-        C:\Users\user\AppData\Local\Temp\claude\diagprobe\Probe\Program.cs(2,19): error CS0103: The name 'missingName' does not exist in the current context [C:\Users\user\AppData\Local\Temp\claude\diagprobe\Probe\Probe.csproj::TargetFramework=net10.0]
+        C:\work\diagprobe\Probe\Program.cs(2,19): error CS0103: The name 'missingName' does not exist in the current context [C:\work\diagprobe\Probe\Probe.csproj::TargetFramework=net8.0]
+        C:\work\diagprobe\Probe\Program.cs(2,19): error CS0103: The name 'missingName' does not exist in the current context [C:\work\diagprobe\Probe\Probe.csproj::TargetFramework=net10.0]
+        C:\work\diagprobe\Probe\Program.cs(2,19): error CS0103: The name 'missingName' does not exist in the current context [C:\work\diagprobe\Probe\Probe.csproj::TargetFramework=net8.0]
+        C:\work\diagprobe\Probe\Program.cs(2,19): error CS0103: The name 'missingName' does not exist in the current context [C:\work\diagprobe\Probe\Probe.csproj::TargetFramework=net10.0]
         """;
 
     private const string SingleTargetOutput = """
-        C:\Users\user\AppData\Local\Temp\claude\diagprobe\Probe\Program.cs(2,19): error CS0103: The name 'missingName' does not exist in the current context [C:\Users\user\AppData\Local\Temp\claude\diagprobe\Probe\Probe.csproj]
-        C:\Users\user\AppData\Local\Temp\claude\diagprobe\Probe\Program.cs(3,12): warning CS8600: Converting null literal or possible null value to non-nullable type. [C:\Users\user\AppData\Local\Temp\claude\diagprobe\Probe\Probe.csproj]
-        C:\Users\user\AppData\Local\Temp\claude\diagprobe\Probe\Program.cs(1,5): warning CS0219: The variable 'unused' is assigned but its value is never used [C:\Users\user\AppData\Local\Temp\claude\diagprobe\Probe\Probe.csproj]
-        C:\Users\user\AppData\Local\Temp\claude\diagprobe\Probe\Program.cs(3,8): warning CS0219: The variable 's' is assigned but its value is never used [C:\Users\user\AppData\Local\Temp\claude\diagprobe\Probe\Probe.csproj]
-        C:\Users\user\AppData\Local\Temp\claude\diagprobe\Probe\Program.cs(3,12): warning CS8600: Converting null literal or possible null value to non-nullable type. [C:\Users\user\AppData\Local\Temp\claude\diagprobe\Probe\Probe.csproj]
-        C:\Users\user\AppData\Local\Temp\claude\diagprobe\Probe\Program.cs(1,5): warning CS0219: The variable 'unused' is assigned but its value is never used [C:\Users\user\AppData\Local\Temp\claude\diagprobe\Probe\Probe.csproj]
-        C:\Users\user\AppData\Local\Temp\claude\diagprobe\Probe\Program.cs(3,8): warning CS0219: The variable 's' is assigned but its value is never used [C:\Users\user\AppData\Local\Temp\claude\diagprobe\Probe\Probe.csproj]
-        C:\Users\user\AppData\Local\Temp\claude\diagprobe\Probe\Program.cs(2,19): error CS0103: The name 'missingName' does not exist in the current context [C:\Users\user\AppData\Local\Temp\claude\diagprobe\Probe\Probe.csproj]
+        C:\work\diagprobe\Probe\Program.cs(2,19): error CS0103: The name 'missingName' does not exist in the current context [C:\work\diagprobe\Probe\Probe.csproj]
+        C:\work\diagprobe\Probe\Program.cs(3,12): warning CS8600: Converting null literal or possible null value to non-nullable type. [C:\work\diagprobe\Probe\Probe.csproj]
+        C:\work\diagprobe\Probe\Program.cs(1,5): warning CS0219: The variable 'unused' is assigned but its value is never used [C:\work\diagprobe\Probe\Probe.csproj]
+        C:\work\diagprobe\Probe\Program.cs(3,8): warning CS0219: The variable 's' is assigned but its value is never used [C:\work\diagprobe\Probe\Probe.csproj]
+        C:\work\diagprobe\Probe\Program.cs(3,12): warning CS8600: Converting null literal or possible null value to non-nullable type. [C:\work\diagprobe\Probe\Probe.csproj]
+        C:\work\diagprobe\Probe\Program.cs(1,5): warning CS0219: The variable 'unused' is assigned but its value is never used [C:\work\diagprobe\Probe\Probe.csproj]
+        C:\work\diagprobe\Probe\Program.cs(3,8): warning CS0219: The variable 's' is assigned but its value is never used [C:\work\diagprobe\Probe\Probe.csproj]
+        C:\work\diagprobe\Probe\Program.cs(2,19): error CS0103: The name 'missingName' does not exist in the current context [C:\work\diagprobe\Probe\Probe.csproj]
           Build FAILED.
         """;
 

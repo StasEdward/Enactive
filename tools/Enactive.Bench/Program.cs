@@ -185,7 +185,10 @@ async Task<ScenarioResult> RunScenarioAsync(Scenario scenario)
         (false, true) => "FALSE PASS",
         (false, false) => "right FAIL"
     };
-    return new ScenarioResult(scenario.Name, outcome, scenario.Expect.Outcome, holds, verdict, exit, wall, note, metrics, checks, work);
+    // Where the workspace was left, from the temp folder on: results.json is what a baseline is made of, and a baseline
+    // is kept in git - with no user's name in a path.
+    var left = Path.Combine("%TEMP%", Path.GetRelativePath(Path.GetTempPath(), work));
+    return new ScenarioResult(scenario.Name, outcome, scenario.Expect.Outcome, holds, verdict, exit, wall, note, metrics, checks, left);
 }
 
 static async Task<string> BuildConsoleAsync(string repo, CancellationToken ct)

@@ -75,7 +75,7 @@
           "outOf": null
         }
       ],
-      "workspace": "C:\\Users\\user\\AppData\\Local\\Temp\\enactive-bench\\20261001-003941-fd406a1\\build-error"
+      "workspace": "%TEMP%\\enactive-bench\\20261001-003941-fd406a1\\build-error"
     },
     {
       "scenario": "disk-report",
@@ -141,7 +141,7 @@
           "outOf": null
         }
       ],
-      "workspace": "C:\\Users\\user\\AppData\\Local\\Temp\\enactive-bench\\20261001-003941-fd406a1\\disk-report"
+      "workspace": "%TEMP%\\enactive-bench\\20261001-003941-fd406a1\\disk-report"
     },
     {
       "scenario": "missing-input",
@@ -232,7 +232,7 @@
           "outOf": null
         }
       ],
-      "workspace": "C:\\Users\\user\\AppData\\Local\\Temp\\enactive-bench\\20261001-003941-fd406a1\\missing-input"
+      "workspace": "%TEMP%\\enactive-bench\\20261001-003941-fd406a1\\missing-input"
     },
     {
       "scenario": "setup-step",
@@ -316,7 +316,7 @@
           "outOf": null
         }
       ],
-      "workspace": "C:\\Users\\user\\AppData\\Local\\Temp\\enactive-bench\\20261001-003941-fd406a1\\setup-step"
+      "workspace": "%TEMP%\\enactive-bench\\20261001-003941-fd406a1\\setup-step"
     },
     {
       "scenario": "test-coverage",
@@ -400,7 +400,7 @@
           "outOf": null
         }
       ],
-      "workspace": "C:\\Users\\user\\AppData\\Local\\Temp\\enactive-bench\\20261001-003941-fd406a1\\test-coverage"
+      "workspace": "%TEMP%\\enactive-bench\\20261001-003941-fd406a1\\test-coverage"
     },
     {
       "scenario": "wiki-drift",
@@ -484,7 +484,7 @@
           "outOf": null
         }
       ],
-      "workspace": "C:\\Users\\user\\AppData\\Local\\Temp\\enactive-bench\\20261001-003941-fd406a1\\wiki-drift"
+      "workspace": "%TEMP%\\enactive-bench\\20261001-003941-fd406a1\\wiki-drift"
     }
   ]
 }
