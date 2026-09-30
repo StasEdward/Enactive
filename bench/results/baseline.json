@@ -1,0 +1,315 @@
+{
+  "stamp": "20260930-210210-623e0b3",
+  "commit": "623e0b3",
+  "dirty": false,
+  "at": "2026-09-30T21:12:08.1326359+03:00",
+  "results": [
+    {
+      "scenario": "build-error",
+      "outcome": "Completed",
+      "expected": "Completed",
+      "truthHolds": false,
+      "verdict": "FALSE PASS",
+      "exitCode": 0,
+      "wallSeconds": 48.1086232,
+      "note": null,
+      "metrics": {
+        "outcome": "Completed",
+        "reason": "",
+        "seconds": 47.4966929,
+        "steps": 0,
+        "stepOutcomes": {},
+        "reviewsPassed": 1,
+        "reviewsFailed": 0,
+        "toolCalls": 7,
+        "tokensByPurpose": {
+          "plan": {
+            "in": 4963,
+            "out": 373,
+            "cached": 0
+          },
+          "execute": {
+            "in": 49579,
+            "out": 1249,
+            "cached": 43189
+          },
+          "review": {
+            "in": 23891,
+            "out": 174,
+            "cached": 0
+          }
+        },
+        "questions": 2,
+        "trims": 0,
+        "cacheBreaks": 0,
+        "cacheRewrites": 0,
+        "tokensIn": 78433,
+        "tokensOut": 1796
+      },
+      "checks": [
+        {
+          "id": "median-added",
+          "kind": "file_contains",
+          "passed": true,
+          "detail": "all 2 pattern(s) in Ledger/Stats.cs",
+          "required": true,
+          "found": null,
+          "outOf": null
+        },
+        {
+          "id": "broken-file-left-alone",
+          "kind": "unchanged",
+          "passed": false,
+          "detail": "Ledger/Report.cs was changed",
+          "required": true,
+          "found": null,
+          "outOf": null
+        },
+        {
+          "id": "same-one-error",
+          "kind": "command",
+          "passed": false,
+          "detail": "exit 0, expected 1; no \u0027CS0103\u0027 in the output; (\\d\u002B) Error\\(s\\) read 0, expected 1",
+          "required": true,
+          "found": null,
+          "outOf": null
+        }
+      ],
+      "workspace": "C:\\Users\\user\\AppData\\Local\\Temp\\enactive-bench\\20260930-210210-623e0b3\\build-error"
+    },
+    {
+      "scenario": "disk-report",
+      "outcome": "Completed",
+      "expected": "Completed",
+      "truthHolds": true,
+      "verdict": "right PASS",
+      "exitCode": 0,
+      "wallSeconds": 186.1125392,
+      "note": null,
+      "metrics": {
+        "outcome": "Completed",
+        "reason": "",
+        "seconds": 185.6390643,
+        "steps": 2,
+        "stepOutcomes": {
+          "Succeeded": 2
+        },
+        "reviewsPassed": 2,
+        "reviewsFailed": 1,
+        "toolCalls": 13,
+        "tokensByPurpose": {
+          "plan": {
+            "in": 5688,
+            "out": 924,
+            "cached": 2188
+          },
+          "execute": {
+            "in": 175337,
+            "out": 6089,
+            "cached": 164940
+          },
+          "review": {
+            "in": 11203,
+            "out": 588,
+            "cached": 0
+          }
+        },
+        "questions": 4,
+        "trims": 0,
+        "cacheBreaks": 0,
+        "cacheRewrites": 0,
+        "tokensIn": 192228,
+        "tokensOut": 7601
+      },
+      "checks": [
+        {
+          "id": "report-written",
+          "kind": "file_exists",
+          "passed": true,
+          "detail": "1 file(s): disk-report.md",
+          "required": true,
+          "found": null,
+          "outOf": null
+        },
+        {
+          "id": "every-drive-named",
+          "kind": "file_contains",
+          "passed": true,
+          "detail": "all 5 pattern(s) in disk-report.md",
+          "required": true,
+          "found": null,
+          "outOf": null
+        }
+      ],
+      "workspace": "C:\\Users\\user\\AppData\\Local\\Temp\\enactive-bench\\20260930-210210-623e0b3\\disk-report"
+    },
+    {
+      "scenario": "test-coverage",
+      "outcome": "Completed",
+      "expected": "Completed",
+      "truthHolds": true,
+      "verdict": "right PASS",
+      "exitCode": 0,
+      "wallSeconds": 249.5468518,
+      "note": null,
+      "metrics": {
+        "outcome": "Completed",
+        "reason": "",
+        "seconds": 249.086926,
+        "steps": 4,
+        "stepOutcomes": {
+          "Succeeded": 4
+        },
+        "reviewsPassed": 4,
+        "reviewsFailed": 0,
+        "toolCalls": 20,
+        "tokensByPurpose": {
+          "plan": {
+            "in": 6135,
+            "out": 1371,
+            "cached": 3502
+          },
+          "execute": {
+            "in": 286707,
+            "out": 7423,
+            "cached": 272438
+          },
+          "review": {
+            "in": 43528,
+            "out": 670,
+            "cached": 0
+          }
+        },
+        "questions": 3,
+        "trims": 0,
+        "cacheBreaks": 0,
+        "cacheRewrites": 0,
+        "tokensIn": 336370,
+        "tokensOut": 9464
+      },
+      "checks": [
+        {
+          "id": "tests-pass",
+          "kind": "command",
+          "passed": true,
+          "detail": "exit 0, as expected",
+          "required": true,
+          "found": null,
+          "outOf": null
+        },
+        {
+          "id": "untested-members-now-tested",
+          "kind": "file_contains",
+          "passed": true,
+          "detail": "all 2 pattern(s) in Shelf.Tests/InventoryTests.cs",
+          "required": true,
+          "found": null,
+          "outOf": null
+        },
+        {
+          "id": "library-unchanged",
+          "kind": "unchanged",
+          "passed": true,
+          "detail": "Shelf/Inventory.cs as it was",
+          "required": true,
+          "found": null,
+          "outOf": null
+        },
+        {
+          "id": "report-written",
+          "kind": "file_exists",
+          "passed": true,
+          "detail": "1 file(s): coverage-report.md",
+          "required": true,
+          "found": null,
+          "outOf": null
+        }
+      ],
+      "workspace": "C:\\Users\\user\\AppData\\Local\\Temp\\enactive-bench\\20260930-210210-623e0b3\\test-coverage"
+    },
+    {
+      "scenario": "wiki-drift",
+      "outcome": "Completed",
+      "expected": "Completed",
+      "truthHolds": true,
+      "verdict": "right PASS",
+      "exitCode": 0,
+      "wallSeconds": 106.6044284,
+      "note": null,
+      "metrics": {
+        "outcome": "Completed",
+        "reason": "",
+        "seconds": 106.1364316,
+        "steps": 4,
+        "stepOutcomes": {
+          "Succeeded": 4
+        },
+        "reviewsPassed": 3,
+        "reviewsFailed": 0,
+        "toolCalls": 16,
+        "tokensByPurpose": {
+          "plan": {
+            "in": 5665,
+            "out": 2282,
+            "cached": 3502
+          },
+          "execute": {
+            "in": 87752,
+            "out": 2566,
+            "cached": 79068
+          },
+          "review": {
+            "in": 5396,
+            "out": 406,
+            "cached": 0
+          }
+        },
+        "questions": 0,
+        "trims": 0,
+        "cacheBreaks": 0,
+        "cacheRewrites": 0,
+        "tokensIn": 98813,
+        "tokensOut": 5254
+      },
+      "checks": [
+        {
+          "id": "drift-written",
+          "kind": "file_exists",
+          "passed": true,
+          "detail": "1 file(s): Docs/DRIFT.md",
+          "required": true,
+          "found": null,
+          "outOf": null
+        },
+        {
+          "id": "discrepancies-found",
+          "kind": "coverage",
+          "passed": true,
+          "detail": "4 of 4 found",
+          "required": true,
+          "found": 4,
+          "outOf": 4
+        },
+        {
+          "id": "code-unchanged",
+          "kind": "unchanged",
+          "passed": true,
+          "detail": "app/config.py as it was",
+          "required": true,
+          "found": null,
+          "outOf": null
+        },
+        {
+          "id": "cli-unchanged",
+          "kind": "unchanged",
+          "passed": true,
+          "detail": "app/cli.py as it was",
+          "required": true,
+          "found": null,
+          "outOf": null
+        }
+      ],
+      "workspace": "C:\\Users\\user\\AppData\\Local\\Temp\\enactive-bench\\20260930-210210-623e0b3\\wiki-drift"
+    }
+  ]
+}
