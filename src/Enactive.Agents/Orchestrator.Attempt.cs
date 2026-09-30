@@ -130,7 +130,7 @@ public sealed partial class Orchestrator
             var kept = store.TouchedPaths;
             if (kept.Count > 0)
                 await publish("Rejected, but NOT put back: " + string.Join(", ", kept)
-                    + " - the review found the work itself right (implementation: pass) and rejected the step "
+                    + " - the review found the work itself right and rejected the step "
                     + "for something else; it is left as it is, and nothing is built on it.");
             return;
         }

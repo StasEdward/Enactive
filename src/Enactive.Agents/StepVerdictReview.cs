@@ -46,6 +46,8 @@ internal static class StepVerdictReview
         Return ONLY one JSON object: {"verdict":"pass"|"fail","reason":"...","calls":[n],"files":["path"]}
         pass: the step's purpose is done, and what the report says about it is true; cite the calls [n] and files that
         show it. fail: say concretely what is not done, not true, or not shown - so the worker can put it right.
+        A fail where what the step made - its files, its changes - is right as it is, and only the report or the way the
+        work was done is not, adds "work_stands":true: the files are then kept if the step is rejected.
         Judge this step only: what the other steps are for is theirs. Do not fail a step on style, on wording, or on a
         detail its purpose does not depend on.
         A change the step made that the request did not ask for is not a detail. Where the request says to leave something
@@ -197,9 +199,14 @@ internal static class StepVerdictReview
                 : "a pass cites the calls or files that show the step done");
         if (errors.Count > 0) return (null, errors);
 
+        // What the step made is right and the fail is elsewhere: a step rejected on it keeps its files, as the earlier
+        // review's "implementation: pass" with no repair to a saved file did (ReviewResult.WorkStands; code review of the
+        // move to one short review, 2026-09-30). Only a fail says it, and only in so many words.
+        var workStands = root.ValueKind == JsonValueKind.Object && root.TryGetProperty("work_stands", out var stands)
+                         && stands.ValueKind == JsonValueKind.True;
         return verdict == "pass"
             ? (new ReviewResult(true, reason), [])
-            : (new ReviewResult(false, reason) { RepairAdvice = reason }, []);
+            : (new ReviewResult(false, reason) { RepairAdvice = reason, WorkStands = workStands }, []);
     }
 
     /// <summary>
