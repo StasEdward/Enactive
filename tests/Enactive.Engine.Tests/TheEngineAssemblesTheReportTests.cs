@@ -56,6 +56,49 @@ public sealed class TheEngineAssemblesTheReportTests
         Assert.Equal(StepOutputFieldType.Text, Assert.Single(plan.Steps[2].Output!.Fields, f => f.Name == "summary").Type);
     }
 
+    /// <summary>
+    /// Benchmark scenario wiki-drift, 2026-09-30: the planner declared the report and nothing its items hand on. Told the
+    /// document is the engine's and to hand their findings on, then that they hand nothing on, the items put what they
+    /// found in their closing messages only; the document read "Result not provided" over a run called Completed. Where
+    /// none is declared, the items of a report hand on their findings as text; a declared output is left as it is.
+    /// </summary>
+    [Fact]
+    public void The_items_of_a_report_hand_on_their_findings_when_the_planner_declared_nothing()
+    {
+        var find = new PlanStep(Guid.NewGuid(), "find", StepStatus.Pending, [])
+            { Output = new StepOutputSchema("s1", 1, [new StepOutputField("pages", StepOutputFieldType.PathList, "p")]) };
+        var each = new PlanStep(Guid.NewGuid(), "check page", StepStatus.Pending, [find.Id]) { ForEach = new ForEachSource(0, "pages"), Report = "Docs/DRIFT.md" };
+        var declared = each with { Id = Guid.NewGuid(), Output = new StepOutputSchema("s2", 1, [new StepOutputField("notes", StepOutputFieldType.Results, "n")]) };
+        var noReport = each with { Id = Guid.NewGuid(), Report = null };
+
+        var field = Assert.Single(FanOut.Validate(new Plan(Guid.NewGuid(), [find, each])).Plan.Steps[1].Output!.Fields);
+        Assert.Equal((ReportDocument.FindingsField, StepOutputFieldType.Text, true), (field.Name, field.Type, field.Required));
+        Assert.Equal("notes", Assert.Single(FanOut.Validate(new Plan(Guid.NewGuid(), [find, declared])).Plan.Steps[1].Output!.Fields).Name);
+        Assert.Null(FanOut.Validate(new Plan(Guid.NewGuid(), [find, noReport])).Plan.Steps[1].Output);
+    }
+
+    [Fact]
+    public async Task What_an_item_found_reaches_the_report_when_its_planner_declared_no_output()
+    {
+        using var fx = new EngineFixture { StepOutputs = true, DynamicSteps = true };
+        fx.Write("wiki/a.md", "Timeout: 60 s\n");
+        var worker = new FakeChatProvider(
+            Turn.Says("""
+                {"disposition":"task","title":"check the wiki",
+                 "steps":[{"title":"find pages","dependsOn":[],"output":{"pages":{"type":"path[]","description":"the pages"}}},
+                          {"title":"check page","dependsOn":[0],"forEach":{"step":0,"field":"pages"},"report":"Docs/DRIFT.md"}]}
+                """),
+            Turn.Calls1(StepOutputContract.ToolName, """{"pages":["wiki/a.md"]}""", "s0"), Turn.Says("Found one."),
+            Turn.Calls1("read_file", """{"path":"wiki/a.md"}""", "ra"),
+            Turn.Calls1(StepOutputContract.ToolName, """{"findings":"The page says 60 s; the code says 30."}""", "sa"),
+            Turn.Says("Checked a.")) { WhenExhausted = Turn.Says("Done.") };
+
+        var events = await fx.RunAsync(fx.Build(worker, EngineFixture.Role("developer")), "check the wiki against the code");
+
+        Assert.Contains("The page says 60 s; the code says 30.", fx.Read("Docs/DRIFT.md"), StringComparison.Ordinal);
+        Assert.DoesNotContain(events, e => e.Summary.Contains("this step hands nothing on as values", StringComparison.Ordinal));
+    }
+
     // ── through a run ──────────────────────────────────────────────────────────────────
 
     private const string Plan = """

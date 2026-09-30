@@ -85,6 +85,15 @@ internal static class ReportDocument
                && !string.IsNullOrWhiteSpace(v.GetString()) ? v.GetString() : null;
     }
 
+    /// <summary>The field an item of a report hands its result on in, where the planner declared none.</summary>
+    internal const string FindingsField = "findings";
+
+    /// <summary>The contract of an item of a report whose planner declared none: what was found for it, as text.</summary>
+    public static StepOutputSchema ItemFindings(int stepNo)
+        => new($"step{stepNo}", 1, [new StepOutputField(FindingsField, StepOutputFieldType.Text,
+            "What was found for this item, in the language of the request - the result the engine puts in the report for it. "
+            + "Do not edit the report.")]);
+
     /// <summary>
     /// The contract of a step after the items of a report: a summary, as a value, alongside whatever else
     /// it declared - so the model's part of the document is handed on, not written into it.

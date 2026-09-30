@@ -78,6 +78,15 @@ public static class FanOut
                 steps[i] = steps[i] with { Report = null };
             }
         }
+        // Each item of a report hands its result on as a value, and the engine assembles the document from those: a
+        // step for an item with nothing it may hand on has nowhere to put what it found. Benchmark scenario wiki-drift,
+        // 2026-09-30: the planner declared the report and no output for its items; told the document is the engine's
+        // and to hand its findings on, then that it hands nothing on, each item finished with the findings in its
+        // closing message only, reviewed and "confirmed", and the document read "Result not provided" twice over a
+        // run called Completed. Where the planner declared none, the items hand on their findings as text.
+        for (var i = 0; i < steps.Length; i++)
+            if (steps[i].ForEach is not null && steps[i].Report is not null && steps[i].Output is null)
+                steps[i] = steps[i] with { Output = ReportDocument.ItemFindings(i + 1) };
         // A step after the items of a report hands its summary on as a value; the engine puts it in the
         // document. Added to its contract whatever else it declared - see ReportDocument.
         var reporting = steps.Where(st => st.ForEach is not null && st.Report is not null).Select(st => st.Id).ToHashSet();
