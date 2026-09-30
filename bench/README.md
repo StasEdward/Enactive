@@ -34,6 +34,7 @@ dotnet run --project tools/Enactive.Bench -- --solutions     # no model: every t
 dotnet run --project tools/Enactive.Bench                    # the live run, all scenarios, once each
 dotnet run --project tools/Enactive.Bench -- --only wiki-drift --timeout 30
 dotnet run --project tools/Enactive.Bench -- --save-baseline # this run becomes what later runs are compared with
+dotnet run --project tools/Enactive.Bench -- --only missing-input --judge <workspace>  # the truth again, on a workspace a run left
 ```
 
 The live run builds the console host into the temp folder, needs the configured providers up (the local model

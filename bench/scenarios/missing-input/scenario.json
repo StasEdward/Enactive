@@ -12,14 +12,14 @@
     },
     {
       "id": "dependencies-reported",
-      "about": "Each dependency on one line of the report: a table row or a list item names both modules.",
+      "about": "Each dependency within its module's part of the report - a table row, or the module's section up to the next heading: the depending module first, then what it depends on. (One line only was too strict: a run that wrote a section per module, its dependencies listed under it, was judged wrong.)",
       "kind": "coverage",
       "glob": "Docs/deps.md",
       "min": 3,
       "items": [
-        { "id": "orders-billing", "pattern": "(?im)^.*\\borders\\b.*\\bbilling\\b.*$" },
-        { "id": "orders-catalog", "pattern": "(?im)^.*\\borders\\b.*\\bcatalog\\b.*$" },
-        { "id": "notify-orders", "pattern": "(?im)^.*\\bnotify\\b.*\\borders\\b.*$" }
+        { "id": "orders-billing", "pattern": "(?is)\\borders\\b(?:(?!\\n\\s*#|\\n\\s*\\|).){0,300}?\\bbilling\\b" },
+        { "id": "orders-catalog", "pattern": "(?is)\\borders\\b(?:(?!\\n\\s*#|\\n\\s*\\|).){0,300}?\\bcatalog\\b" },
+        { "id": "notify-orders", "pattern": "(?is)\\bnotify\\b(?:(?!\\n\\s*#|\\n\\s*\\|).){0,300}?\\borders\\b" }
       ]
     },
     { "id": "orders-unchanged", "kind": "unchanged", "path": "src/orders/__init__.py" },

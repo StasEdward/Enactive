@@ -46,6 +46,18 @@ if (scenarios.Length == 0) { Console.Error.WriteLine("No scenarios to run."); re
 using var cts = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 
+// --judge <workspace>, with --only naming its scenario: the truth checked again on a workspace a run left - after the
+// truth itself was corrected, say - without running anything again.
+if (Option("--judge") is { } judged)
+{
+    if (scenarios.Length != 1) { Console.Error.WriteLine("--judge needs --only with exactly one scenario."); return 2; }
+    var checks = await Truth.CheckAsync(scenarios[0], judged, cts.Token);
+    var holds = checks.Where(c => c.Required).All(c => c.Passed);
+    Console.WriteLine($"{scenarios[0].Name}: truth {(holds ? "holds" : "fails")} on {judged}");
+    foreach (var c in checks) Console.WriteLine($"   {(c.Passed ? "pass" : "FAIL")}  {c.Id}: {c.Detail}");
+    return holds ? 0 : 1;
+}
+
 if (Flag("--fixtures") || Flag("--solutions"))
 {
     var solved = Flag("--solutions");
