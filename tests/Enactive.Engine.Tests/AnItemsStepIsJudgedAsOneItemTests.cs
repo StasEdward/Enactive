@@ -21,10 +21,12 @@ public sealed class AnItemsStepIsJudgedAsOneItemTests
                    "output":{"findings":{"type":"results","description":"unused dependencies per module"}}}]}
         """;
 
-    [Fact]
-    public async Task The_reviewer_is_told_the_document_is_the_engines_and_reading_it_is_answered_not_failed()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task The_reviewer_is_told_the_document_is_the_engines_and_reading_it_is_answered_not_failed(bool shortReview)
     {
-        using var fx = new EngineFixture { StepOutputs = true, DynamicSteps = true };
+        using var fx = new EngineFixture { StepOutputs = true, DynamicSteps = true, ShortReview = shortReview };
         fx.Write("src/Billing/Billing.csproj", "<Project />");
         var worker = new FakeChatProvider(
             Turn.Says(Plan),
@@ -33,7 +35,7 @@ public sealed class AnItemsStepIsJudgedAsOneItemTests
             Turn.Calls1("read_file", """{"path":"src/Billing/Billing.csproj"}""", "r2"),
             Turn.Calls1(StepOutputContract.ToolName, """{"findings":{"src/Billing":"no unused dependencies"}}""", "s1"),
             Turn.Says("Audited."));
-        var reviewer = new FakeChatProvider(Verdicts.Pass(), Verdicts.Pass());
+        var reviewer = shortReview ? new FakeChatProvider(Turn.Says("""{"verdict":"pass","reason":"the step did its part","calls":[1],"files":[]}"""), Turn.Says("""{"verdict":"pass","reason":"the step did its part","calls":[2],"files":[]}""")) : new FakeChatProvider(Verdicts.Pass(), Verdicts.Pass());
 
         var events = await fx.RunAsync(
             fx.Build(worker, EngineFixture.Role("developer"), router: Routers.WithReviewer(), reviewProvider: reviewer),

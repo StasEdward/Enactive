@@ -10,7 +10,11 @@ using Enactive.Core.Providers;
 /// <summary>What a step's verdict review is shown - all of it assembled by the engine.</summary>
 internal sealed record StepVerdictInput(
     string Request, string StepTitle, int? StepNumber, IReadOnlyList<string> OtherSteps, string Report, string? HandedOn,
-    IReadOnlyList<(string Path, string Text, bool Whole)> Files, EvidenceView Evidence);
+    IReadOnlyList<(string Path, string Text, bool Whole)> Files, EvidenceView Evidence,
+    // What the step is, from the plan (FanOut.ScopeNote, a read-only plan): the item it is for and the document the engine
+    // assembles, or that it changes nothing. The earlier review was told; this one was not (code review of the move to
+    // one short review, 2026-09-30) - and a step for one item was failed for "no findings file" in run d91b6a45.
+    string? ScopeNote = null);
 
 /// <summary>
 /// One short verdict on one step: did the worker do what this step was for, and is what it reported true? Pass or fail,
@@ -118,6 +122,8 @@ internal static class StepVerdictReview
         sb.AppendLine(LocalTime.Line() + " - a date or time the work states is judged against this, not against what you remember.");
         sb.AppendLine();
         sb.AppendLine(input.StepNumber is { } no ? $"THIS STEP ({no}): {input.StepTitle}" : $"THE WORK: {input.StepTitle}");
+        if (input.ScopeNote is { Length: > 0 } scope)
+            sb.AppendLine("What this step is, from the plan: " + scope);
         if (input.OtherSteps.Count > 0)
             sb.AppendLine("Other steps of the plan (theirs, not this step's): " + string.Join("; ", input.OtherSteps));
         sb.AppendLine();

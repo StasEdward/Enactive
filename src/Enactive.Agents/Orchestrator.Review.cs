@@ -148,7 +148,7 @@ public sealed partial class Orchestrator
                             planSteps?.Where((_, i) => stepNumber is not { } n || i != n - 1).ToArray() ?? [],
                             LastAssistant(messages), handedOn,
                             await StepFilesNowAsync(changes, before, journal, stepStart, store, ct),
-                            journal.Describe(evidenceStart, _evidenceBudget)),
+                            journal.Describe(evidenceStart, _evidenceBudget), obligations?.ScopeNote),
                         models.ReviewProvider!, models.ReviewModel, scope.Budget.TurnExhaustedAfter, ct, _checkDerivedFigures),
                     ReviewMode.Step)
             : await ReviewAsync(
