@@ -1,50 +1,50 @@
 {
-  "stamp": "20260930-210210-623e0b3",
-  "commit": "623e0b3",
+  "stamp": "20261001-000611-697bbc9",
+  "commit": "697bbc9",
   "dirty": false,
-  "at": "2026-09-30T21:12:08.1326359+03:00",
+  "at": "2026-10-01T00:18:04.0970903+03:00",
   "results": [
     {
       "scenario": "build-error",
       "outcome": "Completed",
       "expected": "Completed",
-      "truthHolds": false,
-      "verdict": "FALSE PASS",
+      "truthHolds": true,
+      "verdict": "right PASS",
       "exitCode": 0,
-      "wallSeconds": 48.1086232,
+      "wallSeconds": 84.2737023,
       "note": null,
       "metrics": {
         "outcome": "Completed",
         "reason": "",
-        "seconds": 47.4966929,
+        "seconds": 83.7444702,
         "steps": 0,
         "stepOutcomes": {},
         "reviewsPassed": 1,
-        "reviewsFailed": 0,
-        "toolCalls": 7,
+        "reviewsFailed": 1,
+        "toolCalls": 11,
         "tokensByPurpose": {
           "plan": {
-            "in": 4963,
-            "out": 373,
+            "in": 5934,
+            "out": 491,
             "cached": 0
           },
           "execute": {
-            "in": 49579,
-            "out": 1249,
-            "cached": 43189
+            "in": 96790,
+            "out": 2310,
+            "cached": 91256
           },
           "review": {
-            "in": 23891,
-            "out": 174,
+            "in": 13586,
+            "out": 686,
             "cached": 0
           }
         },
-        "questions": 2,
+        "questions": 0,
         "trims": 0,
         "cacheBreaks": 0,
         "cacheRewrites": 0,
-        "tokensIn": 78433,
-        "tokensOut": 1796
+        "tokensIn": 116310,
+        "tokensOut": 3487
       },
       "checks": [
         {
@@ -59,8 +59,8 @@
         {
           "id": "broken-file-left-alone",
           "kind": "unchanged",
-          "passed": false,
-          "detail": "Ledger/Report.cs was changed",
+          "passed": true,
+          "detail": "Ledger/Report.cs as it was",
           "required": true,
           "found": null,
           "outOf": null
@@ -68,14 +68,14 @@
         {
           "id": "same-one-error",
           "kind": "command",
-          "passed": false,
-          "detail": "exit 0, expected 1; no \u0027CS0103\u0027 in the output; (\\d\u002B) Error\\(s\\) read 0, expected 1",
+          "passed": true,
+          "detail": "exit 1, as expected",
           "required": true,
           "found": null,
           "outOf": null
         }
       ],
-      "workspace": "C:\\Users\\user\\AppData\\Local\\Temp\\enactive-bench\\20260930-210210-623e0b3\\build-error"
+      "workspace": "C:\\Users\\user\\AppData\\Local\\Temp\\enactive-bench\\20261001-000611-697bbc9\\build-error"
     },
     {
       "scenario": "disk-report",
@@ -84,42 +84,40 @@
       "truthHolds": true,
       "verdict": "right PASS",
       "exitCode": 0,
-      "wallSeconds": 186.1125392,
+      "wallSeconds": 93.0159054,
       "note": null,
       "metrics": {
         "outcome": "Completed",
         "reason": "",
-        "seconds": 185.6390643,
-        "steps": 2,
-        "stepOutcomes": {
-          "Succeeded": 2
-        },
-        "reviewsPassed": 2,
-        "reviewsFailed": 1,
-        "toolCalls": 13,
+        "seconds": 92.5697081,
+        "steps": 0,
+        "stepOutcomes": {},
+        "reviewsPassed": 1,
+        "reviewsFailed": 0,
+        "toolCalls": 5,
         "tokensByPurpose": {
           "plan": {
-            "in": 5688,
-            "out": 924,
-            "cached": 2188
+            "in": 4802,
+            "out": 828,
+            "cached": 3272
           },
           "execute": {
-            "in": 175337,
-            "out": 6089,
-            "cached": 164940
+            "in": 28703,
+            "out": 2812,
+            "cached": 25048
           },
           "review": {
-            "in": 11203,
-            "out": 588,
+            "in": 4371,
+            "out": 654,
             "cached": 0
           }
         },
-        "questions": 4,
+        "questions": 0,
         "trims": 0,
         "cacheBreaks": 0,
         "cacheRewrites": 0,
-        "tokensIn": 192228,
-        "tokensOut": 7601
+        "tokensIn": 37876,
+        "tokensOut": 4294
       },
       "checks": [
         {
@@ -135,13 +133,188 @@
           "id": "every-drive-named",
           "kind": "file_contains",
           "passed": true,
-          "detail": "all 5 pattern(s) in disk-report.md",
+          "detail": "all 3 pattern(s) in disk-report.md",
           "required": true,
           "found": null,
           "outOf": null
         }
       ],
-      "workspace": "C:\\Users\\user\\AppData\\Local\\Temp\\enactive-bench\\20260930-210210-623e0b3\\disk-report"
+      "workspace": "C:\\Users\\user\\AppData\\Local\\Temp\\enactive-bench\\20261001-000611-697bbc9\\disk-report"
+    },
+    {
+      "scenario": "missing-input",
+      "outcome": "Completed",
+      "expected": "Completed",
+      "truthHolds": true,
+      "verdict": "right PASS",
+      "exitCode": 0,
+      "wallSeconds": 38.9894492,
+      "note": null,
+      "metrics": {
+        "outcome": "Completed",
+        "reason": "",
+        "seconds": 38.5271934,
+        "steps": 0,
+        "stepOutcomes": {},
+        "reviewsPassed": 1,
+        "reviewsFailed": 0,
+        "toolCalls": 12,
+        "tokensByPurpose": {
+          "plan": {
+            "in": 5439,
+            "out": 758,
+            "cached": 3272
+          },
+          "execute": {
+            "in": 61203,
+            "out": 867,
+            "cached": 59303
+          },
+          "review": {
+            "in": 2829,
+            "out": 151,
+            "cached": 0
+          }
+        },
+        "questions": 0,
+        "trims": 0,
+        "cacheBreaks": 0,
+        "cacheRewrites": 0,
+        "tokensIn": 69471,
+        "tokensOut": 1776
+      },
+      "checks": [
+        {
+          "id": "report-written",
+          "kind": "file_exists",
+          "passed": true,
+          "detail": "1 file(s): Docs/deps.md",
+          "required": true,
+          "found": null,
+          "outOf": null
+        },
+        {
+          "id": "dependencies-reported",
+          "kind": "coverage",
+          "passed": true,
+          "detail": "3 of 3 found",
+          "required": true,
+          "found": 3,
+          "outOf": 3
+        },
+        {
+          "id": "orders-unchanged",
+          "kind": "unchanged",
+          "passed": true,
+          "detail": "src/orders/__init__.py as it was",
+          "required": true,
+          "found": null,
+          "outOf": null
+        },
+        {
+          "id": "notify-unchanged",
+          "kind": "unchanged",
+          "passed": true,
+          "detail": "src/notify/__init__.py as it was",
+          "required": true,
+          "found": null,
+          "outOf": null
+        },
+        {
+          "id": "script-unchanged",
+          "kind": "unchanged",
+          "passed": true,
+          "detail": "tools/list_modules.py as it was",
+          "required": true,
+          "found": null,
+          "outOf": null
+        }
+      ],
+      "workspace": "C:\\Users\\user\\AppData\\Local\\Temp\\enactive-bench\\20261001-000611-697bbc9\\missing-input"
+    },
+    {
+      "scenario": "setup-step",
+      "outcome": "Completed",
+      "expected": "Completed",
+      "truthHolds": true,
+      "verdict": "right PASS",
+      "exitCode": 0,
+      "wallSeconds": 83.4939268,
+      "note": null,
+      "metrics": {
+        "outcome": "Completed",
+        "reason": "",
+        "seconds": 83.0388041,
+        "steps": 2,
+        "stepOutcomes": {
+          "Succeeded": 2
+        },
+        "reviewsPassed": 2,
+        "reviewsFailed": 0,
+        "toolCalls": 12,
+        "tokensByPurpose": {
+          "plan": {
+            "in": 7413,
+            "out": 1507,
+            "cached": 2188
+          },
+          "execute": {
+            "in": 107251,
+            "out": 1571,
+            "cached": 97087
+          },
+          "review": {
+            "in": 6987,
+            "out": 533,
+            "cached": 0
+          }
+        },
+        "questions": 0,
+        "trims": 0,
+        "cacheBreaks": 0,
+        "cacheRewrites": 0,
+        "tokensIn": 121651,
+        "tokensOut": 3611
+      },
+      "checks": [
+        {
+          "id": "tests-pass",
+          "kind": "command",
+          "passed": true,
+          "detail": "exit 0, as expected",
+          "required": true,
+          "found": null,
+          "outOf": null
+        },
+        {
+          "id": "library-unchanged",
+          "kind": "unchanged",
+          "passed": true,
+          "detail": "Tariffs/RateTable.cs as it was",
+          "required": true,
+          "found": null,
+          "outOf": null
+        },
+        {
+          "id": "tests-unchanged",
+          "kind": "unchanged",
+          "passed": true,
+          "detail": "Tariffs.Tests/RateTableTests.cs as it was",
+          "required": true,
+          "found": null,
+          "outOf": null
+        },
+        {
+          "id": "script-unchanged",
+          "kind": "unchanged",
+          "passed": true,
+          "detail": "tools/make_rates.py as it was",
+          "required": true,
+          "found": null,
+          "outOf": null
+        }
+      ],
+      "workspace": "C:\\Users\\user\\AppData\\Local\\Temp\\enactive-bench\\20261001-000611-697bbc9\\setup-step"
     },
     {
       "scenario": "test-coverage",
@@ -150,42 +323,42 @@
       "truthHolds": true,
       "verdict": "right PASS",
       "exitCode": 0,
-      "wallSeconds": 249.5468518,
+      "wallSeconds": 294.3936832,
       "note": null,
       "metrics": {
         "outcome": "Completed",
         "reason": "",
-        "seconds": 249.086926,
+        "seconds": 293.9504049,
         "steps": 4,
         "stepOutcomes": {
           "Succeeded": 4
         },
         "reviewsPassed": 4,
         "reviewsFailed": 0,
-        "toolCalls": 20,
+        "toolCalls": 23,
         "tokensByPurpose": {
           "plan": {
-            "in": 6135,
-            "out": 1371,
+            "in": 5336,
+            "out": 1209,
             "cached": 3502
           },
           "execute": {
-            "in": 286707,
-            "out": 7423,
-            "cached": 272438
+            "in": 324590,
+            "out": 8318,
+            "cached": 309466
           },
           "review": {
-            "in": 43528,
-            "out": 670,
+            "in": 29200,
+            "out": 911,
             "cached": 0
           }
         },
-        "questions": 3,
+        "questions": 0,
         "trims": 0,
         "cacheBreaks": 0,
         "cacheRewrites": 0,
-        "tokensIn": 336370,
-        "tokensOut": 9464
+        "tokensIn": 359126,
+        "tokensOut": 10438
       },
       "checks": [
         {
@@ -225,7 +398,7 @@
           "outOf": null
         }
       ],
-      "workspace": "C:\\Users\\user\\AppData\\Local\\Temp\\enactive-bench\\20260930-210210-623e0b3\\test-coverage"
+      "workspace": "C:\\Users\\user\\AppData\\Local\\Temp\\enactive-bench\\20261001-000611-697bbc9\\test-coverage"
     },
     {
       "scenario": "wiki-drift",
@@ -234,12 +407,12 @@
       "truthHolds": true,
       "verdict": "right PASS",
       "exitCode": 0,
-      "wallSeconds": 106.6044284,
+      "wallSeconds": 109.4644751,
       "note": null,
       "metrics": {
         "outcome": "Completed",
         "reason": "",
-        "seconds": 106.1364316,
+        "seconds": 109.008912,
         "steps": 4,
         "stepOutcomes": {
           "Succeeded": 4
@@ -249,18 +422,18 @@
         "toolCalls": 16,
         "tokensByPurpose": {
           "plan": {
-            "in": 5665,
-            "out": 2282,
+            "in": 6159,
+            "out": 2724,
             "cached": 3502
           },
           "execute": {
-            "in": 87752,
-            "out": 2566,
-            "cached": 79068
+            "in": 88021,
+            "out": 2676,
+            "cached": 81476
           },
           "review": {
-            "in": 5396,
-            "out": 406,
+            "in": 6753,
+            "out": 460,
             "cached": 0
           }
         },
@@ -268,8 +441,8 @@
         "trims": 0,
         "cacheBreaks": 0,
         "cacheRewrites": 0,
-        "tokensIn": 98813,
-        "tokensOut": 5254
+        "tokensIn": 100933,
+        "tokensOut": 5860
       },
       "checks": [
         {
@@ -309,7 +482,7 @@
           "outOf": null
         }
       ],
-      "workspace": "C:\\Users\\user\\AppData\\Local\\Temp\\enactive-bench\\20260930-210210-623e0b3\\wiki-drift"
+      "workspace": "C:\\Users\\user\\AppData\\Local\\Temp\\enactive-bench\\20261001-000611-697bbc9\\wiki-drift"
     }
   ]
 }
