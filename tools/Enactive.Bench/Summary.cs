@@ -58,10 +58,12 @@ internal static class Summary
         foreach (var r in now.Results)
         {
             var failed = r.Checks.Where(c => !c.Passed).ToArray();
-            if (failed.Length == 0 && r.Note is null && r.Metrics?.Reason is null) continue;
+            // Only where there is something to say: a check that failed, a run that did not end by itself, a verdict
+            // that is not the engine's own.
+            if (failed.Length == 0 && r.Note is null && r.Verdict.StartsWith("right", StringComparison.Ordinal)) continue;
             sb.AppendLine().AppendLine($"## {r.Scenario}");
             if (r.Note is not null) sb.AppendLine($"- Run: {r.Note}");
-            if (r.Metrics?.Reason is { Length: > 0 } reason) sb.AppendLine($"- Engine's reason: {reason}");
+            if (r.Metrics?.Reason is { Length: > 0 } reason && reason != "null") sb.AppendLine($"- Engine's reason: {reason}");
             foreach (var c in failed) sb.AppendLine($"- Truth `{c.Id}`{(c.Required ? "" : " (optional)")}: {c.Detail}");
             sb.AppendLine($"- Workspace left at `{r.Workspace}`");
         }
