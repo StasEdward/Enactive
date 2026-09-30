@@ -145,10 +145,13 @@ public sealed partial class Orchestrator
             : _shortReview
                 ? (await StepVerdictReview.RunAsync(
                         new StepVerdictInput(request, title, stepNumber,
-                            planSteps?.Where((_, i) => stepNumber is not { } n || i != n - 1).ToArray() ?? [],
+                            planSteps?.Select((t, i) => (t, i)).Where(p => stepNumber is not { } n || p.i != n - 1)
+                                .Select(p => $"{p.i + 1}. {p.t}").ToArray() ?? [],
                             LastAssistant(messages), handedOn,
                             await StepFilesNowAsync(changes, before, journal, stepStart, store, ct),
-                            journal.Describe(evidenceStart, _evidenceBudget), obligations?.ScopeNote),
+                            journal.Describe(evidenceStart, _evidenceBudget), obligations?.ScopeNote,
+                            obligations?.Owned().Select(o => $"{o.Unit.Id}: {o.Unit.Text.Trim()}"
+                                + (o.AlsoTo.Count > 0 ? $" (also given to step {string.Join(", ", o.AlsoTo.Select(scope => scope.TrimStart('S')))})" : "")).ToArray()),
                         models.ReviewProvider!, models.ReviewModel, scope.Budget.TurnExhaustedAfter, ct, _checkDerivedFigures),
                     ReviewMode.Step)
             : await ReviewAsync(

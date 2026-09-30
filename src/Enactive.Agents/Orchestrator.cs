@@ -683,6 +683,45 @@ public sealed partial class Orchestrator : IOrchestrator
                       + "and the steps after them write what they write; no item step may write a file the criteria name.");
         }
 
+        // Each step is judged against the lines of the request the plan gives it, and nothing judges the run as a whole
+        // after them: a line no step is given is checked by no one. The planner is asked once, like the report above;
+        // what it answers stands - a line it still gives no step is its judgement (a greeting, context), and is said.
+        if (resume is null && _shortReview && plan.Plan is { } assigning
+            && RequestObligations.ForPlan(intent.RawText, assigning).Unassigned() is { Count: > 0 } ungiven)
+        {
+            var diagnostic = "Lines of the request no step is given: "
+                + string.Join(", ", ungiven.Select(o => o.Id)) + ". "
+                + "Each step is reviewed against the lines it is given, and nothing reviews the run as a whole after them, so a "
+                + "line no step is given is checked by no one. Give each to the step or steps that do or check it; a constraint "
+                + "or a piece of context goes to every step it bears on.";
+            yield return scope.Ev(EventKind.ContextAssembled, diagnostic + " Asking the planner.");
+            var before = plan;
+            string? unclear = budget.TurnExhausted;
+            if (unclear is null)
+            {
+                try
+                {
+                    ct.ThrowIfCancellationRequested();
+                    plan = await InScopeAsync(runId, taskId, null, () => _planner.ReplanAsync(
+                        intent.RawText, intent.Context, plan, diagnostic, models.PlanProvider, models.Plan.Model, ct,
+                        _limits.MaxSteps, _proposeChecks && _successCriteria.Count == 0, RunawayCeiling, _generationBudgets.For(GenerationPurpose.Planning),
+                        _stepOutputs, _typedCriteria, _dynamicSteps, _validateWaves, _semanticCriteria));
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex) { unclear = "the planner could not be asked: " + ex.Message; }
+                if (unclear is null && plan.PromptTokens + plan.CompletionTokens > 0)
+                    yield return scope.Usage(WorkEventPayload.WorkPurpose.Plan, models.Plan,
+                        plan.PromptTokens, plan.CompletionTokens, cached: plan.CachedPromptTokens, created: plan.CacheCreationPromptTokens);
+            }
+            if (unclear is not null || plan.Readout == PlanReadout.Unreadable || plan.Plan is null || PlanValidation.Error(plan.Plan) is not null)
+                plan = before;
+            var still = RequestObligations.ForPlan(intent.RawText, plan.Plan!).Unassigned();
+            yield return scope.Ev(EventKind.ContextAssembled, still.Count == 0
+                ? "The planner gave every line of the request to a step."
+                : $"Given to no step, so judged by no step's review{(unclear is null ? "" : $" ({unclear})")}: "
+                  + string.Join(", ", still.Select(o => o.Id)) + ".");
+        }
+
         // A quick action that stopped at a question is carried on AS the quick action it was, from
         // the position it stopped at. Planned again, the same request can come back as steps, and
         // the position - kept for the quick action - would then be found by nothing, and the work

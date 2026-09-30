@@ -14,7 +14,10 @@ internal sealed record StepVerdictInput(
     // What the step is, from the plan (FanOut.ScopeNote, a read-only plan): the item it is for and the document the engine
     // assembles, or that it changes nothing. The earlier review was told; this one was not (code review of the move to
     // one short review, 2026-09-30) - and a step for one item was failed for "no findings file" in run d91b6a45.
-    string? ScopeNote = null);
+    string? ScopeNote = null,
+    // The lines of the request the plan gives this step. The earlier review judged each step against them; this one saw
+    // the title alone, and a line the title did not name was judged by no one (code review of the move, 2026-09-30).
+    IReadOnlyList<string>? Owns = null);
 
 /// <summary>
 /// One short verdict on one step: did the worker do what this step was for, and is what it reported true? Pass or fail,
@@ -124,6 +127,11 @@ internal static class StepVerdictReview
         sb.AppendLine(input.StepNumber is { } no ? $"THIS STEP ({no}): {input.StepTitle}" : $"THE WORK: {input.StepTitle}");
         if (input.ScopeNote is { Length: > 0 } scope)
             sb.AppendLine("What this step is, from the plan: " + scope);
+        if (input.Owns is { Count: > 0 } owns)
+        {
+            sb.AppendLine("Lines of the request the plan gives this step - it does or checks its part of each; the step is not done while a part of one that is its own is not:");
+            foreach (var line in owns) sb.AppendLine("- " + line);
+        }
         if (input.OtherSteps.Count > 0)
             sb.AppendLine("Other steps of the plan (theirs, not this step's): " + string.Join("; ", input.OtherSteps));
         sb.AppendLine();

@@ -38,6 +38,18 @@ public sealed record RequestObligations(
 
     public RequestObligations AtStep(int step) => this with { CurrentScope = "S" + step };
 
+    /// <summary>The source units the plan gives the current step, each with the other steps it is given to.</summary>
+    public IReadOnlyList<(RequestObligation Unit, IReadOnlyList<string> AlsoTo)> Owned() => ScopeMap is null ? [] :
+        Items.Where(i => ScopeMap.TryGetValue(i.Id, out var owners) && owners.Contains(CurrentScope))
+            .Select(i => (i, (IReadOnlyList<string>)ScopeMap[i.Id].Where(s => s != CurrentScope).ToArray())).ToArray();
+
+    /// <summary>
+    /// The source units no step is given, where the plan gives any: with one short review per step and none of the whole
+    /// run after them, such a unit is checked by no one. A plan that assigns nothing at all says nothing here.
+    /// </summary>
+    public IReadOnlyList<RequestObligation> Unassigned() => ScopeMap is null || ScopeMap.Values.All(o => o.Count == 0) ? [] :
+        Items.Where(i => !ScopeMap.TryGetValue(i.Id, out var owners) || owners.Count == 0).ToArray();
+
     /// <summary>A shared assignment permits verification here of a requirement implemented elsewhere.
     /// Deferrals remain deferrals; membership never proves completion.</summary>
     public string EvidenceScope(string id, string scope, ProofClaimKind kind)

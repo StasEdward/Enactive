@@ -54,7 +54,7 @@ public sealed class AStepIsGivenOneShortVerdictTests
         Assert.Equal(2, reviewer.Requests.Count);                                                  // one per step, none after
         var asked = string.Join("\n", reviewer.Requests[0].Messages.Select(m => m.Content));
         Assert.Contains("THIS STEP (1): Write the disk report", asked, StringComparison.Ordinal);
-        Assert.Contains("Other steps of the plan (theirs, not this step's): Check the report", asked, StringComparison.Ordinal);
+        Assert.Contains("Other steps of the plan (theirs, not this step's): 2. Check the report", asked, StringComparison.Ordinal);
         Assert.Contains("--- report.md", asked, StringComparison.Ordinal);
         Assert.DoesNotContain("report_checks", asked, StringComparison.Ordinal);
         Assert.Contains(events, e => e.Summary.Contains("PASS (Step review)", StringComparison.Ordinal));
