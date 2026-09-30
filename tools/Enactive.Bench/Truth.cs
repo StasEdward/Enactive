@@ -113,7 +113,8 @@ internal static class Truth
     {
         var psi = shell.Equals("powershell", StringComparison.OrdinalIgnoreCase)
             ? new ProcessStartInfo("powershell.exe") { ArgumentList = { "-NoProfile", "-NonInteractive", "-Command", command } }
-            : new ProcessStartInfo("cmd.exe") { ArgumentList = { "/d", "/c", command } };
+            // The line as written: an argument list would escape its quotes as \", which cmd does not read.
+            : new ProcessStartInfo("cmd.exe") { Arguments = "/d /s /c \"" + command + "\"" };
         psi.WorkingDirectory = workspace;
         psi.RedirectStandardOutput = psi.RedirectStandardError = true;
         psi.UseShellExecute = false;

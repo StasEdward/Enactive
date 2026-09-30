@@ -14,8 +14,16 @@ internal sealed record Scenario(
     string Approve,
     Expectation Expect,
     IReadOnlyList<Check> Checks,
-    string? About = null)
+    string? About = null,
+    string? Autonomy = null)
 {
+    /// <summary>
+    /// The tier the run is given. A scenario that needs a shell runs where commands go without asking, as they do in the
+    /// window: at the tier that asks, the engine takes no build of its own before the work (it asks nobody for a check
+    /// nobody asked for), and its "no new build errors" is never measured - so the first benchmark found.
+    /// </summary>
+    public string EffectiveAutonomy => Autonomy ?? (Approve == "allow" ? "autonomous" : "execute");
+
     /// <summary>The folder scenario.json was read from.</summary>
     [JsonIgnore] public string Folder { get; init; } = "";
 

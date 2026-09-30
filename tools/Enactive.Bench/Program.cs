@@ -122,7 +122,7 @@ async Task<ScenarioResult> RunScenarioAsync(Scenario scenario)
     var clock = Stopwatch.StartNew();
     var psi = new ProcessStartInfo(console)
     {
-        ArgumentList = { scenario.Request, work, "--autonomy", "execute", "--approve", scenario.Approve,
+        ArgumentList = { scenario.Request, work, "--autonomy", scenario.EffectiveAutonomy, "--approve", scenario.Approve,
                          "--report", Path.Combine(scenarioOut, "report.txt") },
         WorkingDirectory = work,
         RedirectStandardOutput = true,
