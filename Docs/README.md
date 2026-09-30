@@ -8,21 +8,9 @@ namespaces, assemblies, env vars and on-disk data folders all use the new name (
 
 | | |
 |---|---|
-| `PLAN.md` | The vision |
-| `PLAN_v2.md` | Development spec; **§11 is the honest status** — what is built and what is not |
-| `FIX_PLAN.md` | The defect log: every fix since the first review, each with the log line that exposed it, what changed, what deliberately did not, and the test that fails without it. Its §9 tail is the open backlog |
-| `MODELS.md` | The multi-provider team-of-models design (implemented) |
-| `MCP.md` | MCP servers as tools (implemented 2026-09-06) |
-| `LOGGING.md` | The global log and the log analysis |
-| `STYLING.md` | How the Avalonia/Fluent UI is themed — **read before changing anything visual** |
-| `TASK_TEMPLATES_PLAN.md` | The saved-task system (complete) |
-| `SCHEDULER_PLAN.md` | Schedules: a template that runs at a chosen day and time |
-| `SETTINGS_PLAN.md` | One configuration, two hosts |
-| `REMOTE_DESIGN.md`, `REMOTE_ACCESS_PLAN.md`, `REMOTE_OPERATIONS.md`, `ENACTIVE_REMOTE_PROTOCOL.md` | Remote access — the design, the plan, how to run it, and the wire protocol |
-| `WORKSPACE_SANDBOX_ARCHITECTURE.md`, `SANDBOX_PLAN.md` | The sandbox: the argument, then the plan |
-| `REVERT_INTEGRITY_PLAN.md` | Undo/revert integrity (done 2026-09-08; outcome in `FIX_PLAN.md` §9u) |
-| `SCENARIO_CHECKS.md` | Behaviours a unit test cannot settle, driven from a command line |
-| `Enactive_Code_Review_2026-09-*.md` | The reviews this defect log answers |
+| [`wiki/`](wiki/README.md) | The guide: getting started, models and phases, running tasks, templates and schedules, settings, remote access, operations, architecture |
+| [`REMOTE_OPERATIONS.md`](REMOTE_OPERATIONS.md) | Running your own remote-access gateway: what to install, what each setting means, backups, what is left manual |
+| [`../bench/README.md`](../bench/README.md) | The live benchmark: tasks with a ground truth, run through the engine as it is configured |
 
 The engine turns one intent into real, reviewable, recorded action:
 
@@ -34,7 +22,7 @@ Command -> Intent -> Context(+Environment) -> Planner -> Orchestrator -> Worker(
 ## Solution
 
 `Enactive.sln`, **12 product projects** (`net10.0`, pinned via `global.json`), plus three on the test side:
-`tests/Enactive.Engine.Tests` (**1913 tests**), `tests/Enactive.Remote.Gateway.Tests` (77, and they need a MySQL
+`tests/Enactive.Engine.Tests` (the engine's unit and scenario tests), `tests/Enactive.Remote.Gateway.Tests` (77, and they need a MySQL
 to run) and `tests/Enactive.Mcp.TestServer`.
 
 The engine is dependency-light: `Core`/`Providers`/`Agents`/`App.Console` use **no external NuGet package the
@@ -49,12 +37,12 @@ tool need (`ToolArguments.ExpectedExitCodes`) lives in `Core.Tools`, not in `Too
 | `Enactive.Providers` | `OpenAiCompatibleProvider`, `OllamaNativeProvider` (native `/api/chat` so per-run `num_ctx` works), `AnthropicProvider` (reasoner) behind `ChatProviderFactory`; `LoggingChatProvider` + `WireTap`. |
 | `Enactive.Tools` | The tools themselves, plus `ProcessExec` and `LoggingToolRegistry`. Every path goes through `WorkspacePaths` — inside the workspace or refused. See **Tools** below. |
 | `Enactive.Workspace` | Run, project-memory and inbox stores, each SQLite/MySQL/JSON behind `RunStoreFactory` / `MemoryStoreFactory` / `InboxStoreFactory`; artifact stores (disk + staging), `EnvironmentProbe`, `ProjectMemory`, `LogHub`/`FileLogSink`. |
-| `Enactive.Agents` | `Orchestrator` (DAG execution, role tool-filtering, permission gating, open-failure and stall guards, optional reasoner plan+review, success criteria), `Planner` (dependency graphs), `DagScheduler`, `Reviewer` (judges the step's own evidence journal, not the transcript), `SuccessEvaluator`, `LogAnalyst` (a model reads an exported log; the log is data, never instructions), `DefaultWorkers`, `BackgroundRunner`, the unattended decision handler. |
+| `Enactive.Agents` | `Orchestrator` (DAG execution, role tool-filtering, permission gating, open-failure and stall guards, optional reasoner plan+review, success criteria), `Planner` (dependency graphs), `DagScheduler`, `StepVerdictReview` (one short verdict per step, on the step's own evidence journal and its files as they are - not the transcript), `SuccessEvaluator`, `LogAnalyst` (a model reads an exported log; the log is data, never instructions), `DefaultWorkers`, `BackgroundRunner`, the unattended decision handler. |
 | `Enactive.Secrets` | DPAPI protection for API keys; a key that cannot be protected is not written down. |
 | `Enactive.App.Console` | Console host; sub-commands `timeline`, `inbox`; `--template <id> --workspace <path>` runs one saved task unattended, and `--due` runs whatever the saved schedules say is owed — both with an exit code a scheduler can read. Nothing in that mode is interactive, and it is enforced rather than assumed (`UnattendedDecisionHandler`). |
 | `Enactive.Settings` | `AppSettings` and its file — the one configuration both hosts read, including the provider list, the worker team, the phase bindings, the SMTP account and the MCP servers (`McpSettings`, `McpRoles`). Referenced by both hosts so neither owns it. |
 | `Enactive.Remote.Contracts` | The wire types remote access is spoken in — shared by the gateway and the host so one side cannot drift from the other. |
-| `Enactive.Remote.Gateway` | The server side of remote access: the panel, the cursor over a run's events, the schema. See `REMOTE_DESIGN.md`. |
+| `Enactive.Remote.Gateway` | The server side of remote access: the panel, the cursor over a run's events, the schema. See `REMOTE_OPERATIONS.md`. |
 | `Enactive.Remote.Host` | The machine-side agent that a gateway talks to. Remote access is **off** unless it is turned on. |
 | `Enactive.App.Ui` | Avalonia desktop UI: `.axaml` views over view models (`ViewModels/`), with a small hand-written MVVM base in `Mvvm/`, app-wide styling in `Styles/Controls.axaml` and the palette in `Brand.cs`. |
 
@@ -75,7 +63,7 @@ the host registers and no role names — seen from the other side.
 MCP servers add more. A server configured in Settings → MCP is connected at startup and its tools
 are offered to the roles that reach it (`McpRoles`); a server nobody reaches is named in the run's
 own events, because a server connected and offered to no one looks exactly like a server that
-works. See `MCP.md`.
+works. See [Settings](wiki/Settings.md).
 
 **Every path goes through `WorkspacePaths`** — inside the workspace, or refused.
 
@@ -96,8 +84,7 @@ there.
 an exit code upwards. A lookup that finds nothing is an answer (`read_file` past the end of a file,
 a search that matched nothing). So is a call that never happened: a shell refusing a word it does
 not have, `git` refusing its own arguments, a tool name with no tool behind it. These are told
-apart by what the program itself said, and `FIX_PLAN.md` §9ap and §9bj–§9bl are what each one cost
-to learn.
+apart by what the program itself said.
 
 ## UI
 
@@ -143,7 +130,7 @@ applied **after** `InitializeComponent`, or the XAML's own `Width`/`Height` over
   `%APPDATA%/Enactive/templates/`, repository ones in `<workspace>/.enactive/templates/`. A template is resolved
   against a workspace into one frozen specification the run records verbatim; only DECLARED placeholders are
   replaced, in the goal and in each criterion's command. The library generates a launch form from the parameters.
-  See `TASK_TEMPLATES_PLAN.md`.
+  See [Templates](wiki/Templates.md).
 - **"Done" is not the model's opinion** — three guards decide a step, in this order: a tool call that failed and
   was never made good ends the step Incomplete — but only a call that really did fail. A lookup that found nothing
   is an answer (unless the step did nothing else), and so is a call that never happened at all: a word the shell
@@ -157,7 +144,7 @@ applied **after** `InitializeComponent`, or the XAML's own `Width`/`Height` over
   output in front of it, before the criteria are re-run and decide. A failing check beats the model
   saying it is done.
 - **Permissions + decisions** — autonomy slider (Observe/Suggest/Execute/Autonomous); run_command/run_powershell ask before running. The approval card can **remember** an allow for the session or the workspace (`.enactive/permissions.json`).
-- **Team of models** — configure any number of providers (Ollama, Anthropic, OpenAI-compatible) and an editable team of workers, each with its own model, and bind a model per phase: **Plan**, **Review**, and per-step **Execute** auto-routing (the planner rates each step trivial/normal/complex → light/worker/heavy model). A reasoner plans and reviews each step against the **real tool transcript**; on FAIL the step is retried with feedback. Robustness: local reasoning (`<think>`) off by default, Anthropic `temperature` auto-dropped and `max_tokens` auto-sized to the model's cap, a token-limit truncation guard, and optional read-back verification of writes. See `MODELS.md`.
+- **Team of models** — configure any number of providers (Ollama, Anthropic, OpenAI-compatible) and an editable team of workers, each with its own model, and bind a model per phase: **Plan**, **Review**, and per-step **Execute** auto-routing (the planner rates each step trivial/normal/complex → light/worker/heavy model). A reasoner plans and reviews each step against the **real tool transcript**; on FAIL the step is retried with feedback. Robustness: local reasoning (`<think>`) off by default, Anthropic `temperature` auto-dropped and `max_tokens` auto-sized to the model's cap, a token-limit truncation guard, and optional read-back verification of writes. See [Models and phases](wiki/Models-and-Phases.md).
 - **Workers as roles** — Developer / Reviewer (read-only) / Ops / Writer, each with its own tool allowlist and permission level; pick one per run.
 - **Environment awareness** — read-only discovery of host/OS, git (branch/remote/dirty), Docker, WSL, services, and a live snapshot; fed into the prompt and shown in the UI.
 - **Timeline as project memory, read back** — decisions and how each run ended are folded into a
@@ -168,26 +155,25 @@ applied **after** `InitializeComponent`, or the XAML's own `Width`/`Height` over
 - **Global log** — every prompt, response, tool call and event, with a raw-wire option; live window + daily file.
   **Log analysis**: the log window sends an exported run to a model for a diagnosis; the log is fenced as DATA,
   an instruction found inside it is never followed, and the analysis's own prompts are logged without their bodies
-  so it cannot recurse on itself. See `LOGGING.md`.
+  so it cannot recurse on itself. See [Operations](wiki/Operations.md).
 - **Change staging** — optional stage → diff → Apply/Reject before writing. Staging is a TEXT diff:
   it cannot express a deletion or carry binary content, and an operation needing either is refused
   before it does the half of itself that works (`IArtifactStore.CanRemove`).
 - **Undo and revert that refuse rather than guess** — every write is journalled with the bytes it
   displaced, a sequence number, the scope that made it and one canonical key per file. A revert
   undoes its own scope's writes; a file another scope has written since, or a file the user has
-  edited since, is REPORTED with the reason and left alone. `Docs/FIX_PLAN.md` §9u is what each of
-  those clauses cost to learn.
+  edited since, is REPORTED with the reason and left alone.
 - **MCP servers as tools** — a server configured in Settings → MCP is connected at startup and its
   tools join the registry under `mcp__<server>__<tool>` names. Which roles may reach which server is
   part of the configuration (`McpRoles`), and a server that reaches nobody is said so in the run's
   events — connected-and-offered-to-no-one is indistinguishable from working, from the outside.
-  See `MCP.md`.
+  See [Settings](wiki/Settings.md).
 - **Schedules** — a saved task can be given a day and a time. The console's `--due` asks the saved
   schedules what is owed and runs it; Windows Task Scheduler, cron or a pipeline step drives that.
-  See `SCHEDULER_PLAN.md`.
+  See [Templates](wiki/Templates.md).
 - **Remote access, off by default** — `Enactive.Remote.Host` and `Enactive.Remote.Gateway` let a run
   be watched and steered from elsewhere over the contracts in `Enactive.Remote.Contracts`. It starts
-  off and says so at startup. See `REMOTE_DESIGN.md` and `REMOTE_OPERATIONS.md`.
+  off and says so at startup. See [Remote access](wiki/Remote-Access.md) and `REMOTE_OPERATIONS.md`.
 - **Secrets** — the Anthropic API key is DPAPI-encrypted in `settings.json`.
 
 ## Build & run
@@ -208,7 +194,7 @@ Prerequisites: **.NET 10 SDK**, **Ollama** with a tool-capable model (`ollama pu
 optionally an **Anthropic API key** for multi-agent mode. On Windows, prefer `run_powershell` for
 WMI/CIM/Get-PSDrive/pipes.
 
-One operational rule learned the hard way (`FIX_PLAN.md` §9p): bind **Review** to the strongest model you have,
+One operational rule learned the hard way: bind **Review** to the strongest model you have,
 not the same local model that executes. A weak reviewer rejects true reports over evidence it misreads, and no
 amount of prompt text fixes that.
 

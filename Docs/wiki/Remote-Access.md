@@ -46,7 +46,7 @@ enforced rather than described.
 | Permissions and autonomy come from the workspace's own saved settings, not from whatever is selected on screen | `MainWindow.SnapshotEnvironment` |
 
 The shell rule is absolute and has no exception for somebody being at the keyboard. The reasoning
-is in [SANDBOX_PLAN](../SANDBOX_PLAN.md): the sandbox threat model is justified by "the machine is
+is that the sandbox threat model is justified by "the machine is
 the developer's own, the projects are theirs", and a network origin is exactly what that argument
 does not cover. It is enforced in two independent places because one alone would be a promise and
 the other alone would be trusting the panel.
@@ -149,7 +149,6 @@ These are current, deliberate, and worth knowing before relying on the feature.
 
 ## Implementation references
 
-- [Design and staged plan](../REMOTE_DESIGN.md)
 - [Deployment and operations runbook](../REMOTE_OPERATIONS.md)
 - [Protocol contracts](../src/Enactive.Remote.Contracts/Messages.cs)
 - [Gateway](../src/Enactive.Remote.Gateway/Program.cs)

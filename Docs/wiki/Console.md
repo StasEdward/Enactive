@@ -88,8 +88,7 @@ This demonstrates valid syntax. It is **not** a promise that Fix Bug can complet
 ## Tier, role, and answers
 
 Three arguments describe the conditions a run acts under. They exist so a behavior can be checked
-from a command line instead of by driving the desktop by hand; see
-[SCENARIO_CHECKS](../SCENARIO_CHECKS.md).
+from a command line instead of by driving the desktop by hand.
 
 | Argument | Values | Default |
 | --- | --- | --- |
