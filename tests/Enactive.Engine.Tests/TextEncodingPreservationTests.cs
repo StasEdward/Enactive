@@ -77,7 +77,9 @@ public sealed class TextEncodingPreservationTests
     public async Task Shell_standard_input_is_closed()
     {
         using var fx = new EngineFixture();
-        using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        // A bound for a hang - an open standard input leaves ReadLine waiting for ever - not for how fast PowerShell starts:
+        // on a shared CI runner, busy with the rest of the suite, 10 s was not always enough to start it (2026-10-01).
+        using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(60));
         var script = "if ($null -eq [Console]::ReadLine()) { [Console]::WriteLine('EOF'); exit 0 }; exit 1";
         var result = await new RunPowerShellTool().InvokeAsync(JsonSerializer.Serialize(new { script }), fx.ContextFor(), limit.Token);
         Assert.Contains("EOF", result.Output);
