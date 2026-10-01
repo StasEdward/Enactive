@@ -1,11 +1,14 @@
 namespace Enactive.Remote.Gateway.Tests;
 
 using System.Collections.Concurrent;
+using System.Globalization;
 using System.Net;
 using System.Net.Http.Json;
 using Enactive.Remote.Contracts;
 using Enactive.Remote.Gateway.Accounts;
 using Enactive.Remote.Gateway.Storage;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OAuth;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Hosting;
@@ -15,6 +18,7 @@ using Microsoft.AspNetCore.TestHost;
 using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Xunit;
 
 /// <summary>
@@ -32,6 +36,9 @@ public sealed class SignInTests(TestDatabase database) : IClassFixture<TestDatab
     private static readonly Uri Origin = new("https://localhost");
 
     private FakeProviders _fake = null!;
+
+    // Every gateway of a test logs into this, at Trace, so any test can check it wrote no secret.
+    private readonly CapturingLoggerProvider _logs = new();
 
     private Database Db => new(database.ConnectionString);
 
@@ -76,36 +83,33 @@ public sealed class SignInTests(TestDatabase database) : IClassFixture<TestDatab
     /// <summary>
     /// A state the gateway did not issue to this browser gets nobody in: garbage, and also a real state
     /// issued to another browser, which is what a login-CSRF attacker would deliver. The code is real
-    /// both times, so only the state check stands between it and a session.
+    /// every time, so only the state check stands between it and a session - and it stands before the
+    /// code is redeemed at all.
     /// </summary>
     [Theory]
-    [InlineData("garbage")]
-    [InlineData("another browser's")]
-    public async Task A_forged_state_creates_no_session(string forgery)
+    [InlineData("github", "garbage")]
+    [InlineData("github", "another browser's")]
+    [InlineData("google", "garbage")]
+    [InlineData("google", "another browser's")]
+    public async Task A_forged_state_creates_no_session(string provider, string forgery)
     {
         await using var gateway = Gateway();
-        var id = NewGitHubId();
-        await ApproveAsync($"github:{id}");
-        _fake.GitHubUser = new GitHubAccount(id, "mallory");
+        var subject = Admit(provider, "mallory");
+        await ApproveAsync($"{provider}:{subject}");
 
         using var victim = new Browser(gateway);
-        var callback = await victim.GitHubCallbackAsync(_fake);
+        using var attacker = new Browser(gateway);
+        var answer = await victim.AnswerAsync(provider, _fake);
+        var forged = forgery == "garbage"
+            ? "forged-state"
+            : (await attacker.AnswerAsync(provider, _fake)).Fields["state"];
 
-        string forged;
-        if (forgery == "garbage")
-        {
-            forged = "forged-state";
-        }
-        else
-        {
-            using var attacker = new Browser(gateway);
-            forged = Query(await attacker.GitHubCallbackAsync(_fake), "state");
-        }
+        Assert.Equal("/#failed", await victim.DeliverAsync(answer.With("state", forged)));
 
-        Assert.Equal("/#failed", await victim.FollowAsync(WithQuery(callback, "state", forged)));
-
+        Assert.Equal(0, _fake.TokenRequests);
         Assert.False((await victim.SessionAsync()).Authenticated);
-        Assert.Equal(0, await IdentitiesAsync("github", id.ToString()));
+        Assert.Equal(0, await IdentitiesAsync(provider, subject));
+        AssertNoSecretLogged(answer.Fields["state"], forged);
     }
 
     /// <summary>
@@ -117,19 +121,54 @@ public sealed class SignInTests(TestDatabase database) : IClassFixture<TestDatab
     public async Task A_wrong_code_verifier_creates_no_session()
     {
         await using var gateway = Gateway();
-        var id = NewGitHubId();
+        var id = Admit(ExternalSignIn.GitHub, "mallory");
         await ApproveAsync($"github:{id}");
-        _fake.GitHubUser = new GitHubAccount(id, "mallory");
 
         using var victim = new Browser(gateway);
         using var attacker = new Browser(gateway);
-        var victims = await victim.GitHubCallbackAsync(_fake);
-        var stolen = Query(await attacker.GitHubCallbackAsync(_fake), "code");
+        var victims = await victim.AnswerAsync(ExternalSignIn.GitHub, _fake);
+        var stolen = (await attacker.AnswerAsync(ExternalSignIn.GitHub, _fake)).Fields["code"];
 
-        Assert.Equal("/#failed", await victim.FollowAsync(WithQuery(victims, "code", stolen)));
+        Assert.Equal("/#failed", await victim.DeliverAsync(victims.With("code", stolen)));
 
         Assert.False((await victim.SessionAsync()).Authenticated);
-        Assert.Equal(0, await IdentitiesAsync("github", id.ToString()));
+        Assert.Equal(0, await IdentitiesAsync("github", id));
+        AssertNoSecretLogged(victims.Fields["state"]);
+    }
+
+    /// <summary>
+    /// A callback is limited per caller, before the handler runs. Every callback whose state passes makes
+    /// the gateway post this service's client secret to the provider's token endpoint, and nothing on the
+    /// server makes a state single-use: a client that keeps its own state and correlation cookie can
+    /// replay them with made-up codes as fast as it likes, spending this client's standing with GitHub or
+    /// Google until they block everybody's sign-in. The callbacks are answered inside authentication, so
+    /// the limit on the sign-in endpoints never saw them.
+    /// </summary>
+    [Fact]
+    public async Task Replaying_one_state_at_the_callback_is_limited_before_any_code_is_redeemed()
+    {
+        await using var gateway = Gateway();
+        using var browser = new Browser(gateway);
+        var answer = await browser.AnswerAsync(ExternalSignIn.GitHub, _fake);
+        var kept = browser.CookieHeader(answer.Target);
+
+        // No cookie jar: the kept cookie is sent every time, as a replaying client would send it, although
+        // the gateway asks for it to be deleted after the first use.
+        using var replayer = gateway.CreateDefaultClient(Origin);
+        var statuses = new List<HttpStatusCode>();
+
+        for (var attempt = 0; attempt <= ExternalSignIn.CallbacksPerMinute; attempt++)
+        {
+            using var request = new HttpRequestMessage(
+                HttpMethod.Get, answer.With("code", $"made-up-{attempt}").CallbackUri);
+            request.Headers.Add("Cookie", kept);
+            using var response = await replayer.SendAsync(request);
+            statuses.Add(response.StatusCode);
+        }
+
+        Assert.All(statuses[..^1], status => Assert.Equal(HttpStatusCode.Redirect, status));
+        Assert.Equal(HttpStatusCode.TooManyRequests, statuses[^1]);
+        Assert.Equal(ExternalSignIn.CallbacksPerMinute, _fake.TokenRequests);
     }
 
     // ── Google ──────────────────────────────────────────────────────────────
@@ -157,6 +196,7 @@ public sealed class SignInTests(TestDatabase database) : IClassFixture<TestDatab
 
         Assert.False((await browser.SessionAsync()).Authenticated);
         Assert.Equal(0, await IdentitiesAsync("google", sub));
+        AssertNoSecretLogged();
     }
 
     /// <summary>The same token, unspoilt, does sign in: the theory above fails for its fault and nothing else.</summary>
@@ -245,6 +285,44 @@ public sealed class SignInTests(TestDatabase database) : IClassFixture<TestDatab
         using var second = new Browser(gateway);
         Assert.Equal("/#disabled", await second.SignInWithGitHubAsync(_fake));
         Assert.False((await second.SessionAsync()).Authenticated);
+    }
+
+    /// <summary>
+    /// <c>/auth/complete</c> believes only an External cookie this gateway issued, unaltered and in its
+    /// ten minutes. Without one - a direct visit, a cookie somebody edited, one kept past its time - it
+    /// signs nobody in, though the identity it names is admitted. The genuine cookie is the control.
+    /// </summary>
+    [Theory]
+    [InlineData("none", "/#failed")]
+    [InlineData("tampered", "/#failed")]
+    [InlineData("expired", "/#failed")]
+    [InlineData("genuine", "/")]
+    public async Task Complete_signs_in_only_on_a_genuine_unexpired_answer(string cookie, string expected)
+    {
+        await using var gateway = Gateway();
+        var id = NewGitHubId().ToString(CultureInfo.InvariantCulture);
+        await ApproveAsync($"github:{id}");
+        using var browser = new Browser(gateway);
+
+        if (cookie != "none")
+        {
+            var format = gateway.Services.GetRequiredService<IOptionsMonitor<CookieAuthenticationOptions>>()
+                .Get(ExternalSignIn.SchemeName).TicketDataFormat;
+            var expires = DateTimeOffset.UtcNow.AddMinutes(cookie == "expired" ? -1 : 10);
+            var value = format.Protect(new AuthenticationTicket(
+                ExternalSignIn.Answer(ExternalSignIn.GitHub, id, "octocat"),
+                new AuthenticationProperties { ExpiresUtc = expires },
+                ExternalSignIn.SchemeName));
+
+            browser.SetCookie(ExternalSignIn.CookieName, cookie == "tampered" ? Tamper(value) : value, "/auth");
+        }
+
+        using var response = await browser.Http.GetAsync("/auth/complete");
+
+        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+        Assert.Equal(expected, response.Headers.Location!.OriginalString);
+        Assert.Equal(expected == "/", (await browser.SessionAsync()).Authenticated);
+        Assert.Equal(expected == "/" ? 1 : 0, await IdentitiesAsync("github", id));
     }
 
     // ── configuration ───────────────────────────────────────────────────────
@@ -342,6 +420,29 @@ public sealed class SignInTests(TestDatabase database) : IClassFixture<TestDatab
     }
 
     /// <summary>
+    /// The provider endpoints move only for tests. Anywhere else one stray line would replace Google's
+    /// discovery document and signing keys - the trust anchor for every id token - or GitHub's token and
+    /// user endpoints, and whoever ran the host it named could sign in as any admitted person.
+    /// </summary>
+    [Theory]
+    [InlineData("ENACTIVE_GITHUB_BASE")]
+    [InlineData("ENACTIVE_GITHUB_API")]
+    [InlineData("ENACTIVE_GOOGLE_AUTHORITY")]
+    public async Task A_provider_endpoint_override_refuses_to_start_outside_development(string setting)
+    {
+        await using var gateway = TestGateway.Create(database, devSignIn: false, builder =>
+        {
+            builder.UseSetting("environment", "Production");
+            builder.UseSetting(setting, "https://elsewhere.example");
+        });
+
+        var refused = await Assert.ThrowsAnyAsync<InvalidOperationException>(
+            () => gateway.CreateClient().GetAsync("/health"));
+
+        Assert.Contains(setting, refused.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The callback the providers are given is on the public origin, whatever the request came in as.
     /// Behind the tunnel every request arrives as plain http from 127.0.0.1, and the provider would
     /// refuse a callback that is not the exact registered one; and a Host header is the caller's to
@@ -370,39 +471,27 @@ public sealed class SignInTests(TestDatabase database) : IClassFixture<TestDatab
     /// <summary>
     /// The callback's query string carries the authorization code, and nothing of it may reach a log -
     /// even with every category at Trace, as an operator chasing a fault might set it. Two wrote it before
-    /// they were capped: the request log, which prints each request's full URL, and the handlers' debug
-    /// output, which prints the authorization request and the callback message.
+    /// they were capped: the request log, which prints each request's full URL at the default level, and
+    /// the handlers' debug output, which prints the authorization request and the callback message. The
+    /// refused flows (forged state, stolen code, bad id token) are checked the same way in their tests.
     /// </summary>
     [Fact]
     public async Task Nothing_the_providers_send_back_is_logged()
     {
-        var logs = new CapturingLoggerProvider();
-        await using var gateway = Gateway(configure: builder =>
-        {
-            builder.UseSetting("Logging:LogLevel:Default", "Trace");
-            builder.ConfigureLogging(logging =>
-            {
-                logging.ClearProviders();
-                logging.AddProvider(logs);
-            });
-        });
-
-        var id = NewGitHubId();
+        await using var gateway = Gateway();
+        var id = Admit(ExternalSignIn.GitHub, "octocat");
         await ApproveAsync($"github:{id}");
-        _fake.GitHubUser = new GitHubAccount(id, "octocat");
-        var sub = NewGoogleSub();
-        await ApproveAsync($"google:{sub}");
-        _fake.GoogleUser = new GoogleAccount(sub, "Ann", "ann@example.com");
 
         using var github = new Browser(gateway);
-        var callback = await github.GitHubCallbackAsync(_fake);
-        Assert.Equal("/", await github.FollowAsync(callback));
+        var answer = await github.AnswerAsync(ExternalSignIn.GitHub, _fake);
+        Assert.Equal("/", await github.DeliverAsync(answer));
+
+        var sub = Admit(ExternalSignIn.Google, "Ann");
+        await ApproveAsync($"google:{sub}");
         using var google = new Browser(gateway);
         Assert.Equal("/", await google.SignInWithGoogleAsync(_fake));
 
-        Assert.NotEmpty(logs.Lines);
-        var secrets = _fake.Secrets.Append(Query(callback, "state")).ToArray();
-        Assert.All(logs.Lines, line => Assert.DoesNotContain(secrets, line.Contains));
+        AssertNoSecretLogged(answer.Fields["state"]);
     }
 
     // ── helpers ─────────────────────────────────────────────────────────────
@@ -412,6 +501,13 @@ public sealed class SignInTests(TestDatabase database) : IClassFixture<TestDatab
         => TestGateway.Create(database, devSignIn: false, builder =>
         {
             builder.UseSetting(ExternalProviders.PublicOriginSetting, Origin.ToString().TrimEnd('/'));
+
+            builder.UseSetting("Logging:LogLevel:Default", "Trace");
+            builder.ConfigureLogging(logging =>
+            {
+                logging.ClearProviders();
+                logging.AddProvider(_logs);
+            });
 
             if (github)
             {
@@ -451,15 +547,57 @@ public sealed class SignInTests(TestDatabase database) : IClassFixture<TestDatab
 
     private static string NewGoogleSub() => "1" + Random.Shared.NextInt64(1, long.MaxValue).ToString("D20");
 
+    /// <summary>A fresh identity of <paramref name="provider"/>, as the fake will report it next; its subject.</summary>
+    private string Admit(string provider, string name)
+    {
+        if (provider == ExternalSignIn.GitHub)
+        {
+            var id = NewGitHubId();
+            _fake.GitHubUser = new GitHubAccount(id, name);
+            return id.ToString(CultureInfo.InvariantCulture);
+        }
+
+        var sub = NewGoogleSub();
+        _fake.GoogleUser = new GoogleAccount(sub, name, $"{name}@example.com");
+        return sub;
+    }
+
+    /// <summary>
+    /// No log line holds a code or token the fake issued, or any of <paramref name="more"/>. Not empty
+    /// either, so a test whose logging was never wired up cannot pass by having seen nothing.
+    /// </summary>
+    private void AssertNoSecretLogged(params string[] more)
+    {
+        var secrets = _fake.Secrets.Concat(more).ToArray();
+        Assert.NotEmpty(_logs.Lines);
+        Assert.All(_logs.Lines, line => Assert.DoesNotContain(secrets, line.Contains));
+    }
+
     private static string Query(Uri uri, string name)
         => QueryHelpers.ParseQuery(uri.Query)[name].ToString();
 
-    private static Uri WithQuery(Uri uri, string name, string value)
+    /// <summary>The same protected value with one character changed in its middle.</summary>
+    private static string Tamper(string value)
     {
-        var query = QueryHelpers.ParseQuery(uri.Query)
-            .ToDictionary(pair => pair.Key, pair => (string?)pair.Value.ToString());
-        query[name] = value;
-        return new Uri(QueryHelpers.AddQueryString(uri.GetLeftPart(UriPartial.Path), query));
+        var characters = value.ToCharArray();
+        var middle = characters.Length / 2;
+        characters[middle] = characters[middle] == 'A' ? 'B' : 'A';
+        return new string(characters);
+    }
+
+    /// <summary>
+    /// What a provider sends the browser back to the gateway with: GitHub's redirect to the callback, or
+    /// the form Google's page posts to it. Its fields are what a test tampers with.
+    /// </summary>
+    private sealed record ProviderAnswer(Uri Target, IReadOnlyDictionary<string, string> Fields, bool Posted)
+    {
+        public Uri CallbackUri => Posted
+            ? Target
+            : new Uri(QueryHelpers.AddQueryString(
+                Target.ToString(), Fields.ToDictionary(f => f.Key, f => (string?)f.Value)));
+
+        public ProviderAnswer With(string name, string value)
+            => this with { Fields = new Dictionary<string, string>(Fields) { [name] = value } };
     }
 
     /// <summary>
@@ -482,33 +620,48 @@ public sealed class SignInTests(TestDatabase database) : IClassFixture<TestDatab
         public async Task<SessionView> SessionAsync()
             => (await Http.GetFromJsonAsync<SessionView>("/api/session", RemoteJson.Options))!;
 
+        public string CookieHeader(Uri uri) => _cookies.GetCookieHeader(uri);
+
+        public void SetCookie(string name, string value, string path)
+            => _cookies.Add(new Cookie(name, value, path, Origin.Host));
+
         /// <summary>The whole GitHub sign-in; where the gateway sent the browser at the end.</summary>
         public async Task<string> SignInWithGitHubAsync(FakeProviders fake)
-            => await FollowAsync(await GitHubCallbackAsync(fake));
-
-        /// <summary>Start, and GitHub's answer: the callback the browser is sent to, not yet visited.</summary>
-        public async Task<Uri> GitHubCallbackAsync(FakeProviders fake)
-        {
-            var authorize = await RedirectAsync(Http, new Uri("/auth/github/start", UriKind.Relative));
-            using var provider = fake.CreateBrowser();
-            return await RedirectAsync(provider, authorize);
-        }
-
-        /// <summary>The callback, then wherever it leads; where the browser lands.</summary>
-        public async Task<string> FollowAsync(Uri callback) => await LandAsync(await RedirectAsync(Http, callback));
+            => await DeliverAsync(await AnswerAsync(ExternalSignIn.GitHub, fake));
 
         /// <summary>The whole Google sign-in, through the form Google's page posts back.</summary>
         public async Task<string> SignInWithGoogleAsync(FakeProviders fake)
-        {
-            var authorize = await RedirectAsync(Http, new Uri("/auth/google/start", UriKind.Relative));
+            => await DeliverAsync(await AnswerAsync(ExternalSignIn.Google, fake));
 
-            using var provider = fake.CreateBrowser();
-            using var page = await provider.GetAsync(authorize);
+        /// <summary>Start, and the provider's answer, not yet delivered to the gateway.</summary>
+        public async Task<ProviderAnswer> AnswerAsync(string provider, FakeProviders fake)
+        {
+            var authorize = await RedirectAsync(Http, new Uri($"/auth/{provider}/start", UriKind.Relative));
+            using var client = fake.CreateBrowser();
+
+            if (provider == ExternalSignIn.GitHub)
+            {
+                var callback = await RedirectAsync(client, authorize);
+                return new ProviderAnswer(
+                    new Uri(callback.GetLeftPart(UriPartial.Path)),
+                    QueryHelpers.ParseQuery(callback.Query).ToDictionary(p => p.Key, p => p.Value.ToString()),
+                    Posted: false);
+            }
+
+            using var page = await client.GetAsync(authorize);
             page.EnsureSuccessStatusCode();
             var (action, fields) = FakeProviders.ReadFormPost(await page.Content.ReadAsStringAsync());
+            return new ProviderAnswer(action, fields, Posted: true);
+        }
 
-            using var posted = await Http.PostAsync(action, new FormUrlEncodedContent(fields));
-            return await LandAsync(Location(posted));
+        /// <summary>The answer delivered to the callback, then wherever it leads; where the browser lands.</summary>
+        public async Task<string> DeliverAsync(ProviderAnswer answer)
+        {
+            using var response = answer.Posted
+                ? await Http.PostAsync(answer.Target, new FormUrlEncodedContent(answer.Fields))
+                : await Http.GetAsync(answer.CallbackUri);
+
+            return await LandAsync(Location(response));
         }
 
         public void Dispose() => Http.Dispose();

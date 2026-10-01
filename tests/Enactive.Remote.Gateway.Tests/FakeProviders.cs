@@ -59,6 +59,8 @@ internal sealed partial class FakeProviders : IAsyncDisposable
     private readonly ConcurrentDictionary<string, Grant> _codes = new();
     private readonly ConcurrentDictionary<string, GitHubAccount> _tokens = new();
 
+    private int _tokenRequests;
+
     private FakeProviders(WebApplication app)
     {
         _app = app;
@@ -72,6 +74,9 @@ internal sealed partial class FakeProviders : IAsyncDisposable
 
     /// <summary>What the next id token gets wrong.</summary>
     public IdTokenFault Fault { get; set; }
+
+    /// <summary>How many requests reached either token endpoint, redeemed or refused.</summary>
+    public int TokenRequests => Volatile.Read(ref _tokenRequests);
 
     /// <summary>Every code, access token and id token handed out: a test checks none of them is logged.</summary>
     public ConcurrentBag<string> Secrets { get; } = [];
@@ -136,6 +141,7 @@ internal sealed partial class FakeProviders : IAsyncDisposable
 
         app.MapPost("/login/oauth/access_token", async (HttpRequest request) =>
         {
+            Interlocked.Increment(ref _tokenRequests);
             var form = await request.ReadFormAsync();
 
             if (Redeem(form, "github", GitHubClientId, GitHubClientSecret) is not { } grant)
@@ -217,6 +223,7 @@ internal sealed partial class FakeProviders : IAsyncDisposable
 
         app.MapPost("/token", async (HttpRequest request) =>
         {
+            Interlocked.Increment(ref _tokenRequests);
             var form = await request.ReadFormAsync();
 
             if (Redeem(form, "google", GoogleClientId, GoogleClientSecret) is not { } grant)

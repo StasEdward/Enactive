@@ -3,6 +3,7 @@ namespace Enactive.Remote.Gateway.Accounts;
 using System.Globalization;
 using System.Security.Claims;
 using System.Text.Json;
+using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.OAuth;
 
@@ -23,6 +24,11 @@ public sealed record ExternalProviders(
 {
     public const string PublicOriginSetting = "ENACTIVE_PUBLIC_ORIGIN";
 
+    // Where the providers are, moved only by tests, which point them at a fake.
+    private const string GitHubBaseSetting = "ENACTIVE_GITHUB_BASE";
+    private const string GitHubApiSetting = "ENACTIVE_GITHUB_API";
+    private const string GoogleAuthoritySetting = "ENACTIVE_GOOGLE_AUTHORITY";
+
     /// <summary>The providers offered, in the order the panel shows them.</summary>
     public IReadOnlyList<string> Names
         => new[] { GitHub is null ? null : ExternalSignIn.GitHub, Google is null ? null : ExternalSignIn.Google }
@@ -31,9 +37,28 @@ public sealed record ExternalProviders(
 
     public bool Offers(string provider) => Names.Contains(provider, StringComparer.Ordinal);
 
-    /// <summary>The configured providers; throws on anything half-set or malformed.</summary>
-    public static ExternalProviders FromConfiguration(IConfiguration configuration)
+    /// <summary>
+    /// The configured providers; throws on anything half-set or malformed, and on a provider endpoint
+    /// moved outside Development.
+    /// </summary>
+    public static ExternalProviders FromConfiguration(IConfiguration configuration, IHostEnvironment environment)
     {
+        // The overrides exist for tests. Honoured in production, one stray line would replace Google's
+        // discovery document and signing keys - what every id token is checked against - or GitHub's token
+        // and user endpoints, and whoever ran the host it named could sign in as any admitted person. So,
+        // like the development sign-in, set outside Development they stop the start.
+        var moved = new[] { GitHubBaseSetting, GitHubApiSetting, GoogleAuthoritySetting }
+            .Where(setting => !string.IsNullOrWhiteSpace(configuration[setting]))
+            .ToArray();
+
+        if (moved.Length > 0 && !environment.IsDevelopment())
+        {
+            throw new InvalidOperationException(
+                $"{string.Join(", ", moved)} set in the {environment.EnvironmentName} environment. These move "
+                + "the sign-in providers to another host, for tests, and are honoured only in Development: "
+                + "anywhere else whoever runs that host could sign in as anybody.");
+        }
+
         var github = Client(configuration, "ENACTIVE_GITHUB_CLIENT_ID", "ENACTIVE_GITHUB_CLIENT_SECRET");
         var google = Client(configuration, "ENACTIVE_GOOGLE_CLIENT_ID", "ENACTIVE_GOOGLE_CLIENT_SECRET");
         var origin = configuration[PublicOriginSetting];
@@ -46,13 +71,12 @@ public sealed record ExternalProviders(
                 + "set it to the gateway's public address, such as https://remote.enactive.dev.");
         }
 
-        // The provider endpoints can be moved for tests, which point them at a fake. Nothing else should.
         return new ExternalProviders(
             github, google,
             string.IsNullOrWhiteSpace(origin) ? null : Origin(origin),
-            Endpoint(configuration, "ENACTIVE_GITHUB_BASE", "https://github.com"),
-            Endpoint(configuration, "ENACTIVE_GITHUB_API", "https://api.github.com"),
-            Endpoint(configuration, "ENACTIVE_GOOGLE_AUTHORITY", "https://accounts.google.com"));
+            Endpoint(configuration, GitHubBaseSetting, "https://github.com"),
+            Endpoint(configuration, GitHubApiSetting, "https://api.github.com"),
+            Endpoint(configuration, GoogleAuthoritySetting, "https://accounts.google.com"));
     }
 
     private static ProviderClient? Client(IConfiguration configuration, string idSetting, string secretSetting)
@@ -133,6 +157,12 @@ public static class ExternalSignIn
     public const string Google = "google";
 
     private const string CompletePath = "/auth/complete";
+
+    /// <summary>
+    /// How many provider callbacks one caller may make in a minute. A person signing in makes one; ten
+    /// leaves room for retries and a few people behind one address.
+    /// </summary>
+    public const int CallbacksPerMinute = 10;
 
     // The provider's answer, as the External cookie carries it.
     private const string ProviderClaim = "provider";
@@ -249,6 +279,38 @@ public static class ExternalSignIn
     }
 
     /// <summary>
+    /// The limit on the providers' callbacks, per caller address, for the rate limiter's global slot;
+    /// every other request passes it untouched.
+    ///
+    /// <para>The callbacks are answered inside authentication, before any endpoint, so the limit on the
+    /// sign-in endpoints never applies to them. Each one whose state passes makes the gateway post this
+    /// service's client secret to the provider's token endpoint, and nothing on the server makes a state
+    /// single-use: a client that kept its own state and correlation cookie could replay them with made-up
+    /// codes without end, spending this client's standing with GitHub or Google until they blocked
+    /// everybody's sign-in. The limiter must therefore run before authentication.</para>
+    ///
+    /// <para>The caller is the connection's address, which behind the tunnel the forwarded-headers step
+    /// has already set from the tunnel's own header.</para>
+    /// </summary>
+    public static PartitionedRateLimiter<HttpContext> CallbackLimiter()
+        => PartitionedRateLimiter.Create<HttpContext, string>(context => IsCallback(context.Request.Path)
+            ? RateLimitPartition.GetFixedWindowLimiter(
+                context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+                _ => new FixedWindowRateLimiterOptions
+                {
+                    PermitLimit = CallbacksPerMinute,
+                    Window = TimeSpan.FromMinutes(1),
+                    QueueLimit = 0
+                })
+            : RateLimitPartition.GetNoLimiter(""));
+
+    /// <summary><c>/auth/{provider}/callback</c>, for any provider name, configured or not.</summary>
+    private static bool IsCallback(PathString path)
+        => path.Value is { } value
+           && value.StartsWith("/auth/", StringComparison.OrdinalIgnoreCase)
+           && value.EndsWith("/callback", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
     /// Makes the providers' callback address the public origin, for <c>/auth</c> requests.
     ///
     /// <para>The handlers build the callback from the request's scheme and Host header. Behind the
@@ -344,9 +406,10 @@ public static class ExternalSignIn
     /// <summary>
     /// What the provider said, as three claims and nothing else. A fresh principal rather than the
     /// handler's: an id token's own claims would ride along in the cookie, and one named like ours
-    /// would be read in its place.
+    /// would be read in its place. Internal so a test can make the External cookie's ticket the way the
+    /// handlers make it.
     /// </summary>
-    private static ClaimsPrincipal Answer(string provider, string subject, string display)
+    internal static ClaimsPrincipal Answer(string provider, string subject, string display)
         => new(new ClaimsIdentity(
             [new Claim(ProviderClaim, provider), new Claim(SubjectClaim, subject), new Claim(DisplayClaim, display)],
             provider));

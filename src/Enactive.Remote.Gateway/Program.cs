@@ -14,7 +14,9 @@ using Microsoft.AspNetCore.HttpOverrides;
 // Stage 2 of the remote-access design. The panel itself is stage 6; what is here is the surface it
 // will call and the hub a Host connects to.
 
-// Signing in is limited per caller: the development sign-in, and the start and end of a provider's.
+// Signing in is limited per caller: the development sign-in, and the start and end of a provider's. The
+// providers' callbacks have a limit of their own, which has to run before authentication: see
+// ExternalSignIn.CallbackLimiter.
 const string SignInRateLimit = "login";
 
 // Answered before ANYTHING else, including the configuration checks below: this asks the assembly
@@ -67,14 +69,16 @@ var developmentSignIn = DevelopmentSignIn.Enabled(builder.Configuration, builder
 
 // Read now for the same reason: a provider with half its settings, or no public origin to send people back
 // to, stops the start rather than offering a sign-in that fails for everybody.
-var externalProviders = ExternalProviders.FromConfiguration(builder.Configuration);
+var externalProviders = ExternalProviders.FromConfiguration(builder.Configuration, builder.Environment);
 
 // The providers' callbacks carry the authorization code in their query string, and two framework logs
-// print it: the request log writes every request's full URL, and the sign-in handlers' debug output
-// writes the authorization request and the callback message. Both were caught doing it with logging
-// turned up. Capped here, in code, so turning logging up to chase a fault cannot put codes into the
-// journal. A rule in configuration aimed at one logging provider would still outrank these, so the
-// deployment's configuration must not add one for these categories.
+// print it. The request log writes every request's full URL at Information - the DEFAULT level, so with no
+// logging configuration at all every code went into the journal. The sign-in handlers' debug output writes
+// the authorization request and the callback message once logging is turned up. Capped here, in code, so
+// neither the defaults nor turning logging up to chase a fault puts codes there. A configuration rule for
+// a longer category (Logging__LogLevel__Microsoft.AspNetCore.Authentication.OpenIdConnect=Debug, say) or
+// one aimed at a single logging provider still outranks these, so the deployment's configuration must not
+// set a level below these for anything under them.
 builder.Logging.AddFilter("Microsoft.AspNetCore.Hosting.Diagnostics", LogLevel.Warning);
 builder.Logging.AddFilter("Microsoft.AspNetCore.Authentication", LogLevel.Information);
 
@@ -214,6 +218,7 @@ builder.Services.AddAntiforgery(o =>
 builder.Services.AddRateLimiter(o =>
 {
     o.RejectionStatusCode = 429;
+    o.GlobalLimiter = ExternalSignIn.CallbackLimiter();
     o.AddPolicy(SignInRateLimit, context => RateLimitPartition.GetFixedWindowLimiter(
         context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
         _ => new FixedWindowRateLimiterOptions
@@ -357,11 +362,15 @@ app.UseStaticFiles(new StaticFileOptions
 {
     OnPrepareResponse = served => served.Context.Response.Headers.CacheControl = "no-cache"
 });
+// Before authentication, which is where the providers' callbacks are answered: the callback limit has
+// to refuse a replay before the handler redeems its code. The sign-in endpoints' own policy still works
+// from here, since routing has already chosen the endpoint.
+app.UseRateLimiter();
+
 // Before authentication, where the providers' handlers build their callback address. See ExternalSignIn.
 app.UsePublicOrigin(externalProviders);
 app.UseAuthentication();
 app.UseAuthorization();
-app.UseRateLimiter();
 
 app.MapGet("/health", () => new { status = "ok", protocolVersion = RemoteProtocol.Version });
 
