@@ -26,6 +26,9 @@ public static class RequestLimits
     /// <summary>The person's API's policy, per account.</summary>
     public const string Api = "api";
 
+    /// <summary>The session endpoint's policy, per account or, before signing in, per address.</summary>
+    public const string Session = "session";
+
     /// <summary>
     /// Sign-in requests under <c>/auth</c> (start and complete) and the development sign-in, per address
     /// and minute. A sign-in is two of them; twenty leaves room for retries and several people behind
@@ -80,6 +83,15 @@ public static class RequestLimits
             // UserAccess cannot come back empty here; if it ever did, it throws and the request fails
             // closed, rather than being counted in some shared bucket.
             o.AddPolicy(Api, context => PerMinute(context.UserAccess().UserId, ApiPerMinute));
+
+            // GET /api/session, which answers before anybody has signed in and so is outside the group:
+            // per person when the cookie names one, per address when not, at the API's rate. Protects
+            // the database's time (a signed-in answer reads the account) and nothing else - what the
+            // session says is the cookie check's decision. The prefixes keep an account id and an
+            // address from ever sharing a count.
+            o.AddPolicy(Session, context => PerMinute(
+                context.SignedInUserId() is { } userId ? "user:" + userId : "address:" + ClientAddress(context),
+                ApiPerMinute));
         });
     }
 
@@ -94,19 +106,57 @@ public static class RequestLimits
 
         return app.Use(async (context, next) =>
         {
-            using var lease = await limiter.AcquireAsync(context);
+            var lease = await limiter.AcquireAsync(context);
 
             if (!lease.IsAcquired)
             {
-                await RefuseAsync(context, lease);
+                using (lease)
+                {
+                    await RefuseAsync(context, lease);
+                }
+
                 return;
             }
 
-            // The lease is held until the request is answered: a concurrency permit is the request
-            // being in progress.
-            await next(context);
+            // Held until the request is answered - a concurrency permit is the request being in
+            // progress - unless a computer's connection lets it go sooner (UseComputerRelease).
+            var permit = new FrontDoorPermit(lease);
+            context.Features.Set(permit);
+
+            try
+            {
+                await next(context);
+            }
+            finally
+            {
+                permit.Release();
+            }
         });
     }
+
+    /// <summary>
+    /// Lets a computer's connection out from under the ceiling once it has proved which computer it is.
+    /// After authorization, so only a request the hub has accepted is let go.
+    ///
+    /// <para>A computer's connection lasts as long as it is online - a WebSocket, or a long poll answered
+    /// only when there is something to say - so held, two hundred computers online would leave no place
+    /// for anybody's panel. Its calls are limited per computer (<see cref="HostCallLimit"/>) instead.</para>
+    ///
+    /// <para>Not by its path. The hub's path was exempt from the ceiling once, and the path is the
+    /// caller's to write: anybody could send requests there without end, each with a made-up token
+    /// costing a database lookup, and nothing counted them. Every request is counted until it is
+    /// answered or has authenticated as a computer.</para>
+    /// </summary>
+    public static IApplicationBuilder UseComputerRelease(this IApplicationBuilder app)
+        => app.Use((context, next) =>
+        {
+            if (context.User.Identity is { IsAuthenticated: true, AuthenticationType: HostAuthentication.SchemeName })
+            {
+                context.Features.Get<FrontDoorPermit>()?.Release();
+            }
+
+            return next(context);
+        });
 
     /// <summary>
     /// The caller's address. Behind the tunnel the forwarded-headers step has already set it from the
@@ -146,16 +196,14 @@ public static class RequestLimits
     internal sealed class FrontDoorLimit : IDisposable
     {
         private readonly PartitionedRateLimiter<HttpContext> _concurrency = PartitionedRateLimiter.Create<HttpContext, string>(
-            context => IsHubConnection(context.Request)
-                ? RateLimitPartition.GetNoLimiter("hub-connection")
-                : RateLimitPartition.GetConcurrencyLimiter("all", _ => new ConcurrencyLimiterOptions
-                {
-                    PermitLimit = ConcurrentRequests,
+            _ => RateLimitPartition.GetConcurrencyLimiter("all", _ => new ConcurrencyLimiterOptions
+            {
+                PermitLimit = ConcurrentRequests,
 
-                    // Refused at once rather than queued: a queue full of a flood's requests is the same
-                    // outage, only slower to show.
-                    QueueLimit = 0
-                }));
+                // Refused at once rather than queued: a queue full of a flood's requests is the same
+                // outage, only slower to show.
+                QueueLimit = 0
+            }));
 
         private readonly PartitionedRateLimiter<HttpContext> _callbacks = ExternalSignIn.CallbackLimiter();
 
@@ -175,17 +223,17 @@ public static class RequestLimits
             _concurrency.Dispose();
             _callbacks.Dispose();
         }
+    }
 
-        /// <summary>
-        /// A computer's open connection to the hub, which is not counted against the ceiling. It lasts as
-        /// long as the computer is online - a WebSocket, or a long poll that is answered only when there
-        /// is something to say - so counted, two hundred computers online would leave no request for
-        /// anybody's panel. Their calls are limited per computer (<see cref="HostCallLimit"/>) instead.
-        /// Opening one starts with the negotiation, which is an ordinary short request and is counted.
-        /// </summary>
-        private static bool IsHubConnection(HttpRequest request)
-            => request.Path.StartsWithSegments("/hubs")
-               && request.Path.Value?.EndsWith("/negotiate", StringComparison.OrdinalIgnoreCase) != true;
+    /// <summary>
+    /// One request's place under the ceiling, given back once: when the request is answered, or earlier
+    /// for a computer's connection. Disposing the lease twice would give the place back twice.
+    /// </summary>
+    internal sealed class FrontDoorPermit(RateLimitLease lease)
+    {
+        private RateLimitLease? _lease = lease;
+
+        public void Release() => Interlocked.Exchange(ref _lease, null)?.Dispose();
     }
 }
 

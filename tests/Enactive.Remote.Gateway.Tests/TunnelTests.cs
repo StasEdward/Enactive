@@ -4,6 +4,8 @@ using System.Net;
 using System.Net.Http.Json;
 using Enactive.Remote.Contracts;
 using Enactive.Remote.Gateway;
+using Enactive.Remote.Host;
+using Microsoft.AspNetCore.Http.Connections;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Xunit;
 
@@ -143,22 +145,8 @@ public sealed class TunnelTests(TestDatabase database) : IClassFixture<TestDatab
         await browser.SessionAsync();
         var release = new TaskCompletionSource();
 
-        var flood = Enumerable.Range(0, RequestLimits.ConcurrentRequests + surplus)
-            .Select(i => browser.SendAsync(HttpMethod.Post, "/api/dev/sign-in", configure: request =>
-            {
-                request.Headers.Add(Deployment.ClientAddressHeader, $"198.51.{i / 250}.{i % 250 + 1}");
-                request.Content = new HeldBody(release.Task);
-            }))
-            .ToList();
-
-        // The refused ones are answered at once; the rest wait to be let go.
-        var deadline = DateTime.UtcNow.AddSeconds(30);
-        while (flood.Count(call => call.IsCompleted) < surplus && DateTime.UtcNow < deadline)
-        {
-            await Task.Delay(20);
-        }
-
-        var refusedWhileFull = flood.Where(call => call.IsCompleted).Select(call => call.Result.StatusCode).ToList();
+        var flood = Flood(browser, RequestLimits.ConcurrentRequests + surplus, release.Task);
+        var refusedWhileFull = await AnsweredOnceAsync(flood, surplus);
 
         release.SetResult();
         var answers = await Task.WhenAll(flood);
@@ -177,6 +165,109 @@ public sealed class TunnelTests(TestDatabase database) : IClassFixture<TestDatab
         Assert.Equal(RequestLimits.ConcurrentRequests, statuses.Count(status => status == HttpStatusCode.BadRequest));
         Assert.Equal(surplus, statuses.Count(status => status == HttpStatusCode.TooManyRequests));
         Assert.Equal(HttpStatusCode.OK, after.StatusCode);
+    }
+
+    /// <summary>
+    /// The hub's address is counted like any other. It was exempt from the ceiling by its path - which
+    /// the caller writes - so anybody could send requests there without end, each one with a made-up
+    /// computer token costing a database lookup, and nothing counted them. With the gateway full, such
+    /// a request is refused at the door like the rest.
+    /// </summary>
+    [Fact]
+    public async Task A_request_to_the_hub_with_a_made_up_token_is_counted_by_the_ceiling()
+    {
+        await using var gateway = Gateway(behindTunnel: true);
+        using var browser = new PanelClient(gateway);
+        await browser.SessionAsync();
+        var release = new TaskCompletionSource();
+
+        var flood = Flood(browser, RequestLimits.ConcurrentRequests + 1, release.Task);
+        await AnsweredOnceAsync(flood, 1);
+
+        using var hub = await browser.SendAsync(HttpMethod.Get, "/hubs/host", csrf: false,
+            configure: request => request.Headers.Authorization = new("Bearer", "made-up"));
+
+        release.SetResult();
+        foreach (var response in await Task.WhenAll(flood))
+        {
+            response.Dispose();
+        }
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, hub.StatusCode);
+    }
+
+    /// <summary>
+    /// A computer's connection, once it has proved which computer it is, does not keep a place under the
+    /// ceiling. It lasts as long as the computer is online - a long poll waits for something to say - so
+    /// kept, a couple of hundred computers online would leave no place for anybody's panel. Here a
+    /// computer is connected and every place is still there for the flood: exactly one of one more than
+    /// the ceiling is refused, not two.
+    /// </summary>
+    [Fact]
+    public async Task A_connected_computer_does_not_keep_a_place_under_the_ceiling()
+    {
+        await using var gateway = Gateway(behindTunnel: true);
+        using var owner = await PanelClient.SignedInAsync(gateway, "owner-" + Guid.NewGuid().ToString("N")[..8]);
+        var device = await owner.PostAsync<DeviceView>("/api/hosts", new { name = "Studio PC" });
+
+        await using var computer = new SignalRGatewayConnection(
+            new Uri(gateway.Server.BaseAddress, "hubs/host"), device.Token, options =>
+            {
+                options.HttpMessageHandlerFactory = _ => gateway.Server.CreateHandler();
+                options.Transports = HttpTransportType.LongPolling;
+            });
+        await computer.StartAsync();
+        await computer.SyncAsync([], CancellationToken.None);
+
+        using var browser = new PanelClient(gateway);
+        await browser.SessionAsync();
+        var release = new TaskCompletionSource();
+
+        var flood = Flood(browser, RequestLimits.ConcurrentRequests + 1, release.Task);
+        await AnsweredOnceAsync(flood, 1);
+
+        // Long enough for every request of the flood to have been let in or turned away.
+        await Task.Delay(TimeSpan.FromSeconds(1));
+        var refused = flood.Count(call => call.IsCompleted);
+
+        release.SetResult();
+        foreach (var response in await Task.WhenAll(flood))
+        {
+            response.Dispose();
+        }
+
+        Assert.Equal(1, refused);
+        await computer.SyncAsync([], CancellationToken.None);
+    }
+
+    /// <summary>
+    /// The session endpoint is anonymous, so it is counted per person when there is one and per address
+    /// when there is not: it answers before anybody signs in, and was the one route under <c>/api</c>
+    /// nothing counted.
+    /// </summary>
+    [Fact]
+    public async Task The_session_is_limited_per_address_before_anybody_signs_in()
+    {
+        await using var gateway = Gateway(behindTunnel: true);
+        using var http = gateway.CreateClient();
+
+        async Task<HttpStatusCode> SessionAsync(string address)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, "/api/session");
+            request.Headers.Add(Deployment.ClientAddressHeader, address);
+            using var response = await http.SendAsync(request);
+            return response.StatusCode;
+        }
+
+        var statuses = new List<HttpStatusCode>();
+        for (var call = 0; call < RequestLimits.ApiPerMinute; call++)
+        {
+            statuses.Add(await SessionAsync("203.0.113.7"));
+        }
+
+        Assert.All(statuses, status => Assert.Equal(HttpStatusCode.OK, status));
+        Assert.Equal(HttpStatusCode.TooManyRequests, await SessionAsync("203.0.113.7"));
+        Assert.Equal(HttpStatusCode.OK, await SessionAsync("203.0.113.8"));
     }
 
     /// <summary>
@@ -272,6 +363,38 @@ public sealed class TunnelTests(TestDatabase database) : IClassFixture<TestDatab
 
         return statuses;
     }
+
+    /// <summary>
+    /// <paramref name="count"/> sign-ins whose bodies do not finish arriving until
+    /// <paramref name="release"/> completes, each from an address of its own so the per-address limit
+    /// never refuses one. Only the ceiling answers them early.
+    /// </summary>
+    private static List<Task<HttpResponseMessage>> Flood(PanelClient browser, int count, Task release)
+        => Enumerable.Range(0, count)
+            .Select(i => browser.SendAsync(HttpMethod.Post, "/api/dev/sign-in", configure: request =>
+            {
+                request.Headers.Add(Deployment.ClientAddressHeader, $"198.51.{i / 250}.{i % 250 + 1}");
+                request.Content = new HeldBody(release);
+            }))
+            .ToList();
+
+    /// <summary>
+    /// Waits until <paramref name="answered"/> requests of the flood have been answered - the refused
+    /// ones are answered at once, the rest wait to be let go - and returns what they were answered.
+    /// </summary>
+    private static async Task<List<HttpStatusCode>> AnsweredOnceAsync(
+        List<Task<HttpResponseMessage>> flood, int answered)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(30);
+        while (flood.Count(call => call.IsCompleted) < answered && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(20);
+        }
+
+        return flood.Where(call => call.IsCompleted).Select(call => call.Result.StatusCode).ToList();
+    }
+
+    private sealed record DeviceView(string Id, string Name, string Token);
 
     private sealed record ErrorView(string Code, string Error);
 

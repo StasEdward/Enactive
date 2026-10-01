@@ -358,6 +358,10 @@ app.UsePublicOrigin(externalProviders);
 app.UseAuthentication();
 app.UseAuthorization();
 
+// A computer's connection is let out from under the ceiling once the hub has accepted it, and not
+// before: it lasts as long as the computer is online. See RequestLimits.UseComputerRelease.
+app.UseComputerRelease();
+
 // The endpoints' policies, AFTER authentication: the API is counted per account, and before
 // authentication there is no account - every person would share one bucket, and one busy panel would
 // limit everybody's. A request with no session is refused by authorization before it is counted.
@@ -380,7 +384,7 @@ app.MapGet("/api/session", async (
         csrfToken = antiforgery.GetAndStoreTokens(context).RequestToken,
         user = displayName is null ? null : new { id = user!.UserId, displayName }
     };
-});
+}).RequireRateLimiting(RequestLimits.Session);
 
 if (developmentSignIn)
 {

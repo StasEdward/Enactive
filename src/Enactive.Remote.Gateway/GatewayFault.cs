@@ -109,8 +109,8 @@ public sealed class GatewayFault(string code, int status, string message) : Exce
         "This computer and the service speak different versions - update Enactive.");
 
     /// <summary>
-    /// A computer past its calls for the minute. The quota code, which a Host retries: the window moves
-    /// on, and the event it was sending is kept rather than lost.
+    /// A computer calling faster than its rate allows. The quota code, which a Host retries: its
+    /// allowance refills every second, and the event it was sending is kept rather than lost.
     /// </summary>
     public static GatewayFault TooManyCalls() => new(
         FaultCode.QuotaExceeded, 429,

@@ -203,6 +203,13 @@ public static class UserCookie
     }
 
     /// <summary>
+    /// The signed-in person's id, or null when this request's cookie names nobody. For an anonymous
+    /// endpoint that treats the two differently; anything acting for the person uses
+    /// <see cref="UserAccess"/>, which refuses rather than returning null.
+    /// </summary>
+    public static string? SignedInUserId(this HttpContext context) => context.User.FindFirstValue(UserClaim);
+
+    /// <summary>
     /// The signed-in person, from this request's cookie. The <c>/api</c> group's authorization lets no
     /// request without one through, so the refusal here is a backstop: a handler mapped outside the
     /// group by mistake fails closed instead of acting for an empty id.
