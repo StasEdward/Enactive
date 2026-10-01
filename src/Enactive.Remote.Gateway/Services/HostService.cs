@@ -25,8 +25,10 @@ using MySqlConnector;
 /// commits mid-connection stops the very next call, and one in flight waits for the call that is
 /// already running instead of slipping past it.</para>
 ///
-/// <para><b>Lock order.</b> users, then hosts, both FOR SHARE; then the run, request or command
-/// rows; then the owner's stream counter. A person's cancel and answer lock their target first and
+/// <para><b>Lock order.</b> users, then hosts, both FOR SHARE; then the run and request rows; then
+/// the command rows, each by its own key and never a range of them (a person's command is inserted
+/// into that range while its run is locked); then the owner's stream counter. A person's cancel and
+/// answer lock their target first and
 /// the computer FOR SHARE afterwards (see <see cref="UserService"/>), so this class must never hold
 /// the hosts row EXCLUSIVELY in a transaction that also locks a run or a request: the cancel would
 /// wait for the computer while holding the run this waits for, and the database would roll one of
@@ -173,6 +175,12 @@ public sealed class HostService(Database database)
         // The primary key starts with the owner, so this lock cannot reach another person's command.
         // The computer is in the filter too: a command meant for another of the owner's computers is
         // not this one's to accept, and accepting it would mark it delivered where it never arrived.
+        //
+        // The lock is taken through the primary key and the computer is filtered afterwards, so a
+        // computer naming the id of one of its owner's OTHER computers' commands locks that row until
+        // this refusal rolls back. That is harmless: the row is the same person's, the computer could
+        // only have the id from its own owner's data, and all it costs is that other computer's
+        // acknowledgement waiting a moment - no other account's row is touched or revealed.
         var status = await connection.ReadOneAsync(transaction,
             """
             SELECT status FROM commands
@@ -537,42 +545,67 @@ public sealed class HostService(Database database)
     /// Commands nobody accepted in time. A start that expired undelivered leaves a run that was
     /// never going to happen, and it is reported Incomplete rather than left Queued forever - an
     /// absence is not an answer.
+    ///
+    /// <para><b>Runs before commands.</b> The expired commands are found WITHOUT a lock; the runs of
+    /// the expired starts are locked next, in id order; and only then is each command locked, by its
+    /// own primary key, and written off if it is still undelivered. Finding them with a locking scan
+    /// first held this computer's whole delivery range, gaps included, while waiting for a run - and a
+    /// person's cancel of that run holds the run and then inserts its command into that very range.
+    /// Each waited for the other, and the database rolled one of them back.</para>
     /// </summary>
     private static async Task ExpireCommandsAsync(
         MySqlConnection connection, MySqlTransaction transaction, HostAccess host)
     {
         var now = DateTimeOffset.UtcNow;
 
-        // Through the delivery key, which starts with this computer. The optimizer otherwise takes the
-        // expiry key (status, expires_at) whenever this computer has a long queue and few commands
-        // have expired anywhere - and that range holds every account's expired commands, so Alice's
-        // sync waited on Bob's sync writing off his own.
         var expiring = await connection.ReadAllAsync(transaction,
             """
-            SELECT id, kind, payload FROM commands FORCE INDEX (ix_commands_delivery)
-            WHERE host_id = @host AND status = 'PendingDelivery' AND owner_id = @owner
+            SELECT id, kind, payload FROM commands
+            WHERE owner_id = @owner AND host_id = @host AND status = 'PendingDelivery'
               AND expires_at <= @now
-            FOR UPDATE
+            ORDER BY id
             """,
             reader => (
                 Id: reader.GetString("id"),
                 Kind: reader.Enum<CommandKind>("kind"),
                 Payload: reader.GetString("payload")),
-            ("@host", host.HostId), ("@owner", host.OwnerId), ("@now", now));
+            ("@owner", host.OwnerId), ("@host", host.HostId), ("@now", now));
+
+        // The run id is the gateway's own, written into the payload when the person started it.
+        var starts = expiring
+            .Where(command => command.Kind == CommandKind.StartTask)
+            .ToDictionary(
+                command => command.Id,
+                command => RemoteJson.Deserialize<StartTaskPayload>(command.Payload).RunId,
+                StringComparer.Ordinal);
+
+        // In id order, so two transactions locking several of these runs take them in the same order.
+        foreach (var runId in starts.Values.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal))
+        {
+            await connection.ExecuteAsync(transaction,
+                """
+                SELECT id FROM runs FORCE INDEX (ux_runs_owner_host)
+                WHERE owner_id = @owner AND host_id = @host AND id = @run
+                FOR UPDATE
+                """,
+                ("@owner", host.OwnerId), ("@host", host.HostId), ("@run", runId));
+        }
 
         foreach (var command in expiring)
         {
-            await connection.ExecuteAsync(transaction,
-                "UPDATE commands SET status = @expired WHERE owner_id = @owner AND id = @id",
+            // Re-checked under the lock: what the unlocked read saw may have been accepted, withdrawn
+            // or written off by another call since. Only the call that writes it off reports it.
+            var expired = await connection.ExecuteAsync(transaction,
+                """
+                UPDATE commands SET status = @expired
+                WHERE owner_id = @owner AND id = @id AND status = 'PendingDelivery'
+                """,
                 ("@expired", CommandStatus.Expired), ("@owner", host.OwnerId), ("@id", command.Id));
 
-            if (command.Kind != CommandKind.StartTask)
+            if (expired == 0 || !starts.TryGetValue(command.Id, out var runId))
             {
                 continue;
             }
-
-            // The run id is the gateway's own, written into the payload when the person started it.
-            var runId = RemoteJson.Deserialize<StartTaskPayload>(command.Payload).RunId;
 
             var affected = await connection.ExecuteAsync(transaction,
                 """

@@ -509,6 +509,33 @@ public sealed class HostServiceTests(TestDatabase database) : IClassFixture<Test
     }
 
     /// <summary>
+    /// The same for the account. A publish that arrives while its owner's account is being disabled
+    /// waits for the disablement and is then refused. Read without a lock, the account looked active
+    /// to the publish's snapshot, and an event was applied after the account had been disabled.
+    /// </summary>
+    [Fact]
+    public async Task A_publish_racing_a_disablement_waits_for_it_and_is_refused()
+    {
+        var (host, runId) = await RunningAsync();
+
+        // A disablement, held open: the account's row is locked and marked disabled.
+        await using var connection = await database.OpenAsync();
+        await using var disabling = await connection.BeginAsync(default);
+        await connection.ExecuteAsync(disabling,
+            "UPDATE users SET status = 'Disabled' WHERE id = @owner", ("@owner", host.OwnerId));
+
+        var publish = Service.PublishAsync(host, Event(runId, 2, RemoteEventKind.Progress));
+        await Assert.ThrowsAsync<TimeoutException>(() => publish.WaitAsync(TimeSpan.FromMilliseconds(500)));
+
+        await disabling.CommitAsync();
+
+        var refused = await Assert.ThrowsAsync<GatewayFault>(() => publish.WaitAsync(Generously));
+        Assert.Equal(FaultCode.AccountDisabled, refused.Code);
+        Assert.Equal(1, await database.ScalarLongAsync(
+            $"SELECT applied_sequence FROM runs WHERE id = '{runId}'"));
+    }
+
+    /// <summary>
     /// A disabled account's computers stop at the next thing they do, whatever their connection was
     /// told when it opened. The code is a Fatal one: the Host stops and keeps its queue, because
     /// nothing it can send will be accepted until a person changes the account.
@@ -635,9 +662,10 @@ public sealed class HostServiceTests(TestDatabase database) : IClassFixture<Test
     }
 
     /// <summary>
-    /// A sync writes off this computer's expired commands, and locks only those. Through the expiry
-    /// key - status and expiry time, every account's commands in one range - it locked Bob's expired
-    /// commands as well, and Alice's computer waited for whatever of Bob's held them.
+    /// A sync writes off this computer's expired commands, and locks only those. A locking scan that
+    /// went through the expiry key - status and expiry time, every account's commands in one range -
+    /// locked Bob's expired commands as well, and Alice's computer waited for whatever of Bob's held
+    /// them. The scan no longer locks at all; this keeps it that way.
     ///
     /// <para>The optimizer takes that key when it looks cheapest: this computer has a long queue of
     /// commands that have not expired, and the whole gateway has only a few that have - which is
@@ -703,6 +731,53 @@ public sealed class HostServiceTests(TestDatabase database) : IClassFixture<Test
 
         // The cancel committed first, so the run was no longer Queued when the sync wrote off its
         // start: the run keeps saying a stop was asked for, and the start is still expired.
+        Assert.Equal(RemoteRunStatus.CancelRequested, await StatusAsync(runId));
+        Assert.Equal("Expired", Assert.Single(await database.StringsAsync(
+            $"SELECT status FROM commands WHERE host_id = '{host.HostId}' AND kind = 'StartTask'")));
+    }
+
+    /// <summary>
+    /// The real cancel, all the way to the command it queues. It locks the run, reads the computer,
+    /// and inserts its command into this computer's delivery range. A sync that locked that range to
+    /// find its expired commands and THEN reached for the expired start's run held the gap the
+    /// cancel's insert needed while waiting for the run the cancel held: a deadlock, and the database
+    /// rolled one of them back. A sync finds them without locking, locks the runs first, and only
+    /// then each command by its own key, so the cancel inserts, commits, and the sync goes on.
+    /// </summary>
+    [Fact]
+    public async Task A_sync_does_not_deadlock_with_a_cancel_queuing_its_command()
+    {
+        var (host, runId) = await QueuedAsync();
+        await CommandAsync(host, CommandKind.StartTask, RemoteJson.Serialize(new StartTaskPayload(
+            runId, Guid.NewGuid().ToString(), "workspace-1", Sealed("task"), Sealed("start"))), expired: true);
+        var cancelId = Guid.NewGuid().ToString();
+
+        // Holds the cancel at the right moment: after it has locked the run and read the computer,
+        // before it queues its command. An uncommitted row under the cancel's own command id makes its
+        // idempotency lookup wait. Accepted, so it is outside the range a sync delivers from.
+        await using var connection = await database.OpenAsync();
+        await using var holding = await connection.BeginAsync(default);
+        await connection.ExecuteAsync(holding,
+            """
+            INSERT INTO commands (owner_id, id, host_id, kind, payload, fingerprint, status, created_at, expires_at)
+            VALUES (@owner, @id, @host, 'CancelRun', '{}', SHA2(@id, 256), 'AcceptedByHost',
+                    UTC_TIMESTAMP(3), UTC_TIMESTAMP(3) + INTERVAL 1 DAY)
+            """,
+            ("@owner", host.OwnerId), ("@id", cancelId), ("@host", host.HostId));
+
+        var alice = new UserAccess(host.OwnerId, Ids.New());
+        var cancel = Users.CancelAsync(alice, runId, cancelId, Sealed("cancel"), default);
+        await Assert.ThrowsAsync<TimeoutException>(() => cancel.WaitAsync(TimeSpan.FromMilliseconds(500)));
+
+        var sync = Service.SyncAsync(host, []);
+        await Assert.ThrowsAsync<TimeoutException>(() => sync.WaitAsync(TimeSpan.FromMilliseconds(500)));
+
+        // Let the cancel go on to queue its command.
+        await holding.RollbackAsync();
+
+        Assert.Equal(CommandKind.CancelRun, (await cancel.WaitAsync(Generously)).Kind);
+        await sync.WaitAsync(Generously);
+
         Assert.Equal(RemoteRunStatus.CancelRequested, await StatusAsync(runId));
         Assert.Equal("Expired", Assert.Single(await database.StringsAsync(
             $"SELECT status FROM commands WHERE host_id = '{host.HostId}' AND kind = 'StartTask'")));
@@ -869,16 +944,24 @@ public sealed class HostServiceTests(TestDatabase database) : IClassFixture<Test
             """)));
     }
 
-    /// <summary>What a sync hands over: this computer's undelivered commands, and nobody else's.</summary>
+    /// <summary>
+    /// What a sync hands over: this computer's undelivered commands, and nobody else's - not Bob's,
+    /// and not those of Alice's other computer, which are hers but are not this computer's to carry
+    /// out. The second is what an owner filter alone would let through.
+    /// </summary>
     [Fact]
     public async Task A_sync_delivers_only_this_computers_commands()
     {
         var (host, runId) = await QueuedAsync();
-        var (other, othersRun) = await QueuedAsync("bob");
+        var laptop = await ComputerAsync(new UserAccess(host.OwnerId, Ids.New()), "Laptop");
+        var laptopsRun = await QueuedRunAsync(laptop);
+        var (bobs, bobsRun) = await QueuedAsync("bob");
         var mine = await CommandAsync(host, CommandKind.CancelRun,
             RemoteJson.Serialize(new CancelRunPayload(runId, Sealed("cancel"))));
-        await CommandAsync(other, CommandKind.CancelRun,
-            RemoteJson.Serialize(new CancelRunPayload(othersRun, Sealed("cancel"))));
+        await CommandAsync(laptop, CommandKind.CancelRun,
+            RemoteJson.Serialize(new CancelRunPayload(laptopsRun, Sealed("cancel"))));
+        await CommandAsync(bobs, CommandKind.CancelRun,
+            RemoteJson.Serialize(new CancelRunPayload(bobsRun, Sealed("cancel"))));
 
         var delivered = await Service.SyncAsync(host, []);
 
