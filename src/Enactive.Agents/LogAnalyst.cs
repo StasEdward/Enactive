@@ -73,36 +73,6 @@ public sealed class LogAnalyst
     public static int BudgetChars(int? contextWindowTokens)
         => Math.Max(4_000, (int)((contextWindowTokens ?? 16_000) * 0.60) * CharsPerToken);
 
-    /// <summary>
-    /// Analyses a log FILE without ever holding it.
-    ///
-    /// <para>This is the one that matters for a real log. <see cref="AnalyseAsync"/> takes a
-    /// string, and a .NET string cannot hold two gigabytes — so a daily file of any size is not a
-    /// worse analysis, it is an exception before a model is asked anything. Here the file is
-    /// streamed once, digested to something small, and only the digest is held.</para>
-    /// </summary>
-    public async Task<LogAnalysisResult> AnalyseFileAsync(
-        string path, IChatProvider provider, string model, int? contextWindowTokens, CancellationToken ct)
-    {
-        using var reader = new StreamReader(path);
-        var (digest, stats) = LogDigest.Of(reader);
-
-        // No excerpt to fall back to here: the file was streamed and is not held, and re-reading
-        // gigabytes to send the model the first and last page of something unrecognisable would
-        // be a long way round to a bad answer. Say what happened instead of asking about a blank
-        // page and reporting whatever comes back as a diagnosis.
-        if (!Recognised(stats))
-        {
-            return new LogAnalysisResult(
-                $"This file does not look like an Enactive log: {stats.LinesRead:N0} line(s) were "
-                + $"read and {stats.RecordsKept:N0} of them were recognised as log records, so "
-                + "there is nothing to analyse. Nothing was sent to a model.",
-                model, 0, (int)Math.Min(int.MaxValue, stats.LinesRead));
-        }
-
-        return await SendAsync(digest, stats, provider, model, contextWindowTokens, ct);
-    }
-
     public async Task<LogAnalysisResult> AnalyseAsync(
         string log, IChatProvider provider, string model, int? contextWindowTokens, CancellationToken ct)
     {

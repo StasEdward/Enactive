@@ -1119,17 +1119,6 @@ public sealed partial class AppSettings
         return list;
     }
 
-    /// <summary>Finds a provider by id (case-insensitive), creating and appending it when absent.</summary>
-    public ProviderConfig EnsureProvider(string id, string displayName, ProviderKind kind)
-    {
-        var existing = Providers.FirstOrDefault(x => string.Equals(x.Id, id, StringComparison.OrdinalIgnoreCase));
-        if (existing is not null)
-            return existing;
-        var created = new ProviderConfig { Id = id, DisplayName = displayName, Kind = kind };
-        Providers.Add(created);
-        return created;
-    }
-
     /// <summary>"providerId/model" for a <see cref="ModelRef"/>.</summary>
     public static string FormatRef(ModelRef r) => $"{r.ProviderId}/{r.Model}";
 

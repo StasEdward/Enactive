@@ -313,9 +313,6 @@ public static class WorkEventPayload
     /// </summary>
     public static string? ToolName(this WorkEvent ev) => Field(ev.PayloadJson, ToolRegex);
 
-    /// <summary>The same, from a stored event's payload.</summary>
-    public static string? ToolNameIn(string? payload) => Field(payload, ToolRegex);
-
     /// <summary>The complexity a routing event names, or null.</summary>
     public static string? RouteComplexity(this WorkEvent ev) => Field(ev.PayloadJson, ComplexityRegex);
 

@@ -136,9 +136,6 @@ internal static class Sql
                 $"'{stored}' in column '{column}' is not a {typeof(T).Name} this build knows.");
     }
 
-    public static T? EnumOrNull<T>(this MySqlDataReader reader, string column) where T : struct, Enum
-        => reader.IsDBNull(reader.GetOrdinal(column)) ? null : reader.Enum<T>(column);
-
     /// <summary>
     /// A transaction at REPEATABLE READ, which is MySQL's default and what <c>FOR UPDATE</c> is
     /// written against here.

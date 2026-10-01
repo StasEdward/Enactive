@@ -160,34 +160,6 @@ public static class LogDigest
                 new DigestStats(read, detail, kept, dropped));
     }
 
-    /// <summary>The same, over records the engine already holds — no parsing, no format to drift.</summary>
-    public static (string Text, DigestStats Stats) Of(
-        IEnumerable<DigestRecord> records, int maxTimelineEntries = 2_000)
-    {
-        var steps = new Dictionary<string, StepTotals>(StringComparer.Ordinal);
-        var order = new List<string>();
-        var timeline = new List<string>();
-        long kept = 0, dropped = 0;
-
-        foreach (var r in records)
-        {
-            kept++;
-            if (!steps.TryGetValue(r.Run, out var totals))
-            {
-                steps[r.Run] = totals = new StepTotals(r.At);
-                order.Add(r.Run);
-            }
-            totals.Saw(r);
-
-            if (!Interesting(r)) continue;
-            if (timeline.Count >= maxTimelineEntries) { dropped++; continue; }
-            timeline.Add(Line(r));
-        }
-
-        return (Render(order, steps, timeline, dropped),
-                new DigestStats(kept, 0, kept, dropped));
-    }
-
     /// <summary>
     /// Whether this record earns a line in the timeline. Everything else is counted into its step's
     /// totals and not otherwise shown — the totals are what say it happened.

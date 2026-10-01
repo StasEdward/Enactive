@@ -97,10 +97,6 @@ public sealed record RejectResult(bool Rejected, string? Conflict = null);
 /// <summary>Content hashing for the concurrency checks. SHA-256, hex.</summary>
 public static class FileHash
 {
-    /// <summary>Of a string, as UTF-8. For content that IS text and never was a file.</summary>
-    public static string? Of(string? content)
-        => content is null ? null : Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(content)));
-
     /// <summary>
     /// Of the file's BYTES. It used to hash <c>File.ReadAllText</c>, which is not a hash of the file:
     /// every byte the UTF-8 decoder cannot represent became the same replacement character before
@@ -116,9 +112,6 @@ public static class FileHash
         using var stream = File.OpenRead(fullPath);
         return Convert.ToHexString(SHA256.HashData(stream));
     }
-
-    /// <summary>Of bytes already in hand — so a caller that must read a file anyway reads it once.</summary>
-    public static string OfBytes(byte[] bytes) => Convert.ToHexString(SHA256.HashData(bytes));
 }
 
 /// <summary>
