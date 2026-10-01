@@ -82,7 +82,7 @@ Open Artifacts after the run. With staging enabled, inspect the diff and choose 
 
 ## Add review after connectivity works
 
-Configure a second, stronger model under Providers, then bind it under **AI → Phases → Review model**. Keep **AI → General → Review content** enabled for documentation work. Repeat a small task and inspect the recorded review verdict.
+Configure a second, stronger model under Providers, then bind it under **AI → Phases → Review model**. Every step then gets a verdict from it, documentation steps included. Repeat a small task and inspect the recorded review verdict.
 
 Choose the [balanced setup](Models-and-Phases.md#recommended-configurations) as a starting point for ongoing development.
 
