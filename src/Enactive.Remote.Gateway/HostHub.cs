@@ -1,6 +1,7 @@
 namespace Enactive.Remote.Gateway;
 
 using System.Collections.Concurrent;
+using System.Security.Claims;
 using Enactive.Remote.Contracts;
 using Enactive.Remote.Gateway.Services;
 using Microsoft.AspNetCore.Authorization;
@@ -28,9 +29,9 @@ public sealed class HostConnections
 }
 
 /// <summary>
-/// The three methods a Host calls. Every one of them takes its Host from the authenticated
-/// identity and never from an argument, so "act as another Host" is not a request that can be
-/// made rather than one that is refused.
+/// The methods a Host calls. Every one of them takes its Host and that Host's owner from the
+/// authenticated identity and never from an argument, so "act as another Host", or "act in another
+/// person's account", is not a request that can be made rather than one that is refused.
 /// </summary>
 [Authorize(AuthenticationSchemes = HostAuthentication.SchemeName)]
 public sealed class HostHub(HostService hosts, HostConnections connections) : Hub
@@ -47,25 +48,48 @@ public sealed class HostHub(HostService hosts, HostConnections connections) : Hu
         return base.OnDisconnectedAsync(exception);
     }
 
+    /// <summary>
+    /// The first thing a Host says: which protocol it speaks. Another version is refused with a code
+    /// the Host treats as final and words a person can act on; without this, a Host of another version
+    /// would see each of its calls refused for a different-looking reason and keep trying.
+    ///
+    /// <para>A check the Host asks for, not a gate in front of the other calls: a connection that
+    /// never says hello is still served, so a Host that does not call it yet keeps working.</para>
+    /// </summary>
+    public Task<HostReply<bool>> Hello(int protocolVersion)
+        => Guard(() => protocolVersion == RemoteProtocol.Version
+            ? Task.FromResult(true)
+            : throw GatewayFault.ProtocolMismatch());
+
     public Task<HostReply<IReadOnlyList<HostCommand>>> Sync(List<WorkspaceRef> workspaces)
-        => Guard(() => hosts.SyncAsync(HostId, workspaces, Context.ConnectionAborted));
+        => Guard(() => hosts.SyncAsync(Access, workspaces, Context.ConnectionAborted));
 
     public Task<HostReply<bool>> Acknowledge(string commandId)
         => Guard(async () =>
         {
-            await hosts.AcknowledgeAsync(HostId, commandId, Context.ConnectionAborted);
+            await hosts.AcknowledgeAsync(Access, commandId, Context.ConnectionAborted);
             return true;
         });
 
     public Task<HostReply<bool>> Publish(HostEvent published)
         => Guard(async () =>
         {
-            await hosts.PublishAsync(HostId, published, Context.ConnectionAborted);
+            await hosts.PublishAsync(Access, published, Context.ConnectionAborted);
             return true;
         });
 
     private string HostId => Context.UserIdentifier
         ?? throw new HubException("This connection has no identity.");
+
+    /// <summary>
+    /// Built afresh for each call from the connection's claims. The service re-reads the account and
+    /// the computer inside every call's transaction, so what the claims said when the connection
+    /// opened only names whose rows to look at; it never vouches that they are still allowed.
+    /// </summary>
+    private HostAccess Access => new(
+        HostId,
+        Context.User?.FindFirstValue(HostAuthentication.OwnerClaim)
+            ?? throw new HubException("This connection has no owner."));
 
     /// <summary>
     /// Turns a refusal into an ANSWER rather than an exception.

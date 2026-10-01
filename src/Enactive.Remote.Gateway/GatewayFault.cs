@@ -83,6 +83,13 @@ public sealed class GatewayFault(string code, int status, string message) : Exce
     public static GatewayFault HostRevoked() => new(
         FaultCode.HostRevoked, 403, "This device's credential has been revoked.");
 
+    public static GatewayFault AccountDisabled() => new(
+        FaultCode.AccountDisabled, 403, "The account this computer belongs to has been disabled.");
+
+    public static GatewayFault ProtocolMismatch() => new(
+        FaultCode.ProtocolMismatch, 400,
+        "This computer and the service speak different versions - update Enactive.");
+
     // ── the ones only the owner API produces ────────────────────────────────
     //
     // These have no FaultCode: nothing on a Host's retry path can reach them, and inventing codes a

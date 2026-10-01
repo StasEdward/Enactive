@@ -19,10 +19,7 @@ internal sealed record TaskRow(
 
 internal sealed record RunRow(
     string Id,
-    string TaskId,
+    string OwnerId,
     string HostId,
     RemoteRunStatus Status,
-    long AppliedSequence,
-    DateTimeOffset CreatedAt,
-    DateTimeOffset? EndedAt,
-    string? Summary);
+    long AppliedSequence);

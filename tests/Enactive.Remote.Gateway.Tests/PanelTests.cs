@@ -23,6 +23,10 @@ public sealed class PanelTests(TestDatabase database) : IClassFixture<TestDataba
     private const string OwnerKey = "a-development-owner-key-for-tests";
     private const string HostId = "4444444444444444444444444444dddd";
 
+    // Task 3.8 rewrites this: the computer is registered to the person the test signs in as. Until
+    // then these tests seed the old schema and fail at runtime anyway; this only keeps them compiling.
+    private static readonly HostAccess Computer = new(HostId, "");
+
     private WebApplicationFactory<Program> _gateway = null!;
     private HttpClient _owner = null!;
     private HttpClient _stranger = null!;
@@ -130,7 +134,7 @@ public sealed class PanelTests(TestDatabase database) : IClassFixture<TestDataba
         var runId = await RunningRunAsync();
         var approvalId = "approval-" + Guid.NewGuid().ToString("N");
 
-        await new HostService(new Database(database.ConnectionString)).PublishAsync(HostId, new HostEvent(
+        await new HostService(new Database(database.ConnectionString)).PublishAsync(Computer, new HostEvent(
             Guid.NewGuid().ToString("N"), runId, 2, RemoteEventKind.ApprovalRequested, "Run the tests",
             new ApprovalRequest(approvalId, "call-1", "hash-1", RemoteDecidable: false, "e1:sealed-action")));
 
@@ -226,7 +230,7 @@ public sealed class PanelTests(TestDatabase database) : IClassFixture<TestDataba
         var runId = await RunningRunAsync();
         var approvalId = "approval-" + Guid.NewGuid().ToString("N");
 
-        await new HostService(new Database(database.ConnectionString)).PublishAsync(HostId, new HostEvent(
+        await new HostService(new Database(database.ConnectionString)).PublishAsync(Computer, new HostEvent(
             Guid.NewGuid().ToString("N"), runId, 2, RemoteEventKind.ApprovalRequested, "Delete a file",
             new ApprovalRequest(approvalId, "call-1", "hash-1", RemoteDecidable: true, "e1:sealed-action")));
 
@@ -260,7 +264,7 @@ public sealed class PanelTests(TestDatabase database) : IClassFixture<TestDataba
         var runId = await RunningRunAsync();
         var approvalId = "approval-" + Guid.NewGuid().ToString("N");
 
-        await new HostService(new Database(database.ConnectionString)).PublishAsync(HostId, new HostEvent(
+        await new HostService(new Database(database.ConnectionString)).PublishAsync(Computer, new HostEvent(
             Guid.NewGuid().ToString("N"), runId, 2, RemoteEventKind.ApprovalRequested, "Delete a file",
             new ApprovalRequest(approvalId, "call-1", "hash-1", RemoteDecidable: true, "e1:sealed-action")));
 
@@ -350,7 +354,7 @@ public sealed class PanelTests(TestDatabase database) : IClassFixture<TestDataba
     {
         var runId = await QueuedRunAsync();
 
-        await new HostService(new Database(database.ConnectionString)).PublishAsync(HostId, new HostEvent(
+        await new HostService(new Database(database.ConnectionString)).PublishAsync(Computer, new HostEvent(
             Guid.NewGuid().ToString("N"), runId, 1, RemoteEventKind.Running, "Started"));
 
         return runId;

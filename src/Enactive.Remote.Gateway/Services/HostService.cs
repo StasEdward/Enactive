@@ -1,6 +1,7 @@
 namespace Enactive.Remote.Gateway.Services;
 
 using Enactive.Remote.Contracts;
+using Enactive.Remote.Contracts.Crypto;
 using Enactive.Remote.Gateway.Storage;
 using MySqlConnector;
 
@@ -11,20 +12,62 @@ using MySqlConnector;
 /// PROJECTION of that and never a second opinion. So its job is narrow and unglamorous: refuse what
 /// cannot be true, apply what can, and say precisely why when it refuses - because a Host with a
 /// durable outbox has to decide from that answer whether to keep the item or drop it.</para>
+///
+/// <para><b>A computer acts within its own account, on its own rows.</b> Every call takes a
+/// <see cref="HostAccess"/> built from the authenticated token, and every lookup names both the owner
+/// and the computer. A run or a request of another person's, or of another of the same person's
+/// computers, is refused exactly like one that does not exist. Each computer's outbox speaks only for
+/// what that computer is running.</para>
+///
+/// <para><b>Authority is re-read inside every transaction.</b> The connection was authenticated
+/// when it opened, possibly hours ago. The account's status and the computer's revocation are read
+/// again, locked for share, at the start of each call, so a revocation or a disablement that
+/// commits mid-connection stops the very next call, and one in flight waits for the call that is
+/// already running instead of slipping past it.</para>
+///
+/// <para><b>Lock order.</b> users, then hosts, both FOR SHARE; then the run, request or command
+/// rows; then the owner's stream counter. A person's cancel and answer lock their target first and
+/// the computer FOR SHARE afterwards (see <see cref="UserService"/>), so this class must never hold
+/// the hosts row EXCLUSIVELY in a transaction that also locks a run or a request: the cancel would
+/// wait for the computer while holding the run this waits for, and the database would roll one of
+/// them back as a deadlock. Shared with shared does not wait, which is why the computer is only ever
+/// shared here and why marking it seen happens after the commit.</para>
+///
+/// <para><b>Nothing the computer sends is readable here.</b> Workspace names, event details and
+/// permission requests arrive sealed. This checks that each is an envelope of a sensible size and
+/// stores it as it came; only a trusted browser can open it.</para>
 /// </summary>
 public sealed class HostService(Database database)
 {
     private const int MaxWorkspaces = 100;
-    private const int MaxDetail = 16_000;
-    private const int MaxArguments = 24_000;
 
-    // Task 3.6 rewrites this: a host's owner is known once HostService takes a HostAccess. Until
-    // then nothing here knows whose stream a row belongs to, and this service still writes the old
-    // schema and fails at runtime anyway; the placeholder only lets the new signature compile.
-    private const string PlaceholderOwner = "";
+    // A Sync carries every workspace in one hub message, and the hub refuses a message over 64 KB.
+    // A workspace name is a folder's name, a few dozen characters; sealed it is about 4/3 of its
+    // UTF-8 bytes plus 47. 500 characters of envelope hold a name of over 300 bytes, and 100 of them
+    // with their ids still fit one message - a larger bound would let a Host build a Sync the hub
+    // refuses outright, which it can only retry for ever.
+    private const int MaxSealedName = 500;
 
-    /// <summary>How long the Host has to accept a command, and an owner to answer a request.</summary>
-    public static readonly TimeSpan Lifetime = TimeSpan.FromHours(24);
+    // An event's sentence: up to 16 000 bytes of text, which sealed is about 21 400 characters.
+    private const int MaxSealedDetail = 22_000;
+
+    // A permission request carries what the card shows and the arguments the hash covers, often
+    // both long. Together with a detail at its maximum and the ids around them, 40 000 still fits the
+    // hub's 64 KB message, so a request the hub would accept is never refused here for its size.
+    private const int MaxSealedAction = 40_000;
+
+    // The widths of the columns these ids are stored in. Checked here so a longer one is a refusal
+    // the Host can classify, not a database error it would retry.
+    private const int MaxId = 100;
+    private const int RunIdLength = 32;
+    private const int ActionHashLength = 64;
+
+    /// <summary>
+    /// How long an owner has to answer a request. The protocol's command lifetime: the computer
+    /// refuses a sealed answer issued longer ago than that, so keeping a request open longer here
+    /// would only collect answers it will refuse.
+    /// </summary>
+    public static readonly TimeSpan Lifetime = RemoteProtocol.CommandLifetime;
 
     // ── Sync ────────────────────────────────────────────────────────────────
 
@@ -37,7 +80,7 @@ public sealed class HostService(Database database)
     /// folder that was removed months ago.</para>
     /// </summary>
     public async Task<IReadOnlyList<HostCommand>> SyncAsync(
-        string hostId, IReadOnlyList<WorkspaceRef> workspaces, CancellationToken ct = default)
+        HostAccess host, IReadOnlyList<WorkspaceRef> workspaces, CancellationToken ct = default)
     {
         if (workspaces.Count > MaxWorkspaces)
         {
@@ -51,52 +94,66 @@ public sealed class HostService(Database database)
 
         foreach (var workspace in workspaces)
         {
-            Required(workspace.Id, 100, "workspace id");
-            Required(workspace.SealedName, 100, "workspace name"); // Task 3.4 rewrites this
+            Required(workspace.Id, MaxId, "workspace id");
+            RequireSealed(workspace.SealedName, MaxSealedName, "workspace name");
         }
 
         await using var connection = await database.OpenAsync(ct);
-        await using var transaction = await connection.BeginAsync(ct);
 
-        await EnsureHostAsync(connection, transaction, hostId);
+        IReadOnlyList<HostCommand> pending;
 
-        await connection.ExecuteAsync(transaction,
-            "UPDATE hosts SET last_seen_at = @now WHERE id = @host",
-            ("@now", DateTimeOffset.UtcNow), ("@host", hostId));
-
-        await connection.ExecuteAsync(transaction,
-            "DELETE FROM host_workspaces WHERE host_id = @host", ("@host", hostId));
-
-        foreach (var workspace in workspaces)
+        await using (var transaction = await connection.BeginAsync(ct))
         {
+            await AuthorizeAsync(connection, transaction, host);
+
             await connection.ExecuteAsync(transaction,
+                "DELETE FROM host_workspaces WHERE owner_id = @owner AND host_id = @host",
+                ("@owner", host.OwnerId), ("@host", host.HostId));
+
+            foreach (var workspace in workspaces)
+            {
+                await connection.ExecuteAsync(transaction,
+                    """
+                    INSERT INTO host_workspaces (owner_id, host_id, workspace_id, sealed_name)
+                    VALUES (@owner, @host, @id, @name)
+                    """,
+                    ("@owner", host.OwnerId), ("@host", host.HostId),
+                    ("@id", workspace.Id), ("@name", workspace.SealedName));
+            }
+
+            await ExpireCommandsAsync(connection, transaction, host);
+
+            pending = await connection.ReadAllAsync(transaction,
                 """
-                INSERT INTO host_workspaces (host_id, workspace_id, name)
-                VALUES (@host, @id, @name)
+                SELECT id, host_id, kind, payload, status, created_at, expires_at
+                FROM commands
+                WHERE owner_id = @owner AND host_id = @host AND status = 'PendingDelivery'
+                ORDER BY created_at
                 """,
-                ("@host", hostId), ("@id", workspace.Id), ("@name", workspace.SealedName));
+                reader => new HostCommand(
+                    reader.GetString("id"),
+                    reader.GetString("host_id"),
+                    reader.Enum<CommandKind>("kind"),
+                    reader.GetString("payload"),
+                    reader.Enum<CommandStatus>("status"),
+                    reader.Utc("created_at"),
+                    reader.Utc("expires_at")),
+                ("@owner", host.OwnerId), ("@host", host.HostId));
+
+            await transaction.CommitAsync(ct);
         }
 
-        await ExpireCommandsAsync(connection, transaction, hostId);
-
-        var pending = await connection.ReadAllAsync(transaction,
+        // After the commit, on its own: writing last_seen_at locks the hosts row EXCLUSIVELY, and the
+        // transaction above locks runs while it writes off expired starts - see the lock order in the
+        // class comment. The revoked filter keeps a revocation that committed in between from being
+        // undone: it clears last_seen_at, and this must not set it again.
+        await connection.ExecuteAsync(null,
             """
-            SELECT id, host_id, kind, payload, status, created_at, expires_at
-            FROM commands
-            WHERE host_id = @host AND status = 'PendingDelivery'
-            ORDER BY created_at
+            UPDATE hosts SET last_seen_at = @now
+            WHERE owner_id = @owner AND id = @host AND revoked = 0
             """,
-            reader => new HostCommand(
-                reader.GetString("id"),
-                reader.GetString("host_id"),
-                reader.Enum<CommandKind>("kind"),
-                reader.GetString("payload"),
-                reader.Enum<CommandStatus>("status"),
-                reader.Utc("created_at"),
-                reader.Utc("expires_at")),
-            ("@host", hostId));
+            ("@now", DateTimeOffset.UtcNow), ("@owner", host.OwnerId), ("@host", host.HostId));
 
-        await transaction.CommitAsync(ct);
         return pending;
     }
 
@@ -105,18 +162,25 @@ public sealed class HostService(Database database)
     /// moments and a crash can land between them, which is the entire reason this is a separate
     /// call rather than something Sync infers from having handed the command over.
     /// </summary>
-    public async Task AcknowledgeAsync(string hostId, string commandId, CancellationToken ct = default)
+    public async Task AcknowledgeAsync(HostAccess host, string commandId, CancellationToken ct = default)
     {
         await using var connection = await database.OpenAsync(ct);
         await using var transaction = await connection.BeginAsync(ct);
 
-        await EnsureHostAsync(connection, transaction, hostId);
-        await ExpireCommandsAsync(connection, transaction, hostId);
+        await AuthorizeAsync(connection, transaction, host);
+        await ExpireCommandsAsync(connection, transaction, host);
 
+        // The primary key starts with the owner, so this lock cannot reach another person's command.
+        // The computer is in the filter too: a command meant for another of the owner's computers is
+        // not this one's to accept, and accepting it would mark it delivered where it never arrived.
         var status = await connection.ReadOneAsync(transaction,
-            "SELECT status FROM commands WHERE id = @id AND host_id = @host FOR UPDATE",
+            """
+            SELECT status FROM commands
+            WHERE owner_id = @owner AND id = @id AND host_id = @host
+            FOR UPDATE
+            """,
             reader => (CommandStatus?)reader.Enum<CommandStatus>("status"),
-            ("@id", commandId), ("@host", hostId));
+            ("@owner", host.OwnerId), ("@id", commandId), ("@host", host.HostId));
 
         switch (status)
         {
@@ -137,8 +201,8 @@ public sealed class HostService(Database database)
         }
 
         await connection.ExecuteAsync(transaction,
-            "UPDATE commands SET status = @accepted WHERE id = @id",
-            ("@accepted", CommandStatus.AcceptedByHost), ("@id", commandId));
+            "UPDATE commands SET status = @accepted WHERE owner_id = @owner AND id = @id",
+            ("@accepted", CommandStatus.AcceptedByHost), ("@owner", host.OwnerId), ("@id", commandId));
 
         await transaction.CommitAsync(ct);
     }
@@ -149,35 +213,56 @@ public sealed class HostService(Database database)
     /// One thing the Host is telling us. The run row is locked for the whole decision, so two
     /// events arriving together are serialised by the database rather than by hope.
     /// </summary>
-    public async Task PublishAsync(string hostId, HostEvent published, CancellationToken ct = default)
+    public async Task PublishAsync(HostAccess host, HostEvent published, CancellationToken ct = default)
     {
-        Required(published.EventId, 100, "event id");
-        Required(published.RunId, 32, "run id");
+        Required(published.EventId, MaxId, "event id");
+        Required(published.RunId, RunIdLength, "run id");
 
-        if ((published.SealedDetail?.Length ?? 0) > MaxDetail)
+        if (published.SealedDetail is not null)
         {
-            throw GatewayFault.MalformedEvent($"Event detail is longer than {MaxDetail:N0} characters.");
+            RequireSealed(published.SealedDetail, MaxSealedDetail, "event detail");
+        }
+
+        // Shape before state: a request that is not even well-formed is refused the same way whatever
+        // the run is doing, and before anything is locked for it.
+        if (published.Approval is { } request)
+        {
+            Required(request.ApprovalId, MaxId, "approval id");
+            Required(request.ToolCallId, MaxId, "tool call id");
+            Required(request.ActionHash, ActionHashLength, "action hash");
+            RequireSealed(request.SealedAction, MaxSealedAction, "sealed action");
         }
 
         await using var connection = await database.OpenAsync(ct);
         await using var transaction = await connection.BeginAsync(ct);
 
-        await EnsureHostAsync(connection, transaction, hostId);
+        await AuthorizeAsync(connection, transaction, host);
 
+        // The run id is the Host's to name, so this lookup goes through the key that starts with the
+        // owner and the computer. Through the primary key, MySQL locked the row with that id first and
+        // applied the owner filter afterwards: Alice's computer naming Bob's run waited for any
+        // transaction of Bob's that held it - which told it the run exists - and held up his.
         var run = await connection.ReadOneAsync(transaction,
             """
-            SELECT id, task_id, host_id, status, applied_sequence, created_at, ended_at, summary
-            FROM runs WHERE id = @run AND host_id = @host
+            SELECT id, owner_id, host_id, status, applied_sequence
+            FROM runs FORCE INDEX (ux_runs_owner_host)
+            WHERE owner_id = @owner AND host_id = @host AND id = @run
             FOR UPDATE
             """,
-            ReadRun, ("@run", published.RunId), ("@host", hostId))
+            reader => new RunRow(
+                reader.GetString("id"),
+                reader.GetString("owner_id"),
+                reader.GetString("host_id"),
+                reader.Enum<RemoteRunStatus>("status"),
+                reader.GetInt64("applied_sequence")),
+            ("@owner", host.OwnerId), ("@host", host.HostId), ("@run", published.RunId))
             ?? throw GatewayFault.UnknownRun(published.RunId);
 
         // Deduplication first, and BEFORE the terminal check: a Host retrying the very event that
         // ended the run must get an acknowledgement, not "that run has ended".
         if (await connection.ExistsAsync(transaction,
-                "SELECT 1 FROM events WHERE host_id = @host AND id = @event",
-                ("@host", hostId), ("@event", published.EventId)))
+                "SELECT 1 FROM events WHERE owner_id = @owner AND host_id = @host AND id = @event",
+                ("@owner", run.OwnerId), ("@host", run.HostId), ("@event", published.EventId)))
         {
             await transaction.CommitAsync(ct);
             return;
@@ -201,16 +286,21 @@ public sealed class HostService(Database database)
 
         await connection.ExecuteAsync(transaction,
             """
-            INSERT INTO events (id, host_id, run_id, sequence, kind, detail, at, ordinal)
-            VALUES (@id, @host, @run, @sequence, @kind, @detail, @at, @ordinal)
+            INSERT INTO events (owner_id, host_id, id, run_id, sequence, kind, sealed_detail, at, ordinal)
+            VALUES (@owner, @host, @id, @run, @sequence, @kind, @detail, @at, @ordinal)
             """,
-            ("@id", published.EventId), ("@host", hostId), ("@run", run.Id),
-            ("@sequence", published.Sequence), ("@kind", published.Kind),
+            ("@owner", run.OwnerId), ("@host", run.HostId), ("@id", published.EventId),
+            ("@run", run.Id), ("@sequence", published.Sequence), ("@kind", published.Kind),
             ("@detail", published.SealedDetail), ("@at", now),
             // Allocated inside this transaction, which is what makes a refused publish give the
             // number back: the counter's increment rolls back with everything else. Allocating
             // outside it would leave a hole in the panel's number line for every rejection.
-            ("@ordinal", await StreamCursor.NextAsync(connection, transaction, PlaceholderOwner)));
+            ("@ordinal", await StreamCursor.NextAsync(connection, transaction, run.OwnerId)));
+
+        // The summary is the terminal event's envelope, copied: the gateway has no key to write one
+        // of its own. It opens only under that event's associated data, so its sequence is kept
+        // beside it; the kind is the run's terminal status, which is named like the event's kind.
+        var ended = RunLifecycle.IsTerminal(status);
 
         await connection.ExecuteAsync(transaction,
             """
@@ -218,12 +308,13 @@ public sealed class HostService(Database database)
             SET status = @status,
                 applied_sequence = @sequence,
                 ended_at = CASE WHEN @ended = 1 THEN @at ELSE ended_at END,
-                summary = CASE WHEN @ended = 1 THEN @summary ELSE summary END
-            WHERE id = @run
+                sealed_summary = CASE WHEN @ended = 1 THEN @summary ELSE sealed_summary END,
+                summary_sequence = CASE WHEN @ended = 1 THEN @sequence ELSE summary_sequence END
+            WHERE owner_id = @owner AND host_id = @host AND id = @run
             """,
-            ("@status", status), ("@sequence", published.Sequence),
-            ("@ended", RunLifecycle.IsTerminal(status)), ("@at", now),
-            ("@summary", published.SealedDetail), ("@run", run.Id));
+            ("@status", status), ("@sequence", published.Sequence), ("@ended", ended), ("@at", now),
+            ("@summary", published.SealedDetail),
+            ("@owner", run.OwnerId), ("@host", run.HostId), ("@run", run.Id));
 
         await transaction.CommitAsync(ct);
     }
@@ -249,12 +340,15 @@ public sealed class HostService(Database database)
             await connection.ExecuteAsync(transaction,
                 """
                 UPDATE approvals SET status = @invalidated
-                WHERE run_id = @run AND status IN ('Pending', 'DecisionQueued')
+                WHERE owner_id = @owner AND host_id = @host AND run_id = @run
+                  AND status IN ('Pending', 'DecisionQueued')
                 """,
-                ("@invalidated", ApprovalStatus.Invalidated), ("@run", run.Id));
+                ("@invalidated", ApprovalStatus.Invalidated),
+                ("@owner", run.OwnerId), ("@host", run.HostId), ("@run", run.Id));
 
-            await NoticeAsync(connection, transaction, run.Id,
-                published.Kind.ToString(), published.SealedDetail ?? "", now);
+            // The terminal kinds are named like the statuses they leave, and the notice says which
+            // in those same words.
+            await NoticeAsync(connection, transaction, run, published.Kind.ToString(), published, now);
 
             return RunLifecycle.StatusOf(published.Kind);
         }
@@ -303,36 +397,30 @@ public sealed class HostService(Database database)
             throw GatewayFault.InvalidTransition(published.Kind, run.Status);
         }
 
-        Required(request.ApprovalId, 100, "approval id");
-        Required(request.ToolCallId, 100, "tool call id");
-        Required(request.SealedAction, MaxArguments, "sealed action"); // Task 3.4 rewrites this
-        Required(request.ActionHash, 128, "action hash");
-
+        // Approval ids are made by the computer and unique only on it.
         if (await connection.ExistsAsync(transaction,
-                "SELECT 1 FROM approvals WHERE id = @id", ("@id", request.ApprovalId)))
+                "SELECT 1 FROM approvals WHERE owner_id = @owner AND host_id = @host AND id = @id",
+                ("@owner", run.OwnerId), ("@host", run.HostId), ("@id", request.ApprovalId)))
         {
             throw GatewayFault.Conflict($"Approval {request.ApprovalId} already exists.");
         }
 
+        // What the request is about stays sealed. The tool call, the hash an answer must carry and
+        // whether it may be answered from the web are in the clear because the gateway enforces them.
         await connection.ExecuteAsync(transaction,
             """
-            INSERT INTO approvals (id, host_id, run_id, tool_call_id, tool, arguments,
-                                   working_directory, reason, action_hash, remote_decidable,
-                                   status, created_at, expires_at)
-            VALUES (@id, @host, @run, @call, @tool, @arguments, @directory, @reason, @hash,
-                    @decidable, @pending, @now, @expires)
+            INSERT INTO approvals (owner_id, host_id, id, run_id, tool_call_id, action_hash,
+                                   remote_decidable, sealed_action, status, created_at, expires_at)
+            VALUES (@owner, @host, @id, @run, @call, @hash, @decidable, @action, @pending, @now, @expires)
             """,
-            ("@id", request.ApprovalId), ("@host", run.HostId), ("@run", run.Id),
-            ("@call", request.ToolCallId), ("@tool", ""),
-            // Task 3.4 rewrites this: the sealed action is stored opaquely in the old plaintext column.
-            ("@arguments", request.SealedAction), ("@directory", ""),
-            ("@reason", published.SealedDetail ?? ""), ("@hash", request.ActionHash),
-            ("@decidable", request.RemoteDecidable), ("@pending", ApprovalStatus.Pending),
-            ("@now", now), ("@expires", now.Add(Lifetime)));
+            ("@owner", run.OwnerId), ("@host", run.HostId), ("@id", request.ApprovalId),
+            ("@run", run.Id), ("@call", request.ToolCallId), ("@hash", request.ActionHash),
+            ("@decidable", request.RemoteDecidable), ("@action", request.SealedAction),
+            ("@pending", ApprovalStatus.Pending), ("@now", now), ("@expires", now.Add(Lifetime)));
 
-        await NoticeAsync(connection, transaction, run.Id,
-            request.RemoteDecidable ? "Permission required" : "Permission required on the computer",
-            published.SealedDetail ?? "", now);
+        await NoticeAsync(connection, transaction, run,
+            request.RemoteDecidable ? NoticeKind.PermissionRequested : NoticeKind.PermissionAtComputer,
+            published, now);
 
         return RemoteRunStatus.WaitingForUser;
     }
@@ -343,16 +431,19 @@ public sealed class HostService(Database database)
         var resolution = published.Resolution
             ?? throw GatewayFault.MalformedEvent("An ApprovalResolved event carries no resolution.");
 
+        // The approval id is the Host's to name, so this goes through the key that starts with the
+        // owner and the computer, for the same reason as the run above.
         var approval = await connection.ReadOneAsync(transaction,
             """
-            SELECT id, status, action_hash FROM approvals
-            WHERE id = @id AND run_id = @run AND host_id = @host
+            SELECT status, action_hash FROM approvals FORCE INDEX (ux_approvals_owner_host)
+            WHERE owner_id = @owner AND host_id = @host AND id = @id AND run_id = @run
             FOR UPDATE
             """,
             reader => (
                 Status: (ApprovalStatus?)reader.Enum<ApprovalStatus>("status"),
                 Hash: reader.GetString("action_hash")),
-            ("@id", resolution.ApprovalId), ("@run", run.Id), ("@host", run.HostId));
+            ("@owner", run.OwnerId), ("@host", run.HostId), ("@id", resolution.ApprovalId),
+            ("@run", run.Id));
 
         if (approval.Status is null)
         {
@@ -372,8 +463,9 @@ public sealed class HostService(Database database)
         }
 
         await connection.ExecuteAsync(transaction,
-            "UPDATE approvals SET status = @status WHERE id = @id",
-            ("@status", RunLifecycle.StatusOf(resolution.Outcome)), ("@id", resolution.ApprovalId));
+            "UPDATE approvals SET status = @status WHERE owner_id = @owner AND host_id = @host AND id = @id",
+            ("@status", RunLifecycle.StatusOf(resolution.Outcome)),
+            ("@owner", run.OwnerId), ("@host", run.HostId), ("@id", resolution.ApprovalId));
 
         // A stop that was asked for outlives an answered permission.
         if (run.Status == RemoteRunStatus.CancelRequested)
@@ -384,9 +476,10 @@ public sealed class HostService(Database database)
         var stillWaiting = await connection.ExistsAsync(transaction,
             """
             SELECT 1 FROM approvals
-            WHERE run_id = @run AND status IN ('Pending', 'DecisionQueued')
+            WHERE owner_id = @owner AND host_id = @host AND run_id = @run
+              AND status IN ('Pending', 'DecisionQueued')
             """,
-            ("@run", run.Id));
+            ("@owner", run.OwnerId), ("@host", run.HostId), ("@run", run.Id));
 
         return stillWaiting ? RemoteRunStatus.WaitingForUser : RemoteRunStatus.Running;
     }
@@ -394,16 +487,40 @@ public sealed class HostService(Database database)
     // ── shared ──────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Checked on every call and not only when the connection was made. A credential revoked while
-    /// a Host was connected has to stop working at the next thing it does, not at the next
-    /// reconnect.
+    /// The account is active and the computer is live, read inside this call's transaction and held
+    /// until it commits. Checked on every call and not only when the connection was made: a
+    /// credential revoked, or an account disabled, while a Host was connected has to stop working at
+    /// the next thing it does, not at the next reconnect.
+    ///
+    /// <para>Locking reads, shared. Read without a lock, a call already in flight saw the computer
+    /// live in its snapshot and applied an event after the revocation had committed. Shared, so calls
+    /// of one computer do not wait on each other, and so a person's cancel can still read the
+    /// computer while this holds it (see the lock order in the class comment).</para>
     /// </summary>
-    private static async Task EnsureHostAsync(
-        MySqlConnection connection, MySqlTransaction transaction, string hostId)
+    private static async Task AuthorizeAsync(
+        MySqlConnection connection, MySqlTransaction transaction, HostAccess host)
     {
+        var status = await connection.ReadOneAsync(transaction,
+            "SELECT status FROM users WHERE id = @owner FOR SHARE",
+            reader => reader.GetString("status"), ("@owner", host.OwnerId));
+
+        // Not there at all is a computer whose account is gone - its row went with it - so it is the
+        // unknown-computer refusal below, not a disabled account.
+        if (status is not null && status != "Active")
+        {
+            throw GatewayFault.AccountDisabled();
+        }
+
+        // The owner leads the key, so this cannot lock another person's computer even if the access
+        // named one; and a computer under another owner than its token's is simply not found.
         var revoked = await connection.ReadOneAsync(transaction,
-            "SELECT revoked FROM hosts WHERE id = @host",
-            reader => (bool?)reader.GetBoolean("revoked"), ("@host", hostId));
+            """
+            SELECT revoked FROM hosts FORCE INDEX (ux_hosts_owner)
+            WHERE owner_id = @owner AND id = @host
+            FOR SHARE
+            """,
+            reader => (bool?)reader.GetBoolean("revoked"),
+            ("@owner", host.OwnerId), ("@host", host.HostId));
 
         if (revoked is null)
         {
@@ -422,72 +539,84 @@ public sealed class HostService(Database database)
     /// absence is not an answer.
     /// </summary>
     private static async Task ExpireCommandsAsync(
-        MySqlConnection connection, MySqlTransaction transaction, string hostId)
+        MySqlConnection connection, MySqlTransaction transaction, HostAccess host)
     {
         var now = DateTimeOffset.UtcNow;
 
+        // Through the delivery key, which starts with this computer. The optimizer otherwise takes the
+        // expiry key (status, expires_at) whenever this computer has a long queue and few commands
+        // have expired anywhere - and that range holds every account's expired commands, so Alice's
+        // sync waited on Bob's sync writing off his own.
         var expiring = await connection.ReadAllAsync(transaction,
             """
-            SELECT id, kind, payload FROM commands
-            WHERE host_id = @host AND status = 'PendingDelivery' AND expires_at <= @now
+            SELECT id, kind, payload FROM commands FORCE INDEX (ix_commands_delivery)
+            WHERE host_id = @host AND status = 'PendingDelivery' AND owner_id = @owner
+              AND expires_at <= @now
             FOR UPDATE
             """,
             reader => (
                 Id: reader.GetString("id"),
                 Kind: reader.Enum<CommandKind>("kind"),
                 Payload: reader.GetString("payload")),
-            ("@host", hostId), ("@now", now));
+            ("@host", host.HostId), ("@owner", host.OwnerId), ("@now", now));
 
         foreach (var command in expiring)
         {
             await connection.ExecuteAsync(transaction,
-                "UPDATE commands SET status = @expired WHERE id = @id",
-                ("@expired", CommandStatus.Expired), ("@id", command.Id));
+                "UPDATE commands SET status = @expired WHERE owner_id = @owner AND id = @id",
+                ("@expired", CommandStatus.Expired), ("@owner", host.OwnerId), ("@id", command.Id));
 
             if (command.Kind != CommandKind.StartTask)
             {
                 continue;
             }
 
+            // The run id is the gateway's own, written into the payload when the person started it.
             var runId = RemoteJson.Deserialize<StartTaskPayload>(command.Payload).RunId;
-            const string reason = "The start command expired before the computer accepted it.";
 
             var affected = await connection.ExecuteAsync(transaction,
                 """
-                UPDATE runs SET status = @incomplete, ended_at = @now, summary = @reason
-                WHERE id = @run AND status = 'Queued'
+                UPDATE runs SET status = @incomplete, ended_at = @now
+                WHERE owner_id = @owner AND host_id = @host AND id = @run AND status = 'Queued'
                 """,
                 ("@incomplete", RemoteRunStatus.Incomplete), ("@now", now),
-                ("@reason", reason), ("@run", runId));
+                ("@owner", host.OwnerId), ("@host", host.HostId), ("@run", runId));
 
             if (affected > 0)
             {
-                await NoticeAsync(connection, transaction, runId, "Incomplete", reason, now);
+                // No detail and no summary: the computer never saw this run, so there is no event
+                // to copy, and the gateway has no key to seal a sentence of its own. The panel says
+                // what NotStarted means.
+                await connection.ExecuteAsync(transaction,
+                    """
+                    INSERT INTO notices (id, owner_id, run_id, kind, at, is_read, ordinal)
+                    VALUES (@id, @owner, @run, @kind, @at, 0, @ordinal)
+                    """,
+                    ("@id", Ids.New()), ("@owner", host.OwnerId), ("@run", runId),
+                    ("@kind", NoticeKind.NotStarted), ("@at", now),
+                    ("@ordinal", await StreamCursor.NextAsync(connection, transaction, host.OwnerId)));
             }
         }
     }
 
+    /// <summary>
+    /// A notice raised by an event. Its kind is the gateway's own word; its detail is the event's
+    /// envelope copied as it came, with the event's sequence and kind, which are what the panel
+    /// rebuilds the associated data from - without them the copy could never be opened.
+    /// </summary>
     private static async Task NoticeAsync(
         MySqlConnection connection, MySqlTransaction transaction,
-        string runId, string title, string detail, DateTimeOffset at)
+        RunRow run, string kind, HostEvent published, DateTimeOffset at)
         => await connection.ExecuteAsync(transaction,
             """
-            INSERT INTO notices (id, run_id, title, detail, at, is_read, ordinal)
-            VALUES (@id, @run, @title, @detail, @at, 0, @ordinal)
+            INSERT INTO notices (id, owner_id, run_id, kind, sealed_detail, event_sequence, event_kind,
+                                 at, is_read, ordinal)
+            VALUES (@id, @owner, @run, @kind, @detail, @sequence, @eventKind, @at, 0, @ordinal)
             """,
-            ("@id", Guid.NewGuid().ToString("N")), ("@run", runId),
-            ("@title", title), ("@detail", detail), ("@at", at),
-            ("@ordinal", await StreamCursor.NextAsync(connection, transaction, PlaceholderOwner)));
-
-    private static RunRow ReadRun(MySqlDataReader reader) => new(
-        reader.GetString("id"),
-        reader.GetString("task_id"),
-        reader.GetString("host_id"),
-        reader.Enum<RemoteRunStatus>("status"),
-        reader.GetInt64("applied_sequence"),
-        reader.Utc("created_at"),
-        reader.UtcOrNull("ended_at"),
-        reader.StringOrNull("summary"));
+            ("@id", Ids.New()), ("@owner", run.OwnerId), ("@run", run.Id), ("@kind", kind),
+            ("@detail", published.SealedDetail), ("@sequence", published.Sequence),
+            ("@eventKind", published.Kind), ("@at", at),
+            ("@ordinal", await StreamCursor.NextAsync(connection, transaction, run.OwnerId)));
 
     private static void Required(string? value, int max, string field)
     {
@@ -495,5 +624,24 @@ public sealed class HostService(Database database)
         {
             throw GatewayFault.MalformedEvent($"'{field}' must be 1 to {max:N0} characters.");
         }
+    }
+
+    private static void RequireSealed(string? value, int maxChars, string field)
+    {
+        if (!Envelope.LooksSealed(value, maxChars))
+        {
+            throw GatewayFault.EnvelopeMalformed(field, maxChars);
+        }
+    }
+
+    /// <summary>
+    /// What a notice is about, in the gateway's words - the only part of a notice it can write,
+    /// since it seals nothing. The terminal kinds are the run statuses' own names.
+    /// </summary>
+    private static class NoticeKind
+    {
+        public const string PermissionRequested = "PermissionRequested";
+        public const string PermissionAtComputer = "PermissionAtComputer";
+        public const string NotStarted = "NotStarted";
     }
 }

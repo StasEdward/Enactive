@@ -1,6 +1,11 @@
 namespace Enactive.Remote.Gateway.Tests;
 
+using System.Security.Cryptography;
+using System.Text;
+using Enactive.Remote.Contracts;
+using Enactive.Remote.Contracts.Crypto;
 using Enactive.Remote.Gateway.Accounts;
+using Enactive.Remote.Gateway.Services;
 using Enactive.Remote.Gateway.Storage;
 using Xunit;
 
@@ -31,6 +36,47 @@ public sealed class CursorTests(TestDatabase database) : IClassFixture<TestDatab
 
     private Task<long> CommittedValueAsync(string ownerId)
         => database.ScalarLongAsync($"SELECT value FROM user_streams WHERE owner_id = '{ownerId}'");
+
+    private HostService Host => new(Db);
+
+    private static string Sealed(string text)
+        => Envelope.Seal(RandomNumberGenerator.GetBytes(32), 1, Encoding.UTF8.GetBytes(text), []);
+
+    private static HostEvent Event(string runId, long sequence, RemoteEventKind kind, string? text = null)
+        => new(Guid.NewGuid().ToString("N"), runId, sequence, kind, text is null ? null : Sealed(text));
+
+    /// <summary>A computer of a fresh person's, with a run it has reported started: one ordinal taken.</summary>
+    private async Task<(HostAccess Host, string RunId)> RunningRunAsync(string stem)
+    {
+        var person = await TestAccounts.CreateAsync(database, NewName(stem));
+        var (hostId, _, _) = await new UserService(Db, Limits.Unlimited, TimeProvider.System)
+            .RegisterHostAsync(person, "Studio PC", default);
+        var host = new HostAccess(hostId, person.UserId);
+        var taskId = Guid.NewGuid().ToString();
+        var runId = Ids.New();
+
+        await database.ExecuteAsync(
+            """
+            INSERT INTO tasks (owner_id, id, host_id, workspace_id, sealed, fingerprint, created_at)
+              VALUES (@owner, @task, @host, 'workspace-1', @sealed, SHA2(@task, 256), UTC_TIMESTAMP(3));
+            INSERT INTO runs (id, owner_id, task_id, host_id, status, applied_sequence, created_at)
+              VALUES (@run, @owner, @task, @host, 'Queued', 0, UTC_TIMESTAMP(3));
+            """,
+            ("@owner", person.UserId), ("@task", taskId), ("@host", hostId),
+            ("@sealed", Sealed("Run the tests")), ("@run", runId));
+
+        await Host.PublishAsync(host, Event(runId, 1, RemoteEventKind.Running));
+        return (host, runId);
+    }
+
+    /// <summary>Every number on a person's line that a row holds, events and notices together.</summary>
+    private async Task<List<int>> TakenAsync(string ownerId)
+        => (await database.IntsAsync(
+            $"""
+            SELECT ordinal FROM events WHERE owner_id = '{ownerId}'
+            UNION ALL
+            SELECT ordinal FROM notices WHERE owner_id = '{ownerId}'
+            """)).Order().ToList();
 
     /// <summary>
     /// The one this design exists for. A writer has taken a number and not committed. What a poll
@@ -138,6 +184,62 @@ public sealed class CursorTests(TestDatabase database) : IClassFixture<TestDatab
 
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => StreamCursor.NextAsync(connection, transaction, Ids.New()));
+    }
+
+    /// <summary>
+    /// Events and notices are one stream stored in two tables, so one number line covers both - and
+    /// the line is the owner's. A second counter would let an event and the notice it raised share a
+    /// number, and a panel polling above it would be one row behind on whichever table it read
+    /// second; a line shared with Bob would leave holes in Alice's that tell her how busy he is.
+    ///
+    /// <para>Shown red by giving the notice the event's ordinal (Alice's line then holds a number
+    /// twice), or by allocating everyone's numbers from one line (Bob's events then push Alice's
+    /// past 3).</para>
+    /// </summary>
+    [Fact]
+    public async Task An_event_and_the_notice_it_raised_take_distinct_numbers_on_their_owners_line()
+    {
+        var (alices, alicesRun) = await RunningRunAsync("alice");
+        var (bobs, bobsRun) = await RunningRunAsync("bob");
+        await Host.PublishAsync(bobs, Event(bobsRun, 2, RemoteEventKind.Progress, "reading"));
+
+        // A terminal event writes an event row and a notice, in one transaction.
+        await Host.PublishAsync(alices, Event(alicesRun, 2, RemoteEventKind.Completed, "done"));
+
+        Assert.Equal([1, 2, 3], await TakenAsync(alices.OwnerId));
+        Assert.Equal([1, 2], await TakenAsync(bobs.OwnerId));
+        Assert.Equal(3, await CommittedValueAsync(alices.OwnerId));
+    }
+
+    /// <summary>
+    /// What makes deleting events safe at all.
+    ///
+    /// <para>Deduplication asks whether this event id is already stored, and a trimmed row answers
+    /// no. The backstop is the run's <c>applied_sequence</c>, which is on the run row, is never
+    /// trimmed, and refuses anything at or below the high-water mark - so the replay is dropped
+    /// rather than applied a second time.</para>
+    ///
+    /// <para>The row is deleted here as a trim would delete it; the trim itself is tested with the
+    /// retention it belongs to. Shown red by removing the sequence check: the trimmed event is then
+    /// accepted again and the run's history grows a duplicate of something that happened a year ago.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task A_trimmed_event_replayed_is_dropped_and_not_applied_twice()
+    {
+        var (host, runId) = await RunningRunAsync("alice");
+        var progress = Event(runId, 2, RemoteEventKind.Progress, "trimmed");
+        await Host.PublishAsync(host, progress);
+
+        await database.ExecuteAsync(
+            $"DELETE FROM events WHERE owner_id = '{host.OwnerId}' AND id = '{progress.EventId}'");
+
+        var fault = await Assert.ThrowsAsync<GatewayFault>(() => Host.PublishAsync(host, progress));
+
+        Assert.Equal(FaultCode.SequenceAlreadyApplied, fault.Code);
+        Assert.Equal(FaultDisposition.Drop, RemoteFaults.DispositionOf(fault.Code));
+        Assert.Equal(0, await database.ScalarLongAsync(
+            $"SELECT COUNT(*) FROM events WHERE id = '{progress.EventId}'"));
     }
 
     /// <summary>
