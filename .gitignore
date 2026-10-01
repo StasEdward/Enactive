@@ -5,6 +5,7 @@ obj/
 [Rr]elease/
 artifacts/
 workspace/
+Plans/
 
 # IDE
 .vs/
