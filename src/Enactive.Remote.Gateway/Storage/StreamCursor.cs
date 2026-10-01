@@ -21,32 +21,32 @@ using MySqlConnector;
 /// commit order, and a reader that can see ordinal N can see everything below it. That is the whole
 /// invariant the delta rests on, and it is a property of the lock rather than of timing.</para>
 ///
-/// <para>The price is that every event and notice serialises on one row for the length of the
-/// transaction that writes it. On a gateway serving one person that is not a cost worth trading an
-/// invariant for.</para>
+/// <para>The counter is a row PER OWNER. One row for the whole gateway made every user's writes wait
+/// on every other user's transactions; with a row each, a person waits only on their own, and the
+/// ordering guarantee is the one the delta needs, because a delta is one person's.</para>
 /// </summary>
 internal static class StreamCursor
 {
-    private const string Name = "stream";
-
-    public static async Task<long> NextAsync(MySqlConnection connection, MySqlTransaction transaction)
+    /// <summary>The next number on this owner's line.</summary>
+    public static async Task<long> NextAsync(
+        MySqlConnection connection, MySqlTransaction transaction, string ownerId)
     {
         // The UPDATE takes the lock; the SELECT reads this transaction's own uncommitted value.
         // Both must be inside the caller's transaction, which is what makes the number and the row
         // it will be written to commit together or not at all.
         var updated = await connection.ExecuteAsync(transaction,
-            "UPDATE counters SET value = value + 1 WHERE name = @name", ("@name", Name));
+            "UPDATE user_streams SET value = value + 1 WHERE owner_id = @owner", ("@owner", ownerId));
 
         if (updated != 1)
         {
-            // The row is created by migration 002. Its absence means the schema is not what this
-            // build expects, and continuing would write an ordinal of 0 that no delta ever returns.
+            // Every account is provisioned with its stream row. Its absence is a broken account, and
+            // writing with a guessed ordinal would hide an event from that owner for good.
             throw new InvalidOperationException(
-                $"The '{Name}' counter row is missing, so no ordinal can be allocated.");
+                "This account has no stream row, so no ordinal can be allocated.");
         }
 
         return await connection.ReadOneAsync(transaction,
-            "SELECT value FROM counters WHERE name = @name",
-            reader => reader.GetInt64("value"), ("@name", Name));
+            "SELECT value FROM user_streams WHERE owner_id = @owner",
+            reader => reader.GetInt64("value"), ("@owner", ownerId));
     }
 }

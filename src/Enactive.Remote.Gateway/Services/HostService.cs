@@ -18,6 +18,11 @@ public sealed class HostService(Database database)
     private const int MaxDetail = 16_000;
     private const int MaxArguments = 24_000;
 
+    // Task 3.6 rewrites this: a host's owner is known once HostService takes a HostAccess. Until
+    // then nothing here knows whose stream a row belongs to, and this service still writes the old
+    // schema and fails at runtime anyway; the placeholder only lets the new signature compile.
+    private const string PlaceholderOwner = "";
+
     /// <summary>How long the Host has to accept a command, and an owner to answer a request.</summary>
     public static readonly TimeSpan Lifetime = TimeSpan.FromHours(24);
 
@@ -205,7 +210,7 @@ public sealed class HostService(Database database)
             // Allocated inside this transaction, which is what makes a refused publish give the
             // number back: the counter's increment rolls back with everything else. Allocating
             // outside it would leave a hole in the panel's number line for every rejection.
-            ("@ordinal", await StreamCursor.NextAsync(connection, transaction)));
+            ("@ordinal", await StreamCursor.NextAsync(connection, transaction, PlaceholderOwner)));
 
         await connection.ExecuteAsync(transaction,
             """
@@ -472,7 +477,7 @@ public sealed class HostService(Database database)
             """,
             ("@id", Guid.NewGuid().ToString("N")), ("@run", runId),
             ("@title", title), ("@detail", detail), ("@at", at),
-            ("@ordinal", await StreamCursor.NextAsync(connection, transaction)));
+            ("@ordinal", await StreamCursor.NextAsync(connection, transaction, PlaceholderOwner)));
 
     private static RunRow ReadRun(MySqlDataReader reader) => new(
         reader.GetString("id"),
