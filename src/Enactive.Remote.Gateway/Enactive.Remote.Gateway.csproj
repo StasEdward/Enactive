@@ -25,6 +25,13 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- package.json only tells Node that the panel's .js files are ES modules, so the panel's
+         tests can run. Without this line the Web SDK treats it as content and puts it in the
+         published gateway, where nothing reads it. -->
+    <Content Update="package.json" CopyToPublishDirectory="Never" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!--
       So the cursor tests can hold the real allocator's transaction open and poll around it. The
       alternative is a test that reimplements StreamCursor to stand in for it, which would pass

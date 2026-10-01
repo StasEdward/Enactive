@@ -131,6 +131,24 @@ jobs:
         with:
           dotnet-version: "10.0.x"
 
+      # The panel's cryptography is JavaScript (WebCrypto) and pinned to the C# side by shared test
+      # vectors; ubuntu-latest ships a Node, but not one this repository chose, so the version is
+      # stated here instead of being whatever the image happens to carry.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # The panel is the half of the end-to-end encryption that the gateway cannot check: it never
+      # opens an envelope. If the JS and the C# drift apart, the panel and the Host would seal what
+      # the other cannot open, and the first sign would be a phone that pairs and then shows nothing.
+      #
+      # The glob is quoted so that node expands it, not the shell, and it is a glob because Node 22
+      # does not accept a directory argument. The panel's .js files are read as ES modules because
+      # src/Enactive.Remote.Gateway/package.json says so; without it the run depends on whatever
+      # package.json sits above the checkout on the runner.
+      - name: Test the panel's cryptography
+        run: node --test "tests/panel/*.test.mjs"
+
       # Whether the server is the one the schema was written for is checked by the suite itself
       # (SchemaTests.The_server_is_the_series_this_schema_was_written_for) rather than by a step
       # here: a check in the pipeline only ever runs in the pipeline, and it would depend on a
