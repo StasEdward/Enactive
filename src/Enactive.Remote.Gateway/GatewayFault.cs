@@ -58,6 +58,15 @@ public sealed class GatewayFault(string code, int status, string message) : Exce
     public static GatewayFault MalformedEvent(string why) => new(
         FaultCode.MalformedEvent, 400, why);
 
+    /// <summary>
+    /// A field that should be sealed and is not an envelope of the allowed size. The gateway cannot
+    /// open one, only check its shape - and something that is not even the shape is either plaintext
+    /// that was never meant to reach it or garbage, and neither is worth storing or retrying.
+    /// </summary>
+    public static GatewayFault EnvelopeMalformed(string field, int maxChars) => new(
+        FaultCode.EnvelopeMalformed, 400,
+        $"'{field}' must be a sealed envelope of at most {maxChars:N0} characters.");
+
     public static GatewayFault UnknownEventKind(string kind) => new(
         FaultCode.UnknownEventKind, 400, $"'{kind}' is not an event kind this gateway understands.");
 

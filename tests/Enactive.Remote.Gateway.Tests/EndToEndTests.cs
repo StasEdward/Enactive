@@ -92,7 +92,7 @@ public sealed class EndToEndTests(TestDatabase database) : IClassFixture<TestDat
         var accepted = Assert.Single(await loop.TurnAsync([new WorkspaceRef("workspace-1", "Enactive")]));
         var payload = RemoteJson.Deserialize<StartTaskPayload>(accepted.Payload);
 
-        Assert.False(string.IsNullOrEmpty(payload.SealedTask)); // Task 3.5 rewrites this test
+        Assert.False(string.IsNullOrEmpty(payload.SealedTask)); // Task 3.8 rewrites this test
 
         // Standing in for the engine: what stage 4 wires to this is already proven, and what is
         // under test here is that these events survive the wire.
@@ -239,7 +239,7 @@ public sealed class EndToEndTests(TestDatabase database) : IClassFixture<TestDat
 
     private sealed record IdView(string Id);
 
-    // Task 3.5 rewrites this test; until then the Host only needs keys to be constructible.
+    // Task 3.8 rewrites this test; until then the Host only needs keys to be constructible.
     private sealed class FixedHostKeys : IHostKeys
     {
         public string HostId => "host-1";

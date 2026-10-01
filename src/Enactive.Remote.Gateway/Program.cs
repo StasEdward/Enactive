@@ -71,7 +71,10 @@ builder.Services.AddSingleton(new Database(connectionString));
 builder.Services.AddSingleton(new OwnerKey(ownerKey));
 builder.Services.AddSingleton(services => new Retention(services.GetRequiredService<Database>(), retentionDays));
 builder.Services.AddSingleton<HostService>();
-builder.Services.AddSingleton<OwnerService>();
+// Unlimited until per-account limits are enforced: the service takes them now so its signature does
+// not change again when they are.
+builder.Services.AddSingleton(services => new UserService(
+    services.GetRequiredService<Database>(), Limits.Unlimited, TimeProvider.System));
 builder.Services.AddSingleton<Projection>();
 builder.Services.AddSingleton<HostConnections>();
 builder.Services.AddHostedService<RetentionLoop>();
@@ -362,41 +365,50 @@ api.MapPost("/logout", async (HttpContext context) =>
 api.MapGet("/state", (long? since, Projection projection, CancellationToken ct) =>
     projection.ReadAsync(since, ct));
 
-api.MapPost("/hosts", async (RegisterHostRequest request, OwnerService owner, CancellationToken ct) =>
+// Task 3.8 rewrites this: the person comes from their session cookie. Until then the shared owner key
+// signs in nobody in particular, so there is no account to act for and these calls fail at runtime.
+static UserAccess PlaceholderUser() => new("", "");
+
+api.MapPost("/hosts", async (RegisterHostRequest request, UserService users, CancellationToken ct) =>
 {
-    var (id, name, token) = await owner.RegisterAsync(request.Name, ct);
+    var (id, name, token) = await users.RegisterHostAsync(PlaceholderUser(), request.Name, ct);
 
     // The only time this value exists anywhere but the device it is going to.
     return Results.Ok(new { id, name, token });
 });
 
 api.MapPost("/hosts/{id}/revoke", async (
-    string id, OwnerService owner, HostConnections connections, CancellationToken ct) =>
+    string id, UserService users, HostConnections connections, CancellationToken ct) =>
 {
-    await owner.RevokeAsync(id, ct);
+    await users.RevokeHostAsync(PlaceholderUser(), id, ct);
     connections.CloseAll(id);
     return Results.Ok();
 });
 
-api.MapPost("/tasks", async (CreateTaskRequest request, OwnerService owner, CancellationToken ct) =>
-    Results.Ok(new { id = await owner.CreateTaskAsync(
-        request.HostId, request.WorkspaceId, request.Title, request.Prompt, ct) }));
+api.MapPost("/tasks", async (CreateTaskRequest request, UserService users, CancellationToken ct) =>
+{
+    await users.CreateTaskAsync(
+        PlaceholderUser(), request.TaskId, request.HostId, request.WorkspaceId, request.SealedTask, ct);
+    return Results.Ok(new { id = request.TaskId });
+});
 
 api.MapPost("/tasks/{id}/start", async (
-    string id, CommandRequest request, OwnerService owner, CancellationToken ct) =>
-    Results.Ok(await owner.StartAsync(id, request.CommandId, ct)));
+    string id, CommandRequest request, UserService users, CancellationToken ct) =>
+    Results.Ok(await users.StartAsync(PlaceholderUser(), id, request.CommandId, request.Sealed, ct)));
 
 api.MapPost("/runs/{id}/cancel", async (
-    string id, CommandRequest request, OwnerService owner, CancellationToken ct) =>
-    Results.Ok(await owner.CancelAsync(id, request.CommandId, ct)));
+    string id, CommandRequest request, UserService users, CancellationToken ct) =>
+    Results.Ok(await users.CancelAsync(PlaceholderUser(), id, request.CommandId, request.Sealed, ct)));
 
 api.MapPost("/approvals/{id}/resolve", async (
-    string id, DecisionRequest request, OwnerService owner, CancellationToken ct) =>
-    Results.Ok(await owner.DecideAsync(id, request.CommandId, request.Decision, request.ActionHash, ct)));
+    string id, DecisionRequest request, UserService users, CancellationToken ct) =>
+    Results.Ok(await users.DecideAsync(
+        PlaceholderUser(), id, request.HostId, request.CommandId, request.Decision, request.ActionHash,
+        request.Sealed, ct)));
 
-api.MapPost("/notices/read", async (OwnerService owner, CancellationToken ct) =>
+api.MapPost("/notices/read", async (NoticesReadRequest request, UserService users, CancellationToken ct) =>
 {
-    await owner.MarkNoticesReadAsync(ct);
+    await users.MarkNoticesReadAsync(PlaceholderUser(), request.Through, ct);
     return Results.Ok();
 });
 
@@ -407,9 +419,11 @@ app.Run();
 
 internal sealed record LoginRequest(string? Key);
 internal sealed record RegisterHostRequest(string? Name);
-internal sealed record CreateTaskRequest(string HostId, string WorkspaceId, string? Title, string? Prompt);
-internal sealed record CommandRequest(string CommandId);
-internal sealed record DecisionRequest(string CommandId, RemoteDecision Decision, string ActionHash);
+internal sealed record CreateTaskRequest(string TaskId, string HostId, string WorkspaceId, string SealedTask);
+internal sealed record CommandRequest(string CommandId, string Sealed);
+internal sealed record DecisionRequest(
+    string CommandId, string HostId, RemoteDecision Decision, string ActionHash, string Sealed);
+internal sealed record NoticesReadRequest(long Through);
 
 /// <summary>Named so a test host can reference this assembly's entry point.</summary>
 public partial class Program;
