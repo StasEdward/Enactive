@@ -61,7 +61,7 @@ var isTimeline = args.Length > 0 && string.Equals(args[0], "timeline", StringCom
 //
 // --template names ONE task and runs it now. --due asks the saved schedules what is owed and runs
 // what is: same machinery, and the difference is only who decides which task. See the --due block
-// below and the scheduler plan.
+// below and Docs/wiki/Console.md.
 string? Option(string name)
 {
     for (var i = 0; i < args.Length - 1; i++)
@@ -318,7 +318,7 @@ ResolvedTaskSpec? spec = null;
 //   Enactive.App.Console --due --workspace c:\repos\Enactive
 //
 // This is the tick. Something wakes it every few minutes - a Windows scheduled task registered
-// once - and it asks the saved schedules what is due. See the scheduler plan.
+// once - and it asks the saved schedules what is due. See Docs/wiki/Console.md.
 //
 // It runs AT MOST ONE schedule per invocation, and that is a real limitation rather than an
 // oversight: everything below this point is written for one run, and threading a second through it

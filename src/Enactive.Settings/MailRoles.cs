@@ -3,7 +3,8 @@ namespace Enactive.Settings;
 using Enactive.Core.Permissions;
 
 /// <summary>
-/// Which of the saved roles may call <c>send_email</c>, and how that is changed.
+/// Which of the saved roles may call <c>send_email</c> - read by the SMTP pane, never written by it. The tool is
+/// granted under the role, with every other tool, in the team editor.
 ///
 /// <para><b>Why this is not a migration.</b> Every other tool that reached only new installations
 /// was handed out by <c>WorkerTools.WithImplied</c>, and the argument there is that each one is a
@@ -12,17 +13,13 @@ using Enactive.Core.Permissions;
 /// nothing a worker already holds implies it, and a message cannot be recalled. So it is granted
 /// the way <c>delete_file</c> is: by a person, on purpose.</para>
 ///
-/// <para><b>Why it is HERE and not only in the team editor.</b> Because a capability nobody can
-/// find does not exist — the lesson this codebase has learnt five times over (<c>edit_file</c>,
-/// <c>search_files</c>, <c>create_directory</c>, <c>move_file</c>, <c>copy_file</c>: registered,
-/// documented, tested, and named by no role for months). Somebody filling in an SMTP account is
-/// telling the application it may send mail; asking them to then find a different screen, pick a
-/// role and tick a tool in a list of twelve is how the account ends up configured and unused. The
-/// tick lives next to the account, and the pane says plainly when nothing may use it.</para>
+/// <para><b>Why the SMTP pane reports it.</b> A capability nobody can find does not exist - the lesson
+/// this codebase has learnt five times over (<c>edit_file</c>, <c>search_files</c>, <c>create_directory</c>,
+/// <c>move_file</c>, <c>copy_file</c>: registered, documented, tested, and named by no role for months).
+/// So the pane next to the account says who may send, and says plainly when nobody may.</para>
 ///
-/// <para>Only <see cref="PermissionLevel.Execute"/> and above are offered. <c>send_email</c>
-/// requires Execute at call time, so a tick on the reviewer would be a question that can only ever
-/// be answered no — the thing a settings screen must never draw.</para>
+/// <para>Only a role at <see cref="PermissionLevel.Execute"/> or above counts: <c>send_email</c>
+/// requires Execute at call time, so a read-only role that names the tool still cannot send.</para>
 /// </summary>
 public static class MailRoles
 {

@@ -7,7 +7,7 @@ using Enactive.Settings;
 using Xunit;
 
 /// <summary>
-/// Who may call <c>send_email</c>, and how a person changes that.
+/// Who may call <c>send_email</c>, as the SMTP pane reports it.
 ///
 /// <para><b>The defect these were written for.</b> An SMTP account was filled in, correctly, and
 /// no run was ever offered the tool. A role's tool list is SAVED, so adding <c>send_email</c> to
@@ -15,8 +15,8 @@ using Xunit;
 /// shipped a tool that no existing role named (see <c>WorkerTools</c> for the other four). Mail
 /// cannot be handed out by the migration that fixed those: every entry there is a capability the
 /// worker already holds under another name, and nothing a worker holds implies sending a message
-/// that cannot be recalled. So it is granted by a person, and <see cref="MailRoles"/> is the rule
-/// they are granted it BY.</para>
+/// that cannot be recalled. So it is granted by a person, under the role, and <see cref="MailRoles"/>
+/// says who has it.</para>
 /// </summary>
 public sealed class WhoMaySendMailTests
 {

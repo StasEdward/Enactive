@@ -25,7 +25,7 @@ public enum MissedRun { Skip, RunLate }
 /// that ran, not today's version of it.</para>
 ///
 /// <para>The cost of the first is that a template edited into needing a new parameter makes the
-/// schedule unresolvable. That must be REPORTED rather than skipped - see the scheduler plan -
+/// schedule unresolvable. That must be REPORTED rather than skipped,
 /// and it is the reason resolution is not attempted here: this type says what to run, and the thing
 /// that runs it is where a failure to resolve becomes visible.</para>
 /// </summary>

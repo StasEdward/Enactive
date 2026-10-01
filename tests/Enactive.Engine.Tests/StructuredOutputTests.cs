@@ -74,8 +74,8 @@ public sealed class StructuredOutputTests
     ///
     /// <para>These tests checked that words were in the body: "response_format" and "json_schema".
     /// A body that said <c>"response_format":"json_schema"</c> - a string where the API wants an
-    /// object - passed them, and a deliberately broken serializer doing exactly that stayed green
-    ///. The shape IS the contract here.</para>
+    /// object - passed them, and a deliberately broken serializer doing exactly that stayed green.
+    /// The shape IS the contract here.</para>
     /// </summary>
     private static JsonElement At(string body, params string[] path)
     {

@@ -170,8 +170,7 @@ public sealed class WorkspaceChangesTests : IDisposable
     /// <para>Started from a staging area that HAS something in it - a change staged, and the same
     /// file changed again after, so staged and working versions differ. It used to start from an
     /// empty one, where a snapshot that reset the index to HEAD had nothing to reset, and it did not
-    /// check that either snapshot was taken, so two failed ones passed
-    ///.</para>
+    /// check that either snapshot was taken, so two failed ones passed.</para>
     /// </summary>
     [Fact]
     public async Task The_persons_own_index_is_untouched()

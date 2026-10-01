@@ -20,8 +20,7 @@ using Xunit;
 /// run's only durable report is an Inbox item, so this was the result going missing.</para>
 ///
 /// <para>These tests do not start a process. They hold the LOCK FILE the way another process holds
-/// it — same handle, same exclusion — which is the part a second process actually contributes. The
-/// end-to-end measurement with two real processes is in the scheduler plan.</para>
+/// it — same handle, same exclusion — which is the part a second process actually contributes.</para>
 /// </summary>
 public sealed class JsonStoreProcessLockTests : IDisposable
 {
@@ -62,8 +61,7 @@ public sealed class JsonStoreProcessLockTests : IDisposable
     ///
     /// <para>And the waiting writer is let go and WAITED FOR before the test ends. It used to be left
     /// running when the test returned, racing the fixture deleting its folder, and whatever it did
-    /// after the handle closed - finish, throw, hang - went unseen
-    ///.</para>
+    /// after the handle closed - finish, throw, hang - went unseen.</para>
     /// </summary>
     [Fact]
     public async Task A_write_waits_while_another_process_holds_the_file()

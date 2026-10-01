@@ -26,8 +26,8 @@ public sealed record OutsideWrite(string Token, string Path, string Because, boo
 /// command line has arbitrarily many ways to say the same thing. A variable set earlier in the same
 /// line, a `cd` before the interesting part, a path assembled at runtime, a build tool reading an
 /// output directory out of a config file, a base64 script, a program that simply writes wherever it
-/// likes - every one of those walks past this untouched, and NONE of them is exotic. The sandbox plan
-/// section 2 is explicit that text filtering on <c>C:\</c> is worthless against anything
+/// likes - every one of those walks past this untouched, and NONE of them is exotic. Text filtering
+/// on <c>C:\</c> is worthless against anything
 /// deliberate; the adversary this is for is a model that meant well and got the path wrong.</para>
 ///
 /// <para>The reason to build it anyway is that the honest mistake is the common one, and it is
@@ -40,7 +40,7 @@ public sealed record OutsideWrite(string Token, string Path, string Because, boo
 /// <para><b>False negatives are expected and acceptable; false positives cost a click.</b> That
 /// asymmetry is what makes "ask" the right answer rather than "refuse". A refusal on a guess this
 /// rough would stop legitimate work, and the model would be told it may not do something it may in
-/// fact do - see the sandbox plan.</para>
+/// fact do.</para>
 /// </summary>
 public static class ShellGeography
 {
