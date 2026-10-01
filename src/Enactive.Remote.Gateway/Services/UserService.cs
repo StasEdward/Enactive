@@ -19,6 +19,15 @@ using MySqlConnector;
 /// owner afterwards leaves its existence - and on the idempotency path, its whole payload - one
 /// forgotten check away from somebody else.</para>
 ///
+/// <para><b>A locking lookup goes through a key that starts with the owner.</b> hosts and runs have a
+/// global primary key on id, approvals one on (host_id, id), and MySQL answers
+/// <c>WHERE owner_id = @owner AND id = @id FOR UPDATE</c> through it: it locks the row with that id
+/// first and applies the owner filter afterwards. So Bob asking for Alice's id locked Alice's row -
+/// he waited for any transaction of hers that held it, which told him the id exists, and his own
+/// transaction held up hers. Through the owner's unique key, Bob's lookup finds no entry under his
+/// owner id and locks nothing of Alice's. Tables whose primary key starts with owner_id (tasks,
+/// commands) need no hint.</para>
+///
 /// <para><b>Nothing a person wrote is readable here.</b> A task, and the authorization of every
 /// command, arrive sealed by the browser. This checks that each is an envelope of a sensible size and
 /// passes it through; only the computer can open it.</para>
@@ -28,17 +37,17 @@ public sealed class UserService(Database db, Limits limits, TimeProvider clock)
     // A request body is at most 64 KB, so no sealed field can be larger; each bound below is what is
     // left for that field once the rest of its request is accounted for. A task carries the
     // person's title and prompt and may take nearly all of it.
-    private const int MaxSealedTask = 64_000;
+    internal const int MaxSealedTask = 64_000;
 
     // A command's seal holds a few ids, a decision and a timestamp: a few hundred characters. The
     // request limit is 64 KB; 2 000 leaves room and still refuses a prompt sent where an
     // authorization belongs, which the computer would otherwise refuse a day later with nobody
     // watching.
-    private const int MaxSealedCommand = 2_000;
+    internal const int MaxSealedCommand = 2_000;
 
     // A device command's seal holds a device id and at most one public key. The request limit is
     // 64 KB; 2 000 is the same room as any other command's.
-    private const int MaxSealedDevice = 2_000;
+    internal const int MaxSealedDevice = 2_000;
 
     // The width of hosts.label. Longer is refused rather than cut: the label is what the person
     // will recognise the computer by, and a silently shortened one may not be.
@@ -83,8 +92,13 @@ public sealed class UserService(Database db, Limits limits, TimeProvider clock)
         await using var connection = await db.OpenAsync(ct);
         await using var transaction = await connection.BeginAsync(ct);
 
+        // FORCE INDEX (see the class comment): through the primary key this locked another person's row.
         var exists = await connection.ExistsAsync(transaction,
-            "SELECT 1 FROM hosts WHERE owner_id = @owner AND id = @host FOR UPDATE",
+            """
+            SELECT 1 FROM hosts FORCE INDEX (ux_hosts_owner)
+            WHERE owner_id = @owner AND id = @host
+            FOR UPDATE
+            """,
             ("@owner", user.UserId), ("@host", hostId));
 
         if (!exists)
@@ -273,8 +287,13 @@ public sealed class UserService(Database db, Limits limits, TimeProvider clock)
         await using var connection = await db.OpenAsync(ct);
         await using var transaction = await connection.BeginAsync(ct);
 
+        // FORCE INDEX (see the class comment): through the primary key this locked another person's run.
         var run = await connection.ReadOneAsync(transaction,
-            "SELECT host_id, status FROM runs WHERE owner_id = @owner AND id = @run FOR UPDATE",
+            """
+            SELECT host_id, status FROM runs FORCE INDEX (ux_runs_owner)
+            WHERE owner_id = @owner AND id = @run
+            FOR UPDATE
+            """,
             reader => new RunTarget(reader.GetString("host_id"), reader.Enum<RemoteRunStatus>("status")),
             ("@owner", user.UserId), ("@run", runId))
             ?? throw NoSuchRun();
@@ -330,10 +349,12 @@ public sealed class UserService(Database db, Limits limits, TimeProvider clock)
         await using var transaction = await connection.BeginAsync(ct);
 
         // Addressed by its computer as well: approval ids are made by the Host and unique only there.
+        // FORCE INDEX (see the class comment): through the primary key, (host_id, id), this locked
+        // another person's request.
         var approval = await connection.ReadOneAsync(transaction,
             """
             SELECT run_id, action_hash, remote_decidable, status, expires_at
-            FROM approvals
+            FROM approvals FORCE INDEX (ux_approvals_owner_host)
             WHERE owner_id = @owner AND host_id = @host AND id = @id
             FOR UPDATE
             """,
@@ -538,8 +559,14 @@ public sealed class UserService(Database db, Limits limits, TimeProvider clock)
     private static async Task EnsureLiveHostAsync(
         MySqlConnection connection, MySqlTransaction transaction, string ownerId, string hostId)
     {
+        // FORCE INDEX (see the class comment): through the primary key this locked another person's
+        // computer, and Bob waited on any transaction of Alice's that held it.
         var revoked = await connection.ReadOneAsync(transaction,
-            "SELECT revoked FROM hosts WHERE owner_id = @owner AND id = @host FOR SHARE",
+            """
+            SELECT revoked FROM hosts FORCE INDEX (ux_hosts_owner)
+            WHERE owner_id = @owner AND id = @host
+            FOR SHARE
+            """,
             reader => (bool?)reader.GetBoolean("revoked"),
             ("@owner", ownerId), ("@host", hostId));
 

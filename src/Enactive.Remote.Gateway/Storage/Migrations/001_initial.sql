@@ -206,6 +206,9 @@ CREATE TABLE IF NOT EXISTS approvals (
   created_at         DATETIME(3)  NOT NULL,
   expires_at         DATETIME(3)  NOT NULL,
   PRIMARY KEY (host_id, id),
+  -- What a person's locking lookup goes through. Through the primary key, Bob asking for Alice's request
+  -- locked Alice's row before the owner filter refused it: he waited on her, and the wait told him it exists.
+  UNIQUE KEY ux_approvals_owner_host (owner_id, host_id, id),
   KEY ix_approvals_owner (owner_id, status, created_at),
   KEY ix_approvals_run (run_id, status),
   KEY ix_approvals_expiry (status, expires_at),

@@ -388,7 +388,9 @@ public sealed class UserServiceTests(TestDatabase database) : IClassFixture<Test
         var alice = await PersonAsync("alice");
         var hostId = await ConnectedHostAsync(alice);
         var taskId = Uuid();
-        var sealedTask = task == "oversized" ? Sealed(new string('x', 48_000)) : task;
+        // A valid envelope whose plaintext alone is the maximum, so it is over the maximum whatever the
+        // envelope's own overhead.
+        var sealedTask = task == "oversized" ? Sealed(new string('x', UserService.MaxSealedTask)) : task;
 
         var refused = await RefusedAsync(() =>
             Users.CreateTaskAsync(alice, taskId, hostId, "workspace-1", sealedTask, default));
@@ -783,8 +785,10 @@ public sealed class UserServiceTests(TestDatabase database) : IClassFixture<Test
         await Users.CreateTaskAsync(alice, taskId, hostId, "workspace-1", Sealed("Another"), default);
         var commandsBefore = await CountAsync($"SELECT COUNT(*) FROM commands WHERE host_id = '{hostId}'");
 
-        // "oversized" is a valid envelope of about 2 050 characters, over the 2 000 a command's seal may take.
-        var bad = seal == "plain" ? "Allow" : Sealed(new string('x', 1_500));
+        // "oversized" is a valid envelope whose plaintext alone is the maximum, so it is over the
+        // maximum whatever the envelope's own overhead.
+        var max = command == "device" ? UserService.MaxSealedDevice : UserService.MaxSealedCommand;
+        var bad = seal == "plain" ? "Allow" : Sealed(new string('x', max));
 
         Func<Task> send = command switch
         {
@@ -801,6 +805,112 @@ public sealed class UserServiceTests(TestDatabase database) : IClassFixture<Test
         Assert.Equal((FaultCode.EnvelopeMalformed, 400), (refused.Code, refused.Status));
         Assert.Equal(commandsBefore,
             await CountAsync($"SELECT COUNT(*) FROM commands WHERE host_id = '{hostId}'"));
+    }
+
+    // ── replaying a retry ───────────────────────────────────────────────────
+
+    /// <summary>
+    /// A retry is answered with the queued command only while the computer can still receive it.
+    /// Once it is revoked, the same request id gets the refusal a new request would - replaying the
+    /// first answer would tell the panel its request was queued for a computer that is gone.
+    /// </summary>
+    [Theory]
+    [InlineData("start")]
+    [InlineData("cancel")]
+    [InlineData("decide")]
+    public async Task A_retry_is_not_replayed_once_the_computer_is_revoked(string command)
+    {
+        var alice = await PersonAsync("alice");
+        var (hostId, runId, approvalId) = await WaitingForApprovalAsync(alice, remoteDecidable: true);
+        var taskId = Uuid();
+        await Users.CreateTaskAsync(alice, taskId, hostId, "workspace-1", Sealed("Another"), default);
+        var commandId = Uuid();
+        var seal = Sealed(command);
+
+        Func<Task<HostCommand>> send = command switch
+        {
+            "start" => () => Users.StartAsync(alice, taskId, commandId, seal, default),
+            "cancel" => () => Users.CancelAsync(alice, runId, commandId, seal, default),
+            _ => () => Users.DecideAsync(
+                alice, approvalId, hostId, commandId, RemoteDecision.Allow, ActionHash, seal, default)
+        };
+
+        await send();
+        await Users.RevokeHostAsync(alice, hostId, default);
+
+        Assert.Equal(404, (await RefusedAsync(send)).Status);
+    }
+
+    // ── another account's locks ─────────────────────────────────────────────
+
+    /// <summary>
+    /// Holds Alice's row locked in an open transaction, as one of her own operations does while it
+    /// runs, and makes Bob's call with her id. It must be refused at once. A lookup that locked
+    /// Alice's row on Bob's behalf - filtered by owner, but found through the table's global key -
+    /// made Bob wait for Alice: the wait told him the id exists, and his transaction held up hers.
+    /// </summary>
+    private async Task RefusedWithoutWaitingOnAliceAsync(
+        string lockAlicesRow, (string Name, object? Value)[] parameters, Func<Task> bobsCall)
+    {
+        await using var connection = await database.OpenAsync();
+        await using var alicesTransaction = await connection.BeginAsync(default);
+        await connection.ExecuteAsync(alicesTransaction, lockAlicesRow, parameters);
+
+        var call = bobsCall();
+
+        var refused = await Assert.ThrowsAsync<GatewayFault>(() => call.WaitAsync(TimeSpan.FromSeconds(1)));
+        Assert.Equal(404, refused.Status);
+    }
+
+    [Fact]
+    public async Task Bobs_revocation_does_not_wait_on_alices_computer()
+    {
+        var alice = await PersonAsync("alice");
+        var bob = await PersonAsync("bob");
+        var alicesHost = await ConnectedHostAsync(alice);
+
+        await RefusedWithoutWaitingOnAliceAsync(
+            "SELECT id FROM hosts WHERE id = @id FOR UPDATE", [("@id", alicesHost)],
+            () => Users.RevokeHostAsync(bob, alicesHost, default));
+    }
+
+    /// <summary>The check that a computer is live, which every command and every new task makes.</summary>
+    [Fact]
+    public async Task Bobs_task_does_not_wait_on_alices_computer()
+    {
+        var alice = await PersonAsync("alice");
+        var bob = await PersonAsync("bob");
+        var alicesHost = await ConnectedHostAsync(alice);
+
+        await RefusedWithoutWaitingOnAliceAsync(
+            "SELECT id FROM hosts WHERE id = @id FOR UPDATE", [("@id", alicesHost)],
+            () => Users.CreateTaskAsync(bob, Uuid(), alicesHost, "workspace-1", Sealed("Mine"), default));
+    }
+
+    [Fact]
+    public async Task Bobs_cancel_does_not_wait_on_alices_run()
+    {
+        var alice = await PersonAsync("alice");
+        var bob = await PersonAsync("bob");
+        var (_, _, alicesRun, _) = await StartedAsync(alice);
+
+        await RefusedWithoutWaitingOnAliceAsync(
+            "SELECT id FROM runs WHERE id = @id FOR UPDATE", [("@id", alicesRun)],
+            () => Users.CancelAsync(bob, alicesRun, Uuid(), Sealed("cancel"), default));
+    }
+
+    [Fact]
+    public async Task Bobs_answer_does_not_wait_on_alices_permission()
+    {
+        var alice = await PersonAsync("alice");
+        var bob = await PersonAsync("bob");
+        var (hostId, _, approvalId) = await WaitingForApprovalAsync(alice, remoteDecidable: true);
+
+        await RefusedWithoutWaitingOnAliceAsync(
+            "SELECT id FROM approvals WHERE host_id = @host AND id = @id FOR UPDATE",
+            [("@host", hostId), ("@id", approvalId)],
+            () => Users.DecideAsync(
+                bob, approvalId, hostId, Uuid(), RemoteDecision.Allow, ActionHash, Sealed("allow"), default));
     }
 
     // ── notices ─────────────────────────────────────────────────────────────
