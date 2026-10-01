@@ -459,4 +459,115 @@ public sealed class RemoteCryptoTests
         var pairKey = RemoteKdf.Derive(new byte[32], RemoteKdf.Pair);
         Assert.False(Enrollment.Verify(pairKey, "inv-1", "dev-1", P256.PublicRaw(device), mac));
     }
+
+    // Each builder's theory changes exactly one argument per case; a builder that dropped a field from the associated data would leave one case equal to the baseline, and a gateway could then swap that field between records without the browser noticing.
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    public void Task_associated_data_changes_with_each_argument(int changed)
+    {
+        var baseline = Ad.Task("h", "t", "w");
+        Assert.NotEqual(baseline, Ad.Task(changed == 0 ? "h2" : "h", changed == 1 ? "t2" : "t", changed == 2 ? "w2" : "w"));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    public void Command_associated_data_changes_with_each_argument(int changed)
+    {
+        var baseline = Ad.Command("h", "c", CommandKind.StartTask);
+        Assert.NotEqual(baseline, Ad.Command(
+            changed == 0 ? "h2" : "h", changed == 1 ? "c2" : "c", changed == 2 ? CommandKind.CancelRun : CommandKind.StartTask));
+    }
+
+    /// <summary>The kind is what stops a sealed start being replayed as a cancel (or the reverse) under the same command id.</summary>
+    [Fact]
+    public void A_start_command_and_a_cancel_command_never_share_associated_data()
+        => Assert.NotEqual(Ad.Command("h", "c", CommandKind.StartTask), Ad.Command("h", "c", CommandKind.CancelRun));
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    public void Event_associated_data_changes_with_each_argument(int changed)
+    {
+        var baseline = Ad.Event("h", "r", 1, RemoteEventKind.Progress);
+        Assert.NotEqual(baseline, Ad.Event(
+            changed == 0 ? "h2" : "h", changed == 1 ? "r2" : "r", changed == 2 ? 2 : 1,
+            changed == 3 ? RemoteEventKind.Completed : RemoteEventKind.Progress));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    [InlineData(4)]
+    [InlineData(5)]
+    public void Approval_associated_data_changes_with_each_argument(int changed)
+    {
+        var baseline = Ad.Approval("h", "r", "a", "tc", "hash", true);
+        Assert.NotEqual(baseline, Ad.Approval(
+            changed == 0 ? "h2" : "h", changed == 1 ? "r2" : "r", changed == 2 ? "a2" : "a",
+            changed == 3 ? "tc2" : "tc", changed == 4 ? "hash2" : "hash", changed != 5));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    public void Workspace_associated_data_changes_with_each_argument(int changed)
+    {
+        var baseline = Ad.Workspace("h", "w");
+        Assert.NotEqual(baseline, Ad.Workspace(changed == 0 ? "h2" : "h", changed == 1 ? "w2" : "w"));
+    }
+
+    /// <summary>One record's associated data must never open another record's ciphertext, even when the ids line up.</summary>
+    [Fact]
+    public void Records_of_different_kinds_never_share_associated_data()
+    {
+        var all = new[]
+        {
+            Ad.Task("h", "x", "y"), Ad.Workspace("h", "x"), Ad.Command("h", "x", CommandKind.StartTask),
+            Ad.Event("h", "x", 1, RemoteEventKind.Running), Ad.Approval("h", "x", "y", "z", "a", true)
+        };
+        Assert.Equal(all.Length, all.Select(Convert.ToBase64String).Distinct().Count());
+    }
+
+    [Fact]
+    public void Associated_data_is_the_canonical_bytes_of_the_documented_fields_in_order()
+    {
+        Assert.Equal(Canonical.Bytes("enactive-task-v1", "h", "t", "w"), Ad.Task("h", "t", "w"));
+        Assert.Equal(Canonical.Bytes("enactive-cmd-v1", "h", "c", "CancelRun"), Ad.Command("h", "c", CommandKind.CancelRun));
+        Assert.Equal(Canonical.Bytes("enactive-event-v1", "h", "r", "12", "Completed"), Ad.Event("h", "r", 12, RemoteEventKind.Completed));
+        Assert.Equal(Canonical.Bytes("enactive-approval-v1", "h", "r", "a", "tc", "hash", "1"), Ad.Approval("h", "r", "a", "tc", "hash", true));
+        Assert.Equal(Canonical.Bytes("enactive-approval-v1", "h", "r", "a", "tc", "hash", "0"), Ad.Approval("h", "r", "a", "tc", "hash", false));
+        Assert.Equal(Canonical.Bytes("enactive-workspace-v1", "h", "w"), Ad.Workspace("h", "w"));
+    }
+
+    private static T RoundTrip<T>(T value)
+    {
+        var back = RemoteJson.Deserialize<T>(RemoteJson.Serialize(value));
+        Assert.Equal(value, back);
+        return back;
+    }
+
+    [Fact]
+    public void Every_sealed_record_round_trips_through_remote_json()
+    {
+        var at = new DateTimeOffset(2026, 10, 1, 12, 30, 15, TimeSpan.Zero).AddTicks(1234);
+        RoundTrip(new SealedTask("Title", "Prompt\nwith \"quotes\" and é"));
+        RoundTrip(new StartAuthorization("t", "w", at));
+        RoundTrip(new CancelAuthorization("r", at));
+        RoundTrip(new DecisionAuthorization("a", "hash", RemoteDecision.Deny, at));
+        RoundTrip(new DeviceRevocation("d", at));
+        RoundTrip(new DeviceEndorsement("d", "pub", "Phone", at));
+        RoundTrip(new SealedAction("run_command", "{\"cmd\":\"ls\"}", "ls -la", "C:\\work", "Listing"));
+    }
+
+    [Fact]
+    public void A_decision_travels_as_its_name()
+        => Assert.Contains("\"decision\":\"Allow\"", RemoteJson.Serialize(new DecisionAuthorization("a", "h", RemoteDecision.Allow, DateTimeOffset.UnixEpoch)));
 }
