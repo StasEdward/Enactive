@@ -69,4 +69,57 @@ public sealed class RemoteCryptoTests
         Assert.NotEqual(RemoteKdf.Derive(ikm, RemoteKdf.Message), RemoteKdf.Derive(ikm, RemoteKdf.GrantAuth));
         Assert.Equal(32, RemoteKdf.Derive(ikm, RemoteKdf.Message).Length);
     }
+
+    [Fact]
+    public void A_sealed_text_opens_with_the_same_key_and_associated_data()
+    {
+        var key = HostKey.Create(1);
+        var ad = Canonical.Bytes("enactive-event-v1", "host-a", "run-1", "3", "Progress");
+        var @sealed = key.SealText("Step 2 done", ad);
+        Assert.StartsWith(Envelope.Prefix, @sealed);
+        Assert.Equal(1u, Envelope.EpochOf(@sealed));
+        Assert.Equal("Step 2 done", key.OpenText(@sealed, ad));
+    }
+
+    /// <summary>Review focus 1: an envelope copied to another record must not open there.</summary>
+    [Fact]
+    public void Moved_envelope_does_not_open()
+    {
+        var key = HostKey.Create(1);
+        var @sealed = key.SealText("secret", Canonical.Bytes("enactive-event-v1", "host-a", "run-1", "3", "Progress"));
+        Assert.Throws<EnvelopeException>(() => key.OpenText(@sealed, Canonical.Bytes("enactive-event-v1", "host-a", "run-2", "3", "Progress")));
+    }
+
+    [Fact]
+    public void A_changed_byte_does_not_open()
+    {
+        var key = HostKey.Create(1);
+        var ad = Canonical.Bytes("x");
+        var raw = B64.FromUrl(key.SealText("secret", ad)[Envelope.Prefix.Length..]);
+        raw[^1] ^= 1;
+        Assert.Throws<EnvelopeException>(() => key.OpenText(Envelope.Prefix + B64.Url(raw), ad));
+    }
+
+    [Fact]
+    public void Another_epochs_key_does_not_open()
+    {
+        var ad = Canonical.Bytes("x");
+        var @sealed = HostKey.Create(1).SealText("secret", ad);
+        Assert.Throws<EnvelopeException>(() => HostKey.Create(2).OpenText(@sealed, ad));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("plain text")]
+    [InlineData("e1:")]
+    [InlineData("e1:!!!")]
+    public void Something_that_is_not_an_envelope_is_refused(string value)
+        => Assert.False(Envelope.LooksSealed(value, 1000));
+
+    /// <summary>Without the length check "e1:" alone would slice a negative-length plaintext and crash instead of refusing.</summary>
+    [Theory]
+    [InlineData("e1:")]
+    [InlineData("e1:AQ")]
+    public void Opening_something_that_is_not_an_envelope_fails_cleanly(string value)
+        => Assert.Throws<EnvelopeException>(() => HostKey.Create(1).OpenText(value, Canonical.Bytes("x")));
 }
