@@ -945,6 +945,71 @@ public sealed class HostServiceTests(TestDatabase database) : IClassFixture<Test
     }
 
     /// <summary>
+    /// Two syncs of one computer at once - a reconnect overlapping the old connection's last call -
+    /// both find the same expired start. One writes it off; the other waits for the run, finds there
+    /// is nothing left to write off, and must not then hand the start to the computer. Its delivery
+    /// read came from the snapshot taken before the wait, where the start was still undelivered, and
+    /// the computer was given a start whose run had already been reported as never started.
+    /// </summary>
+    [Fact]
+    public async Task Two_syncs_at_once_do_not_deliver_a_start_one_of_them_wrote_off()
+    {
+        var (host, runId) = await QueuedAsync();
+        var start = await CommandAsync(host, CommandKind.StartTask, RemoteJson.Serialize(new StartTaskPayload(
+            runId, Guid.NewGuid().ToString(), "workspace-1", Sealed("task"), Sealed("start"))), expired: true);
+
+        // Something of the person's holding the run, so both syncs find the start and then wait.
+        await using var connection = await database.OpenAsync();
+        await using var holding = await connection.BeginAsync(default);
+        await connection.ExecuteAsync(holding,
+            "SELECT id FROM runs WHERE id = @run FOR UPDATE", ("@run", runId));
+
+        var first = Service.SyncAsync(host, []);
+        var second = Service.SyncAsync(host, []);
+        await Assert.ThrowsAsync<TimeoutException>(
+            () => Task.WhenAll(first, second).WaitAsync(TimeSpan.FromMilliseconds(500)));
+
+        await holding.RollbackAsync();
+
+        var delivered = (await Task.WhenAll(first, second).WaitAsync(Generously)).SelectMany(c => c);
+
+        Assert.DoesNotContain(delivered, command => command.Id == start);
+        Assert.Equal(RemoteRunStatus.Incomplete, await StatusAsync(runId));
+        Assert.Equal(1, await database.ScalarLongAsync(
+            $"SELECT COUNT(*) FROM notices WHERE run_id = '{runId}' AND kind = 'NotStarted'"));
+    }
+
+    /// <summary>
+    /// An expired command is never handed over, whether or not a sync has written it off yet. One
+    /// that became visible while this sync was waiting - after it had looked for expired commands -
+    /// is still undelivered when the commands to deliver are read, and the computer would be given a
+    /// command it must refuse as too old.
+    /// </summary>
+    [Fact]
+    public async Task An_expired_command_is_never_delivered()
+    {
+        var (host, runId) = await QueuedAsync();
+        await CommandAsync(host, CommandKind.StartTask, RemoteJson.Serialize(new StartTaskPayload(
+            runId, Guid.NewGuid().ToString(), "workspace-1", Sealed("task"), Sealed("start"))), expired: true);
+
+        await using var connection = await database.OpenAsync();
+        await using var holding = await connection.BeginAsync(default);
+        await connection.ExecuteAsync(holding,
+            "SELECT id FROM runs WHERE id = @run FOR UPDATE", ("@run", runId));
+
+        var sync = Service.SyncAsync(host, []);
+        await Assert.ThrowsAsync<TimeoutException>(() => sync.WaitAsync(TimeSpan.FromMilliseconds(500)));
+
+        // Committed while the sync waits, already past its expiry.
+        var late = await CommandAsync(host, CommandKind.CancelRun,
+            RemoteJson.Serialize(new CancelRunPayload(runId, Sealed("cancel"))), expired: true);
+
+        await holding.RollbackAsync();
+
+        Assert.DoesNotContain(await sync.WaitAsync(Generously), command => command.Id == late);
+    }
+
+    /// <summary>
     /// What a sync hands over: this computer's undelivered commands, and nobody else's - not Bob's,
     /// and not those of Alice's other computer, which are hers but are not this computer's to carry
     /// out. The second is what an owner filter alone would let through.

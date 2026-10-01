@@ -102,8 +102,6 @@ public sealed class HostService(Database database)
 
         await using var connection = await database.OpenAsync(ct);
 
-        IReadOnlyList<HostCommand> pending;
-
         await using (var transaction = await connection.BeginAsync(ct))
         {
             await AuthorizeAsync(connection, transaction, host);
@@ -125,25 +123,37 @@ public sealed class HostService(Database database)
 
             await ExpireCommandsAsync(connection, transaction, host);
 
-            pending = await connection.ReadAllAsync(transaction,
-                """
-                SELECT id, host_id, kind, payload, status, created_at, expires_at
-                FROM commands
-                WHERE owner_id = @owner AND host_id = @host AND status = 'PendingDelivery'
-                ORDER BY created_at
-                """,
-                reader => new HostCommand(
-                    reader.GetString("id"),
-                    reader.GetString("host_id"),
-                    reader.Enum<CommandKind>("kind"),
-                    reader.GetString("payload"),
-                    reader.Enum<CommandStatus>("status"),
-                    reader.Utc("created_at"),
-                    reader.Utc("expires_at")),
-                ("@owner", host.OwnerId), ("@host", host.HostId));
-
             await transaction.CommitAsync(ct);
         }
+
+        // What to hand over is read AFTER the commit, by a statement of its own, so it sees what is
+        // committed now. Inside the transaction it read the snapshot taken before the expiry waited
+        // for a run: a second sync of this computer, waiting while the first wrote off an expired
+        // start, then handed that start over as undelivered - and could as well hand over a command
+        // accepted or withdrawn while it waited. No lock is taken, so this cannot wait on a person's
+        // cancel either. A revocation committed since the checks above withdraws the undelivered
+        // commands in its own transaction, so they are not read as undelivered here.
+        //
+        // And never an expired command, written off or not: one that became visible after this sync
+        // looked for expired ones is still undelivered here, and the computer would refuse it as too
+        // old once it had been given it.
+        var pending = await connection.ReadAllAsync(null,
+            """
+            SELECT id, host_id, kind, payload, status, created_at, expires_at
+            FROM commands
+            WHERE owner_id = @owner AND host_id = @host AND status = 'PendingDelivery'
+              AND expires_at > @now
+            ORDER BY created_at
+            """,
+            reader => new HostCommand(
+                reader.GetString("id"),
+                reader.GetString("host_id"),
+                reader.Enum<CommandKind>("kind"),
+                reader.GetString("payload"),
+                reader.Enum<CommandStatus>("status"),
+                reader.Utc("created_at"),
+                reader.Utc("expires_at")),
+            ("@owner", host.OwnerId), ("@host", host.HostId), ("@now", DateTimeOffset.UtcNow));
 
         // After the commit, on its own: writing last_seen_at locks the hosts row EXCLUSIVELY, and the
         // transaction above locks runs while it writes off expired starts - see the lock order in the
