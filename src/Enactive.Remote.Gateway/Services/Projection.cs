@@ -286,24 +286,32 @@ public sealed class Projection(Database database, Retention retention)
     /// or above the line's value. Null means a full snapshot, never a guess at what was meant.
     /// </summary>
     private static long? OrdinalOnLine(string? cursor, int epoch, long value)
+        => TryParseCursor(cursor, out var cursorEpoch, out var ordinal) && cursorEpoch == epoch && ordinal <= value
+            ? ordinal
+            : null;
+
+    /// <summary>
+    /// <c>"{epoch}.{ordinal}"</c> in plain ASCII digits, taken apart. Whether it names anything on a
+    /// person's line is a separate question, answered against that line. Shared with marking notices
+    /// read, so the two never disagree about what a cursor is.
+    /// </summary>
+    internal static bool TryParseCursor(string? cursor, out int epoch, out long ordinal)
     {
+        epoch = 0;
+        ordinal = 0;
+
         if (string.IsNullOrEmpty(cursor) || cursor.Length > MaxCursorLength)
         {
-            return null;
+            return false;
         }
 
         var dot = cursor.IndexOf('.');
 
         // NumberStyles.None: digits only. No sign, no spaces, no exponent and no group separators,
         // so a negative or decorated number is malformed rather than read as something else.
-        if (dot < 0
-            || !int.TryParse(cursor.AsSpan(0, dot), NumberStyles.None, CultureInfo.InvariantCulture, out var cursorEpoch)
-            || !long.TryParse(cursor.AsSpan(dot + 1), NumberStyles.None, CultureInfo.InvariantCulture, out var ordinal))
-        {
-            return null;
-        }
-
-        return cursorEpoch == epoch && ordinal <= value ? ordinal : null;
+        return dot >= 0
+            && int.TryParse(cursor.AsSpan(0, dot), NumberStyles.None, CultureInfo.InvariantCulture, out epoch)
+            && long.TryParse(cursor.AsSpan(dot + 1), NumberStyles.None, CultureInfo.InvariantCulture, out ordinal);
     }
 
     /// <summary>

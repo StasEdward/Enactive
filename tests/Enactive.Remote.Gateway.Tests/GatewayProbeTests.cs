@@ -1,6 +1,5 @@
 namespace Enactive.Remote.Gateway.Tests;
 
-using System.Net.Http.Json;
 using Enactive.Remote.Contracts;
 using Enactive.Remote.Gateway.Services;
 using Enactive.Remote.Host;
@@ -19,27 +18,13 @@ using Xunit;
 /// </summary>
 public sealed class GatewayProbeTests(TestDatabase database) : IClassFixture<TestDatabase>, IAsyncLifetime
 {
-    private const string OwnerKey = "a-development-owner-key-for-tests";
-
     private WebApplicationFactory<Program> _gateway = null!;
-    private HttpClient _owner = null!;
-    private string _csrf = "";
+    private PanelClient _owner = null!;
 
     public async Task InitializeAsync()
     {
-        _gateway = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
-        {
-            builder.UseSetting("ENACTIVE_REMOTE_DB", database.ConnectionString);
-            builder.UseSetting("ENACTIVE_OWNER_KEY", OwnerKey);
-            builder.UseSetting("ENACTIVE_DATA", Path.Combine(Path.GetTempPath(), database.Name));
-            builder.UseSetting("environment", "Development");
-        });
-
-        _owner = _gateway.CreateClient();
-
-        _csrf = (await Get<SessionView>("/api/session")).CsrfToken;
-        await Post("/api/login", new { key = OwnerKey });
-        _csrf = (await Get<SessionView>("/api/session")).CsrfToken;
+        _gateway = TestGateway.Create(database);
+        _owner = await PanelClient.SignedInAsync(_gateway, "owner-" + Guid.NewGuid().ToString("N")[..8]);
     }
 
     public Task DisposeAsync()
@@ -60,16 +45,18 @@ public sealed class GatewayProbeTests(TestDatabase database) : IClassFixture<Tes
     [Fact]
     public async Task A_check_that_succeeds_makes_the_computer_online()
     {
-        var device = await Post<DeviceView>("/api/hosts", new { name = "Studio PC" });
+        var device = await _owner.PostAsync<DeviceView>("/api/hosts", new { name = "Studio PC" });
+        var browser = new TestBrowser(device.Id);
+        var name = browser.Computer.Sealer().WorkspaceName("workspace-1", "Enactive");
 
-        var check = await Probe(device.Token, [new WorkspaceRef("workspace-1", "Enactive")]);
+        var check = await Probe(device.Token, [new WorkspaceRef("workspace-1", name)]);
 
         Assert.True(check.Reached, check.Detail);
 
-        var host = Assert.Single((await Get<GatewaySnapshot>("/api/state")).Hosts, h => h.Id == device.Id);
+        var host = Assert.Single((await _owner.GetAsync<GatewaySnapshot>("/api/state")).Hosts, h => h.Id == device.Id);
 
         Assert.True(host.Online);
-        Assert.Equal("Enactive", Assert.Single(host.Workspaces).SealedName);
+        Assert.Equal("Enactive", browser.OpenWorkspace(Assert.Single(host.Workspaces)));
     }
 
     /// <summary>
@@ -94,11 +81,11 @@ public sealed class GatewayProbeTests(TestDatabase database) : IClassFixture<Tes
     [Fact]
     public async Task A_revoked_computer_can_no_longer_check_in()
     {
-        var device = await Post<DeviceView>("/api/hosts", new { name = "Old laptop" });
+        var device = await _owner.PostAsync<DeviceView>("/api/hosts", new { name = "Old laptop" });
 
         Assert.True((await Probe(device.Token, [])).Reached);
 
-        await Post($"/api/hosts/{device.Id}/revoke", new { });
+        await _owner.PostAsync($"/api/hosts/{device.Id}/revoke", new { });
 
         Assert.False((await Probe(device.Token, [])).Reached);
     }
@@ -117,37 +104,6 @@ public sealed class GatewayProbeTests(TestDatabase database) : IClassFixture<Tes
                 options.HttpMessageHandlerFactory = _ => _gateway.Server.CreateHandler();
                 options.Transports = HttpTransportType.LongPolling;
             });
-
-    private async Task<T> Get<T>(string path)
-        => (await _owner.GetFromJsonAsync<T>(path, RemoteJson.Options))!;
-
-    private async Task Post(string path, object body)
-    {
-        using var request = new HttpRequestMessage(HttpMethod.Post, path)
-        {
-            Content = JsonContent.Create(body, options: RemoteJson.Options)
-        };
-        request.Headers.Add("X-CSRF-TOKEN", _csrf);
-
-        using var response = await _owner.SendAsync(request);
-        response.EnsureSuccessStatusCode();
-    }
-
-    private async Task<T> Post<T>(string path, object body)
-    {
-        using var request = new HttpRequestMessage(HttpMethod.Post, path)
-        {
-            Content = JsonContent.Create(body, options: RemoteJson.Options)
-        };
-        request.Headers.Add("X-CSRF-TOKEN", _csrf);
-
-        using var response = await _owner.SendAsync(request);
-        response.EnsureSuccessStatusCode();
-
-        return (await response.Content.ReadFromJsonAsync<T>(RemoteJson.Options))!;
-    }
-
-    private sealed record SessionView(bool Authenticated, string CsrfToken);
 
     private sealed record DeviceView(string Id, string Name, string Token);
 }

@@ -47,6 +47,10 @@ public sealed class ProjectionTests(TestDatabase database) : IClassFixture<TestD
     private static long OrdinalOf(string cursor)
         => long.Parse(cursor[(cursor.IndexOf('.') + 1)..], CultureInfo.InvariantCulture);
 
+    /// <summary>The epoch a cursor carries.</summary>
+    private static int EpochOf(string cursor)
+        => int.Parse(cursor[..cursor.IndexOf('.')], CultureInfo.InvariantCulture);
+
     /// <summary>A registered computer of <paramref name="user"/>'s that has synced one workspace.</summary>
     private async Task<(HostAccess Host, string Token, string SealedName)> ComputerAsync(
         UserAccess user, string label = "Studio PC")
@@ -406,7 +410,7 @@ public sealed class ProjectionTests(TestDatabase database) : IClassFixture<TestD
         Assert.Empty(quiet.Notices);
         Assert.Equal(1, quiet.UnreadNotices);
 
-        await Users.MarkNoticesReadAsync(alice, OrdinalOf(quiet.Cursor), default);
+        await Users.MarkNoticesReadAsync(alice, EpochOf(quiet.Cursor), OrdinalOf(quiet.Cursor), default);
 
         var afterReading = await ReadAsync(alice, quiet.Cursor);
         Assert.Empty(afterReading.Notices);

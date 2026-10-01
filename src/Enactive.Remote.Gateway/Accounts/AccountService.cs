@@ -74,6 +74,18 @@ public sealed class AccountService(Database db, TimeProvider clock)
     }
 
     /// <summary>
+    /// The name the signed-in person is shown under, or null when their account is gone. Only their own:
+    /// the account is the one their session names, never one the request asks about.
+    /// </summary>
+    public async Task<string?> DisplayNameAsync(UserAccess user, CancellationToken ct)
+    {
+        await using var connection = await db.OpenAsync(ct);
+        return await connection.ReadOneAsync(null,
+            "SELECT display_name FROM users WHERE id = @id",
+            reader => reader.GetString("display_name"), ("@id", user.UserId));
+    }
+
+    /// <summary>
     /// At most <paramref name="width"/> characters, never cutting a surrogate pair in half: a lone
     /// surrogate is not valid UTF-8, and the driver would send a replacement character in its place.
     /// </summary>

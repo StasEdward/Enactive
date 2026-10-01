@@ -86,6 +86,13 @@ public sealed class GatewayFault(string code, int status, string message) : Exce
     public static GatewayFault AccountDisabled() => new(
         FaultCode.AccountDisabled, 403, "The account this computer belongs to has been disabled.");
 
+    /// <summary>
+    /// The same refusal for the person themselves, at sign-in: one code for one fact, in words meant
+    /// for the person rather than for their computer.
+    /// </summary>
+    public static GatewayFault AccountDisabledForPerson() => new(
+        FaultCode.AccountDisabled, 403, "This account has been disabled.");
+
     public static GatewayFault ProtocolMismatch() => new(
         FaultCode.ProtocolMismatch, 400,
         "This computer and the service speak different versions - update Enactive.");
@@ -96,6 +103,8 @@ public sealed class GatewayFault(string code, int status, string message) : Exce
     // Host will never classify would only make the table look more complete than it is.
 
     public static GatewayFault BadRequest(string message) => new("bad-request", 400, message);
+
+    public static GatewayFault Unauthenticated() => new("unauthenticated", 401, "Sign in to continue.");
 
     public static GatewayFault Conflict(string message) => new("conflict", 409, message);
 

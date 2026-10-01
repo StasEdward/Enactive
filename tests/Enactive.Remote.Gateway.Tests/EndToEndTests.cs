@@ -1,12 +1,16 @@
 namespace Enactive.Remote.Gateway.Tests;
 
-using System.Net.Http.Json;
+using System.Runtime.CompilerServices;
+using Enactive.Core.Context;
+using Enactive.Core.Events;
+using Enactive.Core.History;
+using Enactive.Core.Intents;
+using Enactive.Core.Orchestration;
 using Enactive.Remote.Contracts;
 using Enactive.Remote.Gateway.Services;
 using Enactive.Remote.Host;
 using Microsoft.AspNetCore.Http.Connections;
 using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 /// <summary>
@@ -24,29 +28,13 @@ using Xunit;
 /// </summary>
 public sealed class EndToEndTests(TestDatabase database) : IClassFixture<TestDatabase>, IAsyncLifetime
 {
-    private const string OwnerKey = "a-development-owner-key-for-tests";
-
     private WebApplicationFactory<Program> _gateway = null!;
-    private HttpClient _owner = null!;
-    private string _csrf = "";
+    private PanelClient _owner = null!;
 
     public async Task InitializeAsync()
     {
-        _gateway = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
-        {
-            builder.UseSetting("ENACTIVE_REMOTE_DB", database.ConnectionString);
-            builder.UseSetting("ENACTIVE_OWNER_KEY", OwnerKey);
-            builder.UseSetting("ENACTIVE_DATA", Path.Combine(Path.GetTempPath(), database.Name));
-            // Development: the cookie is not marked Secure, which an in-process test server cannot
-            // satisfy. Everything else about the pipeline is what production runs.
-            builder.UseSetting("environment", "Development");
-        });
-
-        _owner = _gateway.CreateClient();
-
-        _csrf = (await Get<SessionView>("/api/session")).CsrfToken;
-        await Post("/api/login", new { key = OwnerKey });
-        _csrf = (await Get<SessionView>("/api/session")).CsrfToken;
+        _gateway = TestGateway.Create(database);
+        _owner = await PanelClient.SignedInAsync(_gateway, "owner-" + Guid.NewGuid().ToString("N")[..8]);
     }
 
     public Task DisposeAsync()
@@ -61,45 +49,67 @@ public sealed class EndToEndTests(TestDatabase database) : IClassFixture<TestDat
     /// Register a computer, connect it, publish a workspace, write a task, start it, let it run,
     /// and watch the ending arrive - through the real hub, the real authentication and the real
     /// database.
+    ///
+    /// <para>And sealed end to end. The browser seals the task and the start under the computer's
+    /// key; the gateway carries both without being able to read either; the computer opens them,
+    /// checks they agree, and hands the engine the prompt the person wrote. Its ending comes back
+    /// sealed the other way, and only the browser opens it. A gateway that rewrote, dropped or
+    /// re-addressed any of it would fail here, at the end that holds the key.</para>
     /// </summary>
     [Fact]
     public async Task A_task_started_by_the_owner_runs_on_the_host_and_reports_back()
     {
-        var device = await Post<DeviceView>("/api/hosts", new { name = "Studio PC" });
+        var device = await _owner.PostAsync<DeviceView>("/api/hosts", new { name = "Studio PC" });
+        var browser = new TestBrowser(device.Id);
+        var sealer = browser.Computer.Sealer();
 
         await using var host = Connect(device.Token);
         await host.StartAsync();
 
         using var store = OpenStore();
-        var keys = new FixedHostKeys();
-        var loop = new DeliveryLoop(store, host, new Sealer(keys, TimeProvider.System));
+        var loop = new DeliveryLoop(store, host, sealer);
+        IReadOnlyList<WorkspaceRef> workspaces =
+            [new WorkspaceRef("workspace-1", sealer.WorkspaceName("workspace-1", "Enactive"))];
 
         // Sync publishes the workspace. Until it has, the owner cannot name one - which is the
         // property that keeps a remote task from naming a folder.
-        await loop.TurnAsync([new WorkspaceRef("workspace-1", "Enactive")]);
+        await loop.TurnAsync(workspaces);
 
-        var task = await Post<IdView>("/api/tasks", new
+        var taskId = Guid.NewGuid().ToString();
+        await _owner.PostAsync<IdView>("/api/tasks", new
         {
+            taskId,
             hostId = device.Id,
             workspaceId = "workspace-1",
-            title = "Run the tests",
-            prompt = "Please run them."
+            sealedTask = browser.Task(taskId, "workspace-1", "Run the tests", "Please run them.")
         });
 
-        await Post($"/api/tasks/{task.Id}/start", new { commandId = Guid.NewGuid().ToString() });
+        var commandId = Guid.NewGuid().ToString();
+        await _owner.PostAsync($"/api/tasks/{taskId}/start", new
+        {
+            commandId,
+            @sealed = browser.Start(commandId, taskId, "workspace-1")
+        });
 
         // The Host picks the command up, writes it down, acknowledges it and is handed the work.
-        var accepted = Assert.Single(await loop.TurnAsync([new WorkspaceRef("workspace-1", "Enactive")]));
-        var payload = RemoteJson.Deserialize<StartTaskPayload>(accepted.Payload);
+        var accepted = Assert.Single(await loop.TurnAsync(workspaces));
+        var runId = RemoteJson.Deserialize<StartTaskPayload>(accepted.Payload).RunId;
 
-        Assert.False(string.IsNullOrEmpty(payload.SealedTask)); // Task 3.8 rewrites this test
+        // A stand-in engine: what a real run does is what the engine's own tests are for. What is
+        // under test here is that the prompt it is handed is the one the person sealed, and that its
+        // ending survives the wire.
+        var engine = new ScriptedEngine(
+            Event(EventKind.StepStarted, "[1/1] Working"),
+            Event(EventKind.TaskCompleted, "All done", WorkEventPayload.OutcomePayload(RunOutcomeKind.Completed)));
+        var runner = new RemoteRunner(store, new RemoteApprovals(), sealer, (task, _, _) =>
+            Task.FromResult(new RemotePreparation(engine, new Intent(
+                Guid.NewGuid(), task.Prompt, IntentSource.Remote,
+                new WorkContext(Guid.NewGuid(), task.WorkspaceId, null, null, null, [], []),
+                DateTimeOffset.UtcNow))));
 
-        // Standing in for the engine: what stage 4 wires to this is already proven, and what is
-        // under test here is that these events survive the wire.
-        store.BeginRun(accepted.Id, payload.RunId);
-        store.Enqueue(payload.RunId, RemoteEventKind.Running, _ => "Started");
-        store.Enqueue(payload.RunId, RemoteEventKind.Progress, _ => "[1/1] Working");
-        store.Enqueue(payload.RunId, RemoteEventKind.Completed, _ => "All done");
+        await runner.ApplyAsync(accepted);
+
+        Assert.Equal("Please run them.", engine.Prompt);
 
         await loop.FlushAsync();
 
@@ -108,15 +118,16 @@ public sealed class EndToEndTests(TestDatabase database) : IClassFixture<TestDat
         // Deserialised into the gateway's OWN projection type, not a trimmed copy of it. The wire
         // format refuses fields the reader does not know, so a partial view fails here - which is
         // the setting doing its job, and a good reason to assert against the real contract.
-        var state = await Get<GatewaySnapshot>("/api/state");
+        var state = await _owner.GetAsync<GatewaySnapshot>("/api/state");
 
         // About THIS test's run and THIS test's computer, not about how many the database holds.
         // The first version asserted a single host and a single run: it passed alone and failed in
         // company, because the class shares one database and its neighbours register their own.
-        var run = Assert.Single(state.Runs, r => r.Id == payload.RunId);
+        var run = Assert.Single(state.Runs, r => r.Id == runId);
 
         Assert.Equal(RemoteRunStatus.Completed, run.Status);
-        Assert.Equal("All done", run.SealedSummary); // Task 3.8 rewrites this test
+        Assert.Equal("All done", browser.OpenSummary(run, RemoteEventKind.Completed));
+        Assert.Equal("Run the tests", browser.OpenTask(Assert.Single(state.Tasks, t => t.Id == taskId)).Title);
         Assert.True(Assert.Single(state.Hosts, h => h.Id == device.Id).Online);
     }
 
@@ -133,11 +144,14 @@ public sealed class EndToEndTests(TestDatabase database) : IClassFixture<TestDat
     [Fact]
     public async Task A_refusal_arrives_as_a_code_the_host_can_act_on()
     {
-        var device = await Post<DeviceView>("/api/hosts", new { name = "Laptop" });
+        var device = await _owner.PostAsync<DeviceView>("/api/hosts", new { name = "Laptop" });
+        var sealer = new TestBrowser(device.Id).Computer.Sealer();
 
         await using var host = Connect(device.Token);
         await host.StartAsync();
-        await host.SyncAsync([new WorkspaceRef("workspace-1", "Enactive")], CancellationToken.None);
+        await host.SyncAsync(
+            [new WorkspaceRef("workspace-1", sealer.WorkspaceName("workspace-1", "Enactive"))],
+            CancellationToken.None);
 
         var refused = await Assert.ThrowsAsync<GatewayRefusedException>(() =>
             host.PublishAsync(
@@ -163,13 +177,13 @@ public sealed class EndToEndTests(TestDatabase database) : IClassFixture<TestDat
     [Fact]
     public async Task A_revoked_device_is_cut_off_and_cannot_get_back_in()
     {
-        var device = await Post<DeviceView>("/api/hosts", new { name = "Old laptop" });
+        var device = await _owner.PostAsync<DeviceView>("/api/hosts", new { name = "Old laptop" });
 
         await using var host = Connect(device.Token);
         await host.StartAsync();
         await host.SyncAsync([], CancellationToken.None);
 
-        await Post($"/api/hosts/{device.Id}/revoke", new { });
+        await _owner.PostAsync($"/api/hosts/{device.Id}/revoke", new { });
 
         // The call on the cut connection fails, and not as a refusal - there was nobody left to
         // refuse it.
@@ -201,52 +215,35 @@ public sealed class EndToEndTests(TestDatabase database) : IClassFixture<TestDat
             options.Transports = HttpTransportType.LongPolling;
         });
 
-    private HostStore OpenStore()
+    private static HostStore OpenStore()
         => new(Path.Combine(Path.GetTempPath(), "enactive-e2e-" + Guid.NewGuid().ToString("N"), "remote.db"));
 
-    private async Task<T> Get<T>(string path)
-        => (await _owner.GetFromJsonAsync<T>(path, RemoteJson.Options))!;
-
-    private async Task Post(string path, object body)
-    {
-        using var request = new HttpRequestMessage(HttpMethod.Post, path)
-        {
-            Content = JsonContent.Create(body, options: RemoteJson.Options)
-        };
-        request.Headers.Add("X-CSRF-TOKEN", _csrf);
-
-        using var response = await _owner.SendAsync(request);
-        response.EnsureSuccessStatusCode();
-    }
-
-    private async Task<T> Post<T>(string path, object body)
-    {
-        using var request = new HttpRequestMessage(HttpMethod.Post, path)
-        {
-            Content = JsonContent.Create(body, options: RemoteJson.Options)
-        };
-        request.Headers.Add("X-CSRF-TOKEN", _csrf);
-
-        using var response = await _owner.SendAsync(request);
-        response.EnsureSuccessStatusCode();
-
-        return (await response.Content.ReadFromJsonAsync<T>(RemoteJson.Options))!;
-    }
-
-    private sealed record SessionView(bool Authenticated, string CsrfToken);
+    private static WorkEvent Event(EventKind kind, string summary, string? payload = null)
+        => new(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.UtcNow, kind, summary, payload);
 
     private sealed record DeviceView(string Id, string Name, string Token);
 
     private sealed record IdView(string Id);
 
-    // Task 3.8 rewrites this test; until then the Host only needs keys to be constructible.
-    private sealed class FixedHostKeys : IHostKeys
+    /// <summary>An engine that emits what the test says, and remembers the prompt it was given.</summary>
+    private sealed class ScriptedEngine(params WorkEvent[] events) : IOrchestrator
     {
-        public string HostId => "host-1";
+        public string? Prompt { get; private set; }
 
-        public Enactive.Remote.Contracts.Crypto.HostKey Current { get; } =
-            Enactive.Remote.Contracts.Crypto.HostKey.Create(1);
+        public async IAsyncEnumerable<WorkEvent> SubmitIntentAsync(
+            Intent intent, [EnumeratorCancellation] CancellationToken ct)
+        {
+            Prompt = intent.RawText;
 
-        public Enactive.Remote.Contracts.Crypto.HostKey? Epoch(uint epoch) => epoch == Current.Epoch ? Current : null;
+            foreach (var published in events)
+            {
+                await Task.Yield();
+                yield return published;
+            }
+        }
+
+        public IAsyncEnumerable<WorkEvent> ResumeRunAsync(
+            RunCheckpoint checkpoint, WorkContext context, CancellationToken ct)
+            => throw new NotSupportedException("Resuming is not part of what this test exercises.");
     }
 }

@@ -1,12 +1,13 @@
 ﻿namespace Enactive.Remote.Gateway.Tests;
 
 using System.Net;
-using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text.RegularExpressions;
 using Enactive.Remote.Contracts;
+using Enactive.Remote.Contracts.Crypto;
 using Enactive.Remote.Gateway.Services;
 using Enactive.Remote.Gateway.Storage;
+using Enactive.Remote.Host;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Xunit;
 
@@ -20,41 +21,23 @@ using Xunit;
 /// </summary>
 public sealed class PanelTests(TestDatabase database) : IClassFixture<TestDatabase>, IAsyncLifetime
 {
-    private const string OwnerKey = "a-development-owner-key-for-tests";
-    private const string HostId = "4444444444444444444444444444dddd";
+    private const string Workspace = "workspace-1";
 
-    // Task 3.8 rewrites this: the computer is registered to the person the test signs in as. Until
-    // then these tests seed the old schema and fail at runtime anyway; this only keeps them compiling.
-    private static readonly HostAccess Computer = new(HostId, "");
+    private static readonly string ActionHash = Ids.Hash("run_command dotnet test");
 
     private WebApplicationFactory<Program> _gateway = null!;
-    private HttpClient _owner = null!;
-    private HttpClient _stranger = null!;
-    private string _csrf = "";
+    private PanelClient _owner = null!;
+    private PanelClient _stranger = null!;
 
+    private HostService Hosts => new(new Database(database.ConnectionString));
+
+    // xUnit makes a new instance for each test, so each test signs in a person of its own: counts such
+    // as the unread notices are then this test's alone, whatever its neighbours left in the database.
     public async Task InitializeAsync()
     {
-        _gateway = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
-        {
-            builder.UseSetting("ENACTIVE_REMOTE_DB", database.ConnectionString);
-            builder.UseSetting("ENACTIVE_OWNER_KEY", OwnerKey);
-            builder.UseSetting("ENACTIVE_DATA", Path.Combine(Path.GetTempPath(), database.Name));
-            builder.UseSetting("environment", "Development");
-        });
-
-        _stranger = _gateway.CreateClient();
-        _owner = _gateway.CreateClient();
-
-        _csrf = (await Session()).CsrfToken;
-
-        using var login = new HttpRequestMessage(HttpMethod.Post, "/api/login")
-        {
-            Content = JsonContent.Create(new { key = OwnerKey }, options: RemoteJson.Options)
-        };
-        login.Headers.Add("X-CSRF-TOKEN", _csrf);
-        (await _owner.SendAsync(login)).EnsureSuccessStatusCode();
-
-        _csrf = (await Session()).CsrfToken;
+        _gateway = TestGateway.Create(database);
+        _stranger = new PanelClient(_gateway);
+        _owner = await PanelClient.SignedInAsync(_gateway, "owner-" + Guid.NewGuid().ToString("N")[..8]);
     }
 
     public Task DisposeAsync()
@@ -81,7 +64,7 @@ public sealed class PanelTests(TestDatabase database) : IClassFixture<TestDataba
     {
         await QueuedRunAsync();
 
-        var json = await _owner.GetStringAsync("/api/state");
+        var json = await _owner.Http.GetStringAsync("/api/state");
 
         Assert.Contains("\"status\":\"Queued\"", json);
         Assert.DoesNotContain("\"status\":0", json);
@@ -94,8 +77,8 @@ public sealed class PanelTests(TestDatabase database) : IClassFixture<TestDataba
     [Fact]
     public async Task The_page_is_served_to_anyone_and_the_state_behind_it_to_nobody()
     {
-        using var page = await _stranger.GetAsync("/");
-        using var state = await _stranger.GetAsync("/api/state");
+        using var page = await _stranger.Http.GetAsync("/");
+        using var state = await _stranger.Http.GetAsync("/api/state");
 
         page.EnsureSuccessStatusCode();
         Assert.Equal("text/html", page.Content.Headers.ContentType?.MediaType);
@@ -103,7 +86,7 @@ public sealed class PanelTests(TestDatabase database) : IClassFixture<TestDataba
     }
 
     /// <summary>
-    /// The cursor survives the query string. It is a <c>long?</c> bound from <c>?since=</c>, and a
+    /// The cursor survives the query string. It is a <c>string?</c> bound from <c>?since=</c>, and a
     /// binding that quietly failed would send a full snapshot every three seconds while every test
     /// that calls the projection directly stayed green.
     /// </summary>
@@ -112,8 +95,8 @@ public sealed class PanelTests(TestDatabase database) : IClassFixture<TestDataba
     {
         await QueuedRunAsync();
 
-        var first = await Get<GatewaySnapshot>("/api/state");
-        var second = await Get<GatewaySnapshot>($"/api/state?since={first.Cursor}");
+        var first = await _owner.GetAsync<GatewaySnapshot>("/api/state");
+        var second = await _owner.GetAsync<GatewaySnapshot>($"/api/state?since={first.Cursor}");
 
         Assert.False(first.Delta);
         Assert.True(second.Delta);
@@ -131,24 +114,13 @@ public sealed class PanelTests(TestDatabase database) : IClassFixture<TestDataba
     [Fact]
     public async Task A_shell_permission_is_refused_over_http_and_not_merely_undrawn()
     {
-        var runId = await RunningRunAsync();
-        var approvalId = "approval-" + Guid.NewGuid().ToString("N");
+        var (computer, runId) = await RunningRunAsync();
+        var approvalId = await AskAsync(computer, runId, remoteDecidable: false);
 
-        await new HostService(new Database(database.ConnectionString)).PublishAsync(Computer, new HostEvent(
-            Guid.NewGuid().ToString("N"), runId, 2, RemoteEventKind.ApprovalRequested, "Run the tests",
-            new ApprovalRequest(approvalId, "call-1", "hash-1", RemoteDecidable: false, "e1:sealed-action")));
-
-        using var request = new HttpRequestMessage(HttpMethod.Post, $"/api/approvals/{approvalId}/resolve")
-        {
-            Content = JsonContent.Create(
-                // As a NAME, which is how the panel will send it and which the gateway could not
-                // read at all until this stage configured its JSON.
-                new { commandId = Guid.NewGuid().ToString(), decision = "Allow", actionHash = "hash-1" },
-                options: RemoteJson.Options)
-        };
-        request.Headers.Add("X-CSRF-TOKEN", _csrf);
-
-        using var response = await _owner.SendAsync(request);
+        // The decision as a NAME, which is how the panel will send it and which the gateway could not
+        // read at all until this stage configured its JSON.
+        using var response = await _owner.SendAsync(
+            HttpMethod.Post, $"/api/approvals/{approvalId}/resolve", Answer(computer, approvalId, "Allow"));
         var body = await response.Content.ReadAsStringAsync();
 
         Assert.False(response.IsSuccessStatusCode);
@@ -176,7 +148,7 @@ public sealed class PanelTests(TestDatabase database) : IClassFixture<TestDataba
     [Fact]
     public async Task Every_script_and_stylesheet_the_page_names_is_fingerprinted()
     {
-        var page = await _owner.GetStringAsync("/");
+        var page = await _owner.Http.GetStringAsync("/");
 
         var referenced = Regex.Matches(page, "(?:href|src)=\"(?<path>/[^\"?#]+\\.(?:css|js))(?<query>[^\"]*)\"");
 
@@ -192,7 +164,7 @@ public sealed class PanelTests(TestDatabase database) : IClassFixture<TestDataba
             // The token has to BE the file. A page that stamps something constant onto every asset
             // passes a "there is a version" check and goes on serving the same URL for a changed
             // file, which is the bug wearing the shape of the fix.
-            var bytes = await _owner.GetByteArrayAsync(path + query);
+            var bytes = await _owner.Http.GetByteArrayAsync(path + query);
             var expected = Convert.ToHexStringLower(SHA256.HashData(bytes))[..8];
 
             Assert.Equal("?v=" + expected, query);
@@ -207,7 +179,7 @@ public sealed class PanelTests(TestDatabase database) : IClassFixture<TestDataba
     [Fact]
     public async Task The_page_itself_is_always_revalidated()
     {
-        using var response = await _owner.GetAsync("/");
+        using var response = await _owner.Http.GetAsync("/");
 
         Assert.Equal("no-cache", Assert.Single(response.Headers.CacheControl!.ToString().Split(", ")));
     }
@@ -227,18 +199,12 @@ public sealed class PanelTests(TestDatabase database) : IClassFixture<TestDataba
     [Fact]
     public async Task A_permission_names_the_run_that_raised_it()
     {
-        var runId = await RunningRunAsync();
-        var approvalId = "approval-" + Guid.NewGuid().ToString("N");
+        var (computer, runId) = await RunningRunAsync();
+        var approvalId = await AskAsync(computer, runId, remoteDecidable: true);
 
-        await new HostService(new Database(database.ConnectionString)).PublishAsync(Computer, new HostEvent(
-            Guid.NewGuid().ToString("N"), runId, 2, RemoteEventKind.ApprovalRequested, "Delete a file",
-            new ApprovalRequest(approvalId, "call-1", "hash-1", RemoteDecidable: true, "e1:sealed-action")));
+        var state = await _owner.GetAsync<GatewaySnapshot>("/api/state");
 
-        var state = await _owner.GetFromJsonAsync<GatewaySnapshot>("/api/state", RemoteJson.Options);
-
-        // By id, not Assert.Single: the tests in this class share one database, so other pending
-        // approvals are legitimately in the snapshot alongside this one.
-        var approval = Assert.Single(state!.Approvals, one => one.Id == approvalId);
+        var approval = Assert.Single(state.Approvals, one => one.Id == approvalId);
 
         Assert.Equal(runId, approval.RunId);
     }
@@ -261,23 +227,12 @@ public sealed class PanelTests(TestDatabase database) : IClassFixture<TestDataba
     [Fact]
     public async Task An_answered_permission_still_reaches_the_panel_and_says_it_was_answered()
     {
-        var runId = await RunningRunAsync();
-        var approvalId = "approval-" + Guid.NewGuid().ToString("N");
+        var (computer, runId) = await RunningRunAsync();
+        var approvalId = await AskAsync(computer, runId, remoteDecidable: true);
 
-        await new HostService(new Database(database.ConnectionString)).PublishAsync(Computer, new HostEvent(
-            Guid.NewGuid().ToString("N"), runId, 2, RemoteEventKind.ApprovalRequested, "Delete a file",
-            new ApprovalRequest(approvalId, "call-1", "hash-1", RemoteDecidable: true, "e1:sealed-action")));
+        await _owner.PostAsync($"/api/approvals/{approvalId}/resolve", Answer(computer, approvalId, "Allow"));
 
-        using var answer = new HttpRequestMessage(HttpMethod.Post, $"/api/approvals/{approvalId}/resolve")
-        {
-            Content = JsonContent.Create(
-                new { commandId = Guid.NewGuid().ToString(), decision = "Allow", actionHash = "hash-1" },
-                options: RemoteJson.Options)
-        };
-        answer.Headers.Add("X-CSRF-TOKEN", _csrf);
-        (await _owner.SendAsync(answer)).EnsureSuccessStatusCode();
-
-        var json = await _owner.GetStringAsync("/api/state");
+        var json = await _owner.Http.GetStringAsync("/api/state");
 
         Assert.Contains(approvalId, json);
         Assert.Contains("\"status\":\"DecisionQueued\"", json);
@@ -285,6 +240,10 @@ public sealed class PanelTests(TestDatabase database) : IClassFixture<TestDataba
 
     /// <summary>
     /// The request itself reaches the panel, whole, and keeps reaching it.
+    ///
+    /// <para>Sealed: only a browser holding the computer's key can read it, so "verbatim" is about
+    /// what opens. The gateway stores the envelope and passes it on, and a gateway that altered one
+    /// byte of it would hand the panel something that does not open at all.</para>
     ///
     /// <para>The prompt is what the computer was actually told to do; the title is a heading its
     /// owner wrote. For a while the panel carried the prompt in every snapshot and rendered it
@@ -303,18 +262,18 @@ public sealed class PanelTests(TestDatabase database) : IClassFixture<TestDataba
         // guarded against is truncation at the first line or the first quote.
         const string prompt = "Read README.md\nand save it as \"README.html\".\n\nKeep the headings.";
 
-        var runId = await QueuedRunAsync(prompt);
+        var (computer, runId) = await QueuedRunAsync(prompt);
 
-        var first = await Get<GatewaySnapshot>("/api/state");
+        var first = await _owner.GetAsync<GatewaySnapshot>("/api/state");
         var task = Assert.Single(first.Tasks, t => t.Id == TaskIdOf(first, runId));
 
-        // Task 3.8 rewrites this test: the task arrives sealed, and only the panel can open it.
-        Assert.Equal(prompt, task.Sealed);
+        Assert.DoesNotContain("README", task.Sealed, StringComparison.Ordinal);
+        Assert.Equal(prompt, computer.Browser.OpenTask(task).Prompt);
 
-        var second = await Get<GatewaySnapshot>($"/api/state?since={first.Cursor}");
+        var second = await _owner.GetAsync<GatewaySnapshot>($"/api/state?since={first.Cursor}");
 
         Assert.True(second.Delta);
-        Assert.Equal(prompt, Assert.Single(second.Tasks, t => t.Id == task.Id).Sealed);
+        Assert.Equal(prompt, computer.Browser.OpenTask(Assert.Single(second.Tasks, t => t.Id == task.Id)).Prompt);
     }
 
     /// <summary>
@@ -336,7 +295,7 @@ public sealed class PanelTests(TestDatabase database) : IClassFixture<TestDataba
     [InlineData("/app.css")]
     public async Task The_panel_is_never_served_as_fresh_for_hours(string path)
     {
-        using var response = await _owner.GetAsync(path);
+        using var response = await _owner.Http.GetAsync(path);
 
         response.EnsureSuccessStatusCode();
 
@@ -349,48 +308,167 @@ public sealed class PanelTests(TestDatabase database) : IClassFixture<TestDataba
     private static string TaskIdOf(GatewaySnapshot snapshot, string runId)
         => Assert.Single(snapshot.Runs, r => r.Id == runId).TaskId;
 
+    // ── marking read, and device commands, over HTTP ────────────────────────
+
+    /// <summary>
+    /// "Mark all read" sends the cursor of the snapshot on the screen, exactly as the panel was given
+    /// it, and marks what that snapshot showed. A cursor that is malformed, or of another epoch of the
+    /// line, marks nothing: the first is not a position at all, and after a reset of the line the
+    /// second counts notices no screen has shown.
+    /// </summary>
+    [Fact]
+    public async Task Marking_read_takes_the_cursor_the_panel_was_given()
+    {
+        var (computer, runId) = await RunningRunAsync();
+        await Hosts.PublishAsync(computer.Access, new HostEvent(
+            Guid.NewGuid().ToString("N"), runId, 2, RemoteEventKind.Completed,
+            computer.Sealer.Detail(runId, 2, RemoteEventKind.Completed, "Done")));
+
+        var shown = await _owner.GetAsync<GatewaySnapshot>("/api/state");
+        Assert.Equal(1, shown.UnreadNotices);
+
+        var otherEpoch = "99" + shown.Cursor[shown.Cursor.IndexOf('.')..];
+
+        foreach (var refused in new[] { "not-a-cursor", "-1.5", otherEpoch })
+        {
+            using var response = await _owner.SendAsync(HttpMethod.Post, "/api/notices/read", new { through = refused });
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        }
+
+        Assert.Equal(1, (await _owner.GetAsync<GatewaySnapshot>("/api/state")).UnreadNotices);
+
+        await _owner.PostAsync("/api/notices/read", new { through = shown.Cursor });
+
+        Assert.Equal(0, (await _owner.GetAsync<GatewaySnapshot>("/api/state")).UnreadNotices);
+    }
+
+    /// <summary>
+    /// A device command goes to the computer as the browser sealed it, and the computer opens it. Like
+    /// every state-changing call it needs the antiforgery token, and it carries device kinds only: a
+    /// start sent this way would skip every check a start is given.
+    /// </summary>
+    [Fact]
+    public async Task A_device_command_reaches_the_computer_as_it_was_sealed()
+    {
+        var computer = await ComputerAsync();
+        var path = $"/api/hosts/{computer.Access.HostId}/device-commands";
+
+        var commandId = Guid.NewGuid().ToString();
+        var command = new { commandId, kind = "RevokeDevice", @sealed = computer.Browser.Revocation(commandId, "device-1") };
+
+        using (var forged = await _owner.SendAsync(HttpMethod.Post, path, command, csrf: false))
+        {
+            Assert.Equal(HttpStatusCode.BadRequest, forged.StatusCode);
+        }
+
+        var startId = Guid.NewGuid().ToString();
+        using (var start = await _owner.SendAsync(HttpMethod.Post, path,
+                   new { commandId = startId, kind = "StartTask", @sealed = computer.Browser.Revocation(startId, "device-1") }))
+        {
+            Assert.Equal(HttpStatusCode.BadRequest, start.StatusCode);
+        }
+
+        await _owner.PostAsync(path, command);
+
+        var delivered = Assert.Single(await Hosts.SyncAsync(computer.Access, computer.Workspaces), c => c.Id == commandId);
+
+        Assert.Equal(CommandKind.RevokeDevice, delivered.Kind);
+        Assert.Equal("device-1", computer.Sealer.OpenRevocation(delivered).DeviceId);
+    }
+
     // ── plumbing ────────────────────────────────────────────────────────────
 
-    private async Task<string> RunningRunAsync()
+    /// <summary>
+    /// A computer of the signed-in person's, sharing its key with a browser of theirs, that has
+    /// published one workspace.
+    /// </summary>
+    private sealed record Computer(HostAccess Access, TestBrowser Browser)
     {
-        var runId = await QueuedRunAsync();
+        public Sealer Sealer { get; } = Browser.Computer.Sealer();
 
-        await new HostService(new Database(database.ConnectionString)).PublishAsync(Computer, new HostEvent(
-            Guid.NewGuid().ToString("N"), runId, 1, RemoteEventKind.Running, "Started"));
-
-        return runId;
+        public IReadOnlyList<WorkspaceRef> Workspaces
+            => [new WorkspaceRef(Workspace, Sealer.WorkspaceName(Workspace, "Enactive"))];
     }
 
-    private async Task<string> QueuedRunAsync(string? prompt = null)
+    private async Task<Computer> ComputerAsync()
     {
-        await database.ExecuteAsync($"""
-            INSERT IGNORE INTO hosts (id, name, token_hash, revoked, created_at)
-            VALUES ('{HostId}', 'Host', SHA2('{HostId}', 256), 0, UTC_TIMESTAMP(3))
-            """);
+        var device = await _owner.PostAsync<DeviceView>("/api/hosts", new { name = "Studio PC" });
+        var computer = new Computer(new HostAccess(device.Id, _owner.UserId), new TestBrowser(device.Id));
 
-        var taskId = Guid.NewGuid().ToString("N");
-        var runId = Guid.NewGuid().ToString("N");
-
-        // The prompt goes in as a PARAMETER while everything around it is interpolated. The rest of
-        // these values are ids this method just generated; a prompt is prose from a test, and one
-        // containing a quote or a backslash would otherwise fail as a syntax error somebody would
-        // spend an afternoon reading as a projection bug.
-        await database.ExecuteAsync($"""
-            INSERT INTO tasks (id, host_id, workspace_id, title, prompt, created_at)
-              VALUES ('{taskId}', '{HostId}', 'workspace-1', 'Test', @prompt, UTC_TIMESTAMP(3));
-            INSERT INTO runs (id, task_id, host_id, status, created_at)
-              VALUES ('{runId}', '{taskId}', '{HostId}', 'Queued', UTC_TIMESTAMP(3));
-            """,
-            ("@prompt", prompt ?? "Do it."));
-
-        return runId;
+        await Hosts.SyncAsync(computer.Access, computer.Workspaces);
+        return computer;
     }
 
-    private async Task<SessionView> Session()
-        => (await _owner.GetFromJsonAsync<SessionView>("/api/session", RemoteJson.Options))!;
+    /// <summary>A task written and started through the panel's API, sealed as the panel seals it.</summary>
+    private async Task<(Computer Computer, string RunId)> QueuedRunAsync(string prompt = "Do it.")
+    {
+        var computer = await ComputerAsync();
+        var hostId = computer.Access.HostId;
 
-    private async Task<T> Get<T>(string path)
-        => (await _owner.GetFromJsonAsync<T>(path, RemoteJson.Options))!;
+        var taskId = Guid.NewGuid().ToString();
+        await _owner.PostAsync("/api/tasks", new
+        {
+            taskId,
+            hostId,
+            workspaceId = Workspace,
+            sealedTask = computer.Browser.Task(taskId, Workspace, "Test", prompt)
+        });
 
-    private sealed record SessionView(bool Authenticated, string CsrfToken);
+        var commandId = Guid.NewGuid().ToString();
+        var start = await _owner.PostAsync<HostCommand>($"/api/tasks/{taskId}/start", new
+        {
+            commandId,
+            @sealed = computer.Browser.Start(commandId, taskId, Workspace)
+        });
+
+        return (computer, RemoteJson.Deserialize<StartTaskPayload>(start.Payload).RunId);
+    }
+
+    private async Task<(Computer Computer, string RunId)> RunningRunAsync()
+    {
+        var (computer, runId) = await QueuedRunAsync();
+
+        await Hosts.PublishAsync(computer.Access, new HostEvent(
+            Guid.NewGuid().ToString("N"), runId, 1, RemoteEventKind.Running,
+            computer.Sealer.Detail(runId, 1, RemoteEventKind.Running, "Started")));
+
+        return (computer, runId);
+    }
+
+    /// <summary>The computer stopping the run to ask its owner for permission.</summary>
+    private async Task<string> AskAsync(Computer computer, string runId, bool remoteDecidable)
+    {
+        var approvalId = "approval-" + Guid.NewGuid().ToString("N");
+        var action = new SealedAction(
+            "run_command", "{\"command\":\"dotnet test\"}", "dotnet test", "C:\\work", "Run the tests");
+
+        await Hosts.PublishAsync(computer.Access, new HostEvent(
+            Guid.NewGuid().ToString("N"), runId, 2, RemoteEventKind.ApprovalRequested,
+            computer.Sealer.Detail(runId, 2, RemoteEventKind.ApprovalRequested, "Run the tests"),
+            new ApprovalRequest(approvalId, "call-1", ActionHash, remoteDecidable,
+                computer.Sealer.Action(runId, approvalId, "call-1", ActionHash, remoteDecidable, action))));
+
+        return approvalId;
+    }
+
+    /// <summary>
+    /// The person's answer as the panel sends it: the decision in the clear for the panel to show
+    /// what was sent, and sealed for the computer to act on.
+    /// </summary>
+    private static object Answer(Computer computer, string approvalId, string decision)
+    {
+        var commandId = Guid.NewGuid().ToString();
+
+        return new
+        {
+            commandId,
+            hostId = computer.Access.HostId,
+            decision,
+            actionHash = ActionHash,
+            @sealed = computer.Browser.Decision(
+                commandId, approvalId, ActionHash, Enum.Parse<RemoteDecision>(decision))
+        };
+    }
+
+    private sealed record DeviceView(string Id, string Name, string Token);
 }

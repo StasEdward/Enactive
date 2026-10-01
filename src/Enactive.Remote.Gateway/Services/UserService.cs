@@ -470,16 +470,40 @@ public sealed class UserService(Database db, Limits limits, TimeProvider clock)
     /// Marks read what the person was shown: their notices up to the ordinal of the snapshot on their
     /// screen. Without the bound, a notice committed a second before the click - a permission request
     /// - would be marked read without ever having been displayed.
+    ///
+    /// <para>The bound is a position on the person's line, so it is refused unless it is one: of the
+    /// line's current <paramref name="epoch"/>, and not past the line's end. After the line is reset,
+    /// an ordinal of the old epoch counts something else entirely, and taken as it came it would mark
+    /// notices read that no screen ever showed. Refused rather than ignored, so a panel that sends a
+    /// stale cursor learns it, by the same rules that answer its poll with a full snapshot.</para>
     /// </summary>
-    public async Task MarkNoticesReadAsync(UserAccess user, long throughOrdinal, CancellationToken ct)
+    public async Task MarkNoticesReadAsync(
+        UserAccess user, int epoch, long throughOrdinal, CancellationToken ct)
     {
         await using var connection = await db.OpenAsync(ct);
-        await connection.ExecuteAsync(null,
+        await using var transaction = await connection.BeginAsync(ct);
+
+        // Not locked, as the projection does not lock it: a cursor the panel was handed never runs
+        // ahead of a committed notice, so comparing with the committed value is enough.
+        var line = await connection.ReadOneAsync(transaction,
+            "SELECT value, epoch FROM user_streams WHERE owner_id = @owner",
+            reader => ((long Value, int Epoch)?)(reader.GetInt64("value"), reader.GetInt32("epoch")),
+            ("@owner", user.UserId));
+
+        if (line is not { } current || current.Epoch != epoch || throughOrdinal > current.Value)
+        {
+            throw GatewayFault.BadRequest(
+                "That cursor is not one of this account's current line. Refresh, and mark them read again.");
+        }
+
+        await connection.ExecuteAsync(transaction,
             """
             UPDATE notices SET is_read = 1
             WHERE owner_id = @owner AND ordinal <= @through AND is_read = 0
             """,
             ("@owner", user.UserId), ("@through", throughOrdinal));
+
+        await transaction.CommitAsync(ct);
     }
 
     // ── shared ──────────────────────────────────────────────────────────────

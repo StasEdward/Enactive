@@ -1,8 +1,8 @@
 using System.Net;
-using System.Security.Claims;
 using System.Threading.RateLimiting;
 using Enactive.Remote.Contracts;
 using Enactive.Remote.Gateway;
+using Enactive.Remote.Gateway.Accounts;
 using Enactive.Remote.Gateway.Services;
 using Enactive.Remote.Gateway.Storage;
 using Microsoft.AspNetCore.Antiforgery;
@@ -14,7 +14,8 @@ using Microsoft.AspNetCore.HttpOverrides;
 // Stage 2 of the remote-access design. The panel itself is stage 6; what is here is the surface it
 // will call and the hub a Host connects to.
 
-const string OwnerScheme = "Owner";
+// Signing in is limited per caller: the development sign-in now, the providers' callbacks later.
+const string SignInRateLimit = "login";
 
 // Answered before ANYTHING else, including the configuration checks below: this asks the assembly
 // what it knows and must work on a build that has been downloaded and not yet configured. That is
@@ -42,12 +43,9 @@ if (string.IsNullOrWhiteSpace(connectionString))
         "Set ENACTIVE_REMOTE_DB to the gateway's MySQL connection string before starting.");
 }
 
-var ownerKey = builder.Configuration["ENACTIVE_OWNER_KEY"];
-if (string.IsNullOrWhiteSpace(ownerKey) || ownerKey.Length < 24)
-{
-    throw new InvalidOperationException(
-        "Set ENACTIVE_OWNER_KEY to a private random value of at least 24 characters before starting.");
-}
+// Read now, because it throws when it is switched on outside Development: refusing to start is the
+// whole of its safety, and a gateway that started first would already be serving the sign-in.
+var developmentSignIn = DevelopmentSignIn.Enabled(builder.Configuration, builder.Environment);
 
 var dataDirectory = builder.Configuration["ENACTIVE_DATA"]
     ?? Path.Combine(builder.Environment.ContentRootPath, "data");
@@ -68,7 +66,9 @@ if (retentionDays < 1)
 }
 
 builder.Services.AddSingleton(new Database(connectionString));
-builder.Services.AddSingleton(new OwnerKey(ownerKey));
+builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddSingleton<AccountService>();
+builder.Services.AddSingleton<SessionStore>();
 builder.Services.AddSingleton(services => new Retention(services.GetRequiredService<Database>(), retentionDays));
 builder.Services.AddSingleton<HostService>();
 // Unlimited until per-account limits are enforced: the service takes them now so its signature does
@@ -116,30 +116,38 @@ builder.Services.AddSignalR(o => o.MaximumReceiveMessageSize = 65536)
         o.PayloadSerializerOptions.UnmappedMemberHandling = RemoteJson.Options.UnmappedMemberHandling;
     });
 
-builder.Services.AddAuthentication(OwnerScheme)
-    .AddCookie(OwnerScheme, o =>
+builder.Services.AddAuthentication(UserCookie.SchemeName)
+    .AddCookie(UserCookie.SchemeName, o =>
     {
-        o.Cookie.Name = "Enactive.Owner";
+        o.Cookie.Name = UserCookie.CookieName;
         o.Cookie.HttpOnly = true;
-        o.Cookie.SameSite = SameSiteMode.Strict;
+
+        // Lax, not Strict: signing in with GitHub or Google ends in a top-level navigation from their
+        // site to ours, and a Strict cookie set on that callback is not sent on the redirect after it.
+        // Lax still keeps it off another site's form posts and fetches, and antiforgery covers the rest.
+        o.Cookie.SameSite = SameSiteMode.Lax;
         o.Cookie.SecurePolicy = builder.Environment.IsDevelopment()
             ? CookieSecurePolicy.SameAsRequest
             : CookieSecurePolicy.Always;
-        o.ExpireTimeSpan = TimeSpan.FromHours(8);
+
+        // Host-only and for the whole site: no Domain, so no other host under the same parent domain is
+        // sent it, and Path=/ so the panel and its API share it.
+        o.Cookie.Domain = null;
+        o.Cookie.Path = "/";
+
+        o.ExpireTimeSpan = SessionStore.Lifetime;
         o.SlidingExpiration = false;
 
-        // Changing the configured key signs everybody out, everywhere. It is the only such control
-        // this build has - per-device sessions are in the design document and are not built.
-        o.Events.OnValidatePrincipal = async context =>
-        {
-            var key = context.HttpContext.RequestServices.GetRequiredService<OwnerKey>();
-
-            if (context.Principal?.FindFirstValue("keyVersion") != key.Version)
-            {
-                context.RejectPrincipal();
-                await context.HttpContext.SignOutAsync(OwnerScheme);
-            }
-        };
+        // Every request is checked against the session's row, so a revocation, a sign-out elsewhere or a
+        // disabled account stops this cookie on its next request rather than when it expires.
+        //
+        // The check is made here, at the door, and NOT again inside each state-changing transaction.
+        // Design section 6 asks for a locking re-read of the account and session inside those
+        // transactions; that is not built. What it would add is narrow: a revocation that commits while
+        // a request is already past this check lets that one request finish. The design's own
+        // "Revocation" section accepts that operations authorized before a revocation commits may
+        // complete; every request after it is refused here.
+        o.Events.OnValidatePrincipal = UserCookie.ValidatePrincipalAsync;
 
         // An API, not a website: an unauthenticated call gets a status, never a redirect to a
         // login page that a fetch() would follow and then fail to parse.
@@ -162,7 +170,7 @@ builder.Services.AddAntiforgery(o =>
 builder.Services.AddRateLimiter(o =>
 {
     o.RejectionStatusCode = 429;
-    o.AddPolicy("login", context => RateLimitPartition.GetFixedWindowLimiter(
+    o.AddPolicy(SignInRateLimit, context => RateLimitPartition.GetFixedWindowLimiter(
         context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
         _ => new FixedWindowRateLimiterOptions
         {
@@ -225,7 +233,7 @@ app.Use(async (context, next) =>
     }
     catch (GatewayFault fault)
     {
-        // The code travels with the message. Nothing on the owner path has a durable outbox today,
+        // The code travels with the message. Nothing on the person's API has a durable outbox today,
         // but the panel has to distinguish "try again" from "this is settled" for the same reason.
         context.Response.StatusCode = fault.Status;
         await context.Response.WriteAsJsonAsync(new { code = fault.Code, error = fault.Message });
@@ -307,40 +315,35 @@ app.UseRateLimiter();
 
 app.MapGet("/health", () => new { status = "ok", protocolVersion = RemoteProtocol.Version });
 
-app.MapGet("/api/session", (HttpContext context, IAntiforgery antiforgery) => new
+// Who is signed in, if anyone, and the antiforgery token for what they send next. Anonymous, since the
+// panel asks it before there is anyone to be: it is how the page learns whether to show a sign-in.
+app.MapGet("/api/session", async (
+    HttpContext context, IAntiforgery antiforgery, AccountService accounts, CancellationToken ct) =>
 {
-    authenticated = context.User.Identity?.IsAuthenticated == true,
-    csrfToken = antiforgery.GetAndStoreTokens(context).RequestToken
+    var signedIn = context.User.Identity?.IsAuthenticated == true;
+    var user = signedIn ? context.UserAccess() : null;
+    var displayName = user is null ? null : await accounts.DisplayNameAsync(user, ct);
+
+    return new
+    {
+        authenticated = displayName is not null,
+        csrfToken = antiforgery.GetAndStoreTokens(context).RequestToken,
+        user = displayName is null ? null : new { id = user!.UserId, displayName }
+    };
 });
 
-app.MapPost("/api/login", async (
-    LoginRequest request, HttpContext context, IAntiforgery antiforgery, OwnerKey key) =>
+if (developmentSignIn)
 {
-    await antiforgery.ValidateRequestAsync(context);
+    app.MapDevelopmentSignIn(SignInRateLimit);
+}
 
-    if (key.LockedOut)
-    {
-        return Results.Json(new { code = "locked-out", error = "Too many failed attempts. Try again shortly." },
-            statusCode: 429);
-    }
-
-    if (!key.Matches(request.Key))
-    {
-        return Results.Unauthorized();
-    }
-
-    await context.SignInAsync(OwnerScheme, new ClaimsPrincipal(new ClaimsIdentity(
-        [new Claim(ClaimTypes.NameIdentifier, "owner"), new Claim("keyVersion", key.Version)],
-        OwnerScheme)));
-
-    return Results.Ok();
-}).RequireRateLimiting("login");
-
+// The person's API: their cookie, and nothing else. A computer's bearer token is a credential for the
+// hub only - one that could call this could register computers and start work on its own say-so.
 var api = app.MapGroup("/api")
-    .RequireAuthorization(new AuthorizeAttribute { AuthenticationSchemes = OwnerScheme });
+    .RequireAuthorization(new AuthorizeAttribute { AuthenticationSchemes = UserCookie.SchemeName });
 
-// Every state-changing call, login and logout included. A token that is only checked on the
-// interesting endpoints is a token somebody will forget to check on the next one.
+// Every state-changing call, sign-out included. A token that is only checked on the interesting
+// endpoints is a token somebody will forget to check on the next one.
 api.AddEndpointFilter(async (invocation, next) =>
 {
     if (invocation.HttpContext.Request.Method != HttpMethods.Get)
@@ -353,62 +356,80 @@ api.AddEndpointFilter(async (invocation, next) =>
     return await next(invocation);
 });
 
-api.MapPost("/logout", async (HttpContext context) =>
+// The session's ROW is revoked, not only the cookie deleted: a cookie copied before signing out would
+// otherwise go on working until it expired.
+api.MapPost("/logout", async (HttpContext context, SessionStore sessions, CancellationToken ct) =>
 {
-    await context.SignOutAsync(OwnerScheme);
+    await sessions.RevokeAsync(context.UserAccess(), ct);
+    await context.SignOutAsync(UserCookie.SchemeName);
     return Results.Ok();
 });
-
-// Task 3.8 rewrites this: the person comes from their session cookie. Until then the shared owner key
-// signs in nobody in particular, so there is no account to act for and these calls fail at runtime.
-static UserAccess PlaceholderUser() => new("", "");
 
 // `since` is the cursor from the previous reply, as text. A cursor that is not one of the person's
 // current line gets their whole snapshot rather than an error, because the panel can do nothing
 // with an error except ask again without one.
-api.MapGet("/state", (string? since, Projection projection, CancellationToken ct) =>
-    projection.ReadAsync(PlaceholderUser(), since, ct));
+api.MapGet("/state", (string? since, HttpContext context, Projection projection, CancellationToken ct) =>
+    projection.ReadAsync(context.UserAccess(), since, ct));
 
-api.MapPost("/hosts", async (RegisterHostRequest request, UserService users, CancellationToken ct) =>
+api.MapPost("/hosts", async (
+    RegisterHostRequest request, HttpContext context, UserService users, CancellationToken ct) =>
 {
-    var (id, name, token) = await users.RegisterHostAsync(PlaceholderUser(), request.Name, ct);
+    var (id, name, token) = await users.RegisterHostAsync(context.UserAccess(), request.Name, ct);
 
     // The only time this value exists anywhere but the device it is going to.
     return Results.Ok(new { id, name, token });
 });
 
 api.MapPost("/hosts/{id}/revoke", async (
-    string id, UserService users, HostConnections connections, CancellationToken ct) =>
+    string id, HttpContext context, UserService users, HostConnections connections, CancellationToken ct) =>
 {
-    await users.RevokeHostAsync(PlaceholderUser(), id, ct);
+    await users.RevokeHostAsync(context.UserAccess(), id, ct);
     connections.CloseAll(id);
     return Results.Ok();
 });
 
-api.MapPost("/tasks", async (CreateTaskRequest request, UserService users, CancellationToken ct) =>
+// Revoke or endorse a browser on one computer. Which browser, and its key, are inside the seal; the
+// kind is plaintext only so the computer knows which record to open it as.
+api.MapPost("/hosts/{hostId}/device-commands", async (
+    string hostId, DeviceCommandRequest request, HttpContext context, UserService users,
+    CancellationToken ct) =>
+    Results.Ok(await users.SendDeviceCommandAsync(
+        context.UserAccess(), hostId, request.Kind, request.CommandId, request.Sealed, ct)));
+
+api.MapPost("/tasks", async (
+    CreateTaskRequest request, HttpContext context, UserService users, CancellationToken ct) =>
 {
     await users.CreateTaskAsync(
-        PlaceholderUser(), request.TaskId, request.HostId, request.WorkspaceId, request.SealedTask, ct);
+        context.UserAccess(), request.TaskId, request.HostId, request.WorkspaceId, request.SealedTask, ct);
     return Results.Ok(new { id = request.TaskId });
 });
 
 api.MapPost("/tasks/{id}/start", async (
-    string id, CommandRequest request, UserService users, CancellationToken ct) =>
-    Results.Ok(await users.StartAsync(PlaceholderUser(), id, request.CommandId, request.Sealed, ct)));
+    string id, CommandRequest request, HttpContext context, UserService users, CancellationToken ct) =>
+    Results.Ok(await users.StartAsync(context.UserAccess(), id, request.CommandId, request.Sealed, ct)));
 
 api.MapPost("/runs/{id}/cancel", async (
-    string id, CommandRequest request, UserService users, CancellationToken ct) =>
-    Results.Ok(await users.CancelAsync(PlaceholderUser(), id, request.CommandId, request.Sealed, ct)));
+    string id, CommandRequest request, HttpContext context, UserService users, CancellationToken ct) =>
+    Results.Ok(await users.CancelAsync(context.UserAccess(), id, request.CommandId, request.Sealed, ct)));
 
 api.MapPost("/approvals/{id}/resolve", async (
-    string id, DecisionRequest request, UserService users, CancellationToken ct) =>
+    string id, DecisionRequest request, HttpContext context, UserService users, CancellationToken ct) =>
     Results.Ok(await users.DecideAsync(
-        PlaceholderUser(), id, request.HostId, request.CommandId, request.Decision, request.ActionHash,
+        context.UserAccess(), id, request.HostId, request.CommandId, request.Decision, request.ActionHash,
         request.Sealed, ct)));
 
-api.MapPost("/notices/read", async (NoticesReadRequest request, UserService users, CancellationToken ct) =>
+// `through` is the cursor of the snapshot on the person's screen, exactly as they were given it. A
+// malformed one is refused here, before anything is marked; whether it is one of their current line
+// is the service's to decide, against the line.
+api.MapPost("/notices/read", async (
+    NoticesReadRequest request, HttpContext context, UserService users, CancellationToken ct) =>
 {
-    await users.MarkNoticesReadAsync(PlaceholderUser(), request.Through, ct);
+    if (!Projection.TryParseCursor(request.Through, out var epoch, out var ordinal))
+    {
+        throw GatewayFault.BadRequest("'through' must be the cursor of the snapshot being marked read.");
+    }
+
+    await users.MarkNoticesReadAsync(context.UserAccess(), epoch, ordinal, ct);
     return Results.Ok();
 });
 
@@ -417,13 +438,13 @@ app.MapHub<HostHub>("/hubs/host");
 await Migrator.ApplyAsync(new Database(connectionString).ConnectionString);
 app.Run();
 
-internal sealed record LoginRequest(string? Key);
 internal sealed record RegisterHostRequest(string? Name);
 internal sealed record CreateTaskRequest(string TaskId, string HostId, string WorkspaceId, string SealedTask);
 internal sealed record CommandRequest(string CommandId, string Sealed);
 internal sealed record DecisionRequest(
     string CommandId, string HostId, RemoteDecision Decision, string ActionHash, string Sealed);
-internal sealed record NoticesReadRequest(long Through);
+internal sealed record NoticesReadRequest(string? Through);
+internal sealed record DeviceCommandRequest(string CommandId, CommandKind Kind, string Sealed);
 
 /// <summary>Named so a test host can reference this assembly's entry point.</summary>
 public partial class Program;

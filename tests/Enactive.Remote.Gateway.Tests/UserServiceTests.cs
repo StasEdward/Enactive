@@ -934,12 +934,39 @@ public sealed class UserServiceTests(TestDatabase database) : IClassFixture<Test
         var newer = await NoticeAsync(alice, alicesRun);
         var bobs = await NoticeAsync(bob, bobsRun);
 
-        await Users.MarkNoticesReadAsync(alice, displayed, default);
+        await Users.MarkNoticesReadAsync(alice, 1, displayed, default);
 
         Assert.Equal(1, await IsReadAsync(alice, first));
         Assert.Equal(1, await IsReadAsync(alice, displayed));
         Assert.Equal(0, await IsReadAsync(alice, newer));
         Assert.Equal(0, await IsReadAsync(bob, bobs));
+    }
+
+    /// <summary>
+    /// The bound is a position on the person's line, and is refused when it is not one. After a reset
+    /// of the line, an ordinal of the old epoch counts something else; an ordinal past the line's end
+    /// counts notices nobody has been shown. Either, taken as it came, marks read what no screen
+    /// displayed - so nothing is marked at all.
+    /// </summary>
+    [Fact]
+    public async Task Mark_read_refuses_a_bound_that_is_not_on_the_current_line()
+    {
+        var alice = await PersonAsync("alice");
+        var (_, _, run, _) = await StartedAsync(alice);
+        var shown = await NoticeAsync(alice, run);
+
+        var ahead = await Assert.ThrowsAsync<GatewayFault>(
+            () => Users.MarkNoticesReadAsync(alice, 1, shown + 1, default));
+
+        await database.ExecuteAsync(
+            "UPDATE user_streams SET epoch = epoch + 1 WHERE owner_id = @owner", ("@owner", alice.UserId));
+
+        var stale = await Assert.ThrowsAsync<GatewayFault>(
+            () => Users.MarkNoticesReadAsync(alice, 1, shown, default));
+
+        Assert.Equal(400, ahead.Status);
+        Assert.Equal(400, stale.Status);
+        Assert.Equal(0, await IsReadAsync(alice, shown));
     }
 
     /// <summary>A notice as the gateway writes one: on its owner's line, unread.</summary>
