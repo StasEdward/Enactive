@@ -6,6 +6,7 @@ using Enactive.Remote.Contracts;
 using Enactive.Remote.Gateway.Storage;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
+using MySqlConnector;
 
 /// <summary>
 /// A browser's sign-in, as a row: which person, under which security version, until when, and whether
@@ -116,6 +117,20 @@ public sealed class SessionStore(Database db, TimeProvider clock)
         await using var connection = await db.OpenAsync(ct);
         await using var transaction = await connection.BeginAsync(ct);
 
+        await RevokeAllAsync(connection, transaction, userId, clock.GetUtcNow());
+
+        await transaction.CommitAsync(ct);
+    }
+
+    /// <summary>
+    /// <see cref="RevokeAllAsync(string, CancellationToken)"/> inside a transaction somebody else owns.
+    /// Disabling an account has to end its sessions in the same transaction that sets its status: done
+    /// as a second step, a failure between the two left a disabled account whose sessions were still
+    /// being refused only by the status check, and an account enabled again would have woken them up.
+    /// </summary>
+    internal static async Task RevokeAllAsync(
+        MySqlConnection connection, MySqlTransaction transaction, string userId, DateTimeOffset now)
+    {
         // The account first, which is the order a sign-in takes them in.
         await connection.ExecuteAsync(transaction,
             "UPDATE users SET security_version = security_version + 1 WHERE id = @user",
@@ -123,9 +138,7 @@ public sealed class SessionStore(Database db, TimeProvider clock)
 
         await connection.ExecuteAsync(transaction,
             "UPDATE user_sessions SET revoked_at = @now WHERE user_id = @user AND revoked_at IS NULL",
-            ("@now", clock.GetUtcNow()), ("@user", userId));
-
-        await transaction.CommitAsync(ct);
+            ("@now", now), ("@user", userId));
     }
 }
 

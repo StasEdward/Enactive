@@ -32,6 +32,24 @@ if (args.Contains("--schema-version"))
     return;
 }
 
+// The operator's command line, on the same binary: `admin approve github:12345`. Handled before the web
+// application is built, so it never binds a port or touches the providers, and needs only the database.
+// Without this the arguments would be passed on to a web server that waits for ever for requests.
+if (args.Length > 0 && args[0] == "admin")
+{
+    var adminConnection = Environment.GetEnvironmentVariable("ENACTIVE_REMOTE_DB");
+
+    if (string.IsNullOrWhiteSpace(adminConnection))
+    {
+        Console.Error.WriteLine("Set ENACTIVE_REMOTE_DB to the gateway's MySQL connection string.");
+        Environment.ExitCode = 2;
+        return;
+    }
+
+    Environment.ExitCode = await AdminCommands.RunAsync(args[1..], new Database(adminConnection), Console.Out);
+    return;
+}
+
 var builder = WebApplication.CreateBuilder(args);
 
 // Both required, both from the environment. A gateway that starts without them and finds out on
@@ -67,14 +85,22 @@ if (retentionDays < 1)
 
 builder.Services.AddSingleton(new Database(connectionString));
 builder.Services.AddSingleton(TimeProvider.System);
-builder.Services.AddSingleton<AccountService>();
+
+// Read now, like the settings above: a mode that is not "list" or "open" must stop the start, not be
+// guessed at. Whether "open" may be used at all is checked once the services are built, below.
+var admission = Admission.FromConfiguration(builder.Configuration);
+
+builder.Services.AddSingleton(services => new AccountService(
+    services.GetRequiredService<Database>(), TimeProvider.System, admission));
 builder.Services.AddSingleton<SessionStore>();
 builder.Services.AddSingleton(services => new Retention(services.GetRequiredService<Database>(), retentionDays));
 builder.Services.AddSingleton<HostService>();
-// Unlimited until per-account limits are enforced: the service takes them now so its signature does
-// not change again when they are.
+// Unlimited until per-account limits are enforced: the services take them now so their signatures do
+// not change again when they are. Task 8.1 replaces this with limits read from configuration; the open
+// admission check below reads whatever is registered here, so it starts working the moment that does.
+builder.Services.AddSingleton(Limits.Unlimited);
 builder.Services.AddSingleton(services => new UserService(
-    services.GetRequiredService<Database>(), Limits.Unlimited, TimeProvider.System));
+    services.GetRequiredService<Database>(), services.GetRequiredService<Limits>(), TimeProvider.System));
 builder.Services.AddSingleton<Projection>();
 builder.Services.AddSingleton<HostConnections>();
 builder.Services.AddHostedService<RetentionLoop>();
@@ -205,6 +231,10 @@ if (behindTunnel)
 }
 
 var app = builder.Build();
+
+// Before the first request, and before the migrations: open admission lets strangers create accounts,
+// which is only tolerable with ceilings on what an account may use.
+Admission.RequireLimits(admission, app.Services.GetRequiredService<Limits>());
 
 // FIRST, before anything reads a scheme or an address: the security headers below, the rate
 // limiter's partition, and every log line all describe the caller, and until this has run they
