@@ -46,30 +46,6 @@ public static class MailRoles
     public static bool Wildcarded(WorkerConfig worker)
         => worker.Tools.Contains(Everything, StringComparer.Ordinal);
 
-    /// <summary>
-    /// Grants the tool to exactly the named roles and takes it from the other candidates.
-    ///
-    /// <para>Touches nothing else: a role that cannot carry it, a role named nowhere in
-    /// <paramref name="chosen"/> that never had it, and a wildcarded role all come out as they went
-    /// in. Idempotent, so the settings window may call it on every save.</para>
-    /// </summary>
-    public static void Apply(IEnumerable<WorkerConfig> workers, IReadOnlyCollection<string> chosen)
-    {
-        foreach (var worker in workers)
-        {
-            if (!CanCarry(worker) || Wildcarded(worker))
-                continue;
-
-            var wanted = chosen.Contains(worker.Id, StringComparer.OrdinalIgnoreCase);
-            var named = worker.Tools.FindIndex(t => string.Equals(t, Tool, StringComparison.OrdinalIgnoreCase));
-
-            if (wanted && named < 0)
-                worker.Tools.Add(Tool);
-            else if (!wanted && named >= 0)
-                worker.Tools.RemoveAll(t => string.Equals(t, Tool, StringComparison.OrdinalIgnoreCase));
-        }
-    }
-
     /// <summary>Whether ANY role can reach the tool — what the pane says when the answer is no.</summary>
     public static bool AnyoneCanSend(IEnumerable<WorkerConfig> workers)
         => workers.Any(w => CanCarry(w) && Carries(w));

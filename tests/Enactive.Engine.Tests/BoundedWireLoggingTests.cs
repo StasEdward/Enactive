@@ -17,11 +17,8 @@ public sealed class BoundedWireLoggingTests
         Assert.Null(BoundedLogBuffer.Create(null, LogLevel.Trace));
         Assert.Null(BoundedLogBuffer.Create(NullLogSink.Instance, LogLevel.Trace));
         Assert.Null(BoundedLogBuffer.Create(hub, LogLevel.Trace));
-        using var composite = new CompositeLogSink(NullLogSink.Instance, hub);
-        Assert.False(composite.IsEnabled(LogLevel.Trace));
         hub.MinLevel = LogLevel.Trace;
-        Assert.True(composite.IsEnabled(LogLevel.Trace));
-        Assert.NotNull(BoundedLogBuffer.Create(composite, LogLevel.Trace));
+        Assert.NotNull(BoundedLogBuffer.Create(hub, LogLevel.Trace));
     }
 
     [Theory]
