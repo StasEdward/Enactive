@@ -5,7 +5,7 @@ using Enactive.Remote.Host;
 using Xunit;
 
 /// <summary>
-/// Delivery, with nothing being executed. Stage 3 of <c>Docs/REMOTE_DESIGN.md</c>.
+/// Delivery, with nothing being executed. Stage 3 of the remote-access design.
 ///
 /// <para>The point of doing this before the engine is attached is that it can be proven on its own:
 /// <c>Enactive.Remote.Host</c> has no reference to Core at this stage, so nothing in these tests

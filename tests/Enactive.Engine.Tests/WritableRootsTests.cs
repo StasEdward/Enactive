@@ -8,7 +8,7 @@ using Xunit;
 /// Folders outside a workspace that it may write to, remembered past the run.
 ///
 /// <para>The fourth answer on the geography card — <i>keep for this workspace</i> — was in
-/// SANDBOX_PLAN step 4's own table and could not be built, because a remembered grant needs
+/// the sandbox plan's own table and could not be built, because a remembered grant needs
 /// somewhere outside the workspace to live. That is what step 2 was for and what none of the
 /// pieces before it built: each solved its own problem instead.</para>
 ///

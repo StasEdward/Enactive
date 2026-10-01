@@ -372,7 +372,7 @@ public sealed class ReviewRetryTests
     // The rejected draft STAYS in the transcript, because it is the thing to repair.
     //
     // It used to be dropped: with num_ctx at 8192 a real run reached 6.7k on the second retry, and
-    // the model was anchored on a version it had been told was wrong. Reversed 2026-09-24 (FIX_PLAN
+    // the model was anchored on a version it had been told was wrong. Reversed 2026-09-24 (the defect log
     // 9de): the drop took the attempt's READS with it, and a rejected audit step re-read 10 sources
     // exactly and spent 58.7 s re-establishing them. The window is handled by trims and handover now,
     // and the retry is told to repair the named points, not to rewrite - so the draft in front of it
@@ -400,7 +400,7 @@ public sealed class ReviewRetryTests
         // The request that started the second attempt still has the first draft in it. Found by what
         // it carries, not by position: Requests[2] was the "Wrote it." turn, and the check passed only
         // because the fake kept a live view of the conversation that later turns had grown
-        // (Docs/PROVIDERS_AGENTS_TOOLS_TESTS_REVIEW_2026-09-24.md #2).
+        //.
         var retryRequest = worker.Requests.First(r => r.Messages.Any(
             m => m.Content?.Contains("A reviewer rejected", StringComparison.Ordinal) == true));
         Assert.Contains(

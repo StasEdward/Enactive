@@ -2,7 +2,7 @@ namespace Enactive.Core.Context;
 
 using System.Text;
 
-// Environment awareness (PLAN_v2 §2.9): the app knows the real world, not just a conversation.
+// Environment awareness: the app knows the real world, not just a conversation.
 // NOTE: the static "what exists" record is named EnvironmentInfo rather than the spec's bare
 // "Environment" on purpose — a domain type called Environment would clash with System.Environment
 // (imported everywhere via ImplicitUsings) and make the bare name ambiguous. EnvironmentSnapshot,
@@ -38,7 +38,7 @@ public sealed record ServiceInfo(string Name, string Status);
 /// <summary>A container's state within an <see cref="EnvironmentSnapshot"/>.</summary>
 public sealed record ContainerState(string Name, string State, int? ExitCode);
 
-/// <summary>Persistent model of the machine/world — "what exists". PLAN_v2 §2.9.</summary>
+/// <summary>Persistent model of the machine/world — "what exists".</summary>
 public sealed record EnvironmentInfo(
     Guid Id,
     Guid WorkspaceId,
@@ -88,7 +88,7 @@ public sealed record EnvironmentInfo(
     }
 }
 
-/// <summary>Point-in-time reading — "how it is doing right now". PLAN_v2 §2.9. Captured in a later slice.</summary>
+/// <summary>Point-in-time reading — "how it is doing right now". Captured in a later slice.</summary>
 public sealed record EnvironmentSnapshot(
     Guid Id,
     Guid EnvironmentId,

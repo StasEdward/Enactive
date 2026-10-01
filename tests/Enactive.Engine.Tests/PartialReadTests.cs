@@ -9,7 +9,7 @@ using Xunit;
 ///
 /// <para><c>read_file</c> ends a shortened result with "… showing lines 1–400 of 518. Read on with
 /// offset 401." On 2026-09-07 a model ignored that line and rewrote the file from the part it had
-/// read; the 118 lines it never saw were gone. <c>FIX_PLAN.md</c> §9b carried this as open with the
+/// read; the 118 lines it never saw were gone. The defect log carried this as open with the
 /// remedy already named: announcing a cut is necessary and not sufficient, because a sentence is
 /// advice and advice can be skipped. Track what the step has READ, and treat a whole-file write of a
 /// partially-read file as the dangerous case.</para>

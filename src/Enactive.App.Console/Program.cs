@@ -61,7 +61,7 @@ var isTimeline = args.Length > 0 && string.Equals(args[0], "timeline", StringCom
 //
 // --template names ONE task and runs it now. --due asks the saved schedules what is owed and runs
 // what is: same machinery, and the difference is only who decides which task. See the --due block
-// below and Docs/SCHEDULER_PLAN.md.
+// below and the scheduler plan.
 string? Option(string name)
 {
     for (var i = 0; i < args.Length - 1; i++)
@@ -73,7 +73,7 @@ string? Option(string name)
 // Every "--param id=value" on the command line. A template parameter with no default is a
 // question, and unattended there is nobody to ask - so the scheduler answers it here, once, in the
 // job definition. Without this a required parameter made a template un-schedulable, and the only
-// way out was a default that was wrong for most projects (FIX_PLAN.md 9l, 9q).
+// way out was a default that was wrong for most projects.
 Dictionary<string, string> Params()
 {
     var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -318,7 +318,7 @@ ResolvedTaskSpec? spec = null;
 //   Enactive.App.Console --due --workspace c:\repos\Enactive
 //
 // This is the tick. Something wakes it every few minutes - a Windows scheduled task registered
-// once - and it asks the saved schedules what is due. See Docs/SCHEDULER_PLAN.md.
+// once - and it asks the saved schedules what is due. See the scheduler plan.
 //
 // It runs AT MOST ONE schedule per invocation, and that is a real limitation rather than an
 // oversight: everything below this point is written for one run, and threading a second through it

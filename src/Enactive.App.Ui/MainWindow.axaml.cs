@@ -743,7 +743,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                 IToolRegistry runTools = new LoggingToolRegistry(mcp, _log);
                 var runStore = RunStoreFactory.Create(workspace);
                 // The same store the recorder folds into, so a run reads back what earlier ones
-                // concluded (PLAN_v2 §11).
+                // concluded.
                 var memoryStore = MemoryStoreFactory.Create(workspace);
                 var contextProvider = new ContextProvider(workspace, new EnvironmentProbe(), memoryStore);
                 var orchestrator = RunEngineComposition.Build(

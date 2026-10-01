@@ -4,7 +4,7 @@ using Enactive.Core.Permissions;
 using Xunit;
 
 /// <summary>
-/// SANDBOX_PLAN steps 3 and 4, at the place they meet: a command that appears to write outside the
+/// The sandbox plan, at the place they meet: a command that appears to write outside the
 /// workspace becomes a QUESTION, and the answer decides.
 ///
 /// <para>Every assertion here is on an EFFECT - the file is there, or it is not. Asserting that a

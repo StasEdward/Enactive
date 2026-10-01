@@ -7,7 +7,7 @@ using Enactive.Tools;
 using Xunit;
 
 /// <summary>
-/// Docs/FIX_PLAN.md §9b: the fixture's world was LF-only, and the product ships on Windows.
+/// The defect log: the fixture's world was LF-only, and the product ships on Windows.
 ///
 /// <para><c>EngineFixture.Write</c> wrote whatever string it was handed, and every test but a
 /// handful handed it <c>\n</c>. So <c>edit_file</c> was never tried against a CRLF file until a user

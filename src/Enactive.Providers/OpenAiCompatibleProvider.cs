@@ -272,7 +272,7 @@ public sealed class OpenAiCompatibleProvider : IChatProvider
         if (OutputTokenBudget.Resolve(request, _descriptor) is { } maxTokens)
             payload[_descriptor.OpenAiReasoningProfile ? "max_completion_tokens" : "max_tokens"] = maxTokens;
 
-        // Structured outputs (FIX_PLAN §9c). "OpenAI-compatible" is a family, not a specification:
+        // Structured outputs. "OpenAI-compatible" is a family, not a specification:
         // vLLM and LM Studio take this, and an arbitrary gateway may ignore it or reject the whole
         // request for it. Sent only when the caller asked and this endpoint has not already refused
         // one. Only an explicit unsupported-field error triggers a fallback; only a successful

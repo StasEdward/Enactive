@@ -10,7 +10,7 @@ using Xunit;
 ///
 /// <para>Every one of these could previously be reached only by running a whole engine with a
 /// scripted provider, because they were private members of a 2,171-line class. Cut 1 of
-/// <c>FIX_PLAN.md</c> §9d moved them out; these are what the move was worth. Several of them exist
+/// the defect log moved them out; these are what the move was worth. Several of them exist
 /// because of a specific incident, and until now none of those incidents had a test that named it.</para>
 /// </summary>
 public sealed class ToolCallParsingTests

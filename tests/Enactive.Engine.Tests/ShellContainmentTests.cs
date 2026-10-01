@@ -25,7 +25,7 @@ public sealed class ProcessTests { }
 ///
 /// <para><c>process.Kill(entireProcessTree: true)</c> reads like a kill-tree guarantee and is not
 /// one: it walks LIVE parents, so a process whose parent has already exited is not in the tree it
-/// can see. SANDBOX_PLAN §3 step 1 named the differential - "a command that spawns a detached
+/// can see. The sandbox plan named the differential - "a command that spawns a detached
 /// grandchild and then times out; today the grandchild outlives the run" - and these are it.</para>
 ///
 /// <para>The pair reads as one rule with two halves: a CANCELLED command leaves nothing behind, and

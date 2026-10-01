@@ -29,7 +29,7 @@ using Enactive.Workspace;
 /// messages when it trims and clearing it when it hands over. A fake that kept the request object
 /// kept a VIEW of that list: a check on what the model saw on turn 3 read the conversation as it
 /// stood after the run, with replies from later turns in it and trimmed ones gone. Measured
-/// 2026-09-24 (Docs/PROVIDERS_AGENTS_TOOLS_TESTS_REVIEW_2026-09-24.md #2): a first request sent with
+/// 2026-09-24: a first request sent with
 /// two messages held five by the end of the run, including a reply that did not exist yet.</para>
 /// </summary>
 internal static class RequestSnapshot

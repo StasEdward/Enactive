@@ -7,7 +7,7 @@ using Xunit;
 /// A cancelled wait for the file lock ends, for the blocking Take as for TakeAsync - and leaves the
 /// lock takeable afterwards.
 ///
-/// <para><b>Found 2026-09-24</b> (Docs/CORE_TESTS_REVIEW_2026-09-24.md #3): Take passed its token to
+/// <para><b>Found 2026-09-24</b>: Take passed its token to
 /// the in-process gate and then waited for the other PROCESS with Thread.Sleep, which no token can
 /// end. Cancelled while another process held the file, it went on waiting up to the whole 30 seconds
 /// - and then returned the lock it had been told to stop waiting for. TakeAsync, waiting with

@@ -5,7 +5,7 @@ using System.Text.Json;
 /// <summary>
 /// How a streamed answer is allowed to END - for every adapter that reads one.
 ///
-/// <para><b>Found 2026-09-24</b> (Docs/PROVIDERS_AGENTS_TOOLS_TESTS_REVIEW_2026-09-24.md #1): an
+/// <para><b>Found 2026-09-24</b>: an
 /// error the server reports INSIDE a stream that began with HTTP 200 - <c>{"error": ...}</c> as a
 /// chunk - was not an event either parser knew, so it produced none, and the stream then ran out.
 /// Nothing required it to have finished, so an error became an ordinary end: through the real

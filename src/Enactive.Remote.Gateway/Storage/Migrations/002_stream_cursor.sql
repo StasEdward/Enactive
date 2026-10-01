@@ -1,5 +1,4 @@
 -- Enactive Remote gateway, migration 002: a cursor the panel can poll with, and a retention mark.
--- See Docs/REMOTE_DESIGN.md section 4.3.
 --
 -- The panel polls. Re-sending every event on every poll is what made the preview's cost grow with
 -- its history, so a poll has to be able to say "only what I have not seen". That needs a cursor,

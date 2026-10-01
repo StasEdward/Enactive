@@ -68,7 +68,7 @@ public sealed class WorkspaceChangesTests : IDisposable
 
         // A setup command that failed must fail the test. Ignored, it leaves a fixture that is not
         // what the test says it is, and an empty answer from a failed read looks exactly like a
-        // clean index (Docs/CORE_TESTS_REVIEW_2026-09-24.md #4).
+        // clean index.
         if (p.ExitCode != 0)
             throw new InvalidOperationException($"git {string.Join(' ', args)} exited {p.ExitCode}: {errors}");
         return output;
@@ -171,7 +171,7 @@ public sealed class WorkspaceChangesTests : IDisposable
     /// file changed again after, so staged and working versions differ. It used to start from an
     /// empty one, where a snapshot that reset the index to HEAD had nothing to reset, and it did not
     /// check that either snapshot was taken, so two failed ones passed
-    /// (Docs/CORE_TESTS_REVIEW_2026-09-24.md #4).</para>
+    ///.</para>
     /// </summary>
     [Fact]
     public async Task The_persons_own_index_is_untouched()

@@ -87,7 +87,7 @@ public sealed record IntentFocus(Guid? WorkspaceId, string? FilePath = null, str
 
 /// <summary>
 /// Context assembled by the application, not typed by the user
-/// ("user provides intent, application provides context"). PLAN_v2 §2.2.
+/// ("user provides intent, application provides context").
 /// </summary>
 public sealed record WorkContext(
     Guid? WorkspaceId,
@@ -105,7 +105,7 @@ public sealed record WorkContext(
     /// What this project already knows: decisions the user made, and how earlier runs ended. Newest
     /// LAST, already bounded by whoever assembled the context.
     ///
-    /// <para>PLAN_v2 §11 carried "project memory is written, never read back" as the gap that made
+    /// <para>The development spec carried "project memory is written, never read back" as the gap that made
     /// the store a write-only log: the recorder folded decisions into it, the window rendered it,
     /// and the next run began knowing nothing about the last one. This is the field that was
     /// missing. An init property rather than a positional parameter so every existing construction

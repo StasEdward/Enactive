@@ -7,7 +7,7 @@ using Enactive.Core.Templates;
 using Xunit;
 
 /// <summary>
-/// M3b of Docs/TASK_TEMPLATES_PLAN.md: a template's limits actually limit something.
+/// M3b of the task-templates plan: a template's limits actually limit something.
 ///
 /// <para><see cref="ExecutionLimits"/> shipped in M0 as data and was read by NOTHING - a template
 /// could declare <c>MaxSteps: 12</c> and the run would take fifty. A limit that is stored, shown in

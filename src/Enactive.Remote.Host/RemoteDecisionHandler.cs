@@ -19,7 +19,7 @@ using Enactive.Remote.Contracts;
 /// <para>An earlier version raced the desktop for shells, on the reasoning that the person at the
 /// keyboard should always be able to answer. That leaves a path where a leaked owner key plus one
 /// casual click on a card somebody did not start becomes arbitrary command execution - and the
-/// click is the easy half. SANDBOX_PLAN.md's threat model is justified by "the machine is the
+/// click is the easy half. The sandbox plan's threat model is justified by "the machine is the
 /// developer's own, the projects are theirs"; a network origin is exactly what that argument does
 /// not cover, so the rule is flat and has no exception to reason about. The gateway refuses such an
 /// answer as well: two independent refusals, because this one alone would be a promise and that one

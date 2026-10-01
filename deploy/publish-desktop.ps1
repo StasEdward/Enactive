@@ -6,7 +6,7 @@
 #   enactive.exe      what the scheduler's tick runs (`enactive.exe --due-all`)
 #
 # The tick used to be registered by a hand-written script on one machine, outside the repository,
-# with an absolute path into `bin\Debug` typed into it. Docs/FIX_PLAN.md carried that as O1 and O2.
+# with an absolute path into `bin\Debug` typed into it. The defect log carried that as O1 and O2.
 # A cleaned `bin`, or a move to Release, and the tick silently stopped finding its executable - the
 # heartbeat would show the silence and could not explain it.
 #

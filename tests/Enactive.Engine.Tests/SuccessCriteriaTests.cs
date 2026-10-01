@@ -7,7 +7,7 @@ using Enactive.Core.Templates;
 using Xunit;
 
 /// <summary>
-/// M2 of Docs/TASK_TEMPLATES_PLAN.md, and the reason the rest of it exists.
+/// M2 of the task-templates plan, and the reason the rest of it exists.
 ///
 /// <para>Everything the engine had to decide whether work was finished went through a language
 /// model: the worker's own closing sentence, and a reviewer's opinion of free text. On 2026-09-07

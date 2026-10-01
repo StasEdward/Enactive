@@ -96,7 +96,7 @@ internal static class JsonFileStore
     /// <para><b>Each corruption gets its OWN backup.</b> This used to stop at the first one - "one
     /// copy is enough; do not overwrite the first failure" - and left it at that whether or not a
     /// second corruption came after it. Reported 2026-09-24
-    /// (Docs/SECRETS_SETTINGS_WORKSPACE_TESTS_REVIEW_2026-09-24.md #1): a store corrupted, quarantined,
+    ///: a store corrupted, quarantined,
     /// written fresh, corrupted a SECOND time - `QuarantineUnreadable` saw the first backup already
     /// there, did nothing, and the caller saved over the second corruption anyway. Whatever was
     /// recoverable in it is gone, with no trace it ever existed.</para>

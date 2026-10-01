@@ -8,7 +8,7 @@ using Xunit;
 /// <summary>
 /// Picking a run up after the process that was running it is gone.
 ///
-/// <para><c>PLAN_v2.md</c> §11 carried this as the first of the things "claimed above, but not
+/// <para>The development spec carried this as the first of the things "claimed above, but not
 /// shipped": <i>"Resume does not exist. An approval is an inline await on a TaskCompletionSource, so
 /// a run waiting for a decision is waiting IN MEMORY. Close the app and the run is gone - it is not
 /// resumed, because there is nothing to resume from."</i></para>

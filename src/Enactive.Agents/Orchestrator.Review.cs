@@ -6,7 +6,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Channels;
-// The pure parsing/formatting members moved to ToolCallParsing (FIX_PLAN §9d, cut 1). Imported
+// The pure parsing/formatting members moved to ToolCallParsing. Imported
 // statically so every call site here reads exactly as it did before the move: a refactor cannot be
 // verified differentially, so the less of it is visible at the call sites, the better.
 using static Enactive.Agents.ToolCallParsing;

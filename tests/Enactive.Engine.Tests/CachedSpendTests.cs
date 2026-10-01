@@ -8,7 +8,7 @@ using Enactive.Core.History;
 using Xunit;
 
 /// <summary>
-/// FIX_PLAN §9am, M1: how much of a run came from a cache.
+/// The defect log: how much of a run came from a cache.
 ///
 /// <para>Prompt caching was built on 2026-09-11 and the number stopped at the log. The run record
 /// could say what a run SPENT and not what it SAVED, which is the half somebody reading a bill is

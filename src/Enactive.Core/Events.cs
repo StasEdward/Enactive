@@ -164,7 +164,7 @@ public enum StepOutcomeKind
 
 /// <summary>
 /// An append-only record of something that happened. Carries RunId so each AgentRun has its
-/// own timeline. Key data is typed in payloads (PLAN_v2 §2A.7); PayloadJson is for extras only.
+/// own timeline. Key data is typed in payloads; PayloadJson is for extras only.
 /// </summary>
 public sealed record WorkEvent(
     Guid Id,

@@ -54,7 +54,7 @@ public sealed class McpTests
     /// have done its work already. Counted on the server - each call it receives is recorded - and
     /// not inferred from the error text, which a client that retried and then gave up would also
     /// produce. The text alone passed with a deliberate second call added after the timeout
-    /// (Docs/PROVIDERS_AGENTS_TOOLS_TESTS_REVIEW_2026-09-24.md #5).
+    ///.
     /// </summary>
     [Fact]
     public async Task Timeout_reports_unknown_outcome_without_retry()

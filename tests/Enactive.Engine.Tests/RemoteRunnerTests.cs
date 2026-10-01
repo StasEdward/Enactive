@@ -11,7 +11,7 @@ using Enactive.Remote.Host;
 using Xunit;
 
 /// <summary>
-/// The engine binding. Stage 4 of <c>Docs/REMOTE_DESIGN.md</c>.
+/// The engine binding. Stage 4 of the remote-access design.
 ///
 /// <para>The claim being tested is narrow on purpose: a remote command becomes an ordinary Intent,
 /// the events that Intent produces become queued remote events, and nothing about the engine

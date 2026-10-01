@@ -9,7 +9,7 @@ using Enactive.Secrets;
 
 namespace Enactive.Settings;
 
-/// <summary>One configured provider endpoint as persisted in settings.json (Docs/MODELS.md).</summary>
+/// <summary>One configured provider endpoint as persisted in settings.json.</summary>
 public sealed class ProviderConfig
 {
     public string Id { get; set; } = string.Empty;
@@ -356,7 +356,7 @@ public sealed partial class AppSettings
     /// </summary>
     public int KeepRuns { get; set; }
 
-    // ── Team-of-models schema (Docs/MODELS.md) ────────────────────────────────
+    // ── Team-of-models schema ────────────────────────────────
     public List<ProviderConfig> Providers { get; set; } = new();
     public List<WorkerConfig> Workers { get; set; } = new();
     public PhaseBindings Bindings { get; set; } = new();

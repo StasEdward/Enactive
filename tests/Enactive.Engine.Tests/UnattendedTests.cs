@@ -7,7 +7,7 @@ using Enactive.Core.Permissions;
 using Xunit;
 
 /// <summary>
-/// M5 of Docs/TASK_TEMPLATES_PLAN.md: a run with nobody watching.
+/// M5 of the task-templates plan: a run with nobody watching.
 ///
 /// <para>The rule the whole design rests on is <b>unattended + Ask = Deny</b>. A run at three in the
 /// morning has nobody to approve anything, so a policy that says "ask before running commands"

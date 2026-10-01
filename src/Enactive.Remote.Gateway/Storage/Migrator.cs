@@ -8,7 +8,7 @@ using MySqlConnector;
 /// Brings a database up to the schema this build expects.
 ///
 /// <para><b>MySQL cannot roll a migration back.</b> DDL commits implicitly, so "apply the file in a
-/// transaction" - which is what <c>Docs/REMOTE_DESIGN.md</c> originally said, and what a reader
+/// transaction" - which is what the remote-access design originally said, and what a reader
 /// coming from PostgreSQL will assume - is not something this database offers. A statement that
 /// fails half way through leaves everything before it applied and the version row unwritten.</para>
 ///

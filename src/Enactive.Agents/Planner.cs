@@ -97,7 +97,7 @@ public enum PlanReadout
 }
 
 /// <summary>
-/// Turns an intent into a routing decision + optional DAG plan with one LLM call (PLAN_v2 §3). Steps may
+/// Turns an intent into a routing decision + optional DAG plan with one LLM call. Steps may
 /// declare dependencies (dependsOn indices); the plan is built as a graph. Falls back to a QuickAction if
 /// the model's answer can't be parsed.
 /// </summary>

@@ -6,7 +6,7 @@ using Enactive.Remote.Host;
 using Xunit;
 
 /// <summary>
-/// Answering a permission from somewhere else. Stage 5 of <c>Docs/REMOTE_DESIGN.md</c>.
+/// Answering a permission from somewhere else. Stage 5 of the remote-access design.
 ///
 /// <para>The rule the whole stage turns on: the remote handler WRAPS the desktop rather than
 /// replacing it, so sitting down at the computer always works, whatever the phone is doing. And a

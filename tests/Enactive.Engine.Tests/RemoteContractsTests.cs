@@ -7,7 +7,7 @@ using Xunit;
 /// <summary>
 /// The remote protocol's vocabulary, before anything uses it.
 ///
-/// <para>Stage 1 of <c>Docs/REMOTE_DESIGN.md</c>. Nothing here does I/O, which is why it lives in
+/// <para>Stage 1 of the remote-access design. Nothing here does I/O, which is why it lives in
 /// this project rather than in one of its own: the split that matters is between tests that need a
 /// database and tests that do not, and these do not.</para>
 ///

@@ -9,7 +9,7 @@ using Xunit;
 /// <summary>
 /// What one run concluded, read back by the next.
 ///
-/// <para><c>PLAN_v2.md</c> §11 carried this as the gap that made the memory store a write-only log:
+/// <para>The development spec carried this as the gap that made the memory store a write-only log:
 /// "RunRecorder folds decisions into IMemoryStore and the window renders it, but WorkContext has no
 /// memory field and the orchestrator never loads one. The next run does NOT know what the previous
 /// one concluded." Two halves were missing, and only one of them was the one written down —

@@ -169,7 +169,7 @@ public sealed partial class AnthropicProvider : IChatProvider
                 payload["tools"] = defined;
             }
 
-            // Structured outputs (FIX_PLAN §9c). GA and not beta-gated, and compatible with tool
+            // Structured outputs. GA and not beta-gated, and compatible with tool
             // use - but incompatible with prefill and with citations, and the schema subset is
             // narrower than the tool-use one. So it is sent hopefully and dropped on refusal below,
             // never depended on.

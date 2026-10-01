@@ -6,7 +6,7 @@ using System.Text;
 using Enactive.Core.Context;
 
 /// <summary>
-/// Read-only discovery of the local environment (PLAN_v2 §2.9). Host facts and the git branch/remote
+/// Read-only discovery of the local environment. Host facts and the git branch/remote
 /// come straight from the runtime and the .git files (no process). Docker containers, WSL distros and
 /// git dirtiness come from short, time-boxed, read-only CLI queries (docker ps / wsl -l / git status),
 /// run in parallel and entirely best-effort: a missing or slow tool yields an empty result and never

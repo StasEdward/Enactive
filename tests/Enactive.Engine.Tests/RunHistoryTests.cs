@@ -5,7 +5,7 @@ using Enactive.Core.History;
 using Xunit;
 
 /// <summary>
-/// M4 of Docs/TASK_TEMPLATES_PLAN.md: a TASK is what was asked for, a RUN is one attempt at it.
+/// M4 of the task-templates plan: a TASK is what was asked for, a RUN is one attempt at it.
 ///
 /// <para><c>RunRecord.TaskId</c> existed from the start and was a fresh Guid on every run, so it
 /// grouped nothing — a column that looked like a key and behaved as a serial number. Until an

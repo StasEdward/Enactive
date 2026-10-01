@@ -614,7 +614,7 @@ internal static partial class ProcessExec
     ///
     /// <para><b>The start AND the end.</b> It kept only the start: past the ceiling every later line
     /// was dropped, and the last lines of a build or a test run are where its result is. Found
-    /// 2026-09-24 (Docs/PROVIDERS_AGENTS_TOOLS_TESTS_REVIEW_2026-09-24.md #3): 640 lines of test
+    /// 2026-09-24: 640 lines of test
     /// output and then "FINAL_TEST_SUMMARY: Failed=3 Passed=22" - the summary was gone before
     /// BuildResult, whose own head-and-tail could only keep the end of what was left. Now half the
     /// ceiling holds the first lines and half a moving window of the last ones, and what is dropped

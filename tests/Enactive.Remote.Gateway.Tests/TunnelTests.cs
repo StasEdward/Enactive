@@ -8,7 +8,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Xunit;
 
 /// <summary>
-/// Behind a Cloudflare tunnel. Stage 7 of <c>Docs/REMOTE_DESIGN.md</c>.
+/// Behind a Cloudflare tunnel. Stage 7 of the remote-access design.
 ///
 /// <para>`cloudflared` runs on the gateway's own machine and connects OUTWARD, so nothing on the
 /// server listens publicly and every request the gateway sees arrives from 127.0.0.1. That one fact

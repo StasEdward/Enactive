@@ -49,7 +49,7 @@ public sealed record ChatRequest(
     // field for this across providers (Anthropic output_config.format, Ollama format, OpenAI-style
     // response_format), some gateways reject the field outright, and a model may ignore it anyway.
     // Every adapter that cannot satisfy it ignores it, and one that is refused for it retries
-    // without it - see FIX_PLAN §9c.
+    // without it - see the defect log.
     //
     // It never becomes the thing correctness rests on. The caller PARSES AND VALIDATES the answer
     // exactly as it did before; this only makes the unparseable path rarer. An unreachable reviewer

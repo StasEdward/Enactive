@@ -6,7 +6,7 @@ using Enactive.Core.Inbox;
 
 /// <summary>
 /// Drains an already-composed (recorded) run event stream to completion with no UI attached, then
-/// files one Inbox item summarizing the outcome (PLAN_v2 §9: a background task runs headless, builds
+/// files one Inbox item summarizing the outcome (a background task runs headless, builds
 /// a timeline via the recorder, and reports back through the Inbox). Never throws.
 /// </summary>
 public static class BackgroundRunner

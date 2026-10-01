@@ -10,7 +10,7 @@ using Enactive.Core.Tools;
 /// enough - but a decision handler only ever sees what the policy decided to ASK about. At the
 /// Autonomous tier the policy asks about nothing, so the handler was never consulted, and a task
 /// started from a phone ran <c>run_powershell</c> in a workspace saved at that tier. The rule that
-/// <c>REMOTE_DESIGN.md</c> §5.4 calls the single most important line in the document, and that the
+/// the remote-access design calls the single most important line in the document, and that the
 /// panel states as fact to the owner, held only for the tiers that happened to ask.</para>
 ///
 /// <para>Denying is not asking, and that distinction is the whole fix. A denied tool is refused by

@@ -12,7 +12,7 @@ using Xunit;
 /// The write journal, judged on SEQUENCES rather than on single operations.
 ///
 /// <para>Five of these came from an outside review on 2026-09-08 (N1-N5 in
-/// <c>Docs/Enactive_Code_Review_2026-09-08.md</c>), which found them by running orders of operations
+/// the code review of 2026-09-08), which found them by running orders of operations
 /// nobody had written down. All five were real, and the suite of 742 was green throughout: each one
 /// needs two things to happen in a particular order, and every test until now exercised one thing at
 /// a time. They are ported here under the reviewer's own names so the report and the suite speak of
@@ -22,7 +22,7 @@ using Xunit;
 /// addressed by their POSITION in a list that shifts when anything is removed, keyed by whatever
 /// STRING the caller happened to pass, guarded by the LAST owner on a path rather than by whether
 /// anyone else wrote it at all, and hashed as TEXT rather than as the bytes on disk. The plan for
-/// the fixes is <c>Docs/REVERT_INTEGRITY_PLAN.md</c>.</para>
+/// the fixes is the revert-integrity plan.</para>
 /// </summary>
 public sealed class RevertIntegrityTests
 {

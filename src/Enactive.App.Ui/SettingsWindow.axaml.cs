@@ -8,7 +8,7 @@ using Enactive.Settings;
 namespace Enactive.App.Ui;
 
 /// <summary>
-/// Settings as sections over the universal team schema (Docs/MODELS.md) - a list on the left, one
+/// Settings as sections over the universal team schema - a list on the left, one
 /// pane on the right. Layout is in the .axaml and the state in SettingsViewModel; what stays here
 /// is what needs the controls themselves: opening the two child editors, which is a view's job
 /// because it owns the window they parent to, and double-click to edit.

@@ -69,7 +69,7 @@ public sealed class PhaseAdviceTests
     /// Short enough to read standing up.
     ///
     /// <para>This is the way the feature actually fails: somebody pastes in the paragraph from
-    /// FIX_PLAN that explains the whole mechanism, and the flyout becomes a page nobody finishes.
+    /// the defect log that explains the whole mechanism, and the flyout becomes a page nobody finishes.
     /// A person clicking a question mark beside a drop-down has already decided to spend about
     /// fifteen seconds. The cap is generous — it catches an essay, not a careful paragraph.</para>
     /// </summary>

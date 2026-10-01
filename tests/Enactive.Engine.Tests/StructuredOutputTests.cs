@@ -13,7 +13,7 @@ using Xunit;
 /// <summary>
 /// Asking a provider to answer in a shape — and never depending on it having done so.
 ///
-/// <para><c>FIX_PLAN.md</c> §9c: there is no single field for this. Anthropic takes
+/// <para>The defect log: there is no single field for this. Anthropic takes
 /// <c>output_config.format</c>, Ollama takes <c>format</c>, OpenAI-style endpoints take
 /// <c>response_format</c>, and "OpenAI-compatible" is a family rather than a specification — an
 /// arbitrary gateway may ignore the field or reject the whole request for it. So the seam is
@@ -75,7 +75,7 @@ public sealed class StructuredOutputTests
     /// <para>These tests checked that words were in the body: "response_format" and "json_schema".
     /// A body that said <c>"response_format":"json_schema"</c> - a string where the API wants an
     /// object - passed them, and a deliberately broken serializer doing exactly that stayed green
-    /// (Docs/PROVIDERS_AGENTS_TOOLS_TESTS_REVIEW_2026-09-24.md #4). The shape IS the contract here.</para>
+    ///. The shape IS the contract here.</para>
     /// </summary>
     private static JsonElement At(string body, params string[] path)
     {

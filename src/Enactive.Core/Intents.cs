@@ -15,7 +15,7 @@ using Enactive.Core.Context;
 public enum IntentSource { CommandBar, ChatMessage, ContextAction, Inbox, Schedule, Remote }
 
 /// <summary>
-/// The entry point of the whole pipeline (PLAN_v2 §2.1). The user expresses an intent;
+/// The entry point of the whole pipeline. The user expresses an intent;
 /// the orchestrator decides whether it becomes a QuickAction or a Task.
 /// </summary>
 public sealed record Intent(

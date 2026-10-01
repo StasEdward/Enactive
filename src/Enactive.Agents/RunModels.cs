@@ -11,7 +11,7 @@ using Enactive.Core.Workers;
 /// unchanged, through every branch beneath. Two of them are derived from a third and existed only to
 /// spare a null check at the point of use.</para>
 ///
-/// <para>Gathered because <c>FIX_PLAN.md</c> §9d's obstacle to splitting the run body was the number
+/// <para>Gathered because the defect log's obstacle to splitting the run body was the number
 /// of values the halves share. Half of that count was this: not a design, just a resolution step
 /// whose results had nowhere to live.</para>
 /// </summary>

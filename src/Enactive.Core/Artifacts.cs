@@ -3,7 +3,7 @@ namespace Enactive.Core.Artifacts;
 /// <summary>Kind of result an agent produces.</summary>
 public enum ArtifactKind { FileSet, Diff, Report, Dashboard, Sql, Config, Preview }
 
-/// <summary>A handle into <see cref="IArtifactStore"/>. Never a physical path (PLAN_v2 §2A.4).</summary>
+/// <summary>A handle into <see cref="IArtifactStore"/>. Never a physical path.</summary>
 public sealed record ArtifactRef(Guid Id, ArtifactKind Kind, string Title, string RelativePath);
 
 /// <summary>Expected bytes before a replacement. Null hash means the path must not exist.</summary>

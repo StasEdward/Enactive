@@ -7,7 +7,7 @@ using Enactive.Core.Tasks;
 using Xunit;
 
 /// <summary>
-/// Docs/FIX_PLAN.md §9c: the planner failed SILENTLY.
+/// The defect log: the planner failed SILENTLY.
 ///
 /// <para>Three different things arrived as the same value — a QuickAction under a title cut from the
 /// request — and nothing anywhere could tell them apart: the model deciding the request is one
