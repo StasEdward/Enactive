@@ -9,7 +9,7 @@ using Enactive.Core.Tools;
 /// Reading what a model said it wanted to do, and saying back what it is about to do.
 ///
 /// <para>Lifted out of <see cref="Orchestrator"/> verbatim on 2026-09-08 - the first of the three
-/// cuts measured in <c>FIX_PLAN.md</c> §9d. These are the members with no <c>yield</c> and no state,
+/// cuts measured in the defect log. These are the members with no <c>yield</c> and no state,
 /// which is the axis that works on that file: its two async iterators cannot be split by NOUN
 /// without buffering the event stream or inverting it into a callback, but everything that never
 /// yields can simply leave.</para>

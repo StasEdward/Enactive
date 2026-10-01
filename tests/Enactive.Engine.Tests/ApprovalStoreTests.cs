@@ -12,7 +12,7 @@ using Xunit;
 /// nothing could compile against, let alone check. This file exists because that is not a state a
 /// rule should be in, not because anybody had found the rules wrong.</para>
 ///
-/// <para>SANDBOX_PLAN step 2 asked for the policy to be moved OUT of the workspace. It had been,
+/// <para>The sandbox plan asked for the policy to be moved OUT of the workspace. It had been,
 /// piecemeal, by earlier work — approvals to <c>%APPDATA%</c>, autonomy and worker to the registry,
 /// and <c>.enactive/workspace.json</c> reduced to an id that grants nothing. What the step was
 /// really still missing was this.</para>

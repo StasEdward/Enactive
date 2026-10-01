@@ -12,7 +12,7 @@ using Xunit;
 /// An error a provider reports INSIDE a stream that began with HTTP 200, and a stream that stops
 /// before its protocol says it finished, are failures - and nothing streamed before them is acted on.
 ///
-/// <para><b>Found 2026-09-24</b> (Docs/PROVIDERS_AGENTS_TOOLS_TESTS_REVIEW_2026-09-24.md #1). Neither
+/// <para><b>Found 2026-09-24</b>. Neither
 /// parser knew a top-level <c>error</c>, so it produced no event, and nothing required a stream to
 /// finish. Through the real orchestrator and the Ollama adapter: a <c>write_file</c> call, then
 /// <c>{"error": ...}</c>, then the end of the stream - the file was WRITTEN, the task Completed, and no

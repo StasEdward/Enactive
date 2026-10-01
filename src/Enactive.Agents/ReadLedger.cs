@@ -9,7 +9,7 @@ using Enactive.Core.Tools;
 /// <para><c>read_file</c> ends a shortened result with "… showing lines 1–400 of 518. Read on with
 /// offset 401." On 2026-09-07 a model ignored that line and rewrote the whole file from the part it
 /// had read, and the 118 lines it never saw were gone. Announcing a cut is necessary and, on its
-/// own, not sufficient: the sentence is advice, and advice can be skipped. <c>FIX_PLAN.md</c> §9b
+/// own, not sufficient: the sentence is advice, and advice can be skipped. The defect log
 /// carried this as open with the fix already named — track what the step has read, and treat a
 /// whole-file write of a partially-read file as the dangerous case.</para>
 ///

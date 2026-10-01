@@ -35,7 +35,7 @@ public static class Secret
     /// guarantee directly instead of reading it off the source text - a round-trip test cannot tell
     /// the two scopes apart on its own: encrypting and decrypting with the SAME (wrong) scope still
     /// round-trips within one process, which is exactly why this was not caught by the six existing
-    /// tests before (Docs/SECRETS_SETTINGS_WORKSPACE_TESTS_REVIEW_2026-09-24.md #3).</para>
+    /// tests before.</para>
     /// </summary>
     internal const DataProtectionScope Scope = DataProtectionScope.CurrentUser;
 

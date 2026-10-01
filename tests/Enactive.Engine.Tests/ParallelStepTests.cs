@@ -9,7 +9,7 @@ using Xunit;
 /// The parallel dispatcher — a channel fan-in, two locks, a semaphore and a keep-N-in-flight loop,
 /// which shipped covered by NOTHING.
 ///
-/// <para>Recorded in <c>FIX_PLAN.md</c> §9d as the most dangerous code in the engine, and the reason
+/// <para>Recorded in the defect log as the most dangerous code in the engine, and the reason
 /// it stayed uncovered was not that anybody decided to skip it: <see cref="EngineFixture.Build"/>
 /// had no way to set <c>MaxParallelSteps</c>, so all 762 tests ran the <c>== 1</c> branch because
 /// that was the only branch the harness could reach. A setting no test can reach is a setting no

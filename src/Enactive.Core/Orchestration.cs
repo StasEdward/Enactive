@@ -7,7 +7,7 @@ using Enactive.Core.Intents;
 
 /// <summary>
 /// The single seam the UI talks to. Everything starts as an Intent; the whole lifecycle
-/// streams back as <see cref="WorkEvent"/>s (PLAN_v2 §4).
+/// streams back as <see cref="WorkEvent"/>s.
 /// </summary>
 public interface IOrchestrator
 {

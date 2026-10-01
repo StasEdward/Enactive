@@ -4,7 +4,7 @@ namespace Enactive.Tools;
 /// One rule about line endings, in one place, because two tools need it and they must not disagree.
 ///
 /// <para>It lived in <see cref="EditFileTool"/> until 2026-09-08, when <c>write_file</c> was made to
-/// follow it too (<c>FIX_PLAN.md</c> §9b): a whole-file rewrite converted a CRLF document to LF
+/// follow it too: a whole-file rewrite converted a CRLF document to LF
 /// silently, which is the same defect one level up from the one this was written for.</para>
 /// </summary>
 internal static class LineEndings

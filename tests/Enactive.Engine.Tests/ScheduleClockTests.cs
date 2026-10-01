@@ -78,7 +78,7 @@ public sealed class ScheduleClockTests
     // ── the two days a year ─────────────────────────────────────────────────
 
     /// <summary>
-    /// The named differential from SCHEDULER_PLAN step 1: nine o'clock stays nine o'clock across a
+    /// The named differential from the scheduler plan: nine o'clock stays nine o'clock across a
     /// clock change.
     ///
     /// <para>Stored as an instant and repeated by adding 24 hours, the occurrence after the
@@ -123,7 +123,7 @@ public sealed class ScheduleClockTests
     ///
     /// <para>This test used 01:30 until 2026-09-24, and said in its comment that the clocks go from
     /// 02:00 to 01:00. They do not: 01:30 happens once, so the ambiguous branch never ran, and a
-    /// deliberate break choosing the LATER offset left it green (Docs/CORE_TESTS_REVIEW_2026-09-24.md
+    /// deliberate break choosing the LATER offset left it green (the code review of 2026-09-24
     /// #1). The time is now checked to be ambiguous before anything is asserted about it.</para>
     /// </summary>
     [Fact]

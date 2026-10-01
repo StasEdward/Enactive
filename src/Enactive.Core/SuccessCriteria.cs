@@ -132,8 +132,6 @@ public sealed record SuccessReport(IReadOnlyList<CriterionResult> Results)
 {
     public static readonly SuccessReport NothingToCheck = new(Array.Empty<CriterionResult>());
 
-    public bool Any => Results.Count > 0;
-
     /// <summary>The required criteria that did not pass — the reason a run is held back, if any.</summary>
     public IReadOnlyList<CriterionResult> Blocking
         => Results.Where(r => r.Blocking).ToArray();

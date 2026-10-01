@@ -8,7 +8,7 @@ using Xunit;
 /// <summary>
 /// The exact sequence of events a run emits, for a handful of representative runs.
 ///
-/// <para><b>Why this file exists.</b> <c>FIX_PLAN.md</c> §9d states the problem with the Orchestrator
+/// <para><b>Why this file exists.</b> The defect log states the problem with the Orchestrator
 /// cuts plainly: <i>"A refactor cannot be verified differentially. Every fix in this repository was
 /// proven by making it fail with its own fix reverted; moving code has no such proof, and its whole
 /// safety rests on the suite."</i> That is true and it is not the end of the matter. What CAN be done

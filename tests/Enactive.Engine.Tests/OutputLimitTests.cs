@@ -37,7 +37,7 @@ public sealed class OutputLimitTests
     /// THE WHOLE CHAIN, capture to evidence, with output well past the ceiling: bounded, and the
     /// verdict at the end still there - for stdout and for stderr.
     ///
-    /// <para>Found 2026-09-24 (Docs/PROVIDERS_AGENTS_TOOLS_TESTS_REVIEW_2026-09-24.md #3): the capture
+    /// <para>Found 2026-09-24: the capture
     /// kept only the START, so the last line of a long test run never reached BuildResult, and the
     /// tests of "the end survives" all began from a string that had not been through the capture.</para>
     /// </summary>

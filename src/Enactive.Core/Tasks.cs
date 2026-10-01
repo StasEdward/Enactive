@@ -1,6 +1,6 @@
 namespace Enactive.Core.Tasks;
 
-/// <summary>The orchestrator's routing decision for an intent (PLAN_v2 §2.1).</summary>
+/// <summary>The orchestrator's routing decision for an intent.</summary>
 public enum IntentDisposition { QuickAction, Task }
 
 /// <summary>Status of a single plan step.</summary>
@@ -16,7 +16,7 @@ public enum StepComplexity { Trivial, Normal, Complex }
 
 /// <summary>
 /// One step of a plan. Carries <see cref="DependsOn"/> so a linear chain (v1) and a future DAG share
-/// the same type (PLAN_v2 §2.4).
+/// the same type.
 /// </summary>
 public sealed record PlanStep(
     Guid Id, string Title, StepStatus Status, IReadOnlyList<Guid> DependsOn,

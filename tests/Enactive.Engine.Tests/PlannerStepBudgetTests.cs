@@ -9,7 +9,7 @@ using Xunit;
 /// <summary>
 /// How many steps a plan may have, and who decides.
 ///
-/// <para>The planner used to carry "Use 2-4 steps max" in its system prompt. Nothing in FIX_PLAN
+/// <para>The planner used to carry "Use 2-4 steps max" in its system prompt. Nothing in the defect log
 /// records an incident that earned the number, and it contradicted the product: every built-in
 /// template declares a step budget of 6 to 12, so none of them could ever reach its own limit. It
 /// was also the quantity Orchestrator.StallLimit describes having already got wrong once - "Work

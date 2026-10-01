@@ -9,7 +9,7 @@ using Xunit;
 /// A failed check gets the agent a chance to fix it, and then the check decides again.
 ///
 /// <para>Until 2026-09-08 the criteria ran once and that was the end of the run.
-/// <c>TASK_TEMPLATES_PLAN.md</c> listed the verification LOOP as "not in M2" and the reason given
+/// The task-templates plan listed the verification LOOP as "not in M2" and the reason given
 /// was honest — re-entering the plan is a real change to the shape of a run — but the gap showed up
 /// in practice on 2026-09-07 at 23:20: a run left a test file un-compilable, and the <c>Builds</c>
 /// criterion would have caught it with nothing behind it to act on. Being told the build is broken

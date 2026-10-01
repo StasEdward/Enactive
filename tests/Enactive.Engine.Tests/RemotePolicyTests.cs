@@ -8,7 +8,7 @@ using Xunit;
 /// <summary>
 /// The shell rule, tested where it is actually enforced.
 ///
-/// <para><c>REMOTE_DESIGN.md</c> §5.4 calls "a task started from the web never runs a shell" the
+/// <para>The remote-access design calls "a task started from the web never runs a shell" the
 /// single most important line in the document, and it is the reason a second factor is a should
 /// rather than a must. <see cref="RemoteDecisionHandler"/> has refused shells since stage 5 and
 /// there are tests for it - and the rule was still broken in production, because a decision

@@ -14,7 +14,7 @@ using Xunit;
 /// loading each check one piece; none of them runs the SEQUENCE <c>Save</c> actually is - pack MCP
 /// credentials, encrypt every family of secret, blank the legacy plaintext for serialization, write
 /// a temp file, replace the real one, restore the plaintext in memory - so a mistake in how those
-/// steps fit together (Docs/SECRETS_SETTINGS_WORKSPACE_TESTS_REVIEW_2026-09-24.md #2) would not have
+/// steps fit together would not have
 /// been caught by any of them.</para>
 ///
 /// <para>Real secrets are never asserted here - only artificial markers that would be conspicuous if

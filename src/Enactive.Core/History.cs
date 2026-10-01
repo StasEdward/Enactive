@@ -146,7 +146,7 @@ public interface IRunHeader
 }
 
 /// <summary>
-/// A persisted agent run (PLAN_v2 §2A.6) plus its events, artifacts and decisions. The Timeline —
+/// A persisted agent run plus its events, artifacts and decisions. The Timeline —
 /// "the memory of the project" — is built from these records.
 /// </summary>
 public sealed record RunRecord(
@@ -183,7 +183,7 @@ public sealed record RunRecord(
 ///
 /// <para>The history window used to read every run whole to fill six fields per row. A run's events
 /// are its whole transcript - every prompt, response, tool call and payload - so a workspace with a
-/// few hundred runs behind it read tens of megabytes to draw a list. <c>PLAN_v2.md</c> §11 carried
+/// few hundred runs behind it read tens of megabytes to draw a list. The development spec carried
 /// it as "it will bite at a few hundred runs".</para>
 ///
 /// <para>A distinct TYPE rather than a <see cref="RunRecord"/> with an empty <c>Events</c> list. A

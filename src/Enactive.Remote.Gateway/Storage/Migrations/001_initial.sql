@@ -1,4 +1,4 @@
--- Enactive Remote gateway, initial schema. See Docs/REMOTE_DESIGN.md section 4.2.
+-- Enactive Remote gateway, initial schema.
 --
 -- Every statement is written to be safe to run twice. MySQL commits DDL implicitly, so a migration
 -- CANNOT be rolled back half-way: if one of these fails, the ones before it have already happened

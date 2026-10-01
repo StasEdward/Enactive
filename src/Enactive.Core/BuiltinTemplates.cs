@@ -197,7 +197,7 @@ public static class BuiltinTemplates
             ReviewRequired: true,
             Builtin: true)
         {
-            // THE case FIX_PLAN §9an was written about. The goal never says "git" - it says
+            // THE case the defect log was written about. The goal never says "git" - it says
             // "everything that has changed since the last commit", which needs a diff without
             // naming one, which is why the test that checks a template's own WORDS could never have
             // caught this. Written down here because only a person can read the meaning.
@@ -222,7 +222,7 @@ public static class BuiltinTemplates
             Id: "improve-tests",
             Name: "Improve Test Coverage",
             // The goal, the parameter and the criterion below are the ones that survived a day of
-            // running this template against two real projects (FIX_PLAN.md 9j-9s). Each sentence
+            // running this template against two real projects. Each sentence
             // that looks like over-explanation is there because a run went wrong without it.
             Goal: "Add tests to this workspace for {area}.\n\n"
                 + "Write tests for behaviour that is not covered yet, in the style of the tests that "

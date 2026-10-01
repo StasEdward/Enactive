@@ -10,7 +10,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 /// <summary>
-/// The two halves, talking to each other. Stage 6a of <c>Docs/REMOTE_DESIGN.md</c>.
+/// The two halves, talking to each other. Stage 6a of the remote-access design.
 ///
 /// <para><b>Why this exists as its own stage.</b> Every test before it proved one side against a
 /// stand-in for the other: the gateway against a database, the Host against a fake gateway, the

@@ -4,7 +4,7 @@ using Enactive.Core.Permissions;
 using Enactive.Core.Providers;
 using Enactive.Core.Tasks;
 
-/// <summary>Model selection policy for a worker (PLAN_v2 §2.5): preferred / fallback / user override.</summary>
+/// <summary>Model selection policy for a worker: preferred / fallback / user override.</summary>
 public sealed record ModelPolicy(
     ModelRef Preferred,
     ModelRef? Fallback = null,
@@ -36,7 +36,7 @@ public interface IWorkerProvider
     Worker Get(string? id);
 }
 
-/// <summary>A phase of a run that a model is chosen for (PLAN_v2 team-of-models, Docs/MODELS.md).</summary>
+/// <summary>A phase of a run that a model is chosen for.</summary>
 public enum ModelPurpose { Plan, Review, Execute }
 
 /// <summary>

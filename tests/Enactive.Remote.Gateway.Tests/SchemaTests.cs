@@ -4,7 +4,7 @@ using Enactive.Remote.Gateway.Storage;
 using Xunit;
 
 /// <summary>
-/// The storage layer, before anything uses it. Stage 2 of <c>Docs/REMOTE_DESIGN.md</c>, first slice.
+/// The storage layer, before anything uses it. Stage 2 of the remote-access design, first slice.
 ///
 /// <para>Each of these asserts something the SCHEMA does, not something the code remembers to do.
 /// That distinction is the whole reason for normalised tables: a rule the database enforces cannot

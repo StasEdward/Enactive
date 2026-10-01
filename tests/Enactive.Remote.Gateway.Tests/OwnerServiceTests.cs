@@ -7,7 +7,7 @@ using Enactive.Remote.Gateway.Storage;
 using Xunit;
 
 /// <summary>
-/// What the owner is allowed to ask for. Stage 2 of <c>Docs/REMOTE_DESIGN.md</c>.
+/// What the owner is allowed to ask for. Stage 2 of the remote-access design.
 ///
 /// <para>Nothing here executes anything: every action becomes a command in a queue the Host drains
 /// and may still refuse. So what these test is the ASKING - that a retried request does not queue

@@ -11,7 +11,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.HttpOverrides;
 
-// Stage 2 of Docs/REMOTE_DESIGN.md. The panel itself is stage 6; what is here is the surface it
+// Stage 2 of the remote-access design. The panel itself is stage 6; what is here is the surface it
 // will call and the hub a Host connects to.
 
 const string OwnerScheme = "Owner";

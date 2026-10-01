@@ -16,7 +16,7 @@ using Xunit;
 /// identical to the original's, because it IS the original's list. No value ever differs, so that
 /// test finds nothing wrong.</para>
 ///
-/// <para><b>Confirmed 2026-09-24</b> (Docs/SECRETS_SETTINGS_WORKSPACE_TESTS_REVIEW_2026-09-24.md #4):
+/// <para><b>Confirmed 2026-09-24</b>:
 /// in a copy of AppSettings.Clone with `Workers = Workers.Select(x => x.Clone()).ToList()` replaced by
 /// `Workers = Workers`, both existing tests in that file still passed. The shipped code already
 /// clones correctly - Workers, Providers and McpServers all deep-copy their own nested lists too

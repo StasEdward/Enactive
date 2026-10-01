@@ -9,7 +9,7 @@ using Microsoft.Data.Sqlite;
 using Xunit;
 
 /// <summary>
-/// M3a of Docs/TASK_TEMPLATES_PLAN.md: a run remembers the specification it ran under.
+/// M3a of the task-templates plan: a run remembers the specification it ran under.
 ///
 /// <para>Without it, reading a finished run means reading the template as it is TODAY - and a
 /// template is editable, so that answers "what would this do now" rather than "what did it do".

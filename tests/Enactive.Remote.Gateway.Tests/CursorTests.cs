@@ -7,7 +7,7 @@ using MySqlConnector;
 using Xunit;
 
 /// <summary>
-/// The panel's poll. Stage 6b of <c>Docs/REMOTE_DESIGN.md</c>.
+/// The panel's poll. Stage 6b of the remote-access design.
 ///
 /// <para>All of these are about one question: can the panel trust that "everything since 41" means
 /// everything. A poll that loses a row loses it once, silently, for ever - the panel simply never

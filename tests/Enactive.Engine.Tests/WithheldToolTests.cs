@@ -7,7 +7,7 @@ using Enactive.Core.Tools;
 using Xunit;
 
 /// <summary>
-/// FIX_PLAN §9an. Found in a real scheduled run on 2026-09-11: schedule <c>test1</c> fired at 00:14
+/// The defect log. Found in a real scheduled run on 2026-09-11: schedule <c>test1</c> fired at 00:14
 /// on the Execute tier, whose AskBefore list is run_command, run_powershell, git, docker. Nobody is
 /// watching a scheduled run, so the handler refused everything it was asked - correctly, and as the
 /// schedules window states in words before the schedule is saved.

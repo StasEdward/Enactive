@@ -5,7 +5,7 @@ using Enactive.Core.History;
 using Xunit;
 
 /// <summary>
-/// M4 of Docs/TASK_TEMPLATES_PLAN.md: a TASK is what was asked for, a RUN is one attempt at it.
+/// M4 of the task-templates plan: a TASK is what was asked for, a RUN is one attempt at it.
 ///
 /// <para><c>RunRecord.TaskId</c> existed from the start and was a fresh Guid on every run, so it
 /// grouped nothing — a column that looked like a key and behaved as a serial number. Until an
@@ -35,64 +35,6 @@ public sealed class RunHistoryTests
 
     // ── grouping ────────────────────────────────────────────────────────────
 
-    [Fact]
-    public void Attempts_at_one_task_are_one_group_newest_first()
-    {
-        var task = Guid.NewGuid();
-        var oldest = Run(task, 30);
-        var middle = Run(task, 20);
-        var newest = Run(task, 10);
-
-        var groups = RunHistory.ByTask(new[] { middle, oldest, newest });
-
-        var only = Assert.Single(groups);
-        Assert.Equal(task, only.TaskId);
-        Assert.Equal(3, only.Count);
-        Assert.Equal(newest.RunId, only.Latest.RunId);
-        Assert.Equal(new[] { newest.RunId, middle.RunId, oldest.RunId }, only.Runs.Select(r => r.RunId));
-    }
-
-    [Fact]
-    public void Tasks_are_ordered_by_their_most_recent_attempt()
-    {
-        var older = Guid.NewGuid();
-        var newer = Guid.NewGuid();
-
-        var groups = RunHistory.ByTask(new[]
-        {
-            Run(older, 60), Run(older, 5),    // retried recently
-            Run(newer, 30)
-        });
-
-        Assert.Equal(2, groups.Count);
-        Assert.Equal(older, groups[0].TaskId);
-    }
-
-    /// <summary>
-    /// Every run recorded before this milestone has a task id of its own, so history stays exactly
-    /// as it reads today - one row per run. Nothing is retroactively grouped, and nothing should be.
-    /// </summary>
-    [Fact]
-    public void Runs_from_before_tasks_meant_anything_stay_apart()
-    {
-        var groups = RunHistory.ByTask(new[] { Run(Guid.NewGuid(), 3), Run(Guid.NewGuid(), 2) });
-
-        Assert.Equal(2, groups.Count);
-        Assert.All(groups, g => Assert.Equal(1, g.Count));
-    }
-
-    /// <summary>
-    /// An empty id is the ABSENCE of an answer, not an answer they share. Grouping them together
-    /// would file unrelated work under one heading, which is a worse lie than showing them apart.
-    /// </summary>
-    [Fact]
-    public void Runs_with_no_task_id_are_not_all_the_same_task()
-    {
-        var groups = RunHistory.ByTask(new[] { Run(Guid.Empty, 3), Run(Guid.Empty, 2) });
-
-        Assert.Equal(2, groups.Count);
-    }
-
     // ── an attempt's number ─────────────────────────────────────────────────
 
     [Fact]
@@ -119,15 +61,6 @@ public sealed class RunHistoryTests
         var attempts = RunHistory.AttemptsOf(new[] { lonely, Run(Guid.Empty, 4) }, lonely);
 
         Assert.Equal(lonely.RunId, Assert.Single(attempts).RunId);
-    }
-
-    [Fact]
-    public void A_task_knows_whether_any_attempt_ever_worked()
-    {
-        var task = Guid.NewGuid();
-
-        Assert.False(RunHistory.ByTask(new[] { Run(task, 9, "Failed"), Run(task, 8, "Incomplete") })[0].EverSucceeded);
-        Assert.True(RunHistory.ByTask(new[] { Run(task, 9, "Failed"), Run(task, 8, "Completed") })[0].EverSucceeded);
     }
 
     // ── what was asked for ──────────────────────────────────────────────────

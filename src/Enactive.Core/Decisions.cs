@@ -25,7 +25,7 @@ public sealed record BoundAction(
     string ArgumentsJson,
     string WorkingDirectory);
 
-/// <summary>A USER DECISION REQUIRED request (PLAN_v2 §7).</summary>
+/// <summary>A USER DECISION REQUIRED request.</summary>
 public sealed record DecisionRequest(
     Guid TaskId,
     string Topic,

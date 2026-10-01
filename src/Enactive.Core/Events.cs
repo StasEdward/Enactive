@@ -164,7 +164,7 @@ public enum StepOutcomeKind
 
 /// <summary>
 /// An append-only record of something that happened. Carries RunId so each AgentRun has its
-/// own timeline. Key data is typed in payloads (PLAN_v2 §2A.7); PayloadJson is for extras only.
+/// own timeline. Key data is typed in payloads; PayloadJson is for extras only.
 /// </summary>
 public sealed record WorkEvent(
     Guid Id,
@@ -312,9 +312,6 @@ public static class WorkEventPayload
     /// <para>Null means UNKNOWN, never "none" — callers must not read silence as a no.</para>
     /// </summary>
     public static string? ToolName(this WorkEvent ev) => Field(ev.PayloadJson, ToolRegex);
-
-    /// <summary>The same, from a stored event's payload.</summary>
-    public static string? ToolNameIn(string? payload) => Field(payload, ToolRegex);
 
     /// <summary>The complexity a routing event names, or null.</summary>
     public static string? RouteComplexity(this WorkEvent ev) => Field(ev.PayloadJson, ComplexityRegex);

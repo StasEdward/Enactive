@@ -15,7 +15,7 @@ using Xunit;
 ///
 /// <para><b>What this file no longer tests.</b> For a few hours the same day, the third whole-file
 /// write of one path in a step was REFUSED. It was withdrawn: the habit it policed turned out to be
-/// caused by the engine (FIX_PLAN 9cs - the history showed the model its own report cut off
+/// caused by the engine (the history showed the model its own report cut off
 /// mid-word, so it believed its write had been truncated and wrote it again), and a rule aimed at
 /// one model's behaviour has no place in an engine meant for any model. What stays is the capability
 /// every model can use.</para>

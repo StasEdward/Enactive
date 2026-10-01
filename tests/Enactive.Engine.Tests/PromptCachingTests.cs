@@ -10,7 +10,7 @@ using Enactive.Providers;
 using Xunit;
 
 /// <summary>
-/// Prompt caching on the Anthropic adapter — FIX_PLAN §9am.
+/// Prompt caching on the Anthropic adapter.
 ///
 /// <para>The console showed ZERO cached tokens for the account, which was exactly right rather than
 /// a reporting gap: nothing sent <c>cache_control</c> anywhere. The worker loop is the case caching

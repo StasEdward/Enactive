@@ -6,7 +6,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Channels;
-// The pure parsing/formatting members moved to ToolCallParsing (FIX_PLAN §9d, cut 1). Imported
+// The pure parsing/formatting members moved to ToolCallParsing. Imported
 // statically so every call site here reads exactly as it did before the move: a refactor cannot be
 // verified differentially, so the less of it is visible at the call sites, the better.
 using static Enactive.Agents.ToolCallParsing;
@@ -943,7 +943,7 @@ public sealed partial class Orchestrator : IOrchestrator
     /// A request the planner judged to be ONE action: no plan, no steps, one tool loop against the
     /// root conversation, then the same review, verification and terminal event a plan gets.
     ///
-    /// <para>Its own method as of FIX_PLAN §9d cut 2. It and <see cref="RunPlanAsync"/> were two
+    /// <para>Its own method since the run body was split. It and <see cref="RunPlanAsync"/> were two
     /// nearly disjoint bodies inside one 950-line iterator, sharing only the setup above them — and
     /// "sharing the setup" is what a parameter list is for.</para>
     /// </summary>
@@ -3011,7 +3011,7 @@ public sealed partial class Orchestrator : IOrchestrator
             // writes is attributed to the repair.
             var store = _artifacts.BeginStep();
             var journal = new ExecutionJournal();
-            session?.Track(journal, store);
+            session?.Track(journal);
             var loop = new ToolLoopResult();
 
             await foreach (var repairEvent in RunToolLoopAsync(
@@ -3257,7 +3257,6 @@ public sealed partial class Orchestrator : IOrchestrator
         return at < 0 ? diff : diff[at..];
     }
 
-    /// <summary>A file as it is now, or a sentence saying why it cannot be shown.</summary>
     /// <summary>A workspace file's text, or null when it is not there or cannot be read.</summary>
     private async Task<string?> ReadOrNullAsync(string relativePath, CancellationToken ct)
     {
@@ -3267,24 +3266,6 @@ public sealed partial class Orchestrator : IOrchestrator
             return File.Exists(full) ? await File.ReadAllTextAsync(full, ct) : null;
         }
         catch (Exception ex) when (ex is not OperationCanceledException) { return null; }
-    }
-
-    private async Task<string> ReadNowAsync(string relativePath, CancellationToken ct)
-    {
-        try
-        {
-            var full = WorkspaceGuard.ResolveInside(_workspace.RootPath, relativePath);
-            var info = new FileInfo(full);
-            if (!info.Exists)
-                return "(could not be read back)";
-            if (info.Length > 2_000_000)
-                return $"(a {info.Length:N0}-byte file - too large to show here)";
-            return await File.ReadAllTextAsync(full, ct);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            return "(could not be read back)";
-        }
     }
 
     /// <summary>
@@ -3555,7 +3536,7 @@ public sealed partial class Orchestrator : IOrchestrator
         var statedWindow = provider.ContextWindow(probe);
 
         // Handover by how full the window is - a per-provider SETTING, not an engine constant: the
-        // number that suits one model is not a property of the engine (FIX_PLAN 9ct). Unset, the
+        // number that suits one model is not a property of the engine. Unset, the
         // turn count decides, as it does for a provider with no window at all.
         var handoverAt = provider.HandoverAtPercent(probe) is int pct and > 0 and < 100 ? pct : (int?)null;
 
@@ -4827,7 +4808,7 @@ public sealed partial class Orchestrator : IOrchestrator
                 //
                 // A guess, and it says so: see ShellGeography. It never refuses on its own - the
                 // whole reason it may exist at all is that its answer becomes a QUESTION. A check
-                // this rough deciding by itself would be the guard SANDBOX_PLAN warns about, and
+                // this rough deciding by itself would be the guard the sandbox plan warns about, and
                 // the first false positive would stop work the model was right to do.
                 var outside = ShellGeography.WritesOutsideFor(
                     call.Name, call.ArgumentsJson, _workspace.RootPath, granted.Roots);

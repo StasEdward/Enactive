@@ -9,7 +9,7 @@ using Enactive.Tools;
 using Xunit;
 
 /// <summary>
-/// Docs/FIX_PLAN.md §9b, the second prevention item: <b>every cap announces itself</b>.
+/// The defect log, the second prevention item: <b>every cap announces itself</b>.
 ///
 /// <para>Measured on 2026-09-07, that was true of every live limit in the codebase — and true by
 /// accident. Nothing kept it true. The next cap somebody adds is silent by default, exactly as

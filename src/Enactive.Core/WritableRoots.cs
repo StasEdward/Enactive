@@ -23,7 +23,7 @@ public sealed record GrantedTo(string Key, string? WorkspaceRoot, IReadOnlyList<
 /// <summary>
 /// Folders outside a workspace that this workspace may write to, remembered past the run.
 ///
-/// <para><b>What this is for.</b> <c>SANDBOX_PLAN</c> step 4 offers a person three answers when a
+/// <para><b>What this is for.</b> The sandbox plan offers a person three answers when a
 /// command appears to write outside the workspace: once, for this run, or keep it inside. The
 /// fourth — <i>add this as a writable root</i> — was in the plan's own table and could not be built,
 /// because a remembered grant needs somewhere outside the workspace to live and there was nothing

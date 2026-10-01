@@ -6,7 +6,7 @@ using Enactive.Core.Providers;
 using Enactive.Core.Workers;
 
 /// <summary>
-/// The built-in worker roles (PLAN_v2 §2.5 — a Worker is a role, not a model picker). Each role carries
+/// The built-in worker roles (a Worker is a role, not a model picker). Each role carries
 /// its own base instructions, tool allowlist and default permission level. <see cref="Seed"/> returns the
 /// roles with their BASE instructions (used to seed the editable team in settings); <see cref="Build"/>
 /// additionally appends the shared honesty rules and any global instructions to every role — that

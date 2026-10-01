@@ -83,7 +83,7 @@ public sealed class JsonStoreConcurrencyTests
     /// A SECOND corruption, after the first was already quarantined, gets its OWN backup rather than
     /// being silently discarded.
     ///
-    /// <para>Confirmed 2026-09-24 (Docs/SECRETS_SETTINGS_WORKSPACE_TESTS_REVIEW_2026-09-24.md #1):
+    /// <para>Confirmed 2026-09-24:
     /// <c>QuarantineUnreadable</c> used to stop at the first backup - "one copy is enough" - and the
     /// caller wrote a fresh file over the second corruption regardless of whether it had actually been
     /// preserved. Content A: write corrupt, append (quarantines A, writes a fresh store). Content B:

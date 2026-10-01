@@ -8,7 +8,7 @@ using Xunit;
 /// The fake provider records each request AS IT WAS SENT: the engine goes on growing, trimming and
 /// clearing the conversation it passed, and a recorded request must not follow it.
 ///
-/// <para><b>Found 2026-09-24</b> (Docs/PROVIDERS_AGENTS_TOOLS_TESTS_REVIEW_2026-09-24.md #2). Once
+/// <para><b>Found 2026-09-24</b>. Once
 /// the fakes snapshot, two tests turned out to have passed on history written after the turn they
 /// were about: a retry check that read the wrong turn, and a handover check whose resumed message
 /// was never sent at all - the step had stopped with a full window first.</para>

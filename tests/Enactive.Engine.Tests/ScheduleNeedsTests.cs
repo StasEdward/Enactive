@@ -10,7 +10,7 @@ using Enactive.Tools;
 using Xunit;
 
 /// <summary>
-/// FIX_PLAN §9an, M2: a schedule that cannot work is refused when it is written, not at 00:14.
+/// The defect log: a schedule that cannot work is refused when it is written, not at 00:14.
 ///
 /// <para>Both halves of what the person was shown were TRUE. The window said "this runs Code
 /// Review". It said "Refused, not asked about: run_command, run_powershell, git, docker — nobody is

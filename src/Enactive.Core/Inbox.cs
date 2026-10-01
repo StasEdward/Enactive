@@ -1,7 +1,7 @@
 namespace Enactive.Core.Inbox;
 
 /// <summary>
-/// An item in the AI Inbox (PLAN_v2 §9): the durable outcome of a background run, or a decision a
+/// An item in the AI Inbox: the durable outcome of a background run, or a decision a
 /// background run hit while no human was watching. The Inbox is how headless work reports back.
 /// </summary>
 public sealed record InboxItem(

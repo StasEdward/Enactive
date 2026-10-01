@@ -38,13 +38,11 @@ internal sealed class RunSession(RunScope scope, List<ChatMessage> messages)
     private ReadLedger? _sharedReads;
     private readonly object _evidenceGate = new();
     private readonly HashSet<ExecutionJournal> _journals = new();
-    private readonly List<IArtifactScope> _stores = new();
 
-    public void Track(ExecutionJournal journal, IArtifactScope store)
+    public void Track(ExecutionJournal journal)
     {
-        lock (_evidenceGate) { _journals.Add(journal); _stores.Add(store); }
+        lock (_evidenceGate) _journals.Add(journal);
     }
-    public IReadOnlyList<IArtifactScope> Stores { get { lock (_evidenceGate) return _stores.ToArray(); } }
     public ExecutionJournal RunEvidence()
     {
         var result = new ExecutionJournal(spansSteps: true);
@@ -82,7 +80,7 @@ internal sealed class RunSession(RunScope scope, List<ChatMessage> messages)
     {
         var shared = ownConversation ? null : _sharedJournal;
         var journal = shared ?? new ExecutionJournal();
-        Track(journal, store);
+        Track(journal);
         var start = journal.Mark();
         return new(conversation, store, journal, (ownConversation ? null : _sharedReads) ?? new ReadLedger(),
             shared is null ? start : 0, start, restartFrom) { Output = output };

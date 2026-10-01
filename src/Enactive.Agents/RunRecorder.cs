@@ -93,7 +93,7 @@ public sealed class RunRecorder
                 var record = Build(events, _settings, _spec);
                 await _store.SaveAsync(record, CancellationToken.None);
 
-                // Fold each resolved decision into the project's durable memory (PLAN_v2 §2.6) -
+                // Fold each resolved decision into the project's durable memory -
                 // but only what this project actually learned. See ProjectFacts: memory is read
                 // into the PROMPT of every step of every later run, so an entry that is not a fact
                 // about the project is a permanent tax on the window and on the bill.
@@ -122,7 +122,7 @@ public sealed class RunRecorder
                     // And how the run ENDED. Until 2026-09-08 memory held decisions only, which meant
                     // that in a workspace where nothing ever needed approving it held nothing at all -
                     // and the thing a later run most wants to know, what the last one concluded, was
-                    // the one thing never written down. PLAN_v2 §11 carried this as "written, never
+                    // the one thing never written down. The development spec carried this as "written, never
                     // read back"; it was also barely written.
                     if (Conclusion(record) is { Length: > 0 } conclusion)
                         await _memory.AppendAsync(

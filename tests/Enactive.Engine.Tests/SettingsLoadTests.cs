@@ -273,7 +273,7 @@ public sealed class SettingsLoadTests : IDisposable
     /// which model to use, which is exactly what was missing.
     ///
     /// <para>The <c>finally</c> used to unconditionally CLEAR the variable rather than restore
-    /// whatever it held before this test ran (Docs/SECRETS_SETTINGS_WORKSPACE_TESTS_REVIEW_2026-09-24.md
+    /// whatever it held before this test ran (the code review of 2026-09-24
     /// #5): on a machine or CI runner where ENACTIVE_MODEL is set process-wide, this test wiped it for
     /// every reader that ran after it in the same process - and process-wide state is not something a
     /// method boundary can fence in on its own, so it is restored to what it actually was.</para>

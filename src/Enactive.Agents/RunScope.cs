@@ -18,7 +18,7 @@ using Enactive.Core.Templates;
 /// A UI attributes an event to a run and a step by these fields, so an event built without them is
 /// an event nothing can place.</para>
 ///
-/// <para><c>FIX_PLAN.md</c> §9d measured the split of the run body and found the two halves sharing
+/// <para>The defect log measured the split of the run body and found the two halves sharing
 /// "twelve values and five local event factories", and called the context object that would be
 /// needed "a coherent design, but a large change". This is that object, and it is smaller than the
 /// measurement suggested because the five factories collapse into one thing rather than travelling

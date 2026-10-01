@@ -7,7 +7,7 @@ using Enactive.Remote.Gateway.Storage;
 using Xunit;
 
 /// <summary>
-/// The state machine a Host drives. Stage 2 of <c>Docs/REMOTE_DESIGN.md</c>.
+/// The state machine a Host drives. Stage 2 of the remote-access design.
 ///
 /// <para>Each test names a refusal or a transition the gateway has to get right for a Host with a
 /// durable outbox to be able to make progress. Where a refusal is asserted, the FAULT CODE is what

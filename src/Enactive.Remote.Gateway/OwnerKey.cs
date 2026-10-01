@@ -14,7 +14,7 @@ using System.Text;
 ///
 /// <para>Deliberately not stored: the key is configuration, and the sessions it grants are
 /// invalidated by changing it. Named per-device sessions and a second factor are written down in
-/// Docs/REMOTE_DESIGN.md and are not built.</para>
+/// the remote-access design and are not built.</para>
 /// </summary>
 public sealed class OwnerKey(string key)
 {

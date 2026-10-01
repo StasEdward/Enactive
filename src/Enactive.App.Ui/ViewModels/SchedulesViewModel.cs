@@ -90,7 +90,7 @@ internal sealed record ZoneChoice(string Id, string Label)
 }
 
 /// <summary>
-/// Managing schedules where the person is (SCHEDULER_PLAN step 4): the list, what each one is
+/// Managing schedules where the person is: the list, what each one is
 /// allowed to do in words, its last few outcomes, and the form for adding or editing one.
 ///
 /// <para><b>It decides nothing.</b> What a schedule says about itself is

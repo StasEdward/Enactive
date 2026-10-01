@@ -10,7 +10,7 @@ using Xunit;
 /// <summary>
 /// Reading a run's HEADER without reading the run.
 ///
-/// <para><c>PLAN_v2.md</c> §11 carried it as: "<c>IRunStore.LoadAllAsync</c> reads every run whole,
+/// <para>The development spec carried it as: "<c>IRunStore.LoadAllAsync</c> reads every run whole,
 /// events included, to fill a list that needs six fields. It will bite at a few hundred runs." A
 /// run's events are its entire transcript - every prompt, every response, every tool call and its
 /// payload - and the history column, the project-memory view, the inbox and the console's own report
@@ -305,12 +305,12 @@ public sealed class RunSummaryTests : IDisposable
     // ── the helpers that read a list now read headers ───────────────────────
 
     /// <summary>
-    /// Grouping attempts, numbering them and naming a run all work off a header, which is what lets
-    /// the history column do its grouping without loading a single transcript. They work off a whole
+    /// Finding a task's attempts, numbering them and naming a run all work off a header, which is what
+    /// lets the history column do it without loading a single transcript. They work off a whole
     /// record too - it is the same interface - so nothing that already had one has to give it up.
     /// </summary>
     [Fact]
-    public void Grouping_and_naming_work_off_a_header()
+    public void Attempts_and_naming_work_off_a_header()
     {
         var task = Guid.NewGuid();
         var first = RunSummary.Of(Record("first go", minutesAgo: 20, taskId: task));
@@ -323,11 +323,6 @@ public sealed class RunSummaryTests : IDisposable
         Assert.Equal(2, RunHistory.AttemptNumber(attempts, second.RunId));
         Assert.Equal(1, RunHistory.AttemptNumber(attempts, first.RunId));
         Assert.Equal("second go", RunTitle.For(second));
-
-        var groups = RunHistory.ByTask(new IRunHeader[] { first, second, unrelated });
-        Assert.Equal(2, groups.Count);
-        Assert.Equal("something else", groups[0].Title);
-        Assert.Equal(2, groups[1].Count);
     }
 
     /// <summary>

@@ -56,8 +56,6 @@ public sealed class DiagnosticSet
 
     private DiagnosticSet() { }
 
-    public static DiagnosticSet Empty { get; } = new();
-
     public static DiagnosticSet Of(IEnumerable<BuildDiagnostic> diagnostics)
     {
         var set = new DiagnosticSet();

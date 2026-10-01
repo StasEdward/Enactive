@@ -75,7 +75,7 @@ public sealed record WaveCheckpoint(IReadOnlyList<Enactive.Core.Builds.BaselineS
 /// <summary>
 /// Enough of an interrupted run to carry on from the last step boundary.
 ///
-/// <para><c>PLAN_v2.md</c> §11 carried this as "Resume does not exist ... a run waiting for a
+/// <para>The development spec carried this as "Resume does not exist ... a run waiting for a
 /// decision is waiting IN MEMORY. Close the app and the run is gone, because there is nothing to
 /// resume from." This is the something to resume from.</para>
 ///

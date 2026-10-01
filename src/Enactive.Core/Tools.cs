@@ -186,7 +186,7 @@ public static class ShellTools
         => names.Concat(All).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
 }
 
-/// <summary>Structured tool result (PLAN_v2 §2A.2) — never a bare string.</summary>
+/// <summary>Structured tool result — never a bare string.</summary>
 /// <param name="IsAnswer">
 /// Set on a FAILED result that is nevertheless the answer to what was asked: the file the model
 /// wanted to look at is not there, and being told so is the whole information it needed. Nothing
@@ -297,7 +297,7 @@ public static class ToolResults
         => new(false, output, error, Array.Empty<ArtifactRef>(), metadata ?? EmptyMeta, DidNotRun: true);
 }
 
-/// <summary>The only surface a tool sees (PLAN_v2 §2A.1). No UI / Orchestrator back-channel.</summary>
+/// <summary>The only surface a tool sees. No UI / Orchestrator back-channel.</summary>
 public sealed record ToolContext(
     Guid TaskId,
     Guid RunId,

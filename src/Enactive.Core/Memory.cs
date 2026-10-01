@@ -1,7 +1,7 @@
 namespace Enactive.Core.Memory;
 
 /// <summary>
-/// A durable fact about the project — the "memory" the Timeline folds into (PLAN_v2 §2.6/§2.9).
+/// A durable fact about the project — the "memory" the Timeline folds into.
 /// Decisions the user resolved are recorded here (Kind "decision"); notes and milestones can be added
 /// later. Kept separate from a run's transient events so it survives and accumulates across runs.
 /// </summary>

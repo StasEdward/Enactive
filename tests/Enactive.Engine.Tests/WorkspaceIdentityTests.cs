@@ -9,7 +9,7 @@ using Xunit;
 /// <summary>
 /// A workspace keeps its identity when its folder is renamed.
 ///
-/// <para><c>PLAN_v2.md</c> §11 carried it as: <i>"A workspace's identity is a hash of its path
+/// <para>The development spec carried it as: <i>"A workspace's identity is a hash of its path
 /// (<c>WorkspaceInfo.IdFor</c>), so renaming the folder detaches its MySQL history. The fix is an id
 /// written into <c>&lt;workspace&gt;/.enactive/workspace.json</c>."</i></para>
 ///

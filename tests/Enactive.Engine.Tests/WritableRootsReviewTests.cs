@@ -4,7 +4,7 @@ using Enactive.Core.Permissions;
 using Xunit;
 
 /// <summary>
-/// FIX_PLAN §9t N3: a grant a person cannot see is a grant they cannot take back.
+/// The defect log: a grant a person cannot see is a grant they cannot take back.
 ///
 /// <para><c>Revoke</c> has existed since the store was built and nothing called it, so withdrawing a
 /// standing permission meant editing JSON in <c>%APPDATA%</c> by hand. That is most of the argument

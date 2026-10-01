@@ -11,7 +11,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Xunit;
 
 /// <summary>
-/// What the panel is served and what it is refused. Stage 6c of <c>Docs/REMOTE_DESIGN.md</c>.
+/// What the panel is served and what it is refused. Stage 6c of the remote-access design.
 ///
 /// <para>The panel itself is JavaScript and is not tested here. What is tested is everything it
 /// depends on that a C# change can break without anyone noticing: the shape of the JSON, the

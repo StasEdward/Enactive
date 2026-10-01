@@ -120,7 +120,7 @@ internal sealed class WorkerRow : ObservableObject
 }
 
 /// <summary>
-/// Settings over the universal team schema (Docs/MODELS.md): General, Providers, Team and Phases.
+/// Settings over the universal team schema: General, Providers, Team and Phases.
 /// Edits a throwaway clone of the settings; only Save hands it to <c>onSaved</c>.
 ///
 /// The model catalog is a live collection rather than a snapshot, which is the whole reason the old

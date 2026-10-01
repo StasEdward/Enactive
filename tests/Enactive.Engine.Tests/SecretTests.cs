@@ -89,7 +89,7 @@ public sealed class SecretTests
     /// CurrentUser, not LocalMachine. Read directly off the constant the production code actually
     /// uses, not off the source text - a round-trip test cannot tell the two scopes apart on its
     /// own, since encrypting and decrypting with the SAME (wrong) scope still round-trips within one
-    /// process. Confirmed 2026-09-24 (Docs/SECRETS_SETTINGS_WORKSPACE_TESTS_REVIEW_2026-09-24.md #3):
+    /// process. Confirmed 2026-09-24:
     /// a copy of Secret.cs with both DPAPI calls switched to LocalMachine passed all six tests above
     /// unchanged.
     /// </summary>

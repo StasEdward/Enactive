@@ -10,7 +10,7 @@ public enum PermissionLevel
 }
 
 /// <summary>
-/// Effective permission policy. Lives on a Workspace; a Task may override it (PLAN_v2 §2.10).
+/// Effective permission policy. Lives on a Workspace; a Task may override it.
 /// </summary>
 public sealed record PermissionPolicy(
     PermissionLevel Level,

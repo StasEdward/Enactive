@@ -134,7 +134,7 @@ public sealed class OllamaNativeProvider : IChatProvider
         if (request.Tools is { Count: > 0 } tools)
             payload["tools"] = tools.Select(ToWireTool).ToArray();
 
-        // Structured outputs (FIX_PLAN §9c). Ollama takes the schema itself in `format` - never the
+        // Structured outputs. Ollama takes the schema itself in `format` - never the
         // bare string "json", which is a trap: a small model then returns valid JSON with invented
         // keys, which is worse than prose because it parses. Schema-constrained or not at all.
         //

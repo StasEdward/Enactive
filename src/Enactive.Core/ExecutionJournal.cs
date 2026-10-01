@@ -30,22 +30,7 @@ public sealed class EvidenceView
     public bool OutputsTruncated { get; }
     public bool ArgumentsTruncated { get; }
     public bool HasPriorTranscript { get; }
-    public bool IsTruncated => ActionsOmitted || OutputsTruncated || ArgumentsTruncated;
     internal IReadOnlyList<ExecutedAction> Actions { get; }
-
-    /// <summary>
-    /// Everything this view was built from, so a review refused against it can be replayed exactly.
-    ///
-    /// <para><see cref="Actions"/> stays internal so that nothing rendering a review prompt reaches
-    /// calls the reviewer was not shown. Recording is a different act: a replay must count those calls
-    /// as the review did, or it checks a different view than the one that refused. This is the one
-    /// deliberate way out, and it builds nothing - restoring a view stays inside this assembly and its
-    /// tests, so there is still no public way to fabricate one.</para>
-    /// </summary>
-    public (string Text, IReadOnlyList<ExecutedAction> Actions, IReadOnlyList<int> VisibleActionIds,
-        bool OutputsTruncated, bool ArgumentsTruncated, bool HasPriorTranscript) ReplaySnapshot()
-        => (Text, Actions, VisibleActionIds.OrderBy(id => id).ToArray(),
-            OutputsTruncated, ArgumentsTruncated, HasPriorTranscript);
 
     /// <summary>Resolve only a call whose numbered entry was included in Text.</summary>
     public ExecutedAction? Cited(int number)
@@ -75,35 +60,6 @@ public sealed class EvidenceView
     /// <summary>The number of the last command in this view, or 0 when there is none.</summary>
     public int LastCommand() => Commands().Select(x => x.id).DefaultIfEmpty(0).Max();
 
-    /// <summary>Addressed evidence retrieval, preserving the original numbering and explicit truncation.</summary>
-    public EvidenceView Expand(IReadOnlyList<int> requested, int budget = 12000)
-    {
-        if (requested.Count > 4 || requested.Any(id => id < 1 || id > Actions.Count))
-            throw new ArgumentException("Request at most four existing evidence IDs.", nameof(requested));
-        var text = new StringBuilder(Text).AppendLine("\nAdditional requested evidence:");
-        var visible = VisibleActionIds.ToHashSet();
-        var room = Math.Max(0, budget);
-        var cut = false;
-        foreach (var id in requested.Distinct())
-        {
-            if (room < 256) break;
-            var action = Actions[id - 1];
-            // As text, the way the model saw it - not as a JSON document. Serialized, every character outside ASCII
-            // became a six-character escape: run 341c2f, 2026-09-29, a Russian report came to 18,864 characters of
-            // \u0410\u043D... and was cut again inside the room it was expanded into.
-            var entry = $"{action.Tool} {action.Arguments}"
-                        + (action.ExitCode is { } exit ? $" [process exit={exit}]" : "")
-                        + "\n" + (action.Output ?? "(no output)");
-            cut |= entry.Length > room;
-            var shown = entry.Length <= room ? entry : entry[..(room / 2)]
-                + "\n[evidence excerpt truncated]\n" + entry[^(room / 2)..];
-            text.AppendLine($"Call [{id}] ({action.Outcome}): {shown}");
-            room -= Math.Min(room, entry.Length);
-            visible.Add(id);
-        }
-        return new(text.ToString(), Actions.ToArray(), visible, outputsTruncated: OutputsTruncated || cut,
-            argumentsTruncated: ArgumentsTruncated || cut, hasPriorTranscript: HasPriorTranscript);
-    }
 }
 
 /// <summary>How a tool call ended. Never ran is not the same as ran and failed.</summary>
@@ -325,33 +281,6 @@ public sealed class ExecutionJournal
                         return true;
 
         return false;
-    }
-
-    /// <summary>
-    /// Whether everything recorded from <paramref name="from"/> on used one of these tools - and
-    /// something was recorded at all.
-    ///
-    /// <para>The "at all" half is the point. An empty range satisfies "every action was one of
-    /// these" vacuously, and a caller asking this question is asking what the step DID; answering
-    /// "only those" about a step that did nothing would let a silence stand in for an observation.
-    /// So nothing recorded is false, and the caller keeps whatever it does when it cannot tell.</para>
-    /// </summary>
-    public bool UsedOnly(IReadOnlyCollection<string> tools, int from = 0)
-    {
-        lock (_gate)
-        {
-            var seen = false;
-
-            for (var i = Math.Max(0, from); i < _actions.Count; i++)
-            {
-                seen = true;
-
-                if (!tools.Contains(_actions[i].Tool, StringComparer.OrdinalIgnoreCase))
-                    return false;
-            }
-
-            return seen;
-        }
     }
 
     /// <summary>

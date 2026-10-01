@@ -9,7 +9,7 @@ using Enactive.Secrets;
 
 namespace Enactive.Settings;
 
-/// <summary>One configured provider endpoint as persisted in settings.json (Docs/MODELS.md).</summary>
+/// <summary>One configured provider endpoint as persisted in settings.json.</summary>
 public sealed class ProviderConfig
 {
     public string Id { get; set; } = string.Empty;
@@ -356,7 +356,7 @@ public sealed partial class AppSettings
     /// </summary>
     public int KeepRuns { get; set; }
 
-    // ── Team-of-models schema (Docs/MODELS.md) ────────────────────────────────
+    // ── Team-of-models schema ────────────────────────────────
     public List<ProviderConfig> Providers { get; set; } = new();
     public List<WorkerConfig> Workers { get; set; } = new();
     public PhaseBindings Bindings { get; set; } = new();
@@ -1117,17 +1117,6 @@ public sealed partial class AppSettings
                 if (!string.IsNullOrWhiteSpace(m))
                     list.Add($"{p.Id}/{m}");
         return list;
-    }
-
-    /// <summary>Finds a provider by id (case-insensitive), creating and appending it when absent.</summary>
-    public ProviderConfig EnsureProvider(string id, string displayName, ProviderKind kind)
-    {
-        var existing = Providers.FirstOrDefault(x => string.Equals(x.Id, id, StringComparison.OrdinalIgnoreCase));
-        if (existing is not null)
-            return existing;
-        var created = new ProviderConfig { Id = id, DisplayName = displayName, Kind = kind };
-        Providers.Add(created);
-        return created;
     }
 
     /// <summary>"providerId/model" for a <see cref="ModelRef"/>.</summary>

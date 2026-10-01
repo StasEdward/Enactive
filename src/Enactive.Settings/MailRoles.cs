@@ -3,7 +3,8 @@ namespace Enactive.Settings;
 using Enactive.Core.Permissions;
 
 /// <summary>
-/// Which of the saved roles may call <c>send_email</c>, and how that is changed.
+/// Which of the saved roles may call <c>send_email</c> - read by the SMTP pane, never written by it. The tool is
+/// granted under the role, with every other tool, in the team editor.
 ///
 /// <para><b>Why this is not a migration.</b> Every other tool that reached only new installations
 /// was handed out by <c>WorkerTools.WithImplied</c>, and the argument there is that each one is a
@@ -12,17 +13,13 @@ using Enactive.Core.Permissions;
 /// nothing a worker already holds implies it, and a message cannot be recalled. So it is granted
 /// the way <c>delete_file</c> is: by a person, on purpose.</para>
 ///
-/// <para><b>Why it is HERE and not only in the team editor.</b> Because a capability nobody can
-/// find does not exist — the lesson this codebase has learnt five times over (<c>edit_file</c>,
-/// <c>search_files</c>, <c>create_directory</c>, <c>move_file</c>, <c>copy_file</c>: registered,
-/// documented, tested, and named by no role for months). Somebody filling in an SMTP account is
-/// telling the application it may send mail; asking them to then find a different screen, pick a
-/// role and tick a tool in a list of twelve is how the account ends up configured and unused. The
-/// tick lives next to the account, and the pane says plainly when nothing may use it.</para>
+/// <para><b>Why the SMTP pane reports it.</b> A capability nobody can find does not exist - the lesson
+/// this codebase has learnt five times over (<c>edit_file</c>, <c>search_files</c>, <c>create_directory</c>,
+/// <c>move_file</c>, <c>copy_file</c>: registered, documented, tested, and named by no role for months).
+/// So the pane next to the account says who may send, and says plainly when nobody may.</para>
 ///
-/// <para>Only <see cref="PermissionLevel.Execute"/> and above are offered. <c>send_email</c>
-/// requires Execute at call time, so a tick on the reviewer would be a question that can only ever
-/// be answered no — the thing a settings screen must never draw.</para>
+/// <para>Only a role at <see cref="PermissionLevel.Execute"/> or above counts: <c>send_email</c>
+/// requires Execute at call time, so a read-only role that names the tool still cannot send.</para>
 /// </summary>
 public static class MailRoles
 {
@@ -45,30 +42,6 @@ public static class MailRoles
     /// </summary>
     public static bool Wildcarded(WorkerConfig worker)
         => worker.Tools.Contains(Everything, StringComparer.Ordinal);
-
-    /// <summary>
-    /// Grants the tool to exactly the named roles and takes it from the other candidates.
-    ///
-    /// <para>Touches nothing else: a role that cannot carry it, a role named nowhere in
-    /// <paramref name="chosen"/> that never had it, and a wildcarded role all come out as they went
-    /// in. Idempotent, so the settings window may call it on every save.</para>
-    /// </summary>
-    public static void Apply(IEnumerable<WorkerConfig> workers, IReadOnlyCollection<string> chosen)
-    {
-        foreach (var worker in workers)
-        {
-            if (!CanCarry(worker) || Wildcarded(worker))
-                continue;
-
-            var wanted = chosen.Contains(worker.Id, StringComparer.OrdinalIgnoreCase);
-            var named = worker.Tools.FindIndex(t => string.Equals(t, Tool, StringComparison.OrdinalIgnoreCase));
-
-            if (wanted && named < 0)
-                worker.Tools.Add(Tool);
-            else if (!wanted && named >= 0)
-                worker.Tools.RemoveAll(t => string.Equals(t, Tool, StringComparison.OrdinalIgnoreCase));
-        }
-    }
 
     /// <summary>Whether ANY role can reach the tool — what the pane says when the answer is no.</summary>
     public static bool AnyoneCanSend(IEnumerable<WorkerConfig> workers)

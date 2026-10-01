@@ -42,9 +42,6 @@ internal sealed class WriteBoundary(
     internal const string ReadOnlyRefusal = "this step was planned as read-only: it looks and reports, and changes no file. "
         + "Hand on what you found; the steps after it make the changes. (.enactive/scratch is still yours for notes and logs.)";
 
-    /// <summary>Whether this step was planned to change nothing.</summary>
-    public bool ReadOnly => readOnly;
-
     private readonly Dictionary<string, List<string>> _creating = new(StringComparer.Ordinal);
 
     /// <summary>Whether this is the boundary of a step for one item (and not only the reserved documents).</summary>

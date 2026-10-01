@@ -167,30 +167,6 @@ public sealed class LogHub : ILogSink, ILogHistory, IDisposable
     }
 }
 
-/// <summary>Fans one entry out to several sinks, swallowing any individual sink's failure.</summary>
-public sealed class CompositeLogSink : ILogSink, IDisposable
-{
-    private readonly ILogSink[] _sinks;
-    public CompositeLogSink(params ILogSink[] sinks) => _sinks = sinks ?? Array.Empty<ILogSink>();
-
-    public bool IsEnabled(LogLevel level) => _sinks.Any(sink => sink.IsLoggingEnabled(level));
-
-    public void Log(LogEntry entry)
-    {
-        foreach (var sink in _sinks)
-        {
-            try { if (sink.IsLoggingEnabled(entry.Level)) sink.Log(entry); }
-            catch { /* isolate sink failures */ }
-        }
-    }
-
-    public void Dispose()
-    {
-        foreach (var sink in _sinks)
-            (sink as IDisposable)?.Dispose();
-    }
-}
-
 /// <summary>
 /// Appends the log to a daily-rotated text file under a directory (default
 /// <c>%APPDATA%/Enactive/logs</c>), so a crash still leaves a full trace on disk. Writes are
@@ -364,8 +340,6 @@ public sealed class FileLogSink : ILogSink, IDisposable
         deleted.Sort(StringComparer.Ordinal);
         return deleted;
     }
-
-    public string? CurrentPath { get { lock (_gate) return _currentPath; } }
 
     public void Dispose()
     {

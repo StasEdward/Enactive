@@ -147,7 +147,7 @@ public sealed class AHandoverCarriesWhatWasMeasuredTests
         // A window the carried note FITS in. At 10,000 the note and its 3,000-character diff did not,
         // the step stopped with "the context window is full", and the resumed message was never
         // sent - which this test did not notice while it read the engine's live list rather than
-        // the requests as they went out (Docs/PROVIDERS_AGENTS_TOOLS_TESTS_REVIEW_2026-09-24.md #2).
+        // the requests as they went out.
         { Window = 100_000, HandoverAt = 75 };
 
         var events = await fx.RunAsync(fx.Build(provider, EngineFixture.Role("developer")), "check the tests catch it");

@@ -9,7 +9,7 @@ using Enactive.Tools;
 using Xunit;
 
 /// <summary>
-/// Docs/FIX_PLAN.md §9b: the suite exercised a world of its own making, and every defect that
+/// The defect log: the suite exercised a world of its own making, and every defect that
 /// reached the user on 2026-09-07 lived in the gap between that world and the real one.
 ///
 /// <para>Two gaps, both structural rather than accidental:</para>

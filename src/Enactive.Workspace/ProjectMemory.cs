@@ -5,7 +5,7 @@ using Enactive.Core.History;
 using Enactive.Core.Memory;
 
 /// <summary>
-/// Projects runs + memory entries into the "project memory" view (PLAN_v2 §2.6/§2.7): the Timeline is
+/// Projects runs + memory entries into the "project memory" view: the Timeline is
 /// not a raw log but a memory of the project — the durable Decisions and notes first, then everything
 /// the project has produced (Artifacts), then the run history. Pure projection, no side effects.
 /// </summary>

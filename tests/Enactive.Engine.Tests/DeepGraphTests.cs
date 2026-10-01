@@ -6,7 +6,7 @@ using Enactive.Core.Tasks;
 using Xunit;
 
 /// <summary>
-/// The two shapes <c>ParallelStepTests</c> left uncovered, recorded in <c>PLAN_v2.md</c> §11: a
+/// The two shapes <c>ParallelStepTests</c> left uncovered, recorded in the development spec: a
 /// graph DEEPER than one layer of branches and a join, and a CYCLE with more than one step in
 /// flight.
 ///

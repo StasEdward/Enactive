@@ -37,8 +37,8 @@ using System.Runtime.Versioning;
 /// leftover process after a crash is untidy, and killing the application somebody just asked for is
 /// the task failing.</para>
 ///
-/// <para><b>What it may claim.</b> Cancellation actually cancels. It is NOT a security boundary -
-/// see SANDBOX_PLAN §2: this is for a mistaken agent, and code that means harm is a different
+/// <para><b>What it may claim.</b> Cancellation actually cancels. It is NOT a security boundary:
+/// this is for a mistaken agent, and code that means harm is a different
 /// adversary and a different step.</para>
 ///
 /// <para><b>Windows only, and says so.</b> <see cref="Create"/> answers null everywhere else, and
@@ -79,7 +79,7 @@ internal sealed class ProcessJob : IDisposable
         // leash that kills whatever the call was asked to start.
         //
         // Deliberately NOT setting ActiveProcessLimit or JobMemoryLimit either, though the same
-        // struct carries both and SANDBOX_PLAN §3 called them free. They are not free: a ceiling
+        // struct carries both and the sandbox plan called them free. They are not free: a ceiling
         // that a real `dotnet build` crosses kills it, and what the model then reads is a command
         // that died with no message - indistinguishable from a broken toolchain, and blamed on one.
         // The number would have to come from measuring real builds.

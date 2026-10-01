@@ -30,7 +30,4 @@ public sealed class GatewayRefusedException(string code, string message) : Excep
     public string Code { get; } = code;
 
     public FaultDisposition Disposition => RemoteFaults.DispositionOf(Code);
-
-    /// <summary>The gateway's own refusal, as it arrived.</summary>
-    public static GatewayRefusedException From(RemoteFault fault) => new(fault.Code, fault.Message);
 }

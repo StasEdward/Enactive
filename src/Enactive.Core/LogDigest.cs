@@ -11,10 +11,7 @@ public readonly record struct DigestRecord(
 
 /// <summary>What a digest threw away, so the reader is never guessing.</summary>
 public sealed record DigestStats(
-    long LinesRead, long DetailLinesDropped, long RecordsKept, long TimelineDropped)
-{
-    public long LinesDropped => LinesRead - RecordsKept;
-}
+    long LinesRead, long DetailLinesDropped, long RecordsKept, long TimelineDropped);
 
 /// <summary>
 /// Turns a log that is too big to read into one that answers the question.
@@ -161,34 +158,6 @@ public static class LogDigest
 
         return (Render(order, steps, timeline, dropped),
                 new DigestStats(read, detail, kept, dropped));
-    }
-
-    /// <summary>The same, over records the engine already holds — no parsing, no format to drift.</summary>
-    public static (string Text, DigestStats Stats) Of(
-        IEnumerable<DigestRecord> records, int maxTimelineEntries = 2_000)
-    {
-        var steps = new Dictionary<string, StepTotals>(StringComparer.Ordinal);
-        var order = new List<string>();
-        var timeline = new List<string>();
-        long kept = 0, dropped = 0;
-
-        foreach (var r in records)
-        {
-            kept++;
-            if (!steps.TryGetValue(r.Run, out var totals))
-            {
-                steps[r.Run] = totals = new StepTotals(r.At);
-                order.Add(r.Run);
-            }
-            totals.Saw(r);
-
-            if (!Interesting(r)) continue;
-            if (timeline.Count >= maxTimelineEntries) { dropped++; continue; }
-            timeline.Add(Line(r));
-        }
-
-        return (Render(order, steps, timeline, dropped),
-                new DigestStats(kept, 0, kept, dropped));
     }
 
     /// <summary>

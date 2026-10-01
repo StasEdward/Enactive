@@ -47,7 +47,7 @@ public sealed record UndoResult(bool Undone, string? Conflict = null, bool Resto
 
 /// <summary>
 /// Disk-backed artifact store rooted at the workspace. The rest of the app addresses artifacts by
-/// id / <see cref="ArtifactRef"/> and never learns the physical path (PLAN_v2 §2A.4).
+/// id / <see cref="ArtifactRef"/> and never learns the physical path.
 ///
 /// It also keeps what it overwrote. "Undo" used to be an unconditional <c>File.Delete</c>: if the
 /// agent edited an existing source file, undoing the edit deleted the source and reported "undone".
@@ -119,7 +119,6 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
 
     /// <summary>Interrupted appends left untouched because their content no longer matches the intent.</summary>
     public IReadOnlyList<string> AppendRecoveryConflicts { get; }
-    public string Root => _root;
 
     /// <summary>
     /// The journal key for a path as the caller spelled it. A path that cannot be resolved has no
