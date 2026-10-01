@@ -18,7 +18,7 @@ public sealed class RemoteServiceShutdownTests
         store.Accept(new HostCommand("command", "host", CommandKind.StartTask, "{}",
             CommandStatus.PendingDelivery, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddHours(1)));
         Assert.True(store.BeginRun("command", "run"));
-        await using var service = new RemoteAccessService(new RemoteAccessSettings(),
+        await using var service = new RemoteAccessService(new RemoteAccessSettings(), new FixedHostKeys(),
             _ => throw new InvalidOperationException("No network or composition expected"), () => [], fx.Decisions, database);
         typeof(RemoteAccessService).GetField("_store", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(service, store);
         var runs = (BackgroundRunGroup)typeof(RemoteAccessService)
@@ -34,7 +34,7 @@ public sealed class RemoteServiceShutdownTests
             {
                 cleaning.SetResult();
                 await release.Task;
-                store.Enqueue("run", RemoteEventKind.Cancelled, "Stopped");
+                store.Enqueue("run", RemoteEventKind.Cancelled, _ => "Stopped");
             }
         })!;
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));

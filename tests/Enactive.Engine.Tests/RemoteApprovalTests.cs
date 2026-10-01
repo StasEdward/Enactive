@@ -22,17 +22,13 @@ public sealed class RemoteApprovalTests : IDisposable
 
     private readonly HostStore _store;
     private readonly RemoteApprovals _approvals = new();
+    private readonly FixedHostKeys _keys = new();
 
     public RemoteApprovalTests()
     {
         _store = new HostStore(Path.Combine(_folder, "remote.db"));
 
-        _store.Accept(new HostCommand(
-            "command-1", "host-1", CommandKind.StartTask,
-            RemoteJson.Serialize(new StartTaskPayload(
-                RunId, "task-1", "workspace-1", "T", "P", DateTimeOffset.UtcNow)),
-            CommandStatus.PendingDelivery, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddHours(24)));
-
+        _store.Accept(_keys.Start(runId: RunId));
         _store.BeginRun("command-1", RunId);
     }
 
@@ -51,7 +47,7 @@ public sealed class RemoteApprovalTests : IDisposable
     }
 
     private RemoteDecisionHandler Handler(IDecisionHandler desktop, TimeSpan? timeout = null)
-        => new(desktop, _store, _approvals, RunId, timeout ?? TimeSpan.FromSeconds(30));
+        => new(desktop, _store, _approvals, _keys.Sealer(), RunId, timeout ?? TimeSpan.FromSeconds(30));
 
     [Theory]
     [InlineData(true)]
@@ -245,7 +241,7 @@ public sealed class RemoteApprovalTests : IDisposable
 
         var published = Assert.Single(queued, e => e.Kind == RemoteEventKind.ApprovalRequested).Request!;
         Assert.False(published.RemoteDecidable);
-        Assert.Equal(tool, published.Tool);
+        Assert.Equal(tool, _keys.OpenAction(RunId, published).Tool);
 
         // Published AND resolved, in that order. The panel shows what was asked for and that it was
         // refused; a refusal nobody is shown is indistinguishable from a step that never happened.

@@ -3,6 +3,7 @@ namespace Enactive.Remote.Host;
 using Enactive.Core.Permissions;
 using Enactive.Core.Tools;
 using Enactive.Remote.Contracts;
+using Enactive.Remote.Contracts.Crypto;
 
 /// <summary>
 /// Lets a permission be answered from the phone, without taking that answer away from the desktop.
@@ -39,6 +40,7 @@ public sealed class RemoteDecisionHandler(
     IDecisionHandler desktop,
     HostStore store,
     RemoteApprovals approvals,
+    Sealer sealer,
     string remoteRunId,
     TimeSpan timeout) : IDecisionHandler
 {
@@ -64,10 +66,16 @@ public sealed class RemoteDecisionHandler(
         var actionHash = ActionIdentity.Hash(
             remoteRunId, action.ToolCallId, action.Tool, action.WorkingDirectory, action.ArgumentsJson);
 
-        store.Enqueue(remoteRunId, RemoteEventKind.ApprovalRequested, request.Topic,
-            approval: new ApprovalRequest(
-                approvalId, action.ToolCallId, action.Tool, request.FullText,
-                action.WorkingDirectory, actionHash, remotelyDecidable));
+        // Sealed whole: the card shows FullText, the hash covers ArgumentsJson, and the browser needs
+        // both - one to show the person, the other to recompute the hash and refuse an Allow for an
+        // action the gateway swapped. Sending only the text left the browser trusting the hash it was
+        // handed by the one party the hash is meant to check.
+        var sealedAction = sealer.Action(remoteRunId, approvalId, action.ToolCallId, actionHash, remotelyDecidable,
+            new SealedAction(action.Tool, action.ArgumentsJson, request.FullText, action.WorkingDirectory, request.Topic));
+
+        store.Enqueue(remoteRunId, RemoteEventKind.ApprovalRequested,
+            sequence => sealer.Detail(remoteRunId, sequence, RemoteEventKind.ApprovalRequested, request.Topic),
+            approval: new ApprovalRequest(approvalId, action.ToolCallId, actionHash, remotelyDecidable, sealedAction));
 
         // Published first, refused second, and the desktop is never asked. Publishing it anyway is
         // the point: the panel shows what the run wanted to do and that it was refused, which is
@@ -145,7 +153,8 @@ public sealed class RemoteDecisionHandler(
     }
 
     private void Report(string approvalId, string actionHash, ApprovalOutcome outcome)
-        => store.Enqueue(remoteRunId, RemoteEventKind.ApprovalResolved, outcome.ToString(),
+        => store.Enqueue(remoteRunId, RemoteEventKind.ApprovalResolved,
+            sequence => sealer.Detail(remoteRunId, sequence, RemoteEventKind.ApprovalResolved, outcome.ToString()),
             resolution: new ApprovalResolution(approvalId, actionHash, outcome));
 
     /// <summary>

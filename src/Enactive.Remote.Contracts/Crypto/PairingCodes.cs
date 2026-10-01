@@ -31,7 +31,7 @@ public sealed record ConnectionCode(Uri Gateway, string HostId, string Token, st
         using (var json = new Utf8JsonWriter(buffer))
         {
             json.WriteStartObject();
-            json.WriteNumber("v", PairingOrigin.Version);
+            json.WriteNumber("v", RemoteProtocol.Version);
             json.WriteString("g", PairingOrigin.Format(Gateway));
             json.WriteString("h", HostId);
             json.WriteString("t", Token);
@@ -54,8 +54,8 @@ public sealed record ConnectionCode(Uri Gateway, string HostId, string Token, st
         var root = document.RootElement;
         if (root.ValueKind != JsonValueKind.Object) throw new PairingCodeException(CopyAgain);
 
-        if (!root.TryGetProperty("v", out var v) || v.ValueKind != JsonValueKind.Number || !v.TryGetInt32(out var version) || version != PairingOrigin.Version)
-            throw new PairingCodeException($"The code's version is missing or is not one this Enactive understands (version {PairingOrigin.Version}) - update the desktop app and reload the browser page, then make a new code.");
+        if (!root.TryGetProperty("v", out var v) || v.ValueKind != JsonValueKind.Number || !v.TryGetInt32(out var version) || version != RemoteProtocol.Version)
+            throw new PairingCodeException($"The code's version is missing or is not one this Enactive understands (version {RemoteProtocol.Version}) - update the desktop app and reload the browser page, then make a new code.");
 
         var gateway = PairingOrigin.Parse(Text(root, "g", "gateway address"));
         var hostId = Text(root, "h", "computer id");
@@ -110,7 +110,7 @@ public sealed record InviteLink(Uri Gateway, string InviteId, byte[] PairingSecr
     public byte[] PairKey => RemoteKdf.Derive(PairingSecret, RemoteKdf.Pair);
 
     public string Format() =>
-        $"{PairingOrigin.Format(Gateway)}{Path}#v={PairingOrigin.Version}&i={Uri.EscapeDataString(InviteId)}&p={B64.Url(PairingSecret)}";
+        $"{PairingOrigin.Format(Gateway)}{Path}#v={RemoteProtocol.Version}&i={Uri.EscapeDataString(InviteId)}&p={B64.Url(PairingSecret)}";
 
     public static InviteLink Parse(string url)
     {
@@ -126,8 +126,8 @@ public sealed record InviteLink(Uri Gateway, string InviteId, byte[] PairingSecr
             if (at > 0) members.TryAdd(part[..at], Uri.UnescapeDataString(part[(at + 1)..]));
         }
 
-        if (!members.TryGetValue("v", out var version) || version != PairingOrigin.Version.ToString(System.Globalization.CultureInfo.InvariantCulture))
-            throw new PairingCodeException($"The link's version is missing or is not one this Enactive understands (version {PairingOrigin.Version}) - update the desktop app and ask for a new link.");
+        if (!members.TryGetValue("v", out var version) || version != RemoteProtocol.Version.ToString(System.Globalization.CultureInfo.InvariantCulture))
+            throw new PairingCodeException($"The link's version is missing or is not one this Enactive understands (version {RemoteProtocol.Version}) - update the desktop app and ask for a new link.");
         if (!members.TryGetValue("i", out var inviteId) || inviteId.Length == 0)
             throw new PairingCodeException("The link has no invitation id - copy all of it again.");
         if (!members.TryGetValue("p", out var encoded))
@@ -172,9 +172,6 @@ public static class Enrollment
 /// </summary>
 internal static class PairingOrigin
 {
-    /// <summary>Pinned to 2 rather than read from RemoteProtocol.Version: these formats are the protocol-2 ones, and an old Host or panel must refuse them by version, not misread them.</summary>
-    public const int Version = 2;
-
     public static string Format(Uri gateway)
     {
         if (!Allowed(gateway)) throw new PairingCodeException(Refusal);

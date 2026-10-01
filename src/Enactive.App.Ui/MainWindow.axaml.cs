@@ -26,7 +26,6 @@ using Enactive.Core.Templates;
 using Enactive.Core.Tools;
 using Enactive.Core.Workers;
 using Enactive.Providers;
-using Enactive.Remote.Host;
 using Enactive.Settings;
 using Enactive.Tools;
 using Enactive.Tools.Mcp;
@@ -334,6 +333,9 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         if (_shuttingDown) return;
         _remote = new RemoteAccessService(
             _settings.RemoteAccess,
+            // No keys until this computer is paired under protocol 2 (a connection code makes them).
+            // The service says so rather than connecting with nothing to seal or open with.
+            keys: null,
             // On the UI thread, because it reads the worker list and the app settings. Governed by
             // the workspace THE TASK NAMED, not by the slider: the slider is about the folder open
             // on this screen, and a phone naming a different project must get the level saved for
@@ -392,20 +394,18 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     }
 
     /// <summary>
-    /// Tries a gateway address and token for the settings window, and says what happened.
+    /// Answers the settings window's "Test connection", and says what happened.
     ///
-    /// <para>It runs against the REAL gateway with this computer's real workspace list, because a
-    /// check that stopped short of that would answer a narrower question than the one being
-    /// asked - and the question being asked is "why does the phone say Offline".</para>
+    /// <para>A real check publishes this computer's workspace list, and under protocol 2 the names in
+    /// it are sealed with keys this computer does not have until it is paired. Probing anyway would
+    /// either send the names in the clear or send an empty list and unpublish every workspace, so
+    /// until pairing exists it says what is missing instead.</para>
     /// </summary>
-    private async Task<string> CheckRemoteAsync(string gatewayUrl, string token, CancellationToken ct)
+    private Task<string> CheckRemoteAsync(string gatewayUrl, string token, CancellationToken ct)
     {
-        var workspaces = RemoteAccessService.Publishable(_registry.Entries);
-        var check = await GatewayProbe.CheckAsync(gatewayUrl, token, workspaces, ct);
+        _log.Info(LogSource.System, "Remote access check: " + RemoteAccessService.NeedsPairing);
 
-        _log.Info(LogSource.System, "Remote access check: " + check.Detail);
-
-        return check.Detail;
+        return Task.FromResult(RemoteAccessService.NeedsPairing);
     }
 
     // ── Closing ──────────────────────────────────────────────────────────────

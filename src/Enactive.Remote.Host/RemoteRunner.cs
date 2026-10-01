@@ -5,6 +5,7 @@ using Enactive.Core.Intents;
 using Enactive.Core.Orchestration;
 using Enactive.Core.Permissions;
 using Enactive.Remote.Contracts;
+using Enactive.Remote.Contracts.Crypto;
 
 /// <summary>
 /// What the application hands back for one task: the engine to run it with, the intent to run, and
@@ -44,42 +45,106 @@ public sealed record RemotePreparation(
 /// and the intent, and the first real caller had to open MCP tool servers to build one - which are
 /// child processes. They would have been left running, one set per remote run, until the desktop
 /// was closed.</para>
+///
+/// <para>It is handed the task as it OPENED, never the payload: the payload's plaintext is written by
+/// the gateway, and only what <see cref="Sealer"/> opened and checked came from the owner.</para>
 /// </param>
 public sealed class RemoteRunner(
     HostStore store,
     RemoteApprovals approvals,
-    Func<StartTaskPayload, Func<IDecisionHandler, IDecisionHandler>, CancellationToken,
+    Sealer sealer,
+    Func<OpenedStart, Func<IDecisionHandler, IDecisionHandler>, CancellationToken,
         Task<RemotePreparation>> prepare)
 {
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _running = new();
+    private readonly ConcurrentQueue<DeliveryNotice> _notices = new();
 
     /// <summary>Runs currently executing, by remote run id. For the desktop to show, and for tests.</summary>
     public IReadOnlyCollection<string> Running => _running.Keys.ToArray();
+
+    /// <summary>Commands this computer refused and had no run to report on, for the desktop to show.</summary>
+    public IReadOnlyCollection<DeliveryNotice> Notices => _notices.ToArray();
+
+    /// <summary>Raised when a notice is recorded. Not on the UI thread.</summary>
+    public event Action<DeliveryNotice>? Noticed;
 
     /// <summary>
     /// Carries out one accepted command.
     ///
     /// <para>The caller has already written it down and acknowledged it; by the time this is
-    /// reached, the only question left is what the command means.</para>
+    /// reached, the only question left is what the command means - and whether the owner sent it.
+    /// Every kind is opened before anything is done, and a command that does not open does nothing
+    /// at all.</para>
     /// </summary>
     public async Task ApplyAsync(HostCommand command, CancellationToken ct = default)
     {
-        switch (command.Kind)
+        try
         {
-            case CommandKind.StartTask:
-                await StartAsync(RemoteJson.Deserialize<StartTaskPayload>(command.Payload), command.Id, ct);
-                return;
+            switch (command.Kind)
+            {
+                case CommandKind.StartTask:
+                    var start = sealer.OpenStart(command);
+                    await StartAsync(start, command.Id, ct);
+                    return;
 
-            case CommandKind.CancelRun:
-                Cancel(RemoteJson.Deserialize<CancelRunPayload>(command.Payload).RunId);
-                return;
+                case CommandKind.CancelRun:
+                    Cancel(sealer.OpenCancel(command).RunId);
+                    return;
 
-            case CommandKind.ResolveApproval:
-                Answer(RemoteJson.Deserialize<ResolveApprovalPayload>(command.Payload));
-                return;
+                case CommandKind.ResolveApproval:
+                    Answer(sealer.OpenDecision(command));
+                    return;
 
-            default:
-                throw new NotSupportedException($"Command kind {command.Kind} is not one this build knows.");
+                default:
+                    throw new NotSupportedException($"Command kind {command.Kind} is not one this build carries out.");
+            }
+        }
+        catch (CommandRefusedException refused)
+        {
+            // Only the opening throws this: StartAsync catches everything a run can throw and reports
+            // it as the run's ending, so nothing that began running is ever reported as refused.
+            Refuse(command, refused.Message);
+        }
+    }
+
+    /// <summary>
+    /// A command that did not open, said where a person will see it.
+    ///
+    /// <para>A start is the one kind with a place of its own: the panel already shows a queued run for
+    /// it, and a run that never moved would leave the owner waiting on something that is never going to
+    /// happen. So the run is opened and at once ended Failed with the reason, and nothing runs. Opening
+    /// it also claims the command, so a redelivery of the same forgery is not even looked at again.
+    /// Every other kind has nothing to report on, and is a notice on this computer.</para>
+    /// </summary>
+    private void Refuse(HostCommand command, string reason)
+    {
+        if (command.Kind == CommandKind.StartTask && RunOf(command) is { } runId)
+        {
+            if (store.BeginRun(command.Id, runId))
+            {
+                store.Enqueue(runId, RemoteEventKind.Failed, sequence => sealer.Detail(
+                    runId, sequence, RemoteEventKind.Failed,
+                    $"This computer refused the request: {reason}. It did not come from a device this computer trusts."));
+            }
+
+            return;
+        }
+
+        var notice = new DeliveryNotice("Refused", $"{command.Kind} {command.Id}: {reason}");
+        _notices.Enqueue(notice);
+        Noticed?.Invoke(notice);
+    }
+
+    /// <summary>The run a start names in its plaintext, if the payload can be read at all.</summary>
+    private static string? RunOf(HostCommand command)
+    {
+        try
+        {
+            return RemoteJson.Deserialize<StartTaskPayload>(command.Payload).RunId is { Length: > 0 } runId ? runId : null;
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return null;
         }
     }
 
@@ -106,10 +171,10 @@ public sealed class RemoteRunner(
     /// already on its way as an ApprovalResolved event, so there is nothing to report and nothing
     /// to correct.</para>
     /// </summary>
-    private void Answer(ResolveApprovalPayload answer)
+    private void Answer(DecisionAuthorization answer)
         => approvals.TryAnswer(answer.ApprovalId, answer.ActionHash, answer.Decision);
 
-    private async Task StartAsync(StartTaskPayload task, string commandId, CancellationToken ct)
+    private async Task StartAsync(OpenedStart task, string commandId, CancellationToken ct)
     {
         // The claim and the run record, in one transaction, BEFORE anything executes. False means a
         // redelivery of a command this machine already carried out, and the correct response to that
@@ -127,7 +192,7 @@ public sealed class RemoteRunner(
             var prepared = await prepare(
                 task,
                 desktop => new RemoteDecisionHandler(
-                    desktop, store, approvals, task.RunId, RemoteDecisionHandler.DefaultTimeout),
+                    desktop, store, approvals, sealer, task.RunId, RemoteDecisionHandler.DefaultTimeout),
                 cancellation.Token);
 
             // Whatever the preparation opened is closed here, however this ends - cancelled,
@@ -135,7 +200,7 @@ public sealed class RemoteRunner(
             // nothing to close says so by leaving it null rather than by handing over a stub.
             await using (prepared.Resources)
             {
-                store.Enqueue(task.RunId, RemoteEventKind.Running, $"Started: {task.Title}");
+                Report(task.RunId, RemoteEventKind.Running, $"Started: {task.Title}");
                 store.MarkRunState(task.RunId, LocalRunState.Running);
 
                 await ConsumeAsync(task.RunId, prepared.Engine, prepared.Intent, cancellation.Token);
@@ -174,14 +239,14 @@ public sealed class RemoteRunner(
         {
             if (EventMapping.Ending(published) is var (kind, detail))
             {
-                store.Enqueue(runId, kind, detail);
+                Report(runId, kind, detail);
                 ended = true;
                 continue;
             }
 
             if (EventMapping.Progress(published) is { } line)
             {
-                store.Enqueue(runId, RemoteEventKind.Progress, line);
+                Report(runId, RemoteEventKind.Progress, line);
             }
         }
 
@@ -207,7 +272,11 @@ public sealed class RemoteRunner(
     {
         if (!store.HasEnded(runId))
         {
-            store.Enqueue(runId, kind, detail);
+            Report(runId, kind, detail);
         }
     }
+
+    /// <summary>Queues an event with its sentence sealed for the sequence the store gives it.</summary>
+    private void Report(string runId, RemoteEventKind kind, string detail)
+        => store.Enqueue(runId, kind, sequence => sealer.Detail(runId, sequence, kind, detail));
 }

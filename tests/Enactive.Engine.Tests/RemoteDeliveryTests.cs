@@ -36,35 +36,17 @@ public sealed class RemoteDeliveryTests : IDisposable
         }
     }
 
-    private static HostCommand Start(string commandId, string runId)
-        => new(commandId, "host-1", CommandKind.StartTask,
-            RemoteJson.Serialize(new StartTaskPayload(
-                runId, "task-1", "workspace-1", "Run the tests", "Please.", DateTimeOffset.UtcNow)),
-            CommandStatus.PendingDelivery,
-            DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddHours(24));
+    private static readonly FixedHostKeys Keys = new();
+
+    private static HostCommand Start(string commandId, string runId) => Keys.Start(commandId, runId);
+
+    private static DeliveryLoop Loop(HostStore store, IGatewayConnection gateway) => new(store, gateway, Keys.Sealer());
 
     // ── accepting a command exactly once ────────────────────────────────────
 
-    /// <summary>
-    /// The reported shape of at-least-once delivery: the same command arrives twice because the
-    /// first acknowledgement was lost. It must be recognised across a RESTART, not merely within
-    /// one process - the gap between accepting and acknowledging is exactly where a crash lands.
-    /// </summary>
-    [Fact]
-    public void A_redelivered_command_is_recognised_after_a_restart()
-    {
-        var command = Start("command-1", "run-1");
-
-        using (var store = Open())
-        {
-            Assert.True(store.Accept(command));
-        }
-
-        using (var store = Open())
-        {
-            Assert.False(store.Accept(command));
-        }
-    }
+    // A redelivered command recognised across a restart is RemoteSealingTests'
+    // Review_focus_3_a_replayed_command_id_is_recognised_after_a_restart: it is the replay half of
+    // refusing a forged command, and lives with the other half.
 
     /// <summary>
     /// A start is claimed once. Two attempts to open the same run - a redelivery, or two threads -
@@ -104,12 +86,16 @@ public sealed class RemoteDeliveryTests : IDisposable
         {
             Assert.True(store.WasApplied("command-1"));
 
-            var loop = new DeliveryLoop(store, new FakeGateway());
+            var loop = Loop(store, new FakeGateway());
             loop.RecoverInterruptedRuns();
 
             var owed = Assert.Single(store.NextOwed());
             Assert.Equal(RemoteEventKind.Interrupted, owed.Event.Kind);
             Assert.Equal("run-1", owed.RunId);
+
+            // Sealed like every other detail: written in the clear, it would be the one sentence the
+            // browser could not open.
+            Assert.Contains("stopped while this run was in progress", Keys.OpenDetail(owed.Event), StringComparison.Ordinal);
         }
     }
 
@@ -129,13 +115,13 @@ public sealed class RemoteDeliveryTests : IDisposable
             store.Accept(Start("command-1", "run-1"));
             store.BeginRun("command-1", "run-1");
             store.Enqueue("run-1", RemoteEventKind.Running);
-            store.Enqueue("run-1", RemoteEventKind.Completed, "done");
+            store.Enqueue("run-1", RemoteEventKind.Completed, _ => "done");
         }
 
         using (var store = Open())
         {
             var gateway = new FakeGateway();
-            var loop = new DeliveryLoop(store, gateway);
+            var loop = Loop(store, gateway);
 
             loop.RecoverInterruptedRuns();
             await loop.FlushAsync();
@@ -161,8 +147,8 @@ public sealed class RemoteDeliveryTests : IDisposable
         store.BeginRun("command-1", "run-1");
 
         Assert.Equal(1, store.Enqueue("run-1", RemoteEventKind.Running).Sequence);
-        Assert.Equal(2, store.Enqueue("run-1", RemoteEventKind.Progress, "reading").Sequence);
-        Assert.Equal(3, store.Enqueue("run-1", RemoteEventKind.Completed, "done").Sequence);
+        Assert.Equal(2, store.Enqueue("run-1", RemoteEventKind.Progress, _ => "reading").Sequence);
+        Assert.Equal(3, store.Enqueue("run-1", RemoteEventKind.Completed, _ => "done").Sequence);
     }
 
     /// <summary>
@@ -176,12 +162,12 @@ public sealed class RemoteDeliveryTests : IDisposable
         store.Accept(Start("command-1", "run-1"));
         store.BeginRun("command-1", "run-1");
         store.Enqueue("run-1", RemoteEventKind.Running);
-        store.Enqueue("run-1", RemoteEventKind.Progress, "second");
+        store.Enqueue("run-1", RemoteEventKind.Progress, _ => "second");
 
         Assert.Equal(1, Assert.Single(store.NextOwed()).Sequence);
 
         var gateway = new FakeGateway();
-        await new DeliveryLoop(store, gateway).FlushAsync();
+        await Loop(store, gateway).FlushAsync();
 
         Assert.Equal([1, 2], gateway.Published.Select(e => e.Sequence).ToArray());
     }
@@ -213,7 +199,7 @@ public sealed class RemoteDeliveryTests : IDisposable
         using var store = Open();
         Seed(store);
 
-        await new DeliveryLoop(store, new FakeGateway()).FlushAsync();
+        await Loop(store, new FakeGateway()).FlushAsync();
 
         Assert.Empty(store.NextOwed());
     }
@@ -228,7 +214,7 @@ public sealed class RemoteDeliveryTests : IDisposable
         using var store = Open();
         Seed(store);
 
-        var loop = new DeliveryLoop(store, new FakeGateway { Refuse = FaultCode.RunEnded });
+        var loop = Loop(store, new FakeGateway { Refuse = FaultCode.RunEnded });
         await loop.FlushAsync();
 
         Assert.Empty(store.NextOwed());
@@ -245,7 +231,7 @@ public sealed class RemoteDeliveryTests : IDisposable
         using var store = Open();
         Seed(store);
 
-        await new DeliveryLoop(store, new FakeGateway { Throw = new IOException("socket closed") }).FlushAsync();
+        await Loop(store, new FakeGateway { Throw = new IOException("socket closed") }).FlushAsync();
 
         Assert.Single(store.NextOwed());
     }
@@ -261,7 +247,7 @@ public sealed class RemoteDeliveryTests : IDisposable
         using var store = Open();
         Seed(store);
 
-        await new DeliveryLoop(store, new FakeGateway { Refuse = "something-from-a-newer-gateway" }).FlushAsync();
+        await Loop(store, new FakeGateway { Refuse = "something-from-a-newer-gateway" }).FlushAsync();
 
         Assert.Single(store.NextOwed());
     }
@@ -279,10 +265,10 @@ public sealed class RemoteDeliveryTests : IDisposable
     {
         using var store = Open();
         Seed(store);
-        store.Enqueue("run-1", RemoteEventKind.Completed, "done");
+        store.Enqueue("run-1", RemoteEventKind.Completed, _ => "done");
 
         var gateway = new FakeGateway { Throw = new IOException("still broken") };
-        var loop = new DeliveryLoop(store, gateway);
+        var loop = Loop(store, gateway);
 
         for (var attempt = 0; attempt < DeliveryLoop.MaxAttempts; attempt++)
         {
@@ -309,7 +295,7 @@ public sealed class RemoteDeliveryTests : IDisposable
         using var store = Open();
         Seed(store);
 
-        var loop = new DeliveryLoop(store, new FakeGateway { Refuse = FaultCode.HostRevoked });
+        var loop = Loop(store, new FakeGateway { Refuse = FaultCode.HostRevoked });
         await loop.FlushAsync();
 
         Assert.True(loop.Stopped);
@@ -329,7 +315,7 @@ public sealed class RemoteDeliveryTests : IDisposable
         using var store = Open();
         var command = Start("command-1", "run-1");
         var gateway = new FakeGateway { Pending = [command] };
-        var loop = new DeliveryLoop(store, gateway);
+        var loop = Loop(store, gateway);
 
         var first = await loop.TurnAsync([]);
         Assert.Single(first);
@@ -351,7 +337,7 @@ public sealed class RemoteDeliveryTests : IDisposable
             ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(-1)
         };
 
-        var accepted = await new DeliveryLoop(store, new FakeGateway { Pending = [expired] }).TurnAsync([]);
+        var accepted = await Loop(store, new FakeGateway { Pending = [expired] }).TurnAsync([]);
 
         Assert.Empty(accepted);
     }

@@ -1,7 +1,11 @@
 namespace Enactive.Remote.Contracts;
 
-/// <summary>A workspace the Host offers, named by the Host. No path: see <see cref="StartTaskPayload"/>.</summary>
-public sealed record WorkspaceRef(string Id, string Name);
+/// <summary>
+/// A workspace the Host offers. No path: see <see cref="StartTaskPayload"/>. The name a person gave it
+/// is sealed (<c>Ad.Workspace</c>): a folder's name is often a client's or a project's, and the gateway
+/// needs only the id to route a task to it.
+/// </summary>
+public sealed record WorkspaceRef(string Id, string SealedName);
 
 /// <summary>
 /// One instruction from the owner, as the Host receives it. <see cref="Payload"/> is JSON read
@@ -23,17 +27,25 @@ public sealed record HostCommand(
 /// the Host already has; it cannot name a folder. That is what keeps "run a task remotely" from
 /// being "read any directory on that machine remotely", and it is a property of the contract
 /// rather than a check somewhere in the Host.</para>
+///
+/// <para>Nothing a person wrote is here in the clear. <see cref="SealedTask"/> holds the title and
+/// prompt, sealed by the browser for this task and workspace; <see cref="SealedStart"/> holds the
+/// owner's authorization, sealed for this command. The plaintext ids are for routing only: the gateway
+/// writes them, so the Host acts on what opens and checks the ids against it.</para>
 /// </summary>
 public sealed record StartTaskPayload(
     string RunId,
     string TaskId,
     string WorkspaceId,
-    string Title,
-    string Prompt,
-    DateTimeOffset CreatedAt);
+    string SealedTask,
+    string SealedStart);
 
-/// <summary>Ask a run to stop. Asking is all this does - the Host reports Cancelled once it has.</summary>
-public sealed record CancelRunPayload(string RunId);
+/// <summary>
+/// Ask a run to stop. Asking is all this does - the Host reports Cancelled once it has.
+/// <see cref="Sealed"/> holds the owner's authorization for this run, so a gateway cannot cancel one
+/// on its own.
+/// </summary>
+public sealed record CancelRunPayload(string RunId, string Sealed);
 
 /// <summary>
 /// The owner's answer to a permission request.
@@ -42,20 +54,30 @@ public sealed record CancelRunPayload(string RunId);
 /// the action it is holding. Receiving this command is not authorisation: it may arrive after the
 /// same request was answered on the desktop, after it expired, or after the run ended, and the
 /// Host refuses it in all three cases.</para>
+///
+/// <para>The decision itself is only inside <see cref="Sealed"/>, with the approval id and hash it
+/// was given for. A plaintext Allow could be written by the gateway; a sealed one can only come from
+/// a device that holds this computer's key.</para>
 /// </summary>
 public sealed record ResolveApprovalPayload(
     string ApprovalId,
     string RunId,
-    string ToolCallId,
     string ActionHash,
-    RemoteDecision Decision);
+    string Sealed);
+
+/// <summary>
+/// Revoke or endorse a browser device. Everything, the device id included, is inside
+/// <see cref="Sealed"/>: the gateway has no business choosing which device a computer trusts.
+/// </summary>
+public sealed record DevicePayload(string Sealed);
 
 /// <summary>
 /// A permission request, exactly as the owner will see it.
 ///
-/// <para><see cref="Arguments"/> is the complete action, not a summary. A person cannot approve
-/// what they have not been shown, and a shortened description is how somebody approves a command
-/// whose tail they never read.</para>
+/// <para><see cref="SealedAction"/> holds the complete action, not a summary. A person cannot
+/// approve what they have not been shown, and a shortened description is how somebody approves a
+/// command whose tail they never read. It is sealed under the ids beside it, so the gateway can route
+/// the answer without reading what is being asked.</para>
 ///
 /// <para><see cref="RemoteDecidable"/> is false for a shell. The request is still published - the
 /// panel should say what is being asked and that the answer has to be given on the computer - but
@@ -65,11 +87,9 @@ public sealed record ResolveApprovalPayload(
 public sealed record ApprovalRequest(
     string ApprovalId,
     string ToolCallId,
-    string Tool,
-    string Arguments,
-    string WorkingDirectory,
     string ActionHash,
-    bool RemoteDecidable);
+    bool RemoteDecidable,
+    string SealedAction);
 
 /// <summary>How a request ended, and which request it was.</summary>
 public sealed record ApprovalResolution(
@@ -89,12 +109,15 @@ public sealed record ApprovalResolution(
 /// <para>The approval fields travel as objects rather than as a dozen nullable strings, so
 /// "ApprovalRequested with no tool call id" is a shape that has to be constructed deliberately
 /// instead of one that happens by omission.</para>
+///
+/// <para><see cref="SealedDetail"/> is sealed under this event's run, sequence and kind
+/// (<c>Ad.Event</c>), so the gateway cannot show one event's sentence as another's.</para>
 /// </summary>
 public sealed record HostEvent(
     string EventId,
     string RunId,
     long Sequence,
     RemoteEventKind Kind,
-    string? Detail = null,
+    string? SealedDetail = null,
     ApprovalRequest? Approval = null,
     ApprovalResolution? Resolution = null);

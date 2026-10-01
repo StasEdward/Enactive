@@ -12,8 +12,12 @@ public sealed record DeliveryNotice(string Kind, string Detail);
 /// the right order. It does not carry any of them out - at stage 3 it cannot, since this assembly
 /// has no reference to the engine. What a StartTask actually does arrives in stage 4 as a callback;
 /// everything here is what has to be true whatever that callback turns out to be.</para>
+///
+/// <para>It takes the <see cref="Sealer"/> for the one event it writes itself, the Interrupted report
+/// on startup: every event detail travels sealed, and one written in the clear would be stored by the
+/// gateway and fail to open in the browser.</para>
 /// </summary>
-public sealed class DeliveryLoop(HostStore store, IGatewayConnection gateway)
+public sealed class DeliveryLoop(HostStore store, IGatewayConnection gateway, Sealer sealer)
 {
     /// <summary>
     /// How often an event may be refused for a reason we do not understand before it is parked.
@@ -44,8 +48,9 @@ public sealed class DeliveryLoop(HostStore store, IGatewayConnection gateway)
     {
         foreach (var runId in store.RunsLeftInFlight())
         {
-            store.Enqueue(runId, RemoteEventKind.Interrupted,
-                "The application stopped while this run was in progress, so how it ended is unknown.");
+            store.Enqueue(runId, RemoteEventKind.Interrupted, sequence => sealer.Detail(
+                runId, sequence, RemoteEventKind.Interrupted,
+                "The application stopped while this run was in progress, so how it ended is unknown."));
 
             _notices.Add(new DeliveryNotice("Interrupted", runId));
         }

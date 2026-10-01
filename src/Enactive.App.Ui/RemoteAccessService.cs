@@ -42,7 +42,14 @@ internal sealed class RemoteAccessService : IAsyncDisposable
     /// <summary>Longest wait between attempts to reconnect after the gateway refused to be reached.</summary>
     private static readonly TimeSpan MaxBackoff = TimeSpan.FromMinutes(2);
 
+    /// <summary>
+    /// What a person is told while this computer has no protocol-2 keys. Connecting without them would
+    /// publish workspaces nobody can read and take commands this computer cannot open, so it does not.
+    /// </summary>
+    public const string NeedsPairing = "Remote access needs this computer to be paired again (protocol 2).";
+
     private readonly RemoteAccessSettings _settings;
+    private readonly Sealer? _sealer;
     private readonly Func<WorkspaceEntry, Task<RunEnvironment>> _environment;
     private readonly Func<IReadOnlyList<WorkspaceEntry>> _workspaces;
     private readonly IDecisionHandler _desktop;
@@ -71,6 +78,10 @@ internal sealed class RemoteAccessService : IAsyncDisposable
     /// </summary>
     private readonly RemoteApprovals _approvals = new();
 
+    /// <param name="keys">
+    /// This computer's keys, or null when it has none yet - which is every computer until it is paired
+    /// under protocol 2. Null is not an error: the service says so and does not connect.
+    /// </param>
     /// <param name="environment">
     /// The run setup for one workspace. A function of the WORKSPACE rather than a value, because
     /// the autonomy level, worker and staging flag are facts about a folder: a task naming one
@@ -85,12 +96,14 @@ internal sealed class RemoteAccessService : IAsyncDisposable
     /// </param>
     public RemoteAccessService(
         RemoteAccessSettings settings,
+        IHostKeys? keys,
         Func<WorkspaceEntry, Task<RunEnvironment>> environment,
         Func<IReadOnlyList<WorkspaceEntry>> workspaces,
         IDecisionHandler desktop,
         string databasePath)
     {
         _settings = settings;
+        _sealer = keys is null ? null : new Sealer(keys, TimeProvider.System);
         _environment = environment;
         _workspaces = workspaces;
         _desktop = desktop;
@@ -131,6 +144,12 @@ internal sealed class RemoteAccessService : IAsyncDisposable
         if (!_settings.Enabled)
         {
             Status = "Remote access is off.";
+            return;
+        }
+
+        if (_sealer is null)
+        {
+            Status = NeedsPairing;
             return;
         }
 
@@ -193,7 +212,14 @@ internal sealed class RemoteAccessService : IAsyncDisposable
         // Opened once and kept: the store is this computer's record of what it was asked to do and
         // what it has not yet managed to report, and it must outlive any one connection.
         _store ??= new HostStore(_databasePath);
-        _runner ??= new RemoteRunner(_store, _approvals, PrepareAsync);
+        if (_runner is null)
+        {
+            _runner = new RemoteRunner(_store, _approvals, _sealer!, PrepareAsync);
+
+            // A refused command with no run to report on is said here, the same way a command that
+            // failed is: otherwise the only trace of a forged command would be a list nobody reads.
+            _runner.Noticed += notice => Status = $"A remote command was refused: {notice.Detail}";
+        }
 
         await using var connection = new SignalRGatewayConnection(
             GatewayAddress.Hub(_settings.GatewayUrl), _settings.Token);
@@ -201,7 +227,7 @@ internal sealed class RemoteAccessService : IAsyncDisposable
         _connection = connection;
         await connection.StartAsync(ct);
 
-        var loop = new DeliveryLoop(_store, connection);
+        var loop = new DeliveryLoop(_store, connection, _sealer!);
 
         // Once per PROCESS, not once per connection. "In flight" means a run with no ending
         // written, and a run going right now is one of those - so doing this after a dropped socket
@@ -224,7 +250,7 @@ internal sealed class RemoteAccessService : IAsyncDisposable
             {
                 nextSync = DateTimeOffset.UtcNow + SyncEvery;
 
-                foreach (var command in await loop.TurnAsync(Publishable(_workspaces()), ct))
+                foreach (var command in await loop.TurnAsync(Publishable(_workspaces(), _sealer!), ct))
                 {
                     Begin(command);
                 }
@@ -257,8 +283,11 @@ internal sealed class RemoteAccessService : IAsyncDisposable
     /// application started should be reachable without restarting it, and one whose folder has been
     /// deleted should stop being offered. A folder that cannot be read is skipped rather than
     /// failing the sync - one missing project must not take remote access down.</para>
+    ///
+    /// <para>The name is sealed and only the id travels in the clear: a folder's name is often a
+    /// client's or a project's, and the gateway needs nothing but the id to route a task.</para>
     /// </summary>
-    public static IReadOnlyList<WorkspaceRef> Publishable(IReadOnlyList<WorkspaceEntry> entries)
+    public static IReadOnlyList<WorkspaceRef> Publishable(IReadOnlyList<WorkspaceEntry> entries, Sealer sealer)
     {
         var published = new List<WorkspaceRef>();
 
@@ -269,8 +298,8 @@ internal sealed class RemoteAccessService : IAsyncDisposable
                 if (!Directory.Exists(entry.RootPath))
                     continue;
 
-                published.Add(new WorkspaceRef(
-                    WorkspaceInfo.For(entry.RootPath).Id.ToString(), entry.Name));
+                var id = WorkspaceInfo.For(entry.RootPath).Id.ToString();
+                published.Add(new WorkspaceRef(id, sealer.WorkspaceName(id, entry.Name)));
             }
             catch (Exception)
             {
@@ -308,7 +337,7 @@ internal sealed class RemoteAccessService : IAsyncDisposable
     /// desktop's wrapped so that either end can answer.</para>
     /// </summary>
     private async Task<RemotePreparation> PrepareAsync(
-        StartTaskPayload task,
+        OpenedStart task,
         Func<IDecisionHandler, IDecisionHandler> wrap,
         CancellationToken ct)
     {

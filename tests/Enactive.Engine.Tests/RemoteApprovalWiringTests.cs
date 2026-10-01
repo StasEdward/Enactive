@@ -35,17 +35,13 @@ public sealed class RemoteApprovalWiringTests : IDisposable
 
     private readonly HostStore _store;
     private readonly RemoteApprovals _approvals = new();
+    private readonly FixedHostKeys _keys = new();
 
     public RemoteApprovalWiringTests()
     {
         _store = new HostStore(Path.Combine(_folder, "remote.db"));
 
-        _store.Accept(new HostCommand(
-            "command-1", "host-1", CommandKind.StartTask,
-            RemoteJson.Serialize(new StartTaskPayload(
-                RunId, "task-1", "workspace-1", "T", "P", DateTimeOffset.UtcNow)),
-            CommandStatus.PendingDelivery, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddHours(24)));
-
+        _store.Accept(_keys.Start(runId: RunId));
         _store.BeginRun("command-1", RunId);
     }
 
@@ -109,7 +105,7 @@ public sealed class RemoteApprovalWiringTests : IDisposable
                      worker: EngineFixture.WorkerWith("read_file"),
                      policy: AsksBefore("read_file"),
                      decisions: new RemoteDecisionHandler(
-                         new ScriptedDecisionHandler("allow"), _store, _approvals,
+                         new ScriptedDecisionHandler("allow"), _store, _approvals, _keys.Sealer(),
                          RunId, TimeSpan.FromSeconds(30))),
             "read the notes");
 
@@ -139,16 +135,18 @@ public sealed class RemoteApprovalWiringTests : IDisposable
                      worker: EngineFixture.WorkerWith("read_file"),
                      policy: AsksBefore("read_file"),
                      decisions: new RemoteDecisionHandler(
-                         new ScriptedDecisionHandler("allow"), _store, _approvals,
+                         new ScriptedDecisionHandler("allow"), _store, _approvals, _keys.Sealer(),
                          RunId, TimeSpan.FromSeconds(30))),
             "read the notes");
 
         var card = PublishedCard();
 
         Assert.NotNull(card);
-        Assert.Equal("read_file", card!.Tool);
+        var action = _keys.OpenAction(RunId, card!);
+        Assert.Equal("read_file", action.Tool);
         Assert.Equal("r1", card.ToolCallId);
-        Assert.Contains("notes.md", card.Arguments);
+        Assert.Contains("notes.md", action.FullText);
+        Assert.Contains("notes.md", action.ArgumentsJson);
         Assert.True(card.RemoteDecidable);
     }
 
@@ -181,13 +179,13 @@ public sealed class RemoteApprovalWiringTests : IDisposable
                      worker: EngineFixture.WorkerWith("run_command"),
                      policy: AsksBefore("run_command"),
                      decisions: new RemoteDecisionHandler(
-                         desktop, _store, _approvals, RunId, TimeSpan.FromSeconds(30))),
+                         desktop, _store, _approvals, _keys.Sealer(), RunId, TimeSpan.FromSeconds(30))),
             "run the thing");
 
         var card = PublishedCard();
 
         Assert.NotNull(card);
-        Assert.Equal("run_command", card!.Tool);
+        Assert.Equal("run_command", _keys.OpenAction(RunId, card!).Tool);
         Assert.False(card.RemoteDecidable);
 
         // The desktop was never asked. A shell refused for a web-started run is refused because of

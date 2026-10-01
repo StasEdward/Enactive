@@ -215,9 +215,14 @@ public sealed class HostStore : IDisposable
     /// <para>The number is allocated here rather than by the caller so it cannot be skipped, reused
     /// or handed out twice by two threads - the gateway refuses anything not ahead of what it has
     /// applied, and a duplicated number would mean an event that can never be delivered.</para>
+    ///
+    /// <para><paramref name="sealedDetail"/> is handed the sequence and returns the sealed sentence,
+    /// rather than being a sealed string already: the detail is sealed under its event's sequence
+    /// number, and that number exists only inside this transaction. A caller that guessed it would
+    /// seal a sentence no browser could open whenever another thread queued first.</para>
     /// </summary>
     public HostEvent Enqueue(
-        string runId, RemoteEventKind kind, string? detail = null,
+        string runId, RemoteEventKind kind, Func<long, string>? sealedDetail = null,
         ApprovalRequest? approval = null, ApprovalResolution? resolution = null)
     {
         using var guard = _gate.EnterScope();
@@ -231,7 +236,7 @@ public sealed class HostStore : IDisposable
             ("$next", sequence + 1), ("$run", runId));
 
         var published = new HostEvent(
-            Guid.NewGuid().ToString("N"), runId, sequence, kind, detail, approval, resolution);
+            Guid.NewGuid().ToString("N"), runId, sequence, kind, sealedDetail?.Invoke(sequence), approval, resolution);
 
         Execute(transaction,
             """

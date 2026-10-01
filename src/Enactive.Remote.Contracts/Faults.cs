@@ -40,6 +40,10 @@ public static class FaultCode
     public const string UnknownApproval = "unknown-approval";
     public const string UnknownHost = "unknown-host";
     public const string HostRevoked = "host-revoked";
+    public const string EnvelopeMalformed = "envelope-malformed";
+    public const string ProtocolMismatch = "protocol-mismatch";
+    public const string QuotaExceeded = "quota-exceeded";
+    public const string AccountDisabled = "account-disabled";
 }
 
 /// <summary>
@@ -94,10 +98,20 @@ public static class RemoteFaults
         // ever hears about.
         [FaultCode.MalformedEvent] = FaultDisposition.Drop,
         [FaultCode.UnknownEventKind] = FaultDisposition.Drop,
+        [FaultCode.EnvelopeMalformed] = FaultDisposition.Drop,
+
+        // The account is over its storage or rate for now. That passes - retention frees space, the
+        // window moves on - so the event is kept and sent again rather than lost.
+        [FaultCode.QuotaExceeded] = FaultDisposition.Retry,
 
         // The credential is gone. Reconnecting with it is the definition of pointless.
         [FaultCode.UnknownHost] = FaultDisposition.Fatal,
-        [FaultCode.HostRevoked] = FaultDisposition.Fatal
+        [FaultCode.HostRevoked] = FaultDisposition.Fatal,
+        [FaultCode.AccountDisabled] = FaultDisposition.Fatal,
+
+        // The two ends speak different protocols. Every call would be refused the same way until one
+        // of them is updated, which is a person's job and not something a retry can do.
+        [FaultCode.ProtocolMismatch] = FaultDisposition.Fatal
     };
 
     /// <summary>

@@ -3,15 +3,32 @@ namespace Enactive.Remote.Contracts;
 /// <summary>The protocol these contracts describe. Reported by the gateway's health endpoint.</summary>
 public static class RemoteProtocol
 {
-    public const int Version = 1;
+    /// <summary>
+    /// 2 is the end-to-end sealed protocol. Pairing codes and invitation links carry this number too,
+    /// so a build that speaks another protocol refuses them by version instead of misreading them.
+    /// </summary>
+    public const int Version = 2;
+
+    /// <summary>
+    /// How long a command waits for its computer before the gateway writes it off. Here rather than in
+    /// the gateway because the Host needs it too: it refuses a sealed command issued longer ago than
+    /// this (plus clock skew), which is what stops a gateway that kept an old command from replaying it.
+    /// </summary>
+    public static readonly TimeSpan CommandLifetime = TimeSpan.FromHours(24);
 }
 
-/// <summary>What the owner asked the Host to do. The payload is read according to this.</summary>
+/// <summary>
+/// What the owner asked the Host to do. The payload is read according to this. The names are
+/// protocol constants: they are part of the associated data a command is sealed under, so renaming
+/// one makes every command of that kind fail to open.
+/// </summary>
 public enum CommandKind
 {
     StartTask,
     CancelRun,
-    ResolveApproval
+    ResolveApproval,
+    RevokeDevice,
+    EndorseDevice
 }
 
 /// <summary>

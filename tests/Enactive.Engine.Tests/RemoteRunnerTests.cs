@@ -38,16 +38,17 @@ public sealed class RemoteRunnerTests : IDisposable
         }
     }
 
-    private static readonly StartTaskPayload Task1 = new(
-        "run-1", "task-1", "workspace-1", "Run the tests", "Please run them.", DateTimeOffset.UtcNow);
+    private static readonly FixedHostKeys Keys = new();
 
-    private static HostCommand Start(string commandId = "command-1", StartTaskPayload? task = null)
-        => new(commandId, "host-1", CommandKind.StartTask, RemoteJson.Serialize(task ?? Task1),
-            CommandStatus.PendingDelivery, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddHours(24));
+    // Sealed once and reused, so the command a test accepts and the one it applies are the same bytes,
+    // as a redelivery from the gateway would be.
+    private static readonly HostCommand Started = Keys.Start();
+
+    private static HostCommand Start() => Started;
 
     private static RemoteRunner Runner(
         HostStore store, IOrchestrator orchestrator, IAsyncDisposable? resources = null)
-        => new(store, new RemoteApprovals(), (task, _, _) =>
+        => new(store, new RemoteApprovals(), Keys.Sealer(), (task, _, _) =>
             System.Threading.Tasks.Task.FromResult(new RemotePreparation(
                 orchestrator,
                 new Intent(
@@ -67,7 +68,7 @@ public sealed class RemoteRunnerTests : IDisposable
         // NextOwed hands back one event per run, so the queue is read by draining it.
         while (store.NextOwed().FirstOrDefault(o => o.RunId == runId) is { } owed)
         {
-            events.Add((owed.Event.Kind, owed.Event.Detail));
+            events.Add((owed.Event.Kind, Keys.OpenDetail(owed.Event)));
             store.Discard(owed.EventId);
         }
 
@@ -311,12 +312,64 @@ public sealed class RemoteRunnerTests : IDisposable
     public async Task An_answer_for_a_request_nobody_is_waiting_on_is_harmless()
     {
         using var store = Open();
-        var resolve = new HostCommand(
-            "command-2", "host-1", CommandKind.ResolveApproval,
-            RemoteJson.Serialize(new ResolveApprovalPayload("a1", "run-1", "call-1", "hash", RemoteDecision.Allow)),
-            CommandStatus.PendingDelivery, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddHours(24));
+        var resolve = Keys.Decide("a1", "hash", RemoteDecision.Allow, commandId: "command-2");
 
         await Runner(store, new FakeOrchestrator()).ApplyAsync(resolve);
+    }
+
+    // ── a command that does not open ────────────────────────────────────────
+
+    /// <summary>
+    /// A start the gateway wrote itself, sealed with a key this computer never gave out. Nothing runs -
+    /// the orchestrator is never asked - and the run is still opened and ended Failed, because the
+    /// panel is showing a queued run and the person who sees it stuck needs to read why.
+    /// </summary>
+    [Fact]
+    public async Task A_start_that_does_not_open_ends_failed_and_runs_nothing()
+    {
+        using var store = Open();
+        var forged = new FixedHostKeys("host-1", Enactive.Remote.Contracts.Crypto.HostKey.Create(1)).Start();
+        store.Accept(forged);
+
+        var orchestrator = new FakeOrchestrator(
+            Event(EventKind.TaskCompleted, "done", WorkEventPayload.OutcomePayload(RunOutcomeKind.Completed)));
+        await Runner(store, orchestrator).ApplyAsync(forged);
+
+        Assert.Equal(0, orchestrator.Submissions);
+
+        var (kind, detail) = Assert.Single(Queued(store, "run-1"));
+        Assert.Equal(RemoteEventKind.Failed, kind);
+        Assert.StartsWith("This computer refused the request: ", detail, StringComparison.Ordinal);
+        Assert.EndsWith(". It did not come from a device this computer trusts.", detail, StringComparison.Ordinal);
+        Assert.True(store.HasEnded("run-1"));
+    }
+
+    /// <summary>
+    /// A cancel the gateway forged, aimed at a run that is working. The run goes on; the refusal is a
+    /// notice on this computer, because there is no run of its own to report it on.
+    /// </summary>
+    [Fact]
+    public async Task A_cancel_that_does_not_open_is_noticed_and_does_nothing()
+    {
+        using var store = Open();
+        store.Accept(Start());
+
+        var orchestrator = new FakeOrchestrator(Event(EventKind.StepStarted, "[1/1] Working")) { BlockAfterFirst = true };
+        var runner = Runner(store, orchestrator);
+
+        var running = runner.ApplyAsync(Start());
+        await orchestrator.Reached.Task;
+
+        var forged = new FixedHostKeys("host-1", Enactive.Remote.Contracts.Crypto.HostKey.Create(1)).Cancel();
+        await runner.ApplyAsync(forged);
+
+        Assert.False(orchestrator.SawCancellation);
+        Assert.Contains("run-1", runner.Running);
+        Assert.Contains(runner.Notices, n => n.Kind == "Refused" && n.Detail.Contains(forged.Id, StringComparison.Ordinal));
+
+        await runner.ApplyAsync(Keys.Cancel());
+        await running;
+        Assert.True(orchestrator.SawCancellation);
     }
 
     /// <summary>
