@@ -1,5 +1,6 @@
 namespace Enactive.Remote.Gateway.Tests;
 
+using Enactive.Remote.Gateway.Services;
 using Enactive.Remote.Gateway.Storage;
 using Xunit;
 
@@ -441,6 +442,59 @@ public sealed class SchemaTests(TestDatabase database) : IClassFixture<TestDatab
 
         Assert.NotNull(refused);
         Assert.Contains("Incorrect string value", refused!.Message, StringComparison.Ordinal);
+    }
+
+    // ── what retention reads through ────────────────────────────────────────
+
+    /// <summary>
+    /// Retention deletes one person's oldest rows a batch at a time. Through a key on (owner, time)
+    /// that batch is the first stretch of one range of the index, read in order. Without one, MySQL
+    /// read every row the person had, sorted them, and locked each row it read until the batch
+    /// committed - a batch "of a thousand" holding locks on all of an account's history while that
+    /// account was writing to it.
+    /// </summary>
+    [Theory]
+    [InlineData("events", "ix_events_owner_at")]
+    [InlineData("notices", "ix_notices_owner_at")]
+    public async Task Retention_deletes_through_the_owners_time_key(string table, string key)
+    {
+        var alice = await SeedAsync("Alice");
+
+        foreach (var owner in new[] { alice, await SeedAsync("Bob") })
+        {
+            // Two hundred rows a day apart for each of two people, most of them past the cutoff: the
+            // first pass over a neglected account, where the optimizer, left to itself, read the whole
+            // table and sorted it even with the key there.
+            await database.ExecuteAsync(table == "events"
+                ? $"""
+                  INSERT INTO events (owner_id, host_id, id, run_id, sequence, kind, sealed_detail, at, ordinal)
+                  WITH RECURSIVE n (i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 200)
+                  SELECT '{owner.UserId}', '{owner.HostId}', CONCAT('retention-', i), '{owner.RunId}', i,
+                         'Progress', 'e1:AAAA', UTC_TIMESTAMP(3) - INTERVAL i DAY, 100000 + i
+                  FROM n
+                  """
+                : $"""
+                  INSERT INTO notices (id, owner_id, run_id, kind, at, is_read, ordinal)
+                  WITH RECURSIVE n (i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 200)
+                  SELECT REPLACE(UUID(), '-', ''), '{owner.UserId}', '{owner.RunId}', 'Completed',
+                         UTC_TIMESTAMP(3) - INTERVAL i DAY, i % 2, i
+                  FROM n
+                  """);
+        }
+
+        await database.ExecuteAsync($"ANALYZE TABLE {table}");
+
+        await using var connection = await database.OpenAsync();
+        await using var explain = new MySqlConnector.MySqlCommand(
+            "EXPLAIN " + Retention.DeleteBatch(table), connection);
+        explain.Parameters.AddWithValue("@owner", alice.UserId);
+        explain.Parameters.AddWithValue("@cutoff", DateTime.UtcNow.AddDays(-30));
+        await using var plan = await explain.ExecuteReaderAsync();
+
+        Assert.True(await plan.ReadAsync());
+        var extra = plan["Extra"] as string ?? "";
+        Assert.Equal(key, plan["key"] as string);
+        Assert.DoesNotContain("filesort", extra, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

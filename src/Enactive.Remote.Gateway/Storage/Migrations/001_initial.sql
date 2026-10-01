@@ -246,6 +246,9 @@ CREATE TABLE IF NOT EXISTS notices (
   PRIMARY KEY (id),
   UNIQUE KEY ux_notices_owner_ordinal (owner_id, ordinal),
   KEY ix_notices_owner_unread (owner_id, is_read, at),
+  -- What retention deletes through, a person's oldest first. Without it the per-owner DELETE read and
+  -- locked all of that person's notices to find the oldest thousand.
+  KEY ix_notices_owner_at (owner_id, at),
   CONSTRAINT fk_notices_run FOREIGN KEY (owner_id, run_id) REFERENCES runs (owner_id, id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 

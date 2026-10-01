@@ -7,6 +7,7 @@ using Enactive.Remote.Contracts.Crypto;
 using Enactive.Remote.Gateway;
 using Enactive.Remote.Gateway.Services;
 using Enactive.Remote.Gateway.Storage;
+using MySqlConnector;
 using Xunit;
 
 /// <summary>
@@ -911,6 +912,200 @@ public sealed class UserServiceTests(TestDatabase database) : IClassFixture<Test
             [("@host", hostId), ("@id", approvalId)],
             () => Users.DecideAsync(
                 bob, approvalId, hostId, Uuid(), RemoteDecision.Allow, ActionHash, Sealed("allow"), default));
+    }
+
+    // ── lock order and deadlocks ────────────────────────────────────────────
+
+    /// <summary>The call has not finished: it is waiting for a lock somebody else holds.</summary>
+    private static async Task StillWaitingAsync(Task call)
+        => await Assert.ThrowsAsync<TimeoutException>(() => call.WaitAsync(TimeSpan.FromMilliseconds(500)));
+
+    /// <summary>
+    /// A command reads its computer before it locks the thing on it. Locking the target first, an
+    /// answer held its request while it waited behind a revocation for the computer - and a report
+    /// from that computer, already holding the computer shared, waited for the request: see the race
+    /// below. Here a revocation holds the computer, and the target must still be free while the
+    /// command waits; NOWAIT makes a held one fail at once instead of hanging the test.
+    /// </summary>
+    [Theory]
+    [InlineData("start")]
+    [InlineData("cancel")]
+    [InlineData("decide")]
+    public async Task A_command_reads_its_computer_before_it_locks_its_target(string command)
+    {
+        var alice = await PersonAsync("alice");
+        var (hostId, runId, approvalId) = await WaitingForApprovalAsync(alice, remoteDecidable: true);
+        var taskId = Uuid();
+        await Users.CreateTaskAsync(alice, taskId, hostId, "workspace-1", Sealed("Another"), default);
+
+        // A revocation, held open: the computer is locked exclusively.
+        await using var connection = await database.OpenAsync();
+        await using var revoking = await connection.BeginAsync(default);
+        await connection.ExecuteAsync(revoking,
+            "SELECT id FROM hosts WHERE id = @host FOR UPDATE", ("@host", hostId));
+
+        var send = command switch
+        {
+            "start" => Users.StartAsync(alice, taskId, Uuid(), Sealed("start"), default),
+            "cancel" => Users.CancelAsync(alice, runId, Uuid(), Sealed("cancel"), default),
+            _ => Users.DecideAsync(
+                alice, approvalId, hostId, Uuid(), RemoteDecision.Allow, ActionHash, Sealed("allow"), default)
+        };
+
+        await StillWaitingAsync(send);
+
+        var (lockTarget, target) = command switch
+        {
+            "start" => ("SELECT id FROM tasks WHERE owner_id = @owner AND id = @id FOR UPDATE NOWAIT", taskId),
+            "cancel" => ("SELECT id FROM runs WHERE owner_id = @owner AND id = @id FOR UPDATE NOWAIT", runId),
+            _ => ("SELECT id FROM approvals WHERE host_id = @host AND id = @id FOR UPDATE NOWAIT", approvalId)
+        };
+
+        await using (var probing = await database.OpenAsync())
+        await using (var probe = await probing.BeginAsync(default))
+        {
+            await probing.ExecuteAsync(probe, lockTarget,
+                ("@owner", alice.UserId), ("@host", hostId), ("@id", target));
+        }
+
+        await revoking.RollbackAsync();
+        await send.WaitAsync(Generously);
+    }
+
+    /// <summary>
+    /// A computer reporting how a permission request ended, its owner answering that request, and
+    /// its owner revoking the computer, all at once. The answer locked its request and then read the
+    /// computer; the report had read the computer and then reached for the request; and the
+    /// revocation, waiting to lock the computer exclusively, queued between them, so the answer's
+    /// shared read waited behind it. Each waited for the next, and the database rolled one back: a
+    /// 500 for the person, or an event the computer retried and then parked.
+    ///
+    /// <para>The answer reads the computer first now, so it waits behind the revocation holding
+    /// nothing; the report finishes, the revocation after it, and the answer is refused in its own
+    /// words.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_decide_publish_revoke_race_does_not_surface_a_deadlock()
+    {
+        var alice = await PersonAsync("alice");
+        var (hostId, runId, approvalId) = await WaitingForApprovalAsync(alice, remoteDecidable: true);
+        var computer = new HostService(Db);
+
+        // Holds the report at the right moment: it has read the account and the computer, shared,
+        // and waits for the run.
+        await using var connection = await database.OpenAsync();
+        await using var holding = await connection.BeginAsync(default);
+        await connection.ExecuteAsync(holding,
+            "SELECT id FROM runs WHERE id = @run FOR UPDATE", ("@run", runId));
+
+        var publish = computer.PublishAsync(new HostAccess(hostId, alice.UserId), new HostEvent(
+            Ids.New(), runId, 1, RemoteEventKind.ApprovalResolved,
+            Resolution: new ApprovalResolution(approvalId, ActionHash, ApprovalOutcome.Allowed)));
+        await StillWaitingAsync(publish);
+
+        var revoke = Users.RevokeHostAsync(alice, hostId, default);
+        await StillWaitingAsync(revoke);
+
+        var decide = Users.DecideAsync(
+            alice, approvalId, hostId, Uuid(), RemoteDecision.Allow, ActionHash, Sealed("allow"), default);
+        await StillWaitingAsync(decide);
+
+        // Let the report go on to the request.
+        await holding.RollbackAsync();
+
+        var all = Task.WhenAll(publish, revoke, decide);
+        await Record.ExceptionAsync(() => all.WaitAsync(Generously));
+
+        Assert.True(all.IsCompleted, "The three calls were still waiting after five seconds.");
+        Assert.All(new[] { publish, revoke, decide }, call => Assert.False(
+            call.Exception?.InnerException is MySqlException, call.Exception?.InnerException?.Message));
+
+        // The report and the revocation went through; the answer came too late for either.
+        Assert.True(publish.IsCompletedSuccessfully);
+        Assert.True(revoke.IsCompletedSuccessfully);
+        Assert.IsType<GatewayFault>(decide.Exception?.InnerException);
+        Assert.Equal("Allowed", Assert.Single(
+            await database.StringsAsync($"SELECT status FROM approvals WHERE id = '{approvalId}'")));
+        Assert.Equal(0, await CountAsync(
+            $"SELECT COUNT(*) FROM commands WHERE host_id = '{hostId}' AND kind = 'ResolveApproval'"));
+    }
+
+    /// <summary>
+    /// A deadlock no lock order prevents - another transaction takes the same rows the other way
+    /// round - is retried, and the person's cancel is queued as if nothing had happened. Without the
+    /// retry the database's choice of victim reached the person as a 500, for a request that would
+    /// have succeeded a moment later.
+    /// </summary>
+    [Fact]
+    public async Task A_deadlock_is_retried_and_succeeds()
+    {
+        var alice = await PersonAsync("alice");
+        var (hostId, _, runId, _) = await StartedAsync(alice);
+        var commandId = Uuid();
+
+        await using var connection = await database.OpenAsync();
+        await using var other = await connection.BeginAsync(default);
+
+        // The database rolls back the transaction that has written least. These rows make the other
+        // transaction the heavier one, so the cancel is the one chosen.
+        for (var i = 0; i < 20; i++)
+        {
+            await connection.ExecuteAsync(other,
+                "INSERT INTO audit (owner_id, at, actor, action) VALUES (NULL, UTC_TIMESTAMP(3), 'operator', 'test')");
+        }
+
+        // An uncommitted row under the cancel's own command id: the cancel locks the run and then
+        // waits here, in its idempotency lookup.
+        await connection.ExecuteAsync(other,
+            """
+            INSERT INTO commands (owner_id, id, host_id, kind, payload, fingerprint, status, created_at, expires_at)
+            VALUES (@owner, @id, @host, 'CancelRun', '{}', SHA2(@id, 256), 'AcceptedByHost',
+                    UTC_TIMESTAMP(3), UTC_TIMESTAMP(3) + INTERVAL 1 DAY)
+            """,
+            ("@owner", alice.UserId), ("@id", commandId), ("@host", hostId));
+
+        var cancel = Users.CancelAsync(alice, runId, commandId, Sealed("cancel"), default);
+        await StillWaitingAsync(cancel);
+
+        // ...and this reaches for the run the cancel holds: each waits for the other.
+        await connection.ExecuteAsync(other,
+            "SELECT id FROM runs WHERE id = @run FOR UPDATE", ("@run", runId));
+        await other.RollbackAsync();
+
+        Assert.Equal(CommandKind.CancelRun, (await cancel.WaitAsync(Generously)).Kind);
+        Assert.Equal("CancelRequested", Assert.Single(
+            await database.StringsAsync($"SELECT status FROM runs WHERE id = '{runId}'")));
+    }
+
+    /// <summary>
+    /// Only a deadlock is worth running again. Anything else - a duplicate key, here - would fail the
+    /// same way every time, and three attempts would only make the person wait three times as long
+    /// for the same error.
+    /// </summary>
+    [Fact]
+    public async Task Only_deadlocks_are_retried()
+    {
+        var alice = await PersonAsync("alice");
+        var hostId = await ConnectedHostAsync(alice);
+        var attempts = 0;
+
+        var refused = await Assert.ThrowsAsync<MySqlException>(() => Db.InTransactionAsync(
+            async (connection, transaction) =>
+            {
+                attempts++;
+
+                // The workspace ConnectedHostAsync published, a second time.
+                return await connection.ExecuteAsync(transaction,
+                    """
+                    INSERT INTO host_workspaces (owner_id, host_id, workspace_id, sealed_name)
+                    VALUES (@owner, @host, 'workspace-1', @name)
+                    """,
+                    ("@owner", alice.UserId), ("@host", hostId), ("@name", Sealed("Enactive")));
+            },
+            default));
+
+        Assert.Equal(MySqlErrorCode.DuplicateKeyEntry, refused.ErrorCode);
+        Assert.Equal(1, attempts);
     }
 
     // ── notices ─────────────────────────────────────────────────────────────

@@ -28,6 +28,15 @@ using MySqlConnector;
 /// owner id and locks nothing of Alice's. Tables whose primary key starts with owner_id (tasks,
 /// commands) need no hint.</para>
 ///
+/// <para><b>Lock order.</b> The same as <see cref="HostService"/>'s, so no two paths wait for each other
+/// in a cycle: the computer first, FOR SHARE; then the target - the task, the run or the request;
+/// then the command row; and a revocation locks the computer and then its commands. A command whose
+/// target names its computer reads that one column without a lock to find it. Locking the target
+/// first was a three-way deadlock: an answer held its request and waited to read the computer
+/// behind a revocation queued for it exclusively, the revocation waited for the computer's own
+/// report holding it shared, and the report waited for the request. A deadlock the order cannot
+/// prevent is run again whole by <see cref="Database.InTransactionAsync{T}"/>.</para>
+///
 /// <para><b>Nothing a person wrote is readable here.</b> A task, and the authorization of every
 /// command, arrive sealed by the browser. This checks that each is an envelope of a sensible size and
 /// passes it through; only the computer can open it.</para>
@@ -87,38 +96,34 @@ public sealed class UserService(Database db, Limits limits, TimeProvider clock)
     /// Host already ACCEPTED are left alone, because it owns them now and may well be carrying one
     /// out - pretending otherwise would make the panel claim a stop that never happened.
     /// </summary>
-    public async Task RevokeHostAsync(UserAccess user, string hostId, CancellationToken ct)
-    {
-        await using var connection = await db.OpenAsync(ct);
-        await using var transaction = await connection.BeginAsync(ct);
-
-        // FORCE INDEX (see the class comment): through the primary key this locked another person's row.
-        var exists = await connection.ExistsAsync(transaction,
-            """
-            SELECT 1 FROM hosts FORCE INDEX (ux_hosts_owner)
-            WHERE owner_id = @owner AND id = @host
-            FOR UPDATE
-            """,
-            ("@owner", user.UserId), ("@host", hostId));
-
-        if (!exists)
+    public Task RevokeHostAsync(UserAccess user, string hostId, CancellationToken ct)
+        => db.InTransactionAsync(async (connection, transaction) =>
         {
-            throw NoSuchComputer();
-        }
+            // FORCE INDEX (see the class comment): through the primary key this locked another person's row.
+            var exists = await connection.ExistsAsync(transaction,
+                """
+                SELECT 1 FROM hosts FORCE INDEX (ux_hosts_owner)
+                WHERE owner_id = @owner AND id = @host
+                FOR UPDATE
+                """,
+                ("@owner", user.UserId), ("@host", hostId));
 
-        await connection.ExecuteAsync(transaction,
-            "UPDATE hosts SET revoked = 1, last_seen_at = NULL WHERE owner_id = @owner AND id = @host",
-            ("@owner", user.UserId), ("@host", hostId));
+            if (!exists)
+            {
+                throw NoSuchComputer();
+            }
 
-        await connection.ExecuteAsync(transaction,
-            """
-            UPDATE commands SET status = @rejected
-            WHERE owner_id = @owner AND host_id = @host AND status = 'PendingDelivery'
-            """,
-            ("@rejected", CommandStatus.Rejected), ("@owner", user.UserId), ("@host", hostId));
+            await connection.ExecuteAsync(transaction,
+                "UPDATE hosts SET revoked = 1, last_seen_at = NULL WHERE owner_id = @owner AND id = @host",
+                ("@owner", user.UserId), ("@host", hostId));
 
-        await transaction.CommitAsync(ct);
-    }
+            await connection.ExecuteAsync(transaction,
+                """
+                UPDATE commands SET status = @rejected
+                WHERE owner_id = @owner AND host_id = @host AND status = 'PendingDelivery'
+                """,
+                ("@rejected", CommandStatus.Rejected), ("@owner", user.UserId), ("@host", hostId));
+        }, ct);
 
     // ── tasks ───────────────────────────────────────────────────────────────
 
@@ -140,59 +145,57 @@ public sealed class UserService(Database db, Limits limits, TimeProvider clock)
 
         var fingerprint = Ids.Fingerprint($"{hostId}|{workspaceId}|{sealedTask}");
 
-        await using var connection = await db.OpenAsync(ct);
-        await using var transaction = await connection.BeginAsync(ct);
-
-        await EnsureLiveHostAsync(connection, transaction, user.UserId, hostId);
-
-        var previous = await connection.ReadOneAsync(transaction,
-            "SELECT fingerprint FROM tasks WHERE owner_id = @owner AND id = @id FOR UPDATE",
-            reader => reader.GetString("fingerprint"),
-            ("@owner", user.UserId), ("@id", taskId));
-
-        if (previous is not null)
+        await db.InTransactionAsync(async (connection, transaction) =>
         {
-            if (!string.Equals(previous, fingerprint, StringComparison.Ordinal))
+            await EnsureLiveHostAsync(connection, transaction, user.UserId, hostId);
+
+            var previous = await connection.ReadOneAsync(transaction,
+                "SELECT fingerprint FROM tasks WHERE owner_id = @owner AND id = @id FOR UPDATE",
+                reader => reader.GetString("fingerprint"),
+                ("@owner", user.UserId), ("@id", taskId));
+
+            if (previous is not null)
             {
-                throw GatewayFault.Conflict("That task id was already used for a different task.");
+                if (!string.Equals(previous, fingerprint, StringComparison.Ordinal))
+                {
+                    throw GatewayFault.Conflict("That task id was already used for a different task.");
+                }
+
+                return;
             }
 
-            await transaction.CommitAsync(ct);
-            return;
-        }
+            var known = await connection.ExistsAsync(transaction,
+                """
+                SELECT 1 FROM host_workspaces
+                WHERE owner_id = @owner AND host_id = @host AND workspace_id = @workspace
+                """,
+                ("@owner", user.UserId), ("@host", hostId), ("@workspace", workspaceId));
 
-        var known = await connection.ExistsAsync(transaction,
-            """
-            SELECT 1 FROM host_workspaces
-            WHERE owner_id = @owner AND host_id = @host AND workspace_id = @workspace
-            """,
-            ("@owner", user.UserId), ("@host", hostId), ("@workspace", workspaceId));
+            if (!known)
+            {
+                throw GatewayFault.BadRequest(
+                    "Choose a workspace this computer has published. It publishes them when it connects.");
+            }
 
-        if (!known)
-        {
-            throw GatewayFault.BadRequest(
-                "Choose a workspace this computer has published. It publishes them when it connects.");
-        }
-
-        await connection.ExecuteAsync(transaction,
-            """
-            INSERT INTO tasks (owner_id, id, host_id, workspace_id, sealed, fingerprint, created_at)
-            VALUES (@owner, @id, @host, @workspace, @sealed, @fingerprint, @now)
-            """,
-            ("@owner", user.UserId), ("@id", taskId), ("@host", hostId), ("@workspace", workspaceId),
-            ("@sealed", sealedTask), ("@fingerprint", fingerprint), ("@now", clock.GetUtcNow()));
-
-        await transaction.CommitAsync(ct);
+            await connection.ExecuteAsync(transaction,
+                """
+                INSERT INTO tasks (owner_id, id, host_id, workspace_id, sealed, fingerprint, created_at)
+                VALUES (@owner, @id, @host, @workspace, @sealed, @fingerprint, @now)
+                """,
+                ("@owner", user.UserId), ("@id", taskId), ("@host", hostId), ("@workspace", workspaceId),
+                ("@sealed", sealedTask), ("@fingerprint", fingerprint), ("@now", clock.GetUtcNow()));
+        }, ct);
     }
 
     // ── commands ────────────────────────────────────────────────────────────
     //
-    // Each command method follows one order: find the target in the caller's account, check its
-    // computer is live, then look for a retry of this command id, then check the target's state. A
-    // retry is looked for AFTER the target and its computer, so a repeated request is answered only
-    // while the caller still owns the thing and the computer can still receive it; and BEFORE the
-    // state checks, because the first attempt changed that state - a retried cancel would otherwise
-    // be refused by the very request it repeats.
+    // Each command method follows one order: check the target's computer is live, then lock the
+    // target in the caller's account, then look for a retry of this command id, then check the
+    // target's state. The computer comes first because that is the lock order (see the class
+    // comment). A retry is looked for AFTER the target and its computer, so a repeated request is
+    // answered only while the caller still owns the thing and the computer can still receive it; and
+    // BEFORE the state checks, because the first attempt changed that state - a retried cancel would
+    // otherwise be refused by the very request it repeats.
 
     /// <summary>
     /// Queues a run of an existing task. The command carries the task exactly as the browser sealed
@@ -208,66 +211,71 @@ public sealed class UserService(Database db, Limits limits, TimeProvider clock)
         // different authorization is a different request.
         var fingerprint = Ids.Fingerprint($"StartTask:{taskId}:{sealedStart}");
 
-        await using var connection = await db.OpenAsync(ct);
-        await using var transaction = await connection.BeginAsync(ct);
-
-        // Locked, so two starts of one task take turns: each sees the other's run when it checks
-        // for an active one below.
-        var task = await connection.ReadOneAsync(transaction,
-            """
-            SELECT host_id, workspace_id, sealed FROM tasks
-            WHERE owner_id = @owner AND id = @id
-            FOR UPDATE
-            """,
-            reader => new TaskTarget(
-                reader.GetString("host_id"), reader.GetString("workspace_id"), reader.GetString("sealed")),
-            ("@owner", user.UserId), ("@id", taskId))
-            ?? throw NoSuchTask();
-
-        await EnsureLiveHostAsync(connection, transaction, user.UserId, task.HostId);
-
-        if (await ExistingCommandAsync(connection, transaction, user.UserId, commandId, fingerprint)
-            is { } repeated)
+        return await db.InTransactionAsync(async (connection, transaction) =>
         {
-            await transaction.CommitAsync(ct);
-            return repeated;
-        }
+            // The computer is locked before the task, so the task's computer is read first and
+            // without a lock. A task never moves to another computer: what this finds is still true
+            // once both are locked.
+            var hostId = await connection.ReadOneAsync(transaction,
+                "SELECT host_id FROM tasks WHERE owner_id = @owner AND id = @id",
+                reader => reader.GetString("host_id"),
+                ("@owner", user.UserId), ("@id", taskId))
+                ?? throw NoSuchTask();
 
-        // One at a time. Two runs of one task would race each other over the same files, and the
-        // panel would have no way to say which timeline belonged to which.
-        var active = await connection.ExistsAsync(transaction,
-            """
-            SELECT 1 FROM runs
-            WHERE owner_id = @owner AND task_id = @task
-              AND status NOT IN ('Completed', 'Failed', 'Incomplete', 'Cancelled', 'Interrupted')
-            FOR UPDATE
-            """,
-            ("@owner", user.UserId), ("@task", taskId));
+            await EnsureLiveHostAsync(connection, transaction, user.UserId, hostId);
 
-        if (active)
-        {
-            throw GatewayFault.Conflict("This task is already running. Wait for it, or stop it first.");
-        }
+            // Locked, so two starts of one task take turns: each sees the other's run when it checks
+            // for an active one below.
+            var task = await connection.ReadOneAsync(transaction,
+                """
+                SELECT host_id, workspace_id, sealed FROM tasks
+                WHERE owner_id = @owner AND id = @id
+                FOR UPDATE
+                """,
+                reader => new TaskTarget(
+                    reader.GetString("host_id"), reader.GetString("workspace_id"), reader.GetString("sealed")),
+                ("@owner", user.UserId), ("@id", taskId))
+                ?? throw NoSuchTask();
 
-        var runId = Ids.New();
-        var now = clock.GetUtcNow();
+            if (await ExistingCommandAsync(connection, transaction, user.UserId, commandId, fingerprint)
+                is { } repeated)
+            {
+                return repeated;
+            }
 
-        await connection.ExecuteAsync(transaction,
-            """
-            INSERT INTO runs (id, owner_id, task_id, host_id, status, applied_sequence, created_at)
-            VALUES (@id, @owner, @task, @host, @queued, 0, @now)
-            """,
-            ("@id", runId), ("@owner", user.UserId), ("@task", taskId), ("@host", task.HostId),
-            ("@queued", RemoteRunStatus.Queued), ("@now", now));
+            // One at a time. Two runs of one task would race each other over the same files, and the
+            // panel would have no way to say which timeline belonged to which.
+            var active = await connection.ExistsAsync(transaction,
+                """
+                SELECT 1 FROM runs
+                WHERE owner_id = @owner AND task_id = @task
+                  AND status NOT IN ('Completed', 'Failed', 'Incomplete', 'Cancelled', 'Interrupted')
+                FOR UPDATE
+                """,
+                ("@owner", user.UserId), ("@task", taskId));
 
-        var payload = RemoteJson.Serialize(new StartTaskPayload(
-            runId, taskId, task.WorkspaceId, task.Sealed, sealedStart));
+            if (active)
+            {
+                throw GatewayFault.Conflict("This task is already running. Wait for it, or stop it first.");
+            }
 
-        var command = await QueueAsync(connection, transaction, user.UserId, commandId, task.HostId,
-            CommandKind.StartTask, payload, fingerprint, now);
+            var runId = Ids.New();
+            var now = clock.GetUtcNow();
 
-        await transaction.CommitAsync(ct);
-        return command;
+            await connection.ExecuteAsync(transaction,
+                """
+                INSERT INTO runs (id, owner_id, task_id, host_id, status, applied_sequence, created_at)
+                VALUES (@id, @owner, @task, @host, @queued, 0, @now)
+                """,
+                ("@id", runId), ("@owner", user.UserId), ("@task", taskId), ("@host", task.HostId),
+                ("@queued", RemoteRunStatus.Queued), ("@now", now));
+
+            var payload = RemoteJson.Serialize(new StartTaskPayload(
+                runId, taskId, task.WorkspaceId, task.Sealed, sealedStart));
+
+            return await QueueAsync(connection, transaction, user.UserId, commandId, task.HostId,
+                CommandKind.StartTask, payload, fingerprint, now);
+        }, ct);
     }
 
     /// <summary>
@@ -284,44 +292,49 @@ public sealed class UserService(Database db, Limits limits, TimeProvider clock)
 
         var fingerprint = Ids.Fingerprint($"CancelRun:{runId}:{sealedCancel}");
 
-        await using var connection = await db.OpenAsync(ct);
-        await using var transaction = await connection.BeginAsync(ct);
-
-        // FORCE INDEX (see the class comment): through the primary key this locked another person's run.
-        var run = await connection.ReadOneAsync(transaction,
-            """
-            SELECT host_id, status FROM runs FORCE INDEX (ux_runs_owner)
-            WHERE owner_id = @owner AND id = @run
-            FOR UPDATE
-            """,
-            reader => new RunTarget(reader.GetString("host_id"), reader.Enum<RemoteRunStatus>("status")),
-            ("@owner", user.UserId), ("@run", runId))
-            ?? throw NoSuchRun();
-
-        await EnsureLiveHostAsync(connection, transaction, user.UserId, run.HostId);
-
-        if (await ExistingCommandAsync(connection, transaction, user.UserId, commandId, fingerprint)
-            is { } repeated)
+        return await db.InTransactionAsync(async (connection, transaction) =>
         {
-            await transaction.CommitAsync(ct);
-            return repeated;
-        }
+            // The computer is locked before the run, so the run's computer is read first and without
+            // a lock. A run never moves to another computer: what this finds is still true once both
+            // are locked.
+            var hostId = await connection.ReadOneAsync(transaction,
+                "SELECT host_id FROM runs WHERE owner_id = @owner AND id = @run",
+                reader => reader.GetString("host_id"),
+                ("@owner", user.UserId), ("@run", runId))
+                ?? throw NoSuchRun();
 
-        if (RunLifecycle.IsTerminal(run.Status))
-        {
-            throw GatewayFault.Conflict("That run has already ended.");
-        }
+            await EnsureLiveHostAsync(connection, transaction, user.UserId, hostId);
 
-        await connection.ExecuteAsync(transaction,
-            "UPDATE runs SET status = @requested WHERE owner_id = @owner AND id = @run",
-            ("@requested", RemoteRunStatus.CancelRequested), ("@owner", user.UserId), ("@run", runId));
+            // FORCE INDEX (see the class comment): through the primary key this locked another person's run.
+            var run = await connection.ReadOneAsync(transaction,
+                """
+                SELECT host_id, status FROM runs FORCE INDEX (ux_runs_owner)
+                WHERE owner_id = @owner AND id = @run
+                FOR UPDATE
+                """,
+                reader => new RunTarget(reader.GetString("host_id"), reader.Enum<RemoteRunStatus>("status")),
+                ("@owner", user.UserId), ("@run", runId))
+                ?? throw NoSuchRun();
 
-        var command = await QueueAsync(connection, transaction, user.UserId, commandId, run.HostId,
-            CommandKind.CancelRun, RemoteJson.Serialize(new CancelRunPayload(runId, sealedCancel)),
-            fingerprint, clock.GetUtcNow());
+            if (await ExistingCommandAsync(connection, transaction, user.UserId, commandId, fingerprint)
+                is { } repeated)
+            {
+                return repeated;
+            }
 
-        await transaction.CommitAsync(ct);
-        return command;
+            if (RunLifecycle.IsTerminal(run.Status))
+            {
+                throw GatewayFault.Conflict("That run has already ended.");
+            }
+
+            await connection.ExecuteAsync(transaction,
+                "UPDATE runs SET status = @requested WHERE owner_id = @owner AND id = @run",
+                ("@requested", RemoteRunStatus.CancelRequested), ("@owner", user.UserId), ("@run", runId));
+
+            return await QueueAsync(connection, transaction, user.UserId, commandId, run.HostId,
+                CommandKind.CancelRun, RemoteJson.Serialize(new CancelRunPayload(runId, sealedCancel)),
+                fingerprint, clock.GetUtcNow());
+        }, ct);
     }
 
     /// <summary>
@@ -345,83 +358,80 @@ public sealed class UserService(Database db, Limits limits, TimeProvider clock)
         var fingerprint = Ids.Fingerprint(
             $"ResolveApproval:{hostId}:{approvalId}:{decision}:{actionHash}:{sealedDecision}");
 
-        await using var connection = await db.OpenAsync(ct);
-        await using var transaction = await connection.BeginAsync(ct);
-
-        // Addressed by its computer as well: approval ids are made by the Host and unique only there.
-        // FORCE INDEX (see the class comment): through the primary key, (host_id, id), this locked
-        // another person's request.
-        var approval = await connection.ReadOneAsync(transaction,
-            """
-            SELECT run_id, action_hash, remote_decidable, status, expires_at
-            FROM approvals FORCE INDEX (ux_approvals_owner_host)
-            WHERE owner_id = @owner AND host_id = @host AND id = @id
-            FOR UPDATE
-            """,
-            reader => new ApprovalTarget(
-                reader.GetString("run_id"),
-                reader.GetString("action_hash"),
-                reader.GetBoolean("remote_decidable"),
-                reader.Enum<ApprovalStatus>("status"),
-                reader.Utc("expires_at")),
-            ("@owner", user.UserId), ("@host", hostId), ("@id", approvalId))
-            ?? throw NoSuchRequest();
-
-        await EnsureLiveHostAsync(connection, transaction, user.UserId, hostId);
-
-        if (await ExistingCommandAsync(connection, transaction, user.UserId, commandId, fingerprint)
-            is { } repeated)
+        return await db.InTransactionAsync(async (connection, transaction) =>
         {
-            await transaction.CommitAsync(ct);
-            return repeated;
-        }
+            // The computer before the request: see the lock order in the class comment.
+            await EnsureLiveHostAsync(connection, transaction, user.UserId, hostId);
 
-        if (!approval.RemoteDecidable)
-        {
-            throw GatewayFault.ApprovalNotRemotelyDecidable(approvalId);
-        }
+            // Addressed by its computer as well: approval ids are made by the Host and unique only
+            // there. FORCE INDEX (see the class comment): through the primary key, (host_id, id), this
+            // locked another person's request.
+            var approval = await connection.ReadOneAsync(transaction,
+                """
+                SELECT run_id, action_hash, remote_decidable, status, expires_at
+                FROM approvals FORCE INDEX (ux_approvals_owner_host)
+                WHERE owner_id = @owner AND host_id = @host AND id = @id
+                FOR UPDATE
+                """,
+                reader => new ApprovalTarget(
+                    reader.GetString("run_id"),
+                    reader.GetString("action_hash"),
+                    reader.GetBoolean("remote_decidable"),
+                    reader.Enum<ApprovalStatus>("status"),
+                    reader.Utc("expires_at")),
+                ("@owner", user.UserId), ("@host", hostId), ("@id", approvalId))
+                ?? throw NoSuchRequest();
 
-        if (approval.Status != ApprovalStatus.Pending)
-        {
-            throw GatewayFault.ApprovalAlreadyResolved(approvalId, approval.Status);
-        }
+            if (await ExistingCommandAsync(connection, transaction, user.UserId, commandId, fingerprint)
+                is { } repeated)
+            {
+                return repeated;
+            }
 
-        if (approval.ExpiresAt <= clock.GetUtcNow())
-        {
-            throw GatewayFault.Conflict("That request has expired. The computer will report how it ended.");
-        }
+            if (!approval.RemoteDecidable)
+            {
+                throw GatewayFault.ApprovalNotRemotelyDecidable(approvalId);
+            }
 
-        if (!string.Equals(approval.ActionHash, actionHash, StringComparison.Ordinal))
-        {
-            throw GatewayFault.ActionHashMismatch(approvalId);
-        }
+            if (approval.Status != ApprovalStatus.Pending)
+            {
+                throw GatewayFault.ApprovalAlreadyResolved(approvalId, approval.Status);
+            }
 
-        var runStatus = await connection.ReadOneAsync(transaction,
-            "SELECT status FROM runs WHERE owner_id = @owner AND id = @run",
-            reader => (RemoteRunStatus?)reader.Enum<RemoteRunStatus>("status"),
-            ("@owner", user.UserId), ("@run", approval.RunId));
+            if (approval.ExpiresAt <= clock.GetUtcNow())
+            {
+                throw GatewayFault.Conflict("That request has expired. The computer will report how it ended.");
+            }
 
-        if (runStatus is null || RunLifecycle.IsTerminal(runStatus.Value))
-        {
-            throw GatewayFault.Conflict("That run has ended, so this permission no longer applies.");
-        }
+            if (!string.Equals(approval.ActionHash, actionHash, StringComparison.Ordinal))
+            {
+                throw GatewayFault.ActionHashMismatch(approvalId);
+            }
 
-        await connection.ExecuteAsync(transaction,
-            """
-            UPDATE approvals SET status = @queued, requested_decision = @decision
-            WHERE owner_id = @owner AND host_id = @host AND id = @id
-            """,
-            ("@queued", ApprovalStatus.DecisionQueued), ("@decision", decision),
-            ("@owner", user.UserId), ("@host", hostId), ("@id", approvalId));
+            var runStatus = await connection.ReadOneAsync(transaction,
+                "SELECT status FROM runs WHERE owner_id = @owner AND id = @run",
+                reader => (RemoteRunStatus?)reader.Enum<RemoteRunStatus>("status"),
+                ("@owner", user.UserId), ("@run", approval.RunId));
 
-        var payload = RemoteJson.Serialize(new ResolveApprovalPayload(
-            approvalId, approval.RunId, approval.ActionHash, sealedDecision));
+            if (runStatus is null || RunLifecycle.IsTerminal(runStatus.Value))
+            {
+                throw GatewayFault.Conflict("That run has ended, so this permission no longer applies.");
+            }
 
-        var command = await QueueAsync(connection, transaction, user.UserId, commandId, hostId,
-            CommandKind.ResolveApproval, payload, fingerprint, clock.GetUtcNow());
+            await connection.ExecuteAsync(transaction,
+                """
+                UPDATE approvals SET status = @queued, requested_decision = @decision
+                WHERE owner_id = @owner AND host_id = @host AND id = @id
+                """,
+                ("@queued", ApprovalStatus.DecisionQueued), ("@decision", decision),
+                ("@owner", user.UserId), ("@host", hostId), ("@id", approvalId));
 
-        await transaction.CommitAsync(ct);
-        return command;
+            var payload = RemoteJson.Serialize(new ResolveApprovalPayload(
+                approvalId, approval.RunId, approval.ActionHash, sealedDecision));
+
+            return await QueueAsync(connection, transaction, user.UserId, commandId, hostId,
+                CommandKind.ResolveApproval, payload, fingerprint, clock.GetUtcNow());
+        }, ct);
     }
 
     /// <summary>
@@ -445,23 +455,19 @@ public sealed class UserService(Database db, Limits limits, TimeProvider clock)
 
         var fingerprint = Ids.Fingerprint($"{kind}:{hostId}:{sealedPayload}");
 
-        await using var connection = await db.OpenAsync(ct);
-        await using var transaction = await connection.BeginAsync(ct);
-
-        await EnsureLiveHostAsync(connection, transaction, user.UserId, hostId);
-
-        if (await ExistingCommandAsync(connection, transaction, user.UserId, commandId, fingerprint)
-            is { } repeated)
+        return await db.InTransactionAsync(async (connection, transaction) =>
         {
-            await transaction.CommitAsync(ct);
-            return repeated;
-        }
+            await EnsureLiveHostAsync(connection, transaction, user.UserId, hostId);
 
-        var command = await QueueAsync(connection, transaction, user.UserId, commandId, hostId, kind,
-            RemoteJson.Serialize(new DevicePayload(sealedPayload)), fingerprint, clock.GetUtcNow());
+            if (await ExistingCommandAsync(connection, transaction, user.UserId, commandId, fingerprint)
+                is { } repeated)
+            {
+                return repeated;
+            }
 
-        await transaction.CommitAsync(ct);
-        return command;
+            return await QueueAsync(connection, transaction, user.UserId, commandId, hostId, kind,
+                RemoteJson.Serialize(new DevicePayload(sealedPayload)), fingerprint, clock.GetUtcNow());
+        }, ct);
     }
 
     // ── notices ─────────────────────────────────────────────────────────────
@@ -477,34 +483,30 @@ public sealed class UserService(Database db, Limits limits, TimeProvider clock)
     /// notices read that no screen ever showed. Refused rather than ignored, so a panel that sends a
     /// stale cursor learns it, by the same rules that answer its poll with a full snapshot.</para>
     /// </summary>
-    public async Task MarkNoticesReadAsync(
+    public Task MarkNoticesReadAsync(
         UserAccess user, int epoch, long throughOrdinal, CancellationToken ct)
-    {
-        await using var connection = await db.OpenAsync(ct);
-        await using var transaction = await connection.BeginAsync(ct);
-
-        // Not locked, as the projection does not lock it: a cursor the panel was handed never runs
-        // ahead of a committed notice, so comparing with the committed value is enough.
-        var line = await connection.ReadOneAsync(transaction,
-            "SELECT value, epoch FROM user_streams WHERE owner_id = @owner",
-            reader => ((long Value, int Epoch)?)(reader.GetInt64("value"), reader.GetInt32("epoch")),
-            ("@owner", user.UserId));
-
-        if (line is not { } current || current.Epoch != epoch || throughOrdinal > current.Value)
+        => db.InTransactionAsync(async (connection, transaction) =>
         {
-            throw GatewayFault.BadRequest(
-                "That cursor is not one of this account's current line. Refresh, and mark them read again.");
-        }
+            // Not locked, as the projection does not lock it: a cursor the panel was handed never runs
+            // ahead of a committed notice, so comparing with the committed value is enough.
+            var line = await connection.ReadOneAsync(transaction,
+                "SELECT value, epoch FROM user_streams WHERE owner_id = @owner",
+                reader => ((long Value, int Epoch)?)(reader.GetInt64("value"), reader.GetInt32("epoch")),
+                ("@owner", user.UserId));
 
-        await connection.ExecuteAsync(transaction,
-            """
-            UPDATE notices SET is_read = 1
-            WHERE owner_id = @owner AND ordinal <= @through AND is_read = 0
-            """,
-            ("@owner", user.UserId), ("@through", throughOrdinal));
+            if (line is not { } current || current.Epoch != epoch || throughOrdinal > current.Value)
+            {
+                throw GatewayFault.BadRequest(
+                    "That cursor is not one of this account's current line. Refresh, and mark them read again.");
+            }
 
-        await transaction.CommitAsync(ct);
-    }
+            await connection.ExecuteAsync(transaction,
+                """
+                UPDATE notices SET is_read = 1
+                WHERE owner_id = @owner AND ordinal <= @through AND is_read = 0
+                """,
+                ("@owner", user.UserId), ("@through", throughOrdinal));
+        }, ct);
 
     // ── shared ──────────────────────────────────────────────────────────────
 
@@ -578,7 +580,8 @@ public sealed class UserService(Database db, Limits limits, TimeProvider clock)
     /// <para>A locking read. A revocation holds this row until it commits; read without a lock, the
     /// computer looked live to a start already in flight, whose command was then queued after the
     /// revocation had withdrawn the undelivered ones - a command for a revoked computer, left
-    /// pending for a day. Shared, so commands for one computer do not wait on each other.</para>
+    /// pending for a day. Shared, so commands for one computer do not wait on each other. Taken
+    /// before anything on the computer is locked: see the lock order in the class comment.</para>
     /// </summary>
     private static async Task EnsureLiveHostAsync(
         MySqlConnection connection, MySqlTransaction transaction, string ownerId, string hostId)

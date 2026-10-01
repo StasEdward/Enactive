@@ -4,7 +4,7 @@ using System.Data;
 using MySqlConnector;
 
 /// <summary>
-/// Opens connections, and nothing else.
+/// Opens connections and runs transactions on them, and nothing else.
 ///
 /// <para>There is no repository layer over this on purpose. The SQL lives beside the decision it
 /// serves, because in this gateway the interesting part of almost every operation IS the query -
@@ -36,6 +36,73 @@ public sealed class Database(string connectionString)
         await connection.OpenAsync(ct);
         return connection;
     }
+
+    /// <summary>
+    /// How many times one unit of work is run in all, the first time included.
+    /// </summary>
+    internal const int Attempts = 3;
+
+    /// <summary>
+    /// Runs <paramref name="work"/> in one transaction at REPEATABLE READ and commits it. When the
+    /// database picks it as the victim of a deadlock, the whole unit runs again, at most
+    /// <see cref="Attempts"/> times in all.
+    ///
+    /// <para><b>Why a deadlock is retried.</b> The services take their locks in one order, which keeps
+    /// their own paths from waiting on each other in a cycle; but InnoDB also deadlocks over gaps and
+    /// index entries no order of rows covers, and it ends a deadlock by rolling one transaction back
+    /// whole. Passed on, that was a 500 for a person whose request would have gone through a moment
+    /// later, and for a computer an event its outbox retried and in the end parked.</para>
+    ///
+    /// <para><b>Why running it again is safe.</b> The victim was rolled back entirely, so the retry
+    /// starts from nothing, and it is the same unit with the same ids: the same command id, event id
+    /// or task id, whose idempotency checks are inside it. Nothing outside the database happens
+    /// inside these transactions - a command is queued in a table, never sent, and the Host fetches it
+    /// after the commit - so a retry cannot carry an action out twice.</para>
+    ///
+    /// <para><b>Why only a deadlock, and only three times.</b> Anything else - a duplicate key, a
+    /// refusal, a lock wait that timed out - fails the same way again, and a retry would only make the
+    /// caller wait longer for the same answer. A deadlock that recurs three times running is not bad
+    /// luck but a cycle the lock order missed, and it has to be seen rather than retried for
+    /// ever.</para>
+    /// </summary>
+    public async Task<T> InTransactionAsync<T>(
+        Func<MySqlConnection, MySqlTransaction, Task<T>> work, CancellationToken ct)
+    {
+        await using var connection = await OpenAsync(ct);
+
+        for (var attempt = 1; ; attempt++)
+        {
+            await using (var transaction = await connection.BeginAsync(ct))
+            {
+                try
+                {
+                    var result = await work(connection, transaction);
+                    await transaction.CommitAsync(ct);
+                    return result;
+                }
+                catch (MySqlException error)
+                    when (error.ErrorCode == MySqlErrorCode.LockDeadlock && attempt < Attempts)
+                {
+                    // The server has already rolled the victim back; this ends the transaction on
+                    // the connection too, so the next attempt begins a fresh one.
+                    await transaction.RollbackAsync(CancellationToken.None);
+                }
+            }
+
+            // Random, so the two transactions that collided do not start again in step and collide
+            // the same way a second time.
+            await Task.Delay(TimeSpan.FromMilliseconds(Random.Shared.Next(10, 51)), ct);
+        }
+    }
+
+    /// <inheritdoc cref="InTransactionAsync{T}"/>
+    public Task InTransactionAsync(
+        Func<MySqlConnection, MySqlTransaction, Task> work, CancellationToken ct)
+        => InTransactionAsync<bool>(async (connection, transaction) =>
+        {
+            await work(connection, transaction);
+            return true;
+        }, ct);
 }
 
 /// <summary>Parameter binding and reading, so the call sites stay the SQL and nothing else.</summary>

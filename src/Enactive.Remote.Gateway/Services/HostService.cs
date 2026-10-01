@@ -25,15 +25,19 @@ using MySqlConnector;
 /// commits mid-connection stops the very next call, and one in flight waits for the call that is
 /// already running instead of slipping past it.</para>
 ///
-/// <para><b>Lock order.</b> users, then hosts, both FOR SHARE; then the run and request rows; then
-/// the command rows, each by its own key and never a range of them (a person's command is inserted
-/// into that range while its run is locked); then the owner's stream counter. A person's cancel and
-/// answer lock their target first and
-/// the computer FOR SHARE afterwards (see <see cref="UserService"/>), so this class must never hold
-/// the hosts row EXCLUSIVELY in a transaction that also locks a run or a request: the cancel would
-/// wait for the computer while holding the run this waits for, and the database would roll one of
-/// them back as a deadlock. Shared with shared does not wait, which is why the computer is only ever
-/// shared here and why marking it seen happens after the commit.</para>
+/// <para><b>Lock order.</b> One order for every path, the computer's and the person's (see
+/// <see cref="UserService"/>): the account, then the computer, both FOR SHARE here; then the run and
+/// its requests; then the command rows, each by its own key and never a range of them (a person's
+/// command is inserted into that range while its run is locked); then the owner's stream counter.
+/// Transactions that take their locks in one order wait for each other but never in a cycle. The
+/// order holds for shared reads too: a revocation waiting to lock the computer exclusively queues
+/// ahead of every later shared read of it, so a person's answer that held its request and then read
+/// the computer waited behind the revocation, which waited behind this class's report holding the
+/// computer shared and reaching for that request - a deadlock, and one of the three rolled back.
+/// The computer is only ever shared here, and marking it seen happens after the commit: writing it
+/// inside would upgrade the shared lock, and two calls of one computer each holding it shared and
+/// each wanting it exclusively deadlock. What no order of rows covers - gaps, index entries - is
+/// retried whole by <see cref="Database.InTransactionAsync{T}"/>.</para>
 ///
 /// <para><b>Nothing the computer sends is readable here.</b> Workspace names, event details and
 /// permission requests arrive sealed. This checks that each is an envelope of a sensible size and
@@ -100,9 +104,7 @@ public sealed class HostService(Database database)
             RequireSealed(workspace.SealedName, MaxSealedName, "workspace name");
         }
 
-        await using var connection = await database.OpenAsync(ct);
-
-        await using (var transaction = await connection.BeginAsync(ct))
+        await database.InTransactionAsync(async (connection, transaction) =>
         {
             await AuthorizeAsync(connection, transaction, host);
 
@@ -122,9 +124,9 @@ public sealed class HostService(Database database)
             }
 
             await ExpireCommandsAsync(connection, transaction, host);
+        }, ct);
 
-            await transaction.CommitAsync(ct);
-        }
+        await using var connection = await database.OpenAsync(ct);
 
         // What to hand over is read AFTER the commit, by a statement of its own, so it sees what is
         // committed now. Inside the transaction it read the snapshot taken before the expiry waited
@@ -155,10 +157,10 @@ public sealed class HostService(Database database)
                 reader.Utc("expires_at")),
             ("@owner", host.OwnerId), ("@host", host.HostId), ("@now", DateTimeOffset.UtcNow));
 
-        // After the commit, on its own: writing last_seen_at locks the hosts row EXCLUSIVELY, and the
-        // transaction above locks runs while it writes off expired starts - see the lock order in the
-        // class comment. The revoked filter keeps a revocation that committed in between from being
-        // undone: it clears last_seen_at, and this must not set it again.
+        // After the commit, on its own: writing last_seen_at locks the hosts row EXCLUSIVELY, which
+        // inside the transaction above, already holding it shared, would be an upgrade - see the lock
+        // order in the class comment. The revoked filter keeps a revocation that committed in between
+        // from being undone: it clears last_seen_at, and this must not set it again.
         await connection.ExecuteAsync(null,
             """
             UPDATE hosts SET last_seen_at = @now
@@ -174,56 +176,53 @@ public sealed class HostService(Database database)
     /// moments and a crash can land between them, which is the entire reason this is a separate
     /// call rather than something Sync infers from having handed the command over.
     /// </summary>
-    public async Task AcknowledgeAsync(HostAccess host, string commandId, CancellationToken ct = default)
-    {
-        await using var connection = await database.OpenAsync(ct);
-        await using var transaction = await connection.BeginAsync(ct);
-
-        await AuthorizeAsync(connection, transaction, host);
-        await ExpireCommandsAsync(connection, transaction, host);
-
-        // The primary key starts with the owner, so this lock cannot reach another person's command.
-        // The computer is in the filter too: a command meant for another of the owner's computers is
-        // not this one's to accept, and accepting it would mark it delivered where it never arrived.
-        //
-        // The lock is taken through the primary key and the computer is filtered afterwards, so a
-        // computer naming the id of one of its owner's OTHER computers' commands locks that row until
-        // this refusal rolls back. That is harmless: the row is the same person's, the computer could
-        // only have the id from its own owner's data, and all it costs is that other computer's
-        // acknowledgement waiting a moment - no other account's row is touched or revealed.
-        var status = await connection.ReadOneAsync(transaction,
-            """
-            SELECT status FROM commands
-            WHERE owner_id = @owner AND id = @id AND host_id = @host
-            FOR UPDATE
-            """,
-            reader => (CommandStatus?)reader.Enum<CommandStatus>("status"),
-            ("@owner", host.OwnerId), ("@id", commandId), ("@host", host.HostId));
-
-        switch (status)
+    public Task AcknowledgeAsync(HostAccess host, string commandId, CancellationToken ct = default)
+        => database.InTransactionAsync(async (connection, transaction) =>
         {
-            case null:
-                throw GatewayFault.NotFound($"Command {commandId} does not belong to this Host.");
+            await AuthorizeAsync(connection, transaction, host);
+            await ExpireCommandsAsync(connection, transaction, host);
 
-            // Already accepted. Saying so again is not an error - the Host retries after a lost
-            // reply, and refusing here would make it retry forever.
-            case CommandStatus.AcceptedByHost:
-                await transaction.CommitAsync(ct);
-                return;
+            // The primary key starts with the owner, so this lock cannot reach another person's
+            // command. The computer is in the filter too: a command meant for another of the owner's
+            // computers is not this one's to accept, and accepting it would mark it delivered where it
+            // never arrived.
+            //
+            // The lock is taken through the primary key and the computer is filtered afterwards, so a
+            // computer naming the id of one of its owner's OTHER computers' commands locks that row
+            // until this refusal rolls back. That is harmless: the row is the same person's, the
+            // computer could only have the id from its own owner's data, and all it costs is that other
+            // computer's acknowledgement waiting a moment - no other account's row is touched or
+            // revealed.
+            var status = await connection.ReadOneAsync(transaction,
+                """
+                SELECT status FROM commands
+                WHERE owner_id = @owner AND id = @id AND host_id = @host
+                FOR UPDATE
+                """,
+                reader => (CommandStatus?)reader.Enum<CommandStatus>("status"),
+                ("@owner", host.OwnerId), ("@id", commandId), ("@host", host.HostId));
 
-            case CommandStatus.Expired:
-                throw GatewayFault.CommandExpired(commandId);
+            switch (status)
+            {
+                case null:
+                    throw GatewayFault.NotFound($"Command {commandId} does not belong to this Host.");
 
-            case CommandStatus.Rejected:
-                throw GatewayFault.Conflict($"Command {commandId} was withdrawn.");
-        }
+                // Already accepted. Saying so again is not an error - the Host retries after a lost
+                // reply, and refusing here would make it retry forever.
+                case CommandStatus.AcceptedByHost:
+                    return;
 
-        await connection.ExecuteAsync(transaction,
-            "UPDATE commands SET status = @accepted WHERE owner_id = @owner AND id = @id",
-            ("@accepted", CommandStatus.AcceptedByHost), ("@owner", host.OwnerId), ("@id", commandId));
+                case CommandStatus.Expired:
+                    throw GatewayFault.CommandExpired(commandId);
 
-        await transaction.CommitAsync(ct);
-    }
+                case CommandStatus.Rejected:
+                    throw GatewayFault.Conflict($"Command {commandId} was withdrawn.");
+            }
+
+            await connection.ExecuteAsync(transaction,
+                "UPDATE commands SET status = @accepted WHERE owner_id = @owner AND id = @id",
+                ("@accepted", CommandStatus.AcceptedByHost), ("@owner", host.OwnerId), ("@id", commandId));
+        }, ct);
 
     // ── Publish ─────────────────────────────────────────────────────────────
 
@@ -251,90 +250,87 @@ public sealed class HostService(Database database)
             RequireSealed(request.SealedAction, MaxSealedAction, "sealed action");
         }
 
-        await using var connection = await database.OpenAsync(ct);
-        await using var transaction = await connection.BeginAsync(ct);
-
-        await AuthorizeAsync(connection, transaction, host);
-
-        // The run id is the Host's to name, so this lookup goes through the key that starts with the
-        // owner and the computer. Through the primary key, MySQL locked the row with that id first and
-        // applied the owner filter afterwards: Alice's computer naming Bob's run waited for any
-        // transaction of Bob's that held it - which told it the run exists - and held up his.
-        var run = await connection.ReadOneAsync(transaction,
-            """
-            SELECT id, owner_id, host_id, status, applied_sequence
-            FROM runs FORCE INDEX (ux_runs_owner_host)
-            WHERE owner_id = @owner AND host_id = @host AND id = @run
-            FOR UPDATE
-            """,
-            reader => new RunRow(
-                reader.GetString("id"),
-                reader.GetString("owner_id"),
-                reader.GetString("host_id"),
-                reader.Enum<RemoteRunStatus>("status"),
-                reader.GetInt64("applied_sequence")),
-            ("@owner", host.OwnerId), ("@host", host.HostId), ("@run", published.RunId))
-            ?? throw GatewayFault.UnknownRun(published.RunId);
-
-        // Deduplication first, and BEFORE the terminal check: a Host retrying the very event that
-        // ended the run must get an acknowledgement, not "that run has ended".
-        if (await connection.ExistsAsync(transaction,
-                "SELECT 1 FROM events WHERE owner_id = @owner AND host_id = @host AND id = @event",
-                ("@owner", run.OwnerId), ("@host", run.HostId), ("@event", published.EventId)))
+        await database.InTransactionAsync(async (connection, transaction) =>
         {
-            await transaction.CommitAsync(ct);
-            return;
-        }
+            await AuthorizeAsync(connection, transaction, host);
 
-        // Strictly increasing, NOT contiguous. A gap is expected and correct: an event the Host's
-        // outbox dropped on a Drop-coded refusal never arrives, and demanding the next number would
-        // wedge that run's queue for good.
-        if (published.Sequence <= run.AppliedSequence)
-        {
-            throw GatewayFault.SequenceAlreadyApplied(published.Sequence, run.AppliedSequence);
-        }
+            // The run id is the Host's to name, so this lookup goes through the key that starts with the
+            // owner and the computer. Through the primary key, MySQL locked the row with that id first and
+            // applied the owner filter afterwards: Alice's computer naming Bob's run waited for any
+            // transaction of Bob's that held it - which told it the run exists - and held up his.
+            var run = await connection.ReadOneAsync(transaction,
+                """
+                SELECT id, owner_id, host_id, status, applied_sequence
+                FROM runs FORCE INDEX (ux_runs_owner_host)
+                WHERE owner_id = @owner AND host_id = @host AND id = @run
+                FOR UPDATE
+                """,
+                reader => new RunRow(
+                    reader.GetString("id"),
+                    reader.GetString("owner_id"),
+                    reader.GetString("host_id"),
+                    reader.Enum<RemoteRunStatus>("status"),
+                    reader.GetInt64("applied_sequence")),
+                ("@owner", host.OwnerId), ("@host", host.HostId), ("@run", published.RunId))
+                ?? throw GatewayFault.UnknownRun(published.RunId);
 
-        if (RunLifecycle.IsTerminal(run.Status))
-        {
-            throw GatewayFault.RunEnded(run.Id);
-        }
+            // Deduplication first, and BEFORE the terminal check: a Host retrying the very event that
+            // ended the run must get an acknowledgement, not "that run has ended".
+            if (await connection.ExistsAsync(transaction,
+                    "SELECT 1 FROM events WHERE owner_id = @owner AND host_id = @host AND id = @event",
+                    ("@owner", run.OwnerId), ("@host", run.HostId), ("@event", published.EventId)))
+            {
+                return;
+            }
 
-        var now = DateTimeOffset.UtcNow;
-        var status = await ApplyAsync(connection, transaction, run, published, now);
+            // Strictly increasing, NOT contiguous. A gap is expected and correct: an event the Host's
+            // outbox dropped on a Drop-coded refusal never arrives, and demanding the next number would
+            // wedge that run's queue for good.
+            if (published.Sequence <= run.AppliedSequence)
+            {
+                throw GatewayFault.SequenceAlreadyApplied(published.Sequence, run.AppliedSequence);
+            }
 
-        await connection.ExecuteAsync(transaction,
-            """
-            INSERT INTO events (owner_id, host_id, id, run_id, sequence, kind, sealed_detail, at, ordinal)
-            VALUES (@owner, @host, @id, @run, @sequence, @kind, @detail, @at, @ordinal)
-            """,
-            ("@owner", run.OwnerId), ("@host", run.HostId), ("@id", published.EventId),
-            ("@run", run.Id), ("@sequence", published.Sequence), ("@kind", published.Kind),
-            ("@detail", published.SealedDetail), ("@at", now),
-            // Allocated inside this transaction, which is what makes a refused publish give the
-            // number back: the counter's increment rolls back with everything else. Allocating
-            // outside it would leave a hole in the panel's number line for every rejection.
-            ("@ordinal", await StreamCursor.NextAsync(connection, transaction, run.OwnerId)));
+            if (RunLifecycle.IsTerminal(run.Status))
+            {
+                throw GatewayFault.RunEnded(run.Id);
+            }
 
-        // The summary is the terminal event's envelope, copied: the gateway has no key to write one
-        // of its own. It opens only under that event's associated data, so its sequence is kept
-        // beside it; the kind is the run's terminal status, which is named like the event's kind.
-        var ended = RunLifecycle.IsTerminal(status);
+            var now = DateTimeOffset.UtcNow;
+            var status = await ApplyAsync(connection, transaction, run, published, now);
 
-        await connection.ExecuteAsync(transaction,
-            """
-            UPDATE runs
-            SET status = @status,
-                applied_sequence = @sequence,
-                ended_at = CASE WHEN @ended = 1 THEN @at ELSE ended_at END,
-                sealed_summary = CASE WHEN @ended = 1 THEN @summary ELSE sealed_summary END,
-                summary_sequence = CASE WHEN @ended = 1 THEN @sequence ELSE summary_sequence END
-            WHERE owner_id = @owner AND host_id = @host AND id = @run
-            """,
-            ("@status", status), ("@sequence", published.Sequence), ("@ended", ended), ("@at", now),
-            ("@summary", published.SealedDetail),
-            ("@owner", run.OwnerId), ("@host", run.HostId), ("@run", run.Id));
+            await connection.ExecuteAsync(transaction,
+                """
+                INSERT INTO events (owner_id, host_id, id, run_id, sequence, kind, sealed_detail, at, ordinal)
+                VALUES (@owner, @host, @id, @run, @sequence, @kind, @detail, @at, @ordinal)
+                """,
+                ("@owner", run.OwnerId), ("@host", run.HostId), ("@id", published.EventId),
+                ("@run", run.Id), ("@sequence", published.Sequence), ("@kind", published.Kind),
+                ("@detail", published.SealedDetail), ("@at", now),
+                // Allocated inside this transaction, which is what makes a refused publish give the
+                // number back: the counter's increment rolls back with everything else. Allocating
+                // outside it would leave a hole in the panel's number line for every rejection.
+                ("@ordinal", await StreamCursor.NextAsync(connection, transaction, run.OwnerId)));
 
-        await transaction.CommitAsync(ct);
+            // The summary is the terminal event's envelope, copied: the gateway has no key to write one
+            // of its own. It opens only under that event's associated data, so its sequence is kept
+            // beside it; the kind is the run's terminal status, which is named like the event's kind.
+            var ended = RunLifecycle.IsTerminal(status);
+
+            await connection.ExecuteAsync(transaction,
+                """
+                UPDATE runs
+                SET status = @status,
+                    applied_sequence = @sequence,
+                    ended_at = CASE WHEN @ended = 1 THEN @at ELSE ended_at END,
+                    sealed_summary = CASE WHEN @ended = 1 THEN @summary ELSE sealed_summary END,
+                    summary_sequence = CASE WHEN @ended = 1 THEN @sequence ELSE summary_sequence END
+                WHERE owner_id = @owner AND host_id = @host AND id = @run
+                """,
+                ("@status", status), ("@sequence", published.Sequence), ("@ended", ended), ("@at", now),
+                ("@summary", published.SealedDetail),
+                ("@owner", run.OwnerId), ("@host", run.HostId), ("@run", run.Id));
+        }, ct);
     }
 
     /// <summary>
@@ -512,7 +508,7 @@ public sealed class HostService(Database database)
     ///
     /// <para>Locking reads, shared. Read without a lock, a call already in flight saw the computer
     /// live in its snapshot and applied an event after the revocation had committed. Shared, so calls
-    /// of one computer do not wait on each other, and so a person's cancel can still read the
+    /// of one computer do not wait on each other, and so a person's command can still read the
     /// computer while this holds it (see the lock order in the class comment).</para>
     /// </summary>
     private static async Task AuthorizeAsync(

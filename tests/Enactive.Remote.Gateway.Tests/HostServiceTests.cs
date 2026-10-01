@@ -698,11 +698,13 @@ public sealed class HostServiceTests(TestDatabase database) : IClassFixture<Test
     }
 
     /// <summary>
-    /// A person's cancel locks the run and then reads the computer. A sync that locked the computer
-    /// row EXCLUSIVELY - to mark it seen - and then reached for the run to write off its expired
-    /// start held what the cancel was waiting for while waiting for what the cancel held: a deadlock,
-    /// and one of the two rolled back by the database. A sync only shares the computer row, so the
-    /// cancel reads it at once, finishes, and the sync goes on after it.
+    /// A sync holds the computer only shared while it reaches for the run of an expired start. A
+    /// sync that locked the computer row EXCLUSIVELY - to mark it seen - held what a transaction
+    /// holding that run and then reading the computer was waiting for, while waiting for the run: a
+    /// deadlock, and one of the two rolled back by the database. A person's cancel took its locks
+    /// in that order until it read the computer first; the transaction held here still does, so a
+    /// sync that took the computer exclusively again is caught. Shared, the read is granted at once,
+    /// the transaction finishes, and the sync goes on after it.
     /// </summary>
     [Fact]
     public async Task A_sync_does_not_deadlock_with_a_cancel_of_the_run_it_expires()
@@ -711,7 +713,7 @@ public sealed class HostServiceTests(TestDatabase database) : IClassFixture<Test
         await CommandAsync(host, CommandKind.StartTask, RemoteJson.Serialize(new StartTaskPayload(
             runId, Guid.NewGuid().ToString(), "workspace-1", Sealed("task"), Sealed("start"))), expired: true);
 
-        // What CancelAsync does first, held open: the run is locked.
+        // A run locked and held open, as a cancel locked it before it read the computer first.
         await using var connection = await database.OpenAsync();
         await using var cancelling = await connection.BeginAsync(default);
         await connection.ExecuteAsync(cancelling,
@@ -720,7 +722,7 @@ public sealed class HostServiceTests(TestDatabase database) : IClassFixture<Test
         var sync = Service.SyncAsync(host, []);
         await Assert.ThrowsAsync<TimeoutException>(() => sync.WaitAsync(TimeSpan.FromMilliseconds(500)));
 
-        // ...and then what it does next: it reads the computer, sharing the row.
+        // ...and then the computer read, sharing the row.
         await connection.ExecuteAsync(cancelling,
             "SELECT revoked FROM hosts WHERE id = @host FOR SHARE", ("@host", host.HostId));
         await connection.ExecuteAsync(cancelling,
@@ -737,7 +739,7 @@ public sealed class HostServiceTests(TestDatabase database) : IClassFixture<Test
     }
 
     /// <summary>
-    /// The real cancel, all the way to the command it queues. It locks the run, reads the computer,
+    /// The real cancel, all the way to the command it queues. It reads the computer, locks the run,
     /// and inserts its command into this computer's delivery range. A sync that locked that range to
     /// find its expired commands and THEN reached for the expired start's run held the gap the
     /// cancel's insert needed while waiting for the run the cancel held: a deadlock, and the database
@@ -752,7 +754,7 @@ public sealed class HostServiceTests(TestDatabase database) : IClassFixture<Test
             runId, Guid.NewGuid().ToString(), "workspace-1", Sealed("task"), Sealed("start"))), expired: true);
         var cancelId = Guid.NewGuid().ToString();
 
-        // Holds the cancel at the right moment: after it has locked the run and read the computer,
+        // Holds the cancel at the right moment: after it has read the computer and locked the run,
         // before it queues its command. An uncommitted row under the cancel's own command id makes its
         // idempotency lookup wait. Accepted, so it is outside the range a sync delivers from.
         await using var connection = await database.OpenAsync();
@@ -781,6 +783,45 @@ public sealed class HostServiceTests(TestDatabase database) : IClassFixture<Test
         Assert.Equal(RemoteRunStatus.CancelRequested, await StatusAsync(runId));
         Assert.Equal("Expired", Assert.Single(await database.StringsAsync(
             $"SELECT status FROM commands WHERE host_id = '{host.HostId}' AND kind = 'StartTask'")));
+    }
+
+    /// <summary>
+    /// An event caught in a deadlock is applied all the same. Without the retry the database's choice
+    /// of victim reached the computer as a server error: its outbox retried the event, and after
+    /// enough of them parked it - a run whose progress stopped on the panel for no reason of its own.
+    /// </summary>
+    [Fact]
+    public async Task A_publish_caught_in_a_deadlock_is_retried_and_applied()
+    {
+        var (host, runId) = await RunningAsync();
+
+        await using var connection = await database.OpenAsync();
+        await using var other = await connection.BeginAsync(default);
+
+        // The database rolls back the transaction that has written least. These rows make the other
+        // transaction the heavier one, so the publish is the one chosen.
+        for (var i = 0; i < 20; i++)
+        {
+            await connection.ExecuteAsync(other,
+                "INSERT INTO audit (owner_id, at, actor, action) VALUES (NULL, UTC_TIMESTAMP(3), 'operator', 'test')");
+        }
+
+        // The owner's stream counter, held: the publish locks the run and then waits here, for the
+        // number of its event.
+        await connection.ExecuteAsync(other,
+            "SELECT value FROM user_streams WHERE owner_id = @owner FOR UPDATE", ("@owner", host.OwnerId));
+
+        var publish = Service.PublishAsync(host, Event(runId, 2, RemoteEventKind.Progress));
+        await Assert.ThrowsAsync<TimeoutException>(() => publish.WaitAsync(TimeSpan.FromMilliseconds(500)));
+
+        // ...and this reaches for the run the publish holds: each waits for the other.
+        await connection.ExecuteAsync(other,
+            "SELECT id FROM runs WHERE id = @run FOR UPDATE", ("@run", runId));
+        await other.RollbackAsync();
+
+        await publish.WaitAsync(Generously);
+        Assert.Equal(2, await database.ScalarLongAsync(
+            $"SELECT applied_sequence FROM runs WHERE id = '{runId}'"));
     }
 
     // ── signing in ──────────────────────────────────────────────────────────

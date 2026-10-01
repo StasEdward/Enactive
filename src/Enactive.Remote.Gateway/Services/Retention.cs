@@ -100,8 +100,7 @@ public sealed class Retention(Database database, int days)
         {
             await using var transaction = await connection.BeginAsync(ct);
 
-            var deleted = await connection.ExecuteAsync(transaction,
-                $"DELETE FROM {table} WHERE owner_id = @owner AND at < @cutoff ORDER BY at LIMIT {Batch}",
+            var deleted = await connection.ExecuteAsync(transaction, DeleteBatch(table),
                 ("@owner", owner), ("@cutoff", cutoff));
 
             if (deleted > 0)
@@ -127,6 +126,20 @@ public sealed class Retention(Database database, int days)
 
         return total;
     }
+
+    /// <summary>
+    /// One batch of one person's oldest rows, through the table's key on (owner_id, at): the batch is
+    /// the first stretch of one range of that key, read in order, and only what it reads is locked.
+    ///
+    /// <para>The key is named in a hint because the optimizer did not always take it. On a neglected
+    /// account, whose old rows are a large share of the table, it chose to read the whole table and
+    /// sort it - and a DELETE at REPEATABLE READ locks every row it reads, so the batch locked every
+    /// account's rows until it committed. A single-table DELETE takes no FORCE INDEX, so this is the
+    /// optimizer hint; it names an index of the same name in each table this is called for.</para>
+    /// </summary>
+    internal static string DeleteBatch(string table)
+        => $"DELETE /*+ INDEX({table} ix_{table}_owner_at) */ FROM {table} "
+           + $"WHERE owner_id = @owner AND at < @cutoff ORDER BY at LIMIT {Batch}";
 }
 
 /// <summary>
