@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Enactive.Core.Chat;
+using Enactive.Core.Context;
 using Enactive.Core.Execution;
 using Enactive.Core.Providers;
 using Enactive.Core.Tools;
@@ -53,8 +54,9 @@ internal static class StepVerdictReview
         Return ONLY one JSON object: {"verdict":"pass"|"fail","reason":"...","calls":[n],"files":["path"]}
         pass: the step's purpose is done, and what the report says about it is true; cite the calls [n] and files that
         show it. fail: say concretely what is not done, not true, or not shown - so the worker can put it right.
-        A fail where what the step made - its files, its changes - is right as it is, and only the report or the way the
-        work was done is not, adds "work_stands":true: the files are then kept if the step is rejected.
+        A fail where a file the step made or changed is right as it is - asked for, and nothing wrong in it - names it in
+        "keep":["path"]: if the step is rejected, the files named are kept and the rest of what it changed is put back. A file
+        with something wrong in it, or a change the request did not ask for, is not kept.
         A step that reports nothing needed doing - the file already right, nothing broken - has done its part only where a
         call it made shows it looked and found so; with no such call, it fails.
         Judge this step only: what the other steps are for is theirs. Do not fail a step on style, on wording, or on a
@@ -223,14 +225,16 @@ internal static class StepVerdictReview
                 : "a pass cites the calls or files that show the step done");
         if (errors.Count > 0) return (null, errors);
 
-        // What the step made is right and the fail is elsewhere: a step rejected on it keeps its files, as the earlier
-        // review's "implementation: pass" with no repair to a saved file did (ReviewResult.WorkStands; code review of the
-        // move to one short review, 2026-09-30). Only a fail says it, and only in so many words.
-        var workStands = root.ValueKind == JsonValueKind.Object && root.TryGetProperty("work_stands", out var stands)
-                         && stands.ValueKind == JsonValueKind.True;
+        // The files that are right, on a fail that is elsewhere: a step rejected on it keeps them, as the earlier review's
+        // "implementation: pass" with no repair to a saved file did (ReviewResult.Keep; code review of the move to one
+        // short review, 2026-09-30). Only a fail names them; a pass keeps everything anyway.
+        var keep = verdict == "fail"
+            ? Arr("keep").Where(x => x.ValueKind == JsonValueKind.String).Select(x => ShellLookup.Normal(x.GetString()!))
+                .Where(p => p.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
+            : [];
         return verdict == "pass"
             ? (new ReviewResult(true, reason), [])
-            : (new ReviewResult(false, reason) { RepairAdvice = reason, WorkStands = workStands }, []);
+            : (new ReviewResult(false, reason) { RepairAdvice = reason, Keep = keep }, []);
     }
 
     /// <summary>

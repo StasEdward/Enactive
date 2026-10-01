@@ -2772,8 +2772,8 @@ public sealed partial class Orchestrator : IOrchestrator
 
         public bool Succeeded => Kind == StepOutcomeKind.Succeeded;
 
-        /// <summary>Rejected on a review that found the work itself right. See <see cref="ReviewResult.WorkStands"/>.</summary>
-        public bool WorkStands { get; set; }
+        /// <summary>Rejected on a review that found these files right. See <see cref="ReviewResult.Keep"/>.</summary>
+        public IReadOnlyList<string> Keep { get; set; } = [];
 
         /// <summary>Why, as a code: what was recorded, or what the outcome implies.</summary>
         public OutcomeCause Cause => _cause ?? StepRecord.CauseOf(Kind);
@@ -5350,11 +5350,13 @@ public sealed partial class Orchestrator : IOrchestrator
     /// summary does not go on claiming files that are no longer there.
     /// </summary>
     private static async Task<RevertReport> RevertAsync(
-        IArtifactScope store, List<ArtifactRef> artifacts, CancellationToken ct)
+        IArtifactScope store, List<ArtifactRef> artifacts, CancellationToken ct, IReadOnlyCollection<string>? except = null)
     {
         // What this step touched, from the store's own record - not from the conversation, which
         // knew only about write_file and lost even that when the transcript had to be shortened.
-        var written = store.TouchedPaths;
+        var written = except is { Count: > 0 }
+            ? store.TouchedPaths.Except(except, StringComparer.OrdinalIgnoreCase).ToArray()
+            : store.TouchedPaths;
         if (written.Count == 0)
             return RevertReport.Empty;
 
