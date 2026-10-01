@@ -358,10 +358,6 @@ internal static partial class ProcessExec
         }
         """;
 
-    /// <summary>The argument name. Defined in Core for the same reason as <see cref="ExpectedExitCodes"/> -
-    /// the engine has to read it before this tool ever sees the call.</summary>
-    public const string Force = ToolArguments.Force;
-
     /// <summary>
     /// The schema property for re-running an exact repeat on purpose.
     ///

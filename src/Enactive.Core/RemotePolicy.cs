@@ -30,9 +30,6 @@ using Enactive.Core.Tools;
 /// </summary>
 public static class RemotePolicy
 {
-    /// <summary>The tools this refuses. The same list <see cref="ShellTools.IsShell"/> answers for.</summary>
-    public static IReadOnlyList<string> Shells => ShellTools.All;
-
     /// <summary>
     /// The same policy with every shell denied outright.
     ///

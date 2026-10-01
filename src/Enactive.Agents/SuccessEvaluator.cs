@@ -21,10 +21,6 @@ using Enactive.Core.Tools;
 /// </summary>
 public sealed class SuccessEvaluator : ISuccessEvaluator
 {
-    /// <summary>Legacy built-in identifier; dispatch now uses trusted RunsSuccessChecks metadata.</summary>
-    [Obsolete("Resolve the success-check adapter from ToolDefinition.RunsSuccessChecks.")]
-    public const string CommandTool = "run_command";
-
     public async Task<SuccessReport> EvaluateAsync(
         IReadOnlyList<SuccessCriterionDefinition> criteria,
         IToolRegistry tools,

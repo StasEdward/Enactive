@@ -113,34 +113,6 @@ internal static class WorkspaceScan
     }
 
     /// <summary>
-    /// Whether this file sits in one of the skipped folders, asked of the path BELOW the scan root
-    /// rather than of the whole path.
-    ///
-    /// <para>Splitting the absolute path made those names mean two things they were never meant to
-    /// mean:</para>
-    /// <list type="number">
-    /// <item><b>A workspace whose own location contains one of them was unsearchable.</b> A project
-    /// under <c>C:\dev\packages\thing</c> matched on a segment of its own address, so every file
-    /// was skipped and every search answered "No matches" — a wrong answer stated as a fact.</item>
-    /// <item><b>Pointing a scan AT a skipped folder could not work.</b> The worker's scratch area is
-    /// under <c>.enactive/</c>, so a scan rooted there matched on the root's own segment and
-    /// returned nothing, always. Counting from the root gives what a person expects from every
-    /// other tool of this kind: the noisy places are left out of a sweep and looked in when you
-    /// name them. That is the whole of how scratch is reachable.</item>
-    /// </list>
-    /// </summary>
-    public static bool Skipped(string scanRoot, string file)
-    {
-        var relative = Path.GetRelativePath(scanRoot, file);
-
-        foreach (var segment in relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
-            foreach (var skip in SkippedFolders)
-                if (string.Equals(segment, skip, WorkspaceGuard.Comparison))
-                    return true;
-        return false;
-    }
-
-    /// <summary>
     /// A NUL byte in the first few KB means this is not text. Cheap, and wrong only for files that
     /// would be unreadable in the output anyway.
     /// </summary>

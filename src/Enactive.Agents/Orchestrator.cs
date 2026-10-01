@@ -3257,7 +3257,6 @@ public sealed partial class Orchestrator : IOrchestrator
         return at < 0 ? diff : diff[at..];
     }
 
-    /// <summary>A file as it is now, or a sentence saying why it cannot be shown.</summary>
     /// <summary>A workspace file's text, or null when it is not there or cannot be read.</summary>
     private async Task<string?> ReadOrNullAsync(string relativePath, CancellationToken ct)
     {
@@ -3267,24 +3266,6 @@ public sealed partial class Orchestrator : IOrchestrator
             return File.Exists(full) ? await File.ReadAllTextAsync(full, ct) : null;
         }
         catch (Exception ex) when (ex is not OperationCanceledException) { return null; }
-    }
-
-    private async Task<string> ReadNowAsync(string relativePath, CancellationToken ct)
-    {
-        try
-        {
-            var full = WorkspaceGuard.ResolveInside(_workspace.RootPath, relativePath);
-            var info = new FileInfo(full);
-            if (!info.Exists)
-                return "(could not be read back)";
-            if (info.Length > 2_000_000)
-                return $"(a {info.Length:N0}-byte file - too large to show here)";
-            return await File.ReadAllTextAsync(full, ct);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            return "(could not be read back)";
-        }
     }
 
     /// <summary>

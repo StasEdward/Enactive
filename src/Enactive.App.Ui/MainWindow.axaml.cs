@@ -38,12 +38,6 @@ namespace Enactive.App.Ui;
 /// AI status + decision card + artifacts (right). Reuses the engine unchanged.</summary>
 public sealed partial class MainWindow : Window, IDecisionHandler
 {
-    private const string DeveloperInstructions =
-        "You are a developer agent working inside the user's workspace. You have these tools: "
-        + "write_file (create/overwrite a file), read_file (read a file), list_dir (list a directory), "
-        + "run_command (run a shell command in the workspace). All paths are relative to the workspace root. "
-        + "Use the tools to accomplish the request, then reply with a short confirmation of what you did.";
-
     // ── Reusable singletons ──────────────────────────────────────────────────
     private readonly HttpClient _http = new() { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
     private string _model = "qwen2.5-coder";

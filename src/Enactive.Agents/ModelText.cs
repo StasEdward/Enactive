@@ -69,7 +69,7 @@ internal static class ModelText
     /// answer. The reviewer was told eight required fields were missing - every one of which it had
     /// sent - and never that its JSON was broken. And an object that opens with a key and never closes
     /// is the answer, cut off or mistyped: everything after its brace lies inside it, so there is
-    /// nothing further along to find (see <see cref="JsonProblem"/> for saying what broke).</para>
+    /// nothing further along to find.</para>
     /// </summary>
     public static string? ExtractJsonObject(string text)
     {
@@ -100,34 +100,6 @@ internal static class ModelText
             i += candidate.Length - 1;
         }
 
-        return null;
-    }
-
-    /// <summary>
-    /// Why the text holds no JSON object, where one was plainly meant: the parser's own complaint
-    /// about the first object that opens with a key, with a few characters either side of where it
-    /// stopped. Null when there is no such object to complain about.
-    /// </summary>
-    public static string? JsonProblem(string text)
-    {
-        for (var i = 0; i < text.Length; i++)
-        {
-            if (text[i] != '{' || !OpensWithKey(text, i)) continue;
-            var candidate = Balanced(text, i) ?? text[i..];
-            try
-            {
-                using var _ = JsonDocument.Parse(candidate);
-                return null;
-            }
-            catch (JsonException ex)
-            {
-                var at = (int)Math.Min(ex.BytePositionInLine ?? 0, candidate.Length);
-                var near = candidate[Math.Max(0, at - 40)..Math.Min(candidate.Length, at + 20)].Replace('\n', ' ');
-                return Balanced(text, i) is null
-                    ? $"the JSON object is never closed - a brace or bracket is missing or mistyped; the parser stopped near: …{near}…"
-                    : $"the JSON object does not parse ({ex.Message}); near: …{near}…";
-            }
-        }
         return null;
     }
 

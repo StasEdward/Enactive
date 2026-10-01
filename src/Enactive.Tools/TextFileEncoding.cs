@@ -27,30 +27,6 @@ internal static class TextFileEncoding
         return new(await reader.ReadToEndAsync(ct), encoding, new(hash));
     }
 
-    public static async Task<string> ReadTextAsync(IArtifactStore store, string path, string fullPath, CancellationToken ct)
-    {
-        await using var stream = await store.TryOpenPendingAsync(path, ct)
-            ?? new FileStream(fullPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete,
-                4096, FileOptions.Asynchronous);
-        if (!stream.CanSeek) throw new NotSupportedException("Editing requires a seekable pending artifact stream.");
-        var encoding = await Detect(stream, ct);
-        stream.Position = encoding.GetPreamble().Length;
-        // Automatic BOM detection would substitute a lenient decoder and silently replace bad bytes.
-        using var reader = new StreamReader(stream, encoding, detectEncodingFromByteOrderMarks: false, leaveOpen: true);
-        return await reader.ReadToEndAsync(ct);
-    }
-
-    public static async Task<Encoding> ReadAsync(IArtifactStore store, string path, string fullPath, CancellationToken ct)
-    {
-        await using var pending = await store.TryOpenPendingAsync(path, ct);
-        if (pending is not null) return await Detect(pending, ct);
-        if (!File.Exists(fullPath)) return new UTF8Encoding(false, true);
-        // Encoding inspection must not prevent an independent step's atomic replacement.
-        await using var disk = new FileStream(fullPath, FileMode.Open, FileAccess.Read,
-            FileShare.ReadWrite | FileShare.Delete, 4096, FileOptions.Asynchronous);
-        return await Detect(disk, ct);
-    }
-
     internal static async Task<Encoding> Detect(Stream stream, CancellationToken ct)
     {
         var bytes = new byte[4];
