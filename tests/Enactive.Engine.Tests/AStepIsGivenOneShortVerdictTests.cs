@@ -176,15 +176,21 @@ public sealed class AStepIsGivenOneShortVerdictTests
         Assert.Contains("it is no error", instruction, StringComparison.Ordinal);
     }
 
-    /// <summary>The earlier review believed "nothing needed doing" only with the calls that looked; so is this one told.</summary>
+    /// <summary>
+    /// What a step reports done or so - by itself or by a step before it - stands only on a call made after the work it
+    /// rests on; what would follow from the work, and the values a step handed on, are not shown. Told instead that a step
+    /// reporting nothing to do needs "a call it made", one reviewer passed a step whose tests nobody ran after the fix, and
+    /// another failed steps whose tests the step before had run (2026-10-01).
+    /// </summary>
     [Fact]
-    public async Task The_review_is_told_nothing_to_do_rests_on_a_call_that_looked()
+    public async Task The_review_is_told_a_result_stands_on_a_call_made_after_the_work()
     {
         var (_, _, reviewer) = await Run([Pass(), Pass("the report matches the listing", 3)]);
 
-        var instruction = reviewer.Requests[0].Messages[0].Content!;
-        Assert.Contains("A step that reports nothing needed doing", instruction, StringComparison.Ordinal);
-        Assert.Contains("call it made shows it looked and found so; with no such call, it fails.", instruction, StringComparison.Ordinal);
+        var instruction = reviewer.Requests[0].Messages[0].Content!.Replace("\r\n", " ").Replace("\n", " ");
+        Assert.Contains("A step that reports something done or so - by itself, or by a step before it - has it only where a call shows it, made after the work it rests on", instruction, StringComparison.Ordinal);
+        Assert.Contains("what would follow from the work is not shown, and neither are the values a step handed on", instruction, StringComparison.Ordinal);
+        Assert.DoesNotContain("A step that reports nothing needed doing", instruction, StringComparison.Ordinal);
     }
 
 }

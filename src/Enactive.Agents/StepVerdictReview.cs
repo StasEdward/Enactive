@@ -57,8 +57,9 @@ internal static class StepVerdictReview
         A fail where a file the step made or changed is right as it is - asked for, and nothing wrong in it - names it in
         "keep":["path"]: if the step is rejected, the files named are kept and the rest of what it changed is put back. A file
         with something wrong in it, or a change the request did not ask for, is not kept.
-        A step that reports nothing needed doing - the file already right, nothing broken - has done its part only where a
-        call it made shows it looked and found so; with no such call, it fails.
+        A step that reports something done or so - by itself, or by a step before it - has it only where a call shows it,
+        made after the work it rests on; what would follow from the work is not shown, and neither are the values a step
+        handed on. With no such call, it fails.
         Judge this step only: what the other steps are for is theirs. Do not fail a step on style, on wording, or on a
         detail its purpose does not depend on.
         A change the step made that the request did not ask for is not a detail. Where the request says to leave something
@@ -72,10 +73,13 @@ internal static class StepVerdictReview
     // of the four, 9 of 12 right with it against 7 of 12 without. The earlier review's word on expectedExitCodes was
     // measured too, and left out: no recorded review needed it, and with it the four came to 8 of 12 either way.
 
-    // "Nothing needed doing": the earlier review's "nothing-to-do" answer, believed only with the calls that looked
-    // (Proof.cs) - a finding rests on having looked. A step with no calls needs no citation for a pass here, so the rule
-    // is the review's to apply; that it changed nothing, the review sees in the files it is shown (code review of the
-    // move to one short review, 2026-09-30).
+    // "Done or so ... only where a call shows it, made after the work": the earlier review's "nothing-to-do" answer was
+    // believed only with the calls that looked (Proof.cs), and this review was first told so in those words - "a call it
+    // made shows it looked". Measured 2026-10-01 on setup-step's second step, after the first had generated the missing
+    // file: told that, Sonnet passed the step where nobody ran the tests after the fix (5 of 6 - "the fix was applied, so
+    // they pass", one answer citing the values step 1 handed on), and DeepSeek failed it where step 1 had run them (7 of
+    // 12). Worded as it is now: DeepSeek 72 of 72 over those and fifteen recorded right passes, Sonnet 2 of 3 on the step
+    // nobody checked against 1 of 3, and every right pass kept.
 
     // The last paragraph of the instruction: benchmark scenario build-error, 2026-09-30. "Add Median; leave the rest of the
     // code alone" - the worker also fixed another file's error, and the review passed it as "out of scope but harmless",
