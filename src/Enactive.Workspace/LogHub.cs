@@ -365,8 +365,6 @@ public sealed class FileLogSink : ILogSink, IDisposable
         return deleted;
     }
 
-    public string? CurrentPath { get { lock (_gate) return _currentPath; } }
-
     public void Dispose()
     {
         lock (_gate)

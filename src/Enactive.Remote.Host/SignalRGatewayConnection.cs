@@ -51,9 +51,6 @@ public sealed class SignalRGatewayConnection : IGatewayConnection, IAsyncDisposa
             .Build();
     }
 
-    /// <summary>Whether the connection is up. A Host that is not connected is not a Host that failed.</summary>
-    public bool Connected => _connection.State == HubConnectionState.Connected;
-
     public Task StartAsync(CancellationToken ct = default) => _connection.StartAsync(ct);
 
     public async Task<IReadOnlyList<HostCommand>> SyncAsync(

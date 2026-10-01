@@ -53,7 +53,6 @@ internal sealed class TemplateRow : ObservableObject
     };
 
     /// <summary>A built-in is customised rather than edited: the original has to stay reachable.</summary>
-    public bool IsBuiltin => Entry.IsBuiltin;
     public bool IsEditable => !Entry.IsBuiltin;
 
     /// <summary>A file that replaced a built-in can be deleted to get the built-in back.</summary>
@@ -100,9 +99,6 @@ internal sealed partial class SettingsViewModel
 
     private TemplateRow? _selectedTemplate;
     public TemplateRow? SelectedTemplate { get => _selectedTemplate; set => Set(ref _selectedTemplate, value); }
-
-    /// <summary>Where a new template goes by default, and where the editor's scope box starts.</summary>
-    public bool HasWorkspace => _templates?.WorkspaceFolder is not null;
 
     public string TemplateFolders => _templates is null
         ? ""

@@ -445,7 +445,6 @@ internal sealed class PastRunViewModel : ObservableObject
     public bool HasArtifacts => Artifacts.Count > 0;
     public bool HasNoArtifacts => Artifacts.Count == 0;
     public bool HasDecisions => Decisions.Count > 0;
-    public bool HasNoDecisions => Decisions.Count == 0;
 
     private static string Duration(TimeSpan span)
     {

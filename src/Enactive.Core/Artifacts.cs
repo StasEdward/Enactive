@@ -330,8 +330,6 @@ public sealed record RevertReport(
     public static readonly RevertReport Empty =
         new(Array.Empty<string>(), Array.Empty<string>());
 
-    public bool DidSomething => Reverted.Count > 0 || Kept.Count > 0;
-
     /// <summary>Why this path was left alone, or null when it was not kept.</summary>
     public string? WhyKept(string path)
         => Reasons is not null && Reasons.TryGetValue(path, out var reason) ? reason : null;

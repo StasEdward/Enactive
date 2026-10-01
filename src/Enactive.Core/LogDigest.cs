@@ -11,10 +11,7 @@ public readonly record struct DigestRecord(
 
 /// <summary>What a digest threw away, so the reader is never guessing.</summary>
 public sealed record DigestStats(
-    long LinesRead, long DetailLinesDropped, long RecordsKept, long TimelineDropped)
-{
-    public long LinesDropped => LinesRead - RecordsKept;
-}
+    long LinesRead, long DetailLinesDropped, long RecordsKept, long TimelineDropped);
 
 /// <summary>
 /// Turns a log that is too big to read into one that answers the question.

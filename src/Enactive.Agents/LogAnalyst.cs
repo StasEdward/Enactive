@@ -18,9 +18,6 @@ public sealed record LogAnalysisResult(
 {
     public bool WasExcerpt => LinesSent < LinesTotal;
 
-    /// <summary>Whether the model read a DIGEST of the log rather than lines out of it.</summary>
-    public bool WasDigested => Digest is not null;
-
     /// <summary>
     /// What the window says above the answer, so nobody has to guess what was read.
     ///

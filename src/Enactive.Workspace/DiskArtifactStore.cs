@@ -119,7 +119,6 @@ public sealed class DiskArtifactStore : IOwnedArtifactStore
 
     /// <summary>Interrupted appends left untouched because their content no longer matches the intent.</summary>
     public IReadOnlyList<string> AppendRecoveryConflicts { get; }
-    public string Root => _root;
 
     /// <summary>
     /// The journal key for a path as the caller spelled it. A path that cannot be resolved has no

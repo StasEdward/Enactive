@@ -30,7 +30,6 @@ public sealed class EvidenceView
     public bool OutputsTruncated { get; }
     public bool ArgumentsTruncated { get; }
     public bool HasPriorTranscript { get; }
-    public bool IsTruncated => ActionsOmitted || OutputsTruncated || ArgumentsTruncated;
     internal IReadOnlyList<ExecutedAction> Actions { get; }
 
     /// <summary>
