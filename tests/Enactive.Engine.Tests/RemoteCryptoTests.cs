@@ -122,4 +122,118 @@ public sealed class RemoteCryptoTests
     [InlineData("e1:AQ")]
     public void Opening_something_that_is_not_an_envelope_fails_cleanly(string value)
         => Assert.Throws<EnvelopeException>(() => HostKey.Create(1).OpenText(value, Canonical.Bytes("x")));
+
+    [Fact]
+    public void A_grant_opens_on_the_device_it_was_made_for()
+    {
+        using var device = P256.Generate();
+        var pairKey = RemoteKdf.Derive(new byte[32], RemoteKdf.Pair);
+        var key = HostKey.Create(3);
+        var grant = Grants.Create("host-a", "dev-1", P256.PublicRaw(device), key, Grants.AuthByPairing("connect"), pairKey);
+        var opened = Grants.Open(grant, device, pairKey);
+        Assert.Equal(3u, opened.Epoch);
+        Assert.Equal(key.Secret.ToArray(), opened.Secret.ToArray());
+    }
+
+    /// <summary>
+    /// Review focus 2: the gateway can wrap a key of its own to any device's public key - the key is
+    /// public - but without the pairing secret its MAC does not verify, and the device refuses it.
+    /// </summary>
+    [Fact]
+    public void A_grant_without_the_pairing_secret_is_rejected()
+    {
+        using var device = P256.Generate();
+        var pairKey = RemoteKdf.Derive(new byte[32], RemoteKdf.Pair);
+        var forged = Grants.Create("host-a", "dev-1", P256.PublicRaw(device), HostKey.Create(1),
+            Grants.AuthByPairing("connect"), RemoteKdf.Derive(new byte[] { 9 }, RemoteKdf.Pair));
+        Assert.Throws<EnvelopeException>(() => Grants.Open(forged, device, pairKey));
+    }
+
+    [Fact]
+    public void A_grant_for_another_device_does_not_open()
+    {
+        using var device = P256.Generate();
+        using var other = P256.Generate();
+        var pairKey = RemoteKdf.Derive(new byte[32], RemoteKdf.Pair);
+        var grant = Grants.Create("host-a", "dev-1", P256.PublicRaw(other), HostKey.Create(1), Grants.AuthByPairing("connect"), pairKey);
+        Assert.Throws<EnvelopeException>(() => Grants.Open(grant, device, pairKey));
+    }
+
+    [Fact]
+    public void A_grant_moved_to_another_host_does_not_open()
+    {
+        using var device = P256.Generate();
+        var pairKey = RemoteKdf.Derive(new byte[32], RemoteKdf.Pair);
+        var grant = Grants.Create("host-a", "dev-1", P256.PublicRaw(device), HostKey.Create(1), Grants.AuthByPairing("connect"), pairKey);
+        Assert.Throws<EnvelopeException>(() => Grants.Open(grant with { HostId = "host-b" }, device, pairKey));
+    }
+
+    /// <summary>The MAC covers AuthBy, so a gateway cannot relabel a rotation grant as a pairing grant.</summary>
+    [Fact]
+    public void A_grant_relabelled_with_another_authentication_does_not_open()
+    {
+        using var device = P256.Generate();
+        var pairKey = RemoteKdf.Derive(new byte[32], RemoteKdf.Pair);
+        var grant = Grants.Create("host-a", "dev-1", P256.PublicRaw(device), HostKey.Create(2), Grants.AuthByEpoch(1), pairKey);
+        Assert.Throws<EnvelopeException>(() => Grants.Open(grant with { AuthBy = Grants.AuthByPairing("connect") }, device, pairKey));
+    }
+
+    /// <summary>
+    /// The device code treats EnvelopeException as "this grant is not for me / not trusted", so a field
+    /// that is damaged - in any way - must surface as that and not as some other exception family.
+    /// </summary>
+    [Fact]
+    public void A_grant_with_a_corrupted_ephemeral_key_is_refused_as_an_envelope_error()
+    {
+        using var device = P256.Generate();
+        var pairKey = RemoteKdf.Derive(new byte[32], RemoteKdf.Pair);
+        var grant = Grants.Create("host-a", "dev-1", P256.PublicRaw(device), HostKey.Create(1), Grants.AuthByPairing("connect"), pairKey);
+
+        // Damaged in transit: the MAC no longer matches.
+        Assert.Throws<EnvelopeException>(() => Grants.Open(grant with { EphemeralPublic = "!!!" }, device, pairKey));
+
+        // Damaged before the MAC was made (a holder of the pairing key): the key must still be refused,
+        // and without the import check a point off the curve escapes as a PlatformNotSupportedException or a raw CryptographicException.
+        var offCurve = new byte[65];
+        offCurve[0] = 4;
+        offCurve[64] = 1;
+        var badKey = B64.Url(offCurve);
+        var mac = B64.Url(System.Security.Cryptography.HMACSHA256.HashData(pairKey, Canonical.Bytes(
+            "enactive-grant-mac-v1", grant.HostId, grant.DeviceId, "1", badKey, B64.Url(P256.PublicRaw(device)),
+            grant.Nonce, grant.Ciphertext, grant.AuthBy)));
+        Assert.Throws<EnvelopeException>(() => Grants.Open(grant with { EphemeralPublic = badKey, Mac = mac }, device, pairKey));
+    }
+
+    [Fact]
+    public void A_grant_with_malformed_fields_is_refused_as_an_envelope_error()
+    {
+        using var device = P256.Generate();
+        var pairKey = RemoteKdf.Derive(new byte[32], RemoteKdf.Pair);
+        var grant = Grants.Create("host-a", "dev-1", P256.PublicRaw(device), HostKey.Create(1), Grants.AuthByPairing("connect"), pairKey);
+        Assert.Throws<EnvelopeException>(() => Grants.Open(grant with { Mac = "!!!" }, device, pairKey));
+        Assert.Throws<EnvelopeException>(() => Grants.Open(grant with { Mac = null! }, device, pairKey));
+        Assert.Throws<EnvelopeException>(() => Grants.Open(grant with { Mac = B64.Url(new byte[5]) }, device, pairKey));
+        Assert.Throws<EnvelopeException>(() => Grants.Open(grant with { Nonce = "!!!" }, device, pairKey));
+        Assert.Throws<EnvelopeException>(() => Grants.Open(grant with { Ciphertext = "!!!" }, device, pairKey));
+    }
+
+    /// <summary>Fields the MAC covers but whose lengths the cipher insists on: a holder of the pairing key can sign a short nonce or ciphertext.</summary>
+    [Fact]
+    public void A_signed_grant_with_wrong_lengths_is_refused_as_an_envelope_error()
+    {
+        using var device = P256.Generate();
+        var pairKey = RemoteKdf.Derive(new byte[32], RemoteKdf.Pair);
+        var dPub = P256.PublicRaw(device);
+        var good = Grants.Create("host-a", "dev-1", dPub, HostKey.Create(1), Grants.AuthByPairing("connect"), pairKey);
+
+        KeyGrant Resigned(KeyGrant g) => g with
+        {
+            Mac = B64.Url(System.Security.Cryptography.HMACSHA256.HashData(pairKey, Canonical.Bytes(
+                "enactive-grant-mac-v1", g.HostId, g.DeviceId, g.Epoch.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                g.EphemeralPublic, B64.Url(dPub), g.Nonce, g.Ciphertext, g.AuthBy)))
+        };
+
+        Assert.Throws<EnvelopeException>(() => Grants.Open(Resigned(good with { Nonce = B64.Url(new byte[5]) }), device, pairKey));
+        Assert.Throws<EnvelopeException>(() => Grants.Open(Resigned(good with { Ciphertext = B64.Url(new byte[10]) }), device, pairKey));
+    }
 }
