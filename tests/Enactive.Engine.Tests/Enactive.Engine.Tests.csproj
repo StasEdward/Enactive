@@ -38,6 +38,15 @@
     <Using Include="Xunit" />
   </ItemGroup>
 
+  <!--
+    The shared crypto vectors live beside the sources (tests/vectors) because the panel's JS tests read
+    the same file. The test reads its copy from the output directory, so it does not depend on where the
+    checkout is; Link puts it at the output root.
+  -->
+  <ItemGroup>
+    <None Include="..\vectors\remote-crypto-v2.json" Link="remote-crypto-v2.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\..\src\Enactive.Core\Enactive.Core.csproj" />
     <ProjectReference Include="..\Enactive.Mcp.TestServer\Enactive.Mcp.TestServer.csproj" />
