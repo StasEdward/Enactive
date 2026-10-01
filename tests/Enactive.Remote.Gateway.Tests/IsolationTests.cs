@@ -177,6 +177,14 @@ public sealed class IsolationTests(TestDatabase database) : IClassFixture<TestDa
         // it is. Last, because it changes her.
         var own = await AnswerAsync(_alice, alicesPath, alicesBody);
         Assert.Equal(path.OwnStatus, own.Status);
+
+        // What she did changed her rows, and the checksum shows it. Without this the unchanged
+        // checksum above could mean only that the checksum cannot see change: every request here that
+        // succeeds writes something of hers.
+        if (own.Status == HttpStatusCode.OK)
+        {
+            Assert.NotEqual(aliceBefore, await ChecksumAsync(_alice.UserId));
+        }
     }
 
     // ── snapshot, notices, cursor ───────────────────────────────────────────
@@ -209,16 +217,8 @@ public sealed class IsolationTests(TestDatabase database) : IClassFixture<TestDa
         var alices = RemoteJson.Deserialize<GatewaySnapshot>(alicesText);
         var bobs = await _bob.Panel.GetAsync<GatewaySnapshot>("/api/state");
 
-        // Bob really has all of it, so the emptiness below is not an empty fixture.
-        Assert.Equal([_bob.Ids.HostId], bobs.Hosts.Select(h => h.Id));
-        Assert.Equal([_bob.Ids.TaskId], bobs.Tasks.Select(t => t.Id));
-        Assert.Equal([_bob.Ids.RunId], bobs.Runs.Select(r => r.Id));
-        Assert.Equal(2, bobs.Approvals.Count);
-        Assert.NotEmpty(bobs.Events);
-        Assert.Equal(2, bobs.Notices.Count);
-        Assert.NotNull(bobs.Retention.TrimmedBefore);
-
-        // Every collection is Alice's own and only hers.
+        // Every collection is Alice's own and only hers. Asserted first: a leak shows here as hers
+        // holding his, before anything is asked about his own panel.
         Assert.Equal([_alice.Ids.HostId], alices.Hosts.Select(h => h.Id));
         Assert.Equal([WorkspaceId], Assert.Single(alices.Hosts).Workspaces.Select(w => w.Id));
         Assert.Equal([_alice.Ids.TaskId], alices.Tasks.Select(t => t.Id));
@@ -229,18 +229,28 @@ public sealed class IsolationTests(TestDatabase database) : IClassFixture<TestDa
         Assert.All(alices.Events, e => Assert.Equal(_alice.Ids.HostId, e.HostId));
         Assert.All(alices.Notices, n => Assert.Equal(_alice.Ids.RunId, n.RunId));
 
-        // The count is hers: one notice, unread. Bob has two.
+        // The count is hers: one notice, unread.
         Assert.False(Assert.Single(alices.Notices).Read);
         Assert.Equal(1, alices.UnreadNotices);
-        Assert.Equal(2, bobs.UnreadNotices);
 
         // The cursor is where Alice's own line stands - the line of a person with three events and a
-        // notice - and not where Bob's does.
+        // notice.
         Assert.Equal(await LineAsync(_alice.UserId), alices.Cursor);
-        Assert.NotEqual(bobs.Cursor, alices.Cursor);
 
-        // Alice has lost nothing, so she is told nothing was trimmed; Bob has.
+        // Alice has lost nothing, so she is told nothing was trimmed.
         Assert.Null(alices.Retention.TrimmedBefore);
+
+        // Bob really has all of it, and more, so the emptiness above is not an empty fixture and
+        // each of her values differs from his.
+        Assert.Equal([_bob.Ids.HostId], bobs.Hosts.Select(h => h.Id));
+        Assert.Equal([_bob.Ids.TaskId], bobs.Tasks.Select(t => t.Id));
+        Assert.Equal([_bob.Ids.RunId], bobs.Runs.Select(r => r.Id));
+        Assert.Equal(2, bobs.Approvals.Count);
+        Assert.NotEmpty(bobs.Events);
+        Assert.Equal(2, bobs.Notices.Count);
+        Assert.Equal(2, bobs.UnreadNotices);
+        Assert.NotEqual(bobs.Cursor, alices.Cursor);
+        Assert.NotNull(bobs.Retention.TrimmedBefore);
 
         // And not a trace of Bob in the text itself: an id, a key, a sealed field, his account.
         foreach (var ofBob in new[]
@@ -294,6 +304,32 @@ public sealed class IsolationTests(TestDatabase database) : IClassFixture<TestDa
         Assert.Equal(before.Cursor, after.Cursor);
         Assert.Equal(before.UnreadNotices, after.UnreadNotices);
         Assert.Equal(lineBefore, await LineAsync(_alice.UserId));
+    }
+
+    /// <summary>
+    /// The checksum can fail: one column of one row of Alice's, changed through SQL, and the checksum
+    /// of the table it is in differs - and only that table's. A checksum that could not tell would
+    /// make "unchanged" in every other test mean nothing. The time column is the smallest change:
+    /// one millisecond.
+    /// </summary>
+    [Fact]
+    public async Task The_checksum_sees_a_single_column_of_alices_change()
+    {
+        var before = await ChecksumAsync(_alice.UserId);
+
+        await database.ExecuteAsync(
+            "UPDATE notices SET is_read = 1 WHERE owner_id = @owner", ("@owner", _alice.UserId));
+        var read = await ChecksumAsync(_alice.UserId);
+
+        Assert.NotEqual(before["notices"], read["notices"]);
+        Assert.Equal(
+            before.Where(t => t.Key != "notices"), read.Where(t => t.Key != "notices"));
+
+        await database.ExecuteAsync(
+            "UPDATE hosts SET created_at = created_at + INTERVAL 1000 MICROSECOND WHERE owner_id = @owner",
+            ("@owner", _alice.UserId));
+
+        Assert.NotEqual(read["hosts"], (await ChecksumAsync(_alice.UserId))["hosts"]);
     }
 
     /// <summary>
@@ -435,8 +471,15 @@ public sealed class IsolationTests(TestDatabase database) : IClassFixture<TestDa
         return sums;
     }
 
-    private static string Text(object value)
-        => value is byte[] bytes ? Convert.ToHexString(bytes) : Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture)!;
+    // "O" for a time: the default text drops the milliseconds, and the DATETIME(3) columns change
+    // within one second - a checksum blind to that would miss a refused request that still touched a row.
+    private static string Text(object value) => value switch
+    {
+        byte[] bytes => Convert.ToHexString(bytes),
+        DateTime time => time.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
+        DateTimeOffset time => time.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
+        _ => Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture)!
+    };
 
     /// <summary>
     /// Every table that holds somebody's rows, and the column that says whose: found from the schema,
