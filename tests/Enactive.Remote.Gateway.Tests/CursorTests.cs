@@ -258,7 +258,7 @@ public sealed class CursorTests(TestDatabase database) : IClassFixture<TestDatab
         var before = await database.ScalarLongAsync("SELECT COUNT(*) FROM users");
 
         var ids = await Task.WhenAll(Enumerable.Range(0, 10)
-            .Select(_ => Task.Run(() => accounts.ProvisionAsync("test", subject, "Carol", default))));
+            .Select(_ => Task.Run(() => accounts.ProvisionWithoutAdmissionAsync("test", subject, "Carol", default))));
 
         var userId = Assert.Single(ids.Distinct());
         Assert.Equal(before + 1, await database.ScalarLongAsync("SELECT COUNT(*) FROM users"));
@@ -283,7 +283,7 @@ public sealed class CursorTests(TestDatabase database) : IClassFixture<TestDatab
         // A surrogate pair straddles the cut, and must not be split.
         var longName = new string('a', 99) + "\U0001F600" + new string('b', 300);
 
-        var userId = await accounts.ProvisionAsync("test", NewName("dave"), longName, default);
+        var userId = await accounts.ProvisionWithoutAdmissionAsync("test", NewName("dave"), longName, default);
 
         var stored = (await database.StringsAsync($"SELECT display_name FROM users WHERE id = '{userId}'")).Single();
         Assert.Equal(new string('a', 99), stored);

@@ -129,7 +129,7 @@ public sealed class AccountService(Database db, TimeProvider clock, AdmissionMod
                     return new SignInOutcome.Refused();
             }
 
-            userId = await ProvisionAsync(provider, subject, display, ct);
+            userId = await ProvisionWithoutAdmissionAsync(provider, subject, display, ct);
         }
 
         try
@@ -217,9 +217,12 @@ public sealed class AccountService(Database db, TimeProvider clock, AdmissionMod
         }, ct);
 
     /// <summary>
-    /// The account of this identity, created on first sight. One transaction writes the user, the
+    /// WARNING: creates the account WITHOUT asking the admission list - a sign-in must call
+    /// <see cref="SignInAsync"/> instead, or anybody with a provider login gets an account.
+    ///
+    /// <para>The account of this identity, created on first sight. One transaction writes the user, the
     /// identity, the event line and the retention row, so no account exists half-made: a user
-    /// without a stream row could never have an event allocated an ordinal.
+    /// without a stream row could never have an event allocated an ordinal.</para>
     ///
     /// <para>Two sign-ins of one identity at once (a double-clicked button, two tabs) must make one
     /// account. The identity's primary key is what decides, not a read made first: both callers
@@ -227,8 +230,11 @@ public sealed class AccountService(Database db, TimeProvider clock, AdmissionMod
     /// row, fails with a duplicate key once it commits, rolls back its own half-made user, and
     /// answers with the winner's id. The user row is inserted before the identity only because the
     /// identity's foreign key needs it to exist.</para>
+    ///
+    /// <para>Internal, and named for what it skips, so it is not the obvious call for the next sign-in
+    /// somebody writes: the development sign-in and the tests use it, a provider's callback must not.</para>
     /// </summary>
-    public async Task<string> ProvisionAsync(
+    internal async Task<string> ProvisionWithoutAdmissionAsync(
         string provider, string subject, string display, CancellationToken ct)
     {
         var userId = Ids.New();

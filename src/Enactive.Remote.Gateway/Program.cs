@@ -14,7 +14,7 @@ using Microsoft.AspNetCore.HttpOverrides;
 // Stage 2 of the remote-access design. The panel itself is stage 6; what is here is the surface it
 // will call and the hub a Host connects to.
 
-// Signing in is limited per caller: the development sign-in now, the providers' callbacks later.
+// Signing in is limited per caller: the development sign-in, and the start and end of a provider's.
 const string SignInRateLimit = "login";
 
 // Answered before ANYTHING else, including the configuration checks below: this asks the assembly
@@ -64,6 +64,19 @@ if (string.IsNullOrWhiteSpace(connectionString))
 // Read now, because it throws when it is switched on outside Development: refusing to start is the
 // whole of its safety, and a gateway that started first would already be serving the sign-in.
 var developmentSignIn = DevelopmentSignIn.Enabled(builder.Configuration, builder.Environment);
+
+// Read now for the same reason: a provider with half its settings, or no public origin to send people back
+// to, stops the start rather than offering a sign-in that fails for everybody.
+var externalProviders = ExternalProviders.FromConfiguration(builder.Configuration);
+
+// The providers' callbacks carry the authorization code in their query string, and two framework logs
+// print it: the request log writes every request's full URL, and the sign-in handlers' debug output
+// writes the authorization request and the callback message. Both were caught doing it with logging
+// turned up. Capped here, in code, so turning logging up to chase a fault cannot put codes into the
+// journal. A rule in configuration aimed at one logging provider would still outrank these, so the
+// deployment's configuration must not add one for these categories.
+builder.Logging.AddFilter("Microsoft.AspNetCore.Hosting.Diagnostics", LogLevel.Warning);
+builder.Logging.AddFilter("Microsoft.AspNetCore.Authentication", LogLevel.Information);
 
 var dataDirectory = builder.Configuration["ENACTIVE_DATA"]
     ?? Path.Combine(builder.Environment.ContentRootPath, "data");
@@ -142,6 +155,12 @@ builder.Services.AddSignalR(o => o.MaximumReceiveMessageSize = 65536)
         o.PayloadSerializerOptions.UnmappedMemberHandling = RemoteJson.Options.UnmappedMemberHandling;
     });
 
+// Secure everywhere but Development, where an in-process test server and a developer's http://localhost
+// could not send a Secure cookie back.
+var cookieSecurity = builder.Environment.IsDevelopment()
+    ? CookieSecurePolicy.SameAsRequest
+    : CookieSecurePolicy.Always;
+
 builder.Services.AddAuthentication(UserCookie.SchemeName)
     .AddCookie(UserCookie.SchemeName, o =>
     {
@@ -152,9 +171,7 @@ builder.Services.AddAuthentication(UserCookie.SchemeName)
         // site to ours, and a Strict cookie set on that callback is not sent on the redirect after it.
         // Lax still keeps it off another site's form posts and fetches, and antiforgery covers the rest.
         o.Cookie.SameSite = SameSiteMode.Lax;
-        o.Cookie.SecurePolicy = builder.Environment.IsDevelopment()
-            ? CookieSecurePolicy.SameAsRequest
-            : CookieSecurePolicy.Always;
+        o.Cookie.SecurePolicy = cookieSecurity;
 
         // Host-only and for the whole site: no Domain, so no other host under the same parent domain is
         // sent it, and Path=/ so the panel and its API share it.
@@ -180,7 +197,8 @@ builder.Services.AddAuthentication(UserCookie.SchemeName)
         o.Events.OnRedirectToLogin = c => { c.Response.StatusCode = 401; return Task.CompletedTask; };
         o.Events.OnRedirectToAccessDenied = c => { c.Response.StatusCode = 403; return Task.CompletedTask; };
     })
-    .AddScheme<AuthenticationSchemeOptions, HostAuthentication>(HostAuthentication.SchemeName, _ => { });
+    .AddScheme<AuthenticationSchemeOptions, HostAuthentication>(HostAuthentication.SchemeName, _ => { })
+    .AddExternalSignIn(externalProviders, cookieSecurity);
 
 builder.Services.AddAuthorization();
 
@@ -339,6 +357,8 @@ app.UseStaticFiles(new StaticFileOptions
 {
     OnPrepareResponse = served => served.Context.Response.Headers.CacheControl = "no-cache"
 });
+// Before authentication, where the providers' handlers build their callback address. See ExternalSignIn.
+app.UsePublicOrigin(externalProviders);
 app.UseAuthentication();
 app.UseAuthorization();
 app.UseRateLimiter();
@@ -366,6 +386,8 @@ if (developmentSignIn)
 {
     app.MapDevelopmentSignIn(SignInRateLimit);
 }
+
+app.MapExternalSignIn(externalProviders, SignInRateLimit);
 
 // The person's API: their cookie, and nothing else. A computer's bearer token is a credential for the
 // hub only - one that could call this could register computers and start work on its own say-so.

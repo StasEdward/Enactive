@@ -159,7 +159,15 @@ public static class UserCookie
     public static async Task SignInAsync(HttpContext context, SessionStore sessions, string userId, CancellationToken ct)
     {
         var (access, version) = await sessions.OpenWithVersionAsync(userId, ct);
+        await IssueAsync(context, access, version);
+    }
 
+    /// <summary>
+    /// Gives this browser the cookie of a session already opened, under the security version it was
+    /// opened with. For a sign-in whose session was made by <see cref="AccountService.SignInAsync"/>.
+    /// </summary>
+    public static async Task IssueAsync(HttpContext context, UserAccess access, int version)
+    {
         var identity = new ClaimsIdentity(
             [
                 new Claim(UserClaim, access.UserId),

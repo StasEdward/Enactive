@@ -68,7 +68,7 @@ public static partial class DevelopmentSignIn
                         "'name' must be 1 to 64 letters, digits, dots, dashes or underscores.");
                 }
 
-                var userId = await accounts.ProvisionAsync(Provider, name, name, ct);
+                var userId = await accounts.ProvisionWithoutAdmissionAsync(Provider, name, name, ct);
                 await UserCookie.SignInAsync(context, sessions, userId, ct);
 
                 return Results.Ok(new { id = userId });

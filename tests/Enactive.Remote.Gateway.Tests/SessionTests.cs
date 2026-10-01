@@ -270,8 +270,8 @@ public sealed class SessionTests(TestDatabase database) : IClassFixture<TestData
     public async Task A_session_is_valid_only_for_its_person_its_version_and_its_lifetime()
     {
         var accounts = new AccountService(Db, TimeProvider.System);
-        var alice = await accounts.ProvisionAsync("test", Name("alice"), "Alice", default);
-        var bob = await accounts.ProvisionAsync("test", Name("bob"), "Bob", default);
+        var alice = await accounts.ProvisionWithoutAdmissionAsync("test", Name("alice"), "Alice", default);
+        var bob = await accounts.ProvisionWithoutAdmissionAsync("test", Name("bob"), "Bob", default);
 
         // A whole millisecond, which is what DATETIME(3) stores. MySQL ROUNDS a finer time on insert, so
         // an expiry written from one could land just after the instant this test calls its end.
