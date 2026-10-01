@@ -138,17 +138,19 @@ test('derive reproduces every C# key derivation', async () => {
 });
 
 test('derive takes a text info as its UTF-8 bytes', async () => {
-  for (const k of vectors.kdf.slice(0, 3)) {
+  // The first two cases are the text info strings (message, pair); the last is canonical bytes.
+  for (const k of vectors.kdf.slice(0, 2)) {
     const info = fromUtf8(fromB64url(k.info));
     assert.equal(b64url(await derive(fromB64url(k.ikm), info)), k.out);
   }
 });
 
 test('the info strings are the C# constants and distinct purposes give distinct keys', async () => {
-  assert.deepEqual(INFO, { message: 'enactive-msg-v1', grantAuth: 'enactive-grant-auth-v1', pair: 'enactive-pair-v1' });
+  // No grant-auth key: a key derived from an epoch key could be made by a revoked device too, so rotation grants are signed instead.
+  assert.deepEqual(INFO, { message: 'enactive-msg-v1', pair: 'enactive-pair-v1' });
   const ikm = new Uint8Array(32).fill(7);
   const keys = await Promise.all(Object.values(INFO).map((info) => derive(ikm, info)));
-  assert.equal(new Set(keys.map(b64url)).size, 3);
+  assert.equal(new Set(keys.map(b64url)).size, 2);
 });
 
 test('hostKey reproduces the C# host key', async () => {
@@ -157,7 +159,7 @@ test('hostKey reproduces the C# host key', async () => {
   assert.equal(key.epoch, stored.epoch);
   assert.equal(b64url(key.secret), stored.secret);
   assert.equal(b64url(key.messageKey), stored.messageKey);
-  assert.equal(b64url(key.grantAuthKey), stored.grantAuthKey);
+  assert.equal(key.grantAuthKey, undefined);
 });
 
 test('hostKey refuses a secret that is not 32 bytes with TypeError', async () => {

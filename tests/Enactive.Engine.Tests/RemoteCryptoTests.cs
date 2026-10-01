@@ -1,5 +1,7 @@
 namespace Enactive.Engine.Tests;
 
+using System.Globalization;
+using System.Security.Cryptography;
 using Enactive.Remote.Contracts;
 using Enactive.Remote.Contracts.Crypto;
 using Xunit;
@@ -63,10 +65,37 @@ public sealed class RemoteCryptoTests
     }
 
     [Fact]
+    public void A_signing_public_key_is_65_bytes_and_verifies_what_its_private_key_signed()
+    {
+        using var signer = P256.GenerateSigning();
+        var raw = P256.SigningPublicRaw(signer);
+        Assert.Equal(65, raw.Length);
+        Assert.Equal(4, raw[0]);
+        var data = "enactive"u8.ToArray();
+        var signature = signer.SignData(data, HashAlgorithmName.SHA256);
+        using var verifier = P256.ImportSigningPublic(raw);
+        Assert.True(verifier.VerifyData(data, signature, HashAlgorithmName.SHA256));
+    }
+
+    /// <summary>The signing key a grant carries comes off the wire; every way it can be wrong must be the one exception family Grants converts.</summary>
+    [Fact]
+    public void A_signing_public_key_that_is_not_a_p256_point_is_refused()
+    {
+        var offCurve = new byte[65];
+        offCurve[0] = 4;
+        offCurve[64] = 1;
+        var wrongPrefix = new byte[65];
+        wrongPrefix[0] = 2;
+        Assert.ThrowsAny<CryptographicException>(() => P256.ImportSigningPublic(offCurve));
+        Assert.ThrowsAny<CryptographicException>(() => P256.ImportSigningPublic(wrongPrefix));
+        Assert.ThrowsAny<CryptographicException>(() => P256.ImportSigningPublic(new byte[64]));
+    }
+
+    [Fact]
     public void Derivations_with_different_info_differ()
     {
         var ikm = new byte[32];
-        Assert.NotEqual(RemoteKdf.Derive(ikm, RemoteKdf.Message), RemoteKdf.Derive(ikm, RemoteKdf.GrantAuth));
+        Assert.NotEqual(RemoteKdf.Derive(ikm, RemoteKdf.Message), RemoteKdf.Derive(ikm, RemoteKdf.Pair));
         Assert.Equal(32, RemoteKdf.Derive(ikm, RemoteKdf.Message).Length);
     }
 
@@ -123,16 +152,131 @@ public sealed class RemoteCryptoTests
     public void Opening_something_that_is_not_an_envelope_fails_cleanly(string value)
         => Assert.Throws<EnvelopeException>(() => HostKey.Create(1).OpenText(value, Canonical.Bytes("x")));
 
+    private static readonly byte[] PairKey = RemoteKdf.Derive(new byte[32], RemoteKdf.Pair);
+
+    private static KeyGrant Paired(ECDiffieHellman device, HostKey key, ECDsa computer, byte[]? pairKey = null)
+        => Grants.CreatePaired("host-a", "dev-1", P256.PublicRaw(device), key, "connect", pairKey ?? PairKey, P256.SigningPublicRaw(computer));
+
+    /// <summary>The HMAC of a paired grant computed here, independently of Grants, so a test can authenticate any fields it chose.</summary>
+    private static string MacOf(KeyGrant g, byte[] devicePublic, byte[]? pairKey = null)
+        => B64.Url(HMACSHA256.HashData(pairKey ?? PairKey, Canonical.Bytes("enactive-grant-mac-v1", g.HostId, g.DeviceId,
+            g.Epoch.ToString(CultureInfo.InvariantCulture), g.EphemeralPublic, B64.Url(devicePublic), g.Nonce, g.Ciphertext,
+            g.AuthBy, g.HostSigningPublic)));
+
+    /// <summary>The signature of a rotation grant made here with any ECDSA key, so a test can sign what an attacker would.</summary>
+    private static string SignatureOf(KeyGrant g, byte[] devicePublic, ECDsa signer)
+        => B64.Url(signer.SignData(Canonical.Bytes("enactive-grant-sig-v1", g.HostId, g.DeviceId,
+            g.Epoch.ToString(CultureInfo.InvariantCulture), g.EphemeralPublic, B64.Url(devicePublic), g.Nonce, g.Ciphertext,
+            g.AuthBy, g.HostSigningPublic), HashAlgorithmName.SHA256));
+
     [Fact]
     public void A_grant_opens_on_the_device_it_was_made_for()
     {
         using var device = P256.Generate();
-        var pairKey = RemoteKdf.Derive(new byte[32], RemoteKdf.Pair);
+        using var computer = P256.GenerateSigning();
         var key = HostKey.Create(3);
-        var grant = Grants.Create("host-a", "dev-1", P256.PublicRaw(device), key, Grants.AuthByPairing("connect"), pairKey);
-        var opened = Grants.Open(grant, device, pairKey);
+        var opened = Grants.Open(Paired(device, key, computer), device, PairKey, null).Key;
         Assert.Equal(3u, opened.Epoch);
         Assert.Equal(key.Secret.ToArray(), opened.Secret.ToArray());
+    }
+
+    /// <summary>The first grant a device receives is the one that tells it which signing key to trust for this computer.</summary>
+    [Fact]
+    public void A_paired_grant_still_opens_and_returns_the_signing_key_to_pin()
+    {
+        using var device = P256.Generate();
+        using var computer = P256.GenerateSigning();
+        var grant = Paired(device, HostKey.Create(1), computer);
+        Assert.Equal(Grants.AuthByPairing("connect"), grant.AuthBy);
+        Assert.Equal(P256.SigningPublicRaw(computer), Grants.Open(grant, device, PairKey, null).HostSigningPublic);
+        // A device that already pinned this computer's key (a second invitation) opens it as well.
+        Assert.Equal(1u, Grants.Open(grant, device, PairKey, P256.SigningPublicRaw(computer)).Key.Epoch);
+    }
+
+    [Fact]
+    public void A_rotation_grant_signed_by_the_computer_opens()
+    {
+        using var device = P256.Generate();
+        using var computer = P256.GenerateSigning();
+        var pinned = P256.SigningPublicRaw(computer);
+        var key = HostKey.Create(4);
+        var grant = Grants.CreateSigned("host-a", "dev-1", P256.PublicRaw(device), key, computer);
+        Assert.Equal(Grants.AuthByHost, grant.AuthBy);
+        Assert.Equal(64, B64.FromUrl(grant.Mac).Length);
+        var (opened, signingPublic) = Grants.Open(grant, device, default, pinned);
+        Assert.Equal(key.Secret.ToArray(), opened.Secret.ToArray());
+        Assert.Equal(pinned, signingPublic);
+    }
+
+    /// <summary>
+    /// The attack the signing key exists for: a revoked device holds every epoch key up to its revocation and,
+    /// with the gateway relaying, could hand the remaining devices a next key of its own choosing. It does not
+    /// hold the computer's private signing key, so the best it can do is sign with another ECDSA key while
+    /// keeping the pinned public key in the grant - or fall back to the old scheme, an HMAC with a key derived
+    /// from the previous epoch key. Neither may open.
+    /// </summary>
+    [Fact]
+    public void A_rotation_grant_made_with_an_old_epoch_key_is_rejected()
+    {
+        using var device = P256.Generate();
+        using var computer = P256.GenerateSigning();
+        using var attacker = P256.GenerateSigning();
+        var dPub = P256.PublicRaw(device);
+        var pinned = P256.SigningPublicRaw(computer);
+        var oldKey = HostKey.Create(3);
+        var chosen = HostKey.Create(4);
+
+        var made = Grants.CreateSigned("host-a", "dev-1", dPub, chosen, attacker) with { HostSigningPublic = B64.Url(pinned) };
+        var forged = made with { Mac = SignatureOf(made, dPub, attacker) };
+        Assert.Throws<EnvelopeException>(() => Grants.Open(forged, device, default, pinned));
+
+        var epochAuth = RemoteKdf.Derive(oldKey.Secret.Span, "enactive-grant-auth-v1");
+        var relabelled = forged with { AuthBy = "epoch:3" };
+        var oldStyle = relabelled with { Mac = MacOf(relabelled, dPub, epochAuth) };
+        Assert.Throws<EnvelopeException>(() => Grants.Open(oldStyle, device, epochAuth, pinned));
+    }
+
+    /// <summary>A grant that brings another signing key would replace the pinned one: whoever holds its private part could then sign every later rotation.</summary>
+    [Fact]
+    public void A_grant_carrying_another_signing_key_than_the_pinned_one_is_rejected()
+    {
+        using var device = P256.Generate();
+        using var computer = P256.GenerateSigning();
+        using var other = P256.GenerateSigning();
+        var pinned = P256.SigningPublicRaw(computer);
+
+        // Paired: authentic under the pair key, but it names another computer key.
+        var paired = Paired(device, HostKey.Create(1), other);
+        Assert.Equal(P256.SigningPublicRaw(other), Grants.Open(paired, device, PairKey, null).HostSigningPublic);
+        Assert.Throws<EnvelopeException>(() => Grants.Open(paired, device, PairKey, pinned));
+
+        // Signed: a valid signature by the key it carries, which is not the pinned one.
+        var signed = Grants.CreateSigned("host-a", "dev-1", P256.PublicRaw(device), HostKey.Create(2), other);
+        Assert.Throws<EnvelopeException>(() => Grants.Open(signed, device, default, pinned));
+    }
+
+    /// <summary>With nothing pinned the only key to check a signature with would be the one in the grant, which anyone can put there.</summary>
+    [Fact]
+    public void A_host_grant_with_nothing_pinned_is_rejected()
+    {
+        using var device = P256.Generate();
+        using var computer = P256.GenerateSigning();
+        var grant = Grants.CreateSigned("host-a", "dev-1", P256.PublicRaw(device), HostKey.Create(2), computer);
+        Assert.Throws<EnvelopeException>(() => Grants.Open(grant, device, PairKey, null));
+    }
+
+    [Theory]
+    [InlineData("epoch:1")]
+    [InlineData("")]
+    [InlineData("HOST")]
+    [InlineData("pair")]
+    public void A_grant_with_an_unknown_authentication_is_rejected(string authBy)
+    {
+        using var device = P256.Generate();
+        using var computer = P256.GenerateSigning();
+        var dPub = P256.PublicRaw(device);
+        var relabelled = Paired(device, HostKey.Create(1), computer) with { AuthBy = authBy };
+        Assert.Throws<EnvelopeException>(() => Grants.Open(relabelled with { Mac = MacOf(relabelled, dPub) }, device, PairKey, P256.SigningPublicRaw(computer)));
     }
 
     /// <summary>
@@ -143,10 +287,11 @@ public sealed class RemoteCryptoTests
     public void A_grant_without_the_pairing_secret_is_rejected()
     {
         using var device = P256.Generate();
-        var pairKey = RemoteKdf.Derive(new byte[32], RemoteKdf.Pair);
-        var forged = Grants.Create("host-a", "dev-1", P256.PublicRaw(device), HostKey.Create(1),
-            Grants.AuthByPairing("connect"), RemoteKdf.Derive(new byte[] { 9 }, RemoteKdf.Pair));
-        Assert.Throws<EnvelopeException>(() => Grants.Open(forged, device, pairKey));
+        using var computer = P256.GenerateSigning();
+        var forged = Paired(device, HostKey.Create(1), computer, RemoteKdf.Derive(new byte[] { 9 }, RemoteKdf.Pair));
+        Assert.Throws<EnvelopeException>(() => Grants.Open(forged, device, PairKey, null));
+        // Nor does it open for a device that has no pairing in progress.
+        Assert.Throws<EnvelopeException>(() => Grants.Open(Paired(device, HostKey.Create(1), computer), device, default, null));
     }
 
     [Fact]
@@ -154,28 +299,34 @@ public sealed class RemoteCryptoTests
     {
         using var device = P256.Generate();
         using var other = P256.Generate();
-        var pairKey = RemoteKdf.Derive(new byte[32], RemoteKdf.Pair);
-        var grant = Grants.Create("host-a", "dev-1", P256.PublicRaw(other), HostKey.Create(1), Grants.AuthByPairing("connect"), pairKey);
-        Assert.Throws<EnvelopeException>(() => Grants.Open(grant, device, pairKey));
+        using var computer = P256.GenerateSigning();
+        Assert.Throws<EnvelopeException>(() => Grants.Open(Paired(other, HostKey.Create(1), computer), device, PairKey, null));
+        var signed = Grants.CreateSigned("host-a", "dev-1", P256.PublicRaw(other), HostKey.Create(2), computer);
+        Assert.Throws<EnvelopeException>(() => Grants.Open(signed, device, default, P256.SigningPublicRaw(computer)));
     }
 
     [Fact]
     public void A_grant_moved_to_another_host_does_not_open()
     {
         using var device = P256.Generate();
-        var pairKey = RemoteKdf.Derive(new byte[32], RemoteKdf.Pair);
-        var grant = Grants.Create("host-a", "dev-1", P256.PublicRaw(device), HostKey.Create(1), Grants.AuthByPairing("connect"), pairKey);
-        Assert.Throws<EnvelopeException>(() => Grants.Open(grant with { HostId = "host-b" }, device, pairKey));
+        using var computer = P256.GenerateSigning();
+        var pinned = P256.SigningPublicRaw(computer);
+        Assert.Throws<EnvelopeException>(() => Grants.Open(Paired(device, HostKey.Create(1), computer) with { HostId = "host-b" }, device, PairKey, null));
+        var signed = Grants.CreateSigned("host-a", "dev-1", P256.PublicRaw(device), HostKey.Create(2), computer);
+        Assert.Throws<EnvelopeException>(() => Grants.Open(signed with { HostId = "host-b" }, device, default, pinned));
     }
 
-    /// <summary>The MAC covers AuthBy, so a gateway cannot relabel a rotation grant as a pairing grant.</summary>
+    /// <summary>The MAC and the signature cover AuthBy, so a gateway cannot relabel one kind of grant as the other.</summary>
     [Fact]
     public void A_grant_relabelled_with_another_authentication_does_not_open()
     {
         using var device = P256.Generate();
-        var pairKey = RemoteKdf.Derive(new byte[32], RemoteKdf.Pair);
-        var grant = Grants.Create("host-a", "dev-1", P256.PublicRaw(device), HostKey.Create(2), Grants.AuthByEpoch(1), pairKey);
-        Assert.Throws<EnvelopeException>(() => Grants.Open(grant with { AuthBy = Grants.AuthByPairing("connect") }, device, pairKey));
+        using var computer = P256.GenerateSigning();
+        var pinned = P256.SigningPublicRaw(computer);
+        var signed = Grants.CreateSigned("host-a", "dev-1", P256.PublicRaw(device), HostKey.Create(2), computer);
+        Assert.Throws<EnvelopeException>(() => Grants.Open(signed with { AuthBy = Grants.AuthByPairing("connect") }, device, PairKey, pinned));
+        var paired = Paired(device, HostKey.Create(1), computer);
+        Assert.Throws<EnvelopeException>(() => Grants.Open(paired with { AuthBy = Grants.AuthByHost }, device, PairKey, pinned));
     }
 
     /// <summary>
@@ -186,35 +337,71 @@ public sealed class RemoteCryptoTests
     public void A_grant_with_a_corrupted_ephemeral_key_is_refused_as_an_envelope_error()
     {
         using var device = P256.Generate();
-        var pairKey = RemoteKdf.Derive(new byte[32], RemoteKdf.Pair);
-        var grant = Grants.Create("host-a", "dev-1", P256.PublicRaw(device), HostKey.Create(1), Grants.AuthByPairing("connect"), pairKey);
+        using var computer = P256.GenerateSigning();
+        var grant = Paired(device, HostKey.Create(1), computer);
 
         // Damaged in transit: the MAC no longer matches.
-        Assert.Throws<EnvelopeException>(() => Grants.Open(grant with { EphemeralPublic = "!!!" }, device, pairKey));
+        Assert.Throws<EnvelopeException>(() => Grants.Open(grant with { EphemeralPublic = "!!!" }, device, PairKey, null));
 
         // Damaged before the MAC was made (a holder of the pairing key): the key must still be refused,
         // and without the import check a point off the curve escapes as a PlatformNotSupportedException or a raw CryptographicException.
         var offCurve = new byte[65];
         offCurve[0] = 4;
         offCurve[64] = 1;
-        var badKey = B64.Url(offCurve);
-        var mac = B64.Url(System.Security.Cryptography.HMACSHA256.HashData(pairKey, Canonical.Bytes(
-            "enactive-grant-mac-v1", grant.HostId, grant.DeviceId, "1", badKey, B64.Url(P256.PublicRaw(device)),
-            grant.Nonce, grant.Ciphertext, grant.AuthBy)));
-        Assert.Throws<EnvelopeException>(() => Grants.Open(grant with { EphemeralPublic = badKey, Mac = mac }, device, pairKey));
+        var bad = grant with { EphemeralPublic = B64.Url(offCurve) };
+        Assert.Throws<EnvelopeException>(() => Grants.Open(bad with { Mac = MacOf(bad, P256.PublicRaw(device)) }, device, PairKey, null));
     }
 
     [Fact]
     public void A_grant_with_malformed_fields_is_refused_as_an_envelope_error()
     {
         using var device = P256.Generate();
-        var pairKey = RemoteKdf.Derive(new byte[32], RemoteKdf.Pair);
-        var grant = Grants.Create("host-a", "dev-1", P256.PublicRaw(device), HostKey.Create(1), Grants.AuthByPairing("connect"), pairKey);
-        Assert.Throws<EnvelopeException>(() => Grants.Open(grant with { Mac = "!!!" }, device, pairKey));
-        Assert.Throws<EnvelopeException>(() => Grants.Open(grant with { Mac = null! }, device, pairKey));
-        Assert.Throws<EnvelopeException>(() => Grants.Open(grant with { Mac = B64.Url(new byte[5]) }, device, pairKey));
-        Assert.Throws<EnvelopeException>(() => Grants.Open(grant with { Nonce = "!!!" }, device, pairKey));
-        Assert.Throws<EnvelopeException>(() => Grants.Open(grant with { Ciphertext = "!!!" }, device, pairKey));
+        using var computer = P256.GenerateSigning();
+        var pinned = P256.SigningPublicRaw(computer);
+        var grant = Paired(device, HostKey.Create(1), computer);
+        Assert.Throws<EnvelopeException>(() => Grants.Open(grant with { Mac = "!!!" }, device, PairKey, null));
+        Assert.Throws<EnvelopeException>(() => Grants.Open(grant with { Mac = null! }, device, PairKey, null));
+        Assert.Throws<EnvelopeException>(() => Grants.Open(grant with { Mac = B64.Url(new byte[5]) }, device, PairKey, null));
+        Assert.Throws<EnvelopeException>(() => Grants.Open(grant with { Nonce = "!!!" }, device, PairKey, null));
+        Assert.Throws<EnvelopeException>(() => Grants.Open(grant with { Ciphertext = "!!!" }, device, PairKey, null));
+        Assert.Throws<EnvelopeException>(() => Grants.Open(grant with { AuthBy = null! }, device, PairKey, null));
+        Assert.Throws<EnvelopeException>(() => Grants.Open(grant with { HostSigningPublic = null! }, device, PairKey, null));
+        Assert.Throws<EnvelopeException>(() => Grants.Open(grant with { HostSigningPublic = "!!!" }, device, PairKey, pinned));
+
+        var signed = Grants.CreateSigned("host-a", "dev-1", P256.PublicRaw(device), HostKey.Create(2), computer);
+        Assert.Throws<EnvelopeException>(() => Grants.Open(signed with { Mac = "!!!" }, device, default, pinned));
+        Assert.Throws<EnvelopeException>(() => Grants.Open(signed with { Mac = null! }, device, default, pinned));
+    }
+
+    /// <summary>A P1363 signature over P-256 is exactly 64 bytes; another length is a damaged grant, not a verification to attempt.</summary>
+    [Fact]
+    public void A_signature_of_the_wrong_length_is_refused_as_an_envelope_error()
+    {
+        using var device = P256.Generate();
+        using var computer = P256.GenerateSigning();
+        var pinned = P256.SigningPublicRaw(computer);
+        var signed = Grants.CreateSigned("host-a", "dev-1", P256.PublicRaw(device), HostKey.Create(2), computer);
+        var signature = B64.FromUrl(signed.Mac);
+        Assert.Throws<EnvelopeException>(() => Grants.Open(signed with { Mac = B64.Url(signature[..63]) }, device, default, pinned));
+        Assert.Throws<EnvelopeException>(() => Grants.Open(signed with { Mac = B64.Url([.. signature, 0]) }, device, default, pinned));
+        Assert.Throws<EnvelopeException>(() => Grants.Open(signed with { Mac = B64.Url(new byte[64]) }, device, default, pinned));
+    }
+
+    /// <summary>A device pins the key a paired grant names; a key that is not a P-256 point would be pinned and make every later rotation unverifiable.</summary>
+    [Fact]
+    public void A_paired_grant_carrying_a_signing_key_that_is_not_a_point_is_refused()
+    {
+        using var device = P256.Generate();
+        using var computer = P256.GenerateSigning();
+        var offCurve = new byte[65];
+        offCurve[0] = 4;
+        offCurve[64] = 1;
+        var grant = Paired(device, HostKey.Create(1), computer);
+        foreach (var bad in new[] { offCurve, new byte[64], new byte[33] })
+        {
+            var changed = grant with { HostSigningPublic = B64.Url(bad) };
+            Assert.Throws<EnvelopeException>(() => Grants.Open(changed with { Mac = MacOf(changed, P256.PublicRaw(device)) }, device, PairKey, null));
+        }
     }
 
     /// <summary>Fields the MAC covers but whose lengths the cipher insists on: a holder of the pairing key can sign a short nonce or ciphertext.</summary>
@@ -222,19 +409,20 @@ public sealed class RemoteCryptoTests
     public void A_signed_grant_with_wrong_lengths_is_refused_as_an_envelope_error()
     {
         using var device = P256.Generate();
-        var pairKey = RemoteKdf.Derive(new byte[32], RemoteKdf.Pair);
+        using var computer = P256.GenerateSigning();
         var dPub = P256.PublicRaw(device);
-        var good = Grants.Create("host-a", "dev-1", dPub, HostKey.Create(1), Grants.AuthByPairing("connect"), pairKey);
+        var good = Paired(device, HostKey.Create(1), computer);
 
-        KeyGrant Resigned(KeyGrant g) => g with
-        {
-            Mac = B64.Url(System.Security.Cryptography.HMACSHA256.HashData(pairKey, Canonical.Bytes(
-                "enactive-grant-mac-v1", g.HostId, g.DeviceId, g.Epoch.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                g.EphemeralPublic, B64.Url(dPub), g.Nonce, g.Ciphertext, g.AuthBy)))
-        };
+        KeyGrant Resigned(KeyGrant g) => g with { Mac = MacOf(g, dPub) };
 
-        Assert.Throws<EnvelopeException>(() => Grants.Open(Resigned(good with { Nonce = B64.Url(new byte[5]) }), device, pairKey));
-        Assert.Throws<EnvelopeException>(() => Grants.Open(Resigned(good with { Ciphertext = B64.Url(new byte[10]) }), device, pairKey));
+        Assert.Throws<EnvelopeException>(() => Grants.Open(Resigned(good with { Nonce = B64.Url(new byte[5]) }), device, PairKey, null));
+        Assert.Throws<EnvelopeException>(() => Grants.Open(Resigned(good with { Ciphertext = B64.Url(new byte[10]) }), device, PairKey, null));
+
+        // The same for a grant the computer signed, so the host path checks the lengths as well.
+        var pinned = P256.SigningPublicRaw(computer);
+        var signed = Grants.CreateSigned("host-a", "dev-1", dPub, HostKey.Create(2), computer);
+        var shortNonce = signed with { Nonce = B64.Url(new byte[5]) };
+        Assert.Throws<EnvelopeException>(() => Grants.Open(shortNonce with { Mac = SignatureOf(shortNonce, dPub, computer) }, device, default, pinned));
     }
 
     [Fact]

@@ -45,100 +45,131 @@
   ],
   "kdf": [
     {
-      "ikm": "0PZFxDh0mw4J5orwHS5fq_-O2C3Gw7HV10tDWfjcXqY",
+      "ikm": "ZyheRRbZa5PnC0Qv4OR7qnm6atM5kmuTnGlLBbI1rXU",
       "info": "ZW5hY3RpdmUtbXNnLXYx",
-      "out": "ta_cu5P0zN71Cnc0CdsOMrEt14y7K3hQkebk4__KzJ0"
+      "out": "EOK_BybejUFkg5SrnSGjeyyoSjZBYFIl89avx-BBdJQ"
     },
     {
-      "ikm": "VkjnlswlDm1Rwi0AED5BhaeFe2foqrjYmFpMnm4GZZU",
-      "info": "ZW5hY3RpdmUtZ3JhbnQtYXV0aC12MQ",
-      "out": "gLm-r8zQVASQnmlqpvtgK8vbFoyUuqUHZreEvyu2Q4s"
-    },
-    {
-      "ikm": "Ep5AC1kUjDSyVKQCVJu9H7w6qzwvZbMn3gIOLAnKYCs",
+      "ikm": "obVLkB90uEc0ZOci4cjP2KJrMHpZSx9pCyRjXecZllA",
       "info": "ZW5hY3RpdmUtcGFpci12MQ",
-      "out": "kXZdAWVuYTpYQYBhkn2Wthn0ADkaIu12x0xGgzcpT7I"
+      "out": "pGkQJzVw6AOedIpKBHf2fyMuBj_Hc3ohZc9CAhQZ1NM"
     },
     {
-      "ikm": "Xzg9AJKDfEUgGUHX8Fs7IpHf59Xv9k2qpDTdaTrQOqI",
+      "ikm": "bArcQJHaYmrcHd68ZZ-3CeMiFzg065rGmitEUI4bIm0",
       "info": "ZW5hY3RpdmUtZ3JhbnQtdjEKMTE6aG9zdC03ZjNhOWMKMTM6ZGV2aWNlLWI0MWUwMgoxOjMKOTplcGhlbWVyYWwKNjpkZXZpY2UK",
-      "out": "FnBW1hd2NreFLi3S4yezmGzrYRxYCG3OnRAGdxPYrK4"
+      "out": "Fun6cDr4RTfmZrxmhU14zSVk2-gyhqjDxXD9z6N7_DQ"
     }
   ],
   "envelope": [
     {
-      "key": "qQkfgoerOAlmdS-rAHkRHKsMe4vu0nQyanzZ8mlYy1c",
+      "key": "SBraLl1rPnKJIwVz6BMdX1JaXeaMrQl3g8hL7d_25UQ",
       "epoch": 3,
-      "nonce": "al_tl0HcH8YhpzSX",
+      "nonce": "8RUc_ZiaOE_g7ljf",
       "ad": "ZW5hY3RpdmUtdGFzay12MQoxMTpob3N0LTdmM2E5Ywo5OnRhc2stMDA0Mgo3OndzLW1haW4K",
       "plaintext": "{\"title\":\"Rotate the nightly backup\",\"prompt\":\"Check disk usage on D:\\\\ and report folders over 10 GB.\"}",
-      "sealed": "e1:AQAAAANqX-2XQdwfxiGnNJf-Nkfp2Ptgi4gTrgLvMzyMKoUUXOtu2KTQynA8Qi3k2mRESdX_0OCRxmAIfkh2czTshRZOFlYn60eDs-HnxshiBlvx18J6UTzdpKy_lbm-6fr_HlHS12CW-5rf8S8rQa3iaKu5bKVF6hKsboaa4AIe7rUBkd3amf4"
+      "sealed": "e1:AQAAAAPxFRz9mJo4T-DuWN_jFZvM4_wQpfBsTc26GdYkcHo6RFrHolubSKN390EU8Pfa_n2GwMvpsAwHIFXp9QmEtHxByRu_6pNWcekB2PLsuUHSK6UzZD0lSQ9HPLu9AnnVzpVpwS2Gew9d1eWCuwN2AbyLfUDsgdmbqPlmZnQiP5nAmnQvQ4Y"
     },
     {
-      "key": "B0AzReip8Lr3_-ozUEe2wZVly1GO3Sq348h8F8cEGu4",
+      "key": "Qk2GBIGuxTaqg93CnTl4rG3GyexDPandYVPRf_TL__E",
       "epoch": 0,
-      "nonce": "_bo_3xwawgXa4R6c",
+      "nonce": "Xz9xiHMnCOqLWJcx",
       "ad": "ZW5hY3RpdmUtY21kLXYxCjExOmhvc3QtN2YzYTljCjg6Y21kLTAwMDkKOTpTdGFydFRhc2sK",
       "plaintext": "",
-      "sealed": "e1:AQAAAAD9uj_fHBrCBdrhHpzJzZpUIAybzsaKljy-NGsT"
+      "sealed": "e1:AQAAAABfP3GIcycI6otYlzGuZgSbf1iyoJSmd3KOSd9n"
     },
     {
-      "key": "Tktj8n09SlXvEgXqcbO20gh-djHHTg8EQbx8rZhzP8Y",
+      "key": "qYz6hfT1wn86LETXGY2Ynd8Y-KGM0mXJetvHL1NqByI",
       "epoch": 4294967295,
-      "nonce": "rycE09yFULJ3pwP-",
+      "nonce": "FDxoDGZtzwa1pyaP",
       "ad": "ZW5hY3RpdmUtZXZlbnQtdjEKMTE6aG9zdC03ZjNhOWMKODpydW4tMDAwMQoyOjEyCjg6UHJvZ3Jlc3MK",
       "plaintext": "Привет, мир — 日本語 \uD83D\uDE42 café\nвторая строка",
-      "sealed": "e1:Af____-vJwTT3IVQsnenA_5lswn4E6OdNR_lY0nCO8ZJi_vhrV-Z5Mt-_aMTTF9X7-fuy6cIrvpbJ8uhiCkb7pBT659K1GriG3AvsgL7PTQYKOCP5HVsg3GQ-uDkW1q4fbPnxu_QTuY"
+      "sealed": "e1:Af____8UPGgMZm3PBrWnJo9x94tGUbLE8Elb_jEPVpm7lGgT3aMPAVxF8rMbjGiItuAZrdoE6Wp-jgn8maAwtpibD6yMebI0lWqq6HuF04UwzdT30l2mk8fqQQWhMF1HDo8bZo5fZus"
     },
     {
-      "key": "66p6lVpTzhlhQERtAPj3s1Q6_DXnkoq7y3SZu9Agz0Y",
+      "key": "0hpiN8O7ulN7f0CAGex-ZiO2po4GrwVlIWPzciBpVT8",
       "epoch": 1,
-      "nonce": "ww9TTpziHZA8tupR",
+      "nonce": "fBVqLGFzKjHcbD6T",
       "ad": "ZW5hY3RpdmUtd29ya3NwYWNlLXYxCjExOmhvc3QtN2YzYTljCjc6d3MtbWFpbgo",
       "plaintext": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-      "sealed": "e1:AQAAAAHDD1NOnOIdkDy26lEvDuXO4n0N7FHkWYSY-x-YMPpsCmJ9t5BfKWj3z4-s6PQSe4C5f-qVNB4W0vPtdj4kaoBmuQEK26q1y2s8wa1dt-MHoNYabaSneTa_sy_5UXNHI2JeBDOWF6pDlur81bfNLET2nUAW_m85mxPJbYGXsUpCYxb6TYq3ldTCORd5OTfHHi_SRMNR8hRQnxu7ynAJqKlT5oAMLbKz_EZcevkPmvS0PFrtThyNu7KyRlveM1m7F-an2t-3KNEMUCz_aoXXpVF-E4oCxkssQDDPe4apL2jZiAy2qReOwnEK7ZJ5pUtJB_3Fw7B4PXFtPBU2sWPu2yoYkeelMMY0U1_ljCM1SzQ_oDZUlISsf3ScJXtMpxeJLxrgY9NtLxrp4Rgdf1pl7yN-PdbqvIkpkyLm3hXbhdkkJEnLDmYix2kZrPQkBcENnRBaHv1sj93XDssmsNs"
+      "sealed": "e1:AQAAAAF8FWosYXMqMdxsPpMfetv7s9PTiTkPzStzE5-iCxCIdcJ-2FviAIk41JsWaw7yIV60iqpCLJ-rjYbhNOX4z9DjUhKavkRg3Am655-ZSbzpaeQgTaa80BV05ssFpJAk24wOJGWISiKjQ9e8r9h5kLknI2tYx5o5YxpTyrn2vdlsGacy-UfUX9lkKj3ppjO6MsC_0sYwM8B0BWjH-xLAPZDYsJeeoG0AYSxdO_H0JUoni5cuATpY6F5FGkBNZiQF51IxSvb4feA0AWI6wOxWnqE8nwCMoM740oWoFFYw9MfIfGXDn4TdmfXN5C_olAhOldYjQJ714pDRy58eHrfap4GhE9cXHY2Gxo8jfSeCJNe02QFPUcV5SYQO-sdgl5cshHGExbBCYw2sCFM1iK-b-6vHPOphd6X-MUCC0qXmAfB4YC1-Ukb2jpS-6sAI81pLxSS1axk5golsLKNe-no"
     }
   ],
   "hostKey": {
     "epoch": 3,
-    "secret": "AeuFfNJna_ySwuHXwhdq5y-LLokM7_RtfC4_-3apI-w",
-    "messageKey": "qQkfgoerOAlmdS-rAHkRHKsMe4vu0nQyanzZ8mlYy1c",
-    "grantAuthKey": "zx3xrsC7Y3q3X2iPafn3-elqXnACnUgwtlBPRoGdjRw"
+    "secret": "z77wCOkdyyxT3zxYvTdTtWBuCFnRsNzP27PcHdGb8kc",
+    "messageKey": "SBraLl1rPnKJIwVz6BMdX1JaXeaMrQl3g8hL7d_25UQ"
+  },
+  "hostSigning": {
+    "d": "dCeA17XJXmXlY8iJGppfc-mT8_Q4o0bos5Iu_5bjQa8",
+    "x": "A8A-Z9h5Q--hUG1r50g9zQhYOK4ArDENrMWx39_6Vfg",
+    "y": "A5q3mwSUstSlkw0W0SfCf10jfDyj7408lu82H0KwRiM",
+    "public": "BAPAPmfYeUPvoVBta-dIPc0IWDiuAKwxDazFsd_f-lX4A5q3mwSUstSlkw0W0SfCf10jfDyj7408lu82H0KwRiM"
   },
   "grant": {
     "hostId": "host-7f3a9c",
     "deviceId": "device-b41e02",
+    "pairingId": "connect",
     "authBy": "pair:connect",
     "devicePrivate": {
-      "d": "4_pLN5s3f2yq2L-j1cwR8z3M79fdooDdlPhMx6yo90E",
-      "x": "ZCoUjDdUyzEtfm7Dc_FhPwZ-LNWijm7XC9pqZTnO9g8",
-      "y": "boFgKaHPhtVhFXKScIF6rNGF-oi6LhzzxzYj-BLM4fU"
+      "d": "4A4jGOFeey_a9J-L7RKUCCjdENXQI4_IMTfMb_obHnw",
+      "x": "nnUmpJ7czpLReqPF3HeWo0pRFfKY13tb7od8wtcPnzM",
+      "y": "azqi04OYmmOKHkuR04Qd8f08QcsQiHbSPFJxsncYtFk"
     },
-    "devicePublic": "BGQqFIw3VMsxLX5uw3PxYT8GfizVoo5u1wvaamU5zvYPboFgKaHPhtVhFXKScIF6rNGF-oi6LhzzxzYj-BLM4fU",
+    "devicePublic": "BJ51JqSe3M6S0Xqjxdx3lqNKURXymNd7W-6HfMLXD58zazqi04OYmmOKHkuR04Qd8f08QcsQiHbSPFJxsncYtFk",
     "ephemeralPrivate": {
-      "d": "cv2GF88Vvr_42riOGX81XdlDfmLyaoSt0G8CtcTxw0o",
-      "x": "S5EtB9clZmnjUJ86DjOJAx4KUym-hVfiVala_q4k-Ck",
-      "y": "mJh1EhYsQIKkv6A9VwC6s11AxB_9oSC3n0Ek1Gg2iqs"
+      "d": "FvuyIY94a67MrkkBw9JhS1P_2Z-U3OtfUorzk36fyMA",
+      "x": "DbgFIe244LdkiCfDCQSzG5NoQ2aN4KK-SX7A7kIPsoQ",
+      "y": "VwItCTI52mYZ3FcMfL4owjQtzdybMxe-PvXUEliJyxE"
     },
-    "nonce": "_tOPHxDLuA2MdKyo",
-    "pairKey": "IDa9-HcZor7f5979XdQtpN4yxAciu7sZZ4Nv3O4w8VA",
+    "nonce": "e0_TC1RSX4Am--3e",
+    "pairKey": "-DOHAzCCq4K8RljXbMBnepIA2PlH1mN6mCUYYw2bl14",
     "grant": {
       "hostId": "host-7f3a9c",
       "deviceId": "device-b41e02",
       "epoch": 3,
-      "ephemeralPublic": "BEuRLQfXJWZp41CfOg4ziQMeClMpvoVX4lWpWv6uJPgpmJh1EhYsQIKkv6A9VwC6s11AxB_9oSC3n0Ek1Gg2iqs",
-      "nonce": "_tOPHxDLuA2MdKyo",
-      "ciphertext": "I2e2pU5loX3WDNcv5hodQSFHTYxHtnxLW1IFWB4oa5TAVMkJrpt8sBEauoXE46C_",
+      "ephemeralPublic": "BA24BSHtuOC3ZIgnwwkEsxuTaENmjeCivkl-wO5CD7KEVwItCTI52mYZ3FcMfL4owjQtzdybMxe-PvXUEliJyxE",
+      "nonce": "e0_TC1RSX4Am--3e",
+      "ciphertext": "cASPiq2EfIZ0Q1_kRNl6h2HlI2OO7KIIX05Gk-wQJlpU3R7Q8yBJc4ZiuKobZgWC",
       "authBy": "pair:connect",
-      "mac": "HfROA0375hOe_2xDjwbt9HX1kPIPpFjxz6pXgjClO7w"
+      "hostSigningPublic": "BAPAPmfYeUPvoVBta-dIPc0IWDiuAKwxDazFsd_f-lX4A5q3mwSUstSlkw0W0SfCf10jfDyj7408lu82H0KwRiM",
+      "mac": "NXvhmYvY-gBjkpyevMpqZ3UPBIZinjtdw93lgJBTuWY"
+    }
+  },
+  "rotationGrant": {
+    "hostId": "host-7f3a9c",
+    "deviceId": "device-b41e02",
+    "epoch": 4,
+    "secret": "41kVnoC4VKpwj-a_P4sA1ZR8KFRN8G9IdxytAyb_bQA",
+    "devicePrivate": {
+      "d": "4A4jGOFeey_a9J-L7RKUCCjdENXQI4_IMTfMb_obHnw",
+      "x": "nnUmpJ7czpLReqPF3HeWo0pRFfKY13tb7od8wtcPnzM",
+      "y": "azqi04OYmmOKHkuR04Qd8f08QcsQiHbSPFJxsncYtFk"
+    },
+    "devicePublic": "BJ51JqSe3M6S0Xqjxdx3lqNKURXymNd7W-6HfMLXD58zazqi04OYmmOKHkuR04Qd8f08QcsQiHbSPFJxsncYtFk",
+    "ephemeralPrivate": {
+      "d": "if5vioiNc0OzU2XQFbcfWD2MGVhF4As_4vJHOwitT_8",
+      "x": "zxGRUe7qbVXZUg7cgwl87U2m7D6BfHJVfJpwe4xK4ik",
+      "y": "trTNwT6Kzqff4_p_PIUVUHRFJJCGvp-cD1EitAvpa2s"
+    },
+    "nonce": "CKgzQGgzsI5l2ueb",
+    "grant": {
+      "hostId": "host-7f3a9c",
+      "deviceId": "device-b41e02",
+      "epoch": 4,
+      "ephemeralPublic": "BM8RkVHu6m1V2VIO3IMJfO1Npuw-gXxyVXyacHuMSuIptrTNwT6Kzqff4_p_PIUVUHRFJJCGvp-cD1EitAvpa2s",
+      "nonce": "CKgzQGgzsI5l2ueb",
+      "ciphertext": "ysg2JOod3P3UNa8VTWP2PkceobWs-5rqIAgO6rVvHRq8lJdgZ31GQDY7nFru-zxh",
+      "authBy": "host",
+      "hostSigningPublic": "BAPAPmfYeUPvoVBta-dIPc0IWDiuAKwxDazFsd_f-lX4A5q3mwSUstSlkw0W0SfCf10jfDyj7408lu82H0KwRiM",
+      "mac": "MRWH0po6wyP-sDfUZclvjwVQbdYQgfFw7mS56HZHRJf0Aa9dK-dDoCL0CQIjIfF9KokL66emHfgtdRZqwQ7f7Q"
     }
   },
   "enrollment": {
-    "pairKey": "RIKT6boggBEmoYIEFvkyAPQ05Dsh9u59typep8QTAZA",
+    "pairKey": "z4g7nzEi43b1zCd5OOChsRJQOKEyNmv0-5N22cRsSa0",
     "inviteId": "invite 7/ü+x",
     "deviceId": "device-c9d814",
-    "devicePublic": "BJP5GGp7JSgr5fxbParxp3wsLKTyn0NJI6ZcxSEYmMQwyvAIHvoWxyulhNjz8JVkEDI8mhAKQz2YtryaYy6GvHg",
-    "mac": "g-502K7VixYCksOM7squO5MRUlG4BOskI2gBzCZGVcI"
+    "devicePublic": "BJ2v9eD26J2dGXZYLdhNkhsR0k58nHmERV3Ju6CPDje_57L6niKXnqlkgfvw6dgju5wHWGQUC7cQP9yWqoXWBmo",
+    "mac": "d0YtBvlWaYsJKt7-QrPMK4dpKVRX5J34bBm8VtuN0-Q"
   },
   "actionIdentity": [
     {
@@ -185,19 +216,19 @@
   "connectionCode": {
     "gateway": "https://remote.example.com",
     "hostId": "host-7f3a9c",
-    "token": "6eb9e6348ed83cecd80fdf70485e97b027155becc0bd711649200ffc5cff5f3a",
+    "token": "38c047cdad7828c58a19619b9c24108f754ec3f4cb0caeaba8be7b9c1754c333",
     "deviceId": "device-b41e02",
-    "devicePublic": "BGQqFIw3VMsxLX5uw3PxYT8GfizVoo5u1wvaamU5zvYPboFgKaHPhtVhFXKScIF6rNGF-oi6LhzzxzYj-BLM4fU",
-    "pairingSecret": "PlzlEaJ9l4rFFSicX400cURlrHJs4kGAceyZi6Cv-10",
-    "pairKey": "IDa9-HcZor7f5979XdQtpN4yxAciu7sZZ4Nv3O4w8VA",
-    "text": "enactive-connect:eyJ2IjoyLCJnIjoiaHR0cHM6Ly9yZW1vdGUuZXhhbXBsZS5jb20iLCJoIjoiaG9zdC03ZjNhOWMiLCJ0IjoiNmViOWU2MzQ4ZWQ4M2NlY2Q4MGZkZjcwNDg1ZTk3YjAyNzE1NWJlY2MwYmQ3MTE2NDkyMDBmZmM1Y2ZmNWYzYSIsImQiOiJkZXZpY2UtYjQxZTAyIiwiayI6IkJHUXFGSXczVk1zeExYNXV3M1B4WVQ4R2ZpelZvbzV1MXd2YWFtVTV6dllQYm9GZ0thSFBodFZoRlhLU2NJRjZyTkdGLW9pNkxoenp4ellqLUJMTTRmVSIsInAiOiJQbHpsRWFKOWw0ckZGU2ljWDQwMGNVUmxySEpzNGtHQWNleVppNkN2LTEwIn0"
+    "devicePublic": "BJ51JqSe3M6S0Xqjxdx3lqNKURXymNd7W-6HfMLXD58zazqi04OYmmOKHkuR04Qd8f08QcsQiHbSPFJxsncYtFk",
+    "pairingSecret": "-YmZEGHb0rYMjOIiKMZz1ruSAmWQkj5P_cRgrOnC1a0",
+    "pairKey": "-DOHAzCCq4K8RljXbMBnepIA2PlH1mN6mCUYYw2bl14",
+    "text": "enactive-connect:eyJ2IjoyLCJnIjoiaHR0cHM6Ly9yZW1vdGUuZXhhbXBsZS5jb20iLCJoIjoiaG9zdC03ZjNhOWMiLCJ0IjoiMzhjMDQ3Y2RhZDc4MjhjNThhMTk2MTliOWMyNDEwOGY3NTRlYzNmNGNiMGNhZWFiYThiZTdiOWMxNzU0YzMzMyIsImQiOiJkZXZpY2UtYjQxZTAyIiwiayI6IkJKNTFKcVNlM002UzBYcWp4ZHgzbHFOS1VSWHltTmQ3Vy02SGZNTFhENTh6YXpxaTA0T1ltbU9LSGt1UjA0UWQ4ZjA4UWNzUWlIYlNQRkp4c25jWXRGayIsInAiOiItWW1aRUdIYjByWU1qT0lpS01aejFydVNBbVdRa2o1UF9jUmdyT25DMWEwIn0"
   },
   "inviteLink": {
     "gateway": "https://remote.example.com",
     "inviteId": "invite 7/ü+x",
-    "secret": "9P558BhLB735rzRZ29douxvtdZifeylqPDwDhMeCv5U",
-    "pairKey": "RIKT6boggBEmoYIEFvkyAPQ05Dsh9u59typep8QTAZA",
-    "text": "https://remote.example.com/pair#v=2&i=invite%207%2F%C3%BC%2Bx&p=9P558BhLB735rzRZ29douxvtdZifeylqPDwDhMeCv5U"
+    "secret": "ZVyiW4kxjC1USUTUcktPooH_Zufoaq4Foq4nlPhZKyA",
+    "pairKey": "z4g7nzEi43b1zCd5OOChsRJQOKEyNmv0-5N22cRsSa0",
+    "text": "https://remote.example.com/pair#v=2&i=invite%207%2F%C3%BC%2Bx&p=ZVyiW4kxjC1USUTUcktPooH_Zufoaq4Foq4nlPhZKyA"
   },
   "ad": [
     {

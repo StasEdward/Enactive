@@ -5,13 +5,12 @@ using System.Text;
 
 /// <summary>
 /// Every key protocol 2 uses that is not random is derived here, with HKDF-SHA256, an empty salt and
-/// a fixed info string, so one secret never serves two purposes: the message key and the grant-auth
-/// key of an epoch come from the same host key and cannot be confused.
+/// a fixed info string, so one secret never serves two purposes: a key derived for one info string
+/// says nothing about the key derived from the same secret for another.
 /// </summary>
 public static class RemoteKdf
 {
     public const string Message = "enactive-msg-v1";
-    public const string GrantAuth = "enactive-grant-auth-v1";
     public const string Pair = "enactive-pair-v1";
 
     public static byte[] Derive(ReadOnlySpan<byte> ikm, string info) => Derive(ikm, Encoding.UTF8.GetBytes(info));

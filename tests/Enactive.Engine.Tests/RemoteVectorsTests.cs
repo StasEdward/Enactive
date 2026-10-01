@@ -67,13 +67,19 @@ public sealed class RemoteVectorsTests
         }
 
         var hostKey = stored["hostKey"]!;
+        var signingPublic = Binary(stored["hostSigning"]!, "public");
         var grant = stored["grant"]!;
-        var wire = grant["grant"]!;
         using var device = Import(grant["devicePrivate"]!);
-        var opening = new KeyGrant(Text(wire, "hostId"), Text(wire, "deviceId"), wire["epoch"]!.GetValue<uint>(),
-            Text(wire, "ephemeralPublic"), Text(wire, "nonce"), Text(wire, "ciphertext"), Text(wire, "authBy"), Text(wire, "mac"));
-        var recovered = Grants.Open(opening, device, Binary(grant, "pairKey"));
+        var (recovered, toPin) = Grants.Open(Wire(grant["grant"]!), device, Binary(grant, "pairKey"), null);
         Assert.Equal(Binary(hostKey, "secret"), recovered.Secret.ToArray());
+        Assert.Equal(signingPublic, toPin);
+
+        // The rotation grant's signature is not reproduced (ECDSA draws a random nonce), so it is checked here by opening it.
+        var rotation = stored["rotationGrant"]!;
+        using var rotated = Import(rotation["devicePrivate"]!);
+        var (next, _) = Grants.Open(Wire(rotation["grant"]!), rotated, default, signingPublic);
+        Assert.Equal(Binary(rotation, "secret"), next.Secret.ToArray());
+        Assert.Equal(rotation["epoch"]!.GetValue<uint>(), next.Epoch);
 
         var enrollment = stored["enrollment"]!;
         Assert.True(Enrollment.Verify(Binary(enrollment, "pairKey"), Text(enrollment, "inviteId"), Text(enrollment, "deviceId"),
@@ -115,6 +121,8 @@ public sealed class RemoteVectorsTests
         using var device = P256.Generate();
         using var ephemeral = P256.Generate();
         using var enrolled = P256.Generate();
+        using var rotationEphemeral = P256.Generate();
+        using var hostSigning = P256.GenerateSigning();
         var hostSecret = RandomNumberGenerator.GetBytes(32);
         const uint epoch = 3;
         var hostKey = HostKey.From(epoch, hostSecret);
@@ -143,7 +151,6 @@ public sealed class RemoteVectorsTests
                 CanonicalCase("enactive-test-v1", "é", "日本語", "🙂 smile", "line one\nline two\r\nline three")),
             ["kdf"] = new JsonArray(
                 KdfCase(RemoteKdf.Message),
-                KdfCase(RemoteKdf.GrantAuth),
                 KdfCase(RemoteKdf.Pair),
                 KdfCase(Canonical.Bytes("enactive-grant-v1", hostId, deviceId, "3", "ephemeral", "device"))),
             ["envelope"] = new JsonArray(
@@ -155,15 +162,27 @@ public sealed class RemoteVectorsTests
                 EnvelopeCase(RandomNumberGenerator.GetBytes(32), 1, Ad.Workspace(hostId, workspaceId),
                     string.Concat(Enumerable.Repeat("0123456789abcdef", 20)))),
             ["hostKey"] = new JsonObject { ["epoch"] = epoch, ["secret"] = B64.Url(hostSecret) },
+            ["hostSigning"] = Export(hostSigning),
             ["grant"] = new JsonObject
             {
                 ["hostId"] = hostId,
                 ["deviceId"] = deviceId,
-                ["authBy"] = Grants.AuthByPairing("connect"),
+                ["pairingId"] = "connect",
                 ["devicePrivate"] = Export(device),
                 ["ephemeralPrivate"] = Export(ephemeral),
                 ["nonce"] = B64.Url(RandomNumberGenerator.GetBytes(12)),
                 ["pairKey"] = B64.Url(code.PairKey)
+            },
+            // The same device receiving the next epoch's key after another device was revoked.
+            ["rotationGrant"] = new JsonObject
+            {
+                ["hostId"] = hostId,
+                ["deviceId"] = deviceId,
+                ["epoch"] = epoch + 1,
+                ["secret"] = B64.Url(RandomNumberGenerator.GetBytes(32)),
+                ["devicePrivate"] = Export(device),
+                ["ephemeralPrivate"] = Export(rotationEphemeral),
+                ["nonce"] = B64.Url(RandomNumberGenerator.GetBytes(12))
             },
             ["enrollment"] = new JsonObject
             {
@@ -259,7 +278,9 @@ public sealed class RemoteVectorsTests
                 Encoding.UTF8.GetBytes(Text(item, "plaintext")), Binary(item, "ad"), Binary(item, "nonce"))
         }),
         ["hostKey"] = ComputeHostKey(input["hostKey"]!),
-        ["grant"] = ComputeGrant(input["grant"]!, input["hostKey"]!),
+        ["hostSigning"] = ComputeHostSigning(input["hostSigning"]!),
+        ["grant"] = ComputeGrant(input["grant"]!, input["hostKey"]!, input["hostSigning"]!),
+        ["rotationGrant"] = ComputeRotationGrant(input["rotationGrant"]!, input["hostSigning"]!),
         ["enrollment"] = ComputeEnrollment(input["enrollment"]!),
         ["actionIdentity"] = Each(input["actionIdentity"], item => new JsonObject
         {
@@ -283,42 +304,101 @@ public sealed class RemoteVectorsTests
         {
             ["epoch"] = key.Epoch,
             ["secret"] = Text(input, "secret"),
-            ["messageKey"] = B64.Url(key.MessageKey),
-            ["grantAuthKey"] = B64.Url(key.GrantAuthKey)
+            ["messageKey"] = B64.Url(key.MessageKey)
         };
     }
 
-    private static JsonObject ComputeGrant(JsonNode input, JsonNode hostKeyInput)
+    private static JsonObject ComputeHostSigning(JsonNode input)
+    {
+        using var signer = ImportSigning(input);
+        return new JsonObject
+        {
+            ["d"] = Text(input, "d"),
+            ["x"] = Text(input, "x"),
+            ["y"] = Text(input, "y"),
+            ["public"] = B64.Url(P256.SigningPublicRaw(signer))
+        };
+    }
+
+    private static JsonObject ComputeGrant(JsonNode input, JsonNode hostKeyInput, JsonNode hostSigningInput)
     {
         var hostKey = HostKey.From(hostKeyInput["epoch"]!.GetValue<uint>(), Binary(hostKeyInput, "secret"));
         using var device = Import(input["devicePrivate"]!);
         using var ephemeral = Import(input["ephemeralPrivate"]!);
+        using var signer = ImportSigning(hostSigningInput);
         var devicePublic = P256.PublicRaw(device);
-        var grant = Grants.Create(Text(input, "hostId"), Text(input, "deviceId"), devicePublic, hostKey,
-            Text(input, "authBy"), Binary(input, "pairKey"), ephemeral, Binary(input, "nonce"));
+        var grant = Grants.CreatePaired(Text(input, "hostId"), Text(input, "deviceId"), devicePublic, hostKey,
+            Text(input, "pairingId"), Binary(input, "pairKey"), P256.SigningPublicRaw(signer), ephemeral, Binary(input, "nonce"));
         return new JsonObject
         {
             ["hostId"] = Text(input, "hostId"),
             ["deviceId"] = Text(input, "deviceId"),
-            ["authBy"] = Text(input, "authBy"),
+            ["pairingId"] = Text(input, "pairingId"),
+            ["authBy"] = grant.AuthBy,
             ["devicePrivate"] = input["devicePrivate"]!.DeepClone(),
             ["devicePublic"] = B64.Url(devicePublic),
             ["ephemeralPrivate"] = input["ephemeralPrivate"]!.DeepClone(),
             ["nonce"] = Text(input, "nonce"),
             ["pairKey"] = Text(input, "pairKey"),
-            ["grant"] = new JsonObject
-            {
-                ["hostId"] = grant.HostId,
-                ["deviceId"] = grant.DeviceId,
-                ["epoch"] = grant.Epoch,
-                ["ephemeralPublic"] = grant.EphemeralPublic,
-                ["nonce"] = grant.Nonce,
-                ["ciphertext"] = grant.Ciphertext,
-                ["authBy"] = grant.AuthBy,
-                ["mac"] = grant.Mac
-            }
+            ["grant"] = GrantJson(grant)
         };
     }
+
+    /// <summary>
+    /// ECDSA signs with a random per-signature nonce, so unlike every other output here the signature cannot be
+    /// recomputed. Everything else in the grant can (the ephemeral key and the nonce are fixed inputs). The stored
+    /// signature is carried over only after it verifies over those recomputed fields under the stored signing
+    /// key; a fresh one is made only when there is none, that is, when the file is being regenerated.
+    /// </summary>
+    private static JsonObject ComputeRotationGrant(JsonNode input, JsonNode hostSigningInput)
+    {
+        var key = HostKey.From(input["epoch"]!.GetValue<uint>(), Binary(input, "secret"));
+        using var device = Import(input["devicePrivate"]!);
+        using var ephemeral = Import(input["ephemeralPrivate"]!);
+        using var signer = ImportSigning(hostSigningInput);
+        var devicePublic = P256.PublicRaw(device);
+        var made = Grants.CreateSigned(Text(input, "hostId"), Text(input, "deviceId"), devicePublic, key, signer,
+            ephemeral, Binary(input, "nonce"));
+        var stored = input["grant"]?["mac"]?.GetValue<string>();
+        var grant = stored is null ? made : made with { Mac = stored };
+        try
+        {
+            Grants.Open(grant, device, default, P256.SigningPublicRaw(signer));
+        }
+        catch (EnvelopeException ex)
+        {
+            throw new InvalidOperationException("The stored rotation-grant signature does not verify over the recomputed grant.", ex);
+        }
+        return new JsonObject
+        {
+            ["hostId"] = Text(input, "hostId"),
+            ["deviceId"] = Text(input, "deviceId"),
+            ["epoch"] = key.Epoch,
+            ["secret"] = Text(input, "secret"),
+            ["devicePrivate"] = input["devicePrivate"]!.DeepClone(),
+            ["devicePublic"] = B64.Url(devicePublic),
+            ["ephemeralPrivate"] = input["ephemeralPrivate"]!.DeepClone(),
+            ["nonce"] = Text(input, "nonce"),
+            ["grant"] = GrantJson(grant)
+        };
+    }
+
+    private static JsonObject GrantJson(KeyGrant grant) => new()
+    {
+        ["hostId"] = grant.HostId,
+        ["deviceId"] = grant.DeviceId,
+        ["epoch"] = grant.Epoch,
+        ["ephemeralPublic"] = grant.EphemeralPublic,
+        ["nonce"] = grant.Nonce,
+        ["ciphertext"] = grant.Ciphertext,
+        ["authBy"] = grant.AuthBy,
+        ["hostSigningPublic"] = grant.HostSigningPublic,
+        ["mac"] = grant.Mac
+    };
+
+    private static KeyGrant Wire(JsonNode wire) => new(Text(wire, "hostId"), Text(wire, "deviceId"), wire["epoch"]!.GetValue<uint>(),
+        Text(wire, "ephemeralPublic"), Text(wire, "nonce"), Text(wire, "ciphertext"), Text(wire, "authBy"),
+        Text(wire, "hostSigningPublic"), Text(wire, "mac"));
 
     private static JsonObject ComputeEnrollment(JsonNode input) => new()
     {
@@ -427,7 +507,7 @@ public sealed class RemoteVectorsTests
     private static byte[] Binary(JsonNode node, string member) => B64.FromUrl(Text(node, member));
 
     /// <summary>A private key as WebCrypto's JWK carries it, so the browser imports the stored values without conversion.</summary>
-    private static JsonObject Export(ECDiffieHellman key)
+    private static JsonObject Export(ECAlgorithm key)
     {
         var parameters = key.ExportParameters(includePrivateParameters: true);
         return new JsonObject
@@ -438,10 +518,14 @@ public sealed class RemoteVectorsTests
         };
     }
 
-    private static ECDiffieHellman Import(JsonNode jwk) => ECDiffieHellman.Create(new ECParameters
+    private static ECDiffieHellman Import(JsonNode jwk) => ECDiffieHellman.Create(Private(jwk));
+
+    private static ECDsa ImportSigning(JsonNode jwk) => ECDsa.Create(Private(jwk));
+
+    private static ECParameters Private(JsonNode jwk) => new()
     {
         Curve = ECCurve.NamedCurves.nistP256,
         D = Binary(jwk, "d"),
         Q = new ECPoint { X = Binary(jwk, "x"), Y = Binary(jwk, "y") }
-    });
+    };
 }

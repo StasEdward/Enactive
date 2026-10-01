@@ -5,7 +5,9 @@ using System.Text;
 
 /// <summary>
 /// One computer's key for one epoch (spec §4). The secret itself is used for nothing but derivation:
-/// content is sealed with the message key, rotation grants are authenticated with the grant-auth key.
+/// content is sealed with the message key. Nothing derived from it authenticates a grant: every device
+/// that held this epoch holds the secret, a revoked one included, so rotation grants are signed with the
+/// computer's signing key instead (see Grants.CreateSigned).
 /// </summary>
 public sealed class HostKey
 {
@@ -15,13 +17,11 @@ public sealed class HostKey
         Epoch = epoch;
         Secret = secret;
         MessageKey = RemoteKdf.Derive(secret, RemoteKdf.Message);
-        GrantAuthKey = RemoteKdf.Derive(secret, RemoteKdf.GrantAuth);
     }
 
     public uint Epoch { get; }
     public ReadOnlyMemory<byte> Secret { get; }
     public byte[] MessageKey { get; }
-    public byte[] GrantAuthKey { get; }
 
     public static HostKey Create(uint epoch) => new(epoch, RandomNumberGenerator.GetBytes(32));
     public static HostKey From(uint epoch, byte[] secret) => new(epoch, secret);

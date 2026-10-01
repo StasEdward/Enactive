@@ -5,7 +5,6 @@ import { utf8, fromUtf8 } from './bytes.js';
 
 export const INFO = Object.freeze({
   message: 'enactive-msg-v1',
-  grantAuth: 'enactive-grant-auth-v1',
   pair: 'enactive-pair-v1'
 });
 
@@ -21,17 +20,16 @@ export async function derive(ikmBytes, info) {
 }
 
 // One computer's key for one epoch. The secret is used for nothing but derivation: content is sealed
-// with the message key, rotation grants are authenticated with the grant-auth key.
+// with the message key. Nothing derived from it authenticates a grant: every device that held this epoch
+// holds the secret, a revoked one included, so rotation grants are signed by the computer (see grants.js).
 export async function hostKey(epoch, secretBytes) {
   if (secretBytes.length !== 32) throw new TypeError('A host key is 32 bytes.');
   const secret = secretBytes.slice();
   const messageKey = await derive(secret, INFO.message);
-  const grantAuthKey = await derive(secret, INFO.grantAuth);
   return {
     epoch,
     secret,
     messageKey,
-    grantAuthKey,
     sealText: (text, ad) => seal(messageKey, epoch, utf8(text), ad),
     async openText(sealed, ad) {
       // Refused before decrypting: the epoch is not in the associated data, so a record sealed under
