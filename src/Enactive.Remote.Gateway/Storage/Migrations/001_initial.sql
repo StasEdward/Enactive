@@ -4,6 +4,10 @@
 -- the isolation tests do. Each statement is safe to run twice: MySQL commits DDL implicitly, so a
 -- migration stopped half-way is re-run from the top by the Migrator.
 
+-- Every table names its charset and collation. A column that does not name one (display_name, label)
+-- takes the DATABASE default, and a database created with another default (latin1 is still the default
+-- of some servers) would turn a person's non-ASCII name into question marks without an error.
+
 CREATE TABLE IF NOT EXISTS users (
   id               CHAR(32)    CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   display_name     VARCHAR(100) NOT NULL,
@@ -12,7 +16,7 @@ CREATE TABLE IF NOT EXISTS users (
   sealed_bytes     BIGINT      NOT NULL DEFAULT 0,                     -- storage limit (Task 8.1)
   created_at       DATETIME(3) NOT NULL,
   PRIMARY KEY (id)
-) ENGINE=InnoDB;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE IF NOT EXISTS external_identities (
   provider   VARCHAR(20)  CHARACTER SET ascii NOT NULL,                 -- github | google
@@ -23,7 +27,7 @@ CREATE TABLE IF NOT EXISTS external_identities (
   PRIMARY KEY (provider, subject),
   KEY ix_identities_user (user_id),
   CONSTRAINT fk_identities_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
-) ENGINE=InnoDB;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE IF NOT EXISTS admissions (
   provider     VARCHAR(20)  CHARACTER SET ascii NOT NULL,
@@ -33,7 +37,7 @@ CREATE TABLE IF NOT EXISTS admissions (
   requested_at DATETIME(3)  NOT NULL,
   decided_at   DATETIME(3)  NULL,
   PRIMARY KEY (provider, subject)
-) ENGINE=InnoDB;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE IF NOT EXISTS user_sessions (
   id               CHAR(32)    CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
@@ -45,7 +49,7 @@ CREATE TABLE IF NOT EXISTS user_sessions (
   PRIMARY KEY (id),
   KEY ix_sessions_user (user_id, revoked_at),
   CONSTRAINT fk_sessions_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
-) ENGINE=InnoDB;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE IF NOT EXISTS user_streams (
   owner_id CHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
@@ -53,7 +57,7 @@ CREATE TABLE IF NOT EXISTS user_streams (
   epoch    INT      NOT NULL DEFAULT 1,
   PRIMARY KEY (owner_id),
   CONSTRAINT fk_streams_user FOREIGN KEY (owner_id) REFERENCES users (id) ON DELETE CASCADE
-) ENGINE=InnoDB;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE IF NOT EXISTS user_retention (
   owner_id       CHAR(32)    CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
@@ -61,7 +65,7 @@ CREATE TABLE IF NOT EXISTS user_retention (
   trimmed_at     DATETIME(3) NULL,
   PRIMARY KEY (owner_id),
   CONSTRAINT fk_retention_user FOREIGN KEY (owner_id) REFERENCES users (id) ON DELETE CASCADE
-) ENGINE=InnoDB;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE IF NOT EXISTS devices (
   id           CHAR(32)      CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
@@ -74,7 +78,7 @@ CREATE TABLE IF NOT EXISTS devices (
   PRIMARY KEY (id),
   UNIQUE KEY ux_devices_owner (owner_id, id),
   CONSTRAINT fk_devices_user FOREIGN KEY (owner_id) REFERENCES users (id) ON DELETE CASCADE
-) ENGINE=InnoDB;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE IF NOT EXISTS hosts (
   id           CHAR(32)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
@@ -90,7 +94,7 @@ CREATE TABLE IF NOT EXISTS hosts (
   UNIQUE KEY ux_hosts_owner (owner_id, id),
   KEY ix_hosts_owner_created (owner_id, created_at),
   CONSTRAINT fk_hosts_user FOREIGN KEY (owner_id) REFERENCES users (id) ON DELETE CASCADE
-) ENGINE=InnoDB;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE IF NOT EXISTS host_workspaces (
   owner_id     CHAR(32)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
@@ -100,7 +104,7 @@ CREATE TABLE IF NOT EXISTS host_workspaces (
   PRIMARY KEY (host_id, workspace_id),
   KEY ix_workspaces_owner (owner_id, host_id),
   CONSTRAINT fk_workspaces_host FOREIGN KEY (owner_id, host_id) REFERENCES hosts (owner_id, id) ON DELETE CASCADE
-) ENGINE=InnoDB;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE IF NOT EXISTS grants (
   owner_id   CHAR(32)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
@@ -113,7 +117,7 @@ CREATE TABLE IF NOT EXISTS grants (
   KEY ix_grants_device (owner_id, device_id),
   CONSTRAINT fk_grants_host   FOREIGN KEY (owner_id, host_id)   REFERENCES hosts (owner_id, id)   ON DELETE CASCADE,
   CONSTRAINT fk_grants_device FOREIGN KEY (owner_id, device_id) REFERENCES devices (owner_id, id) ON DELETE CASCADE
-) ENGINE=InnoDB;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE IF NOT EXISTS invites (
   id                CHAR(32)    CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
@@ -126,7 +130,7 @@ CREATE TABLE IF NOT EXISTS invites (
   PRIMARY KEY (id),
   UNIQUE KEY ux_invites_owner (owner_id, id),
   CONSTRAINT fk_invites_user FOREIGN KEY (owner_id) REFERENCES users (id) ON DELETE CASCADE
-) ENGINE=InnoDB;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE IF NOT EXISTS enrollments (
   invite_id  CHAR(32)    CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
@@ -137,7 +141,7 @@ CREATE TABLE IF NOT EXISTS enrollments (
   PRIMARY KEY (invite_id),
   CONSTRAINT fk_enrollments_invite FOREIGN KEY (owner_id, invite_id) REFERENCES invites (owner_id, id) ON DELETE CASCADE,
   CONSTRAINT fk_enrollments_device FOREIGN KEY (owner_id, device_id) REFERENCES devices (owner_id, id) ON DELETE CASCADE
-) ENGINE=InnoDB;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE IF NOT EXISTS tasks (
   owner_id     CHAR(32)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
@@ -151,7 +155,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   UNIQUE KEY ux_tasks_owner_host (owner_id, host_id, id),
   KEY ix_tasks_owner_created (owner_id, created_at),
   CONSTRAINT fk_tasks_host FOREIGN KEY (owner_id, host_id) REFERENCES hosts (owner_id, id) ON DELETE CASCADE
-) ENGINE=InnoDB;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE IF NOT EXISTS runs (
   id               CHAR(32)    CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
@@ -170,7 +174,7 @@ CREATE TABLE IF NOT EXISTS runs (
   KEY ix_runs_owner_task (owner_id, task_id, created_at),
   KEY ix_runs_owner_created (owner_id, created_at),
   CONSTRAINT fk_runs_task FOREIGN KEY (owner_id, host_id, task_id) REFERENCES tasks (owner_id, host_id, id) ON DELETE CASCADE
-) ENGINE=InnoDB;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE IF NOT EXISTS commands (
   owner_id    CHAR(32)    CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
@@ -186,7 +190,7 @@ CREATE TABLE IF NOT EXISTS commands (
   KEY ix_commands_delivery (host_id, status, created_at),
   KEY ix_commands_expiry (status, expires_at),
   CONSTRAINT fk_commands_host FOREIGN KEY (owner_id, host_id) REFERENCES hosts (owner_id, id) ON DELETE CASCADE
-) ENGINE=InnoDB;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE IF NOT EXISTS approvals (
   owner_id           CHAR(32)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
@@ -206,7 +210,7 @@ CREATE TABLE IF NOT EXISTS approvals (
   KEY ix_approvals_run (run_id, status),
   KEY ix_approvals_expiry (status, expires_at),
   CONSTRAINT fk_approvals_run FOREIGN KEY (owner_id, host_id, run_id) REFERENCES runs (owner_id, host_id, id) ON DELETE CASCADE
-) ENGINE=InnoDB;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE IF NOT EXISTS events (
   owner_id      CHAR(32)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
@@ -223,7 +227,7 @@ CREATE TABLE IF NOT EXISTS events (
   UNIQUE KEY ux_events_owner_ordinal (owner_id, ordinal),
   KEY ix_events_owner_at (owner_id, at),
   CONSTRAINT fk_events_run FOREIGN KEY (owner_id, host_id, run_id) REFERENCES runs (owner_id, host_id, id) ON DELETE CASCADE
-) ENGINE=InnoDB;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE IF NOT EXISTS notices (
   id            CHAR(32)    CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
@@ -240,7 +244,7 @@ CREATE TABLE IF NOT EXISTS notices (
   UNIQUE KEY ux_notices_owner_ordinal (owner_id, ordinal),
   KEY ix_notices_owner_unread (owner_id, is_read, at),
   CONSTRAINT fk_notices_run FOREIGN KEY (owner_id, run_id) REFERENCES runs (owner_id, id) ON DELETE CASCADE
-) ENGINE=InnoDB;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE IF NOT EXISTS audit (
   id       BIGINT      NOT NULL AUTO_INCREMENT,
@@ -252,4 +256,4 @@ CREATE TABLE IF NOT EXISTS audit (
   PRIMARY KEY (id),
   KEY ix_audit_owner (owner_id, at),
   CONSTRAINT fk_audit_user FOREIGN KEY (owner_id) REFERENCES users (id) ON DELETE CASCADE
-) ENGINE=InnoDB;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;

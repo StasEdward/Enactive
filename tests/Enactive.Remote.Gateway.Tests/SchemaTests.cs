@@ -117,7 +117,7 @@ public sealed class SchemaTests(TestDatabase database) : IClassFixture<TestDatab
     /// it is - because a suite pointed at 8.4, or at MariaDB, would still pass most of these and
     /// would be proving it about a server production does not run. What changes between series is
     /// the set of collations and a good deal of SQL behaviour, and <c>utf8mb4_0900_ai_ci</c> is
-    /// the default every table here relies on.</para>
+    /// the collation every table here declares.</para>
     ///
     /// <para>Here rather than in the CI workflow on purpose: a check in the pipeline runs only in
     /// the pipeline, and would need a mysql client on the runner image. This one runs wherever the
@@ -422,12 +422,14 @@ public sealed class SchemaTests(TestDatabase database) : IClassFixture<TestDatab
     }
 
     /// <summary>
-    /// Why sealed columns are <c>ascii</c>: an envelope is <c>e1:</c> plus base64url, so anything
-    /// else is not one. A conversion error at the first insert is the cheapest place to learn that a
-    /// plaintext sentence was about to be stored where a sealed one belongs.
+    /// Why sealed columns are <c>ascii</c>: an envelope is <c>e1:</c> plus base64url, so a sentence a
+    /// person typed in their own language cannot be one. The database refuses such text at the first
+    /// insert instead of storing it. It does NOT refuse ASCII plaintext - an English sentence fits an
+    /// ascii column - so this is a net for a whole class of mistakes, not a check that a value is an
+    /// envelope; the services validate the envelope's shape.
     /// </summary>
     [Fact]
-    public async Task A_sealed_column_refuses_text_that_is_not_an_envelope()
+    public async Task A_sealed_column_refuses_non_ascii_text()
     {
         var alice = await SeedAsync();
 
@@ -440,4 +442,35 @@ public sealed class SchemaTests(TestDatabase database) : IClassFixture<TestDatab
         Assert.NotNull(refused);
         Assert.Contains("Incorrect string value", refused!.Message, StringComparison.Ordinal);
     }
+
+    /// <summary>
+    /// Every table declares its own collation, so the schema does not depend on the database it is
+    /// created in. The other tests run in a utf8mb4 database, where a table that forgot the clause
+    /// would inherit the right answer by luck; a latin1 default is where it would not. Columns such as
+    /// <c>users.display_name</c> and <c>hosts.label</c> name no charset of their own, so a table that
+    /// took latin1 would turn a person's non-ASCII name into question marks.
+    /// </summary>
+    [Fact]
+    public async Task Every_table_is_utf8mb4_whatever_the_database_default()
+        => await database.WithScratchDatabaseAsync("latin1", "latin1_swedish_ci", async connectionString =>
+        {
+            var schema = new MySqlConnector.MySqlConnectionStringBuilder(connectionString).Database;
+            await using var connection = new MySqlConnector.MySqlConnection(connectionString);
+            await connection.OpenAsync();
+            await using var command = new MySqlConnector.MySqlCommand(
+                $"SELECT table_name, table_collation FROM information_schema.tables WHERE table_schema = '{schema}'",
+                connection);
+            await using var reader = await command.ExecuteReaderAsync();
+
+            var tables = new List<(string Name, string Collation)>();
+            while (await reader.ReadAsync())
+            {
+                tables.Add((reader.GetString(0), reader.GetString(1)));
+            }
+
+            Assert.NotEmpty(tables);
+            Assert.All(tables, table => Assert.True(
+                table.Collation == "utf8mb4_0900_ai_ci",
+                $"{table.Name} is {table.Collation}."));
+        });
 }
