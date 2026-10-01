@@ -4,45 +4,66 @@ using Enactive.Remote.Gateway.Storage;
 using Xunit;
 
 /// <summary>
-/// The storage layer, before anything uses it. Stage 2 of the remote-access design, first slice.
+/// The storage layer, before anything uses it.
 ///
 /// <para>Each of these asserts something the SCHEMA does, not something the code remembers to do.
-/// That distinction is the whole reason for normalised tables: a rule the database enforces cannot
-/// be routed around by a future caller who did not read the comment.</para>
+/// That distinction is the whole reason for composite keys: a rule the database enforces cannot be
+/// routed around by a future caller who did not read the comment. The one thing the schema cannot do
+/// is protect a SELECT that forgets its owner filter - the isolation tests of the services do.</para>
 /// </summary>
 public sealed class SchemaTests(TestDatabase database) : IClassFixture<TestDatabase>
 {
-    private const string HostId = "11111111111111111111111111111111";
-    private const string OtherHostId = "22222222222222222222222222222222";
-    private const string TaskId = "33333333333333333333333333333333";
-    private const string RunId = "44444444444444444444444444444444";
+    /// <summary>
+    /// One user with a computer, a task on it and a run of that task: enough to hang anything else
+    /// off. Ids are generated per call, so tests in this class share a database without sharing rows.
+    /// </summary>
+    private sealed record Seeded(string UserId, string HostId, string TaskId, string RunId);
 
-    /// <summary>Enough rows to hang an event off. Every test that needs a run calls this first.</summary>
-    private async Task SeedAsync()
+    private static string NewId() => Guid.NewGuid().ToString("N");
+
+    private async Task<Seeded> SeedAsync(string displayName = "Alice")
     {
+        var seeded = new Seeded(NewId(), NewId(), Guid.NewGuid().ToString(), NewId());
+
         await database.ExecuteAsync($"""
-            INSERT IGNORE INTO hosts (id, name, token_hash, revoked, created_at) VALUES
-              ('{HostId}',      'Studio PC', REPEAT('a', 64), 0, UTC_TIMESTAMP(3)),
-              ('{OtherHostId}', 'Laptop',    REPEAT('b', 64), 0, UTC_TIMESTAMP(3));
-            INSERT IGNORE INTO tasks (id, host_id, workspace_id, title, prompt, created_at)
-              VALUES ('{TaskId}', '{HostId}', 'workspace-1', 'Run the tests', 'Run them.', UTC_TIMESTAMP(3));
-            INSERT IGNORE INTO runs (id, task_id, host_id, status, created_at)
-              VALUES ('{RunId}', '{TaskId}', '{HostId}', 'Queued', UTC_TIMESTAMP(3));
+            INSERT INTO users (id, display_name, status, created_at)
+              VALUES ('{seeded.UserId}', '{displayName}', 'Active', UTC_TIMESTAMP(3));
+            INSERT INTO hosts (id, owner_id, label, token_hash, created_at)
+              VALUES ('{seeded.HostId}', '{seeded.UserId}', 'Studio PC', '{Hash()}', UTC_TIMESTAMP(3));
+            INSERT INTO tasks (owner_id, id, host_id, workspace_id, sealed, fingerprint, created_at)
+              VALUES ('{seeded.UserId}', '{seeded.TaskId}', '{seeded.HostId}', 'workspace-1',
+                      'e1:AAAA', REPEAT('f', 64), UTC_TIMESTAMP(3));
+            INSERT INTO runs (id, owner_id, task_id, host_id, status, created_at)
+              VALUES ('{seeded.RunId}', '{seeded.UserId}', '{seeded.TaskId}', '{seeded.HostId}',
+                      'Queued', UTC_TIMESTAMP(3));
             """);
+
+        return seeded;
     }
 
-    /// <summary>
-    /// Ordinals for events written straight to the table, bypassing the gateway that would normally
-    /// allocate them. Distinct per insert because the column is UNIQUE, and that is the point: these
-    /// tests are about the OTHER keys, so the ordinal must never be what refuses one of them.
-    /// </summary>
+    /// <summary>A token hash no other row has: the column is UNIQUE, and these tests are about the OTHER keys.</summary>
+    private static string Hash() => NewId() + NewId();
+
     private static int _ordinal;
 
-    private static string Event(string id, string hostId, string runId, long sequence)
+    /// <summary>
+    /// Ordinals for events written straight to the table, bypassing the gateway that would allocate
+    /// them. Distinct per insert unless a test says otherwise, because the key is UNIQUE per owner and
+    /// these tests are about the OTHER keys.
+    /// </summary>
+    private static string Event(
+        Seeded of, string id, long sequence, long? ordinal = null, string? hostId = null, string? runId = null)
         => $"""
-            INSERT INTO events (id, host_id, run_id, sequence, kind, detail, at, ordinal)
-            VALUES ('{id}', '{hostId}', '{runId}', {sequence}, 'Progress', 'x', UTC_TIMESTAMP(3),
-                    {Interlocked.Increment(ref _ordinal)})
+            INSERT INTO events (owner_id, host_id, id, run_id, sequence, kind, sealed_detail, at, ordinal)
+            VALUES ('{of.UserId}', '{hostId ?? of.HostId}', '{id}', '{runId ?? of.RunId}', {sequence},
+                    'Progress', 'e1:AAAA', UTC_TIMESTAMP(3), {ordinal ?? Interlocked.Increment(ref _ordinal)})
+            """;
+
+    private static string Command(Seeded of, string id)
+        => $"""
+            INSERT INTO commands (owner_id, id, host_id, kind, payload, fingerprint, status, created_at, expires_at)
+            VALUES ('{of.UserId}', '{id}', '{of.HostId}', 'CancelRun', '[]', REPEAT('f', 64),
+                    'PendingDelivery', UTC_TIMESTAMP(3), UTC_TIMESTAMP(3) + INTERVAL 1 DAY)
             """;
 
     // ── migrations ──────────────────────────────────────────────────────────
@@ -54,11 +75,13 @@ public sealed class SchemaTests(TestDatabase database) : IClassFixture<TestDatab
             $"SELECT table_name FROM information_schema.tables WHERE table_schema = '{database.Name}'");
 
         Assert.Equal(
-            [
-                "approvals", "commands", "counters", "events", "host_workspaces", "hosts",
-                "notices", "retention_state", "runs", "schema_version", "tasks"
-            ],
-            tables.Order().ToArray());
+            new[]
+            {
+                "admissions", "approvals", "audit", "commands", "devices", "enrollments", "events",
+                "external_identities", "grants", "host_workspaces", "hosts", "invites", "notices", "runs",
+                "schema_version", "tasks", "user_retention", "user_sessions", "user_streams", "users"
+            }.Order(StringComparer.Ordinal),
+            tables.Order(StringComparer.Ordinal));
     }
 
     /// <summary>
@@ -80,6 +103,7 @@ public sealed class SchemaTests(TestDatabase database) : IClassFixture<TestDatab
 
         var reapplied = await Migrator.ApplyAsync(database.ConnectionString);
 
+        Assert.Equal([1], Migrator.KnownVersions());
         Assert.Equal(Migrator.KnownVersions(), reapplied);
         Assert.Equal(
             Migrator.KnownVersions(),
@@ -93,7 +117,7 @@ public sealed class SchemaTests(TestDatabase database) : IClassFixture<TestDatab
     /// it is - because a suite pointed at 8.4, or at MariaDB, would still pass most of these and
     /// would be proving it about a server production does not run. What changes between series is
     /// the set of collations and a good deal of SQL behaviour, and <c>utf8mb4_0900_ai_ci</c> is
-    /// written into every table.</para>
+    /// the default every table here relies on.</para>
     ///
     /// <para>Here rather than in the CI workflow on purpose: a check in the pipeline runs only in
     /// the pipeline, and would need a mysql client on the runner image. This one runs wherever the
@@ -115,6 +139,155 @@ public sealed class SchemaTests(TestDatabase database) : IClassFixture<TestDatab
     public async Task An_up_to_date_database_has_nothing_applied_to_it()
         => Assert.Empty(await Migrator.ApplyAsync(database.ConnectionString));
 
+    // ── ownership, which the database decides ───────────────────────────────
+
+    /// <summary>
+    /// The reason every child names its owner and every foreign key includes it.
+    ///
+    /// <para>A service that forgets to filter a WRITE by owner would otherwise attach Bob's task to
+    /// Alice's computer, and the database would accept it: the host id alone is a valid reference.
+    /// With <c>(owner_id, host_id)</c> as the reference, Bob's row finds no parent.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_child_with_another_owner_is_refused_by_the_database()
+    {
+        var alice = await SeedAsync("Alice");
+        var bob = await SeedAsync("Bob");
+
+        var refused = await database.RefusedAsync($"""
+            INSERT INTO tasks (owner_id, id, host_id, workspace_id, sealed, fingerprint, created_at)
+            VALUES ('{bob.UserId}', '{Guid.NewGuid()}', '{alice.HostId}', 'workspace-1',
+                    'e1:AAAA', REPEAT('f', 64), UTC_TIMESTAMP(3))
+            """);
+
+        Assert.NotNull(refused);
+        Assert.Contains("fk_tasks_host", refused!.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Removing a person removes everything they put on the service, in one statement, with nothing
+    /// left behind to be found by somebody else. Seeded in EVERY owned table, because a table added
+    /// later without a cascade is exactly the one that would keep a stranger's data.
+    /// </summary>
+    [Fact]
+    public async Task Deleting_a_user_deletes_everything_they_own()
+    {
+        var alice = await SeedAsync("Alice");
+        var device = NewId();
+        var invite = NewId();
+        var approval = NewId();
+
+        await database.ExecuteAsync($"""
+            INSERT INTO external_identities (provider, subject, user_id, display, created_at)
+              VALUES ('github', '{alice.UserId}', '{alice.UserId}', 'alice', UTC_TIMESTAMP(3));
+            INSERT INTO user_sessions (id, user_id, security_version, created_at, expires_at)
+              VALUES ('{NewId()}', '{alice.UserId}', 1, UTC_TIMESTAMP(3), UTC_TIMESTAMP(3) + INTERVAL 1 DAY);
+            INSERT INTO user_streams (owner_id) VALUES ('{alice.UserId}');
+            INSERT INTO user_retention (owner_id) VALUES ('{alice.UserId}');
+            INSERT INTO devices (id, owner_id, public_key, label, created_at)
+              VALUES ('{device}', '{alice.UserId}', REPEAT(0x04, 65), 'Phone', UTC_TIMESTAMP(3));
+            INSERT INTO host_workspaces (owner_id, host_id, workspace_id, sealed_name)
+              VALUES ('{alice.UserId}', '{alice.HostId}', 'workspace-1', 'e1:AAAA');
+            INSERT INTO grants (owner_id, host_id, device_id, epoch, grant_json, created_at)
+              VALUES ('{alice.UserId}', '{alice.HostId}', '{device}', 1, '[]', UTC_TIMESTAMP(3));
+            INSERT INTO invites (id, owner_id, created_at, expires_at)
+              VALUES ('{invite}', '{alice.UserId}', UTC_TIMESTAMP(3), UTC_TIMESTAMP(3) + INTERVAL 1 DAY);
+            INSERT INTO enrollments (invite_id, owner_id, device_id, mac, created_at)
+              VALUES ('{invite}', '{alice.UserId}', '{device}', 'mac', UTC_TIMESTAMP(3));
+            INSERT INTO approvals (owner_id, host_id, id, run_id, tool_call_id, action_hash,
+                                   remote_decidable, sealed_action, status, created_at, expires_at)
+              VALUES ('{alice.UserId}', '{alice.HostId}', '{approval}', '{alice.RunId}', 'call-1',
+                      REPEAT('a', 64), 1, 'e1:AAAA', 'Pending', UTC_TIMESTAMP(3),
+                      UTC_TIMESTAMP(3) + INTERVAL 1 DAY);
+            INSERT INTO notices (id, owner_id, run_id, kind, at, ordinal)
+              VALUES ('{NewId()}', '{alice.UserId}', '{alice.RunId}', 'Completed', UTC_TIMESTAMP(3), 1);
+            INSERT INTO audit (owner_id, at, actor, action)
+              VALUES ('{alice.UserId}', UTC_TIMESTAMP(3), 'user:{alice.UserId}', 'sign-in');
+            """);
+        await database.ExecuteAsync(Command(alice, Guid.NewGuid().ToString()));
+        await database.ExecuteAsync(Event(alice, "event-1", 1));
+
+        // (table, the column that names its owner). `users` itself is the root.
+        (string Table, string Column)[] owned =
+        [
+            ("external_identities", "user_id"), ("user_sessions", "user_id"), ("user_streams", "owner_id"),
+            ("user_retention", "owner_id"), ("devices", "owner_id"), ("hosts", "owner_id"),
+            ("host_workspaces", "owner_id"), ("grants", "owner_id"), ("invites", "owner_id"),
+            ("enrollments", "owner_id"), ("tasks", "owner_id"), ("runs", "owner_id"),
+            ("commands", "owner_id"), ("approvals", "owner_id"), ("events", "owner_id"),
+            ("notices", "owner_id"), ("audit", "owner_id")
+        ];
+
+        // Seeded for real first: a table that was never populated would "count zero" for the wrong reason.
+        foreach (var (table, column) in owned)
+        {
+            Assert.True(
+                await database.ScalarLongAsync($"SELECT COUNT(*) FROM {table} WHERE {column} = '{alice.UserId}'") > 0,
+                $"{table} was not seeded.");
+        }
+
+        await database.ExecuteAsync($"DELETE FROM users WHERE id = '{alice.UserId}'");
+
+        foreach (var (table, column) in owned)
+        {
+            Assert.Equal(
+                0L,
+                await database.ScalarLongAsync($"SELECT COUNT(*) FROM {table} WHERE {column} = '{alice.UserId}'"));
+        }
+    }
+
+    /// <summary>
+    /// Ids are chosen by the browser and the computer, not by the gateway, so two people choosing
+    /// the same one is ordinary. It is only not an error because the key starts with the owner; with
+    /// the id alone, Bob's command would be refused as a duplicate of one he has never heard of -
+    /// which also tells him that Alice used that id.
+    /// </summary>
+    [Fact]
+    public async Task Two_owners_may_use_the_same_command_and_task_ids()
+    {
+        var alice = await SeedAsync("Alice");
+        var bob = await SeedAsync("Bob");
+        var commandId = Guid.NewGuid().ToString();
+
+        await database.ExecuteAsync(Command(alice, commandId));
+        Assert.Null(await database.RefusedAsync(Command(bob, commandId)));
+
+        // The same task id on Bob's own computer.
+        Assert.Null(await database.RefusedAsync($"""
+            INSERT INTO tasks (owner_id, id, host_id, workspace_id, sealed, fingerprint, created_at)
+            VALUES ('{bob.UserId}', '{alice.TaskId}', '{bob.HostId}', 'workspace-1',
+                    'e1:AAAA', REPEAT('f', 64), UTC_TIMESTAMP(3))
+            """));
+
+        // And one owner still cannot use an id twice: that is what a retry looks like.
+        var repeated = await database.RefusedAsync(Command(alice, commandId));
+
+        Assert.NotNull(repeated);
+        Assert.Contains("Duplicate entry", repeated!.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The number line a panel's delta poll is ordered by belongs to one person. A global line would
+    /// make every owner's events contend for one counter and would let a gap in somebody else's
+    /// numbers show up in yours; per owner, the only thing a number must be is unique among that
+    /// owner's own rows.
+    /// </summary>
+    [Fact]
+    public async Task Event_ordinals_are_unique_per_owner_not_globally()
+    {
+        var alice = await SeedAsync("Alice");
+        var bob = await SeedAsync("Bob");
+
+        await database.ExecuteAsync(Event(alice, "first", 1, ordinal: 1));
+
+        Assert.Null(await database.RefusedAsync(Event(bob, "first", 1, ordinal: 1)));
+
+        var refused = await database.RefusedAsync(Event(alice, "second", 2, ordinal: 1));
+
+        Assert.NotNull(refused);
+        Assert.Contains("ux_events_owner_ordinal", refused!.Message, StringComparison.Ordinal);
+    }
+
     // ── ordering, which the database decides ────────────────────────────────
 
     /// <summary>
@@ -128,68 +301,76 @@ public sealed class SchemaTests(TestDatabase database) : IClassFixture<TestDatab
     [Fact]
     public async Task One_sequence_number_belongs_to_one_event()
     {
-        await SeedAsync();
-        await database.ExecuteAsync(Event("seq-first", HostId, RunId, 500));
+        var alice = await SeedAsync();
+        await database.ExecuteAsync(Event(alice, "seq-first", 500));
 
-        var refused = await database.RefusedAsync(Event("seq-second", HostId, RunId, 500));
+        var refused = await database.RefusedAsync(Event(alice, "seq-second", 500));
 
         Assert.NotNull(refused);
         Assert.Contains("ux_events_run_sequence", refused!.Message, StringComparison.Ordinal);
     }
 
     /// <summary>
-    /// Isolation between Hosts is structural. Two machines pick event ids independently - a counter
-    /// each, most likely - so the same id from two Hosts is ordinary, not an error. It is only not
-    /// an error because the primary key is (host_id, id); with id alone the second Host's event
-    /// would be silently rejected as a duplicate of a run it has never heard of.
+    /// Isolation between computers is structural. Two machines pick event ids independently - a
+    /// counter each, most likely - so the same id from two of them is ordinary, not an error. It is
+    /// only not an error because the primary key is (host_id, id); with id alone the second
+    /// computer's event would be silently rejected as a duplicate of a run it has never heard of.
     /// </summary>
     [Fact]
     public async Task Two_hosts_may_use_the_same_event_id()
     {
-        await SeedAsync();
-        await database.ExecuteAsync(Event("shared-id", HostId, RunId, 600));
+        var first = await SeedAsync();
 
-        // Same id, different Host. The run is this Host's; who owns the run is the service's
-        // question, and this test is about the key.
-        Assert.Null(await database.RefusedAsync(Event("shared-id", OtherHostId, RunId, 601)));
+        // A second computer of the SAME person, with a run of its own.
+        var otherHost = NewId();
+        var otherTask = Guid.NewGuid().ToString();
+        var otherRun = NewId();
+
+        await database.ExecuteAsync($"""
+            INSERT INTO hosts (id, owner_id, label, token_hash, created_at)
+              VALUES ('{otherHost}', '{first.UserId}', 'Laptop', '{Hash()}', UTC_TIMESTAMP(3));
+            INSERT INTO tasks (owner_id, id, host_id, workspace_id, sealed, fingerprint, created_at)
+              VALUES ('{first.UserId}', '{otherTask}', '{otherHost}', 'workspace-1',
+                      'e1:AAAA', REPEAT('f', 64), UTC_TIMESTAMP(3));
+            INSERT INTO runs (id, owner_id, task_id, host_id, status, created_at)
+              VALUES ('{otherRun}', '{first.UserId}', '{otherTask}', '{otherHost}', 'Queued', UTC_TIMESTAMP(3));
+            """);
+
+        await database.ExecuteAsync(Event(first, "shared-id", 600));
+
+        Assert.Null(await database.RefusedAsync(
+            Event(first, "shared-id", 601, hostId: otherHost, runId: otherRun)));
     }
 
     /// <summary>An event about a run nobody created is not a timeline entry, it is a bug.</summary>
     [Fact]
     public async Task An_event_cannot_point_at_a_run_that_does_not_exist()
     {
-        await SeedAsync();
+        var alice = await SeedAsync();
 
         var refused = await database.RefusedAsync(
-            Event("orphan", HostId, "99999999999999999999999999999999", 700));
+            Event(alice, "orphan", 700, runId: "99999999999999999999999999999999"));
 
         Assert.NotNull(refused);
         Assert.Contains("foreign key", refused!.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
-    /// A command id is a string and comes back as one.
+    /// A task id is a string and comes back as one.
     ///
     /// <para>MySqlConnector reads a <c>CHAR(36)</c> column as a <see cref="Guid"/> - a good guess,
     /// since that is exactly a UUID's width, and wrong here: these ids are compared as text and
     /// never parsed. It surfaced as an InvalidCastException inside the command queue, nowhere near
-    /// the schema that caused it. Two things now prevent it, the column type and
-    /// <c>GuidFormat=None</c>, and this is what would notice if either were undone.</para>
+    /// the schema that caused it. <c>GuidFormat=None</c> now prevents it, and this is what would
+    /// notice if that were undone. The task id is the one column that is still a CHAR(36).</para>
     /// </summary>
     [Fact]
-    public async Task A_command_id_is_read_back_as_the_string_it_was_written_as()
+    public async Task A_task_id_is_read_back_as_the_string_it_was_written_as()
     {
-        await SeedAsync();
-        var commandId = Guid.NewGuid().ToString();
+        var alice = await SeedAsync();
 
-        await database.ExecuteAsync($"""
-            INSERT INTO commands (id, host_id, kind, payload, fingerprint, status, created_at, expires_at)
-            VALUES ('{commandId}', '{HostId}', 'CancelRun', '[]', REPEAT('f', 64),
-                    'PendingDelivery', UTC_TIMESTAMP(3), UTC_TIMESTAMP(3) + INTERVAL 1 DAY)
-            """);
-
-        Assert.Equal(commandId, Assert.Single(
-            await database.StringsAsync($"SELECT id FROM commands WHERE id = '{commandId}'")));
+        Assert.Equal(alice.TaskId, Assert.Single(
+            await database.StringsAsync($"SELECT id FROM tasks WHERE owner_id = '{alice.UserId}'")));
     }
 
     // ── collation, which decides what "equal" means ─────────────────────────
@@ -204,44 +385,59 @@ public sealed class SchemaTests(TestDatabase database) : IClassFixture<TestDatab
     [Fact]
     public async Task Two_hashes_differing_only_in_case_are_two_hashes()
     {
+        var alice = await SeedAsync();
+        var lower = $"{NewId()}{NewId()}".Replace('0', 'c');
+        var upper = lower.ToUpperInvariant();
+
         await database.ExecuteAsync($"""
-            INSERT INTO hosts (id, name, token_hash, revoked, created_at)
-            VALUES ('c1{new string('0', 30)}', 'Lower', REPEAT('cd', 32), 0, UTC_TIMESTAMP(3))
+            INSERT INTO hosts (id, owner_id, label, token_hash, created_at)
+            VALUES ('{NewId()}', '{alice.UserId}', 'Lower', '{lower}', UTC_TIMESTAMP(3))
             """);
 
         var refused = await database.RefusedAsync($"""
-            INSERT INTO hosts (id, name, token_hash, revoked, created_at)
-            VALUES ('c2{new string('0', 30)}', 'Upper', REPEAT('CD', 32), 0, UTC_TIMESTAMP(3))
+            INSERT INTO hosts (id, owner_id, label, token_hash, created_at)
+            VALUES ('{NewId()}', '{alice.UserId}', 'Upper', '{upper}', UTC_TIMESTAMP(3))
             """);
 
         Assert.Null(refused);
 
         // And the lookup that authenticates a device finds one row, not two.
-        var matches = await database.ScalarAsync(
-            "SELECT COUNT(*) FROM hosts WHERE token_hash = REPEAT('cd', 32)");
-
-        Assert.Equal(1L, Convert.ToInt64(matches));
+        Assert.Equal(1L, await database.ScalarLongAsync(
+            $"SELECT COUNT(*) FROM hosts WHERE token_hash = '{lower}'"));
     }
 
     /// <summary>
-    /// Text the owner and the model write is utf8mb4 - four-byte characters included. A prompt is
-    /// not going to be ASCII, and a column that silently truncates at the first emoji corrupts the
-    /// instruction the run is carried out from.
+    /// Text a person writes in the clear - a display name, a computer's label - is utf8mb4,
+    /// four-byte characters included. A column that silently truncates at the first emoji corrupts
+    /// what the person typed.
     /// </summary>
     [Fact]
     public async Task Text_survives_characters_outside_the_basic_plane()
     {
-        await SeedAsync();
-        const string prompt = "Проверь тесты 🧪 и 漢字";
+        const string name = "Проверь тесты 🧪 и 漢字";
+        var alice = await SeedAsync(name);
 
-        await database.ExecuteAsync($"""
-            INSERT INTO tasks (id, host_id, workspace_id, title, prompt, created_at)
-            VALUES ('{new string('7', 32)}', '{HostId}', 'workspace-1', 'Unicode', '{prompt}', UTC_TIMESTAMP(3))
+        Assert.Equal(name, Assert.Single(
+            await database.StringsAsync($"SELECT display_name FROM users WHERE id = '{alice.UserId}'")));
+    }
+
+    /// <summary>
+    /// Why sealed columns are <c>ascii</c>: an envelope is <c>e1:</c> plus base64url, so anything
+    /// else is not one. A conversion error at the first insert is the cheapest place to learn that a
+    /// plaintext sentence was about to be stored where a sealed one belongs.
+    /// </summary>
+    [Fact]
+    public async Task A_sealed_column_refuses_text_that_is_not_an_envelope()
+    {
+        var alice = await SeedAsync();
+
+        var refused = await database.RefusedAsync($"""
+            INSERT INTO tasks (owner_id, id, host_id, workspace_id, sealed, fingerprint, created_at)
+            VALUES ('{alice.UserId}', '{Guid.NewGuid()}', '{alice.HostId}', 'workspace-1',
+                    'Проверь тесты', REPEAT('f', 64), UTC_TIMESTAMP(3))
             """);
 
-        var stored = await database.StringsAsync(
-            $"SELECT prompt FROM tasks WHERE id = '{new string('7', 32)}'");
-
-        Assert.Equal(prompt, Assert.Single(stored));
+        Assert.NotNull(refused);
+        Assert.Contains("Incorrect string value", refused!.Message, StringComparison.Ordinal);
     }
 }

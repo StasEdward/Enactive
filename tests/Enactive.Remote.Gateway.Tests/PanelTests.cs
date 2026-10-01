@@ -132,8 +132,7 @@ public sealed class PanelTests(TestDatabase database) : IClassFixture<TestDataba
 
         await new HostService(new Database(database.ConnectionString)).PublishAsync(HostId, new HostEvent(
             Guid.NewGuid().ToString("N"), runId, 2, RemoteEventKind.ApprovalRequested, "Run the tests",
-            new ApprovalRequest(approvalId, "call-1", "run_command", "dotnet test", "C:/work",
-                "hash-1", RemoteDecidable: false)));
+            new ApprovalRequest(approvalId, "call-1", "hash-1", RemoteDecidable: false, "e1:sealed-action")));
 
         using var request = new HttpRequestMessage(HttpMethod.Post, $"/api/approvals/{approvalId}/resolve")
         {
@@ -229,8 +228,7 @@ public sealed class PanelTests(TestDatabase database) : IClassFixture<TestDataba
 
         await new HostService(new Database(database.ConnectionString)).PublishAsync(HostId, new HostEvent(
             Guid.NewGuid().ToString("N"), runId, 2, RemoteEventKind.ApprovalRequested, "Delete a file",
-            new ApprovalRequest(approvalId, "call-1", "delete_file", """{"path":"README8.html"}""",
-                "C:/work", "hash-1", RemoteDecidable: true)));
+            new ApprovalRequest(approvalId, "call-1", "hash-1", RemoteDecidable: true, "e1:sealed-action")));
 
         var state = await _owner.GetFromJsonAsync<GatewaySnapshot>("/api/state", RemoteJson.Options);
 
@@ -264,8 +262,7 @@ public sealed class PanelTests(TestDatabase database) : IClassFixture<TestDataba
 
         await new HostService(new Database(database.ConnectionString)).PublishAsync(HostId, new HostEvent(
             Guid.NewGuid().ToString("N"), runId, 2, RemoteEventKind.ApprovalRequested, "Delete a file",
-            new ApprovalRequest(approvalId, "call-1", "delete_file", """{"path":"README8.html"}""",
-                "C:/work", "hash-1", RemoteDecidable: true)));
+            new ApprovalRequest(approvalId, "call-1", "hash-1", RemoteDecidable: true, "e1:sealed-action")));
 
         using var answer = new HttpRequestMessage(HttpMethod.Post, $"/api/approvals/{approvalId}/resolve")
         {

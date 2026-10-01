@@ -311,8 +311,7 @@ public sealed class OwnerServiceTests(TestDatabase database) : IClassFixture<Tes
         await Host.PublishAsync(hostId, new HostEvent(
             Ids.New(), runId, 2, RemoteEventKind.ApprovalRequested, "Run the project test suite",
             Approval: new ApprovalRequest(
-                approvalId, "call-1", "run_command", "dotnet test", "C:/work/Enactive",
-                "hash-1", remoteDecidable)));
+                approvalId, "call-1", "hash-1", remoteDecidable, "e1:sealed-action")));
 
         return (hostId, runId, approvalId);
     }

@@ -71,7 +71,8 @@ public sealed class EndToEndTests(TestDatabase database) : IClassFixture<TestDat
         await host.StartAsync();
 
         using var store = OpenStore();
-        var loop = new DeliveryLoop(store, host);
+        var keys = new FixedHostKeys();
+        var loop = new DeliveryLoop(store, host, new Sealer(keys, TimeProvider.System));
 
         // Sync publishes the workspace. Until it has, the owner cannot name one - which is the
         // property that keeps a remote task from naming a folder.
@@ -91,14 +92,14 @@ public sealed class EndToEndTests(TestDatabase database) : IClassFixture<TestDat
         var accepted = Assert.Single(await loop.TurnAsync([new WorkspaceRef("workspace-1", "Enactive")]));
         var payload = RemoteJson.Deserialize<StartTaskPayload>(accepted.Payload);
 
-        Assert.Equal("Run the tests", payload.Title);
+        Assert.False(string.IsNullOrEmpty(payload.SealedTask)); // Task 3.5 rewrites this test
 
         // Standing in for the engine: what stage 4 wires to this is already proven, and what is
         // under test here is that these events survive the wire.
         store.BeginRun(accepted.Id, payload.RunId);
-        store.Enqueue(payload.RunId, RemoteEventKind.Running, "Started");
-        store.Enqueue(payload.RunId, RemoteEventKind.Progress, "[1/1] Working");
-        store.Enqueue(payload.RunId, RemoteEventKind.Completed, "All done");
+        store.Enqueue(payload.RunId, RemoteEventKind.Running, _ => "Started");
+        store.Enqueue(payload.RunId, RemoteEventKind.Progress, _ => "[1/1] Working");
+        store.Enqueue(payload.RunId, RemoteEventKind.Completed, _ => "All done");
 
         await loop.FlushAsync();
 
@@ -237,4 +238,15 @@ public sealed class EndToEndTests(TestDatabase database) : IClassFixture<TestDat
     private sealed record DeviceView(string Id, string Name, string Token);
 
     private sealed record IdView(string Id);
+
+    // Task 3.5 rewrites this test; until then the Host only needs keys to be constructible.
+    private sealed class FixedHostKeys : IHostKeys
+    {
+        public string HostId => "host-1";
+
+        public Enactive.Remote.Contracts.Crypto.HostKey Current { get; } =
+            Enactive.Remote.Contracts.Crypto.HostKey.Create(1);
+
+        public Enactive.Remote.Contracts.Crypto.HostKey? Epoch(uint epoch) => epoch == Current.Epoch ? Current : null;
+    }
 }

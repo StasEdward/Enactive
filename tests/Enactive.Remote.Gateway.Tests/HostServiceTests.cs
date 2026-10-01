@@ -58,7 +58,7 @@ public sealed class HostServiceTests(TestDatabase database) : IClassFixture<Test
         => new(NewId(), runId, sequence, kind, detail, approval, resolution);
 
     private static ApprovalRequest Request(string id, string hash = "hash-1", bool remoteDecidable = true)
-        => new(id, "call-1", "run_command", "dotnet test", "C:/work", hash, remoteDecidable);
+        => new(id, "call-1", hash, remoteDecidable, "e1:sealed-action");
 
     private async Task<RemoteRunStatus> StatusAsync(string runId)
         => Enum.Parse<RemoteRunStatus>(
@@ -378,7 +378,7 @@ public sealed class HostServiceTests(TestDatabase database) : IClassFixture<Test
     {
         await QueuedRunAsync();
         var commandId = Guid.NewGuid().ToString();
-        var cancelPayload = RemoteJson.Serialize(new CancelRunPayload("x"));
+        var cancelPayload = RemoteJson.Serialize(new CancelRunPayload("x", ""));
 
         await database.ExecuteAsync($"""
             INSERT INTO commands (id, host_id, kind, payload, fingerprint, status, created_at, expires_at)
@@ -404,7 +404,7 @@ public sealed class HostServiceTests(TestDatabase database) : IClassFixture<Test
         var runId = await QueuedRunAsync();
         var commandId = Guid.NewGuid().ToString();
         var payload = RemoteJson.Serialize(new StartTaskPayload(
-            runId, "task", "workspace-1", "Test", "Do it.", DateTimeOffset.UtcNow));
+            runId, "task", "workspace-1", "e1:sealed-task", "e1:sealed-start"));
 
         await database.ExecuteAsync($"""
             INSERT INTO commands (id, host_id, kind, payload, fingerprint, status, created_at, expires_at)

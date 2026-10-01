@@ -155,8 +155,10 @@ public sealed class OwnerService(Database database)
             ("@id", runId), ("@task", task.Id), ("@host", task.HostId),
             ("@queued", RemoteRunStatus.Queued), ("@now", now));
 
+        // Task 3.5 rewrites this: the browser will seal the task and the owner's authorization, and
+        // this will pass both through. Until then the stored prompt travels as the opaque string.
         var payload = RemoteJson.Serialize(new StartTaskPayload(
-            runId, task.Id, task.WorkspaceId, task.Title, task.Prompt, task.CreatedAt));
+            runId, task.Id, task.WorkspaceId, task.Prompt, ""));
 
         var command = await QueueAsync(
             connection, transaction, commandId, task.HostId, CommandKind.StartTask, payload, fingerprint, now);
@@ -211,7 +213,8 @@ public sealed class OwnerService(Database database)
 
         var command = await QueueAsync(
             connection, transaction, commandId, run.HostId, CommandKind.CancelRun,
-            RemoteJson.Serialize(new CancelRunPayload(runId)), fingerprint, DateTimeOffset.UtcNow);
+            // Task 3.5 rewrites this: the sealed authorization will come from the browser.
+            RemoteJson.Serialize(new CancelRunPayload(runId, "")), fingerprint, DateTimeOffset.UtcNow);
 
         await transaction.CommitAsync(ct);
         return command;
@@ -297,8 +300,9 @@ public sealed class OwnerService(Database database)
             "UPDATE approvals SET status = @queued, requested_decision = @decision WHERE id = @id",
             ("@queued", ApprovalStatus.DecisionQueued), ("@decision", decision), ("@id", approvalId));
 
+        // Task 3.5 rewrites this: the decision will travel only inside the browser's sealed answer.
         var payload = RemoteJson.Serialize(new ResolveApprovalPayload(
-            approvalId, approval.RunId, approval.ToolCallId, approval.ActionHash, decision));
+            approvalId, approval.RunId, approval.ActionHash, ""));
 
         var command = await QueueAsync(
             connection, transaction, commandId, approval.HostId, CommandKind.ResolveApproval,

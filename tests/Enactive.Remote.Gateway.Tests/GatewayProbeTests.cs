@@ -69,7 +69,7 @@ public sealed class GatewayProbeTests(TestDatabase database) : IClassFixture<Tes
         var host = Assert.Single((await Get<GatewaySnapshot>("/api/state")).Hosts, h => h.Id == device.Id);
 
         Assert.True(host.Online);
-        Assert.Equal("Enactive", Assert.Single(host.Workspaces).Name);
+        Assert.Equal("Enactive", Assert.Single(host.Workspaces).SealedName);
     }
 
     /// <summary>

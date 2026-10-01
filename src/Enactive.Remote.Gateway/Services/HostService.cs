@@ -47,7 +47,7 @@ public sealed class HostService(Database database)
         foreach (var workspace in workspaces)
         {
             Required(workspace.Id, 100, "workspace id");
-            Required(workspace.Name, 100, "workspace name");
+            Required(workspace.SealedName, 100, "workspace name"); // Task 3.4 rewrites this
         }
 
         await using var connection = await database.OpenAsync(ct);
@@ -69,7 +69,7 @@ public sealed class HostService(Database database)
                 INSERT INTO host_workspaces (host_id, workspace_id, name)
                 VALUES (@host, @id, @name)
                 """,
-                ("@host", hostId), ("@id", workspace.Id), ("@name", workspace.Name));
+                ("@host", hostId), ("@id", workspace.Id), ("@name", workspace.SealedName));
         }
 
         await ExpireCommandsAsync(connection, transaction, hostId);
@@ -149,7 +149,7 @@ public sealed class HostService(Database database)
         Required(published.EventId, 100, "event id");
         Required(published.RunId, 32, "run id");
 
-        if ((published.Detail?.Length ?? 0) > MaxDetail)
+        if ((published.SealedDetail?.Length ?? 0) > MaxDetail)
         {
             throw GatewayFault.MalformedEvent($"Event detail is longer than {MaxDetail:N0} characters.");
         }
@@ -201,7 +201,7 @@ public sealed class HostService(Database database)
             """,
             ("@id", published.EventId), ("@host", hostId), ("@run", run.Id),
             ("@sequence", published.Sequence), ("@kind", published.Kind),
-            ("@detail", published.Detail), ("@at", now),
+            ("@detail", published.SealedDetail), ("@at", now),
             // Allocated inside this transaction, which is what makes a refused publish give the
             // number back: the counter's increment rolls back with everything else. Allocating
             // outside it would leave a hole in the panel's number line for every rejection.
@@ -218,7 +218,7 @@ public sealed class HostService(Database database)
             """,
             ("@status", status), ("@sequence", published.Sequence),
             ("@ended", RunLifecycle.IsTerminal(status)), ("@at", now),
-            ("@summary", published.Detail), ("@run", run.Id));
+            ("@summary", published.SealedDetail), ("@run", run.Id));
 
         await transaction.CommitAsync(ct);
     }
@@ -249,7 +249,7 @@ public sealed class HostService(Database database)
                 ("@invalidated", ApprovalStatus.Invalidated), ("@run", run.Id));
 
             await NoticeAsync(connection, transaction, run.Id,
-                published.Kind.ToString(), published.Detail ?? "", now);
+                published.Kind.ToString(), published.SealedDetail ?? "", now);
 
             return RunLifecycle.StatusOf(published.Kind);
         }
@@ -300,9 +300,7 @@ public sealed class HostService(Database database)
 
         Required(request.ApprovalId, 100, "approval id");
         Required(request.ToolCallId, 100, "tool call id");
-        Required(request.Tool, 200, "tool");
-        Required(request.Arguments, MaxArguments, "arguments");
-        Required(request.WorkingDirectory, 1000, "working directory");
+        Required(request.SealedAction, MaxArguments, "sealed action"); // Task 3.4 rewrites this
         Required(request.ActionHash, 128, "action hash");
 
         if (await connection.ExistsAsync(transaction,
@@ -320,15 +318,16 @@ public sealed class HostService(Database database)
                     @decidable, @pending, @now, @expires)
             """,
             ("@id", request.ApprovalId), ("@host", run.HostId), ("@run", run.Id),
-            ("@call", request.ToolCallId), ("@tool", request.Tool),
-            ("@arguments", request.Arguments), ("@directory", request.WorkingDirectory),
-            ("@reason", published.Detail ?? ""), ("@hash", request.ActionHash),
+            ("@call", request.ToolCallId), ("@tool", ""),
+            // Task 3.4 rewrites this: the sealed action is stored opaquely in the old plaintext column.
+            ("@arguments", request.SealedAction), ("@directory", ""),
+            ("@reason", published.SealedDetail ?? ""), ("@hash", request.ActionHash),
             ("@decidable", request.RemoteDecidable), ("@pending", ApprovalStatus.Pending),
             ("@now", now), ("@expires", now.Add(Lifetime)));
 
         await NoticeAsync(connection, transaction, run.Id,
             request.RemoteDecidable ? "Permission required" : "Permission required on the computer",
-            published.Detail ?? "", now);
+            published.SealedDetail ?? "", now);
 
         return RemoteRunStatus.WaitingForUser;
     }
