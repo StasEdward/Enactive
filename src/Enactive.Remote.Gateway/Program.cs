@@ -359,15 +359,15 @@ api.MapPost("/logout", async (HttpContext context) =>
     return Results.Ok();
 });
 
-// `since` is the cursor from the previous reply and nothing else. It is not validated against
-// anything: a cursor from the future returns an empty delta, a cursor from before the history was
-// trimmed returns what survived, and neither is an error the panel could do anything about.
-api.MapGet("/state", (long? since, Projection projection, CancellationToken ct) =>
-    projection.ReadAsync(since, ct));
-
 // Task 3.8 rewrites this: the person comes from their session cookie. Until then the shared owner key
 // signs in nobody in particular, so there is no account to act for and these calls fail at runtime.
 static UserAccess PlaceholderUser() => new("", "");
+
+// `since` is the cursor from the previous reply, as text. A cursor that is not one of the person's
+// current line gets their whole snapshot rather than an error, because the panel can do nothing
+// with an error except ask again without one.
+api.MapGet("/state", (string? since, Projection projection, CancellationToken ct) =>
+    projection.ReadAsync(PlaceholderUser(), since, ct));
 
 api.MapPost("/hosts", async (RegisterHostRequest request, UserService users, CancellationToken ct) =>
 {

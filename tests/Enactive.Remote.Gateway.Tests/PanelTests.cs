@@ -308,12 +308,13 @@ public sealed class PanelTests(TestDatabase database) : IClassFixture<TestDataba
         var first = await Get<GatewaySnapshot>("/api/state");
         var task = Assert.Single(first.Tasks, t => t.Id == TaskIdOf(first, runId));
 
-        Assert.Equal(prompt, task.Prompt);
+        // Task 3.8 rewrites this test: the task arrives sealed, and only the panel can open it.
+        Assert.Equal(prompt, task.Sealed);
 
         var second = await Get<GatewaySnapshot>($"/api/state?since={first.Cursor}");
 
         Assert.True(second.Delta);
-        Assert.Equal(prompt, Assert.Single(second.Tasks, t => t.Id == task.Id).Prompt);
+        Assert.Equal(prompt, Assert.Single(second.Tasks, t => t.Id == task.Id).Sealed);
     }
 
     /// <summary>

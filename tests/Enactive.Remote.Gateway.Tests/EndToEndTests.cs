@@ -116,7 +116,7 @@ public sealed class EndToEndTests(TestDatabase database) : IClassFixture<TestDat
         var run = Assert.Single(state.Runs, r => r.Id == payload.RunId);
 
         Assert.Equal(RemoteRunStatus.Completed, run.Status);
-        Assert.Equal("All done", run.Summary);
+        Assert.Equal("All done", run.SealedSummary); // Task 3.8 rewrites this test
         Assert.True(Assert.Single(state.Hosts, h => h.Id == device.Id).Online);
     }
 

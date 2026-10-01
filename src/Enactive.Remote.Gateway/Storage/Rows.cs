@@ -9,14 +9,6 @@ using Enactive.Remote.Contracts;
 // between them is how a token hash ends up in a JSON response because somebody added a field to a
 // record and nothing said no.
 
-internal sealed record TaskRow(
-    string Id,
-    string HostId,
-    string WorkspaceId,
-    string Title,
-    string Prompt,
-    DateTimeOffset CreatedAt);
-
 internal sealed record RunRow(
     string Id,
     string OwnerId,
