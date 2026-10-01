@@ -3011,7 +3011,7 @@ public sealed partial class Orchestrator : IOrchestrator
             // writes is attributed to the repair.
             var store = _artifacts.BeginStep();
             var journal = new ExecutionJournal();
-            session?.Track(journal, store);
+            session?.Track(journal);
             var loop = new ToolLoopResult();
 
             await foreach (var repairEvent in RunToolLoopAsync(
