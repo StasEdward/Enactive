@@ -487,10 +487,14 @@ public sealed class UserService(Database db, Limits limits, TimeProvider clock)
         UserAccess user, int epoch, long throughOrdinal, CancellationToken ct)
         => db.InTransactionAsync(async (connection, transaction) =>
         {
-            // Not locked, as the projection does not lock it: a cursor the panel was handed never runs
-            // ahead of a committed notice, so comparing with the committed value is enough.
+            // Read as it stands now, and held until the marking commits. A plain read is the snapshot of
+            // the transaction's first read: a reset of the line committing between it and the update
+            // below went unseen, the old epoch matched, and ordinals that now count other notices were
+            // marked read. Shared, so two clicks do not wait on each other; a reset waits for this one,
+            // or this waits for the reset and refuses. A computer's call takes the counter before it
+            // writes a notice, so the counter and then the notices, as here, is the order it takes too.
             var line = await connection.ReadOneAsync(transaction,
-                "SELECT value, epoch FROM user_streams WHERE owner_id = @owner",
+                "SELECT value, epoch FROM user_streams WHERE owner_id = @owner FOR SHARE",
                 reader => ((long Value, int Epoch)?)(reader.GetInt64("value"), reader.GetInt32("epoch")),
                 ("@owner", user.UserId));
 

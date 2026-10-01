@@ -11,6 +11,8 @@ using Enactive.Remote.Gateway.Services;
 using Enactive.Remote.Gateway.Storage;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Features;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Xunit;
@@ -883,6 +885,29 @@ public sealed class HostServiceTests(TestDatabase database) : IClassFixture<Test
     }
 
     /// <summary>
+    /// The connection a hub method is called on, as far as a call needs it: which computer it is. Every
+    /// call is counted against that computer's limit, so a hub with no caller cannot answer one.
+    /// </summary>
+    private sealed class CallerOf(string hostId) : HubCallerContext
+    {
+        public override string ConnectionId { get; } = Guid.NewGuid().ToString();
+
+        public override string? UserIdentifier { get; } = hostId;
+
+        public override ClaimsPrincipal? User => null;
+
+        public override IDictionary<object, object?> Items { get; } = new Dictionary<object, object?>();
+
+        public override IFeatureCollection Features { get; } = new FeatureCollection();
+
+        public override CancellationToken ConnectionAborted => CancellationToken.None;
+
+        public override void Abort()
+        {
+        }
+    }
+
+    /// <summary>
     /// The Host says which protocol it speaks before anything else, and a different one is refused
     /// in words a person can act on. Without the check, a Host of protocol 1 would have every sealed
     /// field it never sealed refused one by one, as if each of its events were malformed.
@@ -890,7 +915,8 @@ public sealed class HostServiceTests(TestDatabase database) : IClassFixture<Test
     [Fact]
     public async Task Another_protocol_is_refused_at_hello()
     {
-        var hub = new HostHub(Service, new HostConnections());
+        using var limit = new HostCallLimit();
+        var hub = new HostHub(Service, new HostConnections(), limit) { Context = new CallerOf("host-1") };
 
         var older = await hub.Hello(RemoteProtocol.Version - 1);
         var same = await hub.Hello(RemoteProtocol.Version);

@@ -1164,6 +1164,34 @@ public sealed class UserServiceTests(TestDatabase database) : IClassFixture<Test
         Assert.Equal(0, await IsReadAsync(alice, shown));
     }
 
+    /// <summary>
+    /// The line is read as it stands when the marking is done, not as a snapshot taken earlier. A reset
+    /// of the line committing while the click is in flight would otherwise be missed: the click compared
+    /// its cursor with the old epoch, matched, and marked read by ordinals that now count other notices.
+    /// Here the reset holds the line; the click waits for it, sees the new epoch and marks nothing.
+    /// </summary>
+    [Fact]
+    public async Task Mark_read_waits_for_a_reset_of_the_line_in_flight_and_then_refuses()
+    {
+        var alice = await PersonAsync("alice");
+        var (_, _, run, _) = await StartedAsync(alice);
+        var shown = await NoticeAsync(alice, run);
+
+        await using var connection = await database.OpenAsync();
+        await using var resetting = await connection.BeginAsync(default);
+        await connection.ExecuteAsync(resetting,
+            "UPDATE user_streams SET epoch = epoch + 1 WHERE owner_id = @owner", ("@owner", alice.UserId));
+
+        var mark = Users.MarkNoticesReadAsync(alice, 1, shown, default);
+        await StillWaitingAsync(mark);
+
+        await resetting.CommitAsync();
+
+        var refused = await Assert.ThrowsAsync<GatewayFault>(() => mark.WaitAsync(Generously));
+        Assert.Equal(400, refused.Status);
+        Assert.Equal(0, await IsReadAsync(alice, shown));
+    }
+
     /// <summary>A notice as the gateway writes one: on its owner's line, unread.</summary>
     private async Task<long> NoticeAsync(UserAccess owner, string runId)
     {

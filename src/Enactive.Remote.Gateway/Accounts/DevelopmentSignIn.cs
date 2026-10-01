@@ -75,7 +75,9 @@ public static partial class DevelopmentSignIn
             })
             .RequireRateLimiting(rateLimitPolicy);
 
-    [GeneratedRegex("^[A-Za-z0-9._-]{1,64}$")]
+    // \z and not $: $ also matches before a final line break, so "alice\n" passed and became an account
+    // of its own beside "alice", under a name that prints the same.
+    [GeneratedRegex(@"^[A-Za-z0-9._-]{1,64}\z")]
     private static partial Regex Names();
 }
 

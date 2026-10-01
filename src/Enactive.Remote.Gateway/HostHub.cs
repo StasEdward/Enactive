@@ -34,7 +34,7 @@ public sealed class HostConnections
 /// person's account", is not a request that can be made rather than one that is refused.
 /// </summary>
 [Authorize(AuthenticationSchemes = HostAuthentication.SchemeName)]
-public sealed class HostHub(HostService hosts, HostConnections connections) : Hub
+public sealed class HostHub(HostService hosts, HostConnections connections, HostCallLimit limit) : Hub
 {
     public override Task OnConnectedAsync()
     {
@@ -103,11 +103,15 @@ public sealed class HostHub(HostService hosts, HostConnections connections) : Hu
     ///
     /// <para>An unexpected exception still escapes as one. It is not a refusal, nothing about it is
     /// classifiable, and dressing it up as a coded answer would tell the Host something false.</para>
+    ///
+    /// <para>Every call is counted against this computer's limit here, first, so a refused one costs no
+    /// database work and comes back coded like any other refusal.</para>
     /// </summary>
-    private static async Task<HostReply<T>> Guard<T>(Func<Task<T>> action)
+    private async Task<HostReply<T>> Guard<T>(Func<Task<T>> action)
     {
         try
         {
+            limit.Take(HostId);
             return HostReply<T>.Ok(await action());
         }
         catch (GatewayFault fault)

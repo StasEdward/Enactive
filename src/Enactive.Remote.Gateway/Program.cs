@@ -1,5 +1,4 @@
 using System.Net;
-using System.Threading.RateLimiting;
 using Enactive.Remote.Contracts;
 using Enactive.Remote.Gateway;
 using Enactive.Remote.Gateway.Accounts;
@@ -13,11 +12,6 @@ using Microsoft.AspNetCore.HttpOverrides;
 
 // Stage 2 of the remote-access design. The panel itself is stage 6; what is here is the surface it
 // will call and the hub a Host connects to.
-
-// Signing in is limited per caller: the development sign-in, and the start and end of a provider's. The
-// providers' callbacks have a limit of their own, which has to run before authentication: see
-// ExternalSignIn.CallbackLimiter.
-const string SignInRateLimit = "login";
 
 // Answered before ANYTHING else, including the configuration checks below: this asks the assembly
 // what it knows and must work on a build that has been downloaded and not yet configured. That is
@@ -197,9 +191,10 @@ builder.Services.AddAuthentication(UserCookie.SchemeName)
         o.Events.OnValidatePrincipal = UserCookie.ValidatePrincipalAsync;
 
         // An API, not a website: an unauthenticated call gets a status, never a redirect to a
-        // login page that a fetch() would follow and then fail to parse.
-        o.Events.OnRedirectToLogin = c => { c.Response.StatusCode = 401; return Task.CompletedTask; };
-        o.Events.OnRedirectToAccessDenied = c => { c.Response.StatusCode = 403; return Task.CompletedTask; };
+        // login page that a fetch() would follow and then fail to parse. And the status comes with a
+        // coded body like every other refusal: a bare one left the panel parsing an empty body.
+        o.Events.OnRedirectToLogin = c => GatewayFault.Unauthenticated().WriteAsync(c.HttpContext);
+        o.Events.OnRedirectToAccessDenied = c => GatewayFault.Forbidden().WriteAsync(c.HttpContext);
     })
     .AddScheme<AuthenticationSchemeOptions, HostAuthentication>(HostAuthentication.SchemeName, _ => { })
     .AddExternalSignIn(externalProviders, cookieSecurity);
@@ -215,19 +210,9 @@ builder.Services.AddAntiforgery(o =>
         : CookieSecurePolicy.Always;
 });
 
-builder.Services.AddRateLimiter(o =>
-{
-    o.RejectionStatusCode = 429;
-    o.GlobalLimiter = ExternalSignIn.CallbackLimiter();
-    o.AddPolicy(SignInRateLimit, context => RateLimitPartition.GetFixedWindowLimiter(
-        context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
-        _ => new FixedWindowRateLimiterOptions
-        {
-            PermitLimit = 10,
-            Window = TimeSpan.FromMinutes(1),
-            QueueLimit = 0
-        }));
-});
+// Per address for signing in, per account for the API, per computer for the hub, and a ceiling on
+// everything at once. None of them is authorization: see RequestLimits.
+builder.Services.AddRequestLimits();
 
 // Reached through a Cloudflare tunnel: cloudflared runs on this machine and connects outward, so
 // nothing here listens publicly and every request arrives from 127.0.0.1. See Deployment.
@@ -246,7 +231,7 @@ if (behindTunnel)
         // AND every private network - which is a different, larger promise than the one being made
         // here, and one nobody would notice had been made.
         o.ForwardLimit = 1;
-        o.KnownNetworks.Clear();
+        o.KnownIPNetworks.Clear();
         o.KnownProxies.Clear();
         o.KnownProxies.Add(IPAddress.Loopback);
         o.KnownProxies.Add(IPAddress.IPv6Loopback);
@@ -288,8 +273,7 @@ app.Use(async (context, next) =>
     {
         // The code travels with the message. Nothing on the person's API has a durable outbox today,
         // but the panel has to distinguish "try again" from "this is settled" for the same reason.
-        context.Response.StatusCode = fault.Status;
-        await context.Response.WriteAsJsonAsync(new { code = fault.Code, error = fault.Message });
+        await fault.WriteAsync(context);
     }
     catch (AntiforgeryValidationException)
     {
@@ -362,15 +346,22 @@ app.UseStaticFiles(new StaticFileOptions
 {
     OnPrepareResponse = served => served.Context.Response.Headers.CacheControl = "no-cache"
 });
-// Before authentication, which is where the providers' callbacks are answered: the callback limit has
-// to refuse a replay before the handler redeems its code. The sign-in endpoints' own policy still works
-// from here, since routing has already chosen the endpoint.
-app.UseRateLimiter();
+// Before authentication, for two reasons. The providers' callbacks are answered inside authentication,
+// and their limit has to refuse a replay before the handler redeems its code. And authentication reads
+// the database for every cookie, so the ceiling on requests in progress has to come before it or a
+// flood reaches the database anyway. The panel's page and files above are served from memory and disk
+// and are not counted.
+app.UseFrontDoorLimit();
 
 // Before authentication, where the providers' handlers build their callback address. See ExternalSignIn.
 app.UsePublicOrigin(externalProviders);
 app.UseAuthentication();
 app.UseAuthorization();
+
+// The endpoints' policies, AFTER authentication: the API is counted per account, and before
+// authentication there is no account - every person would share one bucket, and one busy panel would
+// limit everybody's. A request with no session is refused by authorization before it is counted.
+app.UseRateLimiter();
 
 app.MapGet("/health", () => new { status = "ok", protocolVersion = RemoteProtocol.Version });
 
@@ -393,15 +384,16 @@ app.MapGet("/api/session", async (
 
 if (developmentSignIn)
 {
-    app.MapDevelopmentSignIn(SignInRateLimit);
+    app.MapDevelopmentSignIn(RequestLimits.Auth);
 }
 
-app.MapExternalSignIn(externalProviders, SignInRateLimit);
+app.MapExternalSignIn(externalProviders, RequestLimits.Auth);
 
 // The person's API: their cookie, and nothing else. A computer's bearer token is a credential for the
 // hub only - one that could call this could register computers and start work on its own say-so.
 var api = app.MapGroup("/api")
-    .RequireAuthorization(new AuthorizeAttribute { AuthenticationSchemes = UserCookie.SchemeName });
+    .RequireAuthorization(new AuthorizeAttribute { AuthenticationSchemes = UserCookie.SchemeName })
+    .RequireRateLimiting(RequestLimits.Api);
 
 // Every state-changing call, sign-out included. A token that is only checked on the interesting
 // endpoints is a token somebody will forget to check on the next one.
@@ -422,6 +414,16 @@ api.AddEndpointFilter(async (invocation, next) =>
 api.MapPost("/logout", async (HttpContext context, SessionStore sessions, CancellationToken ct) =>
 {
     await sessions.RevokeAsync(context.UserAccess(), ct);
+    await context.SignOutAsync(UserCookie.SchemeName);
+    return Results.Ok();
+});
+
+// Every session of the account, this one included - for a lost phone or a borrowed laptop left signed
+// in. The security version moves on too, so a session a sign-in was opening at the same moment is ended
+// with the rest.
+api.MapPost("/logout-all", async (HttpContext context, SessionStore sessions, CancellationToken ct) =>
+{
+    await sessions.RevokeAllAsync(context.UserAccess().UserId, ct);
     await context.SignOutAsync(UserCookie.SchemeName);
     return Results.Ok();
 });

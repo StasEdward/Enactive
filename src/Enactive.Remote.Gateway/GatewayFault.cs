@@ -23,6 +23,17 @@ public sealed class GatewayFault(string code, int status, string message) : Exce
 
     public RemoteFault ToContract() => new(Code, RemoteFaults.DispositionOf(Code), Message);
 
+    /// <summary>
+    /// The refusal as the person's API answers it: the status, and the code with the message. Every
+    /// refusal there takes this one shape - a thrown fault, the cookie scheme's, a limit's - so the panel
+    /// reads one kind of body and never has to guess at an empty one.
+    /// </summary>
+    public Task WriteAsync(HttpContext context)
+    {
+        context.Response.StatusCode = Status;
+        return context.Response.WriteAsJsonAsync(new { code = Code, error = Message });
+    }
+
     // ── the ones a Host sees ────────────────────────────────────────────────
 
     public static GatewayFault RunEnded(string runId) => new(
@@ -97,6 +108,14 @@ public sealed class GatewayFault(string code, int status, string message) : Exce
         FaultCode.ProtocolMismatch, 400,
         "This computer and the service speak different versions - update Enactive.");
 
+    /// <summary>
+    /// A computer past its calls for the minute. The quota code, which a Host retries: the window moves
+    /// on, and the event it was sending is kept rather than lost.
+    /// </summary>
+    public static GatewayFault TooManyCalls() => new(
+        FaultCode.QuotaExceeded, 429,
+        "This computer is calling the service more often than it allows. It will try again shortly.");
+
     // ── the ones only the owner API produces ────────────────────────────────
     //
     // These have no FaultCode: nothing on a Host's retry path can reach them, and inventing codes a
@@ -105,6 +124,11 @@ public sealed class GatewayFault(string code, int status, string message) : Exce
     public static GatewayFault BadRequest(string message) => new("bad-request", 400, message);
 
     public static GatewayFault Unauthenticated() => new("unauthenticated", 401, "Sign in to continue.");
+
+    public static GatewayFault Forbidden() => new("forbidden", 403, "This account may not do that.");
+
+    public static GatewayFault RateLimited() => new(
+        "rate-limited", 429, "Too many requests. Wait a moment and try again.");
 
     public static GatewayFault Conflict(string message) => new("conflict", 409, message);
 

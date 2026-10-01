@@ -279,8 +279,10 @@ public static class ExternalSignIn
     }
 
     /// <summary>
-    /// The limit on the providers' callbacks, per caller address, for the rate limiter's global slot;
-    /// every other request passes it untouched.
+    /// The limit on the providers' callbacks, per caller address, for the gateway's front door (see
+    /// <see cref="RequestLimits.UseFrontDoorLimit"/>); every other request passes it untouched. Like every
+    /// limit, it decides how often and not whether: the handler still checks the state, the code and the
+    /// token of every callback it lets through.
     ///
     /// <para>The callbacks are answered inside authentication, before any endpoint, so the limit on the
     /// sign-in endpoints never applies to them. Each one whose state passes makes the gateway post this
@@ -295,7 +297,7 @@ public static class ExternalSignIn
     public static PartitionedRateLimiter<HttpContext> CallbackLimiter()
         => PartitionedRateLimiter.Create<HttpContext, string>(context => IsCallback(context.Request.Path)
             ? RateLimitPartition.GetFixedWindowLimiter(
-                context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+                RequestLimits.ClientAddress(context),
                 _ => new FixedWindowRateLimiterOptions
                 {
                     PermitLimit = CallbacksPerMinute,

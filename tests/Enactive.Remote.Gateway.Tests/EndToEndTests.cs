@@ -11,6 +11,8 @@ using Enactive.Remote.Gateway.Services;
 using Enactive.Remote.Host;
 using Microsoft.AspNetCore.Http.Connections;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.SignalR.Client;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 /// <summary>
@@ -194,6 +196,45 @@ public sealed class EndToEndTests(TestDatabase database) : IClassFixture<TestDat
     }
 
     /// <summary>
+    /// A computer's calls are limited per computer. Past the limit a call is answered with a code the
+    /// Host keeps the item for and sends again, not with an exception it could not classify; the
+    /// person's other computer is not slowed by the busy one; and the busy one is slowed, not shut out -
+    /// a moment later its retry goes through, where a minute's window would refuse it to the minute's
+    /// end and the Host would park its events.
+    /// </summary>
+    [Fact]
+    public async Task A_computer_calling_too_often_is_told_to_retry_and_another_is_not()
+    {
+        var busy = await _owner.PostAsync<DeviceView>("/api/hosts", new { name = "Busy" });
+        var quiet = await _owner.PostAsync<DeviceView>("/api/hosts", new { name = "Quiet" });
+
+        await using var busyHub = RawConnect(busy.Token);
+        await using var quietHub = RawConnect(quiet.Token);
+        await busyHub.StartAsync();
+        await quietHub.StartAsync();
+
+        // The bucket refills while the calls are made, so it takes a few more than its size to empty.
+        var answered = 0;
+        RemoteFault? refused = null;
+        while (refused is null && answered < 2 * RequestLimits.HubCallsPerMinute)
+        {
+            refused = (await HelloAsync(busyHub)).Fault;
+            answered += refused is null ? 1 : 0;
+        }
+
+        var other = await HelloAsync(quietHub);
+        await Task.Delay(TimeSpan.FromSeconds(1.5));
+        var retried = await HelloAsync(busyHub);
+
+        Assert.True(answered >= RequestLimits.HubCallsPerMinute, $"Refused after {answered} calls.");
+        Assert.Equal(FaultCode.QuotaExceeded, refused?.Code);
+        Assert.Equal(FaultDisposition.Retry, RemoteFaults.DispositionOf(refused?.Code));
+        Assert.Null(other.Fault);
+        Assert.True(other.Value);
+        Assert.Null(retried.Fault);
+    }
+
+    /// <summary>
     /// The credential goes in a header. A connection carrying none is refused before any hub method
     /// runs, which is what makes "the identity decides the HostId" true rather than aspirational.
     /// </summary>
@@ -214,6 +255,33 @@ public sealed class EndToEndTests(TestDatabase database) : IClassFixture<TestDat
             options.HttpMessageHandlerFactory = _ => _gateway.Server.CreateHandler();
             options.Transports = HttpTransportType.LongPolling;
         });
+
+    /// <summary>
+    /// A bare hub connection, for calls the Host's client has no method for, such as <c>Hello</c>, and
+    /// whose whole reply a test wants to see. Serialised as both ends serialise.
+    /// </summary>
+    private HubConnection RawConnect(string token)
+        => new HubConnectionBuilder()
+            .WithUrl(new Uri(_gateway.Server.BaseAddress, "hubs/host"), options =>
+            {
+                options.Headers["Authorization"] = $"Bearer {token}";
+                options.HttpMessageHandlerFactory = _ => _gateway.Server.CreateHandler();
+                options.Transports = HttpTransportType.LongPolling;
+            })
+            .AddJsonProtocol(options =>
+            {
+                foreach (var converter in RemoteJson.Options.Converters)
+                {
+                    options.PayloadSerializerOptions.Converters.Add(converter);
+                }
+
+                options.PayloadSerializerOptions.PropertyNamingPolicy = RemoteJson.Options.PropertyNamingPolicy;
+                options.PayloadSerializerOptions.UnmappedMemberHandling = RemoteJson.Options.UnmappedMemberHandling;
+            })
+            .Build();
+
+    private static Task<HostReply<bool>> HelloAsync(HubConnection hub)
+        => hub.InvokeAsync<HostReply<bool>>("Hello", RemoteProtocol.Version);
 
     private static HostStore OpenStore()
         => new(Path.Combine(Path.GetTempPath(), "enactive-e2e-" + Guid.NewGuid().ToString("N"), "remote.db"));
