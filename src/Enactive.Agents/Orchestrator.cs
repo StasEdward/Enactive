@@ -210,7 +210,6 @@ public sealed partial class Orchestrator : IOrchestrator
     private readonly bool _validateWaves;
     private readonly bool _reportBlocked;
     private readonly bool _semanticCriteria;
-    private readonly bool _checkDerivedFigures;
 
     /// <summary>One per conversation, kept with the conversation itself: steps that share one, and a hand-over that
     /// refills it, are compared with the request before them (PrefixCacheWatch).</summary>
@@ -299,12 +298,8 @@ public sealed partial class Orchestrator : IOrchestrator
         bool reportBlocked = false,
         // Phase 1.4: the planner may set a step semantic criteria, and a step that has them is judged against those only.
         // Off by default: it changes what a step's review is.
-        bool semanticCriteria = false,
-        // The short step review works out a total, a difference, a percentage the work derived, and fails a wrong one
-        // (StepVerdictReview.DerivedFigures). Off here, on in the application's settings.
-        bool checkDerivedFigures = false)
+        bool semanticCriteria = false)
     {
-        _checkDerivedFigures = checkDerivedFigures;
         _semanticCriteria = semanticCriteria;
         _validateWaves = validateWaves;
         _reportBlocked = reportBlocked;

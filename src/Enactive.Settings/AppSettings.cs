@@ -442,11 +442,6 @@ public sealed partial class AppSettings
     // against those alone, each verdict citing evidence of the kinds the criterion allows. Off until runs show it.
     public bool SemanticCriteria { get; set; }
 
-
-    // The step review works out a total, a difference, a percentage the work derived from other figures, and fails a
-    // wrong one - a worker adds in its head, and a reviewer shown every row passed a wrong sum (run 1ec9e8).
-    public bool CheckDerivedFigures { get; set; } = true;
-
     // Put a rejected step's files back to how they were before it ran. Without this the gate stops
     // only the REPORT: the run says Failed while the rejected document stays in the workspace, which
     // is the version someone is most likely to open next. A file changed since the step wrote it is
@@ -918,7 +913,6 @@ public sealed partial class AppSettings
         ValidateWaves = ValidateWaves,
         ReportBlocked = ReportBlocked,
         SemanticCriteria = SemanticCriteria,
-        CheckDerivedFigures = CheckDerivedFigures,
         Bindings = Bindings.Clone(),
         RemoteAccess = RemoteAccess.Clone(),
         Smtp = Smtp.Clone(),

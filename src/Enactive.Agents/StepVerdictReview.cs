@@ -87,6 +87,9 @@ internal static class StepVerdictReview
     /// three times: told to work a derived figure out, the reviewer failed both steps that carried the wrong total, with the
     /// sum, and passed everything else; told that such a figure counts only where a call computed it, it passed the
     /// wrong total as "simple sums, consistent with what was measured".
+    ///
+    /// <para>Always told, since 2026-10-01. It was a setting - on in the application's, off in an engine built without
+    /// them - so the same step was reviewed by two rules depending on who built the engine; no run had turned it off.</para>
     /// </summary>
     private const string DerivedFigures = """
 
@@ -96,12 +99,9 @@ internal static class StepVerdictReview
         """;
 
     public static async Task<ReviewResult> RunAsync(StepVerdictInput input, IChatProvider provider, string model,
-        Func<int, int, string?>? beforeRetry, CancellationToken ct, bool checkDerivedFigures = false)
+        Func<int, int, string?>? beforeRetry, CancellationToken ct)
     {
-        var messages = new List<ChatMessage>
-        {
-            ChatMessage.System(checkDerivedFigures ? Instruction + DerivedFigures : Instruction), ChatMessage.User(Prompt(input))
-        };
+        var messages = new List<ChatMessage> { ChatMessage.System(Instruction + DerivedFigures), ChatMessage.User(Prompt(input)) };
         int prompt = 0, output = 0;
         int? cached = null, created = null;
         for (var attempt = 0; attempt < 2; attempt++)

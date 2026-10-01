@@ -93,6 +93,7 @@ public sealed class SettingsLoadTests : IDisposable
       "CheckSoundness": true,
       "TaskReview": true,
       "ShortReview": true,
+      "CheckDerivedFigures": true,
       "ReviewRetries": 1,
       "ShellCommands": "Off",
       "CloseToTray": true
@@ -148,7 +149,8 @@ public sealed class SettingsLoadTests : IDisposable
         Assert.True(settings.DisableThinking);
         Assert.False(settings.AllowImplicitToolCalls);
         // ReviewContent, CheckSoundness, TaskReview and ShortReview switched the earlier step review, gone since
-        // 2026-09-30: a file that still has them loads, with no problem said (the test above), and they do nothing.
+        // 2026-09-30, and CheckDerivedFigures a rule of the short one, always on since 2026-10-01: a file that still has
+        // them loads, with no problem said (the test above), and they do nothing.
         Assert.Equal(1, settings.ReviewRetries);
     }
 

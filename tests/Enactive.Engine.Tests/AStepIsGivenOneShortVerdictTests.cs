@@ -22,13 +22,10 @@ public sealed class AStepIsGivenOneShortVerdictTests
 
     private static Turn Fail(string reason) => Turn.Says($$"""{"verdict":"fail","reason":"{{reason}}","calls":[],"files":[]}""");
 
-    private static Task<(List<WorkEvent> Events, FakeChatProvider Worker, FakeChatProvider Reviewer)> Run(Turn[] reviews,
-        params Turn[] more) => Run(false, reviews, more);
-
     private static async Task<(List<WorkEvent> Events, FakeChatProvider Worker, FakeChatProvider Reviewer)> Run(
-        bool derivedFigures, Turn[] reviews, params Turn[] more)
+        Turn[] reviews, params Turn[] more)
     {
-        using var fx = new EngineFixture { CheckDerivedFigures = derivedFigures };
+        using var fx = new EngineFixture();
         fx.Write("disks.txt", "C: 120 GB free of 500 GB");
         var worker = new FakeChatProvider(
             [Turn.Says(Plan),
@@ -141,18 +138,17 @@ public sealed class AStepIsGivenOneShortVerdictTests
 
     /// <summary>
     /// Run 1ec9e8: a total the worker added in its head was 70 GB short, and the step reviews passed it with every row in
-    /// front of them. Switched on, the review is told to work such a figure out itself; off, it is not.
+    /// front of them. The review is told to work such a figure out itself - always: it was a setting, on in the
+    /// application's settings and off in an engine built without them, so the two were reviewed differently.
     /// </summary>
-    [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public async Task A_derived_figure_is_worked_out_by_the_review_when_switched_on(bool on)
+    [Fact]
+    public async Task A_derived_figure_is_worked_out_by_the_review()
     {
-        var (_, _, reviewer) = await Run(on, [Pass(), Pass("the report matches the listing", 3)]);
+        var (_, _, reviewer) = await Run([Pass(), Pass("the report matches the listing", 3)]);
 
         var instruction = reviewer.Requests[0].Messages[0].Content!;
-        Assert.Equal(on, instruction.Contains("a total, a difference, a percentage, an average - is a claim too", StringComparison.Ordinal));
-        Assert.Equal(on, instruction.Contains("work it out from the values the calls show, and fail it if it is wrong", StringComparison.Ordinal));
+        Assert.Contains("a total, a difference, a percentage, an average - is a claim too", instruction, StringComparison.Ordinal);
+        Assert.Contains("work it out from the values the calls show, and fail it if it is wrong", instruction, StringComparison.Ordinal);
     }
 
     /// <summary>
