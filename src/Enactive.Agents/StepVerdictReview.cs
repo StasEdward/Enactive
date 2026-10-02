@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Enactive.Core.Chat;
+using Enactive.Core.Context;
 using Enactive.Core.Execution;
 using Enactive.Core.Providers;
 using Enactive.Core.Tools;
@@ -53,10 +54,12 @@ internal static class StepVerdictReview
         Return ONLY one JSON object: {"verdict":"pass"|"fail","reason":"...","calls":[n],"files":["path"]}
         pass: the step's purpose is done, and what the report says about it is true; cite the calls [n] and files that
         show it. fail: say concretely what is not done, not true, or not shown - so the worker can put it right.
-        A fail where what the step made - its files, its changes - is right as it is, and only the report or the way the
-        work was done is not, adds "work_stands":true: the files are then kept if the step is rejected.
-        A step that reports nothing needed doing - the file already right, nothing broken - has done its part only where a
-        call it made shows it looked and found so; with no such call, it fails.
+        A fail where a file the step made or changed is right as it is - asked for, and nothing wrong in it - names it in
+        "keep":["path"]: if the step is rejected, the files named are kept and the rest of what it changed is put back. A file
+        with something wrong in it, or a change the request did not ask for, is not kept.
+        A step that reports something done or so - by itself, or by a step before it - has it only where a call shows it,
+        made after the work it rests on; what would follow from the work is not shown, and neither are the values a step
+        handed on. With no such call, it fails.
         Judge this step only: what the other steps are for is theirs. Do not fail a step on style, on wording, or on a
         detail its purpose does not depend on.
         A change the step made that the request did not ask for is not a detail. Where the request says to leave something
@@ -70,10 +73,13 @@ internal static class StepVerdictReview
     // of the four, 9 of 12 right with it against 7 of 12 without. The earlier review's word on expectedExitCodes was
     // measured too, and left out: no recorded review needed it, and with it the four came to 8 of 12 either way.
 
-    // "Nothing needed doing": the earlier review's "nothing-to-do" answer, believed only with the calls that looked
-    // (Proof.cs) - a finding rests on having looked. A step with no calls needs no citation for a pass here, so the rule
-    // is the review's to apply; that it changed nothing, the review sees in the files it is shown (code review of the
-    // move to one short review, 2026-09-30).
+    // "Done or so ... only where a call shows it, made after the work": the earlier review's "nothing-to-do" answer was
+    // believed only with the calls that looked (Proof.cs), and this review was first told so in those words - "a call it
+    // made shows it looked". Measured 2026-10-01 on setup-step's second step, after the first had generated the missing
+    // file: told that, Sonnet passed the step where nobody ran the tests after the fix (5 of 6 - "the fix was applied, so
+    // they pass", one answer citing the values step 1 handed on), and DeepSeek failed it where step 1 had run them (7 of
+    // 12). Worded as it is now: DeepSeek 72 of 72 over those and fifteen recorded right passes, Sonnet 2 of 3 on the step
+    // nobody checked against 1 of 3, and every right pass kept.
 
     // The last paragraph of the instruction: benchmark scenario build-error, 2026-09-30. "Add Median; leave the rest of the
     // code alone" - the worker also fixed another file's error, and the review passed it as "out of scope but harmless",
@@ -87,6 +93,9 @@ internal static class StepVerdictReview
     /// three times: told to work a derived figure out, the reviewer failed both steps that carried the wrong total, with the
     /// sum, and passed everything else; told that such a figure counts only where a call computed it, it passed the
     /// wrong total as "simple sums, consistent with what was measured".
+    ///
+    /// <para>Always told, since 2026-10-01. It was a setting - on in the application's, off in an engine built without
+    /// them - so the same step was reviewed by two rules depending on who built the engine; no run had turned it off.</para>
     /// </summary>
     private const string DerivedFigures = """
 
@@ -96,12 +105,9 @@ internal static class StepVerdictReview
         """;
 
     public static async Task<ReviewResult> RunAsync(StepVerdictInput input, IChatProvider provider, string model,
-        Func<int, int, string?>? beforeRetry, CancellationToken ct, bool checkDerivedFigures = false)
+        Func<int, int, string?>? beforeRetry, CancellationToken ct)
     {
-        var messages = new List<ChatMessage>
-        {
-            ChatMessage.System(checkDerivedFigures ? Instruction + DerivedFigures : Instruction), ChatMessage.User(Prompt(input))
-        };
+        var messages = new List<ChatMessage> { ChatMessage.System(Instruction + DerivedFigures), ChatMessage.User(Prompt(input)) };
         int prompt = 0, output = 0;
         int? cached = null, created = null;
         for (var attempt = 0; attempt < 2; attempt++)
@@ -223,14 +229,16 @@ internal static class StepVerdictReview
                 : "a pass cites the calls or files that show the step done");
         if (errors.Count > 0) return (null, errors);
 
-        // What the step made is right and the fail is elsewhere: a step rejected on it keeps its files, as the earlier
-        // review's "implementation: pass" with no repair to a saved file did (ReviewResult.WorkStands; code review of the
-        // move to one short review, 2026-09-30). Only a fail says it, and only in so many words.
-        var workStands = root.ValueKind == JsonValueKind.Object && root.TryGetProperty("work_stands", out var stands)
-                         && stands.ValueKind == JsonValueKind.True;
+        // The files that are right, on a fail that is elsewhere: a step rejected on it keeps them, as the earlier review's
+        // "implementation: pass" with no repair to a saved file did (ReviewResult.Keep; code review of the move to one
+        // short review, 2026-09-30). Only a fail names them; a pass keeps everything anyway.
+        var keep = verdict == "fail"
+            ? Arr("keep").Where(x => x.ValueKind == JsonValueKind.String).Select(x => ShellLookup.Normal(x.GetString()!))
+                .Where(p => p.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
+            : [];
         return verdict == "pass"
             ? (new ReviewResult(true, reason), [])
-            : (new ReviewResult(false, reason) { RepairAdvice = reason, WorkStands = workStands }, []);
+            : (new ReviewResult(false, reason) { RepairAdvice = reason, Keep = keep }, []);
     }
 
     /// <summary>

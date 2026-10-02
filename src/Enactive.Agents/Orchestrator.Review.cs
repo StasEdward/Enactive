@@ -134,7 +134,7 @@ public sealed partial class Orchestrator
                             obligations?.Owned().Select(o => $"{o.Unit.Id}: {o.Unit.Text.Trim()}"
                                 + (o.AlsoTo.Count > 0 ? $" (also given to step {string.Join(", ", o.AlsoTo.Select(scope => scope.TrimStart('S')))})" : "")).ToArray(),
                             restrictions),
-                        models.ReviewProvider!, models.ReviewModel, scope.Budget.TurnExhaustedAfter, ct, _checkDerivedFigures),
+                        models.ReviewProvider!, models.ReviewModel, scope.Budget.TurnExhaustedAfter, ct),
                     ReviewMode.Step);
         await Usage(review.PromptTokens, review.CompletionTokens, review.CachedPromptTokens, review.CacheCreationPromptTokens);
         if (review.BudgetExhausted is { } reviewSpent)

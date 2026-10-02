@@ -104,7 +104,7 @@ public sealed partial class Orchestrator
                 continue;
             }
             result.Set(StepOutcomeKind.ReviewRejected, "review not passed: " + assessed.Review.Notes);
-            result.WorkStands = assessed.Review.WorkStands;
+            result.Keep = assessed.Review.Keep;
         }
     }
 
@@ -112,19 +112,16 @@ public sealed partial class Orchestrator
         RunScope scope, Func<string, ValueTask> publish, CancellationToken ct)
     {
         if (result.Kind != StepOutcomeKind.ReviewRejected || !_revertRejectedSteps) return;
-        if (result.WorkStands)
-        {
-            // Rejected, and still not put back: the review found the work itself right. The step
-            // stays rejected - nothing is built on it - but what it made is left for the person to
-            // see, rather than thrown away with the report it came with. See ReviewResult.WorkStands.
-            var kept = store.TouchedPaths;
-            if (kept.Count > 0)
-                await publish("Rejected, but NOT put back: " + string.Join(", ", kept)
-                    + " - the review found the work itself right and rejected the step "
-                    + "for something else; it is left as it is, and nothing is built on it.");
-            return;
-        }
-        var report = await RevertAsync(store, scope.Artifacts, ct);
+        // Rejected, and still not put back: the files the review found right. The step stays rejected - nothing is built
+        // on it - but what it made right is left for the person to see, rather than thrown away with the report or the
+        // other file it came with; the rest of what it changed goes back. See ReviewResult.Keep.
+        var keep = result.Keep.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var kept = store.TouchedPaths.Where(p => keep.Contains(ShellLookup.Normal(p))).ToArray();
+        if (kept.Length > 0)
+            await publish("Rejected, but NOT put back: " + string.Join(", ", kept)
+                + " - the review found it right and rejected the step for something else; it is left as it is, "
+                + "and nothing is built on it.");
+        var report = await RevertAsync(store, scope.Artifacts, ct, except: kept);
         foreach (var line in DescribeRevert(report)) await publish(line);
     }
 

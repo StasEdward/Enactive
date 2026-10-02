@@ -18,24 +18,26 @@ public sealed class RejectedButRightWorkIsKeptTests
 {
     private const string QuickAction = """{"disposition":"quick_action","title":"write"}""";
 
-    private static async Task<(IReadOnlyList<WorkEvent> Events, EngineFixture Fx)> Run(string verdict)
+    private static async Task<(IReadOnlyList<WorkEvent> Events, EngineFixture Fx)> Run(string verdict, bool twoFiles = false)
     {
         var fx = new EngineFixture();
+        if (twoFiles) fx.Write("other.txt", "as it was");
         var worker = new FakeChatProvider(
-            Turn.Says(QuickAction),
-            Turn.Calls1("write_file", """{"path":"record.txt","content":"one"}"""),
-            Turn.Says("Two records")) { WhenExhausted = Turn.Says("Two records") };
+            [Turn.Says(QuickAction),
+             Turn.Calls1("write_file", """{"path":"record.txt","content":"one"}"""),
+             .. twoFiles ? [Turn.Calls1("write_file", """{"path":"other.txt","content":"tidied"}""", "w2")] : Array.Empty<Turn>(),
+             Turn.Says("Two records")]) { WhenExhausted = Turn.Says("Two records") };
         var reviewer = new FakeChatProvider { WhenExhausted = Turn.Says(verdict) };
         var events = await fx.RunAsync(fx.Build(worker, router: Routers.WithReviewer(),
             reviewProvider: reviewer), "Write one record");
         return (events, fx);
     }
 
-    /// <summary>The short review says it in so many words: a fail whose work stands keeps the file, as the earlier one did.</summary>
+    /// <summary>The short review names the file that is right: a fail of the report keeps it, as the earlier review did.</summary>
     [Fact]
-    public async Task A_short_review_that_fails_the_report_and_says_the_work_stands_keeps_the_file()
+    public async Task A_short_review_that_fails_the_report_and_keeps_the_file_keeps_it()
     {
-        var (events, fx) = await Run("""{"verdict":"fail","reason":"the report says two records; there is one","calls":[1],"files":["record.txt"],"work_stands":true}""");
+        var (events, fx) = await Run("""{"verdict":"fail","reason":"the report says two records; there is one","calls":[1],"files":["record.txt"],"keep":["record.txt"]}""");
         using var _ = fx;
 
         Assert.Equal(RunOutcomeKind.Failed, events.Last().Outcome());
@@ -43,13 +45,32 @@ public sealed class RejectedButRightWorkIsKeptTests
         Assert.Contains(events, e => e.Summary.Contains("NOT put back: record.txt", StringComparison.Ordinal));
     }
 
-    /// <summary>A short fail that does not say so is a fail of the work too, and it is put back, as it always was.</summary>
+    /// <summary>
+    /// Benchmark build-error: asked to add Median to one file and leave the rest alone, the worker also tidied another
+    /// file. Told only "the work stands" or not, the review said it stood in 12 of 12 answers - Median was right - and the
+    /// change the request forbade would have been kept. Naming the files, it kept Stats.cs and not Report.cs, 12 of 12:
+    /// the file named is kept, the rest of what the step changed goes back.
+    /// </summary>
+    [Fact]
+    public async Task Only_the_files_the_review_keeps_are_kept()
+    {
+        var (events, fx) = await Run("""{"verdict":"fail","reason":"other.txt was not to be changed","calls":[1],"files":["record.txt","other.txt"],"keep":["./record.txt"]}""", twoFiles: true);
+        using var _ = fx;
+
+        Assert.Equal("one", fx.Read("record.txt"));
+        Assert.Equal("as it was", fx.Read("other.txt"));
+        Assert.Contains(events, e => e.Summary.Contains("NOT put back: record.txt", StringComparison.Ordinal));
+        Assert.Contains(events, e => e.Summary.StartsWith("Rejected work put back: other.txt", StringComparison.Ordinal));
+    }
+
+    /// <summary>A short fail that keeps nothing is a fail of the work too, and it is put back, as it always was.</summary>
     [Theory]
     [InlineData("")]
-    [InlineData(",\"work_stands\":false")]
-    public async Task A_short_review_that_does_not_say_the_work_stands_has_it_put_back(string stands)
+    [InlineData(",\"keep\":[]")]
+    [InlineData(",\"work_stands\":true")]
+    public async Task A_short_review_that_keeps_nothing_has_it_put_back(string keep)
     {
-        var (events, fx) = await Run("""{"verdict":"fail","reason":"the record is wrong","calls":[1],"files":[]""" + stands + "}");
+        var (events, fx) = await Run("""{"verdict":"fail","reason":"the record is wrong","calls":[1],"files":[]""" + keep + "}");
         using var _ = fx;
 
         Assert.False(File.Exists(Path.Combine(fx.Root, "record.txt")));
@@ -61,9 +82,24 @@ public sealed class RejectedButRightWorkIsKeptTests
     {
         var input = new StepVerdictInput("write", "Write", 1, [], "Done.", null, [new ShownFile("record.txt", "one", true)],
             new Enactive.Core.Execution.ExecutionJournal().Describe());
-        Assert.False(StepVerdictReview.Read("""{"verdict":"pass","reason":"ok","calls":[],"files":["record.txt"],"work_stands":true}""", input).Result!.WorkStands);
-        Assert.True(StepVerdictReview.Read("""{"verdict":"fail","reason":"report","calls":[],"files":[],"work_stands":true}""", input).Result!.WorkStands);
-        Assert.False(StepVerdictReview.Read("""{"verdict":"fail","reason":"report","calls":[],"files":[],"work_stands":"yes"}""", input).Result!.WorkStands);
+        Assert.Empty(StepVerdictReview.Read("""{"verdict":"pass","reason":"ok","calls":[],"files":["record.txt"],"keep":["record.txt"]}""", input).Result!.Keep);
+        Assert.Equal(["record.txt"], StepVerdictReview.Read("""{"verdict":"fail","reason":"report","calls":[],"files":[],"keep":["record.txt"]}""", input).Result!.Keep);
+        Assert.Empty(StepVerdictReview.Read("""{"verdict":"fail","reason":"report","calls":[],"files":[],"keep":"record.txt"}""", input).Result!.Keep);
+    }
+
+    /// <summary>The review is told to name what it keeps, and that a change the request did not ask for is not kept.</summary>
+    [Fact]
+    public async Task The_review_is_told_to_name_the_files_it_keeps()
+    {
+        var reviewer = new FakeChatProvider { WhenExhausted = Turn.Says("""{"verdict":"pass","reason":"ok","calls":[1],"files":[]}""") };
+        using var fx = new EngineFixture();
+        var worker = new FakeChatProvider(Turn.Says(QuickAction), Turn.Calls1("write_file", """{"path":"record.txt","content":"one"}"""), Turn.Says("One record"));
+        await fx.RunAsync(fx.Build(worker, router: Routers.WithReviewer(), reviewProvider: reviewer), "Write one record");
+
+        var instruction = reviewer.Requests[0].Messages[0].Content!;
+        Assert.Contains("names it in\n\"keep\":[\"path\"]", instruction.Replace("\r\n", "\n"), StringComparison.Ordinal);
+        Assert.Contains("a change the request did not ask for, is not kept", instruction.Replace("\r\n", " ").Replace("\n", " "), StringComparison.Ordinal);
+        Assert.DoesNotContain("work_stands", instruction, StringComparison.Ordinal);
     }
 
 }
