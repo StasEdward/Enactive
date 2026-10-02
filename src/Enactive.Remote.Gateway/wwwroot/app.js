@@ -21,7 +21,8 @@ import { emptyState, resetState, forgetScreen, pollOnce } from "./js/session-gua
 import { providerLinks, outcomeOf, createDevelopmentProbe } from "./js/signin.js";
 import { singleFlight } from "./js/single-flight.js";
 import { openKeystore } from "./js/keystore.js";
-import { ensureDevice, collectGrants, troubleFor, worthSaying, connectPendingId } from "./js/trust.js";
+import { ensureDevice, collectGrants, troubleFor, worthSaying, connectPendingId, keyStanding } from "./js/trust.js";
+import { createReader, answerable, NOT_GIVEN } from "./js/reader.js";
 import { formatConnectionCode, newPairingSecret } from "./js/pairing.js";
 
 const POLL_MS = 3000;
@@ -104,9 +105,10 @@ async function pollNow() {
   }
 
   const started = generation();
+  let drawn = false;
 
   try {
-    const drawn = await pollOnce({
+    drawn = await pollOnce({
       read: () => get(state.cursor === null ? "/api/state" : `/api/state?since=${state.cursor}`),
       accountId: account.id,
       apply,
@@ -136,7 +138,12 @@ async function pollNow() {
     setLive(false);
   }
 
-  render();
+  await render();
+
+  if (drawn) {
+    // Not awaited: a rotation grant is a round trip of its own, and the next poll does not wait on it.
+    catchUpKeys();
+  }
 }
 
 /**
@@ -212,9 +219,84 @@ function when(iso) {
   return time;
 }
 
+// ── opening ──────────────────────────────────────────────────────────────
+
+/** Opens what the computers sealed with this device's keys (reader.js); a reader over no keys until a store opens. */
+let reader = createReader(null);
+
+/**
+ * What this device opened of the snapshot on screen, looked up by `"<kind>:<id>"`: a task, a run's summary,
+ * an event, a notice, an approval's action, a workspace name, or a computer's key standing. Kept for the
+ * drawing that follows and for a timeline opened by a click between two polls.
+ */
+let content = () => undefined;
+
+/**
+ * Opens everything on screen, all at once. The reader keeps what it opened, so a poll that brings nothing
+ * new costs a lookup per record and not a decryption.
+ */
+async function openContent() {
+  const read = reader;
+  const store = keystore;
+  const opened = new Map();
+
+  const put = (name, promise) => Promise.resolve(promise).then((value) => { opened.set(name, value); }, () => {
+    // The key store could not be read - closed by a sign-out in the meantime, or the browser's storage
+    // failing. Either way this device cannot reach a key for it, and the record says so rather than
+    // taking the whole screen down with it.
+    opened.set(name, { unreadable: NOT_GIVEN });
+  });
+
+  await Promise.all([
+    ...state.tasks.map((task) => put(`task:${task.id}`, read.openTask(task))),
+    ...state.runs.map((run) => put(`summary:${run.id}`, read.openSummary(run))),
+    ...state.events.map((event) => put(`event:${event.id}`, read.openEvent(event))),
+    ...state.notices.map((notice) => put(`notice:${notice.id}`, read.openNotice(notice))),
+    ...state.approvals.map((approval) => put(`approval:${approval.id}`, read.openAction(approval))),
+    ...state.hosts.flatMap((host) => host.workspaces.map((workspace) =>
+      put(`workspace:${host.id}:${workspace.id}`, read.openWorkspaceName(host.id, workspace)))),
+    ...state.hosts.map((host) => put(`host:${host.id}`, host.revoked ? null : keyStanding(store, host)))
+  ]);
+
+  return (name) => opened.get(name);
+}
+
+/** The muted line drawn where content would be, saying why it is not: never an empty space. */
+function unreadable(result, tag = "p") {
+  const reason = result?.unreadable ?? NOT_GIVEN;
+  return node(tag, "muted", reason[0].toUpperCase() + reason.slice(1) + ".");
+}
+
+/** A task's title as this device opened it, or a stand-in for one it cannot read. */
+function taskTitle(task) {
+  const title = task ? content(`task:${task.id}`)?.json?.title : null;
+  return typeof title === "string" && title.length > 0 ? title : "Task";
+}
+
+/** A workspace's name as its computer sealed it, or its id when this device cannot read the name. */
+function workspaceName(hostId, workspace) {
+  const name = content(`workspace:${hostId}:${workspace.id}`)?.text;
+  return typeof name === "string" && name.length > 0 ? name : `unnamed workspace (${workspace.id})`;
+}
+
 // ── rendering ────────────────────────────────────────────────────────────
 
-function render() {
+// Which render is the newest. Opening is asynchronous, so two renders can overlap, and the older one
+// finishing last would draw the snapshot before the one on screen over it.
+let drawing = 0;
+
+async function render() {
+  const turn = ++drawing;
+  const started = generation();
+  const opened = await openContent();
+
+  // A newer render is under way, or the session this one opened for has ended: drawing would put back
+  // what the newer one, or the reset, has replaced.
+  if (turn !== drawing || !isCurrent(started)) {
+    return;
+  }
+
+  content = opened;
   renderRuns();
   renderApprovals();
   renderInbox();
@@ -247,15 +329,26 @@ function renderRuns() {
     const task = tasks.get(run.taskId);
     const card = node("div", "card");
     const head = node("div", "card-head");
-    head.append(node("h3", null, task?.title ?? "Task"));
+    head.append(node("h3", null, taskTitle(task)));
     head.append(node("span", statusClass(run.status), statusText(run.status)));
     card.append(head);
+
+    const opened = task ? content(`task:${task.id}`) : null;
+
+    if (opened?.unreadable) {
+      card.append(unreadable(opened));
+    }
 
     card.append(node("p", "meta", run.endedAt ? `Ended ${new Date(run.endedAt).toLocaleString()}`
       : `Started ${new Date(run.createdAt).toLocaleString()}`));
 
-    if (run.summary) {
-      card.append(node("p", null, run.summary));
+    // Null while the run is going, and for a run the computer never saw: there is no summary to show.
+    const summary = content(`summary:${run.id}`);
+
+    if (summary?.unreadable) {
+      card.append(unreadable(summary));
+    } else if (summary?.text) {
+      card.append(node("p", null, summary.text));
     }
 
     const actions = node("div", "actions");
@@ -313,23 +406,30 @@ function approvalNodes(approval) {
   // refuse it - the desktop may have answered first, or the run may be over. The panel was told
   // all of that on every poll and drew "Waiting" regardless.
   const queued = approval.status === "DecisionQueued";
+  const opened = content(`approval:${approval.id}`);
+  const action = opened?.json;
+  const canAnswer = answerable(approval, opened);
 
   const head = node("div", "card-head");
   head.append(node("h3", null, "Permission requested"));
   head.append(queued
     ? node("span", "status is-queued", "Sent")
-    : node("span", "status is-waiting", approval.remoteDecidable ? "Waiting" : "At the computer"));
+    : node("span", "status is-waiting", canAnswer ? "Waiting" : "At the computer"));
   parts.push(head);
 
-  if (approval.reason) {
-    parts.push(node("p", null, approval.reason));
+  if (!opened || opened.unreadable) {
+    parts.push(unreadable(opened));
+  } else {
+    if (action?.topic) {
+      parts.push(node("p", null, action.topic));
+    }
+
+    parts.push(node("p", "meta", `${action?.tool ?? "A tool"} · in ${action?.workingDirectory || "no folder"}`));
+
+    // The whole action, never a summary. A person cannot approve what they were
+    // not shown, and a truncated command is one nobody read.
+    parts.push(node("pre", "action", action?.fullText ?? ""));
   }
-
-  parts.push(node("p", "meta", `${approval.tool} · in ${approval.workingDirectory}`));
-
-  // The whole action, never a summary. A person cannot approve what they were
-  // not shown, and a truncated command is one nobody read.
-  parts.push(node("pre", "action", approval.arguments));
 
   if (queued) {
     // No buttons at all rather than disabled ones. The answer has been given; what is left is
@@ -337,11 +437,18 @@ function approvalNodes(approval) {
     parts.push(node("p", "local-only",
       "Your answer is on its way to the computer. If it was already answered there, that answer "
       + "stands - sitting at the machine always wins."));
-  } else if (approval.remoteDecidable) {
+  } else if (canAnswer) {
     const actions = node("div", "actions");
     actions.append(decide(approval, "Allow", "primary"));
     actions.append(decide(approval, "Deny", "secondary"));
     parts.push(actions);
+  } else if (approval.remoteDecidable) {
+    // Not answerable from here although the computer would take an answer: what this device would show
+    // is not what the computer checks an answer against (the action hash), or it cannot be read at all.
+    // An Allow given here would be for a command the person was not shown.
+    parts.push(node("p", "local-only", opened?.unreadable
+      ? "This device cannot read this request; answer it on the computer."
+      : "This request does not match what the computer asked; answer it on the computer."));
   } else {
     // Not a disabled button: the server refuses this whatever the page draws,
     // and the card says why rather than looking broken.
@@ -406,12 +513,26 @@ function renderInbox() {
     // is the number this page is allowed to believe.
     const card = node("div", "card");
     const head = node("div", "card-head");
-    head.append(node("h3", null, notice.title));
+    head.append(node("h3", null, noticeTitle(notice.kind)));
     head.append(when(notice.at));
     card.append(head);
 
-    if (notice.detail) {
-      card.append(node("p", "meta", notice.detail));
+    // Which task it is about: the gateway knows only the run, and the title is sealed.
+    const run = state.runs.find((one) => one.id === notice.runId);
+
+    if (run) {
+      card.append(node("p", "meta", taskTitle(state.tasks.find((task) => task.id === run.taskId))));
+    }
+
+    const detail = content(`notice:${notice.id}`);
+
+    if (detail?.unreadable) {
+      card.append(unreadable(detail));
+    } else if (detail?.text) {
+      card.append(node("p", null, detail.text));
+    } else if (notice.kind === "NotStarted") {
+      // The gateway's own notice: the computer never saw the run, so there is no sealed sentence to show.
+      card.append(node("p", null, "Your computer did not pick this task up in time, so it never started."));
     }
 
     return card;
@@ -419,6 +540,18 @@ function renderInbox() {
 
   fill($("notice-list"), cards, $("inbox-empty"));
   renderRetention();
+}
+
+/**
+ * A notice's heading, made from its kind - the one part of a notice the gateway writes, since it can seal
+ * nothing. The terminal kinds are the run statuses' own names; anything else falls through as its name.
+ */
+function noticeTitle(kind) {
+  return {
+    PermissionRequested: "Permission requested",
+    PermissionAtComputer: "Permission asked at the computer",
+    NotStarted: "Not started"
+  }[kind] ?? statusText(kind);
 }
 
 /**
@@ -450,7 +583,7 @@ function renderHosts() {
     const card = node("div", "card");
 
     const head = node("div", "card-head");
-    head.append(node("h3", null, host.name));
+    head.append(node("h3", null, host.label));
     head.append(node("span", host.online ? "status is-done" : "status",
       host.revoked ? "Revoked" : host.online ? "Online" : "Offline"));
     card.append(head);
@@ -459,11 +592,19 @@ function renderHosts() {
       ? `Last seen ${new Date(host.lastSeenAt).toLocaleString()}`
       : "Has never connected"));
 
+    // Whether this device holds the computer's current key. Without it everything the computer sends is
+    // unreadable here, and this is where the person learns why.
+    const standing = content(`host:${host.id}`);
+
+    if (standing) {
+      card.append(node("p", "muted", standing[0].toUpperCase() + standing.slice(1) + "."));
+    }
+
     // Names, never paths. The gateway is not told where a workspace lives, so
     // this page has no way to name a folder even if someone asked it to.
     if (host.workspaces.length > 0) {
       const chips = node("div", "workspaces");
-      host.workspaces.forEach((workspace) => chips.append(node("span", "chip", workspace.name)));
+      host.workspaces.forEach((workspace) => chips.append(node("span", "chip", workspaceName(host.id, workspace))));
       card.append(chips);
     }
 
@@ -473,7 +614,7 @@ function renderHosts() {
       revoke.type = "button";
 
       revoke.addEventListener("click", () => {
-        if (confirm(`Revoke ${host.name}? Its connection closes and undelivered commands are `
+        if (confirm(`Revoke ${host.label}? Its connection closes and undelivered commands are `
           + "withdrawn. Work already accepted may still be running on the machine.")) {
           act(revoke, () => post(`/api/hosts/${host.id}/revoke`, {}));
         }
@@ -502,7 +643,7 @@ function showRun(run, task) {
   // - once the question moved in here - buttons answering something that might already be settled.
   state.openRun = run.id;
 
-  $("run-title").textContent = task?.title ?? "Task";
+  $("run-title").textContent = taskTitle(task);
 
   const detail = $("run-detail");
   const mine = state.events.filter((event) => event.runId === run.id);
@@ -518,7 +659,14 @@ function showRun(run, task) {
 
     const body = node("div", "body");
     body.append(node("strong", null, statusText(event.kind) + " "));
-    body.append(document.createTextNode(event.detail ?? ""));
+    const detail = content(`event:${event.id}`);
+
+    if (detail?.unreadable) {
+      body.append(unreadable(detail, "span"));
+    } else if (detail?.text) {
+      body.append(document.createTextNode(detail.text));
+    }
+
     entry.append(body);
 
     timeline.append(entry);
@@ -534,9 +682,14 @@ function showRun(run, task) {
   // owner wrote; the prompt is the instruction the computer was given, and
   // judging what a run did against a heading is judging it against the wrong
   // thing. It was stored and sent from the first day and shown nowhere.
-  if (task?.prompt) {
+  const asked = task ? content(`task:${task.id}`) : null;
+
+  if (asked?.unreadable) {
     detail.append(node("p", "meta", "Asked for"));
-    detail.append(node("pre", "action", task.prompt));
+    detail.append(unreadable(asked));
+  } else if (typeof asked?.json?.prompt === "string" && asked.json.prompt.length > 0) {
+    detail.append(node("p", "meta", "Asked for"));
+    detail.append(node("pre", "action", asked.json.prompt));
   }
 
   // Before the steps, not after them. The timeline showed "Permission requested" as history and
@@ -654,7 +807,7 @@ function openTaskDialog() {
   state.hosts
     .filter((host) => !host.revoked)
     .forEach((host) => host.workspaces.forEach((workspace) => {
-      const option = node("option", null, `${workspace.name} · ${host.name}`);
+      const option = node("option", null, `${workspaceName(host.id, workspace)} · ${host.label}`);
       option.value = `${host.id}|${workspace.id}`;
       options.push(option);
     }));
@@ -741,6 +894,7 @@ async function openTrust(user) {
   }
 
   keystore = store;
+  reader = createReader(store);
 
   try {
     const id = await ensureDevice(store, api);
@@ -767,8 +921,68 @@ async function takeGrants(started) {
   return isCurrent(started) ? result : null;
 }
 
+/**
+ * Takes the grants waiting for this device when a snapshot shows a computer whose current key it does not
+ * hold. That is how a rotation reaches an open tab: the computer moves to a new key when a device is
+ * removed, and grants were otherwise taken only at a page load and in the register dialog, so a tab left
+ * open went on showing everything the computer sent after the rotation as unreadable until it was
+ * reloaded. Asked at most once per poll, and only while some computer is behind; one at a time, so a slow
+ * answer is shared by the poll after it rather than asked again.
+ */
+const catchUpKeys = singleFlight(catchUpKeysNow, generation);
+
+async function catchUpKeysNow() {
+  const started = generation();
+  const store = keystore;
+
+  if (!store || !deviceId) {
+    return;
+  }
+
+  try {
+    const behind = await Promise.all(state.hosts.filter((host) => !host.revoked)
+      .map((host) => keyStanding(store, host)));
+
+    if (!behind.some(Boolean)) {
+      return;
+    }
+
+    const result = await takeGrants(started);
+
+    if (!result) {
+      return;
+    }
+
+    sayTrouble(result);
+
+    if (result.added.length > 0) {
+      await render();
+    }
+  } catch {
+    // Not reaching the gateway is what the poll already shows, and the next poll asks again.
+  }
+}
+
+/** The last trouble with grants this page told the person of. */
+let lastTrouble = "";
+
+/**
+ * Tells the person of trouble with a delivery (worthSaying), once. Grants are now taken on every poll while
+ * a computer is behind, and the gateway lists a grant that does not verify on every call: said each time,
+ * the same warning would have come back every three seconds for good.
+ */
+function sayTrouble(result) {
+  const trouble = worthSaying(result, hostLabel);
+
+  if (trouble && trouble !== lastTrouble) {
+    toast(trouble, true);
+  }
+
+  lastTrouble = trouble;
+}
+
 function hostLabel(hostId) {
-  return state.hosts.find((host) => host.id === hostId)?.name ?? "A computer";
+  return state.hosts.find((host) => host.id === hostId)?.label ?? "A computer";
 }
 
 // ── registering a computer ───────────────────────────────────────────────
@@ -828,6 +1042,7 @@ async function registerHost() {
     $("host-secret").hidden = false;
     $("host-status").textContent = "Waiting for the computer…";
     button.hidden = true;
+    // `name` is what the registration answers with: the label the person typed, which snapshots call `label`.
     startPairing(host.id, host.name);
   } catch (error) {
     if (isCurrent(started) && !(error instanceof Stale)) {
@@ -927,6 +1142,10 @@ function resetSession() {
   keystore?.close();
   keystore = null;
   deviceId = null;
+  // Its opened records too: they are the last account's content, in clear.
+  reader = createReader(null);
+  content = () => undefined;
+  lastTrouble = "";
   resetState(state);
   clearTimeout(toastTimer);
   forgetScreen($, document.querySelectorAll("dialog[open]"));
@@ -980,10 +1199,14 @@ async function enterPanel(user) {
   // After the poll, so a computer in doubt is named rather than called "A computer".
   try {
     const result = await takeGrants(started);
-    const trouble = result && worthSaying(result, hostLabel);
 
-    if (trouble) {
-      toast(trouble, true);
+    if (result) {
+      sayTrouble(result);
+    }
+
+    // Keys that arrived while no page was open: what the first poll drew as unreadable opens now.
+    if (result?.added.length > 0) {
+      await render();
     }
 
     // A code answered after it expired is listed by the gateway on every call. Said in a toast it was said on
@@ -1273,8 +1496,10 @@ $("host-dialog").addEventListener("close", () => {
   $("host-code").value = "";
 });
 $("host-submit").addEventListener("click", registerHost);
+// Through the cursor of the snapshot on screen, and no further: a notice that arrived after it has not been
+// seen, and marking "everything" read would have marked it too. The gateway refuses the call without one.
 $("mark-read").addEventListener("click", (clicked) =>
-  act(clicked.currentTarget, () => post("/api/notices/read", {})));
+  act(clicked.currentTarget, () => post("/api/notices/read", { through: state.cursor })));
 
 // A phone puts the page to sleep rather than closing it. Coming back to a
 // screen that is minutes stale, with no sign that it is, is the failure this

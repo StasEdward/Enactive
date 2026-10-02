@@ -7,7 +7,7 @@ import { b64url, fromB64url } from '../../src/Enactive.Remote.Gateway/wwwroot/js
 import { canonicalBytes } from '../../src/Enactive.Remote.Gateway/wwwroot/js/canonical.js';
 import {
   ensureDevice, collectGrants, deviceLabel, tamperingMessage, troubleFor, worthSaying, connectPendingId, invitePendingId,
-  REJECTED, NO_SECRET, DEVICE_LIMIT
+  keyStanding, REJECTED, NO_SECRET, DEVICE_LIMIT, NOT_PAIRED, BEHIND
 } from '../../src/Enactive.Remote.Gateway/wwwroot/js/trust.js';
 import { vectors } from './vectors.mjs';
 
@@ -329,6 +329,23 @@ test('a load tells of tampering and of grants that do not verify, not of codes t
   assert.equal(worthSaying({ added: [], rejected: [expired] }, label), '');
   assert.equal(worthSaying({ added: [], rejected: [expired, forged] }, label), REJECTED);
   assert.equal(worthSaying({ added: [], rejected: [forged], tampering: 'host-c' }, label), tamperingMessage('name of host-c'));
+});
+
+test('a computer whose key this device does not hold, or holds only an older one, says so', async () => {
+  const keystore = await openKeystore(ALICE, memoryAdapter());
+  const host = { id: HOST, label: 'Studio PC', revoked: false, keyEpoch: 2 };
+
+  // A computer registered here whose code was never answered in time: nothing else would say so, since
+  // the gateway's refusal of its late grant is kept out of every toast (worthSaying).
+  assert.equal(await keyStanding(keystore, host), NOT_PAIRED);
+  assert.equal(await keyStanding(null, host), NOT_PAIRED);
+
+  await keystore.addHostKey(HOST, 1, new Uint8Array(32).fill(1));
+  assert.equal(await keyStanding(keystore, host), BEHIND);
+
+  await keystore.addHostKey(HOST, 2, new Uint8Array(32).fill(2));
+  assert.equal(await keyStanding(keystore, host), null);
+  assert.equal(await keyStanding(keystore, { ...host, keyEpoch: 1 }), null);
 });
 
 test('the tampering sentence names the computer and says what to do', () => {

@@ -65,11 +65,31 @@ export function troubleFor(result, hostId, label) {
 /**
  * What a page load tells the person of a delivery: tampering first, then a grant that does not verify. A grant
  * with no secret waiting is left out: the gateway lists it on every call, and a toast on every load for a code
- * answered too late helped nobody - the computer it names says so in the register dialog instead.
+ * answered too late helped nobody. The computer it names says so in the Computers list instead (keyStanding):
+ * the register dialog is only ever open for a computer just registered, which has no such grant.
  */
 export function worthSaying(result, labelOf) {
   if (result.tampering) return tamperingMessage(labelOf(result.tampering));
   return result.rejected.find((one) => one.code === 'unverified')?.reason ?? '';
+}
+
+/** What the Computers list says of a computer this device holds no key for. */
+export const NOT_PAIRED = 'not paired with this device';
+
+/** What it says of a computer that has moved to a key this device has not been given yet. */
+export const BEHIND = 'a newer key exists that this device has not been given';
+
+/**
+ * Whether this device can read and command `host` (a HostView): null when it holds the computer's current
+ * key, NOT_PAIRED or BEHIND when it does not. Without the line a computer whose code was answered too late,
+ * or that rotated while this device's grant was still on its way, showed in the list like any other, and
+ * everything it sent was unreadable with nothing on the computer's card to say why. `keystore` is null in a
+ * browser that cannot keep keys, which is paired with nothing.
+ */
+export async function keyStanding(keystore, host) {
+  const newest = keystore ? await keystore.newestEpoch(host.id) : null;
+  if (newest === null) return NOT_PAIRED;
+  return newest < host.keyEpoch ? BEHIND : null;
 }
 
 // Most specific first: Edge and Opera also say Chrome and Safari, Chrome also says Safari.
