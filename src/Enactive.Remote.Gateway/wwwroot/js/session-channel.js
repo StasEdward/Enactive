@@ -61,12 +61,18 @@ export function openSessionChannel({ onChanged, channelFactory = (name) => new B
 }
 
 /**
- * What a tab does when another one announced a change. A tab with an account asks the gateway whether it is still
- * that account's (`revalidate`). A tab with none - left at the sign-in view, or at "this device was removed" - had
- * nothing to revalidate, so after another tab signed in it went on offering a sign-in for a session the browser
- * already holds: it asks the gateway who is signed in instead (`boot`), which enters the panel if somebody is and
- * stays at the sign-in view if not.
+ * What a tab does when another one announced a change.
+ * - With an account: asks the gateway whether it is still that account's (`revalidate`).
+ * - At "this device was removed" (`view === 'removed'`): only checks the session (`toSignIn`, which moves to the
+ *   sign-in view when there is none). It never boots. That view is shown with the gateway session still open, and
+ *   entering the panel from it uses the removed device's keys again - or, after a forget, recreates the deleted key
+ *   store and registers the browser as a new device, with nobody having asked.
+ * - Otherwise (the sign-in view): had nothing to revalidate, so after another tab signed in it went on offering a
+ *   sign-in for a session the browser already holds. It asks the gateway who is signed in instead (`boot`), which
+ *   enters the panel if somebody is and stays at the sign-in view if not.
  */
-export function onSessionSignal({ account, boot, revalidate }) {
-  return account ? revalidate() : boot();
+export function onSessionSignal({ account, view, boot, revalidate, toSignIn }) {
+  if (account) return revalidate();
+  if (view === 'removed') return toSignIn();
+  return boot();
 }

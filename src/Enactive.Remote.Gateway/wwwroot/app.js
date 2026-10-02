@@ -1974,6 +1974,7 @@ async function bootNow(outcome) {
 const boot = singleFlight(bootNow, generation);
 
 async function enterPanel(user) {
+  deviceRemovedShown = false;
   account = user;
   $("account-name").textContent = user.displayName;
   $("login").hidden = true;
@@ -2025,6 +2026,7 @@ async function enterPanel(user) {
 }
 
 function showSignedOut(outcome) {
+  deviceRemovedShown = false;
   $("panel").hidden = true;
   $("device-removed").hidden = true;
   $("login").hidden = false;
@@ -2043,7 +2045,11 @@ function showSignedOut(outcome) {
   offerDevelopmentSignIn();
 }
 
+/** Whether "this device was removed" is what the tab shows: a signal from another tab treats it differently (sessionChannel). */
+let deviceRemovedShown = false;
+
 function showDeviceRemoved() {
+  deviceRemovedShown = true;
   $("panel").hidden = true;
   $("login").hidden = true;
   $("device-removed").hidden = false;
@@ -2127,6 +2133,8 @@ async function signOut(path, outcome) {
 
   resetSession();
   showSignedOut(outcome);
+  // The cookie is gone for the whole browser: tabs that still show this account's runs must not wait for focus or
+  // their next poll to find out, and they would not hear of it from this tab's own reset.
   sessionChannel.announce();
 }
 
@@ -2145,11 +2153,39 @@ const revalidate = singleFlight(revalidateNow, generation);
 // Other tabs of this browser, told when the session changes here and telling this tab when it changes there.
 // What they say is only "ask the gateway" (session-channel.js): revalidate decides, from /api/session. Never
 // closed by resetSession - the next account signed in in this tab needs it too. A tab with an account revalidates;
-// one left at the sign-in or "device removed" view has none, so it boots - asks /api/session and enters the panel
-// if another tab has signed in since (onSessionSignal).
+// one left at the sign-in view has none, so it boots - asks /api/session and enters the panel if another tab has
+// signed in since. One at "this device was removed" must not enter the panel: the gateway session is still open
+// there on purpose, and booting would use the removed device's keys again, or - after a forget - recreate the
+// deleted store and register this browser as a new device without the person asking. It only checks the session
+// and leaves for the sign-in view if there is none (onSessionSignal).
 const sessionChannel = openSessionChannel({
-  onChanged: () => onSessionSignal({ account, boot: () => boot(), revalidate: () => revalidate() })
+  onChanged: () => onSessionSignal({
+    account,
+    view: deviceRemovedShown ? "removed" : "other",
+    boot: () => boot(),
+    revalidate: () => revalidate(),
+    toSignIn: () => leaveRemovedIfSignedOut()
+  })
 });
+
+const leaveRemovedIfSignedOut = singleFlight(leaveRemovedIfSignedOutNow, generation);
+
+async function leaveRemovedIfSignedOutNow() {
+  const started = generation();
+  let view;
+
+  try {
+    view = await session();
+  } catch {
+    // Unreachable, or this session ended meanwhile: the view stays as it is, and a reload asks again.
+    return;
+  }
+
+  // Not when the tab has moved on (a sign-out or sign-in here) while the answer was on its way.
+  if (!view.authenticated && isCurrent(started) && deviceRemovedShown) {
+    showSignedOut();
+  }
+}
 
 async function revalidateNow() {
   if (!account) {
@@ -2180,6 +2216,9 @@ async function revalidateNow() {
     showSignedOut(SIGNED_OUT);
   } else if (view.user.id !== expected) {
     resetSession();
+    // Said now as well as by boot's own announce, which comes only after /api/session answers again: tabs that
+    // still show the previous account start asking the gateway at once, and what they get from it is the same
+    // single-flight run either way.
     sessionChannel.announce();
     await boot();
   } else if (account?.id === expected) {

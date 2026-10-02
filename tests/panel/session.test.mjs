@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createGuard, pollOnce, Stale } from '../../src/Enactive.Remote.Gateway/wwwroot/js/session-guard.js';
+import { pollOnce } from '../../src/Enactive.Remote.Gateway/wwwroot/js/session-guard.js';
+import { get, abandonRequests, Stale } from '../../src/Enactive.Remote.Gateway/wwwroot/js/api.js';
 import { openSessionChannel, onSessionSignal } from '../../src/Enactive.Remote.Gateway/wwwroot/js/session-channel.js';
 
 // Every channel made by one factory is on the same bus: a message posted on one end reaches the others and
@@ -34,33 +35,55 @@ function fakeBus() {
   };
 }
 
-test('a response from the previous account is dropped', async () => {
-  const guard = createGuard();
+// A fetch whose answer the test releases by hand. It ignores the abort signal on purpose: an answer that
+// arrives anyway is the case the generation exists for.
+function heldFetch(body) {
   let release;
   const gate = new Promise((resolve) => { release = resolve; });
-  // Alice's answer, delivered whenever the network gets round to it - here, after Bob has signed in.
-  const fakeFetch = async () => { await gate; return { userId: 'alice', runs: ['alice-run'] }; };
+  globalThis.fetch = async () => {
+    await gate;
+    return new Response(JSON.stringify(body), { status: 200 });
+  };
+  return release;
+}
+
+test('a response from the previous account is dropped', async () => {
+  // Alice's poll, answered after an account change (abandonRequests is the bump a reset makes). Her snapshot names
+  // her, and the page is still holding her id, so only the generation stands between it and Bob's screen.
+  const release = heldFetch({ userId: 'alice', runs: ['alice-run'] });
   const drawn = [];
   let otherAccount = 0;
 
   const poll = pollOnce({
-    read: async () => {
-      const started = guard.generation;
-      const snapshot = await fakeFetch();
-      guard.check(started);
-      return snapshot;
-    },
+    read: () => get('/api/state'),
     accountId: 'alice',
     apply: (snapshot) => drawn.push(snapshot),
     otherAccount: () => { otherAccount += 1; }
   });
 
-  guard.bump();
+  abandonRequests();
   release();
 
   await assert.rejects(poll, Stale);
   assert.deepEqual(drawn, []);
   assert.equal(otherAccount, 0);
+});
+
+test('the same response is drawn when the account did not change', async () => {
+  const release = heldFetch({ userId: 'alice', runs: ['alice-run'] });
+  const drawn = [];
+
+  const poll = pollOnce({
+    read: () => get('/api/state'),
+    accountId: 'alice',
+    apply: (snapshot) => drawn.push(snapshot),
+    otherAccount: () => assert.fail('the account did not change')
+  });
+
+  release();
+
+  assert.equal(await poll, true);
+  assert.deepEqual(drawn, [{ userId: 'alice', runs: ['alice-run'] }]);
 });
 
 test('a changed signal from another tab makes this tab revalidate', () => {
@@ -146,31 +169,51 @@ test('a factory that throws leaves a channel that does nothing', () => {
   assert.doesNotThrow(() => channel.close());
 });
 
+function signal(overrides) {
+  const calls = [];
+  const effects = {
+    boot: () => calls.push('boot'),
+    revalidate: () => calls.push('revalidate'),
+    toSignIn: () => calls.push('toSignIn')
+  };
+  onSessionSignal({ account: null, view: 'other', ...effects, ...overrides });
+  return calls;
+}
+
 test('a signal revalidates a tab that has an account', () => {
-  const calls = [];
-  onSessionSignal({ account: { id: 'alice' }, boot: () => calls.push('boot'), revalidate: () => calls.push('revalidate') });
-  assert.deepEqual(calls, ['revalidate']);
+  assert.deepEqual(signal({ account: { id: 'alice' } }), ['revalidate']);
 });
 
-test('a signal makes a tab with no account boot, so it follows a sign-in made in another tab', () => {
-  const calls = [];
-  onSessionSignal({ account: null, boot: () => calls.push('boot'), revalidate: () => calls.push('revalidate') });
-  assert.deepEqual(calls, ['boot']);
+test('a signal makes a tab at sign-in boot, so it follows a sign-in made in another tab', () => {
+  assert.deepEqual(signal({ account: null, view: 'other' }), ['boot']);
 });
 
-test('a changed signal from another tab boots a tab left at sign-in', () => {
+test('a signal leaves a tab at "device removed" out of the panel', () => {
+  // Only the session check: it moves to sign-in when there is no session and does nothing when there is one.
+  assert.deepEqual(signal({ account: null, view: 'removed' }), ['toSignIn']);
+});
+
+test('a changed signal over the channel reaches each branch', () => {
   const bus = fakeBus();
   const calls = [];
   let account = null;
+  let view = 'other';
   openSessionChannel({
-    onChanged: () => onSessionSignal({ account, boot: () => calls.push('boot'), revalidate: () => calls.push('revalidate') }),
+    onChanged: () => onSessionSignal({
+      account, view,
+      boot: () => calls.push('boot'),
+      revalidate: () => calls.push('revalidate'),
+      toSignIn: () => calls.push('toSignIn')
+    }),
     channelFactory: bus.factory
   });
   const other = openSessionChannel({ onChanged: () => {}, channelFactory: bus.factory });
 
   other.announce();
+  view = 'removed';
+  other.announce();
   account = { id: 'bob' };
   other.announce();
 
-  assert.deepEqual(calls, ['boot', 'revalidate']);
+  assert.deepEqual(calls, ['boot', 'toSignIn', 'revalidate']);
 });
