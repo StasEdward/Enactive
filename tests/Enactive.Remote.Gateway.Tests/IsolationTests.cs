@@ -71,12 +71,19 @@ public sealed class IsolationTests(TestDatabase database) : IClassFixture<TestDa
 
     /// <summary>
     /// How a call to an endpoint that is made from a device names one. The endpoints that take no device
-    /// are <see cref="NotTaken"/>; for the others Bob is asked each way.
+    /// are <see cref="NotTaken"/> and <see cref="Ignored"/>; for the others Bob is asked each way.
     /// </summary>
     public enum CallerHeader
     {
         /// <summary>The endpoint is not made from a device, so no header is sent.</summary>
         NotTaken,
+
+        /// <summary>
+        /// The endpoint is not made from a device, and Bob sends his own device's header anyway. It must
+        /// change nothing: an endpoint that began to read it - to find who is calling, say - would let a
+        /// header stand in for the ids in the request, and nothing else here would notice.
+        /// </summary>
+        Ignored,
 
         /// <summary>Bob's own live device: the header is true, and the ids in the request are Alice's.</summary>
         Own,
@@ -119,10 +126,16 @@ public sealed class IsolationTests(TestDatabase database) : IClassFixture<TestDa
     /// Whether Alice's own call writes rows of hers. A read does not, and asserting that her checksum
     /// changed would be asserting something false.
     /// </param>
+    /// <param name="OwnRequest">
+    /// What Alice sends as her own call when the request Bob is refused cannot succeed for her: it
+    /// names Bob's device because Bob has no other to name. Hers is the same call made with her own, so
+    /// the control is a real success and not a second 404.
+    /// </param>
     private sealed record PrivatePath(
         Func<TargetIds, TargetIds, (string Path, object? Body)> Request, HttpStatusCode OwnStatus,
         HttpMethod? Method = null, bool TakesDevice = false, bool OwnHeaderIsRefused = true,
-        string Code = "not-found", bool OwnChangesRows = true)
+        string Code = "not-found", bool OwnChangesRows = true,
+        Func<TargetIds, (string Path, object? Body)>? OwnRequest = null)
     {
         public HttpMethod Verb => Method ?? HttpMethod.Post;
     }
@@ -207,13 +220,18 @@ public sealed class IsolationTests(TestDatabase database) : IClassFixture<TestDa
             (ids, _) => ("/api/invites", new { id = ids.InviteId }), HttpStatusCode.Conflict,
             TakesDevice: true, OwnHeaderIsRefused: false),
 
-        ["answer an invitation"] = new(
-            (ids, own) => ("/api/enrollments", new
-            {
-                inviteId = ids.InviteId,
-                deviceId = own.DeviceId,
-                mac = Enrollment.Mac(PairKey, ids.InviteId, own.DeviceId, own.Device.Key)
-            }),
+        // Alice's invitation is open: nobody has answered it, so it is still there to be taken. Bob
+        // answers with his own device, which is live, so the only thing wrong with the call is whose
+        // invitation it is - and her invitation must stay open. Alice answers it with her second device.
+        ["answer an open invitation"] = new(
+            (ids, own) => AnswerBy(ids.OpenInviteId, own.Device),
+            HttpStatusCode.OK, Code: "unknown-invite",
+            OwnRequest: ids => AnswerBy(ids.OpenInviteId, ids.SecondDevice)),
+
+        // The same once it has been answered, which is a different refusal for its owner (it is used) and
+        // must still be the one for a stranger (it is nobody's).
+        ["answer an invitation that has been answered"] = new(
+            (ids, own) => AnswerBy(ids.InviteId, own.Device),
             HttpStatusCode.NotFound, Code: "unknown-invite"),
 
         // The invitation is Bob's own, open and unanswered, and the device answering it is Alice's.
@@ -229,7 +247,22 @@ public sealed class IsolationTests(TestDatabase database) : IClassFixture<TestDa
         ["read the answer to an invitation"] = new(
             (ids, _) => ($"/api/invites/{ids.InviteId}/enrollment", null), HttpStatusCode.OK,
             HttpMethod.Get, TakesDevice: true, Code: "unknown-invite", OwnChangesRows: false),
+
+        // Nobody has answered it, so its owner is told "not yet" (204) and a stranger must be told what he
+        // is told for an invitation nobody made: a 204 to him would say the invitation exists.
+        ["read the answer to an open invitation"] = new(
+            (ids, _) => ($"/api/invites/{ids.OpenInviteId}/enrollment", null), HttpStatusCode.NoContent,
+            HttpMethod.Get, TakesDevice: true, Code: "unknown-invite", OwnChangesRows: false),
     };
+
+    /// <summary>An invitation answered by <paramref name="device"/>, with the MAC the device would make.</summary>
+    private static (string Path, object? Body) AnswerBy(string inviteId, TestDevice device)
+        => ("/api/enrollments", new
+        {
+            inviteId,
+            deviceId = device.Id,
+            mac = Enrollment.Mac(PairKey, inviteId, device.Id, device.Key)
+        });
 
     /// <summary>Every path, and for each of those made from a device every way of naming one that is refused.</summary>
     public static TheoryData<string, CallerHeader> PathCases
@@ -243,6 +276,7 @@ public sealed class IsolationTests(TestDatabase database) : IClassFixture<TestDa
                 if (!path.TakesDevice)
                 {
                     cases.Add(name, CallerHeader.NotTaken);
+                    cases.Add(name, CallerHeader.Ignored);
                     continue;
                 }
 
@@ -337,7 +371,8 @@ public sealed class IsolationTests(TestDatabase database) : IClassFixture<TestDa
 
         // And Alice is not refused the same request, which is what makes the 404 above about whose
         // it is. Last, because it changes her.
-        var own = await AnswerAsync(_alice, path.Verb, alicesPath, alicesBody, path.TakesDevice ? _alice.Ids.DeviceId : null);
+        var (ownPath, ownBody) = path.OwnRequest?.Invoke(_alice.Ids) ?? (alicesPath, alicesBody);
+        var own = await AnswerAsync(_alice, path.Verb, ownPath, ownBody, path.TakesDevice ? _alice.Ids.DeviceId : null);
         Assert.Equal(path.OwnStatus, own.Status);
 
         // What she did changed her rows, and the checksum shows it. Without this the unchanged
@@ -355,7 +390,7 @@ public sealed class IsolationTests(TestDatabase database) : IClassFixture<TestDa
     /// </summary>
     private string? DeviceNamed(CallerHeader header, TargetIds ids) => header switch
     {
-        CallerHeader.Own => _bob.Ids.DeviceId,
+        CallerHeader.Own or CallerHeader.Ignored => _bob.Ids.DeviceId,
         CallerHeader.Alices => ids.DeviceId,
         _ => null
     };
@@ -367,6 +402,9 @@ public sealed class IsolationTests(TestDatabase database) : IClassFixture<TestDa
     /// made, and the one her computer made - and is told what he is told for an invitation nobody made.
     /// Without the owner filter on the invitation's lookup he is handed the key, label and MAC of her
     /// second device: the 404 is the only thing between a stranger and the public keys of her browsers.
+    /// Only her browser's invitation proves that filter: the computer's is also refused by the query's
+    /// "made by a device" condition, so its refusal below is that and the owner filter together, a defence
+    /// in depth, and passes with either one removed.
     /// </summary>
     [Fact]
     public async Task Bob_reads_alices_enrollment()
@@ -378,7 +416,7 @@ public sealed class IsolationTests(TestDatabase database) : IClassFixture<TestDa
         var alices = await AnswerAsync(_bob, HttpMethod.Get, EnrollmentPath(_alice.Ids.InviteId), null, bobsDevice);
 
         // The computer's own invitation is refused to a browser even for its owner (see
-        // DeviceServiceTests), so for Bob it is the same refusal twice over.
+        // DeviceServiceTests), so for Bob this does not show the owner filter by itself.
         var alicesComputers = await AnswerAsync(_bob, HttpMethod.Get, EnrollmentPath(_alice.Ids.HostInviteId), null, bobsDevice);
 
         Assert.Equal(HttpStatusCode.NotFound, madeUp.Status);
@@ -524,6 +562,69 @@ public sealed class IsolationTests(TestDatabase database) : IClassFixture<TestDa
             $"SELECT created_by_device FROM invites WHERE owner_id = '{ownerId}' AND id = '{inviteId}'");
 
     /// <summary>
+    /// Bob, with a live device of his own, answers an invitation of Alice's that nobody has answered, and
+    /// is told it does not exist: it is still open, so there is nothing for the lookup to refuse but whose
+    /// it is. It stays unconsumed, and she can answer it herself afterwards - the refusal took nothing
+    /// from her. The other refusals of this kind are of invitations already answered, where "used" would
+    /// be the answer for a wrong reason.
+    /// </summary>
+    [Fact]
+    public async Task Bob_cannot_answer_alices_open_invitation()
+    {
+        var aliceBefore = await ChecksumAsync(_alice.UserId);
+        var open = _alice.Ids.OpenInviteId;
+
+        var (madeUpPath, madeUpBody) = AnswerBy(Ids.New(), _bob.Ids.Device);
+        var (path, body) = AnswerBy(open, _bob.Ids.Device);
+
+        var madeUp = await AnswerAsync(_bob, HttpMethod.Post, madeUpPath, madeUpBody);
+        var alices = await AnswerAsync(_bob, HttpMethod.Post, path, body);
+
+        Assert.Equal(HttpStatusCode.NotFound, madeUp.Status);
+        Assert.Contains("\"code\":\"unknown-invite\"", madeUp.Body);
+        Assert.Equal(HttpStatusCode.NotFound, alices.Status);
+        Assert.Equal(madeUp.Body, alices.Body);
+
+        Assert.Equal(aliceBefore, await ChecksumAsync(_alice.UserId));
+        Assert.Equal(0, await database.ScalarLongAsync(
+            $"SELECT COUNT(*) FROM enrollments WHERE invite_id = '{open}'"));
+        Assert.Equal(1, await database.ScalarLongAsync(
+            $"SELECT COUNT(*) FROM invites WHERE owner_id = '{_alice.UserId}' AND id = '{open}' AND consumed_at IS NULL"));
+
+        // Hers to answer, and she is not refused: what makes the refusal above about whose it is.
+        var (hersPath, hersBody) = AnswerBy(open, _alice.Ids.SecondDevice);
+        var hers = await AnswerAsync(_alice, HttpMethod.Post, hersPath, hersBody);
+
+        Assert.Equal(HttpStatusCode.OK, hers.Status);
+    }
+
+    /// <summary>
+    /// The checksum can see the <c>invites</c> table change. No refused call changes it, and no control in
+    /// the table above writes to it (Alice making an invitation she has is a conflict), so without this the
+    /// unchanged <c>invites</c> hash after Bob's calls could mean only that it cannot change. Alice makes
+    /// a fresh invitation: her hash for the table changes, and Bob's rows do not.
+    /// </summary>
+    [Fact]
+    public async Task The_checksum_sees_an_invitation_alice_makes()
+    {
+        var aliceBefore = await ChecksumAsync(_alice.UserId);
+        var bobBefore = await ChecksumAsync(_bob.UserId);
+
+        await PostFromAsync(_alice.Panel, "/api/invites", new { id = Ids.New() }, _alice.Ids.DeviceId);
+
+        var aliceAfter = await ChecksumAsync(_alice.UserId);
+
+        Assert.NotEqual(aliceBefore["invites"], aliceAfter["invites"]);
+
+        // Her call touched her invitations and her audit trail, and no other table of hers.
+        Assert.Equal(
+            aliceBefore.Where(t => t.Key is not ("invites" or "audit")),
+            aliceAfter.Where(t => t.Key is not ("invites" or "audit")));
+
+        Assert.Equal(bobBefore, await ChecksumAsync(_bob.UserId));
+    }
+
+    /// <summary>
     /// Bob's computer grants its own key to a device. Alice's device is refused in the words used for a
     /// device nobody has, and a grant of Alice's computer is refused as a grant of another computer than
     /// the caller's - a 400 before any lookup, which is why that one says nothing about whose it is. No
@@ -572,7 +673,9 @@ public sealed class IsolationTests(TestDatabase database) : IClassFixture<TestDa
     /// <summary>
     /// Bob's computer says it has handled the answer to Alice's computer's invitation, and is told no such
     /// invitation exists - as it is for one nobody made. Her enrollment is still unanswered, so her
-    /// computer is handed it again, and saying so herself is what answers it.
+    /// computer is handed it again, and saying so herself is what answers it. The query also asks for the
+    /// computer that made the invitation, and Bob's is not Alice's: the refusal is that condition and the
+    /// owner filter together, a defence in depth, so it does not show either one by itself.
     /// </summary>
     [Fact]
     public async Task Bobs_computer_cannot_mark_alices_invitation_answered()
@@ -605,7 +708,9 @@ public sealed class IsolationTests(TestDatabase database) : IClassFixture<TestDa
 
     /// <summary>
     /// What a computer is handed to answer is its own invitations': Bob's computer is given the one his own
-    /// second device answered and not the one Alice's did, and the reverse.
+    /// second device answered and not the one Alice's did, and the reverse. The list is asked for by owner
+    /// and by the computer that made each invitation, so a leak would need both conditions gone: this is
+    /// the defence in depth, and the owner filter alone is not shown by it.
     /// </summary>
     [Fact]
     public async Task Bobs_computer_is_handed_only_its_own_enrollments()
@@ -888,7 +993,7 @@ public sealed class IsolationTests(TestDatabase database) : IClassFixture<TestDa
     }
 
     private static object EnrollmentBody(string inviteId, TestDevice device)
-        => new { inviteId, deviceId = device.Id, mac = Enrollment.Mac(PairKey, inviteId, device.Id, device.Key) };
+        => AnswerBy(inviteId, device).Body!;
 
     private static async Task<TestDevice> RegisterDeviceAsync(PanelClient panel, string label)
     {
