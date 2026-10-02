@@ -15,6 +15,8 @@ permissions:
   contents: read
 
 jobs:
+  # The panel's tests, the gateway's and the panel in a browser - what build.yml's gateway job runs. The release
+  # job needs it, so its success is what lets a release be made.
   gateway:
     uses: ./.github/workflows/gateway-tests.yml
     with:

@@ -1,3 +1,7 @@
+# What a release is tested with before it is made (release.yml needs this job): the same as build.yml's gateway
+# job - the panel's tests, the gateway's, and the panel in a browser against the gateway and a computer. With the
+# gateway's tests alone, a tag cut from a commit whose push build was red in the other two was still released.
+# This job's success is what lets the release job run, so a step added here that can fail keeps that meaning.
 name: gateway integration tests
 
 on:
@@ -36,6 +40,13 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "10.0.x"
+      # As in build.yml: the panel's half of the encryption, pinned to the C# by shared vectors, on the Node this
+      # repository chose. The glob is quoted so that node expands it; Node 22 takes no directory argument.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Test the panel's cryptography
+        run: node --test "tests/panel/*.test.mjs"
       - name: Test with an isolated MySQL service
         run: dotnet test tests/Enactive.Remote.Gateway.Tests/Enactive.Remote.Gateway.Tests.csproj --configuration Release --logger "trx;LogFileName=gateway.trx"
       - uses: actions/upload-artifact@v4
@@ -43,3 +54,30 @@ jobs:
         with:
           name: gateway-test-results
           path: tests/Enactive.Remote.Gateway.Tests/TestResults/*.trx
+      # The panel in a real browser, as build.yml runs it: its database is made on the service and dropped after.
+      - name: Install the browser tests
+        working-directory: tests/panel-e2e
+        run: npm ci
+      - name: Install Chromium for the browser tests
+        working-directory: tests/panel-e2e
+        run: npx playwright install --with-deps chromium
+      - name: Build the browser tests' gateway and computer
+        run: |
+          dotnet build src/Enactive.Remote.Gateway/Enactive.Remote.Gateway.csproj --configuration Release
+          dotnet build tests/RemoteHostHarness/RemoteHostHarness.csproj --configuration Release
+      - name: Test the panel in a browser
+        working-directory: tests/panel-e2e
+        run: npx playwright test
+        env:
+          E2E_CONFIGURATION: Release
+          E2E_NO_BUILD: "1"
+          ENACTIVE_E2E_MYSQL: "Server=127.0.0.1;Port=3306;User ID=root;Password=integration-only-password;SslMode=None"
+      - name: Keep the browser tests' report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: panel-e2e-report-release
+          path: |
+            tests/panel-e2e/playwright-report
+            tests/panel-e2e/test-results
+          retention-days: 7
