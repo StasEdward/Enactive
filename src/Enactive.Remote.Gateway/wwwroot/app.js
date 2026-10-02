@@ -20,6 +20,7 @@ import {
 import { emptyState, resetState, forgetScreen, pollOnce } from "./js/session-guard.js";
 import { providerLinks, outcomeOf, createDevelopmentProbe } from "./js/signin.js";
 import { singleFlight } from "./js/single-flight.js";
+import { openSessionChannel } from "./js/session-channel.js";
 import { openKeystore } from "./js/keystore.js";
 import {
   ensureDevice, collectGrants, troubleFor, worthSaying, connectPendingId, keyStanding, createGrantSchedule, epochsChanged,
@@ -1730,6 +1731,10 @@ async function forgetNow() {
     resetSession();
     showDeviceRemoved();
   }
+
+  // Either way the keys of this device are gone from this browser: a tab of the same account that still holds
+  // them open should find out now, not on its next poll.
+  sessionChannel.announce();
 }
 
 // ── joining by an invitation ─────────────────────────────────────────────
@@ -1956,6 +1961,8 @@ async function boot(outcome) {
   }
 
   if (view.authenticated) {
+    // Said before the panel is entered, which takes a while: whoever else is open can ask the gateway now.
+    sessionChannel.announce();
     await enterPanel(view.user);
   } else {
     showSignedOut(outcome);
@@ -2116,6 +2123,7 @@ async function signOut(path, outcome) {
 
   resetSession();
   showSignedOut(outcome);
+  sessionChannel.announce();
 }
 
 /**
@@ -2129,6 +2137,11 @@ async function signOut(path, outcome) {
  * checks would each start a poll.
  */
 const revalidate = singleFlight(revalidateNow, generation);
+
+// Other tabs of this browser, told when the session changes here and telling this tab when it changes there.
+// What they say is only "ask the gateway" (session-channel.js): revalidate decides, from /api/session. Never
+// closed by resetSession - the next account signed in in this tab needs it too.
+const sessionChannel = openSessionChannel({ onChanged: () => revalidate() });
 
 async function revalidateNow() {
   if (!account) {
@@ -2159,6 +2172,7 @@ async function revalidateNow() {
     showSignedOut(SIGNED_OUT);
   } else if (view.user.id !== expected) {
     resetSession();
+    sessionChannel.announce();
     await boot();
   } else if (account?.id === expected) {
     await poll();
