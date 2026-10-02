@@ -87,6 +87,7 @@ public sealed class RemoteKeyAdministrationTests
         using var store = new HostStore(fx.PathOf("remote.db"));
         using var keys = new HostKeyStore(store, code.HostId);
         keys.Rotate();
+        var pairKey = code.PairKey;
 
         var outcome = Pairing.Apply(code, keys);
 
@@ -102,7 +103,7 @@ public sealed class RemoteKeyAdministrationTests
         foreach (var grant in pending.Select(p => p.Grant))
         {
             Assert.Equal(Grants.AuthByPairing("connect"), grant.AuthBy);
-            var (opened, signing) = Grants.Open(grant, device, code.PairKey, pinnedHostSigningPublic: null);
+            var (opened, signing) = Grants.Open(grant, device, pairKey, pinnedHostSigningPublic: null);
             Assert.Equal(keys.Epoch(grant.Epoch)!.Secret.ToArray(), opened.Secret.ToArray());
             Assert.Equal(keys.SigningPublic, signing);
         }
@@ -121,18 +122,53 @@ public sealed class RemoteKeyAdministrationTests
         using var _ = device;
         using var store = new HostStore(fx.PathOf("remote.db"));
         using var keys = new HostKeyStore(store, code.HostId);
-        Pairing.Apply(code, keys);
+        Pairing.Apply(Fresh(code), keys);
         keys.Distrust(code.DeviceId);
 
         using var other = P256.Generate();
-        var impostor = code with { DevicePublic = P256.PublicRaw(other) };
+        var impostor = Fresh(code) with { DevicePublic = P256.PublicRaw(other) };
         Assert.Throws<InvalidOperationException>(() => Pairing.Apply(impostor, keys));
         Assert.Empty(keys.Live);
 
-        Pairing.Apply(code, keys);
+        Pairing.Apply(Fresh(code), keys);
 
         Assert.Equal(code.DeviceId, Assert.Single(keys.Live).DeviceId);
         Assert.Single(keys.PendingGrants());
+    }
+
+    /// <summary>A live device is never rebound to another key by a code, either.</summary>
+    [WindowsFact]
+    public void A_code_naming_a_live_device_with_another_key_is_refused_by_apply()
+    {
+        using var fx = new EngineFixture();
+        var (code, device) = NewCode();
+        using var _ = device;
+        using var store = new HostStore(fx.PathOf("remote.db"));
+        using var keys = new HostKeyStore(store, code.HostId);
+        Pairing.Apply(Fresh(code), keys);
+
+        using var other = P256.Generate();
+        Assert.Throws<InvalidOperationException>(
+            () => Pairing.Apply(Fresh(code) with { DevicePublic = P256.PublicRaw(other) }, keys));
+        Assert.Equal(code.DevicePublic, Assert.Single(keys.Live).PublicKey);
+    }
+
+    /// <summary>
+    /// The secret is wiped from the code once it has authenticated the grants. Nothing needs it after,
+    /// and a code object can outlive the click that applied it.
+    /// </summary>
+    [WindowsFact]
+    public void Applying_a_code_wipes_its_pairing_secret_from_memory()
+    {
+        using var fx = new EngineFixture();
+        var (code, device) = NewCode();
+        using var _ = device;
+        using var store = new HostStore(fx.PathOf("remote.db"));
+        using var keys = new HostKeyStore(store, code.HostId);
+
+        Pairing.Apply(code, keys);
+
+        Assert.All(code.PairingSecret, b => Assert.Equal(0, b));
     }
 
     /// <summary>
@@ -149,6 +185,7 @@ public sealed class RemoteKeyAdministrationTests
         var (code, device) = NewCode();
         using var _ = device;
         var settings = new AppSettings();
+        var secret = (byte[])code.PairingSecret.Clone();
 
         var outcome = await RemoteAccessService.ConnectWithCodeAsync(code, settings.RemoteAccess, database, NeverAsked);
 
@@ -159,9 +196,9 @@ public sealed class RemoteKeyAdministrationTests
         if (File.Exists(database + "-wal")) stored = stored.Concat(File.ReadAllBytes(database + "-wal"));
         var bytes = stored.ToArray();
 
-        Assert.False(Contains(bytes, Encoding.ASCII.GetBytes(B64.Url(code.PairingSecret))));
-        Assert.False(Contains(bytes, Encoding.ASCII.GetBytes(Convert.ToBase64String(code.PairingSecret))));
-        Assert.False(Contains(bytes, code.PairingSecret));
+        Assert.False(Contains(bytes, Encoding.ASCII.GetBytes(B64.Url(secret))));
+        Assert.False(Contains(bytes, Encoding.ASCII.GetBytes(Convert.ToBase64String(secret))));
+        Assert.False(Contains(bytes, secret));
         Assert.False(Contains(bytes, Encoding.ASCII.GetBytes(code.Token)));
 
         // And what it was for did happen: the settings name the computer, and the grant is waiting.
@@ -193,8 +230,9 @@ public sealed class RemoteKeyAdministrationTests
         var signingBefore = SigningPublic(database, "host-a");
         var asked = 0;
 
-        var declined = await RemoteAccessService.ConnectWithCodeAsync(second, settings, database, () =>
+        var declined = await RemoteAccessService.ConnectWithCodeAsync(second, settings, database, question =>
         {
+            Assert.Equal(Pairing.ReplaceQuestion, question);
             asked++;
             return Task.FromResult(false);
         });
@@ -205,8 +243,9 @@ public sealed class RemoteKeyAdministrationTests
         Assert.Equal(first.Token, settings.Token);
         Assert.Equal(signingBefore, SigningPublic(database, "host-a"));
 
-        var replaced = await RemoteAccessService.ConnectWithCodeAsync(second, settings, database, () =>
+        var replaced = await RemoteAccessService.ConnectWithCodeAsync(second, settings, database, question =>
         {
+            Assert.Equal(Pairing.ReplaceQuestion, question);
             asked++;
             return Task.FromResult(true);
         });
@@ -225,11 +264,75 @@ public sealed class RemoteKeyAdministrationTests
     }
 
     /// <summary>
-    /// A second code for the same computer - another browser registering it again - adds its device
-    /// to the keys the computer has. Nothing is replaced, so nothing is asked.
+    /// The one code applied without a question: an exact re-paste - the stored computer, the stored
+    /// gateway, and a device this computer already trusts with that very key. It changes nothing a
+    /// person would have to agree to, and re-queues that device's grants.
     /// </summary>
     [WindowsFact]
-    public async Task A_code_for_the_same_computer_adds_its_device_without_asking()
+    public async Task An_exact_re_paste_is_applied_without_asking()
+    {
+        using var fx = new EngineFixture();
+        var database = fx.PathOf("remote.db");
+        var settings = new RemoteAccessSettings();
+        var (code, device) = NewCode("host-a", "device-a");
+        using var _ = device;
+        var text = code.Format();
+        await RemoteAccessService.ConnectWithCodeAsync(code, settings, database, NeverAsked);
+        var signingBefore = SigningPublic(database, "host-a");
+
+        var outcome = await RemoteAccessService.ConnectWithCodeAsync(ConnectionCode.Parse(text), settings, database, NeverAsked);
+
+        Assert.True(outcome.Paired);
+        Assert.False(outcome.Replaced);
+        Assert.Equal(signingBefore, SigningPublic(database, "host-a"));
+        using var store = new HostStore(database);
+        using var keys = new HostKeyStore(store, "host-a");
+        Assert.Equal("device-a", Assert.Single(keys.Live).DeviceId);
+    }
+
+    /// <summary>
+    /// The computer's id is no secret - it is on the settings pane, in the log, and known to the
+    /// gateway's operator - so a code naming it proves nothing about who made it. One that moves the
+    /// computer to another gateway is asked about, and a no leaves it where it was.
+    /// </summary>
+    [WindowsFact]
+    public async Task A_code_for_this_computer_on_another_gateway_asks_before_moving_it()
+    {
+        using var fx = new EngineFixture();
+        var database = fx.PathOf("remote.db");
+        var settings = new RemoteAccessSettings();
+        var (code, device) = NewCode("host-a", "device-a");
+        using var _ = device;
+        var text = code.Format();
+        await RemoteAccessService.ConnectWithCodeAsync(code, settings, database, NeverAsked);
+        var elsewhere = ConnectionCode.Parse(text) with { Gateway = new Uri("https://attacker.example.test") };
+        var questions = new List<string>();
+
+        var declined = await RemoteAccessService.ConnectWithCodeAsync(elsewhere, settings, database, question =>
+        {
+            questions.Add(question);
+            return Task.FromResult(false);
+        });
+
+        Assert.False(declined.Paired);
+        Assert.Equal([Pairing.MoveQuestion(new Uri("https://attacker.example.test"))], questions);
+        Assert.Contains("https://attacker.example.test", questions[0], StringComparison.Ordinal);
+        Assert.Equal("https://remote.example.test", settings.GatewayUrl);
+
+        var moved = await RemoteAccessService.ConnectWithCodeAsync(
+            ConnectionCode.Parse(text) with { Gateway = new Uri("https://attacker.example.test") }, settings, database,
+            _ => Task.FromResult(true));
+
+        Assert.True(moved.Paired);
+        Assert.Equal("https://attacker.example.test", settings.GatewayUrl);
+    }
+
+    /// <summary>
+    /// A code for this computer that names a device it does not trust is asked about: applied silently,
+    /// a crafted one would hand its own device every key this computer holds. A no admits nothing.
+    /// </summary>
+    [WindowsFact]
+    public async Task A_code_for_this_computer_asks_before_admitting_a_new_device()
     {
         using var fx = new EngineFixture();
         var database = fx.PathOf("remote.db");
@@ -238,47 +341,134 @@ public sealed class RemoteKeyAdministrationTests
         var (second, secondDevice) = NewCode("host-a", "device-b");
         using var _ = firstDevice;
         using var __ = secondDevice;
+        var secondText = second.Format();
         await RemoteAccessService.ConnectWithCodeAsync(first, settings, database, NeverAsked);
-        var signingBefore = SigningPublic(database, "host-a");
+        var questions = new List<string>();
 
-        var outcome = await RemoteAccessService.ConnectWithCodeAsync(second, settings, database, NeverAsked);
+        var declined = await RemoteAccessService.ConnectWithCodeAsync(second, settings, database, question =>
+        {
+            questions.Add(question);
+            return Task.FromResult(false);
+        });
 
-        Assert.True(outcome.Paired);
-        Assert.False(outcome.Replaced);
-        Assert.Equal(signingBefore, SigningPublic(database, "host-a"));
-        using var store = new HostStore(database);
-        using var keys = new HostKeyStore(store, "host-a");
-        Assert.Equal(["device-a", "device-b"], keys.Live.Select(d => d.DeviceId).Order());
+        Assert.False(declined.Paired);
+        Assert.Equal([Pairing.AdmitQuestion], questions);
+        Assert.Equal(["device-a"], LiveDevices(database, "host-a"));
+        Assert.Equal(first.Token, settings.Token);
+
+        var admitted = await RemoteAccessService.ConnectWithCodeAsync(
+            ConnectionCode.Parse(secondText), settings, database, _ => Task.FromResult(true));
+
+        Assert.True(admitted.Paired);
+        Assert.False(admitted.Replaced);
+        Assert.Equal(["device-a", "device-b"], LiveDevices(database, "host-a"));
     }
 
     /// <summary>
-    /// Keys this account cannot read are replaced only with the person's yes, even for the same
-    /// computer: a code is how the unreadable-keys message tells them to recover, and recovering is
-    /// a new identity that their other devices will not read.
+    /// A revoked device is a device this computer does not trust: a code bringing it back is asked
+    /// about like a new one - otherwise it would get back every epoch made since it was revoked - and on
+    /// yes it is trusted again with the key it had (Retrust), never as a new trust of that id.
     /// </summary>
     [WindowsFact]
-    public async Task Keys_this_account_cannot_read_are_replaced_only_when_the_person_says_so()
+    public async Task A_code_for_a_revoked_device_asks_and_then_trusts_it_again_with_its_own_key()
     {
         using var fx = new EngineFixture();
         var database = fx.PathOf("remote.db");
         var settings = new RemoteAccessSettings();
         var (code, device) = NewCode("host-a", "device-a");
         using var _ = device;
+        var text = code.Format();
         await RemoteAccessService.ConnectWithCodeAsync(code, settings, database, NeverAsked);
-        MakeUnreadable(database);
-        var asked = 0;
-
-        var outcome = await RemoteAccessService.ConnectWithCodeAsync(code, settings, database, () =>
+        using (var store = new HostStore(database))
+        using (var keys = new HostKeyStore(store, "host-a"))
         {
+            keys.Distrust("device-a");
+            keys.Rotate();
+        }
+        var questions = new List<string>();
+
+        var outcome = await RemoteAccessService.ConnectWithCodeAsync(ConnectionCode.Parse(text), settings, database, question =>
+        {
+            questions.Add(question);
+            return Task.FromResult(true);
+        });
+
+        Assert.True(outcome.Paired);
+        Assert.Equal([Pairing.AdmitQuestion], questions);
+        using (var store = new HostStore(database))
+        using (var keys = new HostKeyStore(store, "host-a"))
+        {
+            var back = Assert.Single(keys.Live);
+            Assert.Equal(code.DevicePublic, back.PublicKey);
+            Assert.Equal(Pairing.AddedBy, back.AddedBy);
+            Assert.Equal([1u, 2u], keys.PendingGrants().Select(p => p.Grant.Epoch).Order());
+        }
+    }
+
+    /// <summary>
+    /// A code naming a device this computer trusts with another key is refused with a sentence, and
+    /// nothing is asked: there is no yes that could make it right, since a device id is never rebound.
+    /// </summary>
+    [WindowsFact]
+    public async Task A_code_naming_a_live_device_with_another_key_is_refused_with_a_sentence()
+    {
+        using var fx = new EngineFixture();
+        var database = fx.PathOf("remote.db");
+        var settings = new RemoteAccessSettings();
+        var (code, device) = NewCode("host-a", "device-a");
+        using var _ = device;
+        var text = code.Format();
+        await RemoteAccessService.ConnectWithCodeAsync(code, settings, database, NeverAsked);
+        using var other = P256.Generate();
+
+        var refused = await RemoteAccessService.ConnectWithCodeAsync(
+            ConnectionCode.Parse(text) with { DevicePublic = P256.PublicRaw(other) }, settings, database, NeverAsked);
+
+        Assert.False(refused.Paired);
+        Assert.Equal(Pairing.AnotherKey, refused.Problem);
+        using var store = new HostStore(database);
+        using var keys = new HostKeyStore(store, "host-a");
+        Assert.Equal(code.DevicePublic, Assert.Single(keys.Live).PublicKey);
+    }
+
+    /// <summary>
+    /// Keys of THIS computer that this account cannot read are not replaced, even on a yes. The gateway
+    /// and every browser pinned the old signing key, so a new one could never be delivered: every grant
+    /// it signed would be refused as a bad grant, for good. The person is told to register the computer
+    /// afresh, which is a code for another id - and that path does replace, after asking.
+    /// </summary>
+    [WindowsFact]
+    public async Task Unreadable_keys_of_this_computer_are_reported_not_replaced()
+    {
+        using var fx = new EngineFixture();
+        var database = fx.PathOf("remote.db");
+        var settings = new RemoteAccessSettings();
+        var (code, device) = NewCode("host-a", "device-a");
+        using var _ = device;
+        var text = code.Format();
+        await RemoteAccessService.ConnectWithCodeAsync(code, settings, database, NeverAsked);
+        var unreadable = MakeUnreadable(database);
+
+        var outcome = await RemoteAccessService.ConnectWithCodeAsync(ConnectionCode.Parse(text), settings, database, NeverAsked);
+
+        Assert.False(outcome.Paired);
+        Assert.Equal(Pairing.UnreadableForThisComputer, outcome.Problem);
+        Assert.Equal(unreadable, Read(database, "SELECT secret FROM host_keys WHERE epoch = 1"));
+        Assert.Equal(1L, Count(database, "host_signing"));
+
+        var (fresh, freshDevice) = NewCode("host-new", "device-a");
+        using var __ = freshDevice;
+        var asked = 0;
+        var replaced = await RemoteAccessService.ConnectWithCodeAsync(fresh, settings, database, question =>
+        {
+            Assert.Equal(Pairing.ReplaceQuestion, question);
             asked++;
             return Task.FromResult(true);
         });
 
         Assert.Equal(1, asked);
-        Assert.True(outcome.Replaced);
-        using var store = new HostStore(database);
-        using var keys = new HostKeyStore(store, "host-a");
-        Assert.Single(keys.Trusted);
+        Assert.True(replaced.Replaced);
+        Assert.Equal("host-new", settings.HostId);
     }
 
     // ── the service ─────────────────────────────────────────────────────────
@@ -424,6 +614,7 @@ public sealed class RemoteKeyAdministrationTests
         var settings = new RemoteAccessSettings();
         var (code, device) = NewCode();
         using var _ = device;
+        var pairKey = code.PairKey;
         await RemoteAccessService.ConnectWithCodeAsync(code, settings, database, NeverAsked);
         var gateway = new FakeGateway();
 
@@ -438,7 +629,62 @@ public sealed class RemoteKeyAdministrationTests
         Assert.Equal(["Hello", "PublishGrants", "Sync"], gateway.Calls.Take(3));
         var grant = Assert.Single(Assert.Single(gateway.GrantCalls));
         Assert.Equal(code.DeviceId, grant.DeviceId);
-        Grants.Open(grant, device, code.PairKey, pinnedHostSigningPublic: null);
+        Grants.Open(grant, device, pairKey, pinnedHostSigningPublic: null);
+    }
+
+    /// <summary>
+    /// A grant refused for good in a way that ends the connection - the credential revoked - stops the
+    /// service, and the person reads why in the status line, not only in a notice list nobody reads.
+    /// </summary>
+    [WindowsFact]
+    public async Task A_fatal_refusal_of_a_grant_stops_the_service_and_says_why()
+    {
+        using var fx = new EngineFixture();
+        var database = fx.PathOf("remote.db");
+        var settings = new RemoteAccessSettings();
+        var (code, device) = NewCode();
+        using var _ = device;
+        await RemoteAccessService.ConnectWithCodeAsync(code, settings, database, NeverAsked);
+        var gateway = new FakeGateway
+        {
+            GrantRefusal = _ => new GatewayRefusedException(FaultCode.HostRevoked, "This computer was revoked.")
+        };
+
+        await using var service = new RemoteAccessService(settings, keys: null,
+            _ => throw new InvalidOperationException("No composition expected"), () => [], fx.Decisions, database,
+            connect: _ => Task.FromResult<IGatewayConnection>(gateway));
+        service.Start();
+
+        await StoppedAsync(service);
+        Assert.Contains("remote access has stopped", service.Status, StringComparison.Ordinal);
+        Assert.Contains("This computer was revoked.", service.Status, StringComparison.Ordinal);
+        Assert.DoesNotContain("Sync", gateway.Calls);
+    }
+
+    /// <summary>
+    /// A connection that closes is replaced by a new one, and the new one says Hello before anything
+    /// else. SignalR's own reconnect came back without it, so a gateway redeployed with another protocol
+    /// meanwhile was sent Sync and Publish and the person never saw the sentence that names the problem.
+    /// </summary>
+    [Fact]
+    public async Task A_connection_made_again_after_a_drop_says_hello_before_it_syncs()
+    {
+        using var fx = new EngineFixture();
+        var first = new FakeGateway { OnSync = g => g.IsOpen = false };
+        var second = new FakeGateway();
+        var gateways = new Queue<FakeGateway>([first, second]);
+        await using var service = new RemoteAccessService(
+            new RemoteAccessSettings { Enabled = true, GatewayUrl = Gateway.ToString(), HostId = "host-1", Token = "token" },
+            new FixedHostKeys(), _ => throw new InvalidOperationException("No composition expected"), () => [],
+            fx.Decisions, fx.PathOf("remote.db"),
+            connect: _ => Task.FromResult<IGatewayConnection>(gateways.Dequeue()),
+            firstRetry: TimeSpan.FromMilliseconds(10));
+
+        service.Start();
+        await Until(() => second.Calls.Contains("Sync"));
+
+        Assert.Equal(["Hello", "Sync"], first.Calls);
+        Assert.Equal(["Hello", "Sync"], second.Calls.Take(2));
     }
 
     // ── the key store ───────────────────────────────────────────────────────
@@ -472,8 +718,22 @@ public sealed class RemoteKeyAdministrationTests
 
     // ── plumbing ────────────────────────────────────────────────────────────
 
-    private static Task<bool> NeverAsked()
-        => throw new Xunit.Sdk.XunitException("Nothing was to be replaced, so nothing should have been asked.");
+    private static Task<bool> NeverAsked(string question)
+        => throw new Xunit.Sdk.XunitException($"Nothing should have been asked, and this was: {question}");
+
+    /// <summary>
+    /// A copy of a code with its own secret, for a test that applies one code more than once: applying
+    /// wipes the secret of the code it was given.
+    /// </summary>
+    private static ConnectionCode Fresh(ConnectionCode code)
+        => code with { PairingSecret = (byte[])code.PairingSecret.Clone() };
+
+    private static string[] LiveDevices(string database, string hostId)
+    {
+        using var store = new HostStore(database);
+        using var keys = new HostKeyStore(store, hostId);
+        return [.. keys.Live.Select(d => d.DeviceId).Order()];
+    }
 
     private static (ConnectionCode Code, ECDiffieHellman Device) NewCode(string hostId = "host-1", string deviceId = "device-1")
     {
@@ -521,9 +781,20 @@ public sealed class RemoteKeyAdministrationTests
     }
 
     /// <summary>An epoch key in the clear: this store never writes one so, so it reads as not this account's.</summary>
-    private static void MakeUnreadable(string database)
-        => Execute(database, "UPDATE host_keys SET secret = $value WHERE epoch = 1",
-            Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)));
+    private static string MakeUnreadable(string database)
+    {
+        var clear = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
+        Execute(database, "UPDATE host_keys SET secret = $value WHERE epoch = 1", clear);
+        return clear;
+    }
+
+    private static object? Read(string path, string sql)
+    {
+        using var connection = Open(path);
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        return command.ExecuteScalar();
+    }
 
     private static bool Contains(byte[] haystack, byte[] needle) => haystack.AsSpan().IndexOf(needle) >= 0;
 

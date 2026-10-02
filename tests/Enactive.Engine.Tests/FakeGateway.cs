@@ -17,6 +17,9 @@ internal sealed class FakeGateway : IGatewayConnection
 
     public List<HostCommand> Pending { get; init; } = [];
 
+    /// <summary>Set to false to have the connection close, as a dropped socket does.</summary>
+    public bool IsOpen { get; set; } = true;
+
     public List<HostEvent> Published { get; } = [];
 
     public List<string> Acknowledged { get; } = [];
@@ -36,6 +39,9 @@ internal sealed class FakeGateway : IGatewayConnection
     /// <summary>What Sync answers instead of the pending commands.</summary>
     public Exception? SyncRefusal { get; set; }
 
+    /// <summary>Runs on every Sync, after it is recorded - how a test closes the connection at a chosen moment.</summary>
+    public Action<FakeGateway>? OnSync { get; set; }
+
     /// <summary>Decides, per call, whether a PublishGrants is refused, and how.</summary>
     public Func<IReadOnlyList<KeyGrant>, Exception?>? GrantRefusal { get; set; }
 
@@ -54,6 +60,7 @@ internal sealed class FakeGateway : IGatewayConnection
     public Task<IReadOnlyList<HostCommand>> SyncAsync(IReadOnlyList<WorkspaceRef> workspaces, CancellationToken ct)
     {
         Record("Sync");
+        OnSync?.Invoke(this);
         return SyncRefusal is null
             ? Task.FromResult<IReadOnlyList<HostCommand>>(Pending)
             : Task.FromException<IReadOnlyList<HostCommand>>(SyncRefusal);

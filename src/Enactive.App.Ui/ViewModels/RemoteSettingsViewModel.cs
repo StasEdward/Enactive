@@ -40,13 +40,14 @@ internal sealed partial class SettingsViewModel
 
     /// <summary>
     /// Asks the window to apply a connection code: the keys, then the settings, saved. The second
-    /// argument asks the person before keys are replaced. Answers whether the code was applied and a
-    /// sentence saying what happened.
+    /// argument puts a yes/no question to the person - before keys are replaced, before the computer
+    /// moves to another gateway, before a device is admitted. Answers whether the code was applied and
+    /// a sentence saying what happened.
     /// </summary>
-    public Func<ConnectionCode, Func<Task<bool>>, Task<(bool Connected, string Detail)>>? RemoteConnect { get; set; }
+    public Func<ConnectionCode, Func<string, Task<bool>>, Task<(bool Connected, string Detail)>>? RemoteConnect { get; set; }
 
-    /// <summary>Asks the person whether to replace this computer's remote identity. No handler means no.</summary>
-    public event Func<string, Task<bool>>? RemoteReplaceRequested;
+    /// <summary>Puts a question about a connection code to the person. No handler means no.</summary>
+    public event Func<string, Task<bool>>? RemoteQuestionRequested;
 
     private bool _remoteEnabled;
     private string _remoteCode = string.Empty;
@@ -140,14 +141,21 @@ internal sealed partial class SettingsViewModel
 
     public bool HasRemoteResult => !string.IsNullOrEmpty(RemoteResult);
 
-    /// <summary>A check or a connect is running. The buttons say so rather than looking like they did nothing.</summary>
+    /// <summary>
+    /// A check or a connect is running. The buttons say so rather than looking like they did nothing,
+    /// and Save waits: this window is not modal, and a Save while a code was being applied could write
+    /// the old computer's settings over the new one's keys - settings and keys for different computers.
+    /// </summary>
     public bool RemoteBusy
     {
         get => _remoteBusy;
         private set
         {
             if (Set(ref _remoteBusy, value))
+            {
                 OnPropertyChanged(nameof(CanUseRemote));
+                SaveCommand?.RaiseCanExecuteChanged();
+            }
         }
     }
 
@@ -187,7 +195,7 @@ internal sealed partial class SettingsViewModel
 
         try
         {
-            var (connected, detail) = await connect(code, AskToReplaceAsync);
+            var (connected, detail) = await connect(code, AskAsync);
             RemoteResult = detail;
 
             if (!connected)
@@ -213,8 +221,8 @@ internal sealed partial class SettingsViewModel
         }
     }
 
-    private async Task<bool> AskToReplaceAsync()
-        => RemoteReplaceRequested is { } ask && await ask(Pairing.ReplaceQuestion);
+    private async Task<bool> AskAsync(string question)
+        => RemoteQuestionRequested is { } ask && await ask(question);
 
     /// <summary>Tries the stored connection: hello, and one sync with the sealed workspace list.</summary>
     private async Task TestRemoteAsync()

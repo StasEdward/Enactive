@@ -29,7 +29,7 @@ internal sealed partial class SettingsWindow : Window
         AppSettings settings, Action<AppSettings> onSaved,
         string? workspaceRoot = null, IReadOnlyList<string>? toolNames = null,
         Func<CancellationToken, Task<string>>? remoteCheck = null,
-        Func<ConnectionCode, Func<Task<bool>>, Task<(bool Connected, string Detail)>>? remoteConnect = null)
+        Func<ConnectionCode, Func<string, Task<bool>>, Task<(bool Connected, string Detail)>>? remoteConnect = null)
     {
         var viewModel = new SettingsViewModel(settings, onSaved, workspaceRoot, toolNames)
         {
@@ -43,10 +43,10 @@ internal sealed partial class SettingsWindow : Window
             new WorkerEditWindow(config, catalog, viewModel.ToolNames, saved).Show(this);
         viewModel.ConfirmRequested += (headline, detail) =>
             ConfirmWindow.AskAsync(this, headline, detail, "Remove", "Keep");
-        viewModel.RemoteReplaceRequested += question =>
+        viewModel.RemoteQuestionRequested += question =>
             ConfirmWindow.AskAsync(this, question,
-                "The keys this computer has now are deleted, and the code's browser becomes the only device it trusts.",
-                "Replace", "Keep");
+                "Nothing changes if you cancel. Only continue with a code you made yourself, in your own browser.",
+                "Continue", "Cancel");
 
         viewModel.McpEditRequested += (config, saved) => new McpEditWindow(config, saved).ShowDialog(this);
         viewModel.TemplateEditRequested += (draft, idEditable, scopes, saved) =>

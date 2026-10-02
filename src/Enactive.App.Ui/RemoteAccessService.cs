@@ -52,6 +52,7 @@ internal sealed class RemoteAccessService : IAsyncDisposable
 
     private readonly RemoteAccessSettings _settings;
     private readonly Func<CancellationToken, Task<IGatewayConnection>> _connect;
+    private readonly TimeSpan _firstRetry;
 
     /// <summary>
     /// The keys, as handed in or as read from remote.db under the settings' computer id - and the key
@@ -74,6 +75,7 @@ internal sealed class RemoteAccessService : IAsyncDisposable
     private IGatewayConnection? _connection;
     private Task? _loop;
     private bool _recovered;
+    private volatile bool _connectedSinceFailure;
     private string _status = "Not connected.";
 
     /// <summary>
@@ -110,6 +112,10 @@ internal sealed class RemoteAccessService : IAsyncDisposable
     /// service does with a refusal is the thing under test, and a real gateway cannot be made to speak
     /// another protocol on cue.
     /// </param>
+    /// <param name="firstRetry">
+    /// The first wait before connecting again after a connection was lost. Five seconds unless a test
+    /// needs to see a reconnection without waiting for one.
+    /// </param>
     public RemoteAccessService(
         RemoteAccessSettings settings,
         IHostKeys? keys,
@@ -117,8 +123,10 @@ internal sealed class RemoteAccessService : IAsyncDisposable
         Func<IReadOnlyList<WorkspaceEntry>> workspaces,
         IDecisionHandler desktop,
         string databasePath,
-        Func<CancellationToken, Task<IGatewayConnection>>? connect = null)
+        Func<CancellationToken, Task<IGatewayConnection>>? connect = null,
+        TimeSpan? firstRetry = null)
     {
+        _firstRetry = firstRetry ?? TimeSpan.FromSeconds(5);
         _settings = settings;
         _keys = keys;
         _sealer = keys is null ? null : new Sealer(keys, TimeProvider.System);
@@ -293,17 +301,20 @@ internal sealed class RemoteAccessService : IAsyncDisposable
     /// the settings it names - the gateway, the computer and its token, and remote access turned on.
     /// The caller saves the settings; the token reaches disk only as DPAPI ciphertext.
     ///
-    /// <para>No service may be running over <paramref name="databasePath"/> while this runs: it holds a
-    /// key store over the same file, and replacing the keys under it would leave it sealing with keys
-    /// written nowhere. Nothing in the settings changes when the person declines.</para>
+    /// <para>The questions are asked first, while a running service may still hold a key store over
+    /// <paramref name="databasePath"/>; <paramref name="beforeChange"/> is where the caller stops it,
+    /// once every answer is yes and before anything is written. Replacing keys under a running service
+    /// would leave it sealing with keys written nowhere. Nothing in the settings changes when the
+    /// person declines or the code is refused.</para>
     /// </summary>
     public static async Task<PairingOutcome> ConnectWithCodeAsync(
-        ConnectionCode code, RemoteAccessSettings settings, string databasePath, Func<Task<bool>> confirmReplace)
+        ConnectionCode code, RemoteAccessSettings settings, string databasePath,
+        Func<string, Task<bool>> confirm, Func<Task>? beforeChange = null)
     {
         PairingOutcome outcome;
         using (var store = new HostStore(databasePath))
         {
-            outcome = await Pairing.ConnectAsync(store, settings.HostId, code, confirmReplace);
+            outcome = await Pairing.ConnectAsync(store, settings.HostId, settings.GatewayUrl, code, confirm, beforeChange);
         }
 
         if (outcome.Paired)
@@ -327,7 +338,7 @@ internal sealed class RemoteAccessService : IAsyncDisposable
 
     private async Task RunAsync(CancellationToken ct)
     {
-        var backoff = TimeSpan.FromSeconds(5);
+        var backoff = _firstRetry;
 
         while (!ct.IsCancellationRequested)
         {
@@ -345,6 +356,12 @@ internal sealed class RemoteAccessService : IAsyncDisposable
             }
             catch (Exception failure)
             {
+                if (_connectedSinceFailure)
+                {
+                    _connectedSinceFailure = false;
+                    backoff = _firstRetry;
+                }
+
                 Status = $"Not connected: {failure.Message} Trying again in {backoff.TotalSeconds:0}s.";
             }
 
@@ -403,6 +420,14 @@ internal sealed class RemoteAccessService : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Serves one connection, from its Hello to its end.
+    ///
+    /// <para>Every connection starts here, the first and every one after a drop: the SignalR client's
+    /// own automatic reconnect is off, because it came back without saying Hello - a gateway redeployed
+    /// with another protocol meanwhile was sent Sync and Publish, refused them for reasons that named
+    /// neither protocol, and the person never saw the sentence that would have told them to update.</para>
+    /// </summary>
     private async Task ServeAsync(HostStore store, IGatewayConnection connection, CancellationToken ct)
     {
         try
@@ -440,10 +465,21 @@ internal sealed class RemoteAccessService : IAsyncDisposable
 
         Status = "Connected.";
 
+        // A connection that got as far as Hello was a working one, so the wait after it drops starts
+        // short again. Without this every drop of a long-lived connection added to the wait, and a
+        // computer that lost its network twice in a week waited two minutes to come back.
+        _connectedSinceFailure = true;
+
         var nextSync = DateTimeOffset.MinValue;
 
         while (!ct.IsCancellationRequested && !loop.Stopped)
         {
+            // A closed connection is left for RunAsync to replace with a new one, which says Hello.
+            // Calls on it would only fail one by one, and each failed Publish counts toward parking
+            // an event that was never refused.
+            if (!connection.IsOpen)
+                throw new IOException("The connection to the gateway closed.");
+
             if (DateTimeOffset.UtcNow >= nextSync)
             {
                 nextSync = DateTimeOffset.UtcNow + SyncEvery;

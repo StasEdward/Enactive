@@ -49,7 +49,10 @@ public sealed class SignalRGatewayConnection : IGatewayConnection, IAsyncDisposa
                 options.PayloadSerializerOptions.PropertyNamingPolicy = RemoteJson.Options.PropertyNamingPolicy;
                 options.PayloadSerializerOptions.UnmappedMemberHandling = RemoteJson.Options.UnmappedMemberHandling;
             })
-            .WithAutomaticReconnect()
+            // No automatic reconnect. It brought a dropped connection back without a Hello, so a
+            // gateway redeployed with another protocol meanwhile was sent Sync and Publish and refused
+            // them for reasons that named neither protocol. The service reconnects itself, with
+            // back-off, through a new connection that says Hello first.
             .Build();
     }
 
@@ -72,6 +75,8 @@ public sealed class SignalRGatewayConnection : IGatewayConnection, IAsyncDisposa
             throw new GatewayCredentialRefusedException(refused);
         }
     }
+
+    public bool IsOpen => _connection.State == HubConnectionState.Connected;
 
     public Task HelloAsync(int protocolVersion, CancellationToken ct)
         => InvokeAsync<bool>("Hello", ct, protocolVersion);

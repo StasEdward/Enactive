@@ -333,6 +333,15 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     private void StartRemoteAccess()
     {
         if (_shuttingDown) return;
+
+        // One service per remote.db: a second one would hold a second key store over the same file,
+        // and a code applied meanwhile could reset the keys under either.
+        if (_remote is not null)
+        {
+            _log.Info(LogSource.System, "Remote access: already running, so it was not started again.");
+            return;
+        }
+
         _remote = new RemoteAccessService(
             _settings.RemoteAccess,
             // Read by the service from remote.db, under the computer id a connection code stored in
@@ -383,17 +392,31 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     /// </summary>
     private async Task RestartRemoteAccessAsync()
     {
-        var previous = _remote;
-        _remote = null;
-
-        if (previous is not null)
+        await _remoteGate.WaitAsync();
+        try
         {
-            _log.Info(LogSource.System, "Remote access: settings changed, reconnecting.");
-            await previous.DisposeAsync();
-        }
+            var previous = _remote;
+            _remote = null;
 
-        StartRemoteAccess();
+            if (previous is not null)
+            {
+                _log.Info(LogSource.System, "Remote access: settings changed, reconnecting.");
+                await previous.DisposeAsync();
+            }
+
+            StartRemoteAccess();
+        }
+        finally
+        {
+            _remoteGate.Release();
+        }
     }
+
+    /// <summary>
+    /// Restarting the service and applying a code, one at a time. Interleaved, a restart could start a
+    /// service - and a key store over remote.db - while a code was resetting the keys in that file.
+    /// </summary>
+    private readonly SemaphoreSlim _remoteGate = new(1, 1);
 
     /// <summary>
     /// Answers the settings window's "Test connection", and says what happened.
@@ -416,30 +439,37 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     /// Applies a connection code from the settings window: this computer's keys, then the live
     /// settings, saved - and remote access started again on them.
     ///
-    /// <para>The service is stopped first. It holds the key store over remote.db, and a code can
-    /// replace the keys in it; a service still running would go on sealing with keys that are no
-    /// longer written anywhere. It is started again whatever happened, so a declined or broken code
-    /// leaves remote access as it was.</para>
+    /// <para>The questions come first, with the service still running: a person who says no keeps
+    /// it, and the remote tasks on it. Only once every answer is yes is it stopped - it holds the key
+    /// store over remote.db, and a code can replace the keys in it; a service still running would go
+    /// on sealing with keys that are no longer written anywhere - and it is started again whatever
+    /// happened after that.</para>
     ///
     /// <para>Nothing here logs the code or the settings it fills: both hold the token, and the code
     /// holds the pairing secret too.</para>
     /// </summary>
     private async Task<(bool Connected, string Detail)> ConnectRemoteAsync(
-        ConnectionCode code, Func<Task<bool>> confirmReplace)
+        ConnectionCode code, Func<string, Task<bool>> confirm)
     {
-        var previous = _remote;
-        _remote = null;
+        await _remoteGate.WaitAsync();
+        var stopped = false;
 
         try
         {
-            if (previous is not null)
-                await previous.DisposeAsync();
-
             var outcome = await RemoteAccessService.ConnectWithCodeAsync(
-                code, _settings.RemoteAccess, RemoteDatabasePath(), confirmReplace);
+                code, _settings.RemoteAccess, RemoteDatabasePath(), confirm,
+                beforeChange: async () =>
+                {
+                    stopped = true;
+                    var previous = _remote;
+                    _remote = null;
+                    if (previous is not null)
+                        await previous.DisposeAsync();
+                });
 
             if (!outcome.Paired)
-                return (false, "Nothing was changed: this computer keeps the keys and the connection it had.");
+                return (false, outcome.Problem
+                    ?? "Nothing was changed: this computer keeps the keys and the connection it had.");
 
             _log.Info(LogSource.System,
                 $"Remote access: connected as computer {outcome.HostId}; device {outcome.DeviceId} is trusted"
@@ -460,7 +490,10 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         }
         finally
         {
-            StartRemoteAccess();
+            if (stopped)
+                StartRemoteAccess();
+
+            _remoteGate.Release();
         }
     }
 

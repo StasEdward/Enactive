@@ -3,8 +3,12 @@ namespace Enactive.Remote.Host;
 using System.Security.Cryptography;
 using Enactive.Remote.Contracts.Crypto;
 
-/// <summary>What applying a connection code did. <paramref name="Paired"/> is false when the person said no.</summary>
-public sealed record PairingOutcome(bool Paired, string HostId, string DeviceId, int GrantsQueued, bool Replaced);
+/// <summary>
+/// What applying a connection code did. <paramref name="Paired"/> is false when the person said no, or
+/// when the code was refused - then <paramref name="Problem"/> says why, in words for the person.
+/// </summary>
+public sealed record PairingOutcome(
+    bool Paired, string HostId, string DeviceId, int GrantsQueued, bool Replaced, string? Problem = null);
 
 /// <summary>
 /// A connection code applied to this computer's keys (spec §5.2): the code's browser becomes the first
@@ -34,6 +38,38 @@ public static class Pairing
     /// </summary>
     public const string ReplaceQuestion =
         "This replaces this computer's remote identity; devices that could read it will not read anything new. Continue?";
+
+    /// <summary>
+    /// Asked before a code for this same computer admits a device it does not trust now - one it never
+    /// trusted, or one it revoked. The computer's id is no secret (it is on the settings pane, in the log,
+    /// and known to the gateway's operator), so a code naming it proves nothing about who made the code;
+    /// applied silently, a crafted one would hand its own device every key this computer holds, and bring
+    /// a revoked device back with the epochs made after its revocation.
+    /// </summary>
+    public const string AdmitQuestion =
+        "This code admits a new device to every key this computer holds. Continue?";
+
+    /// <summary>
+    /// What a person is told when a code for this computer finds its keys unreadable. They are NOT
+    /// replaced under the same id: the gateway and every browser pinned the old signing key, so a new one
+    /// could never be delivered - every grant it signed would be refused as a bad grant, for good.
+    /// </summary>
+    public const string UnreadableForThisComputer =
+        "This computer's remote keys cannot be read on this account. Make a new connection code in the browser "
+        + "(Computers → Register) and paste it here.";
+
+    /// <summary>What a person is told when a code names a device this computer knows with another key.</summary>
+    public const string AnotherKey =
+        "This code names a device this computer already knows with a different key, so it was not applied - "
+        + "a device id is never given to a new key. Make a new code in the browser.";
+
+    /// <summary>
+    /// Asked before a code moves this computer to another gateway. The token would go there from then on,
+    /// and the computer would take its commands from there - a crafted code could otherwise move it to a
+    /// service of the crafter's choosing without a word.
+    /// </summary>
+    public static string MoveQuestion(Uri gateway)
+        => $"This code moves this computer to another service ({gateway.GetLeftPart(UriPartial.Authority)}). Continue?";
 
     /// <summary>
     /// What the trusted list calls a device it knows only from a code. The code carries no label, and
@@ -102,8 +138,11 @@ public static class Pairing
         }
         finally
         {
-            // Derived from the secret, and as good as it for making grants this browser accepts.
+            // The secret and the key derived from it are as good as each other for making grants this
+            // browser accepts, and neither is needed once the grants are made: wiped, rather than left in
+            // memory for as long as the code object happens to live.
             CryptographicOperations.ZeroMemory(pairKey);
+            CryptographicOperations.ZeroMemory(code.PairingSecret);
         }
 
         return new PairingOutcome(true, keys.HostId, code.DeviceId, keys.All.Count, Replaced: false);
@@ -112,50 +151,101 @@ public static class Pairing
     /// <summary>
     /// Applies a code to the keys in <paramref name="store"/>, making them first when there are none.
     ///
-    /// <para>The keys there are replaced only with the person's yes, through
-    /// <paramref name="confirmReplace"/>, and only when they have to be: when they belong to another
-    /// computer than the code names (<paramref name="knownHostId"/>, the id the settings hold, says
-    /// whose they are), or when this Windows account cannot read them. A no changes nothing.</para>
+    /// <para>Every question is asked before anything changes, through <paramref name="confirm"/>, and a no
+    /// to any of them changes nothing. Silent only for the first connection and for an exact re-paste:
+    /// the stored computer, the stored gateway, and a device this computer already trusts with that key.
+    /// Otherwise: another computer (<paramref name="knownHostId"/> is the id the settings hold) replaces
+    /// the keys after <see cref="ReplaceQuestion"/>; another gateway asks <see cref="MoveQuestion"/>; a
+    /// device not trusted now asks <see cref="AdmitQuestion"/>. A device known with another key, and keys
+    /// of this same computer that this account cannot read, are refused with a sentence.</para>
     ///
-    /// <para>Nothing else may hold a key store over <paramref name="store"/> while this runs: replacing
-    /// the keys under one that is sealing would leave it sealing with keys written nowhere.</para>
+    /// <para><paramref name="beforeChange"/> runs once every answer is yes and before the first write: the
+    /// caller stops whatever holds a key store over the same file there, so a person who says no keeps a
+    /// running service and the remote tasks on it. Until then this only reads.</para>
     /// </summary>
     public static async Task<PairingOutcome> ConnectAsync(
-        HostStore store, string? knownHostId, ConnectionCode code, Func<Task<bool>> confirmReplace,
-        TimeProvider? clock = null)
+        HostStore store, string? knownHostId, string? knownGateway, ConnectionCode code,
+        Func<string, Task<bool>> confirm, Func<Task>? beforeChange = null, TimeProvider? clock = null)
     {
         var replace = false;
 
         if (HostKeyStore.HasKeys(store))
         {
-            // Keys and no id in the settings are keys of a computer nobody can name any more - the
-            // settings were reset, or copied without them. They are no more this code's computer than
-            // keys under another id.
-            replace = knownHostId != code.HostId || !Readable(store, code.HostId);
+            if (knownHostId != code.HostId)
+            {
+                // Keys and no id in the settings are keys of a computer nobody can name any more - the
+                // settings were reset, or copied without them. They are no more this code's computer than
+                // keys under another id.
+                if (!await confirm(ReplaceQuestion))
+                    return Declined(code);
+
+                replace = true;
+            }
+            else
+            {
+                List<string> questions;
+                try
+                {
+                    questions = QuestionsFor(store, knownGateway, code, clock, out var refusal);
+                    if (refusal is not null)
+                        return Declined(code) with { Problem = refusal };
+                }
+                catch (HostKeysUnreadableException)
+                {
+                    return Declined(code) with { Problem = UnreadableForThisComputer };
+                }
+
+                foreach (var question in questions)
+                {
+                    if (!await confirm(question))
+                        return Declined(code);
+                }
+            }
         }
+
+        if (beforeChange is not null)
+            await beforeChange();
 
         if (replace)
-        {
-            if (!await confirmReplace())
-                return new PairingOutcome(false, code.HostId, code.DeviceId, 0, Replaced: false);
-
             HostKeyStore.Reset(store);
-        }
 
         using var keys = new HostKeyStore(store, code.HostId, clock);
         return Apply(code, keys, clock) with { Replaced = replace };
     }
 
-    private static bool Readable(HostStore store, string hostId)
+    /// <summary>
+    /// What to ask before a code for this same computer is applied, or a refusal. Reads the key store and
+    /// writes nothing - a key store made here over keys that exist creates nothing.
+    /// </summary>
+    private static List<string> QuestionsFor(
+        HostStore store, string? knownGateway, ConnectionCode code, TimeProvider? clock, out string? refusal)
     {
-        try
+        using var keys = new HostKeyStore(store, code.HostId, clock);
+        var known = keys.Trusted.FirstOrDefault(d => d.DeviceId == code.DeviceId);
+        refusal = null;
+
+        if (known is not null && !CryptographicOperations.FixedTimeEquals(known.PublicKey, code.DevicePublic))
         {
-            using (new HostKeyStore(store, hostId)) { }
-            return true;
+            refusal = AnotherKey;
+            return [];
         }
-        catch (HostKeysUnreadableException)
-        {
-            return false;
-        }
+
+        var questions = new List<string>();
+
+        if (!SameOrigin(code.Gateway, knownGateway))
+            questions.Add(MoveQuestion(code.Gateway));
+
+        if (known is not { RevokedAt: null })
+            questions.Add(AdmitQuestion);
+
+        return questions;
     }
+
+    private static bool SameOrigin(Uri gateway, string? known)
+        => Uri.TryCreate(known, UriKind.Absolute, out var stored)
+           && string.Equals(gateway.GetLeftPart(UriPartial.Authority), stored.GetLeftPart(UriPartial.Authority),
+               StringComparison.OrdinalIgnoreCase);
+
+    private static PairingOutcome Declined(ConnectionCode code)
+        => new(false, code.HostId, code.DeviceId, 0, Replaced: false);
 }

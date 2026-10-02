@@ -282,6 +282,7 @@ public sealed class EndToEndTests(TestDatabase database) : IClassFixture<TestDat
         Assert.Equal(string.Empty, problem);
         using var store = OpenStore();
         using var keys = new HostKeyStore(store, code.HostId);
+        var pairKey = code.PairKey;
         Pairing.Apply(code, keys);
 
         await using var host = Connect(code.Token);
@@ -299,7 +300,7 @@ public sealed class EndToEndTests(TestDatabase database) : IClassFixture<TestDat
         var forComputer = Assert.Single(held!, g => g.HostId == computer.Id);
         var grant = Assert.Single(forComputer.Grants);
 
-        var (key, signing) = Grants.Open(grant, browserKey, code.PairKey, pinnedHostSigningPublic: null);
+        var (key, signing) = Grants.Open(grant, browserKey, pairKey, pinnedHostSigningPublic: null);
 
         Assert.Equal(1u, forComputer.KeyEpoch);
         Assert.Equal(keys.Current.Secret.ToArray(), key.Secret.ToArray());

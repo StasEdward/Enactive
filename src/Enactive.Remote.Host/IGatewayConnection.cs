@@ -13,6 +13,13 @@ using Enactive.Remote.Contracts.Crypto;
 public interface IGatewayConnection
 {
     /// <summary>
+    /// Whether the connection is still up. A connection that closed is not reopened underneath its
+    /// owner - a new one is made, and says Hello first - so the owner has to be able to see that it
+    /// closed rather than learn it from calls failing one by one.
+    /// </summary>
+    bool IsOpen { get; }
+
+    /// <summary>
     /// Says which protocol this computer speaks. The first call on every connection: a gateway of
     /// another version refuses it with <see cref="FaultCode.ProtocolMismatch"/> and a sentence for the
     /// person, where every later call would only be refused for a different-looking reason.
