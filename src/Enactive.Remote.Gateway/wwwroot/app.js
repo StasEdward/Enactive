@@ -42,6 +42,7 @@ import {
 } from "./js/devices.js";
 import { describe, newestFirst } from "./js/audit.js";
 import { deleteAccount, DELETE_QUESTION } from "./js/account.js";
+import { downloadMyData, exportRefusal } from "./js/export.js";
 
 const POLL_MS = 3000;
 
@@ -1802,6 +1803,51 @@ function openAudit() {
   loadAudit();
 }
 
+// ── downloading the account's data ──────────────────────────────────────
+
+// How long the file's address is kept after the click. Revoked at once, some browsers had not yet started reading
+// the file and saved nothing; kept for ever, the opened copy stayed in the page's memory for as long as the tab.
+const DOWNLOAD_KEPT_MS = 60_000;
+
+/**
+ * "Download my data": the gateway's export, opened with this device's keys and saved as a file (export.js). Its
+ * own reader, not the page's: the export is every record the account has, and opened through the page's reader
+ * it would push what is on screen out of that reader's keeping. An answer for a session that has ended is dropped,
+ * like every other: Alice's data must not be offered to Bob, who signed in meanwhile.
+ */
+async function downloadData(clicked) {
+  const button = clicked.currentTarget;
+  const started = generation();
+  $("account").open = false;
+  button.disabled = true;
+  toast("Preparing your data…");
+
+  try {
+    const { name, blob } = await downloadMyData({ api: { get }, reader: createReader(keystore) });
+
+    if (!isCurrent(started)) {
+      return;
+    }
+
+    const address = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = address;
+    link.download = name;
+    link.hidden = true;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(address), DOWNLOAD_KEPT_MS);
+    toast(`Your data is in ${name}. What this device could not open says why, where its text would be.`);
+  } catch (error) {
+    if (isCurrent(started) && !(error instanceof Stale)) {
+      toast(error instanceof Refused ? exportRefusal(error) : "The gateway could not be reached.", true);
+    }
+  } finally {
+    button.disabled = false;
+  }
+}
+
 // ── deleting the account ─────────────────────────────────────────────────
 
 /** Asks first, in a dialog: nothing is sent until the person presses Delete account in it. */
@@ -2437,6 +2483,7 @@ document.querySelectorAll("[data-close]").forEach((button) =>
   button.addEventListener("click", () => button.closest("dialog").close()));
 
 $("security-log").addEventListener("click", openAudit);
+$("download-data").addEventListener("click", downloadData);
 $("delete-account").addEventListener("click", openDeleteAccount);
 $("delete-confirm").addEventListener("click", deleteAccountNow);
 $("sign-out").addEventListener("click", () => signOut("/api/logout"));

@@ -29,6 +29,18 @@ public static class RequestLimits
     /// <summary>The session endpoint's policy, per account or, before signing in, per address.</summary>
     public const string Session = "session";
 
+    /// <summary>The data export's policy, per account: one in <see cref="ExportWindow"/>.</summary>
+    public const string Export = "export";
+
+    /// <summary>
+    /// How often a person may download their data: once in this long. An export reads every row the account
+    /// has, in one transaction held open while the file is downloaded - the most the gateway does for any one
+    /// request - and at the API's rate a script, or a button pressed again and again, could keep a database
+    /// connection and a snapshot of the account open for as long as it liked. Nobody needs a second copy of
+    /// everything within the hour.
+    /// </summary>
+    public static readonly TimeSpan ExportWindow = TimeSpan.FromHours(1);
+
     /// <summary>
     /// Sign-in requests under <c>/auth</c> (start and complete) and the development sign-in, per address
     /// and minute. A sign-in is two of them; twenty leaves room for retries and several people behind
@@ -92,6 +104,18 @@ public static class RequestLimits
             o.AddPolicy(Session, context => PerMinute(
                 context.SignedInUserId() is { } userId ? "user:" + userId : "address:" + ClientAddress(context),
                 ApiPerMinute));
+
+            // Per account, after authentication, like the API. The endpoint's policy is the one that applies
+            // to it - an endpoint's own policy replaces its group's - so an export is counted here and not
+            // against the API's minute, and the hour's refusal stops only the export: the rest of the
+            // person's API goes on.
+            o.AddPolicy(Export, context => RateLimitPartition.GetFixedWindowLimiter(
+                context.UserAccess().UserId, _ => new FixedWindowRateLimiterOptions
+                {
+                    PermitLimit = 1,
+                    Window = ExportWindow,
+                    QueueLimit = 0
+                }));
         });
     }
 

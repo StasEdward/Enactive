@@ -12,12 +12,16 @@ import { createGuard, Stale } from './session-guard.js';
 
 export { Stale };
 
-/** A refusal the gateway coded, kept apart from a network failure. */
+/**
+ * A refusal the gateway coded, kept apart from a network failure. `retryAfter` is the gateway's Retry-After in
+ * seconds when it sent one (a limit says when asking again will work), and undefined when it did not.
+ */
 export class Refused extends Error {
-  constructor(code, message, status) {
+  constructor(code, message, status, retryAfter) {
     super(message);
     this.code = code;
     this.status = status;
+    this.retryAfter = retryAfter;
   }
 }
 
@@ -125,10 +129,18 @@ export async function unwrap(response, started = guard.generation) {
 
     // The gateway's faults carry a code, and the page says what the code means rather than repeating
     // a sentence written for a log.
-    throw new Refused(body?.code ?? 'unknown', body?.error ?? 'That did not work.', response.status);
+    throw new Refused(body?.code ?? 'unknown', body?.error ?? 'That did not work.', response.status,
+      retryAfter(response));
   }
 
   return text ? JSON.parse(text) : null;
+}
+
+// Retry-After as a number of seconds, which is the only form the gateway sends. Without it a refusal for asking
+// too often could only say "later", and a person told to wait an hour has no way to know which hour.
+function retryAfter(response) {
+  const seconds = Number(response.headers?.get('Retry-After') ?? NaN);
+  return Number.isFinite(seconds) && seconds >= 0 ? seconds : undefined;
 }
 
 // A refusal that is not JSON - a 404 from a route that does not exist, a proxy's error page - is a

@@ -128,6 +128,7 @@ builder.Services.AddSingleton(services => new DeviceService(
 builder.Services.AddSingleton<Projection>();
 builder.Services.AddSingleton<HostConnections>();
 builder.Services.AddSingleton<AccountDeletion>();
+builder.Services.AddSingleton<Export>();
 builder.Services.AddHostedService<RetentionLoop>();
 
 // The panel's half of the wire, on the same terms as the Host's.
@@ -506,6 +507,12 @@ api.MapGet("/state", (string? since, HttpContext context, Projection projection,
 // are not in it to leak.
 api.MapGet("/audit", async (HttpContext context, Database db, CancellationToken ct) =>
     Results.Ok(await Audit.ReadAsync(db, context.UserAccess(), ct)));
+
+// Everything stored for the account, streamed as one JSON file (Export): the account's own rows, metadata and
+// envelopes, read by the account the session names. Once an hour per account (RequestLimits.ExportWindow).
+api.MapGet("/export", (HttpContext context, Export export, CancellationToken ct) =>
+    export.WriteAsync(context.UserAccess(), context.Response, ct))
+    .RequireRateLimiting(RequestLimits.Export);
 
 api.MapPost("/hosts", async (
     RegisterHostRequest request, HttpContext context, UserService users, CancellationToken ct) =>

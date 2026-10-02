@@ -30,3 +30,23 @@ test('a call can carry headers of its own beside the ones every call sends', asy
   assert.ok('X-CSRF-TOKEN' in written.init.headers);
   assert.equal(written.init.body, '[]');
 });
+
+// A refusal for asking too often says when asking again will work, as the gateway's Retry-After header does: the
+// page can only tell the person when to come back if the refusal carries it.
+test('a refusal carries the gateway\'s Retry-After, in seconds', async () => {
+  const original = globalThis.fetch;
+  const refusal = JSON.stringify({ code: 'rate-limited', error: 'Too many requests. Wait a moment and try again.' });
+
+  try {
+    globalThis.fetch = async () => new Response(refusal, { status: 429, headers: { 'Retry-After': '1800' } });
+    const limited = await get('/api/export').catch((error) => error);
+    assert.equal(limited.code, 'rate-limited');
+    assert.equal(limited.status, 429);
+    assert.equal(limited.retryAfter, 1800);
+
+    globalThis.fetch = async () => new Response(refusal, { status: 429 });
+    assert.equal((await get('/api/export').catch((error) => error)).retryAfter, undefined);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
