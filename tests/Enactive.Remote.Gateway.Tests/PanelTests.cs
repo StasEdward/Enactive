@@ -499,6 +499,24 @@ public sealed class PanelTests(TestDatabase database) : IClassFixture<TestDataba
         Assert.Contains("href=\"/.well-known/enactive-panel.json\"", page, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// The name a person gives a computer is the one thing they type that is not sealed: the service lists
+    /// computers by it. So the dialog where it is typed says so - the privacy notice promises that it does.
+    /// Without the note, a person who named a computer after a client would find out the name was visible
+    /// only by reading the notice.
+    /// </summary>
+    [Fact]
+    public async Task The_register_dialog_says_the_computer_name_is_not_encrypted()
+    {
+        var page = await _stranger.Http.GetStringAsync("/");
+        var dialog = page[page.IndexOf("<dialog id=\"host-dialog\">", StringComparison.Ordinal)..];
+
+        Assert.Contains(
+            "The computer's name is not encrypted - the service sees it.",
+            dialog[..dialog.IndexOf("</dialog>", StringComparison.Ordinal)],
+            StringComparison.Ordinal);
+    }
+
     private static string TaskIdOf(GatewaySnapshot snapshot, string runId)
         => Assert.Single(snapshot.Runs, r => r.Id == runId).TaskId;
 

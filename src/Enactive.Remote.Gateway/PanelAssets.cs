@@ -51,9 +51,13 @@ public sealed class PanelAssets
     {
         Page = page;
         Files = files;
+
+        // "\n" whatever the platform: indented JSON otherwise ends its lines with the server's own
+        // newline, and the same release was published with "\r\n" from a Windows server and "\n" from
+        // Linux - two different lists, byte for byte, for the same files.
         Manifest = JsonSerializer.Serialize(
             new { algorithm = "sha256", files },
-            new JsonSerializerOptions { WriteIndented = true });
+            new JsonSerializerOptions { WriteIndented = true, NewLine = "\n" });
     }
 
     /// <summary>The page as it is served: identical to index.html but for the fingerprints.</summary>

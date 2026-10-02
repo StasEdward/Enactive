@@ -70,6 +70,7 @@ public sealed class HeadersTests(TestDatabase database) : IClassFixture<TestData
     [InlineData("/api/state", HttpStatusCode.Unauthorized)]
     [InlineData("/auth/github/start", HttpStatusCode.Redirect)]
     [InlineData("/privacy.html", HttpStatusCode.OK)]
+    [InlineData("/terms.html", HttpStatusCode.OK)]
     [InlineData("/no-such-page", HttpStatusCode.NotFound)]
     [InlineData("/.well-known/enactive-panel.json", HttpStatusCode.OK)]
     public async Task Every_response_carries_the_security_headers(string path, HttpStatusCode status)
@@ -77,16 +78,51 @@ public sealed class HeadersTests(TestDatabase database) : IClassFixture<TestData
         using var response = await _http.GetAsync(path);
 
         Assert.Equal(status, response.StatusCode);
+        AssertSecurityHeaders(response);
+    }
 
-        Assert.Equal(
-            Policy.Order(StringComparer.Ordinal),
-            Header(response, "Content-Security-Policy").Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
-                .Order(StringComparer.Ordinal));
-        Assert.Equal("camera=(), microphone=(), geolocation=(), payment=()", Header(response, "Permissions-Policy"));
-        Assert.Equal("same-origin", Header(response, "Cross-Origin-Opener-Policy"));
-        Assert.Equal("same-origin", Header(response, "Cross-Origin-Resource-Policy"));
-        Assert.Equal("nosniff", Header(response, "X-Content-Type-Options"));
-        Assert.Equal("no-referrer", Header(response, "Referrer-Policy"));
+    /// <summary>
+    /// The two refusals the middleware writes itself, from what it caught: a <see cref="GatewayFault"/> an
+    /// endpoint threw, and the antiforgery check's exception. They are written by a catch, after the request
+    /// went down the pipeline and failed - a different path from every row above, and the one a change to
+    /// the middleware is likeliest to leave without the headers.
+    /// </summary>
+    [Fact]
+    public async Task A_refusal_written_from_a_caught_exception_carries_the_security_headers()
+    {
+        using var browser = await PanelClient.SignedInAsync(_gateway, "headers-" + Guid.NewGuid().ToString("N")[..8]);
+
+        // Thrown by the endpoint: a cursor that is not one.
+        using (var fault = await browser.SendAsync(HttpMethod.Post, "/api/notices/read", new { through = "not-a-cursor" }))
+        {
+            Assert.Equal(HttpStatusCode.BadRequest, fault.StatusCode);
+            Assert.DoesNotContain("\"csrf\"", await fault.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+            AssertSecurityHeaders(fault);
+        }
+
+        // Thrown by the antiforgery check: the same call without its token.
+        using (var csrf = await browser.SendAsync(HttpMethod.Post, "/api/notices/read", new { through = "x" }, csrf: false))
+        {
+            Assert.Equal(HttpStatusCode.BadRequest, csrf.StatusCode);
+            Assert.Contains("\"csrf\"", await csrf.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+            AssertSecurityHeaders(csrf);
+        }
+    }
+
+    /// <summary>
+    /// A HEAD of the manifest is answered as its GET is, headers and all. A client that checks whether the
+    /// list exists - or what its validators are - before fetching it met a 404 from the static files, which
+    /// reads as a gateway that publishes no list.
+    /// </summary>
+    [Fact]
+    public async Task A_head_of_the_manifest_is_answered_like_its_get()
+    {
+        using var response = await _http.SendAsync(new HttpRequestMessage(HttpMethod.Head, "/.well-known/enactive-panel.json"));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("application/json", response.Content.Headers.ContentType?.MediaType);
+        Assert.Equal("no-cache", response.Headers.CacheControl?.ToString());
+        AssertSecurityHeaders(response);
     }
 
     /// <summary>
@@ -139,6 +175,27 @@ public sealed class HeadersTests(TestDatabase database) : IClassFixture<TestData
     }
 
     /// <summary>
+    /// The same release publishes the same bytes, on any server: keys in ordinal order and "\n" line
+    /// ends, whatever the operating system. A list that came out in another order, or with "\r\n" on a
+    /// Windows server, would hash differently from the same list elsewhere - and comparing the list
+    /// itself, as a whole, is the simplest check anyone can make. The other tests sort before they
+    /// compare, so only this one reads the raw text.
+    /// </summary>
+    [Fact]
+    public async Task The_manifest_is_the_same_bytes_on_any_server()
+    {
+        var raw = await _http.GetStringAsync("/.well-known/enactive-panel.json");
+
+        Assert.DoesNotContain("\r", raw, StringComparison.Ordinal);
+        Assert.Contains("\n", raw, StringComparison.Ordinal);
+
+        using var manifest = JsonDocument.Parse(raw);
+        var order = manifest.RootElement.GetProperty("files").EnumerateObject().Select(file => file.Name).ToList();
+
+        Assert.Equal(order.Order(StringComparer.Ordinal), order);
+    }
+
+    /// <summary>
     /// The manifest is made from the files when the gateway starts, not kept beside them: change a script
     /// and the next start lists the new hash. A list written once and shipped would go on vouching for the
     /// previous release - the one thing it exists to tell apart. Shown on a web root of the test's own, so
@@ -178,6 +235,19 @@ public sealed class HeadersTests(TestDatabase database) : IClassFixture<TestData
         {
             Directory.Delete(webRoot, recursive: true);
         }
+    }
+
+    private static void AssertSecurityHeaders(HttpResponseMessage response)
+    {
+        Assert.Equal(
+            Policy.Order(StringComparer.Ordinal),
+            Header(response, "Content-Security-Policy").Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+                .Order(StringComparer.Ordinal));
+        Assert.Equal("camera=(), microphone=(), geolocation=(), payment=()", Header(response, "Permissions-Policy"));
+        Assert.Equal("same-origin", Header(response, "Cross-Origin-Opener-Policy"));
+        Assert.Equal("same-origin", Header(response, "Cross-Origin-Resource-Policy"));
+        Assert.Equal("nosniff", Header(response, "X-Content-Type-Options"));
+        Assert.Equal("no-referrer", Header(response, "Referrer-Policy"));
     }
 
     /// <summary>One value of a response header, wherever HttpClient filed it.</summary>

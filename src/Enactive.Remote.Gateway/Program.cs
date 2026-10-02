@@ -339,7 +339,10 @@ app.Use(async (context, next) =>
     // The published list of what the panel is: every script and stylesheet with its SHA-256, so anyone can
     // compare what this server sends with what a release says it sent. Revalidated always, like the page:
     // a cached list compared against a newer release reads as an altered server when nothing was altered.
-    if (HttpMethods.IsGet(context.Request.Method) && context.Request.Path == "/.well-known/enactive-panel.json")
+    // HEAD too: left to the static files it met a 404, which reads as a gateway that publishes no list. The
+    // server drops the body of a HEAD, so writing it costs nothing and keeps the length honest.
+    if ((HttpMethods.IsGet(context.Request.Method) || HttpMethods.IsHead(context.Request.Method))
+        && context.Request.Path == "/.well-known/enactive-panel.json")
     {
         context.Response.Headers.CacheControl = "no-cache";
         context.Response.ContentType = "application/json; charset=utf-8";

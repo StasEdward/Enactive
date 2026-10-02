@@ -13,9 +13,30 @@
 <body>
 <!-- A draft. The operator reviews and approves this text before sign-up opens; until then the banner
      stays, and it is removed only together with the approval. -->
+<!-- OWNER MUST CONFIRM before the banner comes off (from the review of this draft):
+     1. Cloudflare is named as the carrier, and how its role is worded. Whether Cloudflare features that set
+        cookies or keep logs (bot management such as __cf_bm, WAF, request logs) are on for the zone - that
+        decides whether "the cookies are the ones signing in needs" is true.
+     2. The hosting provider of the server is not named. Decide whether it should be.
+     3. "Backups are kept for 30 days": deploy/backup.sh reads ENACTIVE_BACKUP_KEEP_DAYS (default 30,
+        configurable) and `find -mtime +30` deletes only files older than 31 whole days. Copies kept off the
+        machine are the operator's and have their own lifetime.
+     4. Permission requests: next to each one the service stores a plain fingerprint of the exact action
+        (an unkeyed SHA-256 over the run, the tool call, the tool, the folder and the arguments), so someone
+        who guesses the action exactly can confirm the guess. The text says so; confirm the wording.
+     5. "What the service can see" follows the design's list of kinds of records, not every column: also kept
+        are the computer's public signing key and whether it was removed; which computer or browser made an
+        invitation and the enrollment that answered it; command expiry; whether a permission request may be
+        answered remotely and its tool-call id; whether a notice was read; the account's storage counter.
+     6. "Changes are announced on this page before they take effect" (both pages) is a promise of notice.
+     7. Rate limits keep addresses in memory for about a minute and the gateway never logs one; Cloudflare's
+        logs and cloudflared's logs on the machine are outside the gateway - confirm they are not kept, or
+        say so here. -->
 <main class="policy">
   <p class="draft-banner" role="note"><strong>DRAFT — not yet approved by the operator.</strong>
     This text may still change before the service opens to sign-up.</p>
+  <p class="draft-banner" role="note">Not yet built: account deletion, data export, the security log in the
+    panel - this text describes the service as it will be when sign-up opens.</p>
 
   <p class="home"><a href="/">← Enactive Remote</a></p>
 
@@ -44,18 +65,25 @@
     and on the browsers you have added, and they never reach the service. A leak of the database, of
     a backup or of the server's disk shows the encrypted data and nothing more. The same holds for
     anyone who runs the service: they can look at the stored data, and it is unreadable to them.</p>
+  <p>One exception, which makes answering a permission request safe: next to each request the service
+    keeps a fingerprint of the exact action, so that your browser can check that the action it shows
+    you is the one your computer asked about. The fingerprint cannot be turned back into the action, but
+    someone who guesses the action exactly - the same command, in the same folder, for the same run -
+    could confirm the guess.</p>
 
   <h2>What the service can see</h2>
   <p>To do its job the service has to know who you are, which devices are yours, and what to deliver
-    where. It keeps:</p>
+    where. It keeps these kinds of records:</p>
   <ul>
     <li><strong>Your account and how you sign in:</strong> the name shown for your account and, for
       each way you sign in, the provider (GitHub or Google), the provider's id for your account, and
       the display name the provider gives it.</li>
     <li><strong>Your sign-in sessions:</strong> when each began, when it ends, and whether it was
       ended early.</li>
-    <li><strong>Your browsers:</strong> each one's public key, the name you gave it, when it was
-      added, when it was last seen, and when it was removed.</li>
+    <li><strong>Your browsers:</strong> each one's public key, a label made automatically from the
+      browser's and the operating system's names (such as "Firefox on Windows" - so the service learns
+      which browsers and systems you use), when it was added, when it was last seen, and when it was
+      removed.</li>
     <li><strong>Your computers:</strong> the name you give each one (this name is not encrypted, and
       the panel says so where you type it), a fingerprint of its connection token (not the token
       itself), when it was last seen, and which generation of its keys it is on.</li>
@@ -69,10 +97,15 @@
       for can open them.</li>
     <li><strong>Your security log:</strong> see below.</li>
   </ul>
-  <p>Put plainly: the service knows that you use it, how many computers and browsers you have, when
-    you run tasks and how many, whether they finished, failed or were cancelled, how many permission
-    requests they raised, how much encrypted data they produced, and the names you give your
-    computers.</p>
+  <p>Put plainly: the service knows that you use it, how many computers and browsers you have, which
+    browsers and operating systems those are, when you run tasks and how many, whether they finished,
+    failed or were cancelled, how many permission requests they raised, how much encrypted data they
+    produced, and the names you give your computers.</p>
+
+  <h2>Before you have an account</h2>
+  <p>If you sign in without being admitted, we keep the provider, your provider id and display name,
+    and the time, until the operator decides; the operator's decision is logged against that id.
+    Deleting an account removes these records too.</p>
 
   <h2>What we do not keep</h2>
   <ul>
@@ -92,21 +125,35 @@
   <h2>What this design cannot protect against</h2>
   <ul>
     <li><strong>Altered code.</strong> The panel you use in a browser is code this service sends.
-      An operator who sent altered code — or someone who had taken over the server — could take your
-      keys from the browser. No web page can prevent this. What the service does is make an
-      alteration visible: it publishes the fingerprint (SHA-256) of every script and stylesheet it
-      serves at <a href="/.well-known/enactive-panel.json"><code>/.well-known/enactive-panel.json</code></a>,
-      and each release lists the same fingerprints, so anyone can compare what was served with what
-      was released.</li>
+      An operator who sent altered code — or someone who had taken over the server, or Cloudflare (see
+      below) — could take your keys from the browser. No web page can prevent this. What the service
+      does is make an alteration visible: it publishes the fingerprint (SHA-256) of every script and
+      stylesheet it serves at
+      <a href="/.well-known/enactive-panel.json"><code>/.well-known/enactive-panel.json</code></a>, and
+      the operator publishes the fingerprints of each release so anyone can compare.</li>
     <li><strong>What the service can see,</strong> listed above. It is not encrypted, because the
       service needs it to deliver anything at all.</li>
     <li><strong>A compromised computer or browser.</strong> Whatever can read your screen or your
-      browser's storage can read what you read there. Remove a browser you no longer trust from the
-      panel; adding a browser again from your computer does not depend on any other browser.</li>
+      browser's storage can read what you read there. A browser holds keys, so whoever controls it can
+      also start tasks on your computer and answer its permission requests, as you could. Remove a
+      browser you no longer trust from the panel.</li>
+    <li><strong>A browser that was already compromised when it invited another.</strong> When one of
+      your browsers admits another by invitation, it also tells the new browser which signing key your
+      computer has. A browser that was compromised at that moment can make the browser it admitted trust
+      a key it controls, and go on reading what that browser sends even after it has itself been removed.
+      Two things limit this. The admitted browser sees your computer's real key change arrive under another
+      key, reports it as tampering, and asks to be added again from the computer. And adding a browser
+      from your computer ("Add a device" in the desktop app) never depends on another browser's word.</li>
   </ul>
-  <p>If someone takes over your GitHub or Google account, they can sign in and see what the service
-    sees. They cannot read your tasks or send anything to your computer: that needs a key held only
-    by your computer and the browsers it trusts.</p>
+
+  <h2>If someone takes over your GitHub or Google account</h2>
+  <p>They can sign in and see what the service sees. They cannot read your tasks or send anything to
+    your computer: that needs a key held only by your computer and the browsers it trusts. But they can
+    remove your computers and browsers from the service, sign out every session, and delete your
+    account with everything stored for it.</p>
+  <p>If this happens: secure the GitHub or Google account and end its sessions there, then sign in here
+    and use "Sign out everywhere". If computers or browsers were removed, add them again - a computer
+    from the desktop app, and browsers from that computer.</p>
 
   <h2>Signing in</h2>
   <p>You sign in with GitHub or Google. From GitHub the service keeps your account's number and your
@@ -114,9 +161,11 @@
     sign-in under its own privacy policy.</p>
 
   <h2>Who else carries your traffic</h2>
-  <p>The service is reached through Cloudflare, which carries the traffic between your browser and the
-    server. Like any network carrier it sees your IP address and when you connect; of your tasks it
-    sees only the encrypted data.</p>
+  <p>The service is reached through Cloudflare, which ends the encrypted HTTPS connection from your
+    browser and passes the traffic on to the server. So Cloudflare sees everything the service sees on
+    the way in and out: your IP address, your cookies, all the information listed under "What the service
+    can see", and the panel's code - which it delivers, and could alter. It never sees what is encrypted
+    end to end: the contents of your tasks, and your keys.</p>
 
   <h2>Sessions</h2>
   <p>A sign-in lasts at most 8 hours, after which you sign in again. You can sign out of one browser,
@@ -125,17 +174,17 @@
   <h2>Your security log</h2>
   <p>The service keeps a log of what happened to your account: sign-ins (which provider, not from
     where), browsers added and removed, computers added and removed, the operator disabling or
-    enabling the account, and signing out everywhere. Only you can read your log, in the panel. It
-    holds no secrets, no encrypted contents and no addresses, and each entry is kept for 90 days.</p>
+    enabling the account, and signing out everywhere. Only you can read the log in the panel; the
+    operator can read the database, where it is kept like the rest of what is listed above. It holds no
+    secrets, no encrypted contents and no addresses, and each entry is kept for 90 days.</p>
 
   <h2>How long things are kept</h2>
   <ul>
-    <li><strong>Progress messages and notifications</strong> are deleted after a number of days the
-      operator sets. The panel shows the current number, and says when older history was
-      deleted.</li>
+    <li><strong>Ended runs</strong> and their progress messages, permission requests and notifications
+      are removed after a number of days the operator sets. The panel shows the current number, and
+      says when older history was removed. A task with no run left is removed with it.</li>
     <li><strong>The security log</strong> is kept for 90 days.</li>
-    <li><strong>Everything else</strong> — your account, browsers, computers, tasks and runs — is kept
-      while your account exists.</li>
+    <li><strong>Your account, browsers and computers</strong> are kept while your account exists.</li>
   </ul>
 
   <h2>Backups</h2>
@@ -144,9 +193,9 @@
 
   <h2>Deleting your account</h2>
   <p>You can delete your account from the panel. Everything stored for it — computers, browsers,
-    tasks, history and the security log — is deleted at once. Copies of it in backups are gone when
-    those backups are removed, within 30 days. Your computer is told the account no longer exists,
-    and stops.</p>
+    tasks, history, the security log, and the records from before you had an account — is deleted at
+    once. Copies of it in backups are gone when those backups are removed, within 30 days. Your computer
+    is told the account no longer exists, and stops.</p>
 
   <h2>Taking your data out</h2>
   <p>"Download my data" in the panel gives you everything the service stores for your account. Your
