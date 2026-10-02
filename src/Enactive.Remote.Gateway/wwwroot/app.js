@@ -15,7 +15,7 @@
 
 import {
   get, post, remove, session, Refused, Stale, endSession, abandonRequests, generation, isCurrent,
-  onUnauthenticated, onDeviceRevoked
+  onUnauthenticated, onDeviceRevoked, useDevice
 } from "./js/api.js";
 import { emptyState, resetState, forgetScreen, pollOnce } from "./js/session-guard.js";
 import { providerLinks, outcomeOf, createDevelopmentProbe } from "./js/signin.js";
@@ -984,6 +984,16 @@ let keystore = null;
 let deviceId = null;
 
 /**
+ * This browser's device for the signed-in account, known from now on - to the page, and to api.js, which names it
+ * on every call: the gateway refuses every private call that names none. Before this only /api/session, the
+ * registration and signing out are asked.
+ */
+function knowDevice(id) {
+  deviceId = id;
+  useDevice(id);
+}
+
+/**
  * Opens the account's key store and registers this browser's key with the gateway, before the first poll.
  * Neither is needed to see what the gateway itself knows, so a browser that cannot keep keys - or an
  * account with no room for another device - still gets the panel, and is told why it cannot be paired.
@@ -1016,7 +1026,7 @@ async function openTrust(user) {
     const id = await ensureDevice(store, api);
 
     if (isCurrent(started)) {
-      deviceId = id;
+      knowDevice(id);
     }
   } catch (error) {
     if (isCurrent(started) && !(error instanceof Stale)) {
@@ -1204,7 +1214,7 @@ async function registerHost() {
       return;
     }
 
-    deviceId = id;
+    knowDevice(id);
 
     // The token travels inside the code: the one moment it exists anywhere but the machine it is going
     // to. It is not stored by this page and cannot be asked for again.
@@ -1335,7 +1345,7 @@ async function openInviteDialog() {
       return;
     }
 
-    deviceId = id;
+    knowDevice(id);
     // Before the link, so the person can let this device catch up first rather than spend the invitation on a
     // computer whose current key it cannot pass on (invite.js behindReason).
     $("invite-warning").textContent = behindWarning(await behindHosts(store, state.hosts));
@@ -1714,9 +1724,11 @@ async function forgetNow() {
     throw new Error("This browser keeps no keys for this account, so it has nothing to forget.");
   }
 
-  // From here the page makes no call as this device. Once the gateway has removed it, such a call - the grants a
-  // poll takes - is refused, and the page reset and closed the key store under the forgetting: the keys stayed
-  // on disk. Left so if the forgetting stops short: the device is on its way out, and a reload starts afresh.
+  // From here the page makes no call of its own as this device. Once the gateway has removed it, such a call - the
+  // grants a poll takes - is refused, and the page reset and closed the key store under the forgetting: the keys
+  // stayed on disk. Left so if the forgetting stops short: the device is on its way out, and a reload starts
+  // afresh. The forgetting's own calls still name the device (api.js): the gateway refuses a call that names none,
+  // and it tells the computers before the gateway removes the device (devices.js revokeDevice).
   stopPolling();
   deviceId = null;
   await catchUpKeys.pending;
@@ -1962,7 +1974,7 @@ async function joinByInvitation(started) {
     const id = deviceId ?? await ensureDevice(store, api);
 
     if (isCurrent(started)) {
-      deviceId = id;
+      knowDevice(id);
     }
 
     const deadline = await enrollThisDevice({ keystore: store, api, deviceId: id, inviteId, secret, now: Date.now() });

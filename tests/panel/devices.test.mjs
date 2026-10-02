@@ -318,13 +318,20 @@ test('a removal told again after every key change is not confirmed after the las
   assert.equal(NOT_CONFIRMED, 'not confirmed - tell the computers again');
 });
 
+// The computers are told before the gateway removes this device: the gateway refuses every call of a removed
+// device, so told after, every computer's removal was refused and the device stayed trusted on all of them.
 test('forgetting this device revokes it everywhere, forgets the store and signs out', async () => {
   const { store } = await storeHolding({ [STUDIO]: [1], [LAPTOP]: [3] });
   await store.createDevice();
   await store.setDeviceId(PHONE);
   const order = [];
   let told = null;
-  const api = fakeApi();
+  const api = fakeApi({
+    refuse: (path, calls) => path.endsWith('/device-commands')
+      && calls.some((call) => call.path === `/api/devices/${PHONE}/revoke`)
+      ? Object.assign(new Error('This device was removed from your account.'), { code: 'device-revoked' })
+      : null
+  });
   const recorded = {
     post: async (path, body) => { order.push(`post ${path}`); return api.post(path, body); }
   };
@@ -341,9 +348,9 @@ test('forgetting this device revokes it everywhere, forgets the store and signs 
   });
 
   assert.deepEqual(order, [
-    `post /api/devices/${PHONE}/revoke`,
     `post /api/hosts/${STUDIO}/device-commands`,
     `post /api/hosts/${LAPTOP}/device-commands`,
+    `post /api/devices/${PHONE}/revoke`,
     'forget',
     'sign out'
   ]);
@@ -370,6 +377,9 @@ test('a computer not reached keeps this device\'s keys, so forgetting can be pre
   assert.equal(signedOut, false);
   assert.equal(await storeGone(store), false);
   assert.equal((await store.hostKeys(STUDIO)).size, 1);
+  // Nor is it removed at the gateway yet: removed, its next press would be refused there like every call of a
+  // removed device, and the computer could never be told from it.
+  assert.ok(!api.calls.some((call) => call.path === `/api/devices/${PHONE}/revoke`));
 });
 
 test('a key store forgotten or closed is gone; an open one is not', async () => {

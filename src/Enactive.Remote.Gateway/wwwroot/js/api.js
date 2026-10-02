@@ -8,7 +8,11 @@
 //
 // Every request is tied to the session it started under (see session-guard.js). After `endSession`
 // none of them is read: the in-flight ones are aborted, and one that answers anyway is a Stale.
+//
+// Every request names this browser's device once it is known (`useDevice`): the gateway refuses every private
+// call of a removed device, and one that names none.
 import { createGuard, Stale } from './session-guard.js';
+import { DEVICE_HEADER } from './trust.js';
 
 export { Stale };
 
@@ -28,6 +32,7 @@ export class Refused extends Error {
 const guard = createGuard();
 let controller = new AbortController();
 let csrf = '';
+let device = null;
 
 const hooks = { unauthenticated: () => {}, deviceRevoked: () => {} };
 
@@ -44,6 +49,20 @@ export function onDeviceRevoked(handler) { hooks.deviceRevoked = handler; }
 export function endSession() {
   abandonRequests();
   csrf = '';
+  device = null;
+}
+
+/**
+ * The device this browser is registered as for the signed-in account, named on every call from now on. The
+ * gateway refuses every private call that names none, except registering one and signing out - so before this is
+ * called only those are asked. Forgotten by `endSession`: the next account in this tab has a device of its own.
+ */
+export function useDevice(id) { device = id ?? null; }
+
+// The device header, before a call's own headers: a call naming a device itself (an invitation's answer read as
+// the device that made it) is sent with that one.
+function named(headers) {
+  return { ...(device ? { [DEVICE_HEADER]: device } : {}), ...headers };
 }
 
 /**
@@ -68,21 +87,23 @@ export function isCurrent(started) { return guard.isCurrent(started); }
 // another site would otherwise start with the session cookie alone.
 export function get(path, { headers, antiforgery = false } = {}) {
   return request(path, {
-    headers: { ...headers, accept: 'application/json', ...(antiforgery ? { 'X-CSRF-TOKEN': csrf } : {}) }
+    headers: { ...named(headers), accept: 'application/json', ...(antiforgery ? { 'X-CSRF-TOKEN': csrf } : {}) }
   });
 }
 
 export function post(path, body, { headers } = {}) {
   return request(path, {
     method: 'POST',
-    headers: { ...headers, 'content-type': 'application/json', 'X-CSRF-TOKEN': csrf },
+    headers: { ...named(headers), 'content-type': 'application/json', 'X-CSRF-TOKEN': csrf },
     body: JSON.stringify(body ?? {})
   });
 }
 
 /** A DELETE, with the antiforgery token like every other call that changes something. */
 export function remove(path) {
-  return request(path, { method: 'DELETE', headers: { accept: 'application/json', 'X-CSRF-TOKEN': csrf } });
+  return request(path, {
+    method: 'DELETE', headers: { ...named(), accept: 'application/json', 'X-CSRF-TOKEN': csrf }
+  });
 }
 
 /**

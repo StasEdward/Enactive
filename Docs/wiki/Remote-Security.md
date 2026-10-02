@@ -97,7 +97,11 @@ provider account first, then sign in and use **Sign out everywhere**, and add ba
 Each computer has a key per **epoch**, numbered from 1. Removing a device moves every computer to the
 next epoch:
 
-1. The gateway marks the device removed: it refuses the device's calls and stops serving it keys.
+1. The gateway marks the device removed: it refuses every call that names the device and stops
+   serving it keys. Every call of the panel names the browser it comes from, and one that names none
+   is refused, so leaving the name off is no way round it. The device's session is not ended, though:
+   still signed in, it can register itself as a new device. After removing a lost device, also use
+   **Sign out everywhere**.
 2. Each computer receives the sealed removal, distrusts the device, makes a new key, and sends it to
    every device still trusted, signed with its signing key.
 3. From then on the computer seals with the new key.

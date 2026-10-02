@@ -469,6 +469,25 @@ api.AddEndpointFilter(async (invocation, next) =>
     return await next(invocation);
 });
 
+// Every call names the browser it is made from (X-Enactive-Device), and a browser removed from the account is
+// refused all of them. Only the calls that handed out keys checked it before, so a lost phone removed from
+// Devices went on reading every run's metadata with the session it had, starting tasks, and removing the
+// person's other devices and computers. A call that names no browser is refused for that, or leaving the
+// header off would be the way round it. After the antiforgery check, and looked up once per request
+// (DeviceService.CallerAsync). The calls a browser makes before it has a device to name are marked
+// DeviceHeader.NotRequired.
+api.AddEndpointFilter(async (invocation, next) =>
+{
+    var context = invocation.HttpContext;
+
+    if (context.GetEndpoint()?.Metadata.GetMetadata<DeviceHeader.NotRequired>() is null)
+    {
+        await context.RequestServices.GetRequiredService<DeviceService>().CallerAsync(context, context.RequestAborted);
+    }
+
+    return await next(invocation);
+});
+
 // The session's ROW is revoked, not only the cookie deleted: a cookie copied before signing out would
 // otherwise go on working until it expired.
 api.MapPost("/logout", async (HttpContext context, SessionStore sessions, CancellationToken ct) =>
@@ -476,7 +495,7 @@ api.MapPost("/logout", async (HttpContext context, SessionStore sessions, Cancel
     await sessions.RevokeAsync(context.UserAccess(), ct);
     await context.SignOutAsync(UserCookie.SchemeName);
     return Results.Ok();
-});
+}).WithMetadata(DeviceHeader.NotRequired.Instance);
 
 // Every session of the account, this one included - for a lost phone or a borrowed laptop left signed
 // in. The security version moves on too, so a session a sign-in was opening at the same moment is ended
@@ -486,7 +505,7 @@ api.MapPost("/logout-all", async (HttpContext context, SessionStore sessions, Ca
     await sessions.RevokeAllAsync(context.UserAccess().UserId, ct);
     await context.SignOutAsync(UserCookie.SchemeName);
     return Results.Ok();
-});
+}).WithMetadata(DeviceHeader.NotRequired.Instance);
 
 // The person deleting their own account and everything stored for it, from a session opened in the last ten
 // minutes (AccountDeletion). The cookie is removed too: the session it names went with the account.
@@ -555,14 +574,15 @@ api.MapPost("/hosts/{hostId}/device-commands", async (
         context.UserAccess(), hostId, request.Kind, request.CommandId, request.Sealed, ct)));
 
 // A browser profile of this account, and the public key grants will be sealed to. The key is checked for
-// shape and curve; what it is for is the browser's and the computer's business, not this gateway's.
+// shape and curve; what it is for is the browser's and the computer's business, not this gateway's. The one
+// call a browser makes before it has a device to name, since this is how it gets one.
 api.MapPost("/devices", async (
     RegisterDeviceRequest request, HttpContext context, DeviceService devices, CancellationToken ct) =>
     Results.Ok(new
     {
         id = await devices.RegisterAsync(
             context.UserAccess(), DeviceService.DecodeKey(request.PublicKey), request.Label, ct)
-    }));
+    })).WithMetadata(DeviceHeader.NotRequired.Instance);
 
 api.MapGet("/devices", async (HttpContext context, DeviceService devices, CancellationToken ct) =>
     Results.Ok(await devices.ListAsync(context.UserAccess(), ct)));
@@ -578,7 +598,7 @@ api.MapPost("/devices/{id}/revoke", async (
 // them over as they were stored; it has no key to open one.
 api.MapGet("/grants", async (HttpContext context, DeviceService devices, CancellationToken ct) =>
 {
-    var device = await devices.RequireAsync(context.UserAccess(), context.RequireDeviceId(), ct);
+    var device = await devices.CallerAsync(context, ct);
     return Results.Ok(await devices.ReadGrantsAsync(device, ct));
 });
 
@@ -587,7 +607,7 @@ api.MapGet("/grants", async (HttpContext context, DeviceService devices, Cancell
 api.MapPost("/grants", async (
     List<KeyGrant>? grants, HttpContext context, DeviceService devices, CancellationToken ct) =>
 {
-    var device = await devices.RequireAsync(context.UserAccess(), context.RequireDeviceId(), ct);
+    var device = await devices.CallerAsync(context, ct);
     await devices.PublishGrantsAsync(device, grants, ct);
     return Results.Ok();
 });
@@ -597,7 +617,7 @@ api.MapPost("/grants", async (
 api.MapPost("/invites", async (
     CreateInviteRequest request, HttpContext context, DeviceService devices, CancellationToken ct) =>
 {
-    var device = await devices.RequireAsync(context.UserAccess(), context.RequireDeviceId(), ct);
+    var device = await devices.CallerAsync(context, ct);
     var expiresAt = await devices.CreateInviteAsync(device, request.Id, ct);
     return Results.Ok(new { id = request.Id, expiresAt });
 });
@@ -616,7 +636,7 @@ api.MapPost("/enrollments", async (
 api.MapGet("/invites/{id}/enrollment", async (
     string id, HttpContext context, DeviceService devices, CancellationToken ct) =>
 {
-    var device = await devices.RequireAsync(context.UserAccess(), context.RequireDeviceId(), ct);
+    var device = await devices.CallerAsync(context, ct);
 
     return await devices.ReadEnrollmentAsync(device, id, ct) is { } enrollment
         ? Results.Ok(new

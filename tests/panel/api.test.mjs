@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { get, post } from '../../src/Enactive.Remote.Gateway/wwwroot/js/api.js';
+import { get, post, remove, useDevice, endSession } from '../../src/Enactive.Remote.Gateway/wwwroot/js/api.js';
 
 // fetch replaced for one call, recording what the page would have sent.
 async function sent(call) {
@@ -60,4 +60,27 @@ test('a GET carries the antiforgery token only when asked to', async () => {
 
   const plain = await sent(() => get('/api/state'));
   assert.ok(!('X-CSRF-TOKEN' in plain.init.headers));
+});
+
+// The gateway refuses every private call that does not name this browser's device (403 for a removed one, 400 for
+// none), so once the device is known every call names it - not only the ones that hand out keys. Before it is
+// known only registering it and signing out are asked, and those go without; after the session ends nothing does.
+test('once the device is known every call names it, until the session ends', async () => {
+  assert.ok(!('X-Enactive-Device' in (await sent(() => post('/api/devices', {}))).init.headers));
+
+  useDevice('device-1');
+  try {
+    assert.equal((await sent(() => get('/api/state'))).init.headers['X-Enactive-Device'], 'device-1');
+    assert.equal((await sent(() => post('/api/tasks', {}))).init.headers['X-Enactive-Device'], 'device-1');
+    assert.equal((await sent(() => remove('/api/account'))).init.headers['X-Enactive-Device'], 'device-1');
+    assert.equal((await sent(() => get('/api/export', { antiforgery: true }))).init.headers['X-Enactive-Device'], 'device-1');
+
+    // A call naming a device itself is sent with that one.
+    const named = await sent(() => get('/api/grants', { headers: { 'X-Enactive-Device': 'device-2' } }));
+    assert.equal(named.init.headers['X-Enactive-Device'], 'device-2');
+  } finally {
+    endSession();
+  }
+
+  assert.ok(!('X-Enactive-Device' in (await sent(() => get('/api/state'))).init.headers));
 });

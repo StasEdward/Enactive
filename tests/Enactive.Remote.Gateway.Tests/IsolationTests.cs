@@ -30,10 +30,10 @@ using Xunit;
 ///
 /// <para><b>Devices, grants and invitations are in the same suite.</b> Each person has a browser device
 /// that their computer has granted a key to, an invitation that device made and a second device that
-/// answered it, and an invitation their computer made, answered by the second device too. Where an endpoint is called from a
-/// device named in the <c>X-Enactive-Device</c> header, Bob is also asked with a header naming one of
-/// Alice's devices (which has to be refused like a device nobody has) and with none (which is refused for
-/// the header, before anything is looked up). The one call that is not refused is making an invitation
+/// answered it, and an invitation their computer made, answered by the second device too. Every call names the
+/// device it is made from in the <c>X-Enactive-Device</c> header, so Bob is also asked with a header naming one of
+/// Alice's devices (which has to be refused like a device nobody has - as removed) and with none (which is refused
+/// for the header, before anything is looked up). The one call that is not refused is making an invitation
 /// under an id Alice has: invitation ids are per person, so he makes his own, and what is asserted is that
 /// hers is untouched.</para>
 /// </summary>
@@ -70,18 +70,18 @@ public sealed class IsolationTests(TestDatabase database) : IClassFixture<TestDa
     // ── every private path, asked by the wrong person ───────────────────────
 
     /// <summary>
-    /// How a call to an endpoint that is made from a device names one. The endpoints that take no device
-    /// are <see cref="NotTaken"/> and <see cref="Ignored"/>; for the others Bob is asked each way.
+    /// How a call names the device it is made from. Every call names one; the endpoints that do nothing with it
+    /// beyond refusing a removed device are asked <see cref="NotTaken"/> and <see cref="Ignored"/> besides.
     /// </summary>
     public enum CallerHeader
     {
-        /// <summary>The endpoint is not made from a device, so no header is sent.</summary>
+        /// <summary>The test names no device, so Bob's browser names its own, as the panel does.</summary>
         NotTaken,
 
         /// <summary>
-        /// The endpoint is not made from a device, and Bob sends his own device's header anyway. It must
-        /// change nothing: an endpoint that began to read it - to find who is calling, say - would let a
-        /// header stand in for the ids in the request, and nothing else here would notice.
+        /// Bob names his own registered device. It must change nothing: an endpoint that began to read it - to
+        /// find who is calling, say - would let a header stand in for the ids in the request, and nothing else
+        /// here would notice.
         /// </summary>
         Ignored,
 
@@ -277,10 +277,8 @@ public sealed class IsolationTests(TestDatabase database) : IClassFixture<TestDa
                 {
                     cases.Add(name, CallerHeader.NotTaken);
                     cases.Add(name, CallerHeader.Ignored);
-                    continue;
                 }
-
-                if (path.OwnHeaderIsRefused)
+                else if (path.OwnHeaderIsRefused)
                 {
                     cases.Add(name, CallerHeader.Own);
                 }
@@ -338,8 +336,9 @@ public sealed class IsolationTests(TestDatabase database) : IClassFixture<TestDa
         var (madeUpPath, madeUpBody) = path.Request(madeUpIds, _bob.Ids);
         var (alicesPath, alicesBody) = path.Request(_alice.Ids, _bob.Ids);
 
-        var madeUp = await AnswerAsync(_bob, path.Verb, madeUpPath, madeUpBody, DeviceNamed(header, madeUpIds));
-        var alices = await AnswerAsync(_bob, path.Verb, alicesPath, alicesBody, DeviceNamed(header, _alice.Ids));
+        var withoutDevice = header == CallerHeader.Missing;
+        var madeUp = await AnswerAsync(_bob, path.Verb, madeUpPath, madeUpBody, DeviceNamed(header, madeUpIds), withoutDevice);
+        var alices = await AnswerAsync(_bob, path.Verb, alicesPath, alicesBody, DeviceNamed(header, _alice.Ids), withoutDevice);
 
         // The made-up id first, and its body named: two refusals can be equal because both are the
         // same wrong request - a typo in the route, a body the binder refused - and equal bodies
@@ -353,14 +352,20 @@ public sealed class IsolationTests(TestDatabase database) : IClassFixture<TestDa
 
             Assert.Equal(HttpStatusCode.BadRequest, alices.Status);
         }
+        else if (header == CallerHeader.Alices)
+        {
+            // A header naming a device of somebody else's is refused as the device, whatever the rest of the
+            // request names: as a removed one, the answer a device nobody has gets too.
+            Assert.Equal(HttpStatusCode.Forbidden, madeUp.Status);
+            Assert.Contains("\"code\":\"device-revoked\"", madeUp.Body);
+
+            Assert.Equal(HttpStatusCode.Forbidden, alices.Status);
+        }
         else
         {
-            // A header naming a device of somebody else's is refused as the device, whatever the rest of
-            // the request names; a true one leaves the refusal to the ids.
-            var code = header == CallerHeader.Alices ? "not-found" : path.Code;
-
+            // A true header leaves the refusal to the ids.
             Assert.Equal(HttpStatusCode.NotFound, madeUp.Status);
-            Assert.Contains($"\"code\":\"{code}\"", madeUp.Body);
+            Assert.Contains($"\"code\":\"{path.Code}\"", madeUp.Body);
 
             Assert.Equal(HttpStatusCode.NotFound, alices.Status);
         }
@@ -915,6 +920,9 @@ public sealed class IsolationTests(TestDatabase database) : IClassFixture<TestDa
     private async Task<World> BuildWorldAsync(string name)
     {
         var panel = await PanelClient.SignedInAsync(_gateway, name + "-" + Guid.NewGuid().ToString("N")[..8]);
+
+        // First, so it is the device this browser names on every call, as a panel's first registration is.
+        var device = await RegisterDeviceAsync(panel, "Laptop");
         var computer = await panel.PostAsync<NewComputer>("/api/hosts", new { name = "Studio PC" });
 
         var browser = new TestBrowser(computer.Id);
@@ -941,8 +949,8 @@ public sealed class IsolationTests(TestDatabase database) : IClassFixture<TestDa
         await Host.AcknowledgeAsync(host, commandId);
 
         var approvalId = Guid.NewGuid().ToString();
-        var (device, secondDevice, inviteId, hostInviteId, openInviteId, signingPublic) =
-            await SeedDevicesAsync(panel, host, browser);
+        var (secondDevice, inviteId, hostInviteId, openInviteId, signingPublic) =
+            await SeedDevicesAsync(panel, host, browser, device);
 
         var ids = new TargetIds(
             computer.Id, WorkspaceId, taskId, runId, approvalId, Ids.Hash(approvalId),
@@ -957,16 +965,15 @@ public sealed class IsolationTests(TestDatabase database) : IClassFixture<TestDa
     }
 
     /// <summary>
-    /// A person's browsers, grants and invitations, made through the paths real ones are made through: a
-    /// browser registers its key, the computer grants it the first key (which pins the computer's signing
+    /// A person's browsers, grants and invitations, made through the paths real ones are made through: the
+    /// browser has registered its key (<paramref name="device"/>), the computer grants it the first key (which pins the computer's signing
     /// key), the browser invites another, the other registers and answers, and the computer makes an
     /// invitation of its own, which the same second browser answers. One more invitation is left open.
     /// </summary>
-    private async Task<(TestDevice Device, TestDevice SecondDevice, string InviteId, string HostInviteId,
-        string OpenInviteId, byte[] SigningPublic)> SeedDevicesAsync(PanelClient panel, HostAccess host, TestBrowser browser)
+    private async Task<(TestDevice SecondDevice, string InviteId, string HostInviteId,
+        string OpenInviteId, byte[] SigningPublic)> SeedDevicesAsync(
+        PanelClient panel, HostAccess host, TestBrowser browser, TestDevice device)
     {
-        var device = await RegisterDeviceAsync(panel, "Laptop");
-
         // The computer's own call, as its hub makes it: the only path that may pin a signing key.
         using var signer = P256.GenerateSigning();
         var signingPublic = P256.SigningPublicRaw(signer);
@@ -989,7 +996,7 @@ public sealed class IsolationTests(TestDatabase database) : IClassFixture<TestDa
         var openInviteId = Ids.New();
         await PostFromAsync(panel, "/api/invites", new { id = openInviteId }, device.Id);
 
-        return (device, secondDevice, inviteId, hostInviteId, openInviteId, signingPublic);
+        return (secondDevice, inviteId, hostInviteId, openInviteId, signingPublic);
     }
 
     private static object EnrollmentBody(string inviteId, TestDevice device)
@@ -1032,15 +1039,22 @@ public sealed class IsolationTests(TestDatabase database) : IClassFixture<TestDa
     private sealed record Answer(HttpStatusCode Status, string Body);
 
     private static Task<Answer> AnswerAsync(
-        World caller, HttpMethod method, string path, object? body, string? deviceId = null)
-        => AnswerAsync(caller.Panel, method, path, body, deviceId);
+        World caller, HttpMethod method, string path, object? body, string? deviceId = null, bool withoutDevice = false)
+        => AnswerAsync(caller.Panel, method, path, body, deviceId, withoutDevice);
 
+    /// <param name="deviceId">The device named; null for the browser's own, as the panel names it.</param>
+    /// <param name="withoutDevice">Name none at all.</param>
     private static async Task<Answer> AnswerAsync(
-        PanelClient panel, HttpMethod method, string path, object? body, string? deviceId = null)
+        PanelClient panel, HttpMethod method, string path, object? body, string? deviceId = null,
+        bool withoutDevice = false)
     {
         using var response = await panel.SendAsync(method, path, body, configure: request =>
         {
-            if (deviceId is not null)
+            if (withoutDevice)
+            {
+                PanelClient.WithoutDevice(request);
+            }
+            else if (deviceId is not null)
             {
                 request.Headers.Add(DeviceHeader.Name, deviceId);
             }

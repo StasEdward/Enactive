@@ -254,6 +254,7 @@ public sealed class AuditTests(TestDatabase database) : IClassFixture<TestDataba
     public async Task The_log_is_the_newest_rows_first_and_capped()
     {
         using var alice = await PanelClient.SignedInAsync(_gateway, Name("alice"));
+        await alice.EnsureDeviceAsync();
         var start = DateTimeOffset.UtcNow.AddDays(-1);
 
         for (var i = 0; i < Audit.Newest + 5; i++)
@@ -269,9 +270,10 @@ public sealed class AuditTests(TestDatabase database) : IClassFixture<TestDataba
 
         var rows = await alice.GetAsync<List<Entry>>("/api/audit");
 
+        // The sign-in and the browser's registering its device are the newest, then the rows written above.
         Assert.Equal(Audit.Newest, rows.Count);
-        Assert.Equal("signin.dev", rows[0].Action);
-        Assert.Equal((Audit.Newest + 4).ToString("D32"), rows[1].Target);
+        Assert.Equal(["device.registered", "signin.dev"], rows.Take(2).Select(row => row.Action));
+        Assert.Equal((Audit.Newest + 4).ToString("D32"), rows[2].Target);
         Assert.Equal(rows.OrderByDescending(row => row.At).Select(row => row.At), rows.Select(row => row.At));
     }
 

@@ -80,7 +80,8 @@ public sealed class DeviceServiceTests(TestDatabase database) : IClassFixture<Te
         Assert.Equal("Alice laptop", device.GetProperty("label").GetString());
         Assert.Equal(KeyText(key), device.GetProperty("publicKey").GetString());
         Assert.False(device.GetProperty("revoked").GetBoolean());
-        Assert.Equal(JsonValueKind.Null, device.GetProperty("lastSeenAt").ValueKind);
+        // The list was asked for from this very device, which names itself on every call, so it has been seen.
+        Assert.Equal(JsonValueKind.String, device.GetProperty("lastSeenAt").ValueKind);
         Assert.True(device.TryGetProperty("createdAt", out _));
 
         Assert.Equal(1, await database.ScalarLongAsync(
@@ -95,7 +96,9 @@ public sealed class DeviceServiceTests(TestDatabase database) : IClassFixture<Te
 
         await AssertRefusedAsync(browser, KeyText(OffCurveKey()), "bad-key");
 
-        Assert.Empty((await browser.GetAsync<JsonElement>("/api/devices")).EnumerateArray());
+        // Only the device this browser registered to ask for the list.
+        var listed = (await browser.GetAsync<JsonElement>("/api/devices")).EnumerateArray();
+        Assert.Equal([browser.DeviceId], listed.Select(device => device.GetProperty("id").GetString()));
     }
 
     [Theory]
@@ -351,6 +354,7 @@ public sealed class DeviceServiceTests(TestDatabase database) : IClassFixture<Te
     public async Task Revoking_a_device_twice_is_a_success_that_audits_once()
     {
         using var browser = await PanelClient.SignedInAsync(_gateway, Name("alice"));
+        await browser.EnsureDeviceAsync();
         var id = (await browser.PostAsync<JsonElement>(
             "/api/devices", new { publicKey = KeyText(NewPublicKey()), label = "laptop" }))
             .GetProperty("id").GetString()!;
@@ -627,14 +631,14 @@ public sealed class DeviceServiceTests(TestDatabase database) : IClassFixture<Te
         Assert.Equal(laptop.Id, Assert.Single(seen.Grants).DeviceId);
         Assert.Equal(phone.Id, Assert.Single(Assert.Single(await GrantsOfAsync(alice, phone.Id)).Grants).DeviceId);
 
-        // Bob naming Alice's device is refused in the words used for one that does not exist, and his own
-        // device has nothing of hers.
+        // Bob naming Alice's device is refused in the words used for one that does not exist - as removed, to
+        // the browser naming it - and his own device has nothing of hers.
         using var bob = await PanelClient.SignedInAsync(_gateway, Name("bob"));
         var bobs = await DeviceAsync(new UserAccess(bob.UserId, "unused"));
         using var foreign = await ReadGrantsAsync(bob, laptop.Id);
         using var missing = await ReadGrantsAsync(bob, Ids.New());
 
-        Assert.Equal(HttpStatusCode.NotFound, foreign.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, foreign.StatusCode);
         Assert.Equal(await missing.Content.ReadAsStringAsync(), await foreign.Content.ReadAsStringAsync());
         Assert.Empty(await GrantsOfAsync(bob, bobs.Id));
 
@@ -1377,7 +1381,8 @@ public sealed class DeviceServiceTests(TestDatabase database) : IClassFixture<Te
         var phone = await DeviceAsync(owner, "phone");
         var invite = Ids.New();
 
-        using (var unnamed = await alice.SendAsync(HttpMethod.Post, "/api/invites", new { id = invite }))
+        using (var unnamed = await alice.SendAsync(HttpMethod.Post, "/api/invites", new { id = invite },
+            configure: PanelClient.WithoutDevice))
         {
             Assert.Equal(HttpStatusCode.BadRequest, unnamed.StatusCode);
             Assert.Equal("device-header", (await ErrorAsync(unnamed)).Code);
@@ -1399,6 +1404,71 @@ public sealed class DeviceServiceTests(TestDatabase database) : IClassFixture<Te
         await Devices.RevokeAsync(owner, laptop.Id, default);
         using var revoked = await PostInviteAsync(alice, laptop.Id, Ids.New());
         Assert.Equal(HttpStatusCode.Forbidden, revoked.StatusCode);
+    }
+
+    /// <summary>
+    /// A removed browser is refused the whole of the account's API, not only the calls that hand out keys: before,
+    /// a lost phone removed from Devices went on reading every run's metadata, starting tasks, and removing the
+    /// person's other devices and computers, with the session it had. A call that names no browser is refused for
+    /// that, so leaving the header off is no way round it; and a device that is not the caller's is refused like a
+    /// removed one. What a browser asks before it has a device - signing out, registering one - is not refused.
+    /// </summary>
+    [Fact]
+    public async Task A_removed_browser_is_refused_every_call_and_a_call_naming_none_is_refused_for_the_header()
+    {
+        using var alice = await PanelClient.SignedInAsync(_gateway, Name("alice"));
+        var owner = new UserAccess(alice.UserId, "unused");
+        var phone = await DeviceAsync(owner, "phone");
+        var computer = await ComputerAsync(owner);
+        await Devices.RevokeAsync(owner, phone.Id, default);
+
+        var calls = new (HttpMethod Method, string Path, object? Body)[]
+        {
+            (HttpMethod.Get, "/api/state", null),
+            (HttpMethod.Get, "/api/audit", null),
+            (HttpMethod.Get, "/api/export", null),
+            (HttpMethod.Get, "/api/devices", null),
+            (HttpMethod.Post, "/api/tasks", new
+            {
+                taskId = Guid.NewGuid().ToString(), hostId = computer.HostId, workspaceId = "workspace-1",
+                sealedTask = new TestBrowser(computer.HostId).Task(Guid.NewGuid().ToString(), "workspace-1", "T", "P")
+            }),
+            (HttpMethod.Post, $"/api/hosts/{computer.HostId}/device-commands", new
+            {
+                commandId = Guid.NewGuid().ToString(), kind = CommandKind.RevokeDevice,
+                @sealed = Envelope.Seal(RandomNumberGenerator.GetBytes(32), 1, "device"u8.ToArray(), [])
+            }),
+            (HttpMethod.Post, $"/api/hosts/{computer.HostId}/revoke", new { })
+        };
+
+        foreach (var (method, path, body) in calls)
+        {
+            foreach (var named in new[] { phone.Id, Ids.New() })
+            {
+                using var refused = await alice.SendAsync(method, path, body,
+                    configure: request => request.Headers.Add(DeviceHeader.Name, named));
+                Assert.True(HttpStatusCode.Forbidden == refused.StatusCode, $"{method} {path}: {refused.StatusCode}");
+                Assert.Equal("device-revoked", (await ErrorAsync(refused)).Code);
+            }
+
+            using var unnamed = await alice.SendAsync(method, path, body, configure: PanelClient.WithoutDevice);
+            Assert.True(HttpStatusCode.BadRequest == unnamed.StatusCode, $"{method} {path}: {unnamed.StatusCode}");
+            Assert.Equal("device-header", (await ErrorAsync(unnamed)).Code);
+        }
+
+        Assert.Equal(0, await database.ScalarLongAsync($"SELECT COUNT(*) FROM tasks WHERE owner_id = '{alice.UserId}'"));
+        Assert.Equal(0, await database.ScalarLongAsync($"SELECT COUNT(*) FROM commands WHERE owner_id = '{alice.UserId}'"));
+        Assert.Equal(0, await database.ScalarLongAsync($"SELECT revoked FROM hosts WHERE id = '{computer.HostId}'"));
+
+        // Registering is how a browser gets a device to name, and signing out needs none.
+        using (var registered = await alice.SendAsync(HttpMethod.Post, "/api/devices",
+            new { publicKey = KeyText(NewPublicKey()), label = "laptop" }, configure: PanelClient.WithoutDevice))
+        {
+            Assert.True(registered.IsSuccessStatusCode, await registered.Content.ReadAsStringAsync());
+        }
+
+        using var signedOut = await alice.SendAsync(HttpMethod.Post, "/api/logout-all", new { }, configure: PanelClient.WithoutDevice);
+        Assert.True(signedOut.IsSuccessStatusCode, await signedOut.Content.ReadAsStringAsync());
     }
 
     /// <summary>
@@ -1603,6 +1673,10 @@ public sealed class DeviceServiceTests(TestDatabase database) : IClassFixture<Te
             if (deviceId is not null)
             {
                 request.Headers.Add(DeviceHeader.Name, deviceId);
+            }
+            else
+            {
+                PanelClient.WithoutDevice(request);
             }
         });
 

@@ -4,6 +4,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Security.Cryptography;
 using Enactive.Remote.Contracts;
 using Enactive.Remote.Contracts.Crypto;
+using Enactive.Remote.Gateway.Accounts;
 using Enactive.Remote.Gateway.Storage;
 using MySqlConnector;
 
@@ -304,7 +305,32 @@ public sealed class DeviceService(Database db, Limits limits, TimeProvider clock
     /// and not inside a lock: it is a hint for the person's device list, and losing a race with a
     /// revocation costs nothing.
     /// </summary>
-    public async Task<DeviceAccess> RequireAsync(UserAccess user, string deviceId, CancellationToken ct)
+    public Task<DeviceAccess> RequireAsync(UserAccess user, string deviceId, CancellationToken ct)
+        => RequireAsync(user, deviceId, NoSuchDevice, ct);
+
+    /// <summary>
+    /// The browser a call of the person's API is made from, from its <see cref="DeviceHeader"/>: one of theirs and
+    /// not removed. Looked up once per request and kept on it, so an endpoint that needs the device asks again
+    /// for nothing.
+    ///
+    /// <para>A device that is not the caller's is refused as removed, not as missing: to the browser that
+    /// names it, it is gone either way, and the panel shows the same screen for both. Answered "not found", a
+    /// browser whose device had been deleted with its rows was shown a failing panel with no word of why.</para>
+    /// </summary>
+    public async Task<DeviceAccess> CallerAsync(HttpContext context, CancellationToken ct)
+    {
+        if (context.Items[typeof(DeviceAccess)] is DeviceAccess known)
+        {
+            return known;
+        }
+
+        var device = await RequireAsync(context.UserAccess(), context.RequireDeviceId(), GatewayFault.DeviceRevoked, ct);
+        context.Items[typeof(DeviceAccess)] = device;
+        return device;
+    }
+
+    private async Task<DeviceAccess> RequireAsync(
+        UserAccess user, string deviceId, Func<GatewayFault> unknown, CancellationToken ct)
     {
         await using var connection = await db.OpenAsync(ct);
 
@@ -314,7 +340,7 @@ public sealed class DeviceService(Database db, Limits limits, TimeProvider clock
 
         if (revoked is null)
         {
-            throw NoSuchDevice();
+            throw unknown();
         }
 
         if (revoked.Value)
@@ -1199,4 +1225,15 @@ public static class DeviceHeader
     /// </summary>
     public static string RequireDeviceId(this HttpContext context)
         => context.DeviceIdOrNull() ?? throw GatewayFault.DeviceHeaderMissing();
+
+    /// <summary>
+    /// Marks an endpoint of the person's API that a browser calls before it has a device to name: registering
+    /// one, and signing out. Every other one names its device and is refused when that device was removed.
+    /// </summary>
+    public sealed class NotRequired
+    {
+        public static readonly NotRequired Instance = new();
+
+        private NotRequired() { }
+    }
 }

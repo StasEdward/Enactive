@@ -225,7 +225,9 @@ async function runIdOf(page, userId, title) {
     const { createReader } = await import('/js/reader.js');
     const store = await openKeystore(userId);
     try {
-      const state = await (await fetch('/api/state')).json();
+      // As the panel asks: naming this browser's device, without which the gateway answers nothing private.
+      const device = (await store.device())?.id;
+      const state = await (await fetch('/api/state', { headers: { 'X-Enactive-Device': device } })).json();
       const reader = createReader(store);
       for (const task of state.tasks) {
         if ((await reader.openTask(task))?.json?.title === title) {
@@ -239,17 +241,32 @@ async function runIdOf(page, userId, title) {
   }, [userId, title]);
 }
 
-/**
- * Every run in the account's state, opened with the account's key store in this browser and the panel's own
- * reader: `{createdAt, summary}` with the summary's text, or why it does not open.
- */
-async function runsAsOpenedHere(page, userId) {
+/** The account's state as the gateway answers this browser, naming its device as the panel does: `{status, body}`. */
+async function stateAsAsked(page, userId) {
   return page.evaluate(async (userId) => {
+    const { openKeystore } = await import('/js/keystore.js');
+    const store = await openKeystore(userId);
+    try {
+      const device = (await store.device())?.id;
+      const response = await fetch('/api/state', { headers: { 'X-Enactive-Device': device } });
+      return { status: response.status, body: await response.json() };
+    } finally {
+      store.close();
+    }
+  }, userId);
+}
+
+/**
+ * Every run of `state` (an account's state, as the gateway answered some browser), opened with the account's key
+ * store in this browser and the panel's own reader: `{createdAt, summary}` with the summary's text, or why it does
+ * not open.
+ */
+async function runsAsOpenedHere(page, userId, state) {
+  return page.evaluate(async ([userId, state]) => {
     const { openKeystore } = await import('/js/keystore.js');
     const { createReader } = await import('/js/reader.js');
     const store = await openKeystore(userId);
     try {
-      const state = await (await fetch('/api/state')).json();
       const reader = createReader(store);
       return Promise.all(state.runs.map(async (run) => {
         const opened = await reader.openSummary(run);
@@ -258,7 +275,7 @@ async function runsAsOpenedHere(page, userId) {
     } finally {
       store.close();
     }
-  }, userId);
+  }, [userId, state]);
 }
 
 /** Every cell of the dump that contains `words`, as `table.column`. */
@@ -440,10 +457,16 @@ test('4. a removed device cannot read what the computer sends after it rotates',
   // The removed device is told so by the gateway the first time it asks as itself.
   await expect(pageB.locator('#device-removed')).toBeVisible();
 
-  // And with every key it was ever given, it opens what it had and not the run after the removal.
+  // The gateway answers it nothing more: every call names the device, and a removed one is refused all of them.
+  const refused = await stateAsAsked(pageB, aliceId);
+  expect(refused).toMatchObject({ status: 403, body: { code: 'device-revoked' } });
+
+  // And were it handed the state anyway - here the state the remaining device is given - with every key it was
+  // ever given it opens what it had and not the run after the removal.
   const held = await keysHeld(pageB, aliceId, studioId);
   expect(held).toMatchObject({ device: deviceB, newest: 1 });
-  const opened = (await runsAsOpenedHere(pageB, aliceId)).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  const { body: state } = await stateAsAsked(pageA, aliceId);
+  const opened = (await runsAsOpenedHere(pageB, aliceId, state)).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   expect(opened.map((run) => run.summary)).toEqual([
     'All done', 'All done', 'this device has not been given the key for this'
   ]);

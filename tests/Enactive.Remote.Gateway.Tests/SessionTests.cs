@@ -229,7 +229,10 @@ public sealed class SessionTests(TestDatabase database) : IClassFixture<TestData
         using var bob = await PanelClient.SignedInAsync(_gateway, Name("bob"));
         var statuses = new List<HttpStatusCode>();
 
-        for (var call = 0; call < RequestLimits.ApiPerMinute; call++)
+        // Registering the browser's device is one of the minute's calls, as it is for the panel.
+        await alice.EnsureDeviceAsync();
+
+        for (var call = 1; call < RequestLimits.ApiPerMinute; call++)
         {
             using var state = await alice.SendAsync(HttpMethod.Get, "/api/state", csrf: false);
             statuses.Add(state.StatusCode);

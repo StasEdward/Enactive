@@ -67,8 +67,15 @@ export const revokeKey = (deviceId, hostId) => `revoke:${deviceId}:${hostId}`;
  * same id with another envelope, and would queue a new id as a second removal. A refusal of the gateway's own
  * revocation throws, and no computer is told: a computer told first would rotate while the gateway went on
  * serving the device.
+ *
+ * `self` is this browser removing its own device (forgetThisDevice), and then the computers are told first: the
+ * gateway refuses every call of a removed device, the computers' commands included, so told after the gateway they
+ * were all refused and the device stayed trusted on every computer. Nor is it removed at the gateway while a
+ * computer was not reached: removed, the next press would be refused there too. A gateway that then refuses the
+ * revocation leaves a device the computers no longer trust and that is about to delete its keys; pressed again,
+ * the same is sent.
  */
-export async function revokeDevice({ api, writer, sends, hosts, keystore, deviceId }) {
+export async function revokeDevice({ api, writer, sends, hosts, keystore, deviceId, self = false }) {
   const skipped = [];
   const failed = [];
   const sealed = [];
@@ -92,7 +99,8 @@ export async function revokeDevice({ api, writer, sends, hosts, keystore, device
     }
   }
 
-  await api.post(`/api/devices/${encodeURIComponent(deviceId)}/revoke`, {});
+  const revokeAtGateway = () => api.post(`/api/devices/${encodeURIComponent(deviceId)}/revoke`, {});
+  if (!self) await revokeAtGateway();
 
   const sentTo = [];
   for (const { host, command } of sealed) {
@@ -105,6 +113,8 @@ export async function revokeDevice({ api, writer, sends, hosts, keystore, device
       failed.push({ hostId: host.id, reason: `${host.label}: ${error.message}` });
     }
   }
+
+  if (self && failed.length === 0) await revokeAtGateway();
 
   return { sentTo, skipped, failed };
 }
@@ -128,7 +138,7 @@ export async function forgetThisDevice({ api, writer, sends, keystore, hosts, si
   // Never registered with the gateway: no computer was ever told of it either, and there is nothing to remove.
   const result = deviceId === null
     ? { sentTo: [], skipped: [], failed: [] }
-    : await revokeDevice({ api, writer, sends, hosts, keystore, deviceId });
+    : await revokeDevice({ api, writer, sends, hosts, keystore, deviceId, self: true });
 
   if (result.failed.length > 0) {
     throw new Error(`${result.failed.map(({ reason }) => reason).join(' ')} This browser's keys were kept, so `

@@ -4,6 +4,7 @@ using System.Net;
 using System.Net.Http.Json;
 using Enactive.Remote.Contracts;
 using Enactive.Remote.Gateway.Accounts;
+using Enactive.Remote.Gateway.Services;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.Mvc.Testing.Handlers;
@@ -55,12 +56,43 @@ internal sealed class PanelClient : IDisposable
 
     public PanelClient(WebApplicationFactory<Program> gateway)
     {
-        Http = gateway.CreateDefaultClient(new CookieContainerHandler(Cookies));
+        Http = gateway.CreateDefaultClient(new NamesItsDevice(this), new CookieContainerHandler(Cookies));
     }
 
     public CookieContainer Cookies { get; } = new();
 
     public HttpClient Http { get; }
+
+    /// <summary>
+    /// The device this browser names on every private call, as the panel names its own: the first one it
+    /// registered, or one registered for it before its first call that needs one. Null until then.
+    /// </summary>
+    public string? DeviceId { get; private set; }
+
+    /// <summary>A request option that sends it without the device header, for a test of what that is answered.</summary>
+    private static readonly HttpRequestOptionsKey<bool> NoDevice = new("enactive-no-device");
+
+    /// <summary>For <see cref="SendAsync"/>'s <c>configure</c>: this request names no device.</summary>
+    public static void WithoutDevice(HttpRequestMessage request) => request.Options.Set(NoDevice, true);
+
+    /// <summary>
+    /// This browser's device, registered now if it has none yet - for a test that must not have it registered in
+    /// the middle of what it counts.
+    /// </summary>
+    public async Task<string> EnsureDeviceAsync()
+    {
+        if (DeviceId is null)
+        {
+            using var key = Enactive.Remote.Contracts.Crypto.P256.Generate();
+            await PostAsync("/api/devices", new
+            {
+                publicKey = Enactive.Remote.Contracts.Crypto.B64.Url(Enactive.Remote.Contracts.Crypto.P256.PublicRaw(key)),
+                label = "Test browser"
+            });
+        }
+
+        return DeviceId!;
+    }
 
     /// <summary>The account this browser signed in to; empty until it has.</summary>
     public string UserId { get; private set; } = "";
@@ -133,6 +165,98 @@ internal sealed class PanelClient : IDisposable
     }
 
     public void Dispose() => Http.Dispose();
+
+    /// <summary>
+    /// The calls a browser makes before it has a device to name: the gateway refuses every other private call
+    /// that names none (Program.cs, the device filter on the person's API).
+    /// </summary>
+    private static string PathOf(HttpRequestMessage request)
+        => request.RequestUri?.IsAbsoluteUri == true
+            ? request.RequestUri.AbsolutePath
+            : request.RequestUri?.OriginalString.Split('?')[0] ?? "";
+
+    private static bool NeedsDevice(HttpRequestMessage request)
+    {
+        var path = PathOf(request);
+
+        if (!path.StartsWith("/api/", StringComparison.Ordinal)) return false;
+        if (path is "/api/session" or "/api/providers" or "/api/dev/sign-in" or "/api/logout" or "/api/logout-all") return false;
+        return !(request.Method == HttpMethod.Post && path == "/api/devices");
+    }
+
+    /// <summary>
+    /// Adds the device header to every private call that does not carry one, as the panel's api.js does. A test
+    /// that names a device itself, or asks for none (<see cref="WithoutDevice"/>), is left as it is. A device
+    /// registered through this browser becomes its own, as the panel's first registration does.
+    /// </summary>
+    private sealed class NamesItsDevice(PanelClient browser) : DelegatingHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            var asksForNone = request.Options.TryGetValue(NoDevice, out var none) && none;
+
+            if (!asksForNone && NeedsDevice(request) && !request.Headers.Contains(DeviceHeader.Name))
+            {
+                // A browser that is not signed in has no device to register, and is answered 401 without one.
+                browser.DeviceId ??= await RegisterAsync(request.RequestUri!, ct);
+                if (browser.DeviceId is not null)
+                {
+                    request.Headers.Add(DeviceHeader.Name, browser.DeviceId);
+                }
+            }
+
+            var response = await base.SendAsync(request, ct);
+
+            if (browser.DeviceId is null && response.IsSuccessStatusCode && request.Method == HttpMethod.Post
+                && PathOf(request) == "/api/devices")
+            {
+                // Buffered and read as text, so the test reads the same answer after this has.
+                await response.Content.LoadIntoBufferAsync(ct);
+                var registered = RemoteJson.Deserialize<NewDeviceId>(await response.Content.ReadAsStringAsync(ct));
+                browser.DeviceId = registered.Id;
+            }
+
+            return response;
+        }
+
+        private async Task<string?> RegisterAsync(Uri asked, CancellationToken ct)
+        {
+            using var key = Enactive.Remote.Contracts.Crypto.P256.Generate();
+            using var request = new HttpRequestMessage(HttpMethod.Post, new Uri(asked, "/api/devices"))
+            {
+                Content = JsonContent.Create(new
+                {
+                    publicKey = Enactive.Remote.Contracts.Crypto.B64.Url(Enactive.Remote.Contracts.Crypto.P256.PublicRaw(key)),
+                    label = "Test browser"
+                }, options: RemoteJson.Options)
+            };
+            // A browser made from a copied cookie has not asked for its token yet.
+            if (browser._csrf.Length == 0)
+            {
+                using var session = await base.SendAsync(new HttpRequestMessage(HttpMethod.Get, new Uri(asked, "/api/session")), ct);
+                browser._csrf = RemoteJson.Deserialize<SessionView>(await session.Content.ReadAsStringAsync(ct)).CsrfToken;
+            }
+
+            request.Headers.Add("X-CSRF-TOKEN", browser._csrf);
+
+            using var response = await base.SendAsync(request, ct);
+            if (response.StatusCode == HttpStatusCode.Unauthorized)
+            {
+                return null;
+            }
+
+            if (!response.IsSuccessStatusCode)
+            {
+                throw new HttpRequestException(
+                    $"This test browser could not register a device: {(int)response.StatusCode} "
+                    + await response.Content.ReadAsStringAsync(ct));
+            }
+
+            return RemoteJson.Deserialize<NewDeviceId>(await response.Content.ReadAsStringAsync(ct)).Id;
+        }
+    }
+
+    private sealed record NewDeviceId(string Id);
 
     /// <summary>
     /// As EnsureSuccessStatusCode, with the gateway's answer in the message: a bare "400" sends
