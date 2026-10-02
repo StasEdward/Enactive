@@ -298,8 +298,13 @@ internal sealed class RemoteAccessService : IAsyncDisposable
     /// </summary>
     public void WithdrawInvite(string inviteId) => (_keys as HostKeyStore)?.ForgetInvite(inviteId);
 
-    /// <summary>Every device this computer has trusted, revoked ones included; none before its keys are read.</summary>
-    public IReadOnlyList<TrustedDevice> TrustedDevices() => (_keys as HostKeyStore)?.Trusted ?? [];
+    /// <summary>
+    /// Every device this computer has trusted, revoked ones included; none before its keys are read. Not a removal of
+    /// a device this computer never trusted: that is kept in the key store to refuse a later endorsement of it, and is
+    /// no device the person added.
+    /// </summary>
+    public IReadOnlyList<TrustedDevice> TrustedDevices()
+        => [.. ((_keys as HostKeyStore)?.Trusted ?? []).Where(device => !device.NeverTrusted)];
 
     /// <summary>Runs started from a phone that are still going, by remote run id.</summary>
     public IReadOnlyCollection<string> Running => _runner?.Running ?? [];

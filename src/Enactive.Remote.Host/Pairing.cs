@@ -118,7 +118,7 @@ public static class Pairing
         var known = keys.Trusted.FirstOrDefault(d => d.DeviceId == code.DeviceId);
         if (known is { RevokedAt: not null })
         {
-            keys.Retrust(code.DeviceId, code.DevicePublic, AddedBy);
+            keys.Retrust(code.DeviceId, code.DevicePublic, AddedBy, DeviceLabel);
         }
         else
         {
@@ -224,7 +224,8 @@ public static class Pairing
         var known = keys.Trusted.FirstOrDefault(d => d.DeviceId == code.DeviceId);
         refusal = null;
 
-        if (known is not null && !CryptographicOperations.FixedTimeEquals(known.PublicKey, code.DevicePublic))
+        // A device removed before it was ever trusted here has no key to compare: the code names it.
+        if (known is { NeverTrusted: false } && !CryptographicOperations.FixedTimeEquals(known.PublicKey, code.DevicePublic))
         {
             refusal = AnotherKey;
             return [];

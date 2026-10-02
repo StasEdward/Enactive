@@ -80,9 +80,6 @@ public sealed partial class KeyAdministration(HostKeyStore keys, IGatewayConnect
     /// <summary>Why a device command is refused on a computer with no trusted list to change.</summary>
     public const string CannotManageDevices = "this computer cannot manage devices";
 
-    /// <summary>Why a removal naming a device this computer never trusted changes nothing.</summary>
-    public const string UnknownDevice = "it names a device this computer has never trusted";
-
     /// <summary>
     /// Why an endorsement of a removed device is refused. An endorsement is sealed under an epoch key, and
     /// the removed device may hold one: it could vouch for itself and be granted every epoch made since.
@@ -257,10 +254,14 @@ public sealed partial class KeyAdministration(HostKeyStore keys, IGatewayConnect
     /// browser - with no second epoch: nothing more is kept from it, and every device would be sent a grant
     /// for nothing.</para>
     ///
+    /// <para>A device this computer never trusted is recorded as removed, with no epoch either: it holds no
+    /// key of this computer's. Refused and forgotten, as it was, the endorsement of it arriving next -
+    /// sent before the removal, delivered after - trusted the removed device, and every later key was granted
+    /// to it (<see cref="HostKeyStore.Distrust"/>).</para>
+    ///
     /// <para>All of it is one step in the key store (<see cref="HostKeyStore.RevokeAndRotate"/>): a failure
     /// part of the way changes nothing, and the removal can be made again.</para>
     /// </summary>
-    /// <exception cref="CommandRefusedException">This computer never trusted the device.</exception>
     public Task RevokeAsync(string deviceId, string reason, CancellationToken ct)
     {
         Revoke(deviceId, reason, tellGateway: false);
@@ -324,8 +325,13 @@ public sealed partial class KeyAdministration(HostKeyStore keys, IGatewayConnect
         KeyRotated rotated;
         lock (TrustedListGate)
         {
-            var device = keys.Trusted.FirstOrDefault(d => d.DeviceId == deviceId)
-                ?? throw new CommandRefusedException(UnknownDevice);
+            var device = keys.Trusted.FirstOrDefault(d => d.DeviceId == deviceId);
+
+            if (device is null)
+            {
+                keys.Distrust(deviceId);
+                return;
+            }
 
             if (device.RevokedAt is not null)
                 return;
@@ -430,14 +436,15 @@ public sealed partial class KeyAdministration(HostKeyStore keys, IGatewayConnect
     {
         var known = keys.Trusted.FirstOrDefault(d => d.DeviceId == enrollment.DeviceId);
 
-        if (known is not null && !CryptographicOperations.FixedTimeEquals(known.PublicKey, devicePublic))
+        // A device removed before it was ever trusted here has no key to compare: the admission names it.
+        if (known is { NeverTrusted: false } && !CryptographicOperations.FixedTimeEquals(known.PublicKey, devicePublic))
             return false;
 
         if (known is { RevokedAt: not null })
         {
             // The person made the link on this computer, so this is an admission - not an endorsement
             // sealed under an epoch key, which may never bring a revoked device back.
-            keys.Retrust(enrollment.DeviceId, devicePublic, AddedBy);
+            keys.Retrust(enrollment.DeviceId, devicePublic, AddedBy, CleanLabel(enrollment.Label));
         }
         else if (known is null)
         {

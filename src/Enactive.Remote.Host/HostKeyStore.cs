@@ -8,7 +8,15 @@ using Microsoft.Data.Sqlite;
 
 /// <summary>A browser device this computer grants its keys to. Revoked devices stay listed, with the time.</summary>
 public sealed record TrustedDevice(
-    string DeviceId, byte[] PublicKey, string Label, string AddedBy, DateTimeOffset AddedAt, DateTimeOffset? RevokedAt);
+    string DeviceId, byte[] PublicKey, string Label, string AddedBy, DateTimeOffset AddedAt, DateTimeOffset? RevokedAt)
+{
+    /// <summary>
+    /// A device removed before this computer ever trusted it: kept, with no key, so that a later endorsement of
+    /// it is refused (<see cref="HostKeyStore.Distrust"/>). Not a device a person added, so the desktop's list
+    /// does not show it.
+    /// </summary>
+    public bool NeverTrusted => PublicKey.Length == 0;
+}
 
 /// <summary>An invitation this computer opened: the pairing secret it put in the link, and when it stops counting.</summary>
 public sealed record PendingInvite(string Id, byte[] Secret, DateTimeOffset ExpiresAt);
@@ -204,9 +212,12 @@ public sealed class HostKeyStore : IHostKeys, IGrantOutbox, IDisposable
     ///
     /// <para>It is a new trust decision, so who made it and when are recorded anew. A different
     /// key is refused: a device with a new key is a new device, and gets a new id.</para>
+    ///
+    /// <para>A device removed before it was ever trusted here (<see cref="TrustedDevice.NeverTrusted"/>)
+    /// has no key yet, so the admission's key becomes its key, and <paramref name="label"/> its label.</para>
     /// </summary>
     /// <exception cref="InvalidOperationException">The id is unknown, or was trusted with another key.</exception>
-    public void Retrust(string deviceId, byte[] publicKey, string addedBy)
+    public void Retrust(string deviceId, byte[] publicKey, string addedBy, string? label = null)
     {
         RequirePoint(deviceId, publicKey);
 
@@ -214,15 +225,25 @@ public sealed class HostKeyStore : IHostKeys, IGrantOutbox, IDisposable
         {
             var known = StoredDevice(connection, deviceId)
                 ?? throw new InvalidOperationException($"Device {deviceId} was never trusted here, so there is nothing to trust again.");
-            if (!CryptographicOperations.FixedTimeEquals(known.PublicKey, publicKey))
+            var keyless = known.PublicKey.Length == 0;
+            if (!keyless && !CryptographicOperations.FixedTimeEquals(known.PublicKey, publicKey))
                 throw new InvalidOperationException($"Device {deviceId} was trusted with another key; a device id is never rebound to a new key.");
             if (!known.Revoked) return 0;
 
             return Execute(connection, null,
-                "UPDATE trusted_devices SET revoked_at = NULL, added_by = $by, added_at = $now WHERE device_id = $id",
-                ("$by", addedBy), ("$now", Format(_clock.GetUtcNow())), ("$id", deviceId));
+                """
+                UPDATE trusted_devices
+                SET revoked_at = NULL, added_by = $by, added_at = $now, public_key = $key,
+                    label = CASE WHEN length(public_key) = 0 THEN $label ELSE label END
+                WHERE device_id = $id
+                """,
+                ("$by", addedBy), ("$now", Format(_clock.GetUtcNow())), ("$key", publicKey),
+                ("$label", label ?? NeverTrustedLabel), ("$id", deviceId));
         });
     }
+
+    /// <summary>What the list calls a device removed before this computer trusted it, until an admission names it.</summary>
+    private const string NeverTrustedLabel = "A device removed before this computer trusted it";
 
     /// <summary>
     /// Marks a device revoked and drops every grant still queued for it, in one step. The row
@@ -231,13 +252,26 @@ public sealed class HostKeyStore : IHostKeys, IGrantOutbox, IDisposable
     ///
     /// <para>The queued grants go with it because a grant made just before the revocation and
     /// delivered just after would hand the device a key after the person took its trust away.</para>
+    ///
+    /// <para>A device this computer never trusted is kept too, removed and with no key
+    /// (<see cref="TrustedDevice.NeverTrusted"/>). A removal can arrive before the endorsement of the
+    /// device it names - sent while this computer was off, or held back by the gateway - and forgotten,
+    /// it let that endorsement trust the removed device, which was then granted every key made after.
+    /// Kept, it is refused by <see cref="Trust"/> like any removed device; only an admission brings it
+    /// back (<see cref="Retrust"/>).</para>
     /// </summary>
     public void Distrust(string deviceId) => _store.Locked(connection =>
     {
         using var transaction = connection.BeginTransaction();
+        var now = Format(_clock.GetUtcNow());
         Execute(connection, transaction,
-            "UPDATE trusted_devices SET revoked_at = $now WHERE device_id = $id AND revoked_at IS NULL",
-            ("$now", Format(_clock.GetUtcNow())), ("$id", deviceId));
+            """
+            INSERT INTO trusted_devices (device_id, public_key, label, added_by, added_at, revoked_at)
+            VALUES ($id, $none, $label, $by, $now, $now)
+            ON CONFLICT (device_id) DO UPDATE SET revoked_at = COALESCE(revoked_at, excluded.revoked_at)
+            """,
+            ("$id", deviceId), ("$none", Array.Empty<byte>()), ("$label", NeverTrustedLabel),
+            ("$by", "a removal"), ("$now", now));
         Execute(connection, transaction, "DELETE FROM pending_grants WHERE device_id = $id", ("$id", deviceId));
         transaction.Commit();
         return 0;

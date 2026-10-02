@@ -244,6 +244,36 @@ public sealed class HostKeyStoreTests
         Assert.NotNull(Assert.Single(keys.Trusted).RevokedAt);
     }
 
+    /// <summary>
+    /// A removal can reach this computer before the device it names was ever trusted here - removed from a
+    /// browser while this computer was off, with its endorsement still on the way. The removal is kept, as a
+    /// device removed with no key: forgotten, the endorsement arriving next trusted the removed device, and it
+    /// was granted every key made after. Only an admission on this computer - a connection code or an
+    /// invitation it answered - brings the id back, with the key the admission names.
+    /// </summary>
+    [WindowsFact]
+    public void A_removal_of_an_unknown_id_refuses_a_later_trust()
+    {
+        using var fx = new EngineFixture();
+        using var store = new HostStore(fx.PathOf("remote.db"));
+        using var keys = new HostKeyStore(store, HostId);
+        using var standIn = P256.Generate();
+
+        keys.Distrust("stand-in");
+
+        Assert.Throws<InvalidOperationException>(() => keys.Trust(Device("stand-in", standIn, DateTimeOffset.UtcNow)));
+        Assert.Empty(keys.Live);
+        var removed = Assert.Single(keys.Trusted);
+        Assert.Equal(("stand-in", true), (removed.DeviceId, removed.NeverTrusted));
+        Assert.NotNull(removed.RevokedAt);
+
+        keys.Retrust("stand-in", P256.PublicRaw(standIn), "invitation");
+
+        var admitted = Assert.Single(keys.Live);
+        Assert.Equal(P256.PublicRaw(standIn), admitted.PublicKey);
+        Assert.False(admitted.NeverTrusted);
+    }
+
     [WindowsFact]
     public void Retrust_reactivates_a_revoked_device_only_with_its_own_key()
     {

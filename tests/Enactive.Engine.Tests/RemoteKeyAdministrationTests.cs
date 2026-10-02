@@ -1777,11 +1777,12 @@ public sealed class RemoteKeyAdministrationTests
 
     /// <summary>
     /// A removal of a device that is already removed - by a second browser, or on the desktop after the
-    /// browser - makes no second epoch: there is nothing more to keep from it. One this computer never
-    /// trusted is refused and changes nothing.
+    /// browser - makes no second epoch: there is nothing more to keep from it. Nor does one this computer never
+    /// trusted, which holds no key of it; the removal is kept, so the device is never trusted later
+    /// (A_removal_before_an_endorsement_keeps_the_device_out).
     /// </summary>
     [WindowsFact]
-    public async Task Removing_a_removed_device_rotates_nothing_and_an_unknown_one_is_refused()
+    public async Task Removing_a_removed_or_unknown_device_rotates_nothing()
     {
         using var fx = new EngineFixture();
         using var store = new HostStore(fx.PathOf("remote.db"));
@@ -1794,12 +1795,62 @@ public sealed class RemoteKeyAdministrationTests
 
         await administration.RevokeAsync("laptop", KeyAdministration.RemovedFromBrowser, CancellationToken.None);
         await administration.RevokeAsync("laptop", KeyAdministration.RemovedHere, CancellationToken.None);
-        var unknown = await Assert.ThrowsAsync<CommandRefusedException>(
-            () => administration.RevokeAsync("stranger", KeyAdministration.RemovedFromBrowser, CancellationToken.None));
+        await administration.RevokeAsync("stranger", KeyAdministration.RemovedFromBrowser, CancellationToken.None);
 
-        Assert.Equal(KeyAdministration.UnknownDevice, unknown.Message);
         Assert.Equal(2u, keys.Current.Epoch);
         Assert.Single(keys.PendingGrants());
+        Assert.Equal(["phone"], keys.Live.Select(d => d.DeviceId));
+    }
+
+    /// <summary>
+    /// A browser invites a device and endorses it, then the device is removed; the computer, off meanwhile, is
+    /// handed the removal before the endorsement - its own order, or a gateway holding the endorsement back. The
+    /// removal named a device this computer had never trusted and was forgotten, so the endorsement then trusted
+    /// the removed device, and every key made after was granted to it. Kept, the removal refuses the endorsement
+    /// as one of a removed device.
+    /// </summary>
+    [WindowsFact]
+    public async Task A_removal_before_an_endorsement_keeps_the_device_out()
+    {
+        using var fx = new EngineFixture();
+        using var store = new HostStore(fx.PathOf("remote.db"));
+        using var keys = new HostKeyStore(store, "host-1");
+        var administration = new KeyAdministration(keys, new FakeGateway(), TimeProvider.System);
+        var runner = Runner(store, keys, () => administration);
+        using var phone = P256.Generate();
+        using var standIn = P256.Generate();
+        TrustDevice(keys, "phone", phone, "Phone");
+        var browser = new FixedHostKeys(keys.HostId, keys.Current);
+
+        await runner.ApplyAsync(browser.Revoke("stand-in"));
+        var endorsement = browser.Endorse("stand-in", B64.Url(P256.PublicRaw(standIn)), "Stand-in");
+        await runner.ApplyAsync(endorsement);
+
+        var notice = Assert.Single(runner.Notices);
+        Assert.Contains(endorsement.Id, notice.Detail, StringComparison.Ordinal);
+        Assert.EndsWith(": " + KeyAdministration.RemovedCannotBeEndorsed, notice.Detail, StringComparison.Ordinal);
+        Assert.Equal(["phone"], keys.Live.Select(d => d.DeviceId));
+        Assert.Equal(1u, keys.Current.Epoch);
+        Assert.Empty(keys.PendingGrants());
+    }
+
+    /// <summary>
+    /// The removal kept for a device this computer never trusted is no device the person added, and the desktop's
+    /// list of trusted devices does not show it: listed, it was a row with no name the person could not place.
+    /// </summary>
+    [WindowsFact]
+    public async Task The_desktop_list_leaves_out_a_removal_of_a_device_never_trusted()
+    {
+        using var fx = new EngineFixture();
+        using var store = new HostStore(fx.PathOf("keys.db"));
+        using var keys = new HostKeyStore(store, "host-1");
+        using var phone = P256.Generate();
+        TrustDevice(keys, "phone", phone, "Phone");
+        keys.Distrust("stand-in");
+
+        await using var service = Service(fx, keys, _ => throw new InvalidOperationException("No connection expected"));
+
+        Assert.Equal(["phone"], service.TrustedDevices().Select(d => d.DeviceId));
     }
 
     // ── the window and the pane, without a window ───────────────────────────
