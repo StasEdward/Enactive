@@ -793,6 +793,63 @@ public sealed class RemoteKeyAdministrationTests
     }
 
     /// <summary>
+    /// A computer that was asleep while a phone was lost and removed hears of the removal in the same Sync as
+    /// whatever was queued under the old key - by the thief, or by the phone before it was lost: a start, and an
+    /// endorsement of a stand-in device. The removal is carried out first, whatever order the gateway listed
+    /// them in, so the rest are opened under the new key and refused as sealed before the removal. Run each on
+    /// its own task, they opened under the old key whenever they got there before the rotation committed: the
+    /// task ran, and the stand-in was trusted and given every later key.
+    /// </summary>
+    [WindowsFact]
+    public async Task A_removal_in_a_sync_is_carried_out_before_the_commands_that_came_with_it()
+    {
+        using var fx = new EngineFixture();
+        var database = fx.PathOf("remote.db");
+        var settings = new RemoteAccessSettings();
+        var (code, device) = NewCode();
+        using var _ = device;
+        await RemoteAccessService.ConnectWithCodeAsync(code, settings, database, NeverAsked);
+        using var phone = P256.Generate();
+        using var standIn = P256.Generate();
+        HostCommand[] batch;
+        using (var store = new HostStore(database))
+        using (var keys = new HostKeyStore(store, code.HostId))
+        {
+            TrustDevice(keys, "phone", phone, "Phone");
+            var thief = new FixedHostKeys(code.HostId, keys.Current);
+            batch =
+            [
+                thief.Start(commandId: "command-start", runId: "run-thief"),
+                thief.Endorse("stand-in", B64.Url(P256.PublicRaw(standIn)), "Stand-in", commandId: "command-endorse"),
+                thief.Revoke("phone", commandId: "command-revoke")
+            ];
+        }
+        var gateway = new FakeGateway { Pending = [.. batch] };
+
+        await using (var service = new RemoteAccessService(settings, keys: null,
+            _ => throw new InvalidOperationException("No composition expected"), () => [], fx.Decisions, database,
+            connect: _ => Task.FromResult<IGatewayConnection>(gateway)))
+        {
+            service.Start();
+            await Until(() => gateway.Calls.Count(call => call == "Publish") > 0);
+        }
+
+        using (var store = new HostStore(database))
+        using (var keys = new HostKeyStore(store, code.HostId))
+        {
+            Assert.Equal([code.DeviceId], keys.Live.Select(d => d.DeviceId));
+            Assert.DoesNotContain(keys.Trusted, d => d.DeviceId == "stand-in");
+            Assert.Equal(2u, keys.Current.Epoch);
+
+            var ending = Assert.Single(gateway.Published, e => e.RunId == "run-thief");
+            Assert.Equal(RemoteEventKind.Failed, ending.Kind);
+            Assert.Equal(
+                $"This computer refused the request: {Sealer.SealedBeforeRemoval}.",
+                keys.Current.OpenText(ending.SealedDetail!, Ad.Event(keys.HostId, "run-thief", ending.Sequence, ending.Kind)));
+        }
+    }
+
+    /// <summary>
     /// Removing a device does not wait for a connection: the part that keeps it from reading anything new
     /// is this computer's alone. The person is told the gateway will hear of it, not that it failed.
     /// </summary>

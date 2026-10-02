@@ -140,12 +140,13 @@ internal static class Computer
                 // under the new key, or a device given only that key could not read it.
                 IReadOnlyList<WorkspaceRef> workspaces = [new(WorkspaceId, sealer.WorkspaceName(WorkspaceId, workspaceName))];
 
-                foreach (var command in await loop.TurnAsync(workspaces, ct))
-                {
-                    // On their own tasks, as the desktop runs them: a run waiting for an answer must not hold
-                    // up the delivery of the answer.
-                    runs.Add(Task.Run(() => runner.ApplyAsync(command, ct), ct));
-                }
+                // As the desktop carries them out: removals first and one after another, and each run on its own
+                // task - a run waiting for an answer must not hold up the delivery of the answer.
+                await runner.ApplyAllAsync(
+                    await loop.TurnAsync(workspaces, ct),
+                    run => runs.Add(Task.Run(() => run(ct), ct)),
+                    (command, failure) => Say("FAULT", $"run {command.Kind} {failure.Message}"),
+                    ct);
 
                 await administration.SettleOwedRevocationsAsync(ct);
 

@@ -75,6 +75,60 @@ public sealed class RemoteRunner(
     public event Action<DeliveryNotice>? Noticed;
 
     /// <summary>
+    /// Carries out the commands one Sync brought, in <see cref="CommandOrder"/>: each is opened here, one after
+    /// another, and only a start's run is handed to <paramref name="runInBackground"/>.
+    ///
+    /// <para>Opened here and not on the background task, because opening is where the key is chosen: a start
+    /// opened on its own task raced the removal listed with it, and opened under the key the removal was
+    /// replacing. The removals and endorsements are carried out to the end before the next command is opened,
+    /// so whatever follows meets the trusted list and the key they left.</para>
+    /// </summary>
+    /// <param name="runInBackground">
+    /// Runs a started task without holding up the delivery loop: a run takes minutes, and nothing it produced
+    /// would be sent until it finished.
+    /// </param>
+    /// <param name="failed">
+    /// Told of a command that failed on this computer's side - not a refusal, which is said where refusals
+    /// are. Without it one failure ended the batch, and the commands after it, already acknowledged, were
+    /// never carried out.
+    /// </param>
+    public async Task ApplyAllAsync(
+        IReadOnlyList<HostCommand> commands,
+        Action<Func<CancellationToken, Task>> runInBackground,
+        Action<HostCommand, Exception> failed,
+        CancellationToken ct = default)
+    {
+        foreach (var command in CommandOrder.Arrange(commands))
+        {
+            try
+            {
+                if (command.Kind != CommandKind.StartTask)
+                {
+                    await ApplyAsync(command, ct);
+                    continue;
+                }
+
+                OpenedStart start;
+                try
+                {
+                    start = sealer.OpenStart(command);
+                }
+                catch (CommandRefusedException refused)
+                {
+                    Refuse(command, refused);
+                    continue;
+                }
+
+                runInBackground(token => StartAsync(start, command.Id, token));
+            }
+            catch (Exception failure) when (failure is not OperationCanceledException || !ct.IsCancellationRequested)
+            {
+                failed(command, failure);
+            }
+        }
+    }
+
+    /// <summary>
     /// Carries out one accepted command.
     ///
     /// <para>The caller has already written it down and acknowledged it; by the time this is

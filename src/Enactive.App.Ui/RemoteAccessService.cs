@@ -669,10 +669,10 @@ internal sealed class RemoteAccessService : IAsyncDisposable
             {
                 nextSync = DateTimeOffset.UtcNow + SyncEvery;
 
-                foreach (var command in await loop.TurnAsync(Publishable(_workspaces(), _sealer!), ct))
-                {
-                    Begin(command);
-                }
+                // One after another, removals first, and only the runs on their own tasks: a removal carried
+                // out beside the commands that came with it let them open under the key it was replacing.
+                await _runner!.ApplyAllAsync(
+                    await loop.TurnAsync(Publishable(_workspaces(), _sealer!), ct), Begin, Failed, ct);
 
                 // Removals made here that the gateway has not heard of - made offline, or on a connection
                 // that dropped - are passed on after every sync that worked: until then it still serves the
@@ -734,23 +734,27 @@ internal sealed class RemoteAccessService : IAsyncDisposable
     }
 
     /// <summary>
-    /// Turns one accepted command into a run, on its own task.
+    /// Runs one opened start on its own task.
     ///
     /// <para>On its own task because a run takes minutes and the delivery loop has to keep going
     /// while it does - otherwise nothing this run produces would be sent until it finished, and a
     /// phone would show a task that started and then said nothing for ten minutes.</para>
     /// </summary>
-    private void Begin(HostCommand command)
+    private void Begin(Func<CancellationToken, Task> run)
     {
         _runs.TryStart(async ct =>
         {
-            try { await _runner!.ApplyAsync(command, ct); }
+            try { await run(ct); }
             catch (Exception failure)
             {
                 Status = $"A remote command could not be carried out: {failure.Message}";
             }
         });
     }
+
+    /// <summary>A command that failed on this computer's side, said as a run that failed is.</summary>
+    private void Failed(HostCommand command, Exception failure)
+        => Status = $"A remote command could not be carried out: {failure.Message}";
 
     /// <summary>
     /// Builds the engine for one task started from a phone.
