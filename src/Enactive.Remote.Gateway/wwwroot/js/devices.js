@@ -54,6 +54,32 @@ export function undeliveredSentence(notice, hosts) {
   return null;
 }
 
+/** What a browser whose keys were cleared under a session it kept is told (removedView). */
+export const KEYS_CLEARED = "This browser's keys were cleared; sign out and sign in again to use it.";
+
+/**
+ * What the page says when the gateway refuses this browser's device as removed (403 `device-revoked`):
+ * `{title, text, offerForget}`. `registeredHere` is the device this page registered in this session, if it did, and
+ * `named` the one the refused call named.
+ *
+ * A refusal of the device registered in this very session is not a removal. The browser lost its site data - its
+ * keys and device id - but kept its cookie, registered a new device, and the gateway, which binds a session to the
+ * first device it names, refused the new one. Said as "This device was removed", it was untrue, and "Delete this
+ * device's keys" only went round again; a new session is what it needs.
+ */
+export function removedView({ registeredHere, named }) {
+  if (registeredHere !== null && registeredHere === named) {
+    return { title: "This browser's keys were cleared", text: KEYS_CLEARED, offerForget: false };
+  }
+
+  return {
+    title: 'This device was removed',
+    text: 'This browser was removed from your account. Sign in again on a device you trust, or add this one again '
+      + 'from the computer.',
+    offerForget: true
+  };
+}
+
 /** The send-cache key of one removal to one computer (writer.js createSendCache). */
 export const revokeKey = (deviceId, hostId) => `revoke:${deviceId}:${hostId}`;
 

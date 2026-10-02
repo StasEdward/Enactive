@@ -38,7 +38,7 @@ import {
 } from "./js/invite.js";
 import {
   revokeDevice, forgetThisDevice, forgottenSentence, createRemovalWatch, cardActions, deleteDeviceKeys, storeGone,
-  revocationWarning, undeliveredSentence, NOT_CONFIRMED, KEY_NEVER_RECEIVED
+  revocationWarning, undeliveredSentence, removedView, NOT_CONFIRMED, KEY_NEVER_RECEIVED
 } from "./js/devices.js";
 import { describe, newestFirst } from "./js/audit.js";
 import { deleteAccount, DELETE_QUESTION } from "./js/account.js";
@@ -1003,6 +1003,22 @@ function knowDevice(id) {
 }
 
 /**
+ * The device this page registered in this session, if it registered one: a refusal of that very device is a
+ * browser whose keys were cleared under a session it kept, not a removal (devices.js removedView).
+ */
+let registeredHere = null;
+
+/** This browser's device for the account (trust.js ensureDevice), noting whether it was registered just now. */
+async function ensureOwnDevice(store) {
+  const had = (await store.device())?.id ?? null;
+  const id = await ensureDevice(store, api);
+  if (had === null) {
+    registeredHere = id;
+  }
+  return id;
+}
+
+/**
  * Opens the account's key store and registers this browser's key with the gateway, before the first poll.
  * Neither is needed to see what the gateway itself knows, so a browser that cannot keep keys - or an
  * account with no room for another device - still gets the panel, and is told why it cannot be paired.
@@ -1032,7 +1048,7 @@ async function openTrust(user) {
   writer = createWriter(store);
 
   try {
-    const id = await ensureDevice(store, api);
+    const id = await ensureOwnDevice(store);
 
     if (isCurrent(started)) {
       knowDevice(id);
@@ -1073,7 +1089,7 @@ async function leaveDeviceLimit() {
   let id;
 
   try {
-    id = await ensureDevice(keystore, api);
+    id = await ensureOwnDevice(keystore);
   } catch (error) {
     if (error?.code === "device-limit") {
       return;
@@ -1253,7 +1269,7 @@ async function registerHost() {
     }
 
     // Asked again here, not only at sign-in: a registration refused then (a full account) may pass now.
-    const id = deviceId ?? await ensureDevice(store, api);
+    const id = deviceId ?? await ensureOwnDevice(store);
     const host = await post("/api/hosts", { name: $("host-name").value });
 
     // The pairing secret stays on this device; the gateway never sees it. The code carries it to the
@@ -1394,7 +1410,7 @@ async function openInviteDialog() {
       throw new Error("This device holds no computer's key yet, so it has nothing to share. Pair it with a computer first.");
     }
 
-    const id = deviceId ?? await ensureDevice(store, api);
+    const id = deviceId ?? await ensureOwnDevice(store);
     const inviteId = newInviteId();
     const secret = newPairingSecret();
     const pairKey = await derivePairKey(secret);
@@ -2037,7 +2053,7 @@ async function joinByInvitation(started) {
       throw new Error("This browser cannot keep keys, so it cannot be added.");
     }
 
-    const id = deviceId ?? await ensureDevice(store, api);
+    const id = deviceId ?? await ensureOwnDevice(store);
 
     if (isCurrent(started)) {
       knowDevice(id);
@@ -2169,6 +2185,7 @@ function resetSession() {
   keystore?.close();
   keystore = null;
   deviceId = null;
+  registeredHere = null;
   deviceLimited = false;
   showDeviceLimit(false);
   // Its opened records too: they are the last account's content, in clear.
@@ -2317,9 +2334,12 @@ let deviceRemovedShown = false;
  */
 let deviceRemovedFor = null;
 
-function showDeviceRemoved(accountId) {
+function showDeviceRemoved(accountId, said = removedView({ registeredHere: null, named: null })) {
   deviceRemovedShown = true;
   deviceRemovedFor = accountId ?? null;
+  $("removed-title").textContent = said.title;
+  $("removed-text").textContent = said.text;
+  $("removed-forget").hidden = !said.offerForget;
   $("panel").hidden = true;
   $("login").hidden = true;
   $("device-removed").hidden = false;
@@ -2549,8 +2569,10 @@ onUnauthenticated(() => {
 
 onDeviceRevoked(() => {
   const removedId = account?.id;
+  // Read before the reset forgets them: which device was refused, and whether this page registered it.
+  const said = removedView({ registeredHere, named: deviceId });
   resetSession();
-  showDeviceRemoved(removedId);
+  showDeviceRemoved(removedId, said);
 });
 
 let timer = 0;

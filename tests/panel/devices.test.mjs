@@ -7,7 +7,7 @@ import { ad, openJson } from '../../src/Enactive.Remote.Gateway/wwwroot/js/seale
 import {
   revokeDevice, forgetThisDevice, forgottenSentence, createRemovalWatch, storeGone, revocationWarning, cannotTell,
   revokeKey, cardActions, deleteDeviceKeys, toldUnder, toldAgainUnder, waitingForKey, NOT_CONFIRMED, MAX_RESENDS,
-  KEYS_KEPT, KEY_NEVER_RECEIVED, GATEWAY_UNREACHED, KEY_WAIT_MS, undeliveredSentence
+  KEYS_KEPT, KEY_NEVER_RECEIVED, GATEWAY_UNREACHED, KEY_WAIT_MS, undeliveredSentence, removedView, KEYS_CLEARED
 } from '../../src/Enactive.Remote.Gateway/wwwroot/js/devices.js';
 
 const ALICE = '0123456789abcdef0123456789abcdef';
@@ -487,3 +487,19 @@ test('a removal or an endorsement that never reached its computer is said, namin
     'Your computer (no longer listed) never received the removal of a device - remove it again when the computer is back.');
   assert.equal(undeliveredSentence({ kind: 'NotStarted', hostId: STUDIO }, hosts), null);
 });
+
+// A browser that lost its site data but kept its cookie registers a new device in the same session; the gateway, which
+// binds a session to the first device it names, then refuses the new one as removed. Nothing was removed, and the
+// removed view's "Delete this device's keys" only went round again: the page says what happened and what to do.
+test('a refusal of the device registered in this very session says the keys were cleared, not that it was removed', () => {
+  assert.equal(KEYS_CLEARED, "This browser's keys were cleared; sign out and sign in again to use it.");
+
+  const cleared = removedView({ registeredHere: PHONE, named: PHONE });
+  assert.deepEqual(cleared, { title: "This browser's keys were cleared", text: KEYS_CLEARED, offerForget: false });
+
+  for (const view of [removedView({ registeredHere: null, named: PHONE }), removedView({ registeredHere: TABLET, named: PHONE })]) {
+    assert.equal(view.title, 'This device was removed');
+    assert.equal(view.offerForget, true);
+  }
+});
+
