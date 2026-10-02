@@ -102,6 +102,23 @@ public sealed class SessionStore(Database db, TimeProvider clock)
             ("@version", securityVersion));
     }
 
+    /// <summary>
+    /// Whether this browser's session was opened - signed in - within the last <paramref name="window"/>, and
+    /// still stands. Measured from the opening and not from the last use: a session a cookie left behind keeps
+    /// being used by whoever holds it, and use proves nothing about who is at the keyboard now.
+    /// </summary>
+    public async Task<bool> OpenedWithinAsync(UserAccess s, TimeSpan window, CancellationToken ct)
+    {
+        await using var connection = await db.OpenAsync(ct);
+
+        return await connection.ExistsAsync(null,
+            """
+            SELECT 1 FROM user_sessions
+            WHERE id = @session AND user_id = @user AND revoked_at IS NULL AND created_at > @since
+            """,
+            ("@session", s.SessionId), ("@user", s.UserId), ("@since", clock.GetUtcNow() - window));
+    }
+
     /// <summary>Ends one session: the one this browser is signed in with.</summary>
     public async Task RevokeAsync(UserAccess s, CancellationToken ct)
     {

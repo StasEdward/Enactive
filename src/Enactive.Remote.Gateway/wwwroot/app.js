@@ -14,7 +14,7 @@
 // =============================================================================
 
 import {
-  get, post, session, Refused, Stale, endSession, abandonRequests, generation, isCurrent,
+  get, post, remove, session, Refused, Stale, endSession, abandonRequests, generation, isCurrent,
   onUnauthenticated, onDeviceRevoked
 } from "./js/api.js";
 import { emptyState, resetState, forgetScreen, pollOnce } from "./js/session-guard.js";
@@ -41,6 +41,7 @@ import {
   revocationWarning, NOT_CONFIRMED, KEY_NEVER_RECEIVED
 } from "./js/devices.js";
 import { describe, newestFirst } from "./js/audit.js";
+import { deleteAccount, DELETE_QUESTION } from "./js/account.js";
 
 const POLL_MS = 3000;
 
@@ -1801,6 +1802,64 @@ function openAudit() {
   loadAudit();
 }
 
+// ── deleting the account ─────────────────────────────────────────────────
+
+/** Asks first, in a dialog: nothing is sent until the person presses Delete account in it. */
+function openDeleteAccount() {
+  $("account").open = false;
+  $("delete-question").textContent = DELETE_QUESTION;
+  $("delete-error").textContent = "";
+  $("delete-dialog").showModal();
+}
+
+/**
+ * Deletes the account, then this browser's keys of it (account.js), and ends on the sign-in page saying what
+ * happened. A session too old to delete with is signed out, and the sign-in page asks for a fresh sign-in.
+ */
+async function deleteAccountNow(clicked) {
+  const button = clicked.currentTarget;
+  button.disabled = true;
+
+  // As for a sign-out: a poll answered 401 once the account is gone would run the 401's reset, which closes
+  // the key store under the forgetting - the keys stayed on disk - and puts up "You were signed out" instead of
+  // what happened. Abandoned now, its answer is dropped unread.
+  stopPolling();
+  abandonRequests();
+  // Its own failure is what the poll already shows; waited for only so it is not using the store being deleted.
+  await catchUpKeys.pending?.catch(() => {});
+
+  let result;
+
+  try {
+    result = await deleteAccount({ remove, keystore });
+  } catch (error) {
+    // Stale: the page moved on meanwhile. Unauthenticated: the session was over, and the 401 has put the sign-in
+    // page up. Either way there is nobody left to tell here.
+    if (!(error instanceof Stale) && error.code !== "unauthenticated") {
+      $("delete-error").textContent = error instanceof Refused ? error.message : "The gateway could not be reached.";
+
+      // The account is still there, so the panel goes on as it was.
+      if (account && document.visibilityState === "visible") {
+        startPolling();
+      }
+    }
+
+    return;
+  } finally {
+    button.disabled = false;
+  }
+
+  if (!result.deleted) {
+    await signOut("/api/logout", result.sentence);
+    return;
+  }
+
+  resetSession();
+  showSignedOut(result.sentence);
+  // Other tabs of this account must not go on showing what no longer exists until their next poll.
+  sessionChannel.announce();
+}
+
 // ── joining by an invitation ─────────────────────────────────────────────
 
 /**
@@ -2378,6 +2437,8 @@ document.querySelectorAll("[data-close]").forEach((button) =>
   button.addEventListener("click", () => button.closest("dialog").close()));
 
 $("security-log").addEventListener("click", openAudit);
+$("delete-account").addEventListener("click", openDeleteAccount);
+$("delete-confirm").addEventListener("click", deleteAccountNow);
 $("sign-out").addEventListener("click", () => signOut("/api/logout"));
 $("sign-out-all").addEventListener("click", () => signOut("/api/logout-all"));
 

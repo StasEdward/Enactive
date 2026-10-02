@@ -88,8 +88,14 @@ public sealed class GatewayFault(string code, int status, string message) : Exce
         FaultCode.UnknownApproval, 404,
         $"Approval {approvalId} does not belong to this run, or does not exist.");
 
+    /// <summary>
+    /// A computer whose row is not there. Said as what happened, because it is what the desktop shows when it
+    /// stops: the row goes when the person removes the computer's registration, and with the whole account
+    /// when they delete it. "This device is not registered" read as a computer that had never been set up.
+    /// </summary>
     public static GatewayFault UnknownHost() => new(
-        FaultCode.UnknownHost, 404, "This device is not registered.");
+        FaultCode.UnknownHost, 404,
+        "This computer is not registered on the service any more - its account or its registration was removed.");
 
     public static GatewayFault HostRevoked() => new(
         FaultCode.HostRevoked, 403, "This device's credential has been revoked.");
@@ -154,6 +160,14 @@ public sealed class GatewayFault(string code, int status, string message) : Exce
     public static GatewayFault Unauthenticated() => new("unauthenticated", 401, "Sign in to continue.");
 
     public static GatewayFault Forbidden() => new("forbidden", 403, "This account may not do that.");
+
+    /// <summary>
+    /// Deleting the account from a session opened too long ago (<c>AccountDeletion.RecentSignIn</c>). Its own
+    /// code, not a plain 403: the panel answers it by signing the person out and asking them to sign in again,
+    /// which is the only thing that helps.
+    /// </summary>
+    public static GatewayFault Reauthenticate() => new(
+        "reauthenticate", 403, "Sign in again to delete the account.");
 
     public static GatewayFault RateLimited() => new(
         "rate-limited", 429, "Too many requests. Wait a moment and try again.");

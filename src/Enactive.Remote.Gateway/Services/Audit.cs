@@ -64,7 +64,14 @@ public static class Audit
         => connection.ExecuteAsync(transaction,
             "INSERT INTO audit (owner_id, at, actor, action, target) VALUES (@owner, @at, @actor, @action, @target)",
             ("@owner", (object?)ownerId ?? DBNull.Value), ("@at", at), ("@actor", actor), ("@action", action),
-            ("@target", target is null ? DBNull.Value : target.Length <= TargetWidth ? target : target[..TargetWidth]));
+            ("@target", target is null ? DBNull.Value : Cut(target)));
+
+    /// <summary>
+    /// <paramref name="target"/> as a row stores it, cut to the column's width. Also what a row is looked for
+    /// by: deleting an account removes the operator's rows naming its identities, and an identity longer than
+    /// the column is in those rows only as far as the cut.
+    /// </summary>
+    internal static string Cut(string target) => target.Length <= TargetWidth ? target : target[..TargetWidth];
 
     /// <summary>
     /// The person's own rows, the newest first and at most <see cref="Newest"/> of them. Only rows whose owner

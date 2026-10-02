@@ -117,6 +117,7 @@ builder.Services.AddSingleton(services => new DeviceService(
     services.GetRequiredService<Database>(), services.GetRequiredService<Limits>(), TimeProvider.System));
 builder.Services.AddSingleton<Projection>();
 builder.Services.AddSingleton<HostConnections>();
+builder.Services.AddSingleton<AccountDeletion>();
 builder.Services.AddHostedService<RetentionLoop>();
 
 // The panel's half of the wire, on the same terms as the Host's.
@@ -471,6 +472,15 @@ api.MapPost("/logout", async (HttpContext context, SessionStore sessions, Cancel
 api.MapPost("/logout-all", async (HttpContext context, SessionStore sessions, CancellationToken ct) =>
 {
     await sessions.RevokeAllAsync(context.UserAccess().UserId, ct);
+    await context.SignOutAsync(UserCookie.SchemeName);
+    return Results.Ok();
+});
+
+// The person deleting their own account and everything stored for it, from a session opened in the last ten
+// minutes (AccountDeletion). The cookie is removed too: the session it names went with the account.
+api.MapDelete("/account", async (HttpContext context, AccountDeletion deletion, CancellationToken ct) =>
+{
+    await deletion.DeleteAsync(context.UserAccess(), ct);
     await context.SignOutAsync(UserCookie.SchemeName);
     return Results.Ok();
 });

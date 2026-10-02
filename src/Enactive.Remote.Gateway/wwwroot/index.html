@@ -69,6 +69,7 @@
         <button id="security-log" class="secondary" type="button">Security log</button>
         <button id="sign-out" class="secondary" type="button">Sign out</button>
         <button id="sign-out-all" class="secondary" type="button">Sign out everywhere</button>
+        <button id="delete-account" class="danger" type="button">Delete account…</button>
       </div>
     </details>
   </header>
@@ -239,6 +240,20 @@
   <p id="audit-error" class="error" role="alert"></p>
   <ol id="audit-list" class="audit-list"></ol>
   <p id="audit-empty" class="empty" hidden>Nothing recorded yet.</p>
+</dialog>
+
+<!-- Deleting the account. The question is put in with textContent from js/account.js, the one place its words are
+     kept, so the test that pins them pins what the person reads. -->
+<dialog id="delete-dialog">
+  <form method="dialog">
+    <h2>Delete account</h2>
+    <p id="delete-question"></p>
+    <p id="delete-error" class="error" role="alert"></p>
+    <div class="actions">
+      <button type="button" class="secondary" data-close>Cancel</button>
+      <button id="delete-confirm" type="button" class="danger">Delete account</button>
+    </div>
+  </form>
 </dialog>
 
 <div id="toast" class="toast" role="status" hidden></div>

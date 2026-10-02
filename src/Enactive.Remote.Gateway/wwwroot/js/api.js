@@ -72,6 +72,11 @@ export function post(path, body, { headers } = {}) {
   });
 }
 
+/** A DELETE, with the antiforgery token like every other call that changes something. */
+export function remove(path) {
+  return request(path, { method: 'DELETE', headers: { accept: 'application/json', 'X-CSRF-TOKEN': csrf } });
+}
+
 /**
  * Who is signed in, and the antiforgery token for what they send next. Anonymous on the gateway, so it
  * is also how the page learns that nobody is.
