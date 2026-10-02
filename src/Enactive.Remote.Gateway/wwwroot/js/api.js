@@ -38,10 +38,19 @@ export function onDeviceRevoked(handler) { hooks.deviceRevoked = handler; }
  * still on its way, and forgets the antiforgery token, which was bound to the person who has gone.
  */
 export function endSession() {
+  abandonRequests();
+  csrf = '';
+}
+
+/**
+ * Drops every request in flight and every answer still on its way, but keeps the token. For a sign-out
+ * about to be sent: a poll answered 401 while the sign-out is in flight would otherwise run the sign-out
+ * hook, abort the sign-out's own request and report it as failed.
+ */
+export function abandonRequests() {
   guard.bump();
   controller.abort();
   controller = new AbortController();
-  csrf = '';
 }
 
 /** The generation requests start under now, for a caller holding a result across an await of its own. */

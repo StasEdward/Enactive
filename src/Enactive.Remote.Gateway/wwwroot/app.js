@@ -14,11 +14,11 @@
 // =============================================================================
 
 import {
-  get, post, session, Refused, Stale, endSession, generation, isCurrent,
+  get, post, session, Refused, Stale, endSession, abandonRequests, generation, isCurrent,
   onUnauthenticated, onDeviceRevoked
 } from "./js/api.js";
-import { emptyState, resetState } from "./js/session-guard.js";
-import { providerLinks, outcomeOf } from "./js/signin.js";
+import { emptyState, resetState, forgetScreen, pollOnce } from "./js/session-guard.js";
+import { providerLinks, outcomeOf, createDevelopmentProbe } from "./js/signin.js";
 
 const POLL_MS = 3000;
 
@@ -37,6 +37,12 @@ const state = emptyState();
 // command it already queued. That is what makes a tapped button on a flaky
 // phone connection safe: a new id each time would queue a second run of the
 // same task, and the owner would find out by reading the timeline.
+//
+// Kept across a sign-out and every other reset, on purpose. Each key names the
+// resource it acts on - a task, a run, an approval - which another account
+// cannot act on, so nothing of one account's is reused for another's. Clearing
+// it would give the same person's retry after signing in again a new id, and a
+// command the gateway had already queued before the reset would be queued twice.
 const commandIds = new Map();
 
 function commandId(key) {
@@ -91,7 +97,22 @@ async function poll() {
   const started = generation();
 
   try {
-    apply(await get(state.cursor === null ? "/api/state" : `/api/state?since=${state.cursor}`));
+    const drawn = await pollOnce({
+      read: () => get(state.cursor === null ? "/api/state" : `/api/state?since=${state.cursor}`),
+      accountId: account.id,
+      apply,
+      // Another account's state: none of it is drawn. The page forgets this account and asks the
+      // gateway afresh who is signed in.
+      otherAccount: () => {
+        resetSession();
+        boot();
+      }
+    });
+
+    if (!drawn) {
+      return;
+    }
+
     setLive(true);
   } catch (error) {
     // The session ended under it - signed out, a 401 or this browser removed - and the screen that
@@ -710,14 +731,16 @@ const SIGNED_OUT = "You were signed out. Sign in again to go on.";
  * panel still holding the last person's runs and cursor, and the next sign-in in that tab showed those
  * runs until its first poll replaced them. So: polling stops, requests in flight are aborted and whatever
  * they bring back is dropped, the arrays, cursor, unread count and open run are emptied, every dialog
- * closes, and nothing private is drawn again until a fresh /api/session says whose it is.
+ * closes and every field and line drawn for the person is emptied (FORGOTTEN, in session-guard.js), and
+ * nothing private is drawn again until a fresh /api/session says whose it is.
  */
 function resetSession() {
   stopPolling();
   endSession();
   account = null;
   resetState(state);
-  document.querySelectorAll("dialog[open]").forEach((dialog) => dialog.close());
+  clearTimeout(toastTimer);
+  forgetScreen($, document.querySelectorAll("dialog[open]"));
   $("account").open = false;
   $("account-name").textContent = "";
   $("panel").hidden = true;
@@ -758,8 +781,9 @@ async function enterPanel(user) {
   const started = generation();
   await poll();
 
-  // Not when the first poll ended the session: a timer started now would poll for nobody.
-  if (isCurrent(started)) {
+  // Not when the first poll ended the session: a timer started now would poll for nobody. Nor while
+  // hidden: a hidden tab does not poll (see visibilitychange), and coming back starts it.
+  if (isCurrent(started) && document.visibilityState === "visible") {
     startPolling();
   }
 }
@@ -808,15 +832,14 @@ async function offerProviders() {
   }
 }
 
-let developmentProbe = null;
+const developmentSignIn = createDevelopmentProbe(get);
 
 /**
  * The development sign-in, offered only on this machine and only by a gateway that has it.
  *
  * Asked of the gateway rather than assumed from the address: localhost is also where an operator sees a
  * production gateway through an SSH tunnel, and a form there would sign nobody in while looking like a
- * way in. A gateway without the endpoint answers 404; one with it refuses an empty name, which is the
- * whole probe and signs nobody in. Asked once per page.
+ * way in. How it is asked is createDevelopmentProbe's: a GET, which no limit counts.
  */
 async function offerDevelopmentSignIn() {
   const form = $("dev-sign-in");
@@ -826,11 +849,7 @@ async function offerDevelopmentSignIn() {
     return;
   }
 
-  developmentProbe ??= post("/api/dev/sign-in", {}).then(
-    () => true,
-    (error) => error instanceof Refused && error.status !== 404);
-
-  form.hidden = !(await developmentProbe);
+  form.hidden = !(await developmentSignIn());
 }
 
 /**
@@ -838,6 +857,12 @@ async function offerDevelopmentSignIn() {
  * holds the session would claim something untrue: the next reload would open the panel again.
  */
 async function signOut(path) {
+  // Before the request, not after it. A poll in flight that is answered 401 once the gateway has ended
+  // the session would run the 401's reset, which aborts this very request - and the sign-out would end
+  // in "Not signed out" over the sign-in page. Abandoned now, its answer is dropped unread.
+  stopPolling();
+  abandonRequests();
+
   try {
     await post(path, {});
   } catch (error) {
@@ -848,6 +873,12 @@ async function signOut(path) {
     }
 
     toast(`Not signed out. ${error instanceof Refused ? error.message : "The gateway could not be reached."}`, true);
+
+    // Still signed in, so the panel goes on as it was.
+    if (account && document.visibilityState === "visible") {
+      startPolling();
+    }
+
     return;
   }
 
@@ -874,8 +905,11 @@ async function revalidate() {
   try {
     view = await session();
   } catch (error) {
-    if (!(error instanceof Stale)) {
-      poll();
+    // Unreachable: the poll says so on screen, and keeps trying until the gateway answers - each
+    // snapshot is still checked against the account (pollOnce), so nothing unconfirmed is drawn.
+    if (!(error instanceof Stale) && account?.id === expected) {
+      await poll();
+      startPolling();
     }
 
     return;
@@ -887,8 +921,12 @@ async function revalidate() {
   } else if (view.user.id !== expected) {
     resetSession();
     await boot();
-  } else {
-    poll();
+  } else if (account?.id === expected) {
+    await poll();
+
+    if (account?.id === expected && document.visibilityState === "visible") {
+      startPolling();
+    }
   }
 }
 
@@ -992,11 +1030,23 @@ $("mark-read").addEventListener("click", (clicked) =>
 // screen that is minutes stale, with no sign that it is, is the failure this
 // avoids: the session is checked and the poll runs at once, and the banner says
 // so until it succeeds.
+//
+// Hidden, the poll stops. A hidden tab went on polling under whatever cookie the
+// browser held by then, so when Bob signed in, in another tab, Alice's hidden tab
+// drew Bob's events onto her list, and they were on screen before anything could
+// check. Back, the session is checked first and the poll restarts only when it
+// is still the same account (revalidate).
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") {
     revalidate();
+  } else {
+    stopPolling();
   }
 });
+
+// Focus as well: a window that was never hidden - beside another one, where Bob
+// just signed in - fires no visibilitychange when it is clicked back into.
+window.addEventListener("focus", () => revalidate());
 
 // A page restored from the back-forward cache is the page as it was left: whoever was signed in then,
 // their runs on screen, and a poll timer that may belong to a session ended since. None of it is

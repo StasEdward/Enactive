@@ -9,6 +9,12 @@ using MySqlConnector;
 /// <param name="Cursor">
 /// <c>"{epoch}.{ordinal}"</c> on the person's own line: what the panel sends back as <c>since</c>.
 /// </param>
+/// <param name="UserId">
+/// Whose state this is. The cookie belongs to the browser and not to the tab, so another account signed in
+/// in another window changes whose state an open tab is polling for; without this the tab folded the new
+/// account's runs into the old one's screen, under the old name. The panel compares it with the account it
+/// signed in as and resets on a mismatch.
+/// </param>
 public sealed record GatewaySnapshot(
     IReadOnlyList<HostView> Hosts,
     IReadOnlyList<TaskView> Tasks,
@@ -19,7 +25,8 @@ public sealed record GatewaySnapshot(
     string Cursor,
     bool Delta,
     int UnreadNotices,
-    RetentionView Retention);
+    RetentionView Retention,
+    string UserId);
 
 /// <summary>
 /// How long history is kept, and what has already gone.
@@ -277,7 +284,7 @@ public sealed class Projection(Database database, Retention retention)
         return new GatewaySnapshot(
             hosts, tasks, runs, approvals, newNotices, newEvents,
             string.Create(CultureInfo.InvariantCulture, $"{line.Epoch}.{line.Value}"),
-            delta, unread, new RetentionView(retention.Days, trimmedBefore));
+            delta, unread, new RetentionView(retention.Days, trimmedBefore), owner);
     }
 
     /// <summary>

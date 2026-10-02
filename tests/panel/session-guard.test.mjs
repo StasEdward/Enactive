@@ -1,6 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createGuard, emptyState, resetState, Stale } from '../../src/Enactive.Remote.Gateway/wwwroot/js/session-guard.js';
+import { readFileSync } from 'node:fs';
+import {
+  createGuard, emptyState, resetState, Stale, FORGOTTEN, forgetScreen, pollOnce
+} from '../../src/Enactive.Remote.Gateway/wwwroot/js/session-guard.js';
 import {
   get, endSession, onUnauthenticated, onDeviceRevoked, Refused
 } from '../../src/Enactive.Remote.Gateway/wwwroot/js/api.js';
@@ -100,4 +103,96 @@ test('reset clears cursor, arrays, unread and the open run', () => {
 
   assert.equal(same, state);
   assert.deepEqual(state, emptyState());
+});
+
+// What the page holds for the person in its fields rather than in `state`, as a fake element records it.
+function element(id) {
+  return {
+    id, value: 'alice', hidden: false, cleared: false,
+    replaceChildren(...children) { this.cleared = children.length === 0; }
+  };
+}
+
+test('a reset forgets what was typed or shown in every field, and closes the dialogs', () => {
+  const elements = new Map();
+  const byId = (id) => {
+    if (!elements.has(id)) elements.set(id, element(id));
+    return elements.get(id);
+  };
+  let closed = 0;
+  const dialogs = [{ close() { closed += 1; } }, { close() { closed += 1; } }];
+
+  forgetScreen(byId, dialogs);
+
+  for (const id of FORGOTTEN.values) assert.equal(byId(id).value, '', id);
+  for (const id of FORGOTTEN.contents) assert.equal(byId(id).cleared, true, id);
+  for (const id of FORGOTTEN.hidden) assert.equal(byId(id).hidden, true, id);
+  assert.equal(closed, 2);
+
+  // The named ones, by name: an unsent task and a computer's credential are what the next person
+  // in this tab must not find.
+  for (const id of ['task-title', 'task-prompt', 'host-id', 'host-token']) assert.ok(FORGOTTEN.values.includes(id), id);
+  for (const id of ['run-detail', 'task-error', 'host-error', 'toast']) assert.ok(FORGOTTEN.contents.includes(id), id);
+});
+
+test('every field of every dialog in the page is on the reset list', () => {
+  const page = readFileSync(new URL('../../src/Enactive.Remote.Gateway/wwwroot/index.html', import.meta.url), 'utf8');
+  const listed = [...FORGOTTEN.values, ...FORGOTTEN.contents, ...FORGOTTEN.hidden];
+
+  for (const id of listed) assert.match(page, new RegExp(`id="${id}"`), `${id} is not in the page`);
+
+  const dialogs = page.match(/<dialog[\s\S]*?<\/dialog>/g) ?? [];
+  assert.ok(dialogs.length > 0);
+
+  for (const dialog of dialogs) {
+    for (const [, id] of dialog.matchAll(/<(?:input|textarea|select)[^>]*\bid="([^"]+)"/g)) {
+      assert.ok(FORGOTTEN.values.includes(id) || FORGOTTEN.contents.includes(id), `${id} outlives a reset`);
+    }
+  }
+});
+
+test('a snapshot of another account is not drawn, and resets the page', async () => {
+  const applied = [];
+  let others = 0;
+
+  const drawn = await pollOnce({
+    read: async () => ({ userId: 'bob', runs: ['bob-run'] }),
+    accountId: 'alice',
+    apply: (snapshot) => applied.push(snapshot),
+    otherAccount: () => { others += 1; }
+  });
+
+  assert.equal(drawn, false);
+  assert.deepEqual(applied, []);
+  assert.equal(others, 1);
+});
+
+test('a snapshot of the signed-in account is drawn', async () => {
+  const applied = [];
+  let others = 0;
+
+  const drawn = await pollOnce({
+    read: async () => ({ userId: 'alice', runs: ['alice-run'] }),
+    accountId: 'alice',
+    apply: (snapshot) => applied.push(snapshot),
+    otherAccount: () => { others += 1; }
+  });
+
+  assert.equal(drawn, true);
+  assert.deepEqual(applied.map((s) => s.runs), [['alice-run']]);
+  assert.equal(others, 0);
+});
+
+test('a snapshot that names no account is not drawn either', async () => {
+  let others = 0;
+
+  const drawn = await pollOnce({
+    read: async () => ({ runs: [] }),
+    accountId: 'alice',
+    apply: () => assert.fail('drawn'),
+    otherAccount: () => { others += 1; }
+  });
+
+  assert.equal(drawn, false);
+  assert.equal(others, 1);
 });

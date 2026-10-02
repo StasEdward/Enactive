@@ -56,3 +56,44 @@ export function emptyState() {
 export function resetState(state) {
   return Object.assign(state, emptyState());
 }
+
+// What the page holds for the person outside `state`: what was typed into a dialog and not sent, a
+// computer's credential shown once, a timeline, an error line, the last toast. Closing a dialog keeps
+// its fields, so before this list the next person in the tab opened "New task" and found the previous
+// one's title and prompt filled in, ready to send as their own, and the last computer token sat in a
+// hidden field. Every field of every dialog is on it; tests/panel/session-guard.test.mjs checks the page.
+export const FORGOTTEN = {
+  values: ['task-title', 'task-prompt', 'host-name', 'host-id', 'host-token'],
+  contents: ['task-workspace', 'run-title', 'run-detail', 'task-error', 'host-error', 'toast'],
+  hidden: ['host-secret', 'toast']
+};
+
+/** Empties everything on FORGOTTEN and closes `openDialogs`. `byId` finds an element by its id. */
+export function forgetScreen(byId, openDialogs) {
+  for (const dialog of openDialogs) dialog.close();
+  for (const id of FORGOTTEN.values) byId(id).value = '';
+  for (const id of FORGOTTEN.contents) byId(id).replaceChildren();
+  for (const id of FORGOTTEN.hidden) byId(id).hidden = true;
+}
+
+/**
+ * One poll: the snapshot is drawn only if it names the account the page signed in as.
+ *
+ * The cookie belongs to the browser, not the tab. Bob signing in, in another window, changes whose state
+ * Alice's open tab is polling for, and a tab that went on drawing whatever came back showed Bob's runs
+ * and notices under Alice's name - appended to hers when her cursor happened to be valid on his line. A
+ * snapshot that names nobody is treated the same way: it cannot be shown to be this account's.
+ *
+ * @returns {Promise<boolean>} whether it was drawn; `otherAccount` was called if not.
+ */
+export async function pollOnce({ read, accountId, apply, otherAccount }) {
+  const snapshot = await read();
+
+  if (!snapshot || snapshot.userId !== accountId) {
+    otherAccount();
+    return false;
+  }
+
+  apply(snapshot);
+  return true;
+}

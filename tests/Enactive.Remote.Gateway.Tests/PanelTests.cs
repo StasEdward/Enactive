@@ -11,6 +11,7 @@ using Enactive.Remote.Gateway.Storage;
 using Enactive.Remote.Host;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 /// <summary>
@@ -343,6 +344,78 @@ public sealed class PanelTests(TestDatabase database) : IClassFixture<TestDataba
         var script = Regex.Match(page, "src=\"(?<path>/app\\.js\\?v=[0-9a-f]+)\"").Groups["path"].Value;
 
         Assert.Contains("/api/providers", await browser.Http.GetStringAsync(script), StringComparison.Ordinal);
+
+        // Nor any script the page can import. A link written into a module is the same hard-coded
+        // button as one written into the page, only harder to find: the one sign-in path a script may
+        // name is the template the listed provider is put into.
+        var webRoot = githubOnly.Services.GetRequiredService<IWebHostEnvironment>().WebRootPath;
+        var scripts = Directory.GetFiles(Path.Combine(webRoot, "js"), "*.js")
+            .Select(file => "/js/" + Path.GetFileName(file))
+            .Prepend("/app.js")
+            .ToList();
+
+        Assert.Contains("/js/signin.js", scripts);
+
+        foreach (var path in scripts)
+        {
+            var source = await browser.Http.GetStringAsync(path);
+
+            Assert.DoesNotMatch("/auth/(?!\\$\\{)", source);
+        }
+    }
+
+    /// <summary>
+    /// Whether the development sign-in exists is answered without attempting one. The panel used to ask
+    /// by posting an empty name, which the sign-in's limit counted: every reload of a signed-out page on
+    /// localhost spent one of the address's twenty sign-ins a minute, shared with the providers' starts,
+    /// and a browser test signing in repeatedly met 429s that had nothing to do with what it tested. A
+    /// GET of the POST-only route is answered 405 where it exists and 404 where it does not, by routing,
+    /// which no limit counts.
+    /// </summary>
+    [Fact]
+    public async Task The_development_sign_in_is_discoverable_without_a_sign_in_attempt()
+    {
+        // More probes than the limit allows sign-ins: counted, the last of them would be a 429.
+        for (var i = 0; i <= RequestLimits.AuthPerMinute; i++)
+        {
+            using var probe = await _stranger.Http.GetAsync("/api/dev/sign-in");
+            Assert.Equal(HttpStatusCode.MethodNotAllowed, probe.StatusCode);
+        }
+
+        // And the sign-ins themselves are all still there.
+        using var late = await PanelClient.SignedInAsync(_gateway, "late-" + Guid.NewGuid().ToString("N")[..8]);
+
+        await using var production = TestGateway.Create(database, devSignIn: false);
+        using var stranger = new PanelClient(production);
+        using var absent = await stranger.Http.GetAsync("/api/dev/sign-in");
+
+        Assert.Equal(HttpStatusCode.NotFound, absent.StatusCode);
+    }
+
+    /// <summary>
+    /// The state says whose it is.
+    ///
+    /// <para>The cookie belongs to the browser and not to the tab. Bob signing in, in another window,
+    /// changes whose state Alice's open tab is polling for, and nothing in the answer said so: the tab
+    /// went on folding Bob's runs and notices into Alice's screen, under Alice's name. With the account
+    /// in every snapshot the panel compares it with the account it signed in as, and a mismatch resets
+    /// the page instead of drawing anything.</para>
+    /// </summary>
+    [Fact]
+    public async Task The_state_names_the_account_it_belongs_to()
+    {
+        using var other = await PanelClient.SignedInAsync(_gateway, "other-" + Guid.NewGuid().ToString("N")[..8]);
+
+        var owners = await _owner.Http.GetStringAsync("/api/state");
+        var others = await other.Http.GetStringAsync("/api/state");
+        var delta = await _owner.GetAsync<GatewaySnapshot>("/api/state");
+        var ownersDelta = await _owner.Http.GetStringAsync($"/api/state?since={delta.Cursor}");
+
+        Assert.Contains($"\"userId\":\"{_owner.UserId}\"", owners, StringComparison.Ordinal);
+        Assert.Contains($"\"userId\":\"{other.UserId}\"", others, StringComparison.Ordinal);
+        Assert.Contains("\"delta\":true", ownersDelta, StringComparison.Ordinal);
+        Assert.Contains($"\"userId\":\"{_owner.UserId}\"", ownersDelta, StringComparison.Ordinal);
+        Assert.NotEqual(_owner.UserId, other.UserId);
     }
 
     /// <summary>
