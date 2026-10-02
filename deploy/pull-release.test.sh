@@ -248,6 +248,10 @@ parked() { [ -s "$ROOT/PARKED" ] && echo parked || echo not-parked; }
 sandbox
 fake_server
 
+# What step 0 of the cutover writes beside the protocol-1 release: its protocol, said once by a person,
+# because the binary itself cannot say it.
+printf '1\n' > "$ROOT/current/.protocol-version"
+
 # The case the guard exists for. The protocol-2 schema starts again at version 1, BELOW the protocol-1
 # database's 2, so the migration check reads it as a rollback and would install it - onto a database
 # it cannot read, where it would create its own tables beside the old ones.
@@ -271,11 +275,30 @@ check "--allow-migration does not install a protocol change either" \
 check "a parked release is downloaded once, not on every run" \
     "x" "$(cat "$ROOT/fetches")"
 
-# Nor is the running protocol-1 binary asked again on every one of those runs. It has no such switch:
-# asked, it starts and dies of an unhandled exception - a crash in the journal, and perhaps a core
-# dump, every ten minutes for as long as the cutover waits.
-check "the running release is asked its protocol once, not on every run" \
-    "1" "$(grep -c '^current --protocol-version' "$ROOT/dotnet-calls")"
+# Nor is the running protocol-1 binary asked on any of those runs. It has no such switch: asked, it
+# starts and dies of an unhandled exception - a crash in the journal, and perhaps a core dump, every ten
+# minutes for as long as the cutover waits.
+check "with the protocol step 0 writes, the running protocol-1 binary is never asked" \
+    "0" "$(grep -c '^current --protocol-version' "$ROOT/dotnet-calls" 2>/dev/null || true)"
+cleanup
+
+sandbox
+fake_server
+
+# A silence is not remembered. Kept as 1, one unanswered question - a first start after an install by
+# hand, a timeout, a runtime half upgraded - parked every later protocol-2 release on a protocol-2
+# server as a "protocol change", until somebody found the file and deleted it.
+NEW_SCHEMA=1 NEW_PROTOCOL=2
+run_main
+first=$(parked)
+rm -f "$ROOT/PARKED"
+
+printf '2\n' > "$ROOT/releases/old/.protocol"
+newest_green_run() { echo "2 cccccccccccccccccccccccccccccccccccccccc"; }
+NEW_SCHEMA=2 NEW_PROTOCOL=2
+run_main
+check "a silent first ask does not park a later protocol-2 release once the binary answers" \
+    "parked cccccccccccccccccccccccccccccccccccccccc" "$first $(running)"
 cleanup
 
 # ── before the cutover: the guard on a protocol-1 server ─────────────────────

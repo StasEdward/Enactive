@@ -94,8 +94,13 @@ protocol_version() {
 
 # The protocol of the running release, kept in a file beside it once known. Asked of the protocol-1
 # binary on every run, the question crashed it - an unhandled exception in the journal, and perhaps a
-# core dump - every ten minutes for as long as a protocol-2 release waited parked for the cutover.
-# Silence from the RUNNING release is the protocol-1 gateway: every later one answers.
+# core dump - every ten minutes for as long as a protocol-2 release waited parked for the cutover. That
+# binary cannot answer, so step 0 of the cutover writes its file by hand.
+#
+# Silence from the RUNNING release counts as the protocol-1 gateway for this run - but only a number is
+# kept. A silence kept as 1 outlived its cause: one unanswered question on a protocol-2 server (a first
+# start after an install by hand, a timeout, a runtime half upgraded) parked every later protocol-2
+# release as a "protocol change" until somebody found the file and deleted it.
 running_protocol() {
     local cache="$ROOT/current/.protocol-version" answer
     if [ -s "$cache" ]; then
@@ -103,10 +108,11 @@ running_protocol() {
         return 0
     fi
     answer=$(protocol_version "$ROOT/current")
-    answer=${answer:-1}
-    if [ -d "$ROOT/current" ]; then
-        printf '%s\n' "$answer" > "$cache" 2>/dev/null || true
+    if [ -z "$answer" ]; then
+        echo 1
+        return 0
     fi
+    printf '%s\n' "$answer" > "$cache" 2>/dev/null || true
     printf '%s\n' "$answer"
 }
 

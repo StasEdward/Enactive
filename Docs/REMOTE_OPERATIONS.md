@@ -483,8 +483,10 @@ protocol version; it is what the tunnel and any external check should watch.
 
 ## 8. The cutover from protocol 1 (§cutover)
 
-The deploy timer parks a protocol-2 release with *protocol change - install by hand (REMOTE_OPERATIONS
-§cutover)*. This is that by hand. Protocol 2 shares nothing with protocol 1 — not the schema, not the
+This section starts before the message that points to it can exist. Step 0 puts on the server the
+script that parks a protocol-2 release with *protocol change - install by hand (REMOTE_OPERATIONS
+§cutover)*, and it must be done before protocol 2 is merged into the tracked branch; the message, when
+it comes, means step 0 was done and the rest is due. Protocol 2 shares nothing with protocol 1 — not the schema, not the
 owner key, not a device token — so nothing is migrated: the new gateway starts on a **new, empty
 database**, `enactive_remote_v2`, and the old one is kept untouched beside it.
 
@@ -503,12 +505,24 @@ against a database at 2 — no migration — and it installs it, unattended, ont
 `pull-release.sh` goes in first, told which database this server still runs on:
 
 ```bash
-sudo cp -a /opt/enactive-remote/deploy /opt/enactive-remote/deploy.protocol-1      # the rollback's scripts
-sudo install -o enactive -g enactive -m 0755 /tmp/pull-release.sh /opt/enactive-remote/deploy/
-echo 'ENACTIVE_DEPLOY_DATABASE=enactive_remote' | sudo -u enactive tee -a /etc/enactive-remote/deploy.env
-sudo systemctl start enactive-deploy
-journalctl -u enactive-deploy -n 20 --no-pager           # "Already on ..." - or a protocol-1 release installed
+ops=/opt/enactive-remote
+if [ -e $ops/deploy.protocol-1 ]; then
+  echo "Step 0 is already done: $ops/deploy.protocol-1 holds the protocol-1 scripts. Go on with step 1."
+else
+  sudo cp -a $ops/deploy $ops/deploy.protocol-1                                  # the rollback's scripts
+  sudo install -o enactive -g enactive -m 0755 /tmp/pull-release.sh $ops/deploy/
+  # What the protocol-1 binary cannot say about itself; without it the timer asks it, and it crashes.
+  echo 1 | sudo -u enactive tee "$(readlink -f $ops/current)/.protocol-version" >/dev/null
+  # Replaced, not appended: one line, however often this has run.
+  sudo sed -i '/^ENACTIVE_DEPLOY_DATABASE=/d' /etc/enactive-remote/deploy.env
+  echo 'ENACTIVE_DEPLOY_DATABASE=enactive_remote' | sudo -u enactive tee -a /etc/enactive-remote/deploy.env >/dev/null
+  sudo systemctl start enactive-deploy
+  journalctl -u enactive-deploy -n 20 --no-pager         # "Already on ..." - or a protocol-1 release installed
+fi
 ```
+
+It refuses a second run because a second copy would put today's `deploy/` - by then the new scripts -
+where the rollback expects the protocol-1 ones.
 
 From now on it installs protocol-1 releases as before and parks the first protocol-2 one with
 *protocol change - install by hand*. Only now may protocol 2 be merged into the tracked branch.
@@ -521,7 +535,8 @@ sudo -u enactive /opt/enactive-remote/deploy/backup.sh     # the OLD script: ena
 sudo -u enactive /opt/enactive-remote/deploy/verify-restore.sh
 sudo systemctl stop enactive-remote
 sudo mysql -e "ALTER DATABASE enactive_remote READ ONLY = 1"   # MySQL 8.0.22 or later
-sudo -u enactive cp -a "$(readlink -f /opt/enactive-remote/current)" /opt/enactive-remote/protocol-1-release
+[ -e /opt/enactive-remote/protocol-1-release ] ||
+  sudo -u enactive cp -a "$(readlink -f /opt/enactive-remote/current)" /opt/enactive-remote/protocol-1-release
 ```
 
 The last line keeps the protocol-1 binary where nothing removes it. Where `current` points depends on
@@ -556,7 +571,8 @@ needs them.
 
 ```bash
 sudo install -o enactive -g enactive -m 0755 /tmp/backup.sh /tmp/verify-restore.sh /opt/enactive-remote/deploy/
-sudoedit /etc/enactive-remote/deploy.env                  # delete the ENACTIVE_DEPLOY_DATABASE line
+sudo sed -i '/^ENACTIVE_DEPLOY_DATABASE=/d' /etc/enactive-remote/deploy.env      # every such line
+grep -c '^ENACTIVE_DEPLOY_DATABASE=' /etc/enactive-remote/deploy.env                 # 0
 sudo cp -p /etc/enactive-remote/gateway.env /etc/enactive-remote/gateway.env.protocol-1   # the rollback's
 sudoedit /etc/enactive-remote/gateway.env
 ```
@@ -602,7 +618,8 @@ sudo systemctl start enactive-remote
 # The backups, back onto the database people use again:
 sudo -u enactive install -m 0755 /opt/enactive-remote/deploy.protocol-1/backup.sh \
      /opt/enactive-remote/deploy.protocol-1/verify-restore.sh /opt/enactive-remote/deploy/
-echo 'ENACTIVE_DEPLOY_DATABASE=enactive_remote' | sudo -u enactive tee -a /etc/enactive-remote/deploy.env
+sudo sed -i '/^ENACTIVE_DEPLOY_DATABASE=/d' /etc/enactive-remote/deploy.env
+echo 'ENACTIVE_DEPLOY_DATABASE=enactive_remote' | sudo -u enactive tee -a /etc/enactive-remote/deploy.env >/dev/null
 sudo -u enactive /opt/enactive-remote/deploy/backup.sh && sudo -u enactive /opt/enactive-remote/deploy/verify-restore.sh
 sudo systemctl start enactive-deploy.timer
 ```
@@ -613,6 +630,20 @@ backed up. Pointing them at `enactive_remote` instead is not enough: the protoco
 checks protocol 2's tables, and would fail every night on a good dump. The new `pull-release.sh` stays,
 with the line from step 0 back in `deploy.env`: it installs protocol-1 releases and parks protocol 2
 again, as it should.
+
+**Retrying after a rollback.** The rollback leaves the server where step 0 left it — the new
+`pull-release.sh`, one interim line in `deploy.env`, the protocol-1 scripts in `deploy.protocol-1` —
+so step 0 is not repeated (run again, it says it is done). In order:
+
+1. If the timer has installed a newer protocol-1 release since the rollback — `readlink -f
+   /opt/enactive-remote/current` is no longer `protocol-1-release` — the kept copy is stale: remove it,
+   `sudo rm -r /opt/enactive-remote/protocol-1-release`, and step 1 copies the running one. Never while
+   `current` points at it.
+2. `enactive_remote_v2` holds what the failed attempt made. Unless somebody used it, drop it, so the
+   retry starts empty like the first attempt: `sudo mysql -e "DROP DATABASE enactive_remote_v2"`.
+3. Steps 1 to 5 as written. Step 1 keeps an existing `protocol-1-release`, and step 3 removes every
+   interim line — one left behind would have the timer compare protocol-2 releases with the protocol-1
+   database, and install a migration unattended as "no migration".
 
 **5. Tell the people who used it.** Every computer must be connected again with a new code (design
 D2): the old owner key and every old device token mean nothing to protocol 2. Each person signs in
