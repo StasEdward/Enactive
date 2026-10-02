@@ -148,20 +148,21 @@ Old legacy fields such as `MultiAgent`, `ReasonerModel`, and the single `BaseUrl
 
 | Field | Meaning |
 | --- | --- |
-| Enabled | Whether this computer connects to the gateway at all |
-| Gateway URL | The address of the deployed gateway |
-| Token | The device token the panel issued when this computer was added |
-| Test connection | Verifies address and token, and publishes this computer's workspaces |
+| Answer this computer's remote gateway | Whether this computer connects to the gateway at all |
+| Connection code | The `enactive-connect:` code the panel shows when the computer is registered under Computers; **Connect** applies it at once |
+| Gateway, Computer id, Token | What the last code stored: shown, not edited |
+| Test connection | Greets the gateway with what is stored, and publishes this computer's workspaces |
+| Trusted devices | The browsers that hold this computer's keys, each with **Remove**, and **Add a device** for a one-time link and QR code |
 
 The token is stored with the same operating-system user-level protection as the provider keys, and
-is never written to the settings file in clear text. Changes take effect without restarting the
-application: the connection is re-established with the new settings.
+is never written to the settings file in clear text; the code itself is not kept. Changes take
+effect without restarting the application: the connection is re-established with the new settings.
 
 **Test connection is not only a check.** It connects and syncs, which is what makes this computer's
 workspaces selectable in the panel. A computer that has never synced appears with no workspaces to
 choose.
 
-See [Remote access](Remote-Access.md) for the panel, permissions, and what a remote run may not do.
+See [Remote access](Remote-Access.md) for pairing, devices, the panel, permissions, and what a remote run may not do.
 
 ## Implementation references
 

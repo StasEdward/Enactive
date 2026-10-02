@@ -3,6 +3,9 @@
 The last stage of the remote-access design. What that stage is allowed to claim is *"it can be run by someone
 other than the person who wrote it"*, so this is written for that person: what to install, what
 each setting means, what to do when it breaks, and what has deliberately been left manual.
+What the people using it do — signing in, pairing a computer, adding and removing devices — is in
+[the remote access guide](wiki/Remote-Access.md), and what the service can and cannot see in
+[remote security](wiki/Remote-Security.md).
 
 This has been done, once, on the machine it describes. `remote.enactive.dev` serves this gateway;
 the preview it replaced is disabled rather than deleted, because that is the rollback.
@@ -37,8 +40,8 @@ port to firewall, and no certificate on the box.
 
 **Every request arrives from 127.0.0.1.** The real caller is in `CF-Connecting-IP`, which
 Cloudflare writes itself and strips from whatever the client sent. The gateway reads it and treats
-it as the client address — for the login rate limiter above all, which would otherwise put every
-visitor on earth in one bucket and let a stranger lock the owner out by guessing.
+it as the client address — for the sign-in rate limiter above all, which would otherwise put every
+visitor on earth in one bucket, so that one caller's sign-ins could turn everybody else away.
 
 **That trust is only sound while cloudflared is the only thing that can connect.** So the gateway
 **refuses to start** if `ENACTIVE_BEHIND_TUNNEL` is on and it is bound anywhere but loopback. This
@@ -381,6 +384,12 @@ sudo install -o enactive -g enactive -m 0700 /tmp/pull-release.sh /opt/enactive-
 30 3 * * * enactive  /opt/enactive-remote/deploy/verify-restore.sh
 ```
 
+Neither script reads `gateway.env`. Their settings go on their cron lines, and the defaults are the
+ones this server uses: `ENACTIVE_BACKUP_DATABASE` (`enactive_remote_v2`), `ENACTIVE_BACKUP_DIR`
+(`/var/backups/enactive-remote`), `ENACTIVE_BACKUP_DEFAULTS` (the read-only account's option file,
+`/etc/enactive-remote/backup.cnf`), `ENACTIVE_BACKUP_KEEP_DAYS` (30, `backup.sh` only) and
+`ENACTIVE_DATA` (`/var/lib/enactive-remote`, where `backup.sh` finds the keys).
+
 `backup.sh` dumps to a `.partial` name and moves it into place only after `mysqldump` exits
 cleanly, so the directory never holds something that looks like last night's backup and is half a
 dump. Old files are deleted by **age**, not by count — "keep the last seven" quietly keeps seven
@@ -432,6 +441,8 @@ nowhere has the same reputation problem.
 | Start times out after 180s | A migration is running against a large table, or is stuck on `GET_LOCK`. Look for another gateway process before doing anything else. |
 | Signing in returns 429 | The callback limiter: ten provider callbacks a minute per caller address. A person signing in makes one; if it is refusing *you*, something else is calling from that address — check `CF-Connecting-IP` in the logs. |
 | Signing in says to wait | Admission is a list and this identity is not on it yet: §3.1. |
+| A person is refused with *"This account already has N …, the most it may; …"* | One of the per-account limits in §2. The sentence names the limit and what frees a place. Raising it is a change to `gateway.env` and a restart. |
+| The desktop says *"This computer and the service speak different versions - update Enactive."* | A desktop older than protocol 2, or a gateway older than the desktop. Nothing on the server fixes it but the right release. |
 | Panel shows a computer as offline that is running | The Host syncs every 15s and is called offline after 45. Look at the desktop first: this is reported honestly, not inferred. |
 | Runs stuck in `Queued` | Nothing accepted the start command. It expires after 24h and the run is then reported `Incomplete` rather than left queued forever. |
 | Everyone signed out after a deploy | The Data Protection keys moved. `ENACTIVE_DATA` must point at the same directory as before — check that the release did not take `/var/lib/enactive-remote` with it. |
@@ -446,6 +457,11 @@ protocol version; it is what the tunnel and any external check should watch.
 - **Deployment.** Migrations are DDL and cannot be rolled back. A person should be watching. When
   that stops being true — a staging database, a tested rollback path — this is the first thing to
   revisit. A protocol change is never automated at all: it is §8.
+- **Admission.** Approving a sign-up, refusing one, disabling and enabling an account are each an
+  `admin` command a person runs (§3.1). `ENACTIVE_ADMISSION=open` would remove the first of them; it
+  stays `list` until the privacy and terms pages are approved.
+- **Comparing the panel with its build.** The pipeline publishes the fingerprints of every build and
+  release on its own (§9); nothing compares them with what the server sends unless a person runs §9.
 - **Signing people out.** One account: `admin sessions revoke <userId>` (§3.1). Everybody at once:
   replace the Data Protection keys, which no command does — it is a decision about every person
   using the service, made rarely and by hand.
@@ -557,7 +573,8 @@ the timer stopped until the cutover is tried again.
 D2): the old owner key and every old device token mean nothing to protocol 2. Each person signs in
 with GitHub or Google, waits to be approved, registers each computer under **Computers** and enters
 the connection code it shows in the desktop app — which must itself be a protocol-2 build; an older
-one is refused by version. Nothing they had in the old panel is carried over.
+one is refused by version. Nothing they had in the old panel is carried over. The steps they follow
+are in [the remote access guide](wiki/Remote-Access.md#pairing-a-computer).
 
 ---
 

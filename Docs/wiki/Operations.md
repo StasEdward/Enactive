@@ -160,9 +160,10 @@ The historical AIClient → Enactive rename changed names, environment-variable 
 
 ## Remote access
 
-Starting tasks from a browser has its own chapter: [Remote access](Remote-Access.md). Server-side
-installation, the systemd units, database accounts, backups and the automatic deploy are in
-[REMOTE_OPERATIONS](../REMOTE_OPERATIONS.md).
+Starting tasks from a browser has its own chapter: [Remote access](Remote-Access.md), and what the
+service can and cannot see is in [Remote security](Remote-Security.md). The full server runbook is
+[REMOTE_OPERATIONS](../REMOTE_OPERATIONS.md); the parts below are the ones an operator reaches for
+most.
 
 Two things belong here because they are troubleshooting rather than setup.
 
@@ -172,11 +173,70 @@ an answer for. If it happens anyway, the deploy has not run or has not succeeded
 `journalctl -u enactive-deploy`, and remember that the deploy only installs a build that is green
 in CI for the branch named in `/etc/enactive-remote/deploy.env`.
 
-**A computer shows as Offline.** The host connects outward every 15 seconds and backs off up to two
-minutes when the gateway is unreachable. Offline means the desktop application is not running, the
-remote setting is off, the token has been revoked, or the address is wrong. Settings → Remote
-access → **Test connection** reports which of those it is; it connects and publishes this
-computer's workspaces, so a success there is also what makes the workspaces selectable.
+**A computer shows as Offline.** The host syncs every 15 seconds, is shown offline after 45 without
+one, and backs off up to two minutes when the gateway is unreachable. Offline means the desktop
+application is not running, remote access is off in its settings, the computer was revoked under
+**Computers**, the account was disabled, or the computer is on a different gateway. Settings → Remote
+access → **Test connection** says which; it connects and publishes this computer's workspaces, so a
+success there is also what makes the workspaces selectable.
+
+### Running the remote gateway
+
+**Settings.** All are environment variables in `/etc/enactive-remote/gateway.env` (mode `0600`),
+which `deploy/gateway.env.example` lays out with every one named. Every value is checked at start, and
+a bad one stops the gateway with a sentence naming it.
+
+| Variable | Default | One line |
+| --- | --- | --- |
+| `ENACTIVE_REMOTE_DB` | required | MySQL connection string for the protocol-2 database, `enactive_remote_v2` |
+| `ENACTIVE_PUBLIC_ORIGIN` | — | The address people use, scheme and host only; the providers send people back to it |
+| `ENACTIVE_GITHUB_CLIENT_ID`, `ENACTIVE_GITHUB_CLIENT_SECRET` | — | A GitHub OAuth app, callback `<origin>/auth/github/callback`; both or neither |
+| `ENACTIVE_GOOGLE_CLIENT_ID`, `ENACTIVE_GOOGLE_CLIENT_SECRET` | — | A Google OAuth client, redirect `<origin>/auth/google/callback`; both or neither |
+| `ENACTIVE_ADMISSION` | `list` | `list`: only approved identities may create an account; `open`: anyone who signs in |
+| `ENACTIVE_LIMIT_HOSTS_PER_USER` | 5 | Computers per account |
+| `ENACTIVE_LIMIT_DEVICES_PER_USER` | 10 | Devices per account |
+| `ENACTIVE_LIMIT_ACTIVE_RUNS_PER_USER` | 3 | Runs in progress per account |
+| `ENACTIVE_LIMIT_QUEUED_COMMANDS_PER_HOST` | 50 | Commands waiting for one computer |
+| `ENACTIVE_LIMIT_TASKS_PER_DAY` | 200 | Tasks per account in the last 24 hours |
+| `ENACTIVE_LIMIT_OPEN_INVITES_PER_USER` | 5 | Unused, unexpired invitations per account |
+| `ENACTIVE_LIMIT_SEALED_BYTES_PER_USER` | 209715200 | Bytes of encrypted content per account (200 MiB) |
+| `ENACTIVE_RETENTION_DAYS` | 30 | Days of history kept; older events, notices and ended runs are deleted hourly |
+| `ENACTIVE_DEV_SIGNIN` | never set | A sign-in without a provider, for tests; refused outside Development |
+
+`ENACTIVE_DATA` (the Data Protection keys), `ENACTIVE_BEHIND_TUNNEL` and `ASPNETCORE_URLS` are set in
+the systemd unit, and the backup's `ENACTIVE_BACKUP_*` settings on its cron line.
+
+**Admitting people.** A command on the gateway's own binary, run on the server with the gateway's
+environment ([how](../REMOTE_OPERATIONS.md#31-admitting-people-the-admission-cli)):
+
+```text
+admin admissions                 the identities waiting for approval
+admin approve <provider>:<id>    let this identity create an account (e.g. github:12345)
+admin refuse <provider>:<id>     turn this identity away
+admin disable <userId>           stop an account: sign-ins, sessions and queued commands
+admin enable <userId>            let a disabled account sign in again
+admin sessions revoke <userId>   sign the account out everywhere
+```
+
+Every change is written to the audit trail as the operator. `refuse` does not stop an account that
+already exists; `disable` does.
+
+**The cutover from protocol 1** is done by hand onto a new database, and the deploy timer refuses to
+do it: [REMOTE_OPERATIONS, the cutover](../REMOTE_OPERATIONS.md#8-the-cutover-from-protocol-1-cutover).
+
+**Restore.** `deploy/backup.sh` keeps each night's dump with an archive of the Data Protection keys
+beside it, and `deploy/verify-restore.sh` restores the newest dump into a scratch database and checks
+it. A restore without the keys signs everyone out, and nothing else is lost. The procedure is in
+[REMOTE_OPERATIONS, backups](../REMOTE_OPERATIONS.md#5-backups-and-the-half-that-is-usually-missing).
+
+**Not automated, on purpose.**
+
+- Approving sign-ups and every other admission decision: a person runs `admin`.
+- Installing a release that changes the schema or the protocol: the timer parks it.
+- Comparing the served panel with the published fingerprints: the pipeline publishes them; nothing
+  compares them unless a person does
+  ([how](../REMOTE_OPERATIONS.md#9-comparing-the-panel-with-its-build)).
+- Copying backups off the machine.
 
 ## Maintaining this wiki
 
