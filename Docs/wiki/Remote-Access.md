@@ -123,6 +123,11 @@ something looks wrong, and the only one when no browser holds the computer's key
 
 ## Removing a device
 
+An account holds up to 10 browsers (the operator can change it). A browser new to a full account
+shows only **Devices**, saying *"This account has as many browsers as it may; remove one to use this
+browser."* Remove one there - an old browser, or one whose site data was cleared - and this browser
+is added at once. **Delete account** stays in the account menu.
+
 A removed device can still read what it has already opened. It reads nothing new once each
 computer has moved to a new key.
 

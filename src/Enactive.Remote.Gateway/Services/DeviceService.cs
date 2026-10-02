@@ -391,6 +391,13 @@ public sealed class DeviceService(Database db, Limits limits, TimeProvider clock
         }
     }
 
+    /// <summary>Whether the session has named a device yet (see <see cref="BindAsync"/>).</summary>
+    public async Task<bool> SessionBoundAsync(UserAccess user, CancellationToken ct)
+    {
+        await using var connection = await db.OpenAsync(ct);
+        return await BoundDeviceAsync(connection, user) is not null;
+    }
+
     private static Task<string?> BoundDeviceAsync(MySqlConnection connection, UserAccess user)
         => connection.ReadOneAsync(null,
             "SELECT device_id FROM user_sessions WHERE id = @session AND user_id = @user",
@@ -1303,5 +1310,20 @@ public static class DeviceHeader
         public static readonly NotRequired Instance = new();
 
         private NotRequired() { }
+    }
+
+    /// <summary>
+    /// Marks the calls a session bound to no device may make without naming one: listing the devices, removing one
+    /// and deleting the account. A browser new to an account at its device limit cannot register, and with nothing
+    /// to name it could not even remove the devices that fill the limit, or delete the account - for good, once no
+    /// other browser was left. A session bound to no device is a fresh sign-in (a removed device's sessions are
+    /// ended), which below the limit could register a device and do all of this anyway. A bound session names its
+    /// device as on every other call.
+    /// </summary>
+    public sealed class OptionalWhileUnbound
+    {
+        public static readonly OptionalWhileUnbound Instance = new();
+
+        private OptionalWhileUnbound() { }
     }
 }

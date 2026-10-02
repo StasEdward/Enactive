@@ -468,8 +468,7 @@ test('a device the account has no room for is told where to make room', async ()
   const api = registrar(() => { throw refused; });
 
   await assert.rejects(ensureDevice(store, api), (error) => error.message === DEVICE_LIMIT && error.code === 'device-limit');
-  assert.equal(DEVICE_LIMIT,
-    'This account has as many devices as it may; remove one in Devices on another of your browsers, then reload this page.');
+  assert.equal(DEVICE_LIMIT, 'This account has as many browsers as it may; remove one to use this browser.');
   assert.equal((await store.device()).id, null);
 });
 

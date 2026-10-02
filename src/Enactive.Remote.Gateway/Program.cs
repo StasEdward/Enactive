@@ -483,9 +483,23 @@ api.AddEndpointFilter(async (invocation, next) =>
 {
     var context = invocation.HttpContext;
 
-    if (context.GetEndpoint()?.Metadata.GetMetadata<DeviceHeader.NotRequired>() is null)
+    var metadata = context.GetEndpoint()?.Metadata;
+    var devices = context.RequestServices.GetRequiredService<DeviceService>();
+
+    if (metadata?.GetMetadata<DeviceHeader.NotRequired>() is not null)
     {
-        await context.RequestServices.GetRequiredService<DeviceService>().CallerAsync(context, context.RequestAborted);
+        // Made before there is a device to name.
+    }
+    else if (metadata?.GetMetadata<DeviceHeader.OptionalWhileUnbound>() is not null
+        && context.DeviceIdOrNull() is null
+        && !await devices.SessionBoundAsync(context.UserAccess(), context.RequestAborted))
+    {
+        // A fresh sign-in with no device - at the account's device limit, say - listing or removing devices, or
+        // deleting the account (DeviceHeader.OptionalWhileUnbound).
+    }
+    else
+    {
+        await devices.CallerAsync(context, context.RequestAborted);
     }
 
     return await next(invocation);
@@ -517,7 +531,7 @@ api.MapDelete("/account", async (HttpContext context, AccountDeletion deletion, 
     await deletion.DeleteAsync(context.UserAccess(), ct);
     await context.SignOutAsync(UserCookie.SchemeName);
     return Results.Ok();
-});
+}).WithMetadata(DeviceHeader.OptionalWhileUnbound.Instance);
 
 // `since` is the cursor from the previous reply, as text. A cursor that is not one of the person's
 // current line gets their whole snapshot rather than an error, because the panel can do nothing
@@ -588,14 +602,15 @@ api.MapPost("/devices", async (
     })).WithMetadata(DeviceHeader.NotRequired.Instance);
 
 api.MapGet("/devices", async (HttpContext context, DeviceService devices, CancellationToken ct) =>
-    Results.Ok(await devices.ListAsync(context.UserAccess(), ct)));
+    Results.Ok(await devices.ListAsync(context.UserAccess(), ct)))
+    .WithMetadata(DeviceHeader.OptionalWhileUnbound.Instance);
 
 api.MapPost("/devices/{id}/revoke", async (
     string id, HttpContext context, DeviceService devices, CancellationToken ct) =>
 {
     await devices.RevokeAsync(context.UserAccess(), id, ct);
     return Results.Ok();
-});
+}).WithMetadata(DeviceHeader.OptionalWhileUnbound.Instance);
 
 // The grants made to the browser the call names, for every computer of the person's. The gateway hands
 // them over as they were stored; it has no key to open one.

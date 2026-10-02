@@ -10,6 +10,7 @@ using Enactive.Remote.Contracts.Crypto;
 using Enactive.Remote.Gateway;
 using Enactive.Remote.Gateway.Services;
 using Enactive.Remote.Gateway.Storage;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.SignalR;
@@ -1417,6 +1418,10 @@ public sealed class DeviceServiceTests(TestDatabase database) : IClassFixture<Te
     public async Task A_removed_browser_is_refused_every_call_and_a_call_naming_none_is_refused_for_the_header()
     {
         using var alice = await PanelClient.SignedInAsync(_gateway, Name("alice"));
+        // Bound to a device of its own, as a panel's session is: a session bound to none may list and remove devices
+        // without naming one (A_browser_with_no_device_left_can_still_remove_one_or_delete_the_account).
+        await alice.EnsureDeviceAsync();
+        await AssertStateAsync(alice, HttpStatusCode.OK);
         var owner = new UserAccess(alice.UserId, "unused");
         var phone = await DeviceAsync(owner, "phone");
         var computer = await ComputerAsync(owner);
@@ -1578,6 +1583,92 @@ public sealed class DeviceServiceTests(TestDatabase database) : IClassFixture<Te
         using var state = await removed.SendAsync(HttpMethod.Get, "/api/state",
             configure: request => request.Headers.Add(DeviceHeader.Name, fresh));
         Assert.Equal(HttpStatusCode.OK, state.StatusCode);
+    }
+
+    /// <summary>
+    /// An account at its device limit, and a browser new to it. Every private window, cleared site data or new
+    /// profile registers a device, and nothing removes one that is never used again, so the limit fills. The new
+    /// browser cannot register, and with no device to name it was answered 400 on everything - it could not list
+    /// the devices, remove one, or delete the account, and with no other browser left nothing could. A session
+    /// bound to no device - a fresh sign-in; a removed device's sessions are ended - may do those three without
+    /// naming one.
+    /// </summary>
+    [Theory]
+    [InlineData("remove")]
+    [InlineData("delete")]
+    public async Task A_browser_with_no_device_left_can_still_remove_one_or_delete_the_account(string then)
+    {
+        await using var gateway = TestGateway.Create(database,
+            configure: builder => builder.UseSetting(Limits.DevicesSetting, "2"));
+        var name = Name("alice");
+        string[] stale = new string[2];
+        for (var i = 0; i < stale.Length; i++)
+        {
+            using var thrownAway = await PanelClient.SignedInAsync(gateway, name);
+            stale[i] = await thrownAway.EnsureDeviceAsync();
+        }
+
+        using var fresh = await PanelClient.SignedInAsync(gateway, name);
+        using (var full = await fresh.SendAsync(HttpMethod.Post, "/api/devices",
+            new { publicKey = KeyText(NewPublicKey()), label = "new" }))
+        {
+            Assert.Equal("device-limit", (await ErrorAsync(full)).Code);
+        }
+
+        using (var listed = await fresh.SendAsync(HttpMethod.Get, "/api/devices", configure: PanelClient.WithoutDevice))
+        {
+            Assert.True(listed.IsSuccessStatusCode, await listed.Content.ReadAsStringAsync());
+            Assert.Equal(2, (await listed.Content.ReadFromJsonAsync<JsonElement>()).GetArrayLength());
+        }
+
+        // Only those three: everything else still names a device.
+        using (var state = await fresh.SendAsync(HttpMethod.Get, "/api/state", configure: PanelClient.WithoutDevice))
+        {
+            Assert.Equal("device-header", (await ErrorAsync(state)).Code);
+        }
+
+        if (then == "delete")
+        {
+            using var deleted = await fresh.SendAsync(HttpMethod.Delete, "/api/account", configure: PanelClient.WithoutDevice);
+            Assert.True(deleted.IsSuccessStatusCode, await deleted.Content.ReadAsStringAsync());
+            Assert.Equal(0, await database.ScalarLongAsync($"SELECT COUNT(*) FROM users WHERE id = '{fresh.UserId}'"));
+            return;
+        }
+
+        using (var removed = await fresh.SendAsync(HttpMethod.Post, $"/api/devices/{stale[0]}/revoke", new { },
+            configure: PanelClient.WithoutDevice))
+        {
+            Assert.True(removed.IsSuccessStatusCode, await removed.Content.ReadAsStringAsync());
+        }
+
+        var id = (await fresh.PostAsync<JsonElement>("/api/devices",
+            new { publicKey = KeyText(NewPublicKey()), label = "new" })).GetProperty("id").GetString()!;
+        using var named = await fresh.SendAsync(HttpMethod.Get, "/api/state",
+            configure: request => request.Headers.Add(DeviceHeader.Name, id));
+        Assert.Equal(HttpStatusCode.OK, named.StatusCode);
+    }
+
+    /// <summary>
+    /// The exemption is for a session bound to no device. One bound to a device goes on naming it on those calls too:
+    /// left out, a session bound to a removed device - one bound in the moment after its removal ended the device's
+    /// sessions - could remove the person's other devices without naming its own.
+    /// </summary>
+    [Fact]
+    public async Task A_bound_session_still_names_its_device_to_list_or_remove_devices()
+    {
+        using var alice = await PanelClient.SignedInAsync(_gateway, Name("alice"));
+        await alice.EnsureDeviceAsync();
+        await AssertStateAsync(alice, HttpStatusCode.OK);
+        var other = await DeviceAsync(new UserAccess(alice.UserId, "unused"), "other");
+
+        using var listed = await alice.SendAsync(HttpMethod.Get, "/api/devices", configure: PanelClient.WithoutDevice);
+        using var removed = await alice.SendAsync(HttpMethod.Post, $"/api/devices/{other.Id}/revoke", new { },
+            configure: PanelClient.WithoutDevice);
+
+        Assert.Equal("device-header", (await ErrorAsync(listed)).Code);
+        Assert.Equal("device-header", (await ErrorAsync(removed)).Code);
+        Assert.Equal(0, await database.ScalarLongAsync(
+            $"SELECT COUNT(*) FROM devices WHERE id = '{other.Id}' AND revoked_at IS NOT NULL"));
     }
 
     private static async Task AssertStateAsync(PanelClient browser, HttpStatusCode expected)

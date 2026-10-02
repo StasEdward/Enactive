@@ -24,7 +24,7 @@ import { openSessionChannel, onSessionSignal, removedViewAction } from "./js/ses
 import { openKeystore } from "./js/keystore.js";
 import {
   ensureDevice, collectGrants, troubleFor, worthSaying, connectPendingId, keyStanding, createGrantSchedule, epochsChanged,
-  DEVICE_HEADER
+  DEVICE_HEADER, DEVICE_LIMIT
 } from "./js/trust.js";
 import { createReader, answerable, NOT_GIVEN } from "./js/reader.js";
 import {
@@ -113,8 +113,9 @@ function apply(snapshot) {
 const poll = singleFlight(pollNow, generation);
 
 async function pollNow() {
-  // Nobody signed in: there is nothing of anybody's to ask for, and the answer would be a 401.
-  if (!account) {
+  // Nobody signed in: there is nothing of anybody's to ask for, and the answer would be a 401. At the device limit
+  // the gateway answers this browser nothing it could poll (showDeviceLimit).
+  if (!account || deviceLimited) {
     return;
   }
 
@@ -984,6 +985,14 @@ let keystore = null;
 let deviceId = null;
 
 /**
+ * Set while this browser could not register a device because the account has as many as it may. The gateway
+ * answers such a browser only the Devices list, a removal and deleting the account, so that is all the page offers
+ * (showDeviceLimit), and registering is tried again after each removal (leaveDeviceLimit). Before, it got 400 on
+ * every call, and an account whose old browsers were all gone could neither free a place nor be deleted.
+ */
+let deviceLimited = false;
+
+/**
  * This browser's device for the signed-in account, known from now on - to the page, and to api.js, which names it
  * on every call: the gateway refuses every private call that names none. Before this only /api/session, the
  * registration and signing out are asked.
@@ -1029,9 +1038,61 @@ async function openTrust(user) {
       knowDevice(id);
     }
   } catch (error) {
-    if (isCurrent(started) && !(error instanceof Stale)) {
+    if (isCurrent(started) && error?.code === "device-limit") {
+      deviceLimited = true;
+    } else if (isCurrent(started) && !(error instanceof Stale)) {
       toast(error.message, true);
     }
+  }
+}
+
+/**
+ * The page of a browser at the account's device limit: the Devices list with Remove on each card, the line saying
+ * why, and the account menu - nothing that needs a device, which the gateway would refuse this browser.
+ */
+function showDeviceLimit(limited) {
+  document.querySelectorAll(".tab").forEach((tab) => {
+    tab.hidden = limited && tab.dataset.view !== "devices";
+  });
+  $("add-device").hidden = limited;
+  const line = $("device-limit");
+  line.textContent = limited ? DEVICE_LIMIT : "";
+  line.hidden = !limited;
+
+  if (limited) {
+    showView("devices");
+  }
+}
+
+/**
+ * Registers this browser again once a removal may have made room. Still full - another browser took the place -
+ * it stays as it is; registered, the page becomes the whole panel.
+ */
+async function leaveDeviceLimit() {
+  const started = generation();
+  let id;
+
+  try {
+    id = await ensureDevice(keystore, api);
+  } catch (error) {
+    if (error?.code === "device-limit") {
+      return;
+    }
+    throw error;
+  }
+
+  if (!isCurrent(started)) {
+    return;
+  }
+
+  knowDevice(id);
+  deviceLimited = false;
+  showDeviceLimit(false);
+  await reloadDevices();
+  await poll();
+
+  if (isCurrent(started) && document.visibilityState === "visible") {
+    startPolling();
   }
 }
 
@@ -1704,6 +1765,11 @@ function runRemoval(clicked, removed) {
       removals.set(removed, { skipped: result.skipped, failed: result.failed });
       removalWatch.record(removed, result.sentTo);
       await reloadDevices();
+
+      // A place may have been made for this browser.
+      if (deviceLimited && isCurrent(started)) {
+        await leaveDeviceLimit();
+      }
     } finally {
       removing.delete(removed);
     }
@@ -2103,6 +2169,8 @@ function resetSession() {
   keystore?.close();
   keystore = null;
   deviceId = null;
+  deviceLimited = false;
+  showDeviceLimit(false);
   // Its opened records too: they are the last account's content, in clear.
   reader = createReader(null);
   writer = createWriter(null);
@@ -2172,6 +2240,12 @@ async function enterPanel(user) {
   await openTrust(user);
 
   if (!isCurrent(started)) {
+    return;
+  }
+
+  // At the device limit nothing else is asked: every other call would be refused for naming no device.
+  showDeviceLimit(deviceLimited);
+  if (deviceLimited) {
     return;
   }
 

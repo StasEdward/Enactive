@@ -36,12 +36,11 @@ export const connectPendingId = (hostId) => `connect:${hostId}`;
 export const invitePendingId = (inviteId) => `invite:${inviteId}`;
 
 /**
- * What a person is told when the gateway refuses to register this browser as one device too many. On another
- * browser: the gateway answers nothing to a browser that has no device to name, Devices included, so this one
- * cannot list the devices to remove one.
+ * What a person is told when the gateway refuses to register this browser as one device too many. Said over the
+ * Devices list, which this browser can still read and remove from (the gateway lets a session with no device list
+ * the devices, remove one and delete the account), and registering is tried again after each removal.
  */
-export const DEVICE_LIMIT = 'This account has as many devices as it may; remove one in Devices on another of your '
-  + 'browsers, then reload this page.';
+export const DEVICE_LIMIT = 'This account has as many browsers as it may; remove one to use this browser.';
 
 /**
  * What the panel says when a computer's grant carries another signing key than the one pinned. Spec §2: a

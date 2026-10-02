@@ -1,5 +1,5 @@
 // The panel in a real browser, against a real gateway on MySQL and a real computer (tests/RemoteHostHarness):
-// the first place app.js's wiring runs end to end. Seven scenarios, in order and sharing state - the device
+// the first place app.js's wiring runs end to end. Eight scenarios, in order and sharing state - the device
 // admitted in the second is the one removed in the fourth, and the seventh reads every request the others made.
 import { test, expect } from '@playwright/test';
 import {
@@ -13,6 +13,9 @@ const base = () => process.env.E2E_BASE_URL;
 /** What the panel says of a grant that does not verify (trust.js REJECTED). */
 const REJECTED = 'This key was not sent by your computer or a device you trust; it was ignored.';
 
+/** What a browser at the account's device limit is told over the Devices list (trust.js DEVICE_LIMIT). */
+const DEVICE_LIMIT = 'This account has as many browsers as it may; remove one to use this browser.';
+
 /** What a request whose arguments do not hash to its action hash shows instead of Allow (app.js approvalNodes). */
 const MISMATCH = 'This request does not match what the computer asked; answer it on the computer.';
 
@@ -21,6 +24,7 @@ const MISMATCH = 'This request does not match what the computer asked; answer it
 const alice = marker('alice');
 const bob = marker('bob');
 const carol = marker('carol');
+const dave = marker('dave');
 const workspace = marker('Workspace');
 const carolWorkspace = marker('CarolWorkspace');
 const first = { title: marker('Title-first'), prompt: marker('Please tidy the first folder') };
@@ -578,5 +582,53 @@ test('7. nothing the person wrote and no secret reached the gateway in the clear
       const found = sent.includes(word) || sent.includes(encodeURIComponent(word));
       expect(found, `"${word}" in a request to ${request.url}`).toBe(false);
     }
+  }
+});
+
+// ── 8 ────────────────────────────────────────────────────────────────────
+
+test('8. a browser new to an account at its device limit removes one and is then let in', async ({ browser }) => {
+  const [contextOld, contextNew] = await Promise.all([browser.newContext(), browser.newContext()]);
+  try {
+    const [old, fresh] = await Promise.all([contextOld.newPage(), contextNew.newPage()]);
+    for (const [name, page] of [['old', old], ['new', fresh]]) {
+      page.on('dialog', (dialog) => dialog.accept());
+      page.on('pageerror', (error) => pageErrors.push(`page ${name}: ${error.stack ?? error.message}`));
+    }
+
+    // One browser of the account, and then as many more devices as the gateway's limit (10) allows - browsers whose
+    // site data was cleared, say, which nothing ever removes.
+    await signIn(old, dave);
+    await old.evaluate(async () => {
+      const { csrfToken } = await (await fetch('/api/session')).json();
+      for (let i = 1; i <= 9; i++) {
+        const pair = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']);
+        const raw = new Uint8Array(await crypto.subtle.exportKey('raw', pair.publicKey));
+        const publicKey = btoa(String.fromCharCode(...raw)).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
+        const response = await fetch('/api/devices', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'X-CSRF-TOKEN': csrfToken },
+          body: JSON.stringify({ publicKey, label: `spare-${i}` })
+        });
+        if (!response.ok) throw new Error(`spare-${i}: ${response.status} ${await response.text()}`);
+      }
+    });
+
+    // The new browser cannot register: it is shown the list, what to do, and nothing else.
+    await fresh.goto(`${base()}/`);
+    await fresh.fill('#dev-name', dave);
+    await fresh.click('#dev-sign-in button[type=submit]');
+    await expect(fresh.locator('#device-limit')).toHaveText(DEVICE_LIMIT);
+    await expect(fresh.locator('#device-list .card')).toHaveCount(10);
+    await expect(fresh.locator('.tab[data-view="runs"]')).toBeHidden();
+
+    // Removing one makes room, and the browser registers in it at once.
+    await fresh.locator('#device-list .card', { hasText: 'spare-1' }).getByRole('button', { name: 'Remove' }).click();
+    await expect(fresh.locator('#device-limit')).toBeHidden();
+    await expect(fresh.locator('#device-list .card', { hasText: 'This device' })).toHaveCount(1);
+    await expect(fresh.locator('.tab[data-view="runs"]')).toBeVisible();
+    await expect(fresh.locator('#link-label')).toHaveText('Live');
+  } finally {
+    await Promise.all([contextOld.close(), contextNew.close()]);
   }
 });
