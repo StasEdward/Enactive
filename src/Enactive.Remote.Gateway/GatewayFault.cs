@@ -130,6 +130,24 @@ public sealed class GatewayFault(string code, int status, string message) : Exce
     public static GatewayFault RateLimited() => new(
         "rate-limited", 429, "Too many requests. Wait a moment and try again.");
 
+    /// <summary>
+    /// A public key that is not an uncompressed P-256 point: wrong text encoding, wrong length, wrong
+    /// prefix, or off the curve. Refused here because a grant sealed to it could never be opened.
+    /// </summary>
+    public static GatewayFault BadKey() => new(
+        "bad-key", 400, "The device key must be an uncompressed P-256 public key, as base64url text.");
+
+    /// <summary>
+    /// The browser that made this call has been removed from the account. Its own code, not a plain 403:
+    /// the panel answers it by telling the person this device was removed, not by retrying.
+    /// </summary>
+    public static GatewayFault DeviceRevoked() => new(
+        "device-revoked", 403, "This device was removed from your account.");
+
+    public static GatewayFault DeviceLimit(int max) => new(
+        "device-limit", 409,
+        $"This account already has {max:N0} devices. Remove one that is no longer used to add another.");
+
     public static GatewayFault Conflict(string message) => new("conflict", 409, message);
 
     public static GatewayFault NotFound(string message) => new("not-found", 404, message);

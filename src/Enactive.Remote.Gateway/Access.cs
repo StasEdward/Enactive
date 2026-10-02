@@ -13,3 +13,10 @@ public sealed record UserAccess(string UserId, string SessionId);
 /// account as its own.
 /// </summary>
 public sealed record HostAccess(string HostId, string OwnerId);
+
+/// <summary>
+/// A browser asking, resolved from the <c>X-Enactive-Device</c> header against the signed-in person's own
+/// devices: one that exists, is theirs and has not been removed. The owner is read from the device's row,
+/// never from the request.
+/// </summary>
+public sealed record DeviceAccess(string DeviceId, string OwnerId);

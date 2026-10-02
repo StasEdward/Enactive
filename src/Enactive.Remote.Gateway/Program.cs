@@ -112,6 +112,8 @@ builder.Services.AddSingleton<HostService>();
 builder.Services.AddSingleton(Limits.Unlimited);
 builder.Services.AddSingleton(services => new UserService(
     services.GetRequiredService<Database>(), services.GetRequiredService<Limits>(), TimeProvider.System));
+builder.Services.AddSingleton(services => new DeviceService(
+    services.GetRequiredService<Database>(), services.GetRequiredService<Limits>(), TimeProvider.System));
 builder.Services.AddSingleton<Projection>();
 builder.Services.AddSingleton<HostConnections>();
 builder.Services.AddHostedService<RetentionLoop>();
@@ -463,6 +465,26 @@ api.MapPost("/hosts/{hostId}/device-commands", async (
     Results.Ok(await users.SendDeviceCommandAsync(
         context.UserAccess(), hostId, request.Kind, request.CommandId, request.Sealed, ct)));
 
+// A browser profile of this account, and the public key grants will be sealed to. The key is checked for
+// shape and curve; what it is for is the browser's and the computer's business, not this gateway's.
+api.MapPost("/devices", async (
+    RegisterDeviceRequest request, HttpContext context, DeviceService devices, CancellationToken ct) =>
+    Results.Ok(new
+    {
+        id = await devices.RegisterAsync(
+            context.UserAccess(), DeviceService.DecodeKey(request.PublicKey), request.Label, ct)
+    }));
+
+api.MapGet("/devices", async (HttpContext context, DeviceService devices, CancellationToken ct) =>
+    Results.Ok(await devices.ListAsync(context.UserAccess(), ct)));
+
+api.MapPost("/devices/{id}/revoke", async (
+    string id, HttpContext context, DeviceService devices, CancellationToken ct) =>
+{
+    await devices.RevokeAsync(context.UserAccess(), id, ct);
+    return Results.Ok();
+});
+
 api.MapPost("/tasks", async (
     CreateTaskRequest request, HttpContext context, UserService users, CancellationToken ct) =>
 {
@@ -506,6 +528,7 @@ await Migrator.ApplyAsync(new Database(connectionString).ConnectionString);
 app.Run();
 
 internal sealed record RegisterHostRequest(string? Name);
+internal sealed record RegisterDeviceRequest(string? PublicKey, string? Label);
 internal sealed record CreateTaskRequest(string TaskId, string HostId, string WorkspaceId, string SealedTask);
 internal sealed record CommandRequest(string CommandId, string Sealed);
 internal sealed record DecisionRequest(
