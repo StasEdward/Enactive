@@ -51,6 +51,12 @@ internal sealed class TestBrowser(string hostId, HostKey key)
 
     // ── what the computer sent ──────────────────────────────────────────────
 
+    /// <summary>An event's sentence, opened as the browser opens it: under the run, sequence and kind it travelled with.</summary>
+    public string OpenDetail(HostEvent published)
+        => key.OpenText(
+            published.SealedDetail ?? throw new InvalidOperationException("The event carries no detail."),
+            Ad.Event(HostId, published.RunId, published.Sequence, published.Kind));
+
     public SealedTask OpenTask(TaskView task)
         => RemoteJson.Deserialize<SealedTask>(key.OpenText(task.Sealed, Ad.Task(HostId, task.Id, task.WorkspaceId)));
 

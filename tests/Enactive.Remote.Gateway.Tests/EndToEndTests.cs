@@ -8,6 +8,7 @@ using Enactive.Core.Events;
 using Enactive.Core.History;
 using Enactive.Core.Intents;
 using Enactive.Core.Orchestration;
+using Enactive.Core.Permissions;
 using Enactive.Remote.Contracts;
 using Enactive.Remote.Contracts.Crypto;
 using Enactive.Remote.Gateway.Services;
@@ -307,6 +308,306 @@ public sealed class EndToEndTests(TestDatabase database) : IClassFixture<TestDat
         Assert.Equal(keys.SigningPublic, signing);
     }
 
+    // ── a gateway that writes commands itself ───────────────────────────────
+
+    // The attacker here is the gateway, or anyone with its database: it can write `commands` rows
+    // directly, with any plaintext it likes. It cannot seal anything under the computer's key, so what
+    // these tests look for is that a computer given such a row does nothing - never calls the engine -
+    // and says so, as a run that ended Failed when there is a run to say it on.
+
+    /// <summary>
+    /// A start the gateway composed itself. Sealed under a key the computer does not hold, it cannot
+    /// open; and under an epoch the computer does not hold at all, it is named as such. Either way the
+    /// engine is never asked.
+    /// </summary>
+    [Theory]
+    [InlineData(1u, "it was not sealed for this command on this computer")]
+    [InlineData(2u, "sealed under a key this computer does not hold")]
+    public async Task A_start_command_the_gateway_wrote_itself_runs_nothing(uint epoch, string reason)
+    {
+        var device = await _owner.PostAsync<DeviceView>("/api/hosts", new { name = "Studio PC" });
+        var browser = new TestBrowser(device.Id);
+        await using var host = Connect(device.Token);
+        await host.StartAsync();
+        await using var computer = new Computer(host, browser);
+        await computer.ReceiveAsync();
+
+        var attackerKey = HostKey.Create(epoch);
+        var commandId = Guid.NewGuid().ToString();
+        var taskId = Guid.NewGuid().ToString();
+        var runId = Guid.NewGuid().ToString("N");
+
+        await InsertCommandAsync(device.Id, commandId, CommandKind.StartTask, RemoteJson.Serialize(new StartTaskPayload(
+            runId, taskId, "workspace-1",
+            attackerKey.SealText(RemoteJson.Serialize(new SealedTask("Harmless", "Delete everything.")),
+                Ad.Task(device.Id, taskId, "workspace-1")),
+            attackerKey.SealText(RemoteJson.Serialize(new StartAuthorization(taskId, "workspace-1", DateTimeOffset.UtcNow)),
+                Ad.Command(device.Id, commandId, CommandKind.StartTask)))));
+
+        await computer.DeliverAsync();
+
+        computer.AssertNothingRan();
+        Assert.Contains(Refusal(reason), computer.EndingOf(runId));
+    }
+
+    /// <summary>
+    /// A genuine command, copied under a new command id. The browser's seal is real and unaltered - it is
+    /// the id the seal was made for that the copy no longer matches, so the computer cannot open it.
+    ///
+    /// <para>The copy names a run of its own. The gateway makes run ids, and a copy that kept the
+    /// original's would only be refused one step earlier, by the record that the original claimed that
+    /// run - which would leave this test unable to tell that apart from the seal refusing it. The
+    /// original is delivered too and runs once, so the one engine call is what the owner asked for.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_start_command_copied_under_a_new_id_runs_nothing()
+    {
+        var device = await _owner.PostAsync<DeviceView>("/api/hosts", new { name = "Studio PC" });
+        var browser = new TestBrowser(device.Id);
+        await using var host = Connect(device.Token);
+        await host.StartAsync();
+        await using var computer = new Computer(host, browser);
+        await computer.ReceiveAsync();
+
+        var taskId = Guid.NewGuid().ToString();
+        await _owner.PostAsync<IdView>("/api/tasks", new
+        {
+            taskId,
+            hostId = device.Id,
+            workspaceId = "workspace-1",
+            sealedTask = browser.Task(taskId, "workspace-1", "Run the tests", "Please run them.")
+        });
+
+        var genuineId = Guid.NewGuid().ToString();
+        await _owner.PostAsync($"/api/tasks/{taskId}/start", new
+        {
+            commandId = genuineId,
+            @sealed = browser.Start(genuineId, taskId, "workspace-1")
+        });
+
+        var genuine = RemoteJson.Deserialize<StartTaskPayload>(
+            (await database.StringsAsync($"SELECT payload FROM commands WHERE id = '{genuineId}'")).Single());
+        var copyId = Guid.NewGuid().ToString();
+        var copiedRunId = Guid.NewGuid().ToString("N");
+        Assert.NotEqual(genuine.RunId, copiedRunId);
+
+        await InsertCommandAsync(device.Id, copyId, CommandKind.StartTask,
+            RemoteJson.Serialize(genuine with { RunId = copiedRunId }));
+
+        var delivered = await computer.DeliverAsync();
+
+        Assert.Equal(new[] { genuineId, copyId }.Order(), delivered.Select(c => c.Id).Order());
+        Assert.Equal(1, computer.Engine.Submissions);
+        Assert.Equal(1, computer.Prepared);
+        Assert.True(computer.Store.HasEnded(genuine.RunId));
+        Assert.Contains(Refusal("it was not sealed for this command on this computer"), computer.EndingOf(copiedRunId));
+    }
+
+    /// <summary>
+    /// An Allow given for one permission request, attached to another. Everything the Host checks first
+    /// passes - the seal is genuine and made for this very command - and what is left is the approval
+    /// the owner named inside it, which is not the one the gateway wrote beside it.
+    ///
+    /// <para>A control follows: the genuine Allow for the first request, sent properly, does answer it.
+    /// Without it, "the second request stayed pending" would also be true of a harness in which nothing
+    /// could be answered at all.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_decision_for_another_approval_is_refused()
+    {
+        var key = HostKey.Create(1);
+        var device = await _owner.PostAsync<DeviceView>("/api/hosts", new { name = "Studio PC" });
+        var browser = new TestBrowser(device.Id, key);
+        await using var host = Connect(device.Token);
+        await host.StartAsync();
+
+        var askA = Ask("call-a");
+        var askB = Ask("call-b");
+        var (idA, idB) = (askA.Id.ToString("N"), askB.Id.ToString("N"));
+
+        await using var computer = new Computer(host, browser,
+            during: (handler, ct) => Task.WhenAll(handler.RequestAsync(askA, ct), handler.RequestAsync(askB, ct)));
+        await computer.ReceiveAsync();
+
+        var taskId = Guid.NewGuid().ToString();
+        await _owner.PostAsync<IdView>("/api/tasks", new
+        {
+            taskId,
+            hostId = device.Id,
+            workspaceId = "workspace-1",
+            sealedTask = browser.Task(taskId, "workspace-1", "Edit a file", "Please edit it.")
+        });
+        var startId = Guid.NewGuid().ToString();
+        await _owner.PostAsync($"/api/tasks/{taskId}/start", new
+        {
+            commandId = startId,
+            @sealed = browser.Start(startId, taskId, "workspace-1")
+        });
+
+        var start = Assert.Single(await computer.ReceiveAsync());
+        var runId = RemoteJson.Deserialize<StartTaskPayload>(start.Payload).RunId;
+
+        using var stop = new CancellationTokenSource();
+        var running = computer.Runner.ApplyAsync(start, stop.Token);
+
+        try
+        {
+            await WaitUntilAsync(() => computer.Approvals.Pending.Count == 2);
+            await computer.Loop.FlushAsync();
+
+            var hashA = (await database.StringsAsync($"SELECT action_hash FROM approvals WHERE id = '{idA}'")).Single();
+            var hashB = (await database.StringsAsync($"SELECT action_hash FROM approvals WHERE id = '{idB}'")).Single();
+
+            // The forgery: a genuine Allow for A, sealed for this command id, in a payload that says B.
+            var forgedId = Guid.NewGuid().ToString();
+            await InsertCommandAsync(device.Id, forgedId, CommandKind.ResolveApproval,
+                RemoteJson.Serialize(new ResolveApprovalPayload(
+                    idB, runId, hashB, browser.Decision(forgedId, idA, hashA, RemoteDecision.Allow))));
+
+            await computer.DeliverAsync();
+
+            var notice = Assert.Single(computer.Runner.Notices);
+            Assert.Equal("Refused", notice.Kind);
+            Assert.Contains("the answer was given for a different permission request", notice.Detail);
+            Assert.Equivalent(new[] { idA, idB }, computer.Approvals.Pending);
+
+            // The control: the same Allow for A, sent properly, answers A and only A.
+            var genuineId = Guid.NewGuid().ToString();
+            await InsertCommandAsync(device.Id, genuineId, CommandKind.ResolveApproval,
+                RemoteJson.Serialize(new ResolveApprovalPayload(
+                    idA, runId, hashA, browser.Decision(genuineId, idA, hashA, RemoteDecision.Allow))));
+
+            await computer.DeliverAsync();
+            await WaitUntilAsync(() => computer.Approvals.Pending.Count == 1);
+
+            Assert.Equal([idB], computer.Approvals.Pending);
+            Assert.Single(computer.Runner.Notices);
+        }
+        finally
+        {
+            // The run is waiting on B for as long as nobody answers it; stopping it is how the test ends.
+            await stop.CancelAsync();
+            await running.WaitAsync(TimeSpan.FromSeconds(10));
+        }
+    }
+
+    /// <summary>
+    /// A command the owner genuinely sent, held back and delivered more than a day later. The gateway
+    /// cannot read the time inside the seal, so it carries the start as it would any other and makes a
+    /// run for it; it is the computer that refuses, and the run it ended Failed is what the owner sees.
+    /// </summary>
+    [Fact]
+    public async Task An_old_command_is_refused()
+    {
+        var key = HostKey.Create(1);
+        var device = await _owner.PostAsync<DeviceView>("/api/hosts", new { name = "Studio PC" });
+        var browser = new TestBrowser(device.Id, key);
+        await using var host = Connect(device.Token);
+        await host.StartAsync();
+        await using var computer = new Computer(host, browser);
+        await computer.ReceiveAsync();
+
+        var taskId = Guid.NewGuid().ToString();
+        await _owner.PostAsync<IdView>("/api/tasks", new
+        {
+            taskId,
+            hostId = device.Id,
+            workspaceId = "workspace-1",
+            sealedTask = browser.Task(taskId, "workspace-1", "Run the tests", "Please run them.")
+        });
+
+        var commandId = Guid.NewGuid().ToString();
+        await _owner.PostAsync($"/api/tasks/{taskId}/start", new
+        {
+            commandId,
+            @sealed = key.SealText(
+                RemoteJson.Serialize(new StartAuthorization(taskId, "workspace-1", DateTimeOffset.UtcNow - TimeSpan.FromHours(25))),
+                Ad.Command(device.Id, commandId, CommandKind.StartTask))
+        });
+
+        var accepted = Assert.Single(await computer.DeliverAsync());
+        var runId = RemoteJson.Deserialize<StartTaskPayload>(accepted.Payload).RunId;
+
+        computer.AssertNothingRan();
+        var reason = Refusal("it was issued too long ago to act on");
+        Assert.Contains(reason, computer.EndingOf(runId));
+
+        // And the owner's side of it: the gateway's own run, ended Failed, with the sentence sealed.
+        await computer.Loop.FlushAsync();
+        var run = Assert.Single((await _owner.GetAsync<GatewaySnapshot>("/api/state")).Runs, r => r.Id == runId);
+
+        Assert.Equal(RemoteRunStatus.Failed, run.Status);
+        Assert.Contains(reason, browser.OpenSummary(run, RemoteEventKind.Failed));
+    }
+
+    /// <summary>
+    /// A start sealed with the computer's own key, but for another computer: the associated data carries
+    /// the computer's id, so a command made for one cannot be redirected to another that shares the key.
+    /// </summary>
+    [Fact]
+    public async Task A_command_sealed_for_another_computer_runs_nothing()
+    {
+        var key = HostKey.Create(1);
+        var device = await _owner.PostAsync<DeviceView>("/api/hosts", new { name = "Studio PC" });
+        var browser = new TestBrowser(device.Id, key);
+        await using var host = Connect(device.Token);
+        await host.StartAsync();
+        await using var computer = new Computer(host, browser);
+        await computer.ReceiveAsync();
+
+        var otherComputer = Guid.NewGuid().ToString("N");
+        var commandId = Guid.NewGuid().ToString();
+        var taskId = Guid.NewGuid().ToString();
+        var runId = Guid.NewGuid().ToString("N");
+
+        await InsertCommandAsync(device.Id, commandId, CommandKind.StartTask, RemoteJson.Serialize(new StartTaskPayload(
+            runId, taskId, "workspace-1",
+            browser.Task(taskId, "workspace-1", "Run the tests", "Please run them."),
+            key.SealText(RemoteJson.Serialize(new StartAuthorization(taskId, "workspace-1", DateTimeOffset.UtcNow)),
+                Ad.Command(otherComputer, commandId, CommandKind.StartTask)))));
+
+        await computer.DeliverAsync();
+
+        computer.AssertNothingRan();
+        Assert.Contains(Refusal("it was not sealed for this command on this computer"), computer.EndingOf(runId));
+    }
+
+    private static string Refusal(string reason) => $"This computer refused the request: {reason}.";
+
+    /// <summary>
+    /// A command row as the gateway's own code writes one, with whatever payload the attacker chose. It
+    /// is written for this test's account and computer, because that is where a database writer
+    /// would aim it, and it is live for a day.
+    /// </summary>
+    private async Task InsertCommandAsync(string hostId, string commandId, CommandKind kind, string payload)
+        => await database.ExecuteAsync(
+            """
+            INSERT INTO commands (owner_id, id, host_id, kind, payload, fingerprint, status, created_at, expires_at)
+            VALUES (@owner, @id, @host, @kind, @payload, SHA2(@id, 256), 'PendingDelivery',
+                    UTC_TIMESTAMP(3), UTC_TIMESTAMP(3) + INTERVAL 1 DAY)
+            """,
+            ("@owner", _owner.UserId), ("@id", commandId), ("@host", hostId),
+            ("@kind", kind.ToString()), ("@payload", payload));
+
+    private static async Task WaitUntilAsync(Func<bool> condition)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+
+        while (!condition())
+        {
+            Assert.True(DateTime.UtcNow < deadline, "Gave up waiting for the computer.");
+            await Task.Delay(20);
+        }
+    }
+
+    private static DecisionRequest Ask(string toolCallId)
+        => new(
+            Guid.NewGuid(), "Approve tool 'write_file'?", "short form",
+            [new DecisionOption("allow", "Allow"), new DecisionOption("deny", "Deny")],
+            RecommendedOptionId: "allow",
+            FullDetail: "the complete action, unabridged",
+            Action: new BoundAction(Guid.NewGuid(), toolCallId, "write_file", """{"path":"a.txt"}""", "C:/work"));
+
     // ── plumbing ────────────────────────────────────────────────────────────
 
     /// <summary>A Host client pointed at the in-process gateway.</summary>
@@ -377,5 +678,129 @@ public sealed class EndToEndTests(TestDatabase database) : IClassFixture<TestDat
         public IAsyncEnumerable<WorkEvent> ResumeRunAsync(
             RunCheckpoint checkpoint, WorkContext context, CancellationToken ct)
             => throw new NotSupportedException("Resuming is not part of what this test exercises.");
+    }
+
+    /// <summary>
+    /// A computer as the end-to-end tests attach one: a real store, sealer, delivery loop and runner on
+    /// the real connection, and an engine that counts how often it was asked to do anything.
+    /// </summary>
+    private sealed class Computer : IAsyncDisposable
+    {
+        private readonly SignalRGatewayConnection _host;
+        private readonly TestBrowser _browser;
+        private readonly IReadOnlyList<WorkspaceRef> _workspaces;
+        private IDecisionHandler? _handler;
+
+        /// <param name="during">What the run does before it completes, given the run's own decision handler.</param>
+        public Computer(
+            SignalRGatewayConnection host, TestBrowser browser,
+            Func<IDecisionHandler, CancellationToken, Task>? during = null)
+        {
+            _host = host;
+            _browser = browser;
+            var sealer = browser.Computer.Sealer();
+            _workspaces = [new WorkspaceRef("workspace-1", sealer.WorkspaceName("workspace-1", "Enactive"))];
+
+            Store = OpenStore();
+            Loop = new DeliveryLoop(Store, host, sealer);
+            Engine = new CountingEngine(ct => during?.Invoke(_handler!, ct) ?? Task.CompletedTask);
+            Runner = new RemoteRunner(Store, Approvals, sealer, (_, wrap, _) =>
+            {
+                Prepared++;
+                _handler = wrap(new WaitingDesktop());
+
+                return Task.FromResult(new RemotePreparation(Engine, new Intent(
+                    Guid.NewGuid(), "prompt", IntentSource.Remote,
+                    new WorkContext(Guid.NewGuid(), "workspace-1", null, null, null, [], []),
+                    DateTimeOffset.UtcNow)));
+            });
+        }
+
+        public HostStore Store { get; }
+
+        public DeliveryLoop Loop { get; }
+
+        public RemoteApprovals Approvals { get; } = new();
+
+        public RemoteRunner Runner { get; }
+
+        public CountingEngine Engine { get; }
+
+        /// <summary>How many times the application was asked to prepare a run - the step before the engine.</summary>
+        public int Prepared { get; private set; }
+
+        /// <summary>One turn of the delivery loop, which also publishes the computer's workspace.</summary>
+        public Task<IReadOnlyList<HostCommand>> ReceiveAsync() => Loop.TurnAsync(_workspaces);
+
+        /// <summary>A turn, and every command it accepted carried out in order.</summary>
+        public async Task<IReadOnlyList<HostCommand>> DeliverAsync()
+        {
+            var accepted = await ReceiveAsync();
+
+            foreach (var command in accepted)
+            {
+                await Runner.ApplyAsync(command);
+            }
+
+            return accepted;
+        }
+
+        public void AssertNothingRan()
+        {
+            Assert.Equal(0, Engine.Submissions);
+            Assert.Equal(0, Prepared);
+            Assert.Empty(Runner.Running);
+        }
+
+        /// <summary>
+        /// What the run was told it ended with, opened as the owner's browser would. The run must have
+        /// ended, and Failed: a refusal that left it open would have the owner waiting for ever.
+        /// </summary>
+        public string EndingOf(string runId)
+        {
+            Assert.True(Store.HasEnded(runId), "The run was left open.");
+            var ending = Assert.Single(Store.NextOwed(), owed => owed.RunId == runId).Event;
+
+            Assert.Equal(RemoteEventKind.Failed, ending.Kind);
+            return _browser.OpenDetail(ending);
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            await _host.DisposeAsync();
+            Store.Dispose();
+        }
+    }
+
+    /// <summary>The person at the desk, who never answers.</summary>
+    private sealed class WaitingDesktop : IDecisionHandler
+    {
+        public async Task<DecisionOutcome> RequestAsync(DecisionRequest request, CancellationToken ct)
+        {
+            await Task.Delay(Timeout.Infinite, ct);
+            return new DecisionOutcome("deny");
+        }
+    }
+
+    /// <summary>An engine that does nothing but count, remember its prompt, and end the run.</summary>
+    private sealed class CountingEngine(Func<CancellationToken, Task> during) : IOrchestrator
+    {
+        public int Submissions { get; private set; }
+
+        public string? Prompt { get; private set; }
+
+        public async IAsyncEnumerable<WorkEvent> SubmitIntentAsync(
+            Intent intent, [EnumeratorCancellation] CancellationToken ct)
+        {
+            Submissions++;
+            Prompt = intent.RawText;
+            await during(ct);
+
+            yield return Event(EventKind.TaskCompleted, "All done", WorkEventPayload.OutcomePayload(RunOutcomeKind.Completed));
+        }
+
+        public IAsyncEnumerable<WorkEvent> ResumeRunAsync(
+            RunCheckpoint checkpoint, WorkContext context, CancellationToken ct)
+            => throw new NotSupportedException("Resuming is not part of what these tests exercise.");
     }
 }
