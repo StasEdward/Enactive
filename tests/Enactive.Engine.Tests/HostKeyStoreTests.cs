@@ -90,19 +90,31 @@ public sealed class HostKeyStoreTests
     }
 
     [WindowsTheory]
-    [InlineData("host_keys", "secret", "epoch = 1")]
-    [InlineData("host_signing", "private_key", "id = 1")]
-    public void A_key_this_windows_user_cannot_read_is_reported_not_replaced(string table, string column, string where)
+    [InlineData("host_keys", "secret", "epoch = 1", "foreign")]
+    [InlineData("host_signing", "private_key", "id = 1", "foreign")]
+    [InlineData("host_keys", "secret", "epoch = 1", "clear")]
+    [InlineData("host_signing", "private_key", "id = 1", "clear")]
+    [InlineData("host_signing", "private_key", "id = 1", "other-curve")]
+    public void A_key_this_windows_user_cannot_read_is_reported_not_replaced(
+        string table, string column, string where, string kind)
     {
         using var fx = new EngineFixture();
         var path = fx.PathOf("remote.db");
         using (var store = new HostStore(path))
         using (new HostKeyStore(store, HostId)) { }
 
-        // A ciphertext this account made with other entropy is what another program's (or another
-        // build's) secret looks like: DPAPI refuses it, exactly as it refuses another user's.
-        var foreign = "dpapi:" + Convert.ToBase64String(ProtectedData.Protect(
-            RandomNumberGenerator.GetBytes(32), Encoding.UTF8.GetBytes("not-enactive"), Secret.Scope));
+        var foreign = kind switch
+        {
+            // A ciphertext this account made with other entropy is what another program's (or another
+            // build's) secret looks like: DPAPI refuses it, exactly as it refuses another user's.
+            "foreign" => "dpapi:" + Convert.ToBase64String(ProtectedData.Protect(
+                RandomNumberGenerator.GetBytes(32), Encoding.UTF8.GetBytes("not-enactive"), Secret.Scope)),
+            // Secret.Unprotect hands back unprefixed text as it is; the store never writes a key that
+            // way, so one found like that was put there by something else.
+            "clear" => Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)),
+            // Readable, and 256 bits, but not P-256: no device could check a grant it signed.
+            _ => OtherCurveSigningKey(),
+        };
         Execute(path, $"UPDATE {table} SET {column} = $value WHERE {where}", foreign);
 
         using (var store = new HostStore(path))
@@ -136,6 +148,26 @@ public sealed class HostKeyStoreTests
     }
 
     [WindowsFact]
+    public void A_store_with_a_signing_key_but_no_epoch_keys_is_reported()
+    {
+        using var fx = new EngineFixture();
+        var path = fx.PathOf("remote.db");
+        using (var store = new HostStore(path))
+        using (new HostKeyStore(store, HostId)) { }
+
+        Execute(path, "DELETE FROM host_keys");
+
+        using (var store = new HostStore(path))
+        {
+            var refused = Assert.Throws<HostKeysUnreadableException>(() => new HostKeyStore(store, HostId));
+            Assert.Contains("no epoch keys", refused.Message, StringComparison.Ordinal);
+        }
+
+        Assert.Equal(0L, Count(path, "host_keys"));
+        Assert.Equal(1L, Count(path, "host_signing"));
+    }
+
+    [WindowsFact]
     public void Distrusting_a_device_keeps_it_in_the_list_as_revoked()
     {
         using var fx = new EngineFixture();
@@ -154,13 +186,88 @@ public sealed class HostKeyStoreTests
         Assert.Equal(clock.GetUtcNow(), revoked.RevokedAt);
         Assert.Equal(P256.PublicRaw(phone), revoked.PublicKey);
         Assert.Equal(["laptop"], keys.Live.Select(d => d.DeviceId));
+    }
 
-        // Trusting it again is a new decision, not a quiet undo of the revocation.
+    // An endorsement can be sealed by any device that holds an epoch key, a revoked one included. If
+    // Trust rebound a live id to a new key, that device could swap a victim's key for its own and
+    // receive the next epoch's key under the victim's name at the next rotation.
+    [WindowsFact]
+    public void A_live_device_is_not_rebound_to_another_key()
+    {
+        using var fx = new EngineFixture();
+        var clock = new MovableClock(new DateTimeOffset(2026, 10, 2, 12, 0, 0, TimeSpan.Zero));
+        using var store = new HostStore(fx.PathOf("remote.db"));
+        using var keys = new HostKeyStore(store, HostId, clock);
+        using var phone = P256.Generate();
+        using var attacker = P256.Generate();
+        var addedAt = clock.GetUtcNow();
+        keys.Trust(Device("phone", phone, addedAt));
+
         clock.Advance(TimeSpan.FromMinutes(5));
+        Assert.Throws<InvalidOperationException>(() => keys.Trust(Device("phone", attacker, clock.GetUtcNow())));
+
+        var kept = Assert.Single(keys.Trusted);
+        Assert.Equal(P256.PublicRaw(phone), kept.PublicKey);
+    }
+
+    [WindowsFact]
+    public void Trusting_a_live_device_again_with_its_own_key_changes_nothing()
+    {
+        using var fx = new EngineFixture();
+        var clock = new MovableClock(new DateTimeOffset(2026, 10, 2, 12, 0, 0, TimeSpan.Zero));
+        using var store = new HostStore(fx.PathOf("remote.db"));
+        using var keys = new HostKeyStore(store, HostId, clock);
+        using var phone = P256.Generate();
+        var addedAt = clock.GetUtcNow();
+        keys.Trust(Device("phone", phone, addedAt));
+
+        clock.Advance(TimeSpan.FromMinutes(5));
+        keys.Trust(new TrustedDevice("phone", P256.PublicRaw(phone), "renamed", "someone-else", clock.GetUtcNow(), null));
+
+        var kept = Assert.Single(keys.Trusted);
+        Assert.Equal(addedAt, kept.AddedAt);
+        Assert.Equal("test", kept.AddedBy);
+        Assert.Null(kept.RevokedAt);
+    }
+
+    [WindowsFact]
+    public void Trust_does_not_reactivate_a_revoked_device()
+    {
+        using var fx = new EngineFixture();
+        using var store = new HostStore(fx.PathOf("remote.db"));
+        using var keys = new HostKeyStore(store, HostId);
+        using var phone = P256.Generate();
+        keys.Trust(Device("phone", phone, DateTimeOffset.UtcNow));
+        keys.Distrust("phone");
+
+        Assert.Throws<InvalidOperationException>(() => keys.Trust(Device("phone", phone, DateTimeOffset.UtcNow)));
+        Assert.NotNull(Assert.Single(keys.Trusted).RevokedAt);
+    }
+
+    [WindowsFact]
+    public void Retrust_reactivates_a_revoked_device_only_with_its_own_key()
+    {
+        using var fx = new EngineFixture();
+        var clock = new MovableClock(new DateTimeOffset(2026, 10, 2, 12, 0, 0, TimeSpan.Zero));
+        using var store = new HostStore(fx.PathOf("remote.db"));
+        using var keys = new HostKeyStore(store, HostId, clock);
+        using var phone = P256.Generate();
+        using var other = P256.Generate();
         keys.Trust(Device("phone", phone, clock.GetUtcNow()));
-        var again = Assert.Single(keys.Trusted, d => d.DeviceId == "phone");
-        Assert.Null(again.RevokedAt);
+        keys.Distrust("phone");
+
+        Assert.Throws<InvalidOperationException>(() => keys.Retrust("phone", P256.PublicRaw(other), "desktop"));
+        Assert.NotNull(Assert.Single(keys.Trusted).RevokedAt);
+        Assert.Throws<InvalidOperationException>(() => keys.Retrust("never-seen", P256.PublicRaw(other), "desktop"));
+
+        clock.Advance(TimeSpan.FromMinutes(5));
+        keys.Retrust("phone", P256.PublicRaw(phone), "desktop");
+
+        // A new trust decision: who made it and when are the new ones.
+        var again = Assert.Single(keys.Live);
+        Assert.Equal("desktop", again.AddedBy);
         Assert.Equal(clock.GetUtcNow(), again.AddedAt);
+        Assert.Equal(P256.PublicRaw(phone), again.PublicKey);
     }
 
     [WindowsFact]
@@ -233,6 +340,8 @@ public sealed class HostKeyStoreTests
         using var keys = new HostKeyStore(store, HostId, clock);
         using var phone = P256.Generate();
         using var laptop = P256.Generate();
+        keys.Trust(Device("phone", phone, clock.GetUtcNow()));
+        keys.Trust(Device("laptop", laptop, clock.GetUtcNow()));
 
         keys.EnqueueGrant(Grants.CreateSigned(HostId, "phone", P256.PublicRaw(phone), keys.Current, keys.Signer));
         clock.Advance(TimeSpan.FromSeconds(1));
@@ -249,7 +358,58 @@ public sealed class HostKeyStoreTests
         Assert.Equal(["host-1:phone:1"], keys.PendingGrants().Select(p => p.Id));
     }
 
+    // A grant queued for a device that is revoked, or was never trusted, would hand it a key the
+    // moment the delivery loop next runs.
+    [WindowsFact]
+    public void A_grant_for_a_device_that_is_not_live_is_refused()
+    {
+        using var fx = new EngineFixture();
+        using var store = new HostStore(fx.PathOf("remote.db"));
+        using var keys = new HostKeyStore(store, HostId);
+        using var phone = P256.Generate();
+        using var stranger = P256.Generate();
+        keys.Trust(Device("phone", phone, DateTimeOffset.UtcNow));
+        keys.Distrust("phone");
+
+        Assert.Throws<InvalidOperationException>(() => keys.EnqueueGrant(
+            Grants.CreateSigned(HostId, "phone", P256.PublicRaw(phone), keys.Current, keys.Signer)));
+        Assert.Throws<InvalidOperationException>(() => keys.EnqueueGrant(
+            Grants.CreateSigned(HostId, "stranger", P256.PublicRaw(stranger), keys.Current, keys.Signer)));
+        Assert.Empty(keys.PendingGrants());
+    }
+
+    // Revocation followed by delivery of a grant made just before it would give the revoked device
+    // a key after the person took its trust away.
+    [WindowsFact]
+    public void Distrusting_a_device_drops_its_queued_grants_and_no_others()
+    {
+        using var fx = new EngineFixture();
+        using var store = new HostStore(fx.PathOf("remote.db"));
+        using var keys = new HostKeyStore(store, HostId);
+        using var phone = P256.Generate();
+        using var laptop = P256.Generate();
+        keys.Trust(Device("phone", phone, DateTimeOffset.UtcNow));
+        keys.Trust(Device("laptop", laptop, DateTimeOffset.UtcNow));
+        keys.Rotate();
+        foreach (var key in keys.All)
+        {
+            keys.EnqueueGrant(Grants.CreateSigned(HostId, "phone", P256.PublicRaw(phone), key, keys.Signer));
+            keys.EnqueueGrant(Grants.CreateSigned(HostId, "laptop", P256.PublicRaw(laptop), key, keys.Signer));
+        }
+        Assert.Equal(4, keys.PendingGrants().Count);
+
+        keys.Distrust("phone");
+
+        Assert.Equal(["host-1:laptop:1", "host-1:laptop:2"], keys.PendingGrants().Select(p => p.Id).Order());
+    }
+
     // ── helpers ─────────────────────────────────────────────────────────────
+
+    private static string OtherCurveSigningKey()
+    {
+        using var key = ECDsa.Create(ECCurve.NamedCurves.brainpoolP256r1);
+        return Secret.Protect(Convert.ToBase64String(key.ExportECPrivateKey()));
+    }
 
     private static TrustedDevice Device(string id, ECDiffieHellman key, DateTimeOffset at)
         => new(id, P256.PublicRaw(key), id + " browser", "test", at, null);

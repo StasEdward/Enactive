@@ -115,8 +115,11 @@ public sealed class HostStore : IDisposable
               expires_at TEXT NOT NULL
             );
 
+            -- device_id is its own column, not only part of the id, so revoking a device can drop
+            -- exactly its queued grants without matching on the text of an id.
             CREATE TABLE IF NOT EXISTS pending_grants (
               id         TEXT PRIMARY KEY,
+              device_id  TEXT NOT NULL,
               json       TEXT NOT NULL,
               created_at TEXT NOT NULL
             );

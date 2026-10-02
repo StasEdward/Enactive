@@ -42,6 +42,10 @@ public sealed class HostKeysUnreadableException(string message) : Exception(mess
 /// <para><b>The signing key is made with epoch 1 and never rotated.</b> Every device pins it at its
 /// first verified grant and checks every rotation grant against it, so a new one would make every
 /// later rotation grant look forged.</para>
+///
+/// <para><b>One HostKeyStore per remote.db.</b> The epoch keys are read once and held in memory;
+/// a second instance over the same file would rotate from its own idea of the highest epoch and
+/// never see the other's keys. The service makes one at startup and shares it.</para>
 /// </summary>
 public sealed class HostKeyStore : IHostKeys, IDisposable
 {
@@ -132,45 +136,112 @@ public sealed class HostKeyStore : IHostKeys, IDisposable
     public IReadOnlyList<TrustedDevice> Live => [.. Trusted.Where(d => d.RevokedAt is null)];
 
     /// <summary>
-    /// Trusts a device, or trusts it again after a revocation.
+    /// Trusts a device this computer has never trusted. Trusting a live device again with the key it
+    /// already has changes nothing; the first decision, with its time and author, stands.
     ///
-    /// <para>Trusting a revoked device again is a new decision, so it takes the new record whole -
-    /// key, label, who added it and when - rather than only clearing the revocation and keeping a
-    /// record that describes the old decision.</para>
+    /// <para><b>A live device is never rebound to another key.</b> An endorsement can be sealed by
+    /// any device that holds an epoch key, a revoked or stolen one included. If this replaced the
+    /// key of a live id, that device could put its own key under a victim's name and receive the
+    /// next epoch's key, as the victim, at the next rotation. So another key for a known id is
+    /// refused, and so is a revoked id: bringing a device back is <see cref="Retrust"/>, which only
+    /// the admission paths call.</para>
     /// </summary>
+    /// <exception cref="InvalidOperationException">The id is known with another key, or revoked.</exception>
     public void Trust(TrustedDevice device)
     {
-        // Refused here rather than when the first grant to it is made: a key that is not a P-256
-        // point cannot be granted to, and a rotation that met it would fail for every device after it.
-        try
-        {
-            using (P256.ImportPublic(device.PublicKey)) { }
-        }
-        catch (CryptographicException ex)
-        {
-            throw new ArgumentException($"Device {device.DeviceId} has no valid P-256 public key.", nameof(device), ex);
-        }
+        RequirePoint(device.DeviceId, device.PublicKey);
 
-        _store.Locked(connection => Execute(connection, null,
-            """
-            INSERT INTO trusted_devices (device_id, public_key, label, added_by, added_at, revoked_at)
-            VALUES ($id, $key, $label, $by, $at, NULL)
-            ON CONFLICT (device_id) DO UPDATE SET
-              public_key = excluded.public_key, label = excluded.label, added_by = excluded.added_by,
-              added_at = excluded.added_at, revoked_at = NULL
-            """,
-            ("$id", device.DeviceId), ("$key", device.PublicKey), ("$label", device.Label),
-            ("$by", device.AddedBy), ("$at", Format(device.AddedAt))));
+        _store.Locked(connection =>
+        {
+            if (StoredDevice(connection, device.DeviceId) is { } known)
+            {
+                if (known.Revoked)
+                    throw new InvalidOperationException(
+                        $"Device {device.DeviceId} was revoked; trusting it again is a new admission, not an endorsement.");
+                if (!CryptographicOperations.FixedTimeEquals(known.PublicKey, device.PublicKey))
+                    throw new InvalidOperationException(
+                        $"Device {device.DeviceId} is already trusted with another key; a device id is never rebound to a new key.");
+                return 0;
+            }
+
+            return Execute(connection, null,
+                """
+                INSERT INTO trusted_devices (device_id, public_key, label, added_by, added_at, revoked_at)
+                VALUES ($id, $key, $label, $by, $at, NULL)
+                """,
+                ("$id", device.DeviceId), ("$key", device.PublicKey), ("$label", device.Label),
+                ("$by", device.AddedBy), ("$at", Format(device.AddedAt)));
+        });
     }
 
     /// <summary>
-    /// Marks a device revoked. The row stays, so the list can say who was trusted and when that
-    /// ended; the time of the first revocation is kept if it is revoked twice.
+    /// Trusts a revoked device again, with the key it had. Only the desktop app's own admission and
+    /// an answered invitation call this - both rest on something the person did on this computer or
+    /// on an out-of-band secret, which an endorsement sealed under an epoch key does not.
+    ///
+    /// <para>It is a new trust decision, so who made it and when are recorded anew. A different
+    /// key is refused: a device with a new key is a new device, and gets a new id.</para>
     /// </summary>
-    public void Distrust(string deviceId)
-        => _store.Locked(connection => Execute(connection, null,
+    /// <exception cref="InvalidOperationException">The id is unknown, or was trusted with another key.</exception>
+    public void Retrust(string deviceId, byte[] publicKey, string addedBy)
+    {
+        RequirePoint(deviceId, publicKey);
+
+        _store.Locked(connection =>
+        {
+            var known = StoredDevice(connection, deviceId)
+                ?? throw new InvalidOperationException($"Device {deviceId} was never trusted here, so there is nothing to trust again.");
+            if (!CryptographicOperations.FixedTimeEquals(known.PublicKey, publicKey))
+                throw new InvalidOperationException($"Device {deviceId} was trusted with another key; a device id is never rebound to a new key.");
+            if (!known.Revoked) return 0;
+
+            return Execute(connection, null,
+                "UPDATE trusted_devices SET revoked_at = NULL, added_by = $by, added_at = $now WHERE device_id = $id",
+                ("$by", addedBy), ("$now", Format(_clock.GetUtcNow())), ("$id", deviceId));
+        });
+    }
+
+    /// <summary>
+    /// Marks a device revoked and drops every grant still queued for it, in one step. The row
+    /// stays, so the list can say who was trusted and when that ended; the time of the first
+    /// revocation is kept if it is revoked twice.
+    ///
+    /// <para>The queued grants go with it because a grant made just before the revocation and
+    /// delivered just after would hand the device a key after the person took its trust away.</para>
+    /// </summary>
+    public void Distrust(string deviceId) => _store.Locked(connection =>
+    {
+        using var transaction = connection.BeginTransaction();
+        Execute(connection, transaction,
             "UPDATE trusted_devices SET revoked_at = $now WHERE device_id = $id AND revoked_at IS NULL",
-            ("$now", Format(_clock.GetUtcNow())), ("$id", deviceId)));
+            ("$now", Format(_clock.GetUtcNow())), ("$id", deviceId));
+        Execute(connection, transaction, "DELETE FROM pending_grants WHERE device_id = $id", ("$id", deviceId));
+        transaction.Commit();
+        return 0;
+    });
+
+    // Refused here rather than when the first grant to it is made: a key that is not a P-256 point
+    // cannot be granted to, and a rotation that met it would fail for every device after it.
+    private static void RequirePoint(string deviceId, byte[] publicKey)
+    {
+        try
+        {
+            using (P256.ImportPublic(publicKey)) { }
+        }
+        catch (CryptographicException ex)
+        {
+            throw new ArgumentException($"Device {deviceId} has no valid P-256 public key.", nameof(publicKey), ex);
+        }
+    }
+
+    private static (byte[] PublicKey, bool Revoked)? StoredDevice(SqliteConnection connection, string deviceId)
+    {
+        using var statement = connection.CreateCommand();
+        statement.CommandText = "SELECT public_key, revoked_at FROM trusted_devices WHERE device_id = $id";
+        statement.Parameters.AddWithValue("$id", deviceId);
+        using var reader = statement.ExecuteReader();
+        return reader.Read() ? ((byte[])reader.GetValue(0), !reader.IsDBNull(1)) : null;
+    }
 
     // ── invitations ─────────────────────────────────────────────────────────
 
@@ -227,7 +298,7 @@ public sealed class HostKeyStore : IHostKeys, IDisposable
     // ── grants owed to the gateway ──────────────────────────────────────────
 
     /// <summary>
-    /// Queues a grant for delivery.
+    /// Queues a grant for delivery, to a device this computer trusts now.
     ///
     /// <para>Keyed by computer, device and epoch, so a grant made again - after a restart, or for a
     /// device enrolled twice - replaces the one still waiting instead of sending both.</para>
@@ -238,12 +309,22 @@ public sealed class HostKeyStore : IHostKeys, IDisposable
         if (grant.HostId != HostId)
             throw new ArgumentException($"A grant for {grant.HostId} cannot be queued by {HostId}.", nameof(grant));
 
-        _store.Locked(connection => Execute(connection, null,
-            """
-            INSERT INTO pending_grants (id, json, created_at) VALUES ($id, $json, $now)
-            ON CONFLICT (id) DO UPDATE SET json = excluded.json, created_at = excluded.created_at
-            """,
-            ("$id", GrantId(grant)), ("$json", RemoteJson.Serialize(grant)), ("$now", Format(_clock.GetUtcNow()))));
+        _store.Locked(connection =>
+        {
+            // Checked under the same lock as Distrust, so a grant cannot slip in between a
+            // revocation and the dropping of that device's queue.
+            if (StoredDevice(connection, grant.DeviceId) is not { Revoked: false })
+                throw new InvalidOperationException(
+                    $"Device {grant.DeviceId} is not trusted by this computer, so nothing is granted to it.");
+
+            return Execute(connection, null,
+                """
+                INSERT INTO pending_grants (id, device_id, json, created_at) VALUES ($id, $device, $json, $now)
+                ON CONFLICT (id) DO UPDATE SET json = excluded.json, created_at = excluded.created_at
+                """,
+                ("$id", GrantId(grant)), ("$device", grant.DeviceId), ("$json", RemoteJson.Serialize(grant)),
+                ("$now", Format(_clock.GetUtcNow())));
+        });
     }
 
     /// <summary>The grants still owed, oldest first.</summary>
@@ -306,7 +387,11 @@ public sealed class HostKeyStore : IHostKeys, IDisposable
         {
             var secret = Unprotect(row.Secret);
             if (secret is null || secret.Length != SecretLength || row.Epoch is < 1 or > uint.MaxValue)
+            {
+                if (secret is not null) CryptographicOperations.ZeroMemory(secret);
                 throw new HostKeysUnreadableException(UnreadableMessage);
+            }
+            // Not cleared after this: the HostKey keeps this very array as its secret.
             return HostKey.From((uint)row.Epoch, secret);
         }).ToArray();
 
@@ -317,13 +402,27 @@ public sealed class HostKeyStore : IHostKeys, IDisposable
     {
         var first = HostKey.Create(1);
         var signer = P256.GenerateSigning();
-
-        using var transaction = connection.BeginTransaction();
-        Execute(connection, transaction, "INSERT INTO host_keys (epoch, secret) VALUES (1, $secret)",
-            ("$secret", Protect(first.Secret.Span)));
-        Execute(connection, transaction, "INSERT INTO host_signing (id, private_key) VALUES (1, $key)",
-            ("$key", Protect(signer.ExportECPrivateKey())));
-        transaction.Commit();
+        var exported = signer.ExportECPrivateKey();
+        try
+        {
+            using var transaction = connection.BeginTransaction();
+            Execute(connection, transaction, "INSERT INTO host_keys (epoch, secret) VALUES (1, $secret)",
+                ("$secret", Protect(first.Secret.Span)));
+            Execute(connection, transaction, "INSERT INTO host_signing (id, private_key) VALUES (1, $key)",
+                ("$key", Protect(exported)));
+            transaction.Commit();
+        }
+        catch
+        {
+            // The constructor never returns, so nothing else would dispose the key it made.
+            signer.Dispose();
+            throw;
+        }
+        finally
+        {
+            // The private key belongs in DPAPI's output and in the ECDsa object, not in a stray array.
+            CryptographicOperations.ZeroMemory(exported);
+        }
 
         return ([first], signer);
     }
@@ -335,15 +434,21 @@ public sealed class HostKeyStore : IHostKeys, IDisposable
         try
         {
             signer.ImportECPrivateKey(raw, out _);
-            // Grants are verified as P-256 on every device; a key on another curve would sign
-            // grants none of them can check.
-            if (signer.KeySize != 256) throw new CryptographicException("The signing key is not P-256.");
+            // Grants are verified as P-256 on every device; a key on another curve - including
+            // another 256-bit one, such as brainpoolP256r1 - would sign grants none of them can check.
+            var curve = signer.ExportParameters(includePrivateParameters: false).Curve;
+            if (!curve.IsNamed || curve.Oid.Value != ECCurve.NamedCurves.nistP256.Oid.Value)
+                throw new CryptographicException("The signing key is not P-256.");
             return signer;
         }
         catch (CryptographicException)
         {
             signer.Dispose();
             throw new HostKeysUnreadableException(UnreadableMessage);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(raw);
         }
     }
 
