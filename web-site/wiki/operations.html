@@ -398,6 +398,11 @@ a bad one stops the gateway with a sentence naming it.</p>
 <td>never set</td>
 <td>A sign-in without a provider, for tests; refused outside Development</td>
 </tr>
+<tr>
+<td><code>ENACTIVE_GITHUB_BASE</code>, <code>ENACTIVE_GITHUB_API</code>, <code>ENACTIVE_GOOGLE_AUTHORITY</code></td>
+<td>never set</td>
+<td>Move the providers to another host, for tests against a fake; outside Development they stop the start</td>
+</tr>
 </tbody></table>
 </div><p><code>ENACTIVE_DATA</code> (the Data Protection keys), <code>ENACTIVE_BEHIND_TUNNEL</code> and <code>ASPNETCORE_URLS</code> are set in
 the systemd unit, and the backup&#39;s <code>ENACTIVE_BACKUP_*</code> settings on its cron line.</p>

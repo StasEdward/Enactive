@@ -147,8 +147,13 @@ What the service does is make an alteration visible.
 
 ### Comparing the panel with a release
 
+Compare against the release the operator says is running, and use the `panel-manifest.json`
+attached to that release rather than a copy pasted from a page: the list has no newline after its
+closing `}`, and a pasted copy usually gains one, which makes `cmp` report a difference that is not
+there.
+
 ```bash
-# What the server says it sends, against the list published for the build it is running.
+# What the server says it sends, against the panel-manifest.json attached to the release it runs.
 curl -s https://remote.enactive.dev/.well-known/enactive-panel.json > served.json
 cmp served.json panel-manifest.json && echo "the panel is the build"
 

@@ -202,6 +202,7 @@ a bad one stops the gateway with a sentence naming it.
 | `ENACTIVE_LIMIT_SEALED_BYTES_PER_USER` | 209715200 | Bytes of encrypted content per account (200 MiB) |
 | `ENACTIVE_RETENTION_DAYS` | 30 | Days of history kept; older events, notices and ended runs are deleted hourly |
 | `ENACTIVE_DEV_SIGNIN` | never set | A sign-in without a provider, for tests; refused outside Development |
+| `ENACTIVE_GITHUB_BASE`, `ENACTIVE_GITHUB_API`, `ENACTIVE_GOOGLE_AUTHORITY` | never set | Move the providers to another host, for tests against a fake; outside Development they stop the start |
 
 `ENACTIVE_DATA` (the Data Protection keys), `ENACTIVE_BEHIND_TUNNEL` and `ASPNETCORE_URLS` are set in
 the systemd unit, and the backup's `ENACTIVE_BACKUP_*` settings on its cron line.

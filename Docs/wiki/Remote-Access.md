@@ -160,8 +160,8 @@ machine.
 On this browser's own card, **Forget this device** removes it from the account and from every
 computer it can tell, deletes its keys from the browser, and signs it out. The sign-in page then says
 *"This device was forgotten: its keys are deleted from this browser, and it will not read anything
-new."* If a computer could not be reached, the browser keeps its keys so the removal can still be
-sealed for that computer, and says that **Forget this device** can be pressed again. If the browser
+new."* If the removal for a computer could not reach the gateway, the browser keeps its keys so the
+removal can be sent again, and says that **Forget this device** can be pressed again. If the browser
 would not let the keys be deleted (another tab of the site holding them open), it says so and asks
 you to clear the site's data in the browser settings.
 
@@ -170,11 +170,16 @@ calls the gateway, with **Delete this device's keys** and **Sign out**.
 
 ## When devices are lost
 
+A lost browser is not removed by being lost. It still holds the computer's current key and stays on
+the computer's trusted list, so until a removal reaches the computer it can read everything new and
+send commands — start tasks, answer permissions — for as long as the gateway serves it. Replacing it
+is not enough: remove it too.
+
 | What is lost | What to do |
 | --- | --- |
-| Every browser | On the computer, **Add a device** (above). The computer still holds its keys and admits a new browser itself. |
+| Every browser | First, on the computer, **Add a device** (above): the computer still holds its keys and admits a new browser itself. Then remove each lost browser — on the computer under **Settings → Remote access → Trusted devices → Remove**, or under **Devices → Remove** on the new browser — and use **Sign out everywhere** to end their sessions. |
 | The computer | Its history stays readable on the devices that hold its keys. Revoke it under **Computers**, then register the new computer afresh with a new connection code. |
-| The computer and every browser | The history cannot be read by anyone, the service included. Delete the account, or revoke the old computer and pair a new one. |
+| The computer and every browser | The history cannot be read by anyone, the service included. From a new browser, remove the lost browsers under **Devices → Remove**, revoke the old computer under **Computers → Revoke access**, and use **Sign out everywhere**: with no computer to tell, the gateway refusing them is what keeps them out. Then delete the account, or pair a new computer. |
 
 ## Deleting the account
 
@@ -193,8 +198,11 @@ are kept for 30 days and then removed."*
 ## Taking your data out
 
 Account menu → **Download my data** fetches everything the service stores for the account
-(`GET /api/export`), at most once an hour. The browser opens every encrypted item it holds a key for,
-names the reason for each one it cannot open, and offers the result as `enactive-export-<date>.json`.
+(`GET /api/export`), at most once an hour. The browser opens every encrypted item it holds a key for —
+tasks, run summaries, progress messages, notifications, permission requests and workspace names —
+and names the reason for each one it cannot open. Command payloads and the keys sent to your browsers
+stay sealed as stored: opened, a key would sit in clear in a file that gets copied around. The result
+is offered as `enactive-export-<date>.json`.
 The readable text is put together in the browser and is never sent anywhere.
 
 ## The security log

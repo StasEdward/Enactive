@@ -11,7 +11,7 @@
 <a class="skip-link" href="#main">Skip to content</a>
 <header class="wiki-header"><a class="brand" href="../index.html" aria-label="Enactive home"><img class="brand-mark" src="assets/mark-loop.svg" alt="" width="32" height="32"><img class="wordmark dark-mark" src="assets/wordmark.svg" alt="Enactive" width="144" height="18"><img class="wordmark light-mark" src="assets/wordmark-light.svg" alt="Enactive" width="144" height="18"></a><a class="wiki-label" href="index.html">Wiki</a><div class="header-actions"><button type="button" class="search-trigger" aria-haspopup="dialog">Search wiki <kbd>Ctrl K</kbd></button><button type="button" id="theme-toggle" aria-label="Switch to light theme">Light theme</button><button type="button" id="menu-toggle" aria-expanded="false" aria-controls="sidebar">Menu</button></div></header>
 <div class="wiki-layout"><aside id="sidebar" class="sidebar"><nav aria-label="Wiki chapters"><p class="nav-group">Start here</p><a href="index.html">Wiki home</a><a href="overview.html">Application overview</a><a href="getting-started.html">Getting started</a><p class="nav-group">Workflows</p><a href="running-tasks.html">Running tasks</a><a href="console.html">Console & automation</a><a href="templates.html">Templates</a><a href="remote-access.html" aria-current="page">Remote access</a><a href="remote-security.html">Remote security</a><p class="nav-group">Configuration</p><a href="settings.html">Settings</a><a href="models-and-phases.html">Models & Phases</a><p class="nav-group">Reference</p><a href="architecture.html">Architecture</a><a href="operations.html">Operations & troubleshooting</a></nav><div class="sidebar-footer"><a href="../index.html">← Back to Enactive</a><span>Product & engineering handbook</span></div></aside>
-<main id="main" class="" tabindex="-1"><div class="page-heading"><div class="breadcrumb"><a href="index.html">Documentation</a><span aria-hidden="true">/</span><span>Remote access</span></div><p class="eyebrow">Workflows · Enactive</p><h1>Remote Access</h1><div class="page-meta"><span>16 min read</span><span>English</span><a href="https://github.com/StasEdward/Enactive/blob/master/Docs/wiki/Remote-Access.md">Markdown source ↗</a></div></div><details class="mobile-toc"><summary>On this page</summary><nav aria-label="On this page"><a href="#what-this-is">What this is</a><a href="#signing-in">Signing in</a><a href="#pairing-a-computer">Pairing a computer</a><a href="#adding-a-phone-or-another-browser">Adding a phone or another browser</a><a href="#removing-a-device">Removing a device</a><a href="#when-devices-are-lost">When devices are lost</a><a href="#deleting-the-account">Deleting the account</a><a href="#taking-your-data-out">Taking your data out</a><a href="#the-security-log">The security log</a><a href="#limits">Limits</a><a href="#what-a-remote-run-may-and-may-not-do">What a remote run may and may not do</a><a href="#permissions">Permissions</a><a href="#what-the-panel-shows">What the panel shows</a><a href="#connection-behaviour">Connection behaviour</a><a href="#limitations">Limitations</a><a href="#setting-up-your-own-gateway">Setting up your own gateway</a><a href="#implementation-references">Implementation references</a></nav></details><article><h2 id="what-this-is">What this is<a class="heading-anchor" href="#what-this-is" aria-label="Link to What this is">#</a></h2>
+<main id="main" class="" tabindex="-1"><div class="page-heading"><div class="breadcrumb"><a href="index.html">Documentation</a><span aria-hidden="true">/</span><span>Remote access</span></div><p class="eyebrow">Workflows · Enactive</p><h1>Remote Access</h1><div class="page-meta"><span>17 min read</span><span>English</span><a href="https://github.com/StasEdward/Enactive/blob/master/Docs/wiki/Remote-Access.md">Markdown source ↗</a></div></div><details class="mobile-toc"><summary>On this page</summary><nav aria-label="On this page"><a href="#what-this-is">What this is</a><a href="#signing-in">Signing in</a><a href="#pairing-a-computer">Pairing a computer</a><a href="#adding-a-phone-or-another-browser">Adding a phone or another browser</a><a href="#removing-a-device">Removing a device</a><a href="#when-devices-are-lost">When devices are lost</a><a href="#deleting-the-account">Deleting the account</a><a href="#taking-your-data-out">Taking your data out</a><a href="#the-security-log">The security log</a><a href="#limits">Limits</a><a href="#what-a-remote-run-may-and-may-not-do">What a remote run may and may not do</a><a href="#permissions">Permissions</a><a href="#what-the-panel-shows">What the panel shows</a><a href="#connection-behaviour">Connection behaviour</a><a href="#limitations">Limitations</a><a href="#setting-up-your-own-gateway">Setting up your own gateway</a><a href="#implementation-references">Implementation references</a></nav></details><article><h2 id="what-this-is">What this is<a class="heading-anchor" href="#what-this-is" aria-label="Link to What this is">#</a></h2>
 <p>Remote access lets a task be started from a browser and run on a computer where Enactive is
 installed. The browser does not execute anything: it queues a request, the desktop application
 picks it up, runs it through the same engine as a task typed into the app, and reports back.</p>
@@ -194,13 +194,17 @@ machine.</p>
 <p>On this browser&#39;s own card, <strong>Forget this device</strong> removes it from the account and from every
 computer it can tell, deletes its keys from the browser, and signs it out. The sign-in page then says
 <em>&quot;This device was forgotten: its keys are deleted from this browser, and it will not read anything
-new.&quot;</em> If a computer could not be reached, the browser keeps its keys so the removal can still be
-sealed for that computer, and says that <strong>Forget this device</strong> can be pressed again. If the browser
+new.&quot;</em> If the removal for a computer could not reach the gateway, the browser keeps its keys so the
+removal can be sent again, and says that <strong>Forget this device</strong> can be pressed again. If the browser
 would not let the keys be deleted (another tab of the site holding them open), it says so and asks
 you to clear the site&#39;s data in the browser settings.</p>
 <p>A browser that was removed from somewhere else shows <em>&quot;This device was removed&quot;</em> the next time it
 calls the gateway, with <strong>Delete this device&#39;s keys</strong> and <strong>Sign out</strong>.</p>
 <h2 id="when-devices-are-lost">When devices are lost<a class="heading-anchor" href="#when-devices-are-lost" aria-label="Link to When devices are lost">#</a></h2>
+<p>A lost browser is not removed by being lost. It still holds the computer&#39;s current key and stays on
+the computer&#39;s trusted list, so until a removal reaches the computer it can read everything new and
+send commands — start tasks, answer permissions — for as long as the gateway serves it. Replacing it
+is not enough: remove it too.</p>
 <div class="table-wrap" tabindex="0" role="region" aria-label="What is lost / What to do"><table>
 <thead>
 <tr>
@@ -210,7 +214,7 @@ calls the gateway, with <strong>Delete this device&#39;s keys</strong> and <stro
 </thead>
 <tbody><tr>
 <td>Every browser</td>
-<td>On the computer, <strong>Add a device</strong> (above). The computer still holds its keys and admits a new browser itself.</td>
+<td>First, on the computer, <strong>Add a device</strong> (above): the computer still holds its keys and admits a new browser itself. Then remove each lost browser — on the computer under <strong>Settings → Remote access → Trusted devices → Remove</strong>, or under <strong>Devices → Remove</strong> on the new browser — and use <strong>Sign out everywhere</strong> to end their sessions.</td>
 </tr>
 <tr>
 <td>The computer</td>
@@ -218,7 +222,7 @@ calls the gateway, with <strong>Delete this device&#39;s keys</strong> and <stro
 </tr>
 <tr>
 <td>The computer and every browser</td>
-<td>The history cannot be read by anyone, the service included. Delete the account, or revoke the old computer and pair a new one.</td>
+<td>The history cannot be read by anyone, the service included. From a new browser, remove the lost browsers under <strong>Devices → Remove</strong>, revoke the old computer under <strong>Computers → Revoke access</strong>, and use <strong>Sign out everywhere</strong>: with no computer to tell, the gateway refusing them is what keeps them out. Then delete the account, or pair a new computer.</td>
 </tr>
 </tbody></table>
 </div><h2 id="deleting-the-account">Deleting the account<a class="heading-anchor" href="#deleting-the-account" aria-label="Link to Deleting the account">#</a></h2>
@@ -233,8 +237,11 @@ sign-in page then says <em>&quot;Your account and everything stored for it on th
 are kept for 30 days and then removed.&quot;</em></p>
 <h2 id="taking-your-data-out">Taking your data out<a class="heading-anchor" href="#taking-your-data-out" aria-label="Link to Taking your data out">#</a></h2>
 <p>Account menu → <strong>Download my data</strong> fetches everything the service stores for the account
-(<code>GET /api/export</code>), at most once an hour. The browser opens every encrypted item it holds a key for,
-names the reason for each one it cannot open, and offers the result as <code>enactive-export-&lt;date&gt;.json</code>.
+(<code>GET /api/export</code>), at most once an hour. The browser opens every encrypted item it holds a key for —
+tasks, run summaries, progress messages, notifications, permission requests and workspace names —
+and names the reason for each one it cannot open. Command payloads and the keys sent to your browsers
+stay sealed as stored: opened, a key would sit in clear in a file that gets copied around. The result
+is offered as <code>enactive-export-&lt;date&gt;.json</code>.
 The readable text is put together in the browser and is never sent anywhere.</p>
 <h2 id="the-security-log">The security log<a class="heading-anchor" href="#the-security-log" aria-label="Link to The security log">#</a></h2>
 <p>Account menu → <strong>Security log</strong>: sign-ins (which provider, not from where), devices added and

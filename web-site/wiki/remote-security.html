@@ -163,7 +163,11 @@ of every tagged release, and as <code>panel-manifest.json</code> attached to the
 <li>The two lists are byte for byte the same format, so comparing them is a file comparison.</li>
 </ul>
 <h3 id="comparing-the-panel-with-a-release">Comparing the panel with a release<a class="heading-anchor" href="#comparing-the-panel-with-a-release" aria-label="Link to Comparing the panel with a release">#</a></h3>
-<div class="code-block"><div class="code-toolbar"><span>bash</span><button class="copy-button" type="button" aria-label="Copy bash example">Copy</button></div><pre tabindex="0"><code class="language-bash"># What the server says it sends, against the list published for the build it is running.
+<p>Compare against the release the operator says is running, and use the <code>panel-manifest.json</code>
+attached to that release rather than a copy pasted from a page: the list has no newline after its
+closing <code>}</code>, and a pasted copy usually gains one, which makes <code>cmp</code> report a difference that is not
+there.</p>
+<div class="code-block"><div class="code-toolbar"><span>bash</span><button class="copy-button" type="button" aria-label="Copy bash example">Copy</button></div><pre tabindex="0"><code class="language-bash"># What the server says it sends, against the panel-manifest.json attached to the release it runs.
 curl -s https://remote.enactive.dev/.well-known/enactive-panel.json &gt; served.json
 cmp served.json panel-manifest.json &amp;&amp; echo &quot;the panel is the build&quot;
 
