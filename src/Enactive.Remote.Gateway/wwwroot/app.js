@@ -37,7 +37,7 @@ import {
 } from "./js/invite.js";
 import {
   revokeDevice, forgetThisDevice, forgottenSentence, createRemovalWatch, cardActions, deleteDeviceKeys, storeGone,
-  revocationWarning, NOT_CONFIRMED
+  revocationWarning, NOT_CONFIRMED, KEY_NEVER_RECEIVED
 } from "./js/devices.js";
 
 const POLL_MS = 3000;
@@ -1648,8 +1648,9 @@ function removalLines(deviceId) {
   const removal = removals.get(deviceId);
 
   return [
-    ...removalWatch.lines(deviceId, state.hosts).map(({ hostId, status }) =>
-      node("p", status === NOT_CONFIRMED ? "error" : "meta", `${hostLabel(hostId)}: ${status}`)),
+    ...removalWatch.lines(deviceId, state.hosts, Date.now()).map(({ hostId, status }) =>
+      node("p", [NOT_CONFIRMED, KEY_NEVER_RECEIVED].includes(status) ? "error" : "meta",
+        `${hostLabel(hostId)}: ${status}`)),
     ...(removal?.skipped ?? []).map(({ reason }) => node("p", "muted", reason)),
     ...(removal?.failed ?? []).map(({ reason }) => node("p", "error", reason))
   ];

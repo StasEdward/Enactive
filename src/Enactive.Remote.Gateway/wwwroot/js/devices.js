@@ -23,6 +23,13 @@ export const toldUnder = (epoch) => `told under key ${epoch}`;
 export const toldAgainUnder = (epoch) => `key changed - told again under key ${epoch}`;
 export const waitingForKey = (epoch) => `key changed - waiting for key ${epoch} to tell it again`;
 export const NOT_CONFIRMED = 'not confirmed - tell the computers again';
+export const KEY_NEVER_RECEIVED = "not confirmed - this device never received the computer's new key; do it from a "
+  + 'device that holds its key, or from the computer';
+export const GATEWAY_UNREACHED = 'could not reach the gateway - will try again';
+
+// How long a removal waits for a computer's new key before it says what to do instead. A grant that never comes -
+// this device not trusted there any more, or the computer gone - left "waiting for key" on the line for good.
+export const KEY_WAIT_MS = 10 * 60 * 1000;
 
 // How many key changes a removal is told again after before it is called not confirmed. A computer that goes on
 // changing keys - removals from other tabs and devices, one after another - is not told for ever; three covers
@@ -174,10 +181,13 @@ export function cardActions(device, ownId, removing) {
  * it uses now (toldUnder). Whenever the key epoch rises above the one the latest command was sealed under, the
  * removal is sealed again under the new key, with a new command id, once this device holds that key - whatever
  * else was sent under the old one; a computer returns without a key change for a device it has removed already,
- * so telling it twice is harmless (toldAgainUnder). At most MAX_RESENDS times, then NOT_CONFIRMED.
+ * so telling it twice is harmless (toldAgainUnder). At most MAX_RESENDS times, then NOT_CONFIRMED. A new key
+ * not received within KEY_WAIT_MS is KEY_NEVER_RECEIVED; a new command the gateway was not reached with is
+ * GATEWAY_UNREACHED, and the next poll sends it.
  *
  * `record(deviceId, sentTo)` takes revokeDevice's `sentTo`; `step(...)` runs on every poll and resolves to
- * whether anything changed; `lines(deviceId, hosts)` is `[{hostId, status}]` against the snapshot's computers.
+ * whether anything changed; `lines(deviceId, hosts, now)` is `[{hostId, status}]` against the snapshot's
+ * computers.
  */
 export function createRemovalWatch() {
   let watches = [];
@@ -189,11 +199,13 @@ export function createRemovalWatch() {
         // The same command sent again - "Tell the computers again" before any key change - is the one watched.
         if (kept?.commandId === commandId) continue;
         watches = watches.filter((one) => one !== kept);
-        watches.push({ deviceId, hostId, commandId, epoch, resends: 0, confirmed: true });
+        watches.push({
+          deviceId, hostId, commandId, epoch, resends: 0, confirmed: true, waitingSince: null, unreached: false
+        });
       }
     },
 
-    async step({ hosts, keystore, api, writer, sends }) {
+    async step({ hosts, keystore, api, writer, sends, now = () => Date.now() }) {
       let changed = false;
 
       for (const watch of watches) {
@@ -209,7 +221,11 @@ export function createRemovalWatch() {
 
         // Sealed under the key before, it would be refused again: wait for the grant of the new one.
         const newest = keystore ? await keystore.newestEpoch(watch.hostId) : null;
-        if (newest === null || newest < host.keyEpoch) continue;
+        if (newest === null || newest < host.keyEpoch) {
+          if (watch.waitingSince === null) watch.waitingSince = now();
+          continue;
+        }
+        watch.waitingSince = null;
 
         try {
           const command = await sends.once(revokeKey(watch.deviceId, watch.hostId), newest,
@@ -217,20 +233,28 @@ export function createRemovalWatch() {
           await api.post(`/api/hosts/${encodeURIComponent(watch.hostId)}/device-commands`,
             { commandId: command.id, kind: 'RevokeDevice', sealed: command.sealed });
           Object.assign(watch, { commandId: command.id, epoch: command.epoch, resends: watch.resends + 1 });
+          watch.unreached = false;
           changed = true;
         } catch {
-          // Out of reach: the next poll tries again.
+          // Out of reach: said, and the next poll tries again.
+          changed ||= !watch.unreached;
+          watch.unreached = true;
         }
       }
 
       return changed;
     },
 
-    lines(deviceId, hosts) {
-      return watches.filter((one) => one.deviceId === deviceId).map(({ hostId, epoch, resends, confirmed }) => {
+    lines(deviceId, hosts, now = Date.now()) {
+      return watches.filter((one) => one.deviceId === deviceId).map((watch) => {
+        const { hostId, epoch, resends } = watch;
         const keyEpoch = hosts.find((one) => one.id === hostId)?.keyEpoch;
-        if (!confirmed) return { hostId, status: NOT_CONFIRMED };
-        if (Number.isInteger(keyEpoch) && keyEpoch > epoch) return { hostId, status: waitingForKey(keyEpoch) };
+        if (!watch.confirmed) return { hostId, status: NOT_CONFIRMED };
+        if (Number.isInteger(keyEpoch) && keyEpoch > epoch) {
+          if (watch.unreached) return { hostId, status: GATEWAY_UNREACHED };
+          const waited = watch.waitingSince !== null && now - watch.waitingSince >= KEY_WAIT_MS;
+          return { hostId, status: waited ? KEY_NEVER_RECEIVED : waitingForKey(keyEpoch) };
+        }
         return { hostId, status: resends > 0 ? toldAgainUnder(epoch) : toldUnder(epoch) };
       });
     },

@@ -7,7 +7,7 @@ import { ad, openJson } from '../../src/Enactive.Remote.Gateway/wwwroot/js/seale
 import {
   revokeDevice, forgetThisDevice, forgottenSentence, createRemovalWatch, storeGone, revocationWarning, cannotTell,
   revokeKey, cardActions, deleteDeviceKeys, toldUnder, toldAgainUnder, waitingForKey, NOT_CONFIRMED, MAX_RESENDS,
-  KEYS_KEPT
+  KEYS_KEPT, KEY_NEVER_RECEIVED, GATEWAY_UNREACHED, KEY_WAIT_MS
 } from '../../src/Enactive.Remote.Gateway/wwwroot/js/devices.js';
 
 const ALICE = '0123456789abcdef0123456789abcdef';
@@ -71,7 +71,7 @@ test('revocation sends one sealed command per computer', async () => {
   const hosts = [host(STUDIO, 'Studio PC', 1), host(LAPTOP, 'Laptop', 3), host(NAS, 'NAS', 2)];
 
   const result = await revokeDevice({
-    api, writer, sends: createSendCache(() => NOW), hosts, keystore: store, deviceId: PHONE, now: () => NOW
+    api, writer, sends: createSendCache(() => NOW), hosts, keystore: store, deviceId: PHONE
   });
 
   // The gateway first: from then on it refuses the device and has deleted its grants.
@@ -160,8 +160,8 @@ test('a removal says it was told under the computer\'s current key, and no more'
   const { store } = await storeHolding({ [STUDIO]: [1], [LAPTOP]: [3] });
   const watch = createRemovalWatch();
   watch.record(PHONE, [
-    { hostId: STUDIO, commandId: 'c-studio', epoch: 1, at: NOW },
-    { hostId: LAPTOP, commandId: 'c-laptop', epoch: 3, at: NOW }
+    { hostId: STUDIO, commandId: 'c-studio', epoch: 1 },
+    { hostId: LAPTOP, commandId: 'c-laptop', epoch: 3 }
   ]);
   const hosts = [host(STUDIO, 'S', 1), host(LAPTOP, 'L', 3)];
 
@@ -183,7 +183,7 @@ test('a rotation by the computer itself has the removal told again under the new
   const writer = spyWriter(store);
   const watch = createRemovalWatch();
   watch.record(PHONE, (await revokeDevice({
-    api, writer, sends, hosts: [host(STUDIO, 'Studio PC', 1)], keystore: store, deviceId: PHONE, now: () => NOW
+    api, writer, sends, hosts: [host(STUDIO, 'Studio PC', 1)], keystore: store, deviceId: PHONE
   })).sentTo);
   const [first] = commandsOf(api);
   api.calls.length = 0;
@@ -195,7 +195,8 @@ test('a rotation by the computer itself has the removal told again under the new
   // a device was removed: from here that looks exactly like our own removal done. Until this device holds epoch 2
   // nothing is sent - sealed under epoch 1 again, it would be refused again.
   assert.equal(await step(2), false);
-  assert.deepEqual(watch.lines(PHONE, [host(STUDIO, 'Studio PC', 2)]), [{ hostId: STUDIO, status: waitingForKey(2) }]);
+  assert.deepEqual(watch.lines(PHONE, [host(STUDIO, 'Studio PC', 2)], NOW),
+    [{ hostId: STUDIO, status: waitingForKey(2) }]);
   assert.equal(api.calls.length, 0);
 
   // Epoch 2 arrives: told again once, under it and a new command id.
@@ -213,6 +214,50 @@ test('a rotation by the computer itself has the removal told again under the new
   assert.equal(toldAgainUnder(2), 'key changed - told again under key 2');
 });
 
+test('a removal that waits for a key this device never gets says what to do', async () => {
+  const { store } = await storeHolding({ [STUDIO]: [1] });
+  const sends = createSendCache(() => NOW);
+  const api = fakeApi();
+  const writer = spyWriter(store);
+  const watch = createRemovalWatch();
+  watch.record(PHONE, (await revokeDevice({
+    api, writer, sends, hosts: [host(STUDIO, 'Studio PC', 1)], keystore: store, deviceId: PHONE
+  })).sentTo);
+  const atKey2 = [host(STUDIO, 'Studio PC', 2)];
+  const step = (at) => watch.step({ hosts: atKey2, keystore: store, api, writer, sends, now: () => at });
+
+  // The computer moved to key 2, and its grant never reaches this device: waiting is said for a while, and then
+  // what to do instead - the line used to wait for good.
+  await step(NOW);
+  await step(NOW + KEY_WAIT_MS - 1);
+  assert.deepEqual(watch.lines(PHONE, atKey2, NOW + KEY_WAIT_MS - 1), [{ hostId: STUDIO, status: waitingForKey(2) }]);
+  await step(NOW + KEY_WAIT_MS);
+  assert.deepEqual(watch.lines(PHONE, atKey2, NOW + KEY_WAIT_MS), [{ hostId: STUDIO, status: KEY_NEVER_RECEIVED }]);
+  assert.equal(KEY_NEVER_RECEIVED, "not confirmed - this device never received the computer's new key; do it from "
+    + 'a device that holds its key, or from the computer');
+});
+
+test('a removal whose new command does not reach the gateway says so, and is sent on the next poll', async () => {
+  const { store } = await storeHolding({ [STUDIO]: [1, 2] });
+  const sends = createSendCache(() => NOW);
+  let reachable = false;
+  const api = fakeApi({ refuse: () => reachable ? null : new Error('The gateway could not be reached.') });
+  const writer = spyWriter(store);
+  const watch = createRemovalWatch();
+  watch.record(PHONE, [{ hostId: STUDIO, commandId: 'c-studio', epoch: 1 }]);
+  const atKey2 = [host(STUDIO, 'Studio PC', 2)];
+  const step = () => watch.step({ hosts: atKey2, keystore: store, api, writer, sends, now: () => NOW });
+
+  // The key is held: it is not "waiting for key", it is the gateway that was not reached.
+  assert.equal(await step(), true);
+  assert.deepEqual(watch.lines(PHONE, atKey2, NOW), [{ hostId: STUDIO, status: GATEWAY_UNREACHED }]);
+  assert.equal(GATEWAY_UNREACHED, 'could not reach the gateway - will try again');
+
+  reachable = true;
+  await step();
+  assert.deepEqual(watch.lines(PHONE, atKey2, NOW), [{ hostId: STUDIO, status: toldAgainUnder(2) }]);
+});
+
 test('removals sealed under one key are all told again under the next', async () => {
   const { store } = await storeHolding({ [STUDIO]: [1] });
   const sends = createSendCache(() => NOW);
@@ -224,12 +269,12 @@ test('removals sealed under one key are all told again under the next', async ()
   // epoch 2 and granted it to the other, still trusted, then refused the other's command. Which one, nothing says.
   for (const deviceId of [PHONE, TABLET]) {
     watch.record(deviceId, (await revokeDevice({
-      api, writer, sends, hosts: [host(STUDIO, 'Studio PC', 1)], keystore: store, deviceId, now: () => NOW
+      api, writer, sends, hosts: [host(STUDIO, 'Studio PC', 1)], keystore: store, deviceId
     })).sentTo);
   }
   // Told again with the same command, as "Tell the computers again" does: still the one command.
   watch.record(PHONE, (await revokeDevice({
-    api, writer, sends, hosts: [host(STUDIO, 'Studio PC', 1)], keystore: store, deviceId: PHONE, now: () => NOW
+    api, writer, sends, hosts: [host(STUDIO, 'Studio PC', 1)], keystore: store, deviceId: PHONE
   })).sentTo);
   api.calls.length = 0;
 
@@ -254,7 +299,7 @@ test('a removal told again after every key change is not confirmed after the las
   const writer = spyWriter(store);
   const watch = createRemovalWatch();
   watch.record(PHONE, (await revokeDevice({
-    api, writer, sends, hosts: [host(STUDIO, 'Studio PC', 1)], keystore: store, deviceId: PHONE, now: () => NOW
+    api, writer, sends, hosts: [host(STUDIO, 'Studio PC', 1)], keystore: store, deviceId: PHONE
   })).sentTo);
   api.calls.length = 0;
 
