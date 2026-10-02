@@ -31,7 +31,10 @@ KEEP=${ENACTIVE_DEPLOY_KEEP:-5}
 
 # The database the running gateway uses. Protocol 2 lives in a new one beside the protocol-1 database,
 # which is kept untouched as the rollback - so asking the old name would compare a protocol-2 release
-# with the schema of a database it never runs against.
+# with the schema of a database it never runs against. Until the cutover, deploy.env sets
+# ENACTIVE_DEPLOY_DATABASE=enactive_remote: this script goes onto the protocol-1 server first, so
+# that its guard is there before the first protocol-2 build can be (REMOTE_OPERATIONS §cutover).
+# Read again in main(), after deploy.env.
 DATABASE=${ENACTIVE_DEPLOY_DATABASE:-enactive_remote_v2}
 
 # How long to give the service to come up before calling it failed. It restarts in about a second;
@@ -72,10 +75,11 @@ release_schema_version() {
 # protocol 2 started its schema again at version 1, BELOW the protocol-1 database's 2, so by schema
 # alone a protocol-2 release reads as a rollback and would be installed onto a database it cannot read.
 #
-# A build that does not answer is the protocol-1 gateway, which has no such switch: it does not refuse
-# an unknown argument but goes on to start as a web server, and dies for want of ENACTIVE_REMOTE_DB with
-# nothing on stdout. So anything but a number counts as 1. The variable is taken away so that dying is
-# what it does, and the timeout bounds the case where it starts anyway.
+# Prints the number, or NOTHING when the build does not answer. The protocol-1 gateway has no such
+# switch: it does not refuse an unknown argument but goes on to start as a web server, and dies for want
+# of ENACTIVE_REMOTE_DB with nothing on stdout. A broken build - a bad download, a missing runtime - says
+# nothing too, so what a silence means is left to the caller, who knows what is running. The variable is
+# taken away so that dying is what the old gateway does, and the timeout bounds the case where it starts.
 protocol_version() {
     local dir=$1 answer
     answer=$(env -u ENACTIVE_REMOTE_DB timeout 60 \
@@ -83,9 +87,27 @@ protocol_version() {
     # A build run on Windows ends the line with \r, which would read as "not a number" there.
     answer=${answer%$'\r'}
     case $answer in
-        ''|*[!0-9]*) echo 1 ;;
+        ''|*[!0-9]*) ;;
         *) echo "$answer" ;;
     esac
+}
+
+# The protocol of the running release, kept in a file beside it once known. Asked of the protocol-1
+# binary on every run, the question crashed it - an unhandled exception in the journal, and perhaps a
+# core dump - every ten minutes for as long as a protocol-2 release waited parked for the cutover.
+# Silence from the RUNNING release is the protocol-1 gateway: every later one answers.
+running_protocol() {
+    local cache="$ROOT/current/.protocol-version" answer
+    if [ -s "$cache" ]; then
+        cat "$cache"
+        return 0
+    fi
+    answer=$(protocol_version "$ROOT/current")
+    answer=${answer:-1}
+    if [ -d "$ROOT/current" ]; then
+        printf '%s\n' "$answer" > "$cache" 2>/dev/null || true
+    fi
+    printf '%s\n' "$answer"
 }
 
 # The directory this commit was already downloaded into, if a run before this one fetched it and
@@ -243,6 +265,10 @@ main() {
     # shellcheck source=/dev/null
     [ -r "$CONFIG/deploy.env" ] && . "$CONFIG/deploy.env"
 
+    # Again, now that deploy.env has been read. The timer's unit hands it over as the environment, but
+    # a run by hand (--allow-migration) gets it only here - and would ask the wrong database.
+    DATABASE=${ENACTIVE_DEPLOY_DATABASE:-$DATABASE}
+
     : "${ENACTIVE_DEPLOY_REPO:?Set ENACTIVE_DEPLOY_REPO in $CONFIG/deploy.env, e.g. owner/repo}"
     : "${ENACTIVE_DEPLOY_BRANCH:?Set ENACTIVE_DEPLOY_BRANCH in $CONFIG/deploy.env}"
     : "${ENACTIVE_DEPLOY_TOKEN:?Set ENACTIVE_DEPLOY_TOKEN in $CONFIG/deploy.env - a fine-grained token with Actions: read on that repository, and nothing else}"
@@ -276,8 +302,19 @@ main() {
     fi
 
     local speaks running
+    running=$(running_protocol)
     speaks=$(protocol_version "$release")
-    running=$(protocol_version "$ROOT/current")
+
+    # A release that does not answer is a protocol-1 build only where protocol 1 is running - on the
+    # protocol-1 server between step 0 of the cutover and the cutover itself, where every ordinary
+    # release is one. Anywhere else it is a build that cannot run, and calling that a protocol change
+    # sent the operator to the cutover for a fault that has nothing to do with it.
+    if [ -z "$speaks" ]; then
+        [ "$running" = 1 ] || fail "Release ${sha:0:12} at $release could not read the protocol - not installed.
+It did not answer --protocol-version, and the running gateway speaks protocol $running. Check the download
+and the runtime: sudo -u enactive dotnet $release/Enactive.Remote.Gateway.dll --protocol-version"
+        speaks=1
+    fi
 
     # Before the schema check, and whatever the arguments: --allow-migration answers a migration, and a
     # protocol change is not one. It needs a new database and a new environment, made by a person.
@@ -322,6 +359,8 @@ PARKED
     previous=$(readlink -f "$ROOT/current" 2>/dev/null || true)
 
     say "Installing ${sha:0:12} (schema $wants, database at $applied)."
+    # What it speaks is known now; written here, the next run need not start it to ask.
+    printf '%s\n' "$speaks" > "$release/.protocol-version"
     activate "$release"
 
     if health_ok; then

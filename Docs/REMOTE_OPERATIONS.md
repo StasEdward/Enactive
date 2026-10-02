@@ -66,9 +66,10 @@ so it cannot be sourced with `.`.
 | `ENACTIVE_PUBLIC_ORIGIN` | with a provider | The address people use, e.g. `https://remote.enactive.dev`: scheme, host and nothing more. The providers send people back to it. |
 | `ENACTIVE_GITHUB_CLIENT_ID`, `ENACTIVE_GITHUB_CLIENT_SECRET` | a pair | From a GitHub OAuth app whose callback URL is `<origin>/auth/github/callback`. Both or neither: half a pair stops the start. |
 | `ENACTIVE_GOOGLE_CLIENT_ID`, `ENACTIVE_GOOGLE_CLIENT_SECRET` | a pair | From a Google OAuth client whose redirect URI is `<origin>/auth/google/callback`. Both or neither. |
-| `ENACTIVE_ADMISSION` | no | `list` (the default): only identities the operator approved may create an account — §3.1. `open`: anyone who signs in; it is refused while the gateway has no per-account limits, and it stays off until the privacy and terms pages are approved. Anything else stops the start. |
+| `ENACTIVE_ADMISSION` | no | `list` (the default): only identities the operator approved may create an account — §3.1. `open`: anyone who signs in. What stands between an open service and one stranger filling it is the `ENACTIVE_LIMIT_*` values below — the gateway refuses `open` only with no limits at all, which configuration cannot produce (an unset limit is its default). It stays off until the privacy and terms pages are approved. Anything else stops the start. |
 | `ENACTIVE_LIMIT_*` | no | What one account may use; the table below. Each a whole number of at least 1, or the start stops naming it. |
 | `ENACTIVE_DEV_SIGNIN` | **never** | A sign-in without a provider, for tests. The gateway refuses to start with it outside Development. |
+| `ENACTIVE_GITHUB_BASE`, `ENACTIVE_GITHUB_API`, `ENACTIVE_GOOGLE_AUTHORITY` | **never** | Move the providers to another host, for tests against a fake. Honoured anywhere else, whoever ran that host could sign in as anybody, so outside Development they stop the start. |
 | `ENACTIVE_BEHIND_TUNNEL` | yes here | `true`. See §1. Set in the unit. |
 | `ASPNETCORE_URLS` | yes here | `http://127.0.0.1:5099`. Anything not loopback and the process will not start. Set in the unit. |
 | `ENACTIVE_DATA` | yes | Where the Data Protection keys live: `/var/lib/enactive-remote`, `0700`. Set in the unit. |
@@ -92,6 +93,11 @@ and whoever has the copy can mint a session cookie. They are protected by the di
 by nothing else in this build — this is stated rather than fixed, and it is the first thing to
 change if the threat model ever grows. `backup.sh` keeps them beside each dump (§5) for the same
 reason the mode matters: the archive is `0600` and the backup directory is the service account's.
+
+The deploy timer reads its own file, `/etc/enactive-remote/deploy.env` (§4.4). Besides the repository,
+branch and token, it takes `ENACTIVE_DEPLOY_DATABASE`: the database whose schema version a release is
+compared with, `enactive_remote_v2` when unset. It is set to `enactive_remote` only on a protocol-1
+server between step 0 of the cutover and step 3 (§8).
 
 ---
 
@@ -485,9 +491,27 @@ database**, `enactive_remote_v2`, and the old one is kept untouched beside it.
 **There is no rollback to protocol 1 on the new database.** Rollback means the old binary on the old
 database, which this procedure never writes to. Plan the window: the site is down from step 1 to step 4.
 
-Everything below runs on the server. From a checkout, first copy over the new `deploy/` files
-(`backup.sh`, `verify-restore.sh`, `pull-release.sh`, `grants.sql`, `gateway.env.example`) to `/tmp/`,
-as in §4.4 — but do not install them yet: step 1 uses the old ones.
+Everything below runs on the server. From a checkout of protocol 2, copy the new `deploy/` files
+(`backup.sh`, `verify-restore.sh`, `pull-release.sh`, `grants.sql`, `gateway.env.example`) to `/tmp/`
+there, as in §4.4.
+
+**0. Put the guard on the server — before protocol 2 can reach the tracked branch.** The script on
+the server is the protocol-1 one, and the deploy scripts do not update themselves (§4.5). It has no
+protocol check: the first green protocol-2 build on `ENACTIVE_DEPLOY_BRANCH` reads to it as schema 1
+against a database at 2 — no migration — and it installs it, unattended, onto the protocol-1 database.
+`/health` answers, so it reports success; nobody can sign in and every computer is refused. So the new
+`pull-release.sh` goes in first, told which database this server still runs on:
+
+```bash
+sudo cp -a /opt/enactive-remote/deploy /opt/enactive-remote/deploy.protocol-1      # the rollback's scripts
+sudo install -o enactive -g enactive -m 0755 /tmp/pull-release.sh /opt/enactive-remote/deploy/
+echo 'ENACTIVE_DEPLOY_DATABASE=enactive_remote' | sudo -u enactive tee -a /etc/enactive-remote/deploy.env
+sudo systemctl start enactive-deploy
+journalctl -u enactive-deploy -n 20 --no-pager           # "Already on ..." - or a protocol-1 release installed
+```
+
+From now on it installs protocol-1 releases as before and parks the first protocol-2 one with
+*protocol change - install by hand*. Only now may protocol 2 be merged into the tracked branch.
 
 **1. Back up, and keep the old database for 30 days, read-only.**
 
@@ -497,7 +521,13 @@ sudo -u enactive /opt/enactive-remote/deploy/backup.sh     # the OLD script: ena
 sudo -u enactive /opt/enactive-remote/deploy/verify-restore.sh
 sudo systemctl stop enactive-remote
 sudo mysql -e "ALTER DATABASE enactive_remote READ ONLY = 1"   # MySQL 8.0.22 or later
+sudo -u enactive cp -a "$(readlink -f /opt/enactive-remote/current)" /opt/enactive-remote/protocol-1-release
 ```
+
+The last line keeps the protocol-1 binary where nothing removes it. Where `current` points depends on
+how it got there — `first-install.sh` unpacks into `/opt/enactive-remote/<stamp>`, the timer into
+`releases/<stamp>-<commit>` — and the timer prunes `releases/` to the newest five once protocol-2
+releases deploy, which would take the rollback's binary with it.
 
 Read-only rather than renamed or dumped and dropped: it is the rollback, and a rollback should be the
 old binary started against exactly what it left. The new `backup.sh` neither backs it up nor deletes
@@ -507,6 +537,8 @@ removes it. After 30 days, if nothing called for the rollback:
 ```bash
 sudo mysql -e "ALTER DATABASE enactive_remote READ ONLY = 0; DROP DATABASE enactive_remote"
 sudo rm /var/backups/enactive-remote/enactive_remote-*.sql.gz
+sudo rm -r /opt/enactive-remote/protocol-1-release /opt/enactive-remote/deploy.protocol-1 \
+           /etc/enactive-remote/gateway.env.protocol-1
 ```
 
 **2. Create `enactive_remote_v2` and grant it.**
@@ -523,11 +555,14 @@ needs them.
 **3. Update the environment.**
 
 ```bash
-sudo install -o enactive -g enactive -m 0755 /tmp/backup.sh /tmp/verify-restore.sh /tmp/pull-release.sh \
-     /opt/enactive-remote/deploy/
+sudo install -o enactive -g enactive -m 0755 /tmp/backup.sh /tmp/verify-restore.sh /opt/enactive-remote/deploy/
+sudoedit /etc/enactive-remote/deploy.env                  # delete the ENACTIVE_DEPLOY_DATABASE line
 sudo cp -p /etc/enactive-remote/gateway.env /etc/enactive-remote/gateway.env.protocol-1   # the rollback's
 sudoedit /etc/enactive-remote/gateway.env
 ```
+
+Without the `ENACTIVE_DEPLOY_DATABASE` line the timer compares releases with `enactive_remote_v2`,
+which is where protocol 2 runs from step 4 on.
 
 In `gateway.env`, against `/tmp/gateway.env.example`:
 
@@ -559,15 +594,25 @@ Then sign in and approve yourself (§3.1), and compare the panel with its build 
 If it does not come up and cannot be made to: the rollback, which touches nothing of the new database.
 
 ```bash
-sudo systemctl stop enactive-remote
+sudo systemctl stop enactive-deploy.timer enactive-remote
 sudo cp -p /etc/enactive-remote/gateway.env.protocol-1 /etc/enactive-remote/gateway.env
 sudo mysql -e "ALTER DATABASE enactive_remote READ ONLY = 0"
-sudo -u enactive ln -sfn /opt/enactive-remote/releases/<the protocol-1 release> /opt/enactive-remote/current
+sudo -u enactive ln -sfn /opt/enactive-remote/protocol-1-release /opt/enactive-remote/current
 sudo systemctl start enactive-remote
+# The backups, back onto the database people use again:
+sudo -u enactive install -m 0755 /opt/enactive-remote/deploy.protocol-1/backup.sh \
+     /opt/enactive-remote/deploy.protocol-1/verify-restore.sh /opt/enactive-remote/deploy/
+echo 'ENACTIVE_DEPLOY_DATABASE=enactive_remote' | sudo -u enactive tee -a /etc/enactive-remote/deploy.env
+sudo -u enactive /opt/enactive-remote/deploy/backup.sh && sudo -u enactive /opt/enactive-remote/deploy/verify-restore.sh
+sudo systemctl start enactive-deploy.timer
 ```
 
-The new `pull-release.sh` would park every protocol-2 build against that again, as it should; leave
-the timer stopped until the cutover is tried again.
+The backup scripts go back with the binary. Left as they are, the protocol-2 ones would dump and verify
+`enactive_remote_v2` every night - green, and of a database nobody uses - while the live one was never
+backed up. Pointing them at `enactive_remote` instead is not enough: the protocol-2 `verify-restore.sh`
+checks protocol 2's tables, and would fail every night on a good dump. The new `pull-release.sh` stays,
+with the line from step 0 back in `deploy.env`: it installs protocol-1 releases and parks protocol 2
+again, as it should.
 
 **5. Tell the people who used it.** Every computer must be connected again with a new code (design
 D2): the old owner key and every old device token mean nothing to protocol 2. Each person signs in
