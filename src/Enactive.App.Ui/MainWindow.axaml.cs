@@ -376,10 +376,15 @@ public sealed partial class MainWindow : Window, IDecisionHandler
 
         // Said in the log as well as in the window that made the invitation: that window may have been
         // closed, and a device that now holds every key of this computer must be traceable to a moment.
-        _remote.DeviceAdmitted += label => Dispatcher.UIThread.Post(() =>
-            _log.Info(LogSource.System, $"Remote access: \"{label}\" answered an invitation and is now trusted."));
-        _remote.InvitationNoticed += notice => Dispatcher.UIThread.Post(() =>
-            _log.Info(LogSource.System, "Remote access: " + notice.Detail));
+        _remote.DeviceAdmitted += device => Dispatcher.UIThread.Post(() =>
+            _log.Info(LogSource.System, $"Remote access: \"{device.Label}\" answered an invitation and is now trusted."));
+        // A refused answer is logged once, as the status line it also becomes; only answers set aside
+        // are logged from here.
+        _remote.InvitationNoticed += notice =>
+        {
+            if (!notice.Refused)
+                Dispatcher.UIThread.Post(() => _log.Info(LogSource.System, "Remote access: " + notice.Detail));
+        };
         RemoteDeviceAccess.Attach(_remote);
 
         _remote.Start();

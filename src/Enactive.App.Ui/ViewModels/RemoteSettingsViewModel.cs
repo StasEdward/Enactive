@@ -1,7 +1,5 @@
 namespace Enactive.App.Ui.ViewModels;
 
-using System.Collections.ObjectModel;
-using System.Globalization;
 using Enactive.App.Ui.Mvvm;
 using Enactive.Remote.Contracts.Crypto;
 using Enactive.Remote.Host;
@@ -33,36 +31,8 @@ internal sealed partial class SettingsViewModel
 
     public RelayCommand ConnectRemoteCommand { get; private set; } = null!;
 
-    public RelayCommand AddDeviceCommand { get; private set; } = null!;
-
-    /// <summary>
-    /// Whether an invitation can be made now: remote access is connected, past Hello. Set by the window,
-    /// because the connection belongs to the running service, not to this pane.
-    /// </summary>
-    public Func<bool>? RemoteCanInvite { get; set; }
-
-    /// <summary>Reads the devices this computer has trusted, revoked ones included. Set by the window.</summary>
-    public Func<Task<IReadOnlyList<TrustedDevice>>>? RemoteTrusted { get; set; }
-
-    /// <summary>Asks the window to open Add a device. It answers once that window has closed.</summary>
-    public event Func<Task>? AddDeviceRequested;
-
-    /// <summary>
-    /// The devices this computer has trusted, as the list shows them. Read only here: taking a device's
-    /// trust away means a new key for every other device, which is its own piece of work.
-    /// </summary>
-    public ObservableCollection<TrustedDeviceRow> RemoteDevices { get; } = [];
-
-    public bool HasRemoteDevices => RemoteDevices.Count > 0;
-
-    private bool _remoteCanAddDevice;
-
-    /// <summary>Add a device is pressable: connected, and nothing else of this pane's running.</summary>
-    public bool RemoteCanAddDevice
-    {
-        get => _remoteCanAddDevice;
-        private set => Set(ref _remoteCanAddDevice, value);
-    }
+    /// <summary>The trusted devices and Add a device.</summary>
+    public RemoteDevicesViewModel RemoteDeviceList { get; } = new();
 
     /// <summary>
     /// Asks the window to try the stored connection against the real gateway and say what happened.
@@ -188,7 +158,7 @@ internal sealed partial class SettingsViewModel
             {
                 OnPropertyChanged(nameof(CanUseRemote));
                 SaveCommand?.RaiseCanExecuteChanged();
-                RefreshRemoteConnection();
+                RemoteDeviceList.PaneBusy = value;
             }
         }
     }
@@ -200,10 +170,9 @@ internal sealed partial class SettingsViewModel
         ShowRemoteCommand = new(() =>
         {
             Section = SectionRemote;
-            RefreshRemoteConnection();
-            _ = RefreshRemoteDevicesAsync();
+            RemoteDeviceList.RefreshConnection();
+            _ = RemoteDeviceList.RefreshAsync();
         });
-        AddDeviceCommand = new(() => _ = AddDeviceAsync());
         TestRemoteCommand = new(() => _ = TestRemoteAsync());
         ConnectRemoteCommand = new(() => _ = ConnectRemoteAsync());
 
@@ -259,58 +228,6 @@ internal sealed partial class SettingsViewModel
         {
             RemoteBusy = false;
         }
-    }
-
-    /// <summary>
-    /// Re-reads whether an invitation can be made. Called when the pane is shown and whenever the service
-    /// says something new - it connects and drops while the pane is open.
-    /// </summary>
-    public void RefreshRemoteConnection() => RemoteCanAddDevice = !RemoteBusy && RemoteCanInvite?.Invoke() == true;
-
-    /// <summary>Re-reads the trusted devices: when the pane is shown, and after a device was admitted.</summary>
-    public async Task RefreshRemoteDevicesAsync()
-    {
-        if (RemoteTrusted is not { } trusted)
-            return;
-
-        IReadOnlyList<TrustedDevice> devices;
-        try
-        {
-            devices = await trusted();
-        }
-        catch (Exception failure)
-        {
-            // A list that cannot be read is said, not shown empty: empty would read as "nothing is
-            // trusted", which is the one thing about this list a person must never be misled on.
-            RemoteResult = "The trusted devices could not be read: " + failure.Message;
-            return;
-        }
-
-        RemoteDevices.Clear();
-        foreach (var device in devices)
-        {
-            RemoteDevices.Add(TrustedDeviceRow.From(device));
-        }
-        OnPropertyChanged(nameof(HasRemoteDevices));
-    }
-
-    /// <summary>Opens Add a device, and reads the list again once it has closed: it may have added one.</summary>
-    private async Task AddDeviceAsync()
-    {
-        if (AddDeviceRequested is not { } open)
-            return;
-
-        RemoteBusy = true;
-        try
-        {
-            await open();
-        }
-        finally
-        {
-            RemoteBusy = false;
-        }
-
-        await RefreshRemoteDevicesAsync();
     }
 
     private async Task<bool> AskAsync(string question)
@@ -385,17 +302,4 @@ internal sealed partial class SettingsViewModel
     private void SaveRemote() => _working.RemoteAccess.Enabled = RemoteEnabled;
 
     private static string Shown(string value) => string.IsNullOrEmpty(value) ? "not connected" : value;
-}
-
-/// <summary>One trusted device, as the remote pane lists it.</summary>
-internal sealed record TrustedDeviceRow(string Label, string Added, string State, bool IsRevoked)
-{
-    public static TrustedDeviceRow From(TrustedDevice device) => new(
-        device.Label,
-        $"added by {device.AddedBy}, {When(device.AddedAt)}",
-        device.RevokedAt is { } revoked ? $"revoked {When(revoked)}" : "trusted",
-        device.RevokedAt is not null);
-
-    private static string When(DateTimeOffset at)
-        => at.ToLocalTime().ToString("d MMM yyyy HH:mm", CultureInfo.CurrentCulture);
 }

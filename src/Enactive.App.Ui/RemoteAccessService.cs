@@ -166,8 +166,8 @@ internal sealed class RemoteAccessService : IAsyncDisposable
 
     private volatile KeyAdministration? _administration;
 
-    /// <summary>A device answered an invitation and was admitted; its label. Not on the UI thread.</summary>
-    public event Action<string>? DeviceAdmitted;
+    /// <summary>A device answered an invitation and was admitted - which invitation, and its label. Not on the UI thread.</summary>
+    public event Action<AdmittedDevice>? DeviceAdmitted;
 
     /// <summary>An answer to an invitation was refused, or set aside. Not on the UI thread.</summary>
     public event Action<AdmissionNotice>? InvitationNoticed;
@@ -575,9 +575,9 @@ internal sealed class RemoteAccessService : IAsyncDisposable
                 // nothing. The grants an answer queues go out with the next flush, two seconds on.
                 if (_administration is { } administration && hostKeys!.HasPendingInvites)
                 {
-                    foreach (var label in await administration.AnswerEnrollmentsAsync(ct))
+                    foreach (var device in await administration.AnswerEnrollmentsAsync(ct))
                     {
-                        DeviceAdmitted?.Invoke(label);
+                        DeviceAdmitted?.Invoke(device);
                     }
                 }
             }

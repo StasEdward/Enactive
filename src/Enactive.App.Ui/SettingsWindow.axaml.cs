@@ -39,18 +39,19 @@ internal sealed partial class SettingsWindow : Window
         var viewModel = new SettingsViewModel(settings, onSaved, workspaceRoot, toolNames)
         {
             RemoteCheck = remoteCheck,
-            RemoteConnect = remoteConnect,
-            RemoteCanInvite = remoteDevices is null ? null : () => remoteDevices.CanInvite,
-            RemoteTrusted = remoteDevices is null ? null : remoteDevices.TrustedAsync
+            RemoteConnect = remoteConnect
         };
         if (remoteDevices is not null)
         {
             // The connection comes and goes while this window is open; Add a device follows it. Let go of
             // on close, or every settings window ever opened would be kept alive by the main window's bridge.
-            Action changed = viewModel.RefreshRemoteConnection;
+            var pane = viewModel.RemoteDeviceList;
+            pane.CanInvite = () => remoteDevices.CanInvite;
+            pane.Trusted = remoteDevices.TrustedAsync;
+            Action changed = pane.RefreshConnection;
             remoteDevices.Changed += changed;
             Closed += (_, _) => remoteDevices.Changed -= changed;
-            viewModel.AddDeviceRequested += () => new AddDeviceWindow(remoteDevices).ShowDialog(this);
+            pane.AddDeviceRequested += () => new AddDeviceWindow(remoteDevices).ShowDialog(this);
         }
         viewModel.CloseRequested += () => Close();
         viewModel.ProviderEditRequested += (config, saved) =>

@@ -1,15 +1,25 @@
 namespace Enactive.Remote.Host;
 
+using System.Globalization;
 using System.Security.Cryptography;
+using System.Text;
+using System.Text.RegularExpressions;
 using Enactive.Remote.Contracts;
 using Enactive.Remote.Contracts.Crypto;
 
 /// <summary>
 /// Something an answer to an invitation came to that a person should hear about. <paramref name="Refused"/>
-/// is an answer that failed its check - someone other than the invited device - and closed the invitation;
-/// otherwise the answer was for an invitation this computer no longer holds, and was set aside.
+/// is an answer that failed its check - someone other than the invited device - or that could not be
+/// admitted, and closed the invitation; otherwise the answer was for an invitation this computer no longer
+/// holds, and was set aside.
 /// </summary>
 public sealed record AdmissionNotice(string InviteId, bool Refused, string Detail);
+
+/// <summary>
+/// A device that answered an invitation and was admitted. The invitation id says which link it answered:
+/// a window showing one link must not take another invitation's answer for its own.
+/// </summary>
+public sealed record AdmittedDevice(string InviteId, string DeviceId, string Label);
 
 /// <summary>
 /// Adding a browser device from this computer (spec §5.3): an invitation link with a pairing secret in it,
@@ -25,12 +35,7 @@ public sealed record AdmissionNotice(string InviteId, bool Refused, string Detai
 /// computer holds, wrapped for it. Only the device that opened the link has the pairing secret, so only it
 /// can make a MAC over its key that verifies here.</para>
 /// </summary>
-/// <param name="watchSecrets">
-/// Shown every secret array answering reads or derives - the invitation's pairing secret and the pair key
-/// made from it - as it is made. Only a test passes it, to hold the arrays and check they were wiped.
-/// </param>
-public sealed class KeyAdministration(
-    HostKeyStore keys, IGatewayConnection gateway, TimeProvider clock, Action<byte[]>? watchSecrets = null)
+public sealed partial class KeyAdministration(HostKeyStore keys, IGatewayConnection gateway, TimeProvider clock)
 {
     /// <summary>Who decided to trust a device that answered an invitation, as the trusted list records it.</summary>
     public const string AddedBy = "invitation";
@@ -44,6 +49,14 @@ public sealed class KeyAdministration(
         "Someone other than your new device answered this invitation, so nothing was shared. "
         + "Make a new link and open it only on the device you want to add.";
 
+    /// <summary>
+    /// What a person is told when admitting an answer failed on this computer's side. Fixed words, not the
+    /// failure's own: those can carry the device id, which is text of the gateway's choosing.
+    /// </summary>
+    public const string CouldNotAdmit =
+        "This computer could not add the device that answered this invitation, so nothing was shared. "
+        + "Make a new link and try again.";
+
     /// <summary>What the trusted list calls a device that gave no label.</summary>
     public const string UnnamedDevice = "A device added by invitation";
 
@@ -55,6 +68,17 @@ public sealed class KeyAdministration(
 
     /// <summary>A raw uncompressed P-256 point: 0x04, then X and Y.</summary>
     private const int PublicKeyLength = 65;
+
+    private readonly Action<byte[]>? _watchSecrets;
+
+    /// <param name="watchSecrets">
+    /// Shown every secret array answering reads or derives - the invitation's pairing secret and the pair
+    /// key made from it - as it is made. Only a test passes it, to hold the arrays and check they were wiped.
+    /// </param>
+    internal KeyAdministration(
+        HostKeyStore keys, IGatewayConnection gateway, TimeProvider clock, Action<byte[]> watchSecrets)
+        : this(keys, gateway, clock)
+        => _watchSecrets = watchSecrets;
 
     /// <summary>Raised for an answer refused or set aside. On the caller's thread.</summary>
     public event Action<AdmissionNotice>? Noticed;
@@ -87,20 +111,34 @@ public sealed class KeyAdministration(
     }
 
     /// <summary>
-    /// Handles every answer the gateway holds for this computer's invitations, and returns the labels of
-    /// the devices admitted.
+    /// Handles every answer the gateway holds for this computer's invitations, and returns the devices
+    /// admitted.
     ///
     /// <para>Each answer closes its invitation, whatever became of it: forgotten here first and then said
     /// answered to the gateway, so a gateway call that fails leaves nothing open to answer again - the
     /// gateway hands the answer over once more, and it is then set aside as one for an invitation this
     /// computer does not hold.</para>
+    ///
+    /// <para>Anything that goes wrong admitting one answer refuses that answer only. Thrown out of the
+    /// batch, it took the connection down with the invitation still open, and was met again every turn for
+    /// ten minutes - a device revoked between the trusted list being read and its grants being queued did
+    /// exactly that, since a grant to a revoked device is refused.</para>
     /// </summary>
-    public async Task<IReadOnlyList<string>> AnswerEnrollmentsAsync(CancellationToken ct)
+    public async Task<IReadOnlyList<AdmittedDevice>> AnswerEnrollmentsAsync(CancellationToken ct)
     {
-        var admitted = new List<string>();
+        var admitted = new List<AdmittedDevice>();
 
         foreach (var enrollment in await gateway.EnrollmentsAsync(ct))
         {
+            if (!IsInviteId(enrollment.InviteId))
+            {
+                // Not an id this computer could have made, so not one of its invitations - and text of the
+                // gateway's choosing, line breaks and all, so it is neither logged nor sent back.
+                Notice(new AdmissionNotice(string.Empty, Refused: false,
+                    "An answer to invitation <not an id> was ignored."));
+                continue;
+            }
+
             if (keys.Invite(enrollment.InviteId) is not { } invite)
             {
                 // Expired, withdrawn, already answered, or never this computer's. The secret is gone,
@@ -111,13 +149,21 @@ public sealed class KeyAdministration(
                 continue;
             }
 
-            var label = Admit(enrollment, invite);
-            keys.ForgetInvite(invite.Id);
+            string? refusal;
+            try
+            {
+                var device = Admit(enrollment, invite);
+                if (device is not null) admitted.Add(device);
+                refusal = device is null ? Tampered : null;
+            }
+            catch (Exception)
+            {
+                refusal = CouldNotAdmit;
+            }
 
-            if (label is null)
-                Notice(new AdmissionNotice(invite.Id, Refused: true, Tampered));
-            else
-                admitted.Add(label);
+            keys.ForgetInvite(invite.Id);
+            if (refusal is not null)
+                Notice(new AdmissionNotice(invite.Id, Refused: true, refusal));
 
             await gateway.AnsweredInviteAsync(invite.Id, ct);
         }
@@ -127,17 +173,19 @@ public sealed class KeyAdministration(
 
     /// <summary>
     /// Checks one answer against its invitation and, when it holds, trusts the device and queues a grant
-    /// of every epoch to it. The device's label, or null when nothing was admitted.
+    /// of every epoch to it. The device, or null when the answer failed its check.
     /// </summary>
-    private string? Admit(EnrollmentView enrollment, PendingInvite invite)
+    private AdmittedDevice? Admit(EnrollmentView enrollment, PendingInvite invite)
     {
-        watchSecrets?.Invoke(invite.Secret);
-        var pairKey = RemoteKdf.Derive(invite.Secret, RemoteKdf.Pair);
-        watchSecrets?.Invoke(pairKey);
-
+        byte[]? pairKey = null;
         try
         {
-            if (DevicePublic(enrollment.DevicePublic) is not { } devicePublic
+            _watchSecrets?.Invoke(invite.Secret);
+            pairKey = RemoteKdf.Derive(invite.Secret, RemoteKdf.Pair);
+            _watchSecrets?.Invoke(pairKey);
+
+            if (string.IsNullOrEmpty(enrollment.DeviceId)
+                || DevicePublic(enrollment.DevicePublic) is not { } devicePublic
                 || !Enrollment.Verify(pairKey, invite.Id, enrollment.DeviceId, devicePublic, enrollment.Mac))
                 return null;
 
@@ -154,20 +202,22 @@ public sealed class KeyAdministration(
                     keys.HostId, enrollment.DeviceId, devicePublic, key, invite.Id, pairKey, signingPublic));
             }
 
-            return Label(enrollment.Label);
+            return new AdmittedDevice(invite.Id, enrollment.DeviceId, CleanLabel(enrollment.Label));
         }
         finally
         {
             // Either one makes grants the new device accepts as this computer's, and nothing needs them
             // once the grants are made: wiped, rather than left in memory until the collector runs.
-            CryptographicOperations.ZeroMemory(pairKey);
+            if (pairKey is not null) CryptographicOperations.ZeroMemory(pairKey);
             CryptographicOperations.ZeroMemory(invite.Secret);
         }
     }
 
     /// <summary>
     /// Trusts the answering device, or brings it back with the key it had. False when its id is known here
-    /// with another key: a device id is never rebound, so the device that has that id keeps it.
+    /// with another key: a device id is never rebound, so the device that has that id keeps it. A device
+    /// live with this very key is left as it is - the computer coming back after a crash between trusting
+    /// it and closing the invitation - and is granted again.
     /// </summary>
     private bool Trust(EnrollmentView enrollment, byte[] devicePublic)
     {
@@ -184,7 +234,7 @@ public sealed class KeyAdministration(
         }
         else if (known is null)
         {
-            keys.Trust(new TrustedDevice(enrollment.DeviceId, devicePublic, Label(enrollment.Label), AddedBy,
+            keys.Trust(new TrustedDevice(enrollment.DeviceId, devicePublic, CleanLabel(enrollment.Label), AddedBy,
                 clock.GetUtcNow(), RevokedAt: null));
         }
 
@@ -195,11 +245,11 @@ public sealed class KeyAdministration(
     /// The device's public key as a P-256 point, or null when it is not one. Refused as an answer that
     /// failed its check: the gateway relayed it, and a key that cannot be granted to is no device's.
     /// </summary>
-    private static byte[]? DevicePublic(string encoded)
+    private static byte[]? DevicePublic(string? encoded)
     {
         try
         {
-            var raw = B64.FromUrl(encoded);
+            var raw = B64.FromUrl(encoded ?? string.Empty);
             if (raw.Length != PublicKeyLength) return null;
             using (P256.ImportPublic(raw)) { }
             return raw;
@@ -211,12 +261,29 @@ public sealed class KeyAdministration(
     }
 
     /// <summary>
-    /// The label as the trusted list shows it: on one line, trimmed and bounded. It is text the device
-    /// chose, relayed by the gateway, and a line break in it would make one device read as two.
+    /// The label as the trusted list, the Add a device window and the log show it: one plain line, trimmed,
+    /// at most 80 characters. It is text the device chose, relayed by the gateway, so anything that would
+    /// break the line (control characters; U+2028 and U+2029, which Avalonia lays out as line breaks),
+    /// reorder it (bidirectional overrides such as U+202E, which turn a name around) or hide in it
+    /// (zero-width and other format characters, half of a surrogate pair) is replaced with a space.
     /// </summary>
-    private static string Label(string? label)
+    public static string CleanLabel(string? label)
     {
-        var line = new string([.. (label ?? string.Empty).Select(c => char.IsControl(c) ? ' ' : c)]).Trim();
+        var text = label ?? string.Empty;
+        var clean = new StringBuilder(text.Length);
+        for (var i = 0; i < text.Length; i++)
+        {
+            var c = text[i];
+            if (char.IsHighSurrogate(c) && i + 1 < text.Length && char.IsLowSurrogate(text[i + 1]))
+            {
+                clean.Append(c).Append(text[++i]);
+                continue;
+            }
+
+            clean.Append(Unsafe(c) ? ' ' : c);
+        }
+
+        var line = clean.ToString().Trim();
         if (line.Length > LabelLength)
         {
             // Not through the middle of a character outside the BMP: half a surrogate pair shows as a box.
@@ -225,6 +292,18 @@ public sealed class KeyAdministration(
         }
         return line.Length == 0 ? UnnamedDevice : line;
     }
+
+    // Surrogate here means a half on its own: whole pairs are kept before this is asked.
+    private static bool Unsafe(char c) => char.GetUnicodeCategory(c) is
+        UnicodeCategory.Control or UnicodeCategory.Format or UnicodeCategory.LineSeparator
+        or UnicodeCategory.ParagraphSeparator or UnicodeCategory.Surrogate;
+
+    /// <summary>An invitation id as this computer makes them: 32 lowercase hex characters.</summary>
+    private static bool IsInviteId(string? id) => id is not null && InviteIdShape().IsMatch(id);
+
+    // \z, not $: $ also matches before a final line break, and "<id>\n" is not an id.
+    [GeneratedRegex(@"^[0-9a-f]{32}\z")]
+    private static partial Regex InviteIdShape();
 
     private void Notice(AdmissionNotice notice) => Noticed?.Invoke(notice);
 }

@@ -31,4 +31,13 @@
     <ProjectReference Include="..\Enactive.Secrets\Enactive.Secrets.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!--
+      For test seams that must not be public API: KeyAdministration's hook that shows a test the secret
+      arrays it reads, so the test can check they were wiped. Public, any caller could watch the pairing
+      secret go by.
+    -->
+    <InternalsVisibleTo Include="Enactive.Engine.Tests" />
+  </ItemGroup>
+
 </Project>

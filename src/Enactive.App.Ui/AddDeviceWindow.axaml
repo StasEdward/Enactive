@@ -1,7 +1,9 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="using:Enactive.App.Ui"
+        xmlns:vm="using:Enactive.App.Ui.ViewModels"
         x:Class="Enactive.App.Ui.AddDeviceWindow"
+        x:DataType="vm:AddDeviceViewModel"
         Title="Add a device"
         SizeToContent="Height" Width="460"
         CanResize="False"
@@ -22,24 +24,24 @@
 
             <!-- Dark on white whatever the theme, with a quiet zone of four modules: a camera reads a
                  QR code by its contrast and its margin, and a dark theme's light-on-dark is neither. -->
-            <Border x:Name="QrFrame" Background="White" Padding="16" HorizontalAlignment="Center"
-                    IsVisible="False">
+            <Border Background="White" Padding="16" HorizontalAlignment="Center"
+                    IsVisible="{Binding IsLinkShown}">
                 <Path x:Name="QrPath" Fill="Black" Width="208" Height="208" Stretch="Uniform" />
             </Border>
 
-            <Grid ColumnDefinitions="*,Auto" x:Name="LinkRow" IsVisible="False">
-                <TextBox Grid.Column="0" x:Name="LinkBox" IsReadOnly="True" TextWrapping="NoWrap"
+            <Grid ColumnDefinitions="*,Auto" IsVisible="{Binding IsLinkShown}">
+                <TextBox Grid.Column="0" Text="{Binding Link}" IsReadOnly="True" TextWrapping="NoWrap"
                          FontFamily="Consolas, Menlo, monospace" FontSize="11" />
                 <Button Grid.Column="1" x:Name="CopyButton" Content="Copy" Margin="6,0,0,0" Padding="12,4" />
             </Grid>
 
-            <TextBlock x:Name="CountdownText" FontSize="12" Foreground="{DynamicResource Brand.TextFaint}" />
-            <TextBlock x:Name="StatusText" FontSize="12" TextWrapping="Wrap" />
-            <TextBlock x:Name="ProblemText" FontSize="12" TextWrapping="Wrap"
+            <TextBlock Text="{Binding Countdown}" FontSize="12" Foreground="{DynamicResource Brand.TextFaint}" />
+            <TextBlock Text="{Binding Status}" FontSize="12" TextWrapping="Wrap" />
+            <TextBlock Text="{Binding Problem}" FontSize="12" TextWrapping="Wrap"
                        Foreground="{DynamicResource Brand.Danger}" />
 
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                <Button x:Name="CancelButton" Content="Cancel" Padding="14,4" IsCancel="True" />
+                <Button x:Name="CancelButton" Content="{Binding CloseLabel}" Padding="14,4" IsCancel="True" />
             </StackPanel>
         </StackPanel>
     </Grid>

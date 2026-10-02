@@ -5,6 +5,7 @@ using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using Enactive.App.Ui;
+using Enactive.App.Ui.ViewModels;
 using Enactive.Remote.Contracts;
 using Enactive.Remote.Contracts.Crypto;
 using Enactive.Remote.Host;
@@ -722,7 +723,7 @@ public sealed class RemoteKeyAdministrationTests
             }
         };
         var gateways = new Queue<FakeGateway>([first, second]);
-        var admitted = new ConcurrentQueue<string>();
+        var admitted = new ConcurrentQueue<AdmittedDevice>();
 
         await using (service = new RemoteAccessService(settings, keys: null,
             _ => throw new InvalidOperationException("No composition expected"), () => [], fx.Decisions, database,
@@ -735,7 +736,7 @@ public sealed class RemoteKeyAdministrationTests
         }
 
         Assert.Equal(["Hello", "PublishGrants", "Sync"], first.Calls);
-        Assert.Equal(["Phone"], admitted);
+        Assert.Equal(new AdmittedDevice(Assert.Single(second.InvitesCreated), "phone", "Phone"), Assert.Single(admitted));
         Assert.Equal(["Hello", "Sync", "CreateInvite", "Enrollments", "AnsweredInvite"], second.Calls.Take(5));
         using var store = new HostStore(database);
         using var keys = new HostKeyStore(store, code.HostId);
@@ -767,7 +768,7 @@ public sealed class RemoteKeyAdministrationTests
 
         var admitted = await administration.AnswerEnrollmentsAsync(CancellationToken.None);
 
-        Assert.Equal(["Pixel 9"], admitted);
+        Assert.Equal(new AdmittedDevice(link.InviteId, "phone", "Pixel 9"), Assert.Single(admitted));
         Assert.StartsWith($"https://remote.example.test/pair#v=2&i={link.InviteId}&p=", link.Format(), StringComparison.Ordinal);
         var trusted = Assert.Single(keys.Live);
         Assert.Equal("phone", trusted.DeviceId);
@@ -845,7 +846,7 @@ public sealed class RemoteKeyAdministrationTests
         gateway.Enroll(Enrolled(link, "phone", phone, "Phone"));
         gateway.Enroll(Enrolled(link, "laptop", laptop, "Laptop"));
 
-        Assert.Equal(["Phone"], await administration.AnswerEnrollmentsAsync(CancellationToken.None));
+        Assert.Equal(["Phone"], Labels(await administration.AnswerEnrollmentsAsync(CancellationToken.None)));
         Assert.Empty(await administration.AnswerEnrollmentsAsync(CancellationToken.None));
 
         Assert.Equal("phone", Assert.Single(keys.Trusted).DeviceId);
@@ -954,7 +955,7 @@ public sealed class RemoteKeyAdministrationTests
         var link = await administration.InviteAsync(Gateway, CancellationToken.None);
         gateway.Enroll(Enrolled(link, "phone", phone, "Phone"));
 
-        Assert.Equal(["Phone"], await administration.AnswerEnrollmentsAsync(CancellationToken.None));
+        Assert.Equal(["Phone"], Labels(await administration.AnswerEnrollmentsAsync(CancellationToken.None)));
 
         var back = Assert.Single(keys.Live);
         Assert.Equal(KeyAdministration.AddedBy, back.AddedBy);
@@ -975,13 +976,13 @@ public sealed class RemoteKeyAdministrationTests
         using var keys = new HostKeyStore(store, "host-1");
         var gateway = new FakeGateway();
         var made = new List<byte[]>();
-        var administration = new KeyAdministration(keys, gateway, TimeProvider.System, watchSecrets: made.Add);
+        var administration = new KeyAdministration(keys, gateway, TimeProvider.System, made.Add);
         using var phone = P256.Generate();
 
         var link = await administration.InviteAsync(Gateway, CancellationToken.None);
         gateway.Enroll(Enrolled(link, "phone", phone, "Phone"));
 
-        Assert.Equal(["Phone"], await administration.AnswerEnrollmentsAsync(CancellationToken.None));
+        Assert.Equal(["Phone"], Labels(await administration.AnswerEnrollmentsAsync(CancellationToken.None)));
 
         Assert.Equal(2, made.Count);
         Assert.All(made, secret =>
@@ -990,6 +991,326 @@ public sealed class RemoteKeyAdministrationTests
             Assert.All(secret, b => Assert.Equal(0, b));
         });
         Assert.Contains(link.PairingSecret, b => b != 0);
+    }
+
+    /// <summary>
+    /// An answer from a device this computer already trusts with that very key is granted again, and the
+    /// first decision to trust it - its author, its time, its label - stands. This is the computer coming
+    /// back after a crash between trusting the device and closing the invitation: the gateway hands the
+    /// answer over again, and refusing it then would leave the device trusted with no key to read with.
+    /// </summary>
+    [WindowsFact]
+    public async Task An_answer_from_a_device_already_trusted_with_that_key_is_granted_again()
+    {
+        using var fx = new EngineFixture();
+        using var store = new HostStore(fx.PathOf("remote.db"));
+        using var keys = new HostKeyStore(store, "host-1");
+        keys.Rotate();
+        var gateway = new FakeGateway();
+        var administration = new KeyAdministration(keys, gateway, TimeProvider.System);
+        using var phone = P256.Generate();
+        keys.Trust(new TrustedDevice("phone", P256.PublicRaw(phone), "First name", "test", DateTimeOffset.UtcNow, null));
+
+        var link = await administration.InviteAsync(Gateway, CancellationToken.None);
+        gateway.Enroll(Enrolled(link, "phone", phone, "Phone"));
+
+        Assert.Equal(["Phone"], Labels(await administration.AnswerEnrollmentsAsync(CancellationToken.None)));
+
+        var trusted = Assert.Single(keys.Live);
+        Assert.Equal("test", trusted.AddedBy);
+        Assert.Equal("First name", trusted.Label);
+        Assert.Equal([1u, 2u], keys.PendingGrants().Select(p => p.Grant.Epoch).Order());
+        Assert.Null(keys.Invite(link.InviteId));
+    }
+
+    /// <summary>
+    /// A device key that is not a P-256 point - cut short, off the curve, not base64url at all - is refused
+    /// like a MAC that fails, even when the MAC was made over exactly those bytes: the gateway relayed it,
+    /// and a key nothing can be granted to is no device's.
+    /// </summary>
+    [WindowsTheory]
+    [InlineData("short")]
+    [InlineData("off-curve")]
+    [InlineData("not-base64")]
+    public async Task A_device_key_that_is_not_a_point_gets_nothing(string kind)
+    {
+        using var fx = new EngineFixture();
+        using var store = new HostStore(fx.PathOf("remote.db"));
+        using var keys = new HostKeyStore(store, "host-1");
+        var gateway = new FakeGateway();
+        var administration = new KeyAdministration(keys, gateway, TimeProvider.System);
+        var notices = new List<AdmissionNotice>();
+        administration.Noticed += notices.Add;
+        using var phone = P256.Generate();
+
+        var link = await administration.InviteAsync(Gateway, CancellationToken.None);
+        var raw = kind switch
+        {
+            "short" => P256.PublicRaw(phone)[..64],
+            "off-curve" => [0x04, .. Enumerable.Repeat((byte)0x01, 64)],
+            _ => P256.PublicRaw(phone)
+        };
+        var mac = Enrollment.Mac(link.PairKey, link.InviteId, "phone", raw);
+        var encoded = kind == "not-base64" ? "not base64!" : B64.Url(raw);
+        gateway.Enroll(new EnrollmentView(link.InviteId, "phone", encoded, "Phone", mac));
+
+        Assert.Empty(await administration.AnswerEnrollmentsAsync(CancellationToken.None));
+
+        Assert.Empty(keys.Trusted);
+        Assert.Empty(keys.PendingGrants());
+        Assert.Equal([link.InviteId], gateway.Answered);
+        Assert.Equal(KeyAdministration.Tampered, Assert.Single(notices).Detail);
+    }
+
+    /// <summary>
+    /// Anything that goes wrong admitting one answer refuses that answer and no other: its invitation is
+    /// closed, said answered, and the rest of the batch is handled. Thrown out of the batch instead, it took
+    /// the connection down, left the invitation open, and was met again every turn for ten minutes - and a
+    /// device revoked between the trusted list being read and its grants being queued did exactly that.
+    /// </summary>
+    [WindowsFact]
+    public async Task A_failure_admitting_one_answer_refuses_it_and_the_batch_goes_on()
+    {
+        using var fx = new EngineFixture();
+        using var store = new HostStore(fx.PathOf("remote.db"));
+        using var keys = new HostKeyStore(store, "host-1");
+        var gateway = new FakeGateway();
+        var reads = 0;
+        // The first secret read fails, as the store would under the call: the first answer cannot be admitted.
+        var administration = new KeyAdministration(keys, gateway, TimeProvider.System, _ =>
+        {
+            if (reads++ == 0) throw new InvalidOperationException("The store failed under the call.");
+        });
+        var notices = new List<AdmissionNotice>();
+        administration.Noticed += notices.Add;
+        using var phone = P256.Generate();
+        using var laptop = P256.Generate();
+
+        var first = await administration.InviteAsync(Gateway, CancellationToken.None);
+        var second = await administration.InviteAsync(Gateway, CancellationToken.None);
+        gateway.Enroll(Enrolled(first, "phone", phone, "Phone"));
+        gateway.Enroll(Enrolled(second, "laptop", laptop, "Laptop"));
+
+        Assert.Equal(["Laptop"], Labels(await administration.AnswerEnrollmentsAsync(CancellationToken.None)));
+
+        Assert.Equal("laptop", Assert.Single(keys.Trusted).DeviceId);
+        Assert.Equal([first.InviteId, second.InviteId], gateway.Answered);
+        Assert.Null(keys.Invite(first.InviteId));
+        var notice = Assert.Single(notices);
+        Assert.Equal(first.InviteId, notice.InviteId);
+        Assert.True(notice.Refused);
+        Assert.DoesNotContain("store failed", notice.Detail, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// An invitation id the gateway sent that is not one this computer could have made is not repeated in
+    /// what the log says - it is text of the gateway's choosing, line breaks and all - and is not sent back.
+    /// </summary>
+    [WindowsFact]
+    public async Task An_answer_naming_no_invitation_id_is_set_aside_without_repeating_it()
+    {
+        using var fx = new EngineFixture();
+        using var store = new HostStore(fx.PathOf("remote.db"));
+        using var keys = new HostKeyStore(store, "host-1");
+        var gateway = new FakeGateway();
+        var administration = new KeyAdministration(keys, gateway, TimeProvider.System);
+        var notices = new List<AdmissionNotice>();
+        administration.Noticed += notices.Add;
+        gateway.Enroll(new EnrollmentView("Remote access: all clear\r\nforged", "phone", "x", "Phone", "x"));
+
+        Assert.Empty(await administration.AnswerEnrollmentsAsync(CancellationToken.None));
+
+        var notice = Assert.Single(notices);
+        Assert.False(notice.Refused);
+        Assert.Contains("<not an id>", notice.Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain("forged", notice.Detail, StringComparison.Ordinal);
+        Assert.Empty(gateway.Answered);
+    }
+
+    /// <summary>
+    /// A device's label is text a stranger may have chosen, shown in the trusted list, the window and the
+    /// log. What would break a line there, reorder it or hide in it is replaced; it is kept to 80
+    /// characters without cutting a character in half.
+    /// </summary>
+    [Theory]
+    [InlineData("Phone\r\nRemote access: forged", "Phone  Remote access: forged")]
+    [InlineData("Phone\u2028second line\u2029third", "Phone second line third")]
+    [InlineData("txt.\u202Eexe", "txt. exe")]
+    [InlineData("zero\u200Bwidth", "zero width")]
+    [InlineData("   ", KeyAdministration.UnnamedDevice)]
+    [InlineData(null, KeyAdministration.UnnamedDevice)]
+    public void A_label_is_kept_to_one_plain_line(string? label, string expected)
+        => Assert.Equal(expected, KeyAdministration.CleanLabel(label));
+
+    [Fact]
+    public void A_label_loses_half_characters_and_is_cut_at_80_without_splitting_one()
+    {
+        var face = "\U0001F600";
+
+        // Half a pair on its own is no character: it shows as a box, or hides what follows. Built at run
+        // time - an attribute argument goes into metadata as UTF-8, which has no way to hold one.
+        Assert.Equal("lone   high", KeyAdministration.CleanLabel("lone " + (char)0xD800 + " high"));
+        Assert.Equal("lone   low", KeyAdministration.CleanLabel("lone " + (char)0xDC00 + " low"));
+
+        Assert.Equal(new string('a', 80), KeyAdministration.CleanLabel(new string('a', 100)));
+        // 79 letters and a two-unit character: the character would straddle the 80th place, so it goes.
+        Assert.Equal(new string('a', 79), KeyAdministration.CleanLabel(new string('a', 79) + face + "tail"));
+        Assert.Equal(new string('a', 78) + face, KeyAdministration.CleanLabel(new string('a', 78) + face + "tail"));
+    }
+
+    // ── the window and the pane, without a window ───────────────────────────
+
+    /// <summary>
+    /// The Add a device window settles on its OWN invitation's answer only. Settled by another one's -
+    /// opened elsewhere, or left from before - it took its link down without withdrawing it, and the link
+    /// stayed answerable for the rest of its ten minutes, perhaps still in the clipboard.
+    /// </summary>
+    [Fact]
+    public async Task The_window_settles_on_its_own_invitation_only_and_withdraws_it_otherwise()
+    {
+        var devices = new FakeInvitations();
+        var window = new AddDeviceViewModel(devices, TimeProvider.System);
+        await window.StartAsync(CancellationToken.None);
+        var takenDown = new List<string>();
+        window.LinkTakenDown += takenDown.Add;
+
+        devices.Admit(new AdmittedDevice("another-invitation", "laptop", "Laptop"));
+
+        Assert.False(window.IsSettled);
+        Assert.Equal(AddDeviceViewModel.Waiting, window.Status);
+        Assert.True(window.IsLinkShown);
+
+        window.Closed();
+
+        Assert.Equal([devices.Made!.InviteId], devices.Withdrawn);
+        Assert.All(devices.Made.PairingSecret, b => Assert.Equal(0, b));
+        Assert.Single(takenDown);
+    }
+
+    [Fact]
+    public async Task The_windows_own_answer_settles_it_and_nothing_is_withdrawn()
+    {
+        var devices = new FakeInvitations();
+        var window = new AddDeviceViewModel(devices, TimeProvider.System);
+        var finished = 0;
+        window.Admitted += () => finished++;
+        await window.StartAsync(CancellationToken.None);
+
+        devices.Admit(new AdmittedDevice(devices.Made!.InviteId, "phone", "Phone"));
+        window.Closed();
+
+        Assert.True(window.IsSettled);
+        Assert.False(window.IsLinkShown);
+        Assert.StartsWith("Phone was added", window.Status, StringComparison.Ordinal);
+        Assert.Equal(1, finished);
+        Assert.Empty(devices.Withdrawn);
+    }
+
+    /// <summary>A refusal of another invitation's answer is not this window's to show.</summary>
+    [Fact]
+    public async Task The_window_shows_a_refusal_of_its_own_invitation_only()
+    {
+        var devices = new FakeInvitations();
+        var window = new AddDeviceViewModel(devices, TimeProvider.System);
+        await window.StartAsync(CancellationToken.None);
+
+        devices.Notice(new AdmissionNotice("another-invitation", true, KeyAdministration.Tampered));
+        Assert.False(window.IsSettled);
+
+        devices.Notice(new AdmissionNotice(devices.Made!.InviteId, true, KeyAdministration.Tampered));
+        Assert.True(window.IsSettled);
+        Assert.False(window.IsLinkShown);
+        Assert.Equal(KeyAdministration.Tampered, window.Problem);
+    }
+
+    /// <summary>
+    /// When the ten minutes run out the window says nobody answered in time - closing on its own left a
+    /// person who looked back at the screen wondering whether it had worked - and the invitation is withdrawn.
+    /// </summary>
+    [Fact]
+    public async Task The_window_says_when_nobody_answered_in_time()
+    {
+        var clock = new MovableClock(new DateTimeOffset(2026, 10, 2, 12, 0, 0, TimeSpan.Zero));
+        var devices = new FakeInvitations();
+        var window = new AddDeviceViewModel(devices, clock);
+        await window.StartAsync(CancellationToken.None);
+
+        clock.Advance(TimeSpan.FromMinutes(9));
+        window.Tick();
+        Assert.Equal("The link stops working in 1:00.", window.Countdown);
+
+        clock.Advance(TimeSpan.FromMinutes(1));
+        window.Tick();
+
+        Assert.True(window.IsSettled);
+        Assert.False(window.IsLinkShown);
+        Assert.Equal(AddDeviceViewModel.Expired, window.Status);
+        Assert.Equal([devices.Made!.InviteId], devices.Withdrawn);
+        window.Closed();
+        Assert.Single(devices.Withdrawn);
+    }
+
+    /// <summary>A link that could not be made is said, in the window, not thrown out of an event handler.</summary>
+    [Fact]
+    public async Task The_window_says_why_no_link_was_made()
+    {
+        var devices = new FakeInvitations { Refusal = new InvalidOperationException(RemoteAccessService.NotConnectedForInvite) };
+        var window = new AddDeviceViewModel(devices, TimeProvider.System);
+
+        await window.StartAsync(CancellationToken.None);
+
+        Assert.Contains(RemoteAccessService.NotConnectedForInvite, window.Status, StringComparison.Ordinal);
+        Assert.False(window.IsLinkShown);
+    }
+
+    /// <summary>
+    /// Add a device can be pressed only while the computer is connected - past Hello, where an invitation
+    /// can be registered - and nothing else of the pane is running; it follows the connection as it comes
+    /// and goes.
+    /// </summary>
+    [Fact]
+    public void Add_a_device_is_enabled_only_while_connected()
+    {
+        var connected = false;
+        var pane = new RemoteDevicesViewModel { CanInvite = () => connected };
+
+        pane.RefreshConnection();
+        Assert.False(pane.CanAddDevice);
+
+        connected = true;
+        pane.RefreshConnection();
+        Assert.True(pane.CanAddDevice);
+
+        pane.PaneBusy = true;
+        Assert.False(pane.CanAddDevice);
+        pane.PaneBusy = false;
+        Assert.True(pane.CanAddDevice);
+
+        connected = false;
+        pane.RefreshConnection();
+        Assert.False(pane.CanAddDevice);
+    }
+
+    [Fact]
+    public async Task The_trusted_list_shows_revoked_devices_as_revoked()
+    {
+        using var phone = P256.Generate();
+        var at = new DateTimeOffset(2026, 10, 2, 12, 0, 0, TimeSpan.Zero);
+        var pane = new RemoteDevicesViewModel
+        {
+            Trusted = () => Task.FromResult<IReadOnlyList<TrustedDevice>>(
+            [
+                new TrustedDevice("phone", P256.PublicRaw(phone), "Phone", KeyAdministration.AddedBy, at, null),
+                new TrustedDevice("old", P256.PublicRaw(phone), "Old laptop", "connection code", at, at.AddDays(1))
+            ])
+        };
+
+        await pane.RefreshAsync();
+
+        Assert.True(pane.HasDevices);
+        Assert.Equal(["Phone", "Old laptop"], pane.Devices.Select(d => d.Label));
+        Assert.Equal([false, true], pane.Devices.Select(d => d.IsRevoked));
+        Assert.StartsWith("added by invitation", pane.Devices[0].Added, StringComparison.Ordinal);
     }
 
     // ── the key store ───────────────────────────────────────────────────────
@@ -1041,6 +1362,39 @@ public sealed class RemoteKeyAdministrationTests
         return new EnrollmentView(link.InviteId, deviceId, B64.Url(publicKey), label,
             Enrollment.Mac(pairKey, link.InviteId, deviceId, publicKey));
     }
+
+    /// <summary>The invitations as the window sees them: made at once, and answered when a test says so.</summary>
+    private sealed class FakeInvitations : IDeviceInvitations
+    {
+        public Exception? Refusal { get; init; }
+
+        public InviteLink? Made { get; private set; }
+
+        public List<string> Withdrawn { get; } = [];
+
+        public event Action<AdmittedDevice>? Admitted;
+
+        public event Action<AdmissionNotice>? Noticed;
+
+        public Task<InviteLink> InviteAsync(CancellationToken ct)
+        {
+            if (Refusal is not null) return Task.FromException<InviteLink>(Refusal);
+            Made = new InviteLink(Gateway, Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16)), RandomNumberGenerator.GetBytes(32));
+            return Task.FromResult(Made);
+        }
+
+        public Task WithdrawAsync(string inviteId)
+        {
+            Withdrawn.Add(inviteId);
+            return Task.CompletedTask;
+        }
+
+        public void Admit(AdmittedDevice device) => Admitted?.Invoke(device);
+
+        public void Notice(AdmissionNotice notice) => Noticed?.Invoke(notice);
+    }
+
+    private static string[] Labels(IReadOnlyList<AdmittedDevice> admitted) => [.. admitted.Select(d => d.Label)];
 
     private sealed class MovableClock(DateTimeOffset now) : TimeProvider
     {

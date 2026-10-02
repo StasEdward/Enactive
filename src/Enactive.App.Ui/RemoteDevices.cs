@@ -1,4 +1,5 @@
 using Avalonia.Threading;
+using Enactive.App.Ui.ViewModels;
 using Enactive.Remote.Contracts.Crypto;
 using Enactive.Remote.Host;
 
@@ -17,10 +18,10 @@ namespace Enactive.App.Ui;
 /// <para>Its events arrive on the UI thread: the service raises them from its own loop, and every
 /// listener here is a window.</para>
 /// </summary>
-internal sealed class RemoteDevices(Func<RemoteAccessService?> current, SemaphoreSlim gate)
+internal sealed class RemoteDevices(Func<RemoteAccessService?> current, SemaphoreSlim gate) : IDeviceInvitations
 {
-    /// <summary>A device answered an invitation and was admitted; its label.</summary>
-    public event Action<string>? Admitted;
+    /// <summary>A device answered an invitation and was admitted - which invitation, and its label.</summary>
+    public event Action<AdmittedDevice>? Admitted;
 
     /// <summary>An answer to an invitation was refused, or set aside.</summary>
     public event Action<AdmissionNotice>? Noticed;
@@ -84,7 +85,7 @@ internal sealed class RemoteDevices(Func<RemoteAccessService?> current, Semaphor
     /// <summary>Listens to a service the main window just started. A replaced one is disposed and says nothing more.</summary>
     public void Attach(RemoteAccessService service)
     {
-        service.DeviceAdmitted += label => Dispatcher.UIThread.Post(() => Admitted?.Invoke(label));
+        service.DeviceAdmitted += device => Dispatcher.UIThread.Post(() => Admitted?.Invoke(device));
         service.InvitationNoticed += notice => Dispatcher.UIThread.Post(() => Noticed?.Invoke(notice));
         service.Changed += () => Dispatcher.UIThread.Post(() => Changed?.Invoke());
         Dispatcher.UIThread.Post(() => Changed?.Invoke());

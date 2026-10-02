@@ -35,6 +35,10 @@
     <Compile Include="../../src/Enactive.App.Ui/BatchObservableCollection.cs" Link="Ui/BatchObservableCollection.cs" />
     <Compile Include="../../src/Enactive.App.Ui/LogFilter.cs" Link="Ui/LogFilter.cs" />
     <Compile Include="../../src/Enactive.App.Ui/InboxDecisions.cs" Link="Ui/InboxDecisions.cs" />
+    <Compile Include="../../src/Enactive.App.Ui/Mvvm/ObservableObject.cs" Link="Ui/ObservableObject.cs" />
+    <Compile Include="../../src/Enactive.App.Ui/Mvvm/RelayCommand.cs" Link="Ui/RelayCommand.cs" />
+    <Compile Include="../../src/Enactive.App.Ui/ViewModels/AddDeviceViewModel.cs" Link="Ui/AddDeviceViewModel.cs" />
+    <Compile Include="../../src/Enactive.App.Ui/ViewModels/RemoteDevicesViewModel.cs" Link="Ui/RemoteDevicesViewModel.cs" />
     <Using Include="Xunit" />
   </ItemGroup>
 
