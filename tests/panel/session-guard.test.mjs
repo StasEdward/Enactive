@@ -131,7 +131,7 @@ test('a reset forgets what was typed or shown in every field, and closes the dia
 
   // The named ones, by name: an unsent task and a computer's credential are what the next person
   // in this tab must not find.
-  for (const id of ['task-title', 'task-prompt', 'host-id', 'host-token']) assert.ok(FORGOTTEN.values.includes(id), id);
+  for (const id of ['task-title', 'task-prompt', 'host-code']) assert.ok(FORGOTTEN.values.includes(id), id);
   for (const id of ['run-detail', 'task-error', 'host-error', 'toast']) assert.ok(FORGOTTEN.contents.includes(id), id);
 });
 

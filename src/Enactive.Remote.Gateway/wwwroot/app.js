@@ -20,6 +20,9 @@ import {
 import { emptyState, resetState, forgetScreen, pollOnce } from "./js/session-guard.js";
 import { providerLinks, outcomeOf, createDevelopmentProbe } from "./js/signin.js";
 import { singleFlight } from "./js/single-flight.js";
+import { openKeystore } from "./js/keystore.js";
+import { ensureDevice, collectGrants, tamperingMessage } from "./js/trust.js";
+import { formatConnectionCode, newPairingSecret } from "./js/pairing.js";
 
 const POLL_MS = 3000;
 
@@ -699,7 +702,93 @@ async function createTask() {
   }
 }
 
+// ── this device's keys ───────────────────────────────────────────────────
+
+// The calls trust.js makes, through the same guard as every other request of the page.
+const api = { get, post };
+
+/**
+ * The signed-in account's key store in this browser, and this browser's device id with the gateway. Null
+ * while nobody is signed in, and closed by resetSession: the next account in this tab opens its own store,
+ * and nothing the page does after a reset can still reach the last one's keys through a store left open.
+ */
+let keystore = null;
+let deviceId = null;
+
+/**
+ * Opens the account's key store and registers this browser's key with the gateway, before the first poll.
+ * Neither is needed to see what the gateway itself knows, so a browser that cannot keep keys - or an
+ * account with no room for another device - still gets the panel, and is told why it cannot be paired.
+ */
+async function openTrust(user) {
+  const started = generation();
+  let store;
+
+  try {
+    store = await openKeystore(user.id);
+  } catch (error) {
+    if (isCurrent(started)) {
+      toast(`This browser cannot keep keys for this account: ${error.message}`, true);
+    }
+
+    return;
+  }
+
+  // Signed out, or in as somebody else, while it opened: the store is not this session's.
+  if (!isCurrent(started)) {
+    store.close();
+    return;
+  }
+
+  keystore = store;
+
+  try {
+    const id = await ensureDevice(store, api);
+
+    if (isCurrent(started)) {
+      deviceId = id;
+    }
+  } catch (error) {
+    if (isCurrent(started) && !(error instanceof Stale)) {
+      toast(error.message, true);
+    }
+  }
+}
+
+/** Takes the grants waiting for this device. Null when there is no device to take them for, or the session ended. */
+async function takeGrants(started) {
+  const store = keystore;
+
+  if (!store || !deviceId) {
+    return null;
+  }
+
+  const result = await collectGrants(store, api, deviceId);
+  return isCurrent(started) ? result : null;
+}
+
+/** What a person is told of a delivery: a computer in doubt first, then a refused key; nothing when all went well. */
+function grantTrouble(result, labelOf = hostLabel) {
+  if (result.tampering) {
+    return tamperingMessage(labelOf(result.tampering));
+  }
+
+  return result.rejected[0]?.reason ?? "";
+}
+
+function hostLabel(hostId) {
+  return state.hosts.find((host) => host.id === hostId)?.name ?? "A computer";
+}
+
 // ── registering a computer ───────────────────────────────────────────────
+
+// How long a connection code can be answered. The computer may be in another room or another building, so
+// minutes are too few; a secret that waited for ever would stay on this device's disk for ever.
+const PAIRING_LIFETIME_MS = 24 * 60 * 60 * 1000;
+const PAIRING_POLL_MS = 3000;
+
+/** The computer the open dialog is waiting for, and the timer asking for its grant; null when none. */
+let pairing = null;
 
 async function registerHost() {
   const button = $("host-submit");
@@ -708,16 +797,40 @@ async function registerHost() {
   const started = generation();
 
   try {
-    const device = await post("/api/hosts", { name: $("host-name").value });
+    const store = keystore;
 
-    // The one moment this value exists anywhere but the machine it is going to.
-    // It is not stored by this page and cannot be asked for again.
-    $("host-id").value = device.id;
-    $("host-token").value = device.token;
+    if (!store) {
+      throw new Error("This browser cannot keep keys, so it cannot be paired with a computer.");
+    }
+
+    // Asked again here, not only at sign-in: a registration refused then (a full account) may pass now.
+    const id = deviceId ?? await ensureDevice(store, api);
+    const host = await post("/api/hosts", { name: $("host-name").value });
+
+    // The pairing secret stays on this device; the gateway never sees it. The code carries it to the
+    // computer by hand, and the computer's first grant is checked with it.
+    const secret = newPairingSecret();
+    await store.setPending(host.id, secret, Date.now() + PAIRING_LIFETIME_MS);
+    const device = await store.device();
+
+    if (!isCurrent(started)) {
+      return;
+    }
+
+    deviceId = id;
+
+    // The token travels inside the code: the one moment it exists anywhere but the machine it is going
+    // to. It is not stored by this page and cannot be asked for again.
+    $("host-code").value = formatConnectionCode({
+      gateway: location.origin, hostId: host.id, token: host.token, deviceId: id,
+      devicePublicRaw: device.publicRaw, secret
+    });
     $("host-secret").hidden = false;
+    $("host-status").textContent = "Waiting for the computer…";
     button.hidden = true;
+    startPairing(host.id, host.name);
   } catch (error) {
-    if (isCurrent(started)) {
+    if (isCurrent(started) && !(error instanceof Stale)) {
       $("host-error").textContent = error.message;
     }
   } finally {
@@ -725,6 +838,67 @@ async function registerHost() {
     await refresh();
   }
 }
+
+/** Asks for the computer's grant every few seconds while the dialog is open. */
+function startPairing(hostId, label) {
+  stopPairing();
+  const started = generation();
+  // One check at a time: a slow answer overlapping the next tick would take the same grants twice.
+  const check = singleFlight(() => checkPairing(hostId, label, started));
+  pairing = { hostId, timer: setInterval(check, PAIRING_POLL_MS) };
+}
+
+function stopPairing() {
+  if (pairing) {
+    clearInterval(pairing.timer);
+  }
+
+  pairing = null;
+}
+
+async function checkPairing(hostId, label, started) {
+  const waiting = () => isCurrent(started) && pairing?.hostId === hostId;
+
+  if (!waiting()) {
+    return;
+  }
+
+  try {
+    const result = await takeGrants(started);
+
+    if (!result || !waiting()) {
+      return;
+    }
+
+    $("host-error").textContent = grantTrouble(result, (id) => (id === hostId ? label : hostLabel(id)));
+
+    // Held rather than "added now": another tab of this browser may have taken the grant first.
+    if (await keystore.newestEpoch(hostId) !== null && waiting()) {
+      stopPairing();
+      $("host-dialog").close();
+      toast(`Paired - this device can read and command ${label}`);
+    }
+  } catch (error) {
+    // The gateway out of reach is said, and the next tick asks again. An ended session says nothing.
+    if (waiting() && !(error instanceof Stale)) {
+      $("host-status").textContent = `Waiting for the computer… (${error.message})`;
+    }
+  }
+}
+
+$("host-copy").addEventListener("click", async () => {
+  const code = $("host-code");
+
+  try {
+    await navigator.clipboard.writeText(code.value);
+    $("host-status").textContent = "Copied. Waiting for the computer…";
+  } catch {
+    // No clipboard here (a page not served over https, or permission refused): the code is selected,
+    // for the person's own copy.
+    code.focus();
+    code.select();
+  }
+});
 
 // ── signing in and out ───────────────────────────────────────────────────
 
@@ -746,8 +920,13 @@ const SIGNED_OUT = "You were signed out. Sign in again to go on.";
  */
 function resetSession() {
   stopPolling();
+  stopPairing();
   endSession();
   account = null;
+  // Closed, not only dropped: one database per account, and this one's keys are not the next person's.
+  keystore?.close();
+  keystore = null;
+  deviceId = null;
   resetState(state);
   clearTimeout(toastTimer);
   forgetScreen($, document.querySelectorAll("dialog[open]"));
@@ -789,7 +968,26 @@ async function enterPanel(user) {
   $("panel").hidden = false;
 
   const started = generation();
+  await openTrust(user);
+
+  if (!isCurrent(started)) {
+    return;
+  }
+
   await poll();
+
+  // Grants that arrived while no page was open - a connection code pasted after its dialog was closed.
+  // After the poll, so a computer in doubt is named rather than called "A computer".
+  try {
+    const result = await takeGrants(started);
+    const trouble = result && grantTrouble(result);
+
+    if (trouble) {
+      toast(trouble, true);
+    }
+  } catch {
+    // Not reaching the gateway is what the poll already shows.
+  }
 
   // Not when the first poll ended the session: a timer started now would poll for nobody. Nor while
   // hidden: a hidden tab does not poll (see visibilitychange), and coming back starts it.
@@ -1053,12 +1251,17 @@ $("theme").addEventListener("click", () => {
 $("new-task").addEventListener("click", openTaskDialog);
 $("task-submit").addEventListener("click", createTask);
 $("add-host").addEventListener("click", () => {
+  stopPairing();
   $("host-secret").hidden = true;
   $("host-submit").hidden = false;
   $("host-error").textContent = "";
+  $("host-status").textContent = "";
   $("host-name").value = "";
+  $("host-code").value = "";
   $("host-dialog").showModal();
 });
+// Closed - by its button, Escape or a reset - nobody is waiting for the answer any more.
+$("host-dialog").addEventListener("close", stopPairing);
 $("host-submit").addEventListener("click", registerHost);
 $("mark-read").addEventListener("click", (clicked) =>
   act(clicked.currentTarget, () => post("/api/notices/read", {})));

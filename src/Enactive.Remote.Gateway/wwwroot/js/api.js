@@ -59,14 +59,15 @@ export function generation() { return guard.generation; }
 /** Whether a result obtained under `started` may still be shown. */
 export function isCurrent(started) { return guard.isCurrent(started); }
 
-export function get(path) {
-  return request(path, { headers: { accept: 'application/json' } });
+// `headers` adds to what every call sends: a call made as this browser's device names it (X-Enactive-Device).
+export function get(path, { headers } = {}) {
+  return request(path, { headers: { ...headers, accept: 'application/json' } });
 }
 
-export function post(path, body) {
+export function post(path, body, { headers } = {}) {
   return request(path, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', 'X-CSRF-TOKEN': csrf },
+    headers: { ...headers, 'content-type': 'application/json', 'X-CSRF-TOKEN': csrf },
     body: JSON.stringify(body ?? {})
   });
 }

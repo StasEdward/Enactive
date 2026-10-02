@@ -61,6 +61,12 @@ public sealed class DeviceService(Database db, Limits limits, TimeProvider clock
     /// <summary>
     /// Adds a browser. The key is checked for shape and curve here, so a caller that did not decode it
     /// the way the endpoint does still cannot store a key no grant could be sealed to.
+    ///
+    /// <para>A key this account already holds on a live device answers with that device, and nothing is
+    /// written. A browser whose registration was answered but never heard - the tab closed, the network
+    /// dropped - registers its key again, and a second row took a second place of the allowance for one
+    /// browser, or refused the retry outright on a full account. A removed device's key is not looked for:
+    /// removing a device must not be undone by registering it again.</para>
     /// </summary>
     public async Task<string> RegisterAsync(UserAccess user, byte[] publicKey, string? label, CancellationToken ct)
     {
@@ -75,9 +81,7 @@ public sealed class DeviceService(Database db, Limits limits, TimeProvider clock
             throw GatewayFault.BadKey();
         }
 
-        var id = Ids.New();
-
-        await db.InTransactionAsync(async (connection, transaction) =>
+        return await db.InTransactionAsync(async (connection, transaction) =>
         {
             // The account's row is the lock the count is taken under. Counting alone does not stop two
             // registrations that both read "one place left" and both insert; and the insert itself takes a
@@ -96,6 +100,22 @@ public sealed class DeviceService(Database db, Limits limits, TimeProvider clock
                 throw GatewayFault.Unauthenticated();
             }
 
+            // Under the account's lock, like the count: two tabs of one browser registering at once find
+            // each other's row instead of both inserting. Before the limit, so a full account still answers
+            // a browser that is only asking again.
+            var existing = await connection.ReadOneAsync(transaction,
+                """
+                SELECT id FROM devices
+                WHERE owner_id = @owner AND public_key = @key AND revoked_at IS NULL
+                ORDER BY created_at, id LIMIT 1
+                """,
+                reader => reader.GetString(0), ("@owner", user.UserId), ("@key", publicKey));
+
+            if (existing is not null)
+            {
+                return existing;
+            }
+
             // Removed devices do not count: removing one is how a person makes room for another.
             var held = await connection.ReadOneAsync(transaction,
                 "SELECT COUNT(*) FROM devices WHERE owner_id = @owner AND revoked_at IS NULL",
@@ -106,6 +126,7 @@ public sealed class DeviceService(Database db, Limits limits, TimeProvider clock
                 throw GatewayFault.DeviceLimit(limits.DevicesPerUser);
             }
 
+            var id = Ids.New();
             var now = clock.GetUtcNow();
             await connection.ExecuteAsync(transaction,
                 """
@@ -115,9 +136,8 @@ public sealed class DeviceService(Database db, Limits limits, TimeProvider clock
                 ("@id", id), ("@owner", user.UserId), ("@key", publicKey), ("@label", name), ("@now", now));
 
             await AuditAsync(connection, transaction, user, "device-registered", id, now);
+            return id;
         }, ct);
-
-        return id;
     }
 
     /// <summary>The person's own devices, oldest first, removed ones included so the panel can say so.</summary>

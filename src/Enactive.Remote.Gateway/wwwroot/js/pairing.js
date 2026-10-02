@@ -20,6 +20,9 @@ const TOKEN = /^[0-9a-f]{64}$/;
 /** The key that authenticates the first grant and the enrollment, derived from the secret in a code or link. */
 export const derivePairKey = (secretBytes) => derive(secretBytes, INFO.pair);
 
+/** A pairing secret `P` for a connection code or an invitation link: 32 bytes from the browser's CSPRNG. */
+export const newPairingSecret = () => crypto.getRandomValues(new Uint8Array(SECRET));
+
 export function formatConnectionCode({ gateway, hostId, token, deviceId, devicePublicRaw, secret }) {
   // Everything the desktop app would refuse is refused here, where the person can still be told to make a new code.
   const origin = gatewayOrigin(gateway);

@@ -60,11 +60,11 @@ export function resetState(state) {
 // What the page holds for the person outside `state`: what was typed into a dialog and not sent, a
 // computer's credential shown once, a timeline, an error line, the last toast. Closing a dialog keeps
 // its fields, so before this list the next person in the tab opened "New task" and found the previous
-// one's title and prompt filled in, ready to send as their own, and the last computer token sat in a
-// hidden field. Every field of every dialog is on it; tests/panel/session-guard.test.mjs checks the page.
+// one's title and prompt filled in, ready to send as their own, and the last computer's credential sat in
+// a hidden field. Every field of every dialog is on it; tests/panel/session-guard.test.mjs checks the page.
 export const FORGOTTEN = {
-  values: ['task-title', 'task-prompt', 'host-name', 'host-id', 'host-token'],
-  contents: ['task-workspace', 'run-title', 'run-detail', 'task-error', 'host-error', 'toast'],
+  values: ['task-title', 'task-prompt', 'host-name', 'host-code'],
+  contents: ['task-workspace', 'run-title', 'run-detail', 'task-error', 'host-status', 'host-error', 'toast'],
   hidden: ['host-secret', 'toast']
 };
 

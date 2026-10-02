@@ -152,17 +152,20 @@
     <label for="host-name">Name</label>
     <input id="host-name" required maxlength="80" placeholder="Studio PC">
     <div id="host-secret" hidden>
-      <p class="note">Put this in the computer's Enactive settings. It is shown once and is not
-        stored anywhere it can be read back.</p>
-      <label for="host-id">Host id</label>
-      <input id="host-id" readonly spellcheck="false">
-      <label for="host-token">Device token</label>
-      <textarea id="host-token" readonly rows="3" spellcheck="false"></textarea>
+      <p class="note">Paste this code into the computer: Desktop app → Settings → Remote access → paste.
+        It lets whoever holds it connect the computer to this device, so give it to nobody else. It is
+        shown once; keep this open until the computer answers.</p>
+      <label for="host-code">Connection code</label>
+      <textarea id="host-code" readonly rows="5" spellcheck="false"></textarea>
+      <div class="actions">
+        <button id="host-copy" type="button" class="secondary">Copy</button>
+      </div>
+      <p id="host-status" class="note" role="status"></p>
     </div>
     <p id="host-error" class="error" role="alert"></p>
     <div class="actions">
       <button type="button" class="secondary" data-close>Close</button>
-      <button id="host-submit" type="button" class="primary">Create credential</button>
+      <button id="host-submit" type="button" class="primary">Create connection code</button>
     </div>
   </form>
 </dialog>

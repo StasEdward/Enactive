@@ -195,6 +195,50 @@ public sealed class DeviceServiceTests(TestDatabase database) : IClassFixture<Te
             $"SELECT COUNT(*) FROM devices WHERE owner_id = '{alice.UserId}'"));
     }
 
+    /// <summary>
+    /// A browser whose registration was answered but never heard - the tab closed, the network dropped -
+    /// registers the same key again. It gets the device it already has: a second row took a second place of
+    /// the allowance for one browser, and a full account then refused the browser its own retry.
+    /// </summary>
+    [Fact]
+    public async Task Registering_the_same_live_key_again_answers_with_the_device_already_registered()
+    {
+        var alice = await PersonAsync("alice");
+        var bob = await PersonAsync("bob");
+        var devices = new DeviceService(Db, Limits.Unlimited with { DevicesPerUser = 1 }, TimeProvider.System);
+        var key = NewPublicKey();
+
+        var first = await devices.RegisterAsync(alice, key, "laptop", default);
+
+        // At the limit, and still answered: the repeat takes no place.
+        Assert.Equal(first, await devices.RegisterAsync(alice, key, "laptop again", default));
+        Assert.Equal(1, await database.ScalarLongAsync(
+            $"SELECT COUNT(*) FROM devices WHERE owner_id = '{alice.UserId}'"));
+        Assert.Equal(1, await database.ScalarLongAsync(
+            $"SELECT COUNT(*) FROM audit WHERE owner_id = '{alice.UserId}' AND action = 'device-registered'"));
+
+        // Only the owner's own device is found by its key: Bob registering the same key gets his own.
+        Assert.NotEqual(first, await devices.RegisterAsync(bob, key, "laptop", default));
+
+        // A removed device is not brought back by its key: removal stands, and the key is a new device.
+        await devices.RevokeAsync(alice, first, default);
+        Assert.NotEqual(first, await devices.RegisterAsync(alice, key, "laptop", default));
+    }
+
+    /// <summary>Two tabs of one browser registering its key at once: one device, whichever came first.</summary>
+    [Fact]
+    public async Task Concurrent_registrations_of_one_key_make_one_device()
+    {
+        var alice = await PersonAsync("alice");
+        var key = NewPublicKey();
+
+        var ids = await Task.WhenAll(Enumerable.Range(0, 6).Select(_ => Devices.RegisterAsync(alice, key, "tab", default)));
+
+        Assert.Single(ids.Distinct());
+        Assert.Equal(1, await database.ScalarLongAsync(
+            $"SELECT COUNT(*) FROM devices WHERE owner_id = '{alice.UserId}'"));
+    }
+
     // ── listing ─────────────────────────────────────────────────────────────
 
     [Fact]

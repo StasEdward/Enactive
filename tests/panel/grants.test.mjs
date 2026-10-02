@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import { authByPairing, AUTH_BY_HOST, createGrant, openGrant } from '../../src/Enactive.Remote.Gateway/wwwroot/js/grants.js';
 import {
-  formatConnectionCode, formatInviteLink, parseInviteFragment, enrollmentMac, verifyEnrollment, derivePairKey
+  formatConnectionCode, formatInviteLink, parseInviteFragment, enrollmentMac, verifyEnrollment, derivePairKey,
+  newPairingSecret
 } from '../../src/Enactive.Remote.Gateway/wwwroot/js/pairing.js';
 import { EnvelopeError } from '../../src/Enactive.Remote.Gateway/wwwroot/js/envelope.js';
 import { hostKey, derive } from '../../src/Enactive.Remote.Gateway/wwwroot/js/hostkey.js';
@@ -489,4 +490,16 @@ test('verifyEnrollment refuses a MAC for another invite, device, key or pair key
   for (const bad of ['', 'not base64url!', e.mac + '=', e.mac.slice(1), e.mac.slice(0, -2), null, undefined, 5]) {
     assert.equal(await verifyEnrollment(key, e.inviteId, e.deviceId, devicePublic, bad), false, String(bad));
   }
+});
+
+// The secret a connection code carries is what the first grant is authenticated by: a guessable one would let
+// whoever guessed it - the gateway that served the page, say - make that grant itself.
+test('newPairingSecret draws 32 fresh random bytes each time', () => {
+  const first = newPairingSecret();
+  const second = newPairingSecret();
+
+  assert.ok(first instanceof Uint8Array);
+  assert.equal(first.length, 32);
+  assert.notDeepEqual(first, second);
+  assert.notDeepEqual(first, new Uint8Array(32));
 });
