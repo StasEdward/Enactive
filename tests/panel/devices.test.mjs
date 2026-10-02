@@ -6,8 +6,8 @@ import { hostKey } from '../../src/Enactive.Remote.Gateway/wwwroot/js/hostkey.js
 import { ad, openJson } from '../../src/Enactive.Remote.Gateway/wwwroot/js/sealed.js';
 import {
   revokeDevice, forgetThisDevice, forgottenSentence, createRemovalWatch, storeGone, revocationWarning, cannotTell,
-  revokeKey, cardActions, deleteDeviceKeys, SENT, ROTATED, NOT_ROTATED_YET, NOT_CONFIRMED, ROTATION_WATCH_MS,
-  MAX_RESENDS, KEYS_KEPT
+  revokeKey, cardActions, deleteDeviceKeys, toldUnder, toldAgainUnder, waitingForKey, NOT_CONFIRMED, MAX_RESENDS,
+  KEYS_KEPT
 } from '../../src/Enactive.Remote.Gateway/wwwroot/js/devices.js';
 
 const ALICE = '0123456789abcdef0123456789abcdef';
@@ -156,84 +156,98 @@ test('a refused gateway revocation tells no computer', async () => {
   assert.equal(commandsOf(api).length, 0);
 });
 
-test('rotation is reported once the computer\'s epoch rises', async () => {
-  const { store } = await storeHolding({ [STUDIO]: [1], [LAPTOP]: [3], [NAS]: [2] });
+test('a removal says it was told under the computer\'s current key, and no more', async () => {
+  const { store } = await storeHolding({ [STUDIO]: [1], [LAPTOP]: [3] });
   const watch = createRemovalWatch();
   watch.record(PHONE, [
-    { hostId: STUDIO, epoch: 1, at: NOW },
-    { hostId: LAPTOP, epoch: 3, at: NOW },
-    { hostId: NAS, epoch: 2, at: NOW }
+    { hostId: STUDIO, commandId: 'c-studio', epoch: 1, at: NOW },
+    { hostId: LAPTOP, commandId: 'c-laptop', epoch: 3, at: NOW }
   ]);
-  const step = (hosts, at) => watch.step({
-    hosts, keystore: store, api: fakeApi(), writer: spyWriter(store), sends: createSendCache(), now: () => at
-  });
+  const hosts = [host(STUDIO, 'S', 1), host(LAPTOP, 'L', 3)];
 
-  // Nothing moved yet.
-  await step([host(STUDIO, 'S', 1), host(LAPTOP, 'L', 3), host(NAS, 'N', 2)], NOW + 1000);
-  assert.deepEqual(watch.lines(PHONE, NOW + 1000),
-    [{ hostId: STUDIO, status: SENT }, { hostId: LAPTOP, status: SENT }, { hostId: NAS, status: SENT }]);
-
-  // Studio rotated once past the epoch the command was sealed under; the laptop has not moved.
-  assert.equal(await step([host(STUDIO, 'S', 2), host(LAPTOP, 'L', 3), host(NAS, 'N', 2)], NOW + 5000), true);
-  assert.deepEqual(watch.lines(PHONE, NOW + 5000),
-    [{ hostId: STUDIO, status: ROTATED }, { hostId: LAPTOP, status: SENT }, { hostId: NAS, status: SENT }]);
-
-  // Ten minutes on, a computer that has not moved is said not to have; one that rotated stays rotated, and one
-  // missing from the snapshot is not called rotated.
-  await step([host(STUDIO, 'S', 2), host(LAPTOP, 'L', 3)], NOW + ROTATION_WATCH_MS);
-  assert.deepEqual(watch.lines(PHONE, NOW + ROTATION_WATCH_MS),
-    [{ hostId: STUDIO, status: ROTATED }, { hostId: LAPTOP, status: NOT_ROTATED_YET }, { hostId: NAS, status: NOT_ROTATED_YET }]);
+  // What the panel can see: the command was sealed under the key the computer uses now. Whether the computer has
+  // acted on it, and whose removal a later key change was for, nothing the panel receives says.
+  assert.equal(await watch.step({
+    hosts, keystore: store, api: fakeApi(), writer: spyWriter(store), sends: createSendCache(), now: () => NOW
+  }), false);
+  assert.deepEqual(watch.lines(PHONE, hosts),
+    [{ hostId: STUDIO, status: toldUnder(1) }, { hostId: LAPTOP, status: toldUnder(3) }]);
+  assert.equal(toldUnder(1), 'told under key 1');
+  assert.ok(!/rotated/.test(watch.lines(PHONE, hosts).map(({ status }) => status).join(' ')));
 });
 
-test('a removal sealed before another one is told again under the new key', async () => {
+test('a rotation by the computer itself has the removal told again under the new key', async () => {
+  const { store } = await storeHolding({ [STUDIO]: [1] });
+  const sends = createSendCache(() => NOW);
+  const api = fakeApi();
+  const writer = spyWriter(store);
+  const watch = createRemovalWatch();
+  watch.record(PHONE, (await revokeDevice({
+    api, writer, sends, hosts: [host(STUDIO, 'Studio PC', 1)], keystore: store, deviceId: PHONE, now: () => NOW
+  })).sentTo);
+  const [first] = commandsOf(api);
+  api.calls.length = 0;
+  const step = (keyEpoch) => watch.step({
+    hosts: [host(STUDIO, 'Studio PC', keyEpoch)], keystore: store, api, writer, sends, now: () => NOW
+  });
+
+  // The desktop removed another device and moved to epoch 2 before running ours, and refused ours as sealed before
+  // a device was removed: from here that looks exactly like our own removal done. Until this device holds epoch 2
+  // nothing is sent - sealed under epoch 1 again, it would be refused again.
+  assert.equal(await step(2), false);
+  assert.deepEqual(watch.lines(PHONE, [host(STUDIO, 'Studio PC', 2)]), [{ hostId: STUDIO, status: waitingForKey(2) }]);
+  assert.equal(api.calls.length, 0);
+
+  // Epoch 2 arrives: told again once, under it and a new command id.
+  const newer = crypto.getRandomValues(new Uint8Array(32));
+  await store.addHostKey(STUDIO, 2, newer);
+  assert.equal(await step(2), true);
+  assert.equal(await step(2), false);
+  const [again] = commandsOf(api);
+  assert.equal(api.calls.length, 1);
+  assert.notEqual(again.body.commandId, first.body.commandId);
+  const opened = await openJson(await hostKey(2, newer), again.body.sealed,
+    ad.command(STUDIO, again.body.commandId, 'RevokeDevice'));
+  assert.equal(opened.deviceId, PHONE);
+  assert.deepEqual(watch.lines(PHONE, [host(STUDIO, 'Studio PC', 2)]), [{ hostId: STUDIO, status: toldAgainUnder(2) }]);
+  assert.equal(toldAgainUnder(2), 'key changed - told again under key 2');
+});
+
+test('removals sealed under one key are all told again under the next', async () => {
   const { store } = await storeHolding({ [STUDIO]: [1] });
   const sends = createSendCache(() => NOW);
   const api = fakeApi();
   const writer = spyWriter(store);
   const watch = createRemovalWatch();
 
-  // The phone and then the tablet, both sealed under epoch 1 while the computer was asleep.
+  // The phone and then the tablet, both sealed under epoch 1 while the computer was asleep. It removed one, moved to
+  // epoch 2 and granted it to the other, still trusted, then refused the other's command. Which one, nothing says.
   for (const deviceId of [PHONE, TABLET]) {
-    const result = await revokeDevice({
+    watch.record(deviceId, (await revokeDevice({
       api, writer, sends, hosts: [host(STUDIO, 'Studio PC', 1)], keystore: store, deviceId, now: () => NOW
-    });
-    watch.record(deviceId, result.sentTo);
+    })).sentTo);
   }
-  const [, tabletFirst] = commandsOf(api);
-  const step = (keyEpoch, at) => watch.step({
-    hosts: [host(STUDIO, 'Studio PC', keyEpoch)], keystore: store, api, writer, sends, now: () => at
-  });
-
-  // The computer removed the phone and moved to epoch 2 - granting it to the tablet, still trusted - then refused
-  // the tablet's command as sealed before a device was removed. Until this device holds epoch 2 nothing is sent:
-  // sealed under epoch 1 again, it would be refused again.
+  // Told again with the same command, as "Tell the computers again" does: still the one command.
+  watch.record(PHONE, (await revokeDevice({
+    api, writer, sends, hosts: [host(STUDIO, 'Studio PC', 1)], keystore: store, deviceId: PHONE, now: () => NOW
+  })).sentTo);
   api.calls.length = 0;
-  await step(2, NOW + 3000);
-  assert.deepEqual(watch.lines(PHONE, NOW + 3000), [{ hostId: STUDIO, status: ROTATED }]);
-  assert.deepEqual(watch.lines(TABLET, NOW + 3000), [{ hostId: STUDIO, status: SENT }]);
-  assert.equal(api.calls.length, 0);
 
-  // Epoch 2 arrives: the tablet is told again, under it and a new command id, and is not called rotated.
   const newer = crypto.getRandomValues(new Uint8Array(32));
   await store.addHostKey(STUDIO, 2, newer);
-  await step(2, NOW + 6000);
-  const [again] = commandsOf(api);
-  assert.equal(api.calls.length, 1);
-  assert.equal(again.path, `/api/hosts/${STUDIO}/device-commands`);
-  assert.notEqual(again.body.commandId, tabletFirst.body.commandId);
-  const opened = await openJson(await hostKey(2, newer), again.body.sealed,
-    ad.command(STUDIO, again.body.commandId, 'RevokeDevice'));
-  assert.equal(opened.deviceId, TABLET);
-  assert.deepEqual(watch.lines(TABLET, NOW + 6000), [{ hostId: STUDIO, status: SENT }]);
+  await watch.step({ hosts: [host(STUDIO, 'Studio PC', 2)], keystore: store, api, writer, sends, now: () => NOW });
 
-  // The computer acts on it and moves to epoch 3: both are done, and nothing more is sent.
-  await step(3, NOW + 9000);
-  assert.deepEqual(watch.lines(PHONE, NOW + 9000), [{ hostId: STUDIO, status: ROTATED }]);
-  assert.deepEqual(watch.lines(TABLET, NOW + 9000), [{ hostId: STUDIO, status: ROTATED }]);
-  assert.equal(api.calls.length, 1);
+  // Both are told again under epoch 2; the computer returns without a key change for the one it removed already.
+  const told = await Promise.all(commandsOf(api).map(async ({ body }) => (await openJson(await hostKey(2, newer),
+    body.sealed, ad.command(STUDIO, body.commandId, 'RevokeDevice'))).deviceId));
+  assert.deepEqual(told.sort(), [PHONE, TABLET].sort());
+  for (const deviceId of [PHONE, TABLET]) {
+    assert.deepEqual(watch.lines(deviceId, [host(STUDIO, 'Studio PC', 2)]),
+      [{ hostId: STUDIO, status: toldAgainUnder(2) }]);
+  }
 });
 
-test('a removal told again without a rotation of its own is not confirmed', async () => {
+test('a removal told again after every key change is not confirmed after the last', async () => {
   const { store } = await storeHolding({ [STUDIO]: [1] });
   const sends = createSendCache(() => NOW);
   const api = fakeApi();
@@ -244,9 +258,9 @@ test('a removal told again without a rotation of its own is not confirmed', asyn
   })).sentTo);
   api.calls.length = 0;
 
-  // Each time the computer has moved on twice since the last command: someone else's rotation came in between,
-  // so this one may have been refused, and it is told again - at most MAX_RESENDS times.
-  for (let epoch = 3; epoch <= 3 + 2 * MAX_RESENDS; epoch += 2) {
+  // Each key change is told again, at most MAX_RESENDS times: a computer that goes on changing keys - other
+  // removals, from other tabs - is not told for ever.
+  for (let epoch = 2; epoch <= 2 + MAX_RESENDS; epoch += 1) {
     await store.addHostKey(STUDIO, epoch, crypto.getRandomValues(new Uint8Array(32)));
     await watch.step({
       hosts: [host(STUDIO, 'Studio PC', epoch)], keystore: store, api, writer, sends, now: () => NOW
@@ -254,7 +268,8 @@ test('a removal told again without a rotation of its own is not confirmed', asyn
   }
 
   assert.equal(commandsOf(api).length, MAX_RESENDS);
-  assert.deepEqual(watch.lines(PHONE, NOW), [{ hostId: STUDIO, status: NOT_CONFIRMED }]);
+  assert.deepEqual(watch.lines(PHONE, [host(STUDIO, 'Studio PC', 2 + MAX_RESENDS)]),
+    [{ hostId: STUDIO, status: NOT_CONFIRMED }]);
   assert.equal(NOT_CONFIRMED, 'not confirmed - tell the computers again');
 });
 

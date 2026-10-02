@@ -37,7 +37,7 @@ import {
 } from "./js/invite.js";
 import {
   revokeDevice, forgetThisDevice, forgottenSentence, createRemovalWatch, cardActions, deleteDeviceKeys, storeGone,
-  revocationWarning, ROTATED
+  revocationWarning, NOT_CONFIRMED
 } from "./js/devices.js";
 
 const POLL_MS = 3000;
@@ -1526,7 +1526,7 @@ let ownDevice = null;
  */
 const removals = new Map();
 
-/** Each computer told of a removal from this tab, watched until it has rotated for it (devices.js). */
+/** Each computer told of a removal from this tab, told again under each new key it moves to (devices.js). */
 const removalWatch = createRemovalWatch();
 
 /** The devices whose removal is under way, so a redraw does not offer the button again (devices.js cardActions). */
@@ -1569,8 +1569,8 @@ async function reloadDevices() {
 }
 
 /**
- * Moves the removals on after a poll (devices.js createRemovalWatch): marks what rotated, and tells a computer
- * again where its rotation cannot have been for the removal. One at a time, so two polls do not send twice.
+ * Moves the removals on after a poll (devices.js createRemovalWatch): a computer that moved to a new key is told
+ * again under it. One at a time, so two polls do not send twice.
  */
 const watchRemovals = singleFlight(async () => {
   const started = generation();
@@ -1640,16 +1640,16 @@ function renderDevices() {
 }
 
 /**
- * One line per computer told of a device's removal: waiting for its new key, moved to it, not moved within the
- * watch, or not confirmed (devices.js createRemovalWatch) - moved on by every poll - then the computers this
- * device cannot tell, then those it did not reach.
+ * One line per computer told of a device's removal - told under its current key, told again under a new one,
+ * waiting for a new key, or not confirmed (devices.js createRemovalWatch), moved on by every poll - then the
+ * computers this device cannot tell, then those it did not reach.
  */
 function removalLines(deviceId) {
   const removal = removals.get(deviceId);
 
   return [
-    ...removalWatch.lines(deviceId, Date.now()).map(({ hostId, status }) =>
-      node("p", status === ROTATED ? "meta" : "muted", `${hostLabel(hostId)}: ${status}`)),
+    ...removalWatch.lines(deviceId, state.hosts).map(({ hostId, status }) =>
+      node("p", status === NOT_CONFIRMED ? "error" : "meta", `${hostLabel(hostId)}: ${status}`)),
     ...(removal?.skipped ?? []).map(({ reason }) => node("p", "muted", reason)),
     ...(removal?.failed ?? []).map(({ reason }) => node("p", "error", reason))
   ];

@@ -18,21 +18,16 @@ export const revocationWarning = (label) =>
 export const cannotTell = (hostLabel) =>
   `Cannot tell ${hostLabel} from this device - do it from a device that holds its key, or from the computer.`;
 
-/** Where a computer stands after it was sent a removal. */
-export const SENT = 'sent';
-export const ROTATED = 'rotated';
-export const NOT_ROTATED_YET = 'not rotated yet';
+/** What a removal's line says of a computer: only what the panel can see (createRemovalWatch). */
+export const toldUnder = (epoch) => `told under key ${epoch}`;
+export const toldAgainUnder = (epoch) => `key changed - told again under key ${epoch}`;
+export const waitingForKey = (epoch) => `key changed - waiting for key ${epoch} to tell it again`;
 export const NOT_CONFIRMED = 'not confirmed - tell the computers again';
 
-// How many times a removal is told again before it is called not confirmed. Each one waits for a key change, so a
-// computer that never rotates for it - another tab's removal of the same device got there first - is not told for
-// ever; three covers removals made one after another, which is how they come.
+// How many key changes a removal is told again after before it is called not confirmed. A computer that goes on
+// changing keys - removals from other tabs and devices, one after another - is not told for ever; three covers
+// removals made one after another, which is how they come.
 export const MAX_RESENDS = 3;
-
-// How long a computer's rotation is waited for. A computer that is switched off takes the command when it next
-// connects, which may be days away: watched for that long, the line would say "sent" for good and read as a
-// removal still under way. After this it says it has not happened yet, which stays true until it does.
-export const ROTATION_WATCH_MS = 10 * 60 * 1000;
 
 /** The send-cache key of one removal to one computer (writer.js createSendCache). */
 export const revokeKey = (deviceId, hostId) => `revoke:${deviceId}:${hostId}`;
@@ -40,7 +35,7 @@ export const revokeKey = (deviceId, hostId) => `revoke:${deviceId}:${hostId}`;
 /**
  * Removes `deviceId`: at the gateway, then on every computer of `hosts` (the snapshot's) that is not revoked
  * and whose current key this device holds. Resolves to `{sentTo, skipped, failed}`: `sentTo` the computers
- * whose command the gateway took, each `{hostId, commandId, epoch, at}` with the epoch it was sealed under;
+ * whose command the gateway took, each `{hostId, commandId, epoch}` with the epoch it was sealed under;
  * `skipped` those this device cannot tell (cannotTell); `failed` those whose command did not reach the gateway,
  * each with the reason. Pressed again, it sends each computer the command and envelope it sent before (`sends`,
  * keyed by revokeKey): the gateway takes the same id with the same envelope as the same command, refuses the
@@ -48,7 +43,7 @@ export const revokeKey = (deviceId, hostId) => `revoke:${deviceId}:${hostId}`;
  * revocation throws, and no computer is told: a computer told first would rotate while the gateway went on
  * serving the device.
  */
-export async function revokeDevice({ api, writer, sends, hosts, keystore, deviceId, now = () => Date.now() }) {
+export async function revokeDevice({ api, writer, sends, hosts, keystore, deviceId }) {
   const skipped = [];
   const failed = [];
   const sealed = [];
@@ -79,7 +74,7 @@ export async function revokeDevice({ api, writer, sends, hosts, keystore, device
     try {
       await api.post(`/api/hosts/${encodeURIComponent(host.id)}/device-commands`,
         { commandId: command.id, kind: 'RevokeDevice', sealed: command.sealed });
-      sentTo.push({ hostId: host.id, commandId: command.id, epoch: command.epoch, at: now() });
+      sentTo.push({ hostId: host.id, commandId: command.id, epoch: command.epoch });
     } catch (error) {
       // One computer out of reach does not keep the others from being told; pressed again, it is sent the same.
       failed.push({ hostId: host.id, reason: `${host.label}: ${error.message}` });
@@ -103,12 +98,12 @@ export async function revokeDevice({ api, writer, sends, hosts, keystore, device
  * clear the site's data instead (KEYS_KEPT), and the removed page can delete the keys later (deleteDeviceKeys).
  * Resolves to revokeDevice's answer.
  */
-export async function forgetThisDevice({ api, writer, sends, keystore, hosts, signOut, now }) {
+export async function forgetThisDevice({ api, writer, sends, keystore, hosts, signOut }) {
   const deviceId = (await keystore.device())?.id ?? null;
   // Never registered with the gateway: no computer was ever told of it either, and there is nothing to remove.
   const result = deviceId === null
     ? { sentTo: [], skipped: [], failed: [] }
-    : await revokeDevice({ api, writer, sends, hosts, keystore, deviceId, now });
+    : await revokeDevice({ api, writer, sends, hosts, keystore, deviceId });
 
   if (result.failed.length > 0) {
     throw new Error(`${result.failed.map(({ reason }) => reason).join(' ')} This browser's keys were kept, so `
@@ -165,62 +160,54 @@ export function cardActions(device, ownId, removing) {
 }
 
 /**
- * Watches the removals this tab sent until each computer has rotated for them, and tells a computer again when its
- * rotation cannot have been for this removal.
+ * Watches the removals this tab sent, and tells a computer again under its new key each time it changes keys.
  *
- * A computer acts on a command sealed under its current key only. Two removals sealed under the same epoch e - a
- * phone and then a tablet, while the computer was asleep - meet one key change: the computer removes the phone,
- * moves to e+1 and grants it to every device still trusted, the tablet among them, then refuses the tablet's
- * command as sealed before a device was removed. Read as "the epoch rose", both were reported rotated, and the
- * tablet kept the new key. So a removal counts as rotated only when the computer moved exactly one epoch past the
- * one its latest command was sealed under, and that command was the first of this tab's sealed under that epoch
- * for that computer; otherwise it is sealed again under the newest key once this device holds it (a computer
- * returns without rotating for a device it has removed already, so this is harmless). At most MAX_RESENDS times:
- * after that it is NOT_CONFIRMED.
+ * A computer acts on a command sealed under its current key only, and refuses one sealed under the key before a
+ * device was removed - rightly: a removed device must not be able to remove others. So a removal sealed under
+ * epoch e that meets a key change before the computer runs it is refused, and the device it names is granted the
+ * new key with everyone else. That happens to two removals sealed under one key (the computer runs one and refuses
+ * the other), and to a removal overtaken by a key change from the desktop or another tab.
+ *
+ * Ruling: the panel cannot tell which removal a key change was for - the snapshot carries only the computer's key
+ * epoch, a rotation grant names no device, and the computer's refusal is shown on the computer only - so it never
+ * says a computer "rotated" for a removal. It says only what it can see: that the computer was told under the key
+ * it uses now (toldUnder). Whenever the key epoch rises above the one the latest command was sealed under, the
+ * removal is sealed again under the new key, with a new command id, once this device holds that key - whatever
+ * else was sent under the old one; a computer returns without a key change for a device it has removed already,
+ * so telling it twice is harmless (toldAgainUnder). At most MAX_RESENDS times, then NOT_CONFIRMED.
  *
  * `record(deviceId, sentTo)` takes revokeDevice's `sentTo`; `step(...)` runs on every poll and resolves to
- * whether anything changed; `lines(deviceId, now)` is `[{hostId, status}]` to draw.
+ * whether anything changed; `lines(deviceId, hosts)` is `[{hostId, status}]` against the snapshot's computers.
  */
 export function createRemovalWatch() {
   let watches = [];
-  // Which command was sent first, for the first-sealed rule; a clock can give two sends one time.
-  let order = 0;
 
   return {
     record(deviceId, sentTo) {
-      for (const { hostId, epoch, at } of sentTo) {
+      for (const { hostId, commandId, epoch } of sentTo) {
         const kept = watches.find((one) => one.deviceId === deviceId && one.hostId === hostId);
-        // Confirmed stays confirmed: told again later, the computer returns early and never rotates for it.
-        if (kept?.state === ROTATED) continue;
+        // The same command sent again - "Tell the computers again" before any key change - is the one watched.
+        if (kept?.commandId === commandId) continue;
         watches = watches.filter((one) => one !== kept);
-        watches.push({ deviceId, hostId, epoch, at, resends: 0, state: null, order: order++ });
+        watches.push({ deviceId, hostId, commandId, epoch, resends: 0, confirmed: true });
       }
     },
 
-    async step({ hosts, keystore, api, writer, sends, now = () => Date.now() }) {
+    async step({ hosts, keystore, api, writer, sends }) {
       let changed = false;
 
       for (const watch of watches) {
-        if (watch.state !== null) continue;
+        if (!watch.confirmed) continue;
         const host = hosts.find((one) => one.id === watch.hostId);
         if (!Number.isInteger(host?.keyEpoch) || host.keyEpoch <= watch.epoch) continue;
 
-        const first = watches
-          .filter((one) => one.hostId === watch.hostId && one.epoch === watch.epoch)
-          .reduce((earliest, one) => (one.order < earliest.order ? one : earliest));
-        if (first === watch && host.keyEpoch === watch.epoch + 1) {
-          watch.state = ROTATED;
-          changed = true;
-          continue;
-        }
-
         if (watch.resends >= MAX_RESENDS) {
-          watch.state = NOT_CONFIRMED;
+          watch.confirmed = false;
           changed = true;
           continue;
         }
 
-        // Sealed under the key before, it would be refused again: wait for the grant of the newest one.
+        // Sealed under the key before, it would be refused again: wait for the grant of the new one.
         const newest = keystore ? await keystore.newestEpoch(watch.hostId) : null;
         if (newest === null || newest < host.keyEpoch) continue;
 
@@ -229,7 +216,7 @@ export function createRemovalWatch() {
             (commandId) => writer.sealRevocation(watch.hostId, commandId, watch.deviceId));
           await api.post(`/api/hosts/${encodeURIComponent(watch.hostId)}/device-commands`,
             { commandId: command.id, kind: 'RevokeDevice', sealed: command.sealed });
-          Object.assign(watch, { epoch: command.epoch, at: now(), resends: watch.resends + 1, order: order++ });
+          Object.assign(watch, { commandId: command.id, epoch: command.epoch, resends: watch.resends + 1 });
           changed = true;
         } catch {
           // Out of reach: the next poll tries again.
@@ -239,11 +226,13 @@ export function createRemovalWatch() {
       return changed;
     },
 
-    lines(deviceId, now = Date.now()) {
-      return watches.filter((one) => one.deviceId === deviceId).map(({ hostId, state, at }) => ({
-        hostId,
-        status: state ?? (now - at >= ROTATION_WATCH_MS ? NOT_ROTATED_YET : SENT)
-      }));
+    lines(deviceId, hosts) {
+      return watches.filter((one) => one.deviceId === deviceId).map(({ hostId, epoch, resends, confirmed }) => {
+        const keyEpoch = hosts.find((one) => one.id === hostId)?.keyEpoch;
+        if (!confirmed) return { hostId, status: NOT_CONFIRMED };
+        if (Number.isInteger(keyEpoch) && keyEpoch > epoch) return { hostId, status: waitingForKey(keyEpoch) };
+        return { hostId, status: resends > 0 ? toldAgainUnder(epoch) : toldUnder(epoch) };
+      });
     },
 
     clear() {
