@@ -109,7 +109,7 @@ public sealed class AuditTests(TestDatabase database) : IClassFixture<TestDataba
         Assert.Equal([Mine(alice, Audit.DeviceRevoked, id)], await RowsAfterAsync(before));
     }
 
-    [Fact(Skip = "host audit lands with Task 8.1's fix: UserService.RegisterHostAsync writes no row yet")]
+    [Fact]
     public async Task Registering_a_computer_writes_one_row()
     {
         var alice = await PersonAsync("alice");
@@ -120,13 +120,30 @@ public sealed class AuditTests(TestDatabase database) : IClassFixture<TestDataba
         Assert.Equal([Mine(alice, Audit.HostRegistered, id)], await RowsAfterAsync(before));
     }
 
-    [Fact(Skip = "host audit lands with Task 8.1's fix: UserService.RevokeHostAsync writes no row yet")]
+    [Fact]
     public async Task Removing_a_computer_writes_one_row()
     {
         var alice = await PersonAsync("alice");
         var (id, _, _) = await Users.RegisterHostAsync(alice, "Studio PC", default);
         var before = await NewestIdAsync();
 
+        await Users.RevokeHostAsync(alice, id, default);
+
+        Assert.Equal([Mine(alice, Audit.HostRevoked, id)], await RowsAfterAsync(before));
+    }
+
+    /// <summary>
+    /// Revoking a computer that is already revoked succeeds and changes nothing, so it writes nothing: a
+    /// second row would tell the person their computer was removed twice.
+    /// </summary>
+    [Fact]
+    public async Task Removing_a_computer_twice_writes_one_row()
+    {
+        var alice = await PersonAsync("alice");
+        var (id, _, _) = await Users.RegisterHostAsync(alice, "Studio PC", default);
+        var before = await NewestIdAsync();
+
+        await Users.RevokeHostAsync(alice, id, default);
         await Users.RevokeHostAsync(alice, id, default);
 
         Assert.Equal([Mine(alice, Audit.HostRevoked, id)], await RowsAfterAsync(before));

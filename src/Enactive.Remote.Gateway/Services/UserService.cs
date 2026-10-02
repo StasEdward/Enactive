@@ -95,13 +95,18 @@ public sealed class UserService(
                 throw GatewayFault.QuotaExceeded("computers", limits.HostsPerUser, "revoke one to add another");
             }
 
+            var now = clock.GetUtcNow();
+
             await connection.ExecuteAsync(transaction,
                 """
                 INSERT INTO hosts (id, owner_id, label, token_hash, revoked, created_at)
                 VALUES (@id, @owner, @label, @hash, 0, @now)
                 """,
                 ("@id", id), ("@owner", user.UserId), ("@label", name), ("@hash", Ids.Hash(token)),
-                ("@now", clock.GetUtcNow()));
+                ("@now", now));
+
+            await Audit.WriteAsync(
+                connection, transaction, now, user.UserId, Audit.User(user.UserId), Audit.HostRegistered, id);
         }, ct);
 
         return (id, name, token);
@@ -127,17 +132,27 @@ public sealed class UserService(
             await Quota.LockAccountAsync(connection, transaction, user.UserId);
 
             // FORCE INDEX (see the class comment): through the primary key this locked another person's row.
-            var exists = await connection.ExistsAsync(transaction,
+            var revoked = await connection.ReadOneAsync(transaction,
                 """
-                SELECT 1 FROM hosts FORCE INDEX (ux_hosts_owner)
+                SELECT revoked FROM hosts FORCE INDEX (ux_hosts_owner)
                 WHERE owner_id = @owner AND id = @host
                 FOR UPDATE
                 """,
-                ("@owner", user.UserId), ("@host", hostId));
+                reader => (bool?)reader.GetBoolean(0), ("@owner", user.UserId), ("@host", hostId));
 
-            if (!exists)
+            if (revoked is null)
             {
                 throw NoSuchComputer();
+            }
+
+            var now = clock.GetUtcNow();
+
+            // Only the first revocation is the person's log's: a repeat changes nothing, and a second row
+            // would say the computer was removed twice.
+            if (!revoked.Value)
+            {
+                await Audit.WriteAsync(
+                    connection, transaction, now, user.UserId, Audit.User(user.UserId), Audit.HostRevoked, hostId);
             }
 
             await connection.ExecuteAsync(transaction,
@@ -152,7 +167,7 @@ public sealed class UserService(
                 WHERE owner_id = @owner AND host_id = @host
                   AND status NOT IN ('Completed', 'Failed', 'Incomplete', 'Cancelled', 'Interrupted')
                 """,
-                ("@interrupted", RemoteRunStatus.Interrupted), ("@now", clock.GetUtcNow()),
+                ("@interrupted", RemoteRunStatus.Interrupted), ("@now", now),
                 ("@owner", user.UserId), ("@host", hostId));
 
             await connection.ExecuteAsync(transaction,
