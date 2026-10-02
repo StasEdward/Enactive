@@ -38,6 +38,14 @@
       secret go by.
     -->
     <InternalsVisibleTo Include="Enactive.Engine.Tests" />
+
+    <!--
+      SecretProtector.ForTestsOnly, which writes the computer's keys down in the clear: for the end-to-end
+      tests and the browser-test harness, which run a computer on Linux, where there is no DPAPI. Internal so
+      the desktop cannot be built to use it.
+    -->
+    <InternalsVisibleTo Include="Enactive.Remote.Gateway.Tests" />
+    <InternalsVisibleTo Include="RemoteHostHarness" />
   </ItemGroup>
 
 </Project>

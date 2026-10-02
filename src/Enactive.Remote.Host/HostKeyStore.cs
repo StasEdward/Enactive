@@ -4,7 +4,6 @@ using System.Globalization;
 using System.Security.Cryptography;
 using Enactive.Remote.Contracts;
 using Enactive.Remote.Contracts.Crypto;
-using Enactive.Secrets;
 using Microsoft.Data.Sqlite;
 
 /// <summary>A browser device this computer grants its keys to. Revoked devices stay listed, with the time.</summary>
@@ -78,6 +77,7 @@ public sealed class HostKeyStore : IHostKeys, IGrantOutbox, IDisposable
 
     private readonly HostStore _store;
     private readonly TimeProvider _clock;
+    private readonly ISecretProtector _protector;
     private readonly ECDsa _signer;
     private readonly byte[] _signingPublic;
 
@@ -85,10 +85,15 @@ public sealed class HostKeyStore : IHostKeys, IGrantOutbox, IDisposable
     // list or the new one and never one being changed under it.
     private volatile HostKey[] _keys;
 
-    public HostKeyStore(HostStore store, string hostId, TimeProvider? clock = null)
+    /// <param name="protector">
+    /// How the secrets are kept at rest: DPAPI for this Windows user unless a test says otherwise (see
+    /// <see cref="ISecretProtector"/>).
+    /// </param>
+    public HostKeyStore(HostStore store, string hostId, TimeProvider? clock = null, ISecretProtector? protector = null)
     {
         _store = store;
         _clock = clock ?? TimeProvider.System;
+        _protector = protector ?? SecretProtector.Dpapi;
         HostId = hostId;
 
         (_keys, _signer) = store.Locked(Load);
@@ -551,7 +556,7 @@ public sealed class HostKeyStore : IHostKeys, IGrantOutbox, IDisposable
         return (keys, ImportSigner(signing));
     }
 
-    private static (HostKey[] Keys, ECDsa Signer) Create(SqliteConnection connection)
+    private (HostKey[] Keys, ECDsa Signer) Create(SqliteConnection connection)
     {
         var first = HostKey.Create(1);
         var signer = P256.GenerateSigning();
@@ -580,7 +585,7 @@ public sealed class HostKeyStore : IHostKeys, IGrantOutbox, IDisposable
         return ([first], signer);
     }
 
-    private static ECDsa ImportSigner(string stored)
+    private ECDsa ImportSigner(string stored)
     {
         var raw = Unprotect(stored) ?? throw new HostKeysUnreadableException(UnreadableMessage);
         var signer = ECDsa.Create();
@@ -610,17 +615,17 @@ public sealed class HostKeyStore : IHostKeys, IGrantOutbox, IDisposable
     private static string GrantId(KeyGrant grant)
         => $"{grant.HostId}:{grant.DeviceId}:{grant.Epoch.ToString(CultureInfo.InvariantCulture)}";
 
-    private static string Protect(ReadOnlySpan<byte> secret) => Secret.Protect(Convert.ToBase64String(secret));
+    private string Protect(ReadOnlySpan<byte> secret) => _protector.Protect(Convert.ToBase64String(secret));
 
     /// <summary>
     /// The bytes, or null when this account cannot read them. Text that is not protected at all is
     /// refused too: this store never writes a secret in the clear, so one found that way was put
     /// there by something else.
     /// </summary>
-    private static byte[]? Unprotect(string stored)
+    private byte[]? Unprotect(string stored)
     {
-        if (!Secret.IsProtected(stored)) return null;
-        var clear = Secret.Unprotect(stored);
+        if (!_protector.IsProtected(stored)) return null;
+        var clear = _protector.Unprotect(stored);
         if (clear.Length == 0) return null;
         try
         {

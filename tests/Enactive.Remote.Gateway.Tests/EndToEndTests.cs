@@ -283,7 +283,7 @@ public sealed class EndToEndTests(TestDatabase database) : IClassFixture<TestDat
         var code = Assert.IsType<ConnectionCode>(Pairing.TryRead(text, out var problem), exactMatch: true);
         Assert.Equal(string.Empty, problem);
         using var store = OpenStore();
-        using var keys = new HostKeyStore(store, code.HostId);
+        using var keys = OpenKeys(store, code.HostId);
         var pairKey = code.PairKey;
         Pairing.Apply(code, keys);
 
@@ -331,7 +331,7 @@ public sealed class EndToEndTests(TestDatabase database) : IClassFixture<TestDat
         var pairKey = code.PairKey;
 
         using var store = OpenStore();
-        using var keys = new HostKeyStore(store, code.HostId);
+        using var keys = OpenKeys(store, code.HostId);
         Pairing.Apply(code, keys);
         keys.Trust(new TrustedDevice(laptopId, P256.PublicRaw(laptopKey), "Laptop", "test", DateTimeOffset.UtcNow, null));
 
@@ -709,6 +709,13 @@ public sealed class EndToEndTests(TestDatabase database) : IClassFixture<TestDat
 
     private static HostStore OpenStore()
         => new(Path.Combine(Path.GetTempPath(), "enactive-e2e-" + Guid.NewGuid().ToString("N"), "remote.db"));
+
+    /// <summary>
+    /// The computer's key store, kept with the test protector: this suite runs on the gateway's Linux CI job,
+    /// where there is no DPAPI, and with the desktop's protector every test that pairs failed there.
+    /// </summary>
+    private static HostKeyStore OpenKeys(HostStore store, string hostId)
+        => new(store, hostId, protector: SecretProtector.ForTestsOnly);
 
     private static WorkEvent Event(EventKind kind, string summary, string? payload = null)
         => new(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.UtcNow, kind, summary, payload);

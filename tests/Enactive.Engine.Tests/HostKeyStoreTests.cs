@@ -498,6 +498,70 @@ public sealed class HostKeyStoreTests
         Assert.Empty(keys.OwedRevocations());
     }
 
+    // ── the protector ───────────────────────────────────────────────────────
+
+    /// <summary>
+    /// A store is read with the protector that wrote it, or not at all. The test protector exists so a
+    /// computer can be run where there is no DPAPI; a desktop that took its marked text for a key - or a
+    /// harness that took DPAPI's - would be reading keys it never made, so each refuses the other's as it
+    /// refuses another Windows user's.
+    /// </summary>
+    [WindowsTheory]
+    [InlineData("dpapi", "tests")]
+    [InlineData("tests", "dpapi")]
+    public void A_store_written_with_one_protector_is_unreadable_with_another(string writer, string reader)
+    {
+        using var fx = new EngineFixture();
+        var path = fx.PathOf("remote.db");
+        using (var store = new HostStore(path))
+        using (new HostKeyStore(store, HostId, protector: Protector(writer))) { }
+
+        using (var store = new HostStore(path))
+        {
+            var refused = Assert.Throws<HostKeysUnreadableException>(
+                () => new HostKeyStore(store, HostId, protector: Protector(reader)));
+            Assert.Contains("cannot be read on this account", refused.Message, StringComparison.Ordinal);
+        }
+
+        Assert.Equal(1L, Count(path, "host_keys"));
+        Assert.Equal(1L, Count(path, "host_signing"));
+    }
+
+    /// <summary>
+    /// The test protector keeps a store across a restart, as DPAPI does, and marks what it writes - so the
+    /// end-to-end tests and the browser harness, which run a computer on it, run the same store logic the
+    /// desktop does. Not Windows-only: it is what lets a computer run where there is no DPAPI.
+    /// </summary>
+    [Fact]
+    public void The_test_protector_keeps_keys_across_a_restart_and_marks_what_it_wrote()
+    {
+        using var fx = new EngineFixture();
+        var path = fx.PathOf("remote.db");
+
+        byte[] first, second, signing;
+        using (var store = new HostStore(path))
+        using (var keys = new HostKeyStore(store, HostId, protector: SecretProtector.ForTestsOnly))
+        {
+            first = keys.Current.Secret.ToArray();
+            second = keys.Rotate().Secret.ToArray();
+            signing = keys.SigningPublic;
+        }
+
+        Assert.StartsWith("clear:", (string)Read(path, "SELECT secret FROM host_keys WHERE epoch = 1")!, StringComparison.Ordinal);
+        Assert.StartsWith("clear:", (string)Read(path, "SELECT private_key FROM host_signing WHERE id = 1")!, StringComparison.Ordinal);
+
+        using (var store = new HostStore(path))
+        using (var keys = new HostKeyStore(store, HostId, protector: SecretProtector.ForTestsOnly))
+        {
+            Assert.Equal(first, keys.Epoch(1)!.Secret.ToArray());
+            Assert.Equal(second, keys.Epoch(2)!.Secret.ToArray());
+            Assert.Equal(signing, keys.SigningPublic);
+        }
+    }
+
+    private static ISecretProtector Protector(string name)
+        => name == "dpapi" ? SecretProtector.Dpapi : SecretProtector.ForTestsOnly;
+
     // ── helpers ─────────────────────────────────────────────────────────────
 
     /// <summary>
