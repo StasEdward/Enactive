@@ -36,7 +36,7 @@
   <p class="draft-banner" role="note"><strong>DRAFT — not yet approved by the operator.</strong>
     This text may still change before the service opens to sign-up.</p>
   <p class="draft-banner" role="note">Not yet built: account deletion, data export, the security log in the
-    panel - this text describes the service as it will be when sign-up opens.</p>
+    panel, publishing release fingerprints - this text describes the service as it will be when sign-up opens.</p>
 
   <p class="home"><a href="/">← Enactive Remote</a></p>
 
@@ -102,10 +102,11 @@
     failed or were cancelled, how many permission requests they raised, how much encrypted data they
     produced, and the names you give your computers.</p>
 
-  <h2>Before you have an account</h2>
-  <p>If you sign in without being admitted, we keep the provider, your provider id and display name,
-    and the time, until the operator decides; the operator's decision is logged against that id.
-    Deleting an account removes these records too.</p>
+  <h2>Your first sign-in</h2>
+  <p>When you first sign in, the service records the provider, your provider id and display name, and
+    the time, together with the operator's decision about admission. These records stay after the
+    decision. Deleting an account removes them; records of a sign-in that never became an account are
+    kept until the operator removes them.</p>
 
   <h2>What we do not keep</h2>
   <ul>
@@ -130,7 +131,7 @@
       does is make an alteration visible: it publishes the fingerprint (SHA-256) of every script and
       stylesheet it serves at
       <a href="/.well-known/enactive-panel.json"><code>/.well-known/enactive-panel.json</code></a>, and
-      the operator publishes the fingerprints of each release so anyone can compare.</li>
+      the operator will publish the fingerprints of each release so anyone can compare.</li>
     <li><strong>What the service can see,</strong> listed above. It is not encrypted, because the
       service needs it to deliver anything at all.</li>
     <li><strong>A compromised computer or browser.</strong> Whatever can read your screen or your
@@ -152,8 +153,9 @@
     remove your computers and browsers from the service, sign out every session, and delete your
     account with everything stored for it.</p>
   <p>If this happens: secure the GitHub or Google account and end its sessions there, then sign in here
-    and use "Sign out everywhere". If computers or browsers were removed, add them again - a computer
-    from the desktop app, and browsers from that computer.</p>
+    and use "Sign out everywhere". If computers or browsers were removed, add them again: for a
+    computer, register it again from this page and paste the new code into the desktop app; browsers are
+    added again from that computer.</p>
 
   <h2>Signing in</h2>
   <p>You sign in with GitHub or Google. From GitHub the service keeps your account's number and your
@@ -180,12 +182,16 @@
 
   <h2>How long things are kept</h2>
   <ul>
-    <li><strong>Ended runs</strong> and their progress messages, permission requests and notifications
-      are removed after a number of days the operator sets. The panel shows the current number, and
-      says when older history was removed. A task with no run left is removed with it.</li>
+    <li><strong>History</strong> is kept for a number of days the operator sets; the panel shows the
+      current number, and says when older history was removed. Progress messages and notifications
+      older than that are removed even while their run is going; an ended run is removed whole, with its
+      task, after the window.</li>
     <li><strong>The security log</strong> is kept for 90 days.</li>
     <li><strong>Your account, browsers and computers</strong> are kept while your account exists.</li>
   </ul>
+  <p>Everything else the service holds for you - sessions, invitations, the encrypted keys sent to your
+    browsers, workspace ids and commands - stays while your account exists and goes with it when the
+    account is deleted.</p>
 
   <h2>Backups</h2>
   <p>The database is backed up. Backups are kept for 30 days and then removed. Like the database, a
@@ -193,7 +199,7 @@
 
   <h2>Deleting your account</h2>
   <p>You can delete your account from the panel. Everything stored for it — computers, browsers,
-    tasks, history, the security log, and the records from before you had an account — is deleted at
+    tasks, history, the security log, and the records of your first sign-in — is deleted at
     once. Copies of it in backups are gone when those backups are removed, within 30 days. Your computer
     is told the account no longer exists, and stops.</p>
 
