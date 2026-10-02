@@ -25,7 +25,9 @@ import {
   ensureDevice, collectGrants, troubleFor, worthSaying, connectPendingId, keyStanding, createGrantSchedule, epochsChanged
 } from "./js/trust.js";
 import { createReader, answerable, NOT_GIVEN } from "./js/reader.js";
-import { createWriter, createSendCache, sendRefusal, NOT_YET_GIVEN } from "./js/writer.js";
+import {
+  createWriter, createSendCache, sendRefusal, draftKey, draftAlreadyRan, NOT_YET_GIVEN
+} from "./js/writer.js";
 import { formatConnectionCode, newPairingSecret } from "./js/pairing.js";
 
 const POLL_MS = 3000;
@@ -53,6 +55,7 @@ const state = emptyState();
 // cannot act on, so nothing of one account's is reused for another's. Clearing
 // it would give the same person's retry after signing in again a new id, and a
 // command the gateway had already queued before the reset would be queued twice.
+// Drafts of tasks not yet started are the exception (resetSession).
 const sends = createSendCache();
 
 const $ = (id) => document.getElementById(id);
@@ -871,23 +874,31 @@ async function createTask() {
     // The task's id and envelope are kept per draft - this computer, workspace, title and prompt - until it
     // is started, so pressing Create again after a failure sends the same task: the gateway takes the same
     // id with another envelope for a different task, and a new id for a second one.
-    const draft = `draft:${JSON.stringify([hostId, workspaceId, title, prompt])}`;
+    const draft = await draftKey(hostId, workspaceId, title, prompt);
+
+    // A start whose answer was lost may have gone through: then the run is on the screen, and these words
+    // are not sent again (draftAlreadyRan). After a key change they would be sealed under a new task id,
+    // which the gateway takes for another task and runs a second time.
+    if (draftAlreadyRan(state.runs, (await sends.kept(draft))?.id)) {
+      sends.forget(draft);
+      finishTaskDialog("This task was already started.");
+      return;
+    }
+
     const task = await sealFor(draft, hostId,
       (write, taskId) => write.sealTask(hostId, taskId, workspaceId, { title, prompt }));
     await post("/api/tasks", { taskId: task.id, hostId, workspaceId, sealedTask: task.sealed });
 
     // Two calls, and the gap between them is real: a task that was created and
-    // not started is a draft the owner can see, not a lost request.
+    // not started is kept by the gateway but not shown - the panel draws runs -
+    // and pressing Create again starts the same task rather than a second one.
     const start = await sealFor(`start:${task.id}`, hostId,
       (write, commandId) => write.sealStart(hostId, commandId, task.id, workspaceId));
     await post(`/api/tasks/${task.id}/start`, { commandId: start.id, sealed: start.sealed });
 
     // Started: the same words written again are a new task, not this one retried.
     sends.forget(draft);
-    $("task-dialog").close();
-    $("task-title").value = "";
-    $("task-prompt").value = "";
-    toast("Queued. Your computer picks it up on its next check-in.");
+    finishTaskDialog("Queued. Your computer picks it up on its next check-in.");
   } catch (error) {
     if (isCurrent(started)) {
       $("task-error").textContent = error.message;
@@ -922,6 +933,14 @@ async function sealFor(key, hostId, seal) {
   }
 
   return sends.once(key, newest, (id) => seal(write, id));
+}
+
+/** Closes the new-task dialog on a task that is running, empties it and says so. */
+function finishTaskDialog(message) {
+  $("task-dialog").close();
+  $("task-title").value = "";
+  $("task-prompt").value = "";
+  toast(message);
 }
 
 // ── this device's keys ───────────────────────────────────────────────────
@@ -1261,6 +1280,9 @@ function resetSession() {
   // Its opened records too: they are the last account's content, in clear.
   reader = createReader(null);
   writer = createWriter(null);
+  // Drafts too: a draft is the last person's task, and nothing of it is the next one's to resend. Commands
+  // stay (see `sends`): each names a task, run or approval only its own account can act on.
+  sends.forgetAll("draft:");
   content = () => undefined;
   drawnCursor = null;
   grantSchedule = createGrantSchedule();

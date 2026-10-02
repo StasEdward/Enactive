@@ -6,7 +6,7 @@ import { ad, openJson } from '../../src/Enactive.Remote.Gateway/wwwroot/js/seale
 import { epochOf } from '../../src/Enactive.Remote.Gateway/wwwroot/js/envelope.js';
 import { fromB64url } from '../../src/Enactive.Remote.Gateway/wwwroot/js/bytes.js';
 import {
-  createWriter, createSendCache, sendRefusal, NoKeyError, NOT_PAIRED_TO_SEND, NOT_YET_GIVEN
+  createWriter, createSendCache, sendRefusal, NoKeyError, NOT_PAIRED_TO_SEND, NOT_YET_GIVEN, draftKey, draftAlreadyRan
 } from '../../src/Enactive.Remote.Gateway/wwwroot/js/writer.js';
 import { vectors } from './vectors.mjs';
 
@@ -155,6 +155,8 @@ test('a retry resends the identical envelope', async () => {
   // the same command id for a different command.
   assert.deepEqual(again, first);
   assert.equal(sealedCount, 1);
+  assert.deepEqual(await cache.kept('cancel:run-1'), first);
+  assert.equal(await cache.kept('cancel:run-9'), null);
   assert.equal(typeof first.id, 'string');
   assert.notEqual((await cache.once('cancel:run-2', EPOCH, seal)).id, first.id);
 });
@@ -186,4 +188,56 @@ test('a seal that failed is not kept, and a forgotten action starts over', async
 
   cache.forget('cancel:run-1');
   assert.notEqual((await cache.once('cancel:run-1', EPOCH, (id) => write.sealCancel(HOST, id, 'run-1'))).id, made.id);
+});
+
+test('a kept command older than twenty hours is sealed afresh under a new id', async () => {
+  let now = NOW;
+  const cache = createSendCache(() => now);
+  const write = createWriter(await store(), () => now);
+  const seal = (id) => write.sealCancel(HOST, id, 'run-1');
+
+  const first = await cache.once('cancel:run-1', EPOCH, seal);
+  now += 20 * 60 * 60 * 1000 - 1;
+  assert.deepEqual(await cache.once('cancel:run-1', EPOCH, seal), first);
+
+  // Resent as it was, its issuedAt would soon be older than the computer acts on, and a start refused for
+  // that is reported as not coming from a trusted device.
+  now += 1;
+  const renewed = await cache.once('cancel:run-1', EPOCH, seal);
+  assert.notEqual(renewed.id, first.id);
+  assert.notEqual(renewed.sealed, first.sealed);
+  const opened = await openJson(computer, renewed.sealed, ad.command(HOST, renewed.id, 'CancelRun'));
+  assert.equal(opened.issuedAt, new Date(now).toISOString());
+});
+
+test('a draft whose kept task already has a run is not started again', () => {
+  const runs = [{ id: 'run-1', taskId: 'task-1' }, { id: 'run-2', taskId: 'task-2' }];
+
+  assert.equal(draftAlreadyRan(runs, 'task-2'), true);
+  assert.equal(draftAlreadyRan(runs, 'task-3'), false);
+  assert.equal(draftAlreadyRan([], 'task-1'), false);
+  assert.equal(draftAlreadyRan(runs, null), false);
+});
+
+test('a draft is kept under a digest, never under its words', async () => {
+  const key = await draftKey(HOST, 'ws-main', 'Secret title', 'Read my mail');
+
+  assert.match(key, /^draft:[0-9a-f]{64}$/);
+  assert.ok(!key.includes('Secret') && !key.includes('mail'), key);
+  assert.equal(await draftKey(HOST, 'ws-main', 'Secret title', 'Read my mail'), key);
+  // The fields are kept apart, so moving words from the title to the prompt is another draft.
+  assert.notEqual(await draftKey(HOST, 'ws-main', 'a|b', 'c'), await draftKey(HOST, 'ws-main', 'a', 'b|c'));
+});
+
+test('forgetting by prefix lets those actions go and keeps the others', async () => {
+  const cache = createSendCache();
+  const write = await writer();
+  const seal = (id) => write.sealCancel(HOST, id, 'run-1');
+
+  const draft = await cache.once('draft:abc', EPOCH, seal);
+  const cancel = await cache.once('cancel:run-1', EPOCH, seal);
+  cache.forgetAll('draft:');
+
+  assert.notEqual((await cache.once('draft:abc', EPOCH, seal)).id, draft.id);
+  assert.deepEqual(await cache.once('cancel:run-1', EPOCH, seal), cancel);
 });

@@ -9,7 +9,7 @@
 import { ad, sealJson } from './sealed.js';
 import { hostKey } from './hostkey.js';
 import { epochOf } from './envelope.js';
-import { b64url } from './bytes.js';
+import { b64url, utf8 } from './bytes.js';
 
 /** Why the panel sends nothing to a computer this device holds no key for. */
 export const NOT_PAIRED_TO_SEND = 'This device is not paired with this computer.';
@@ -40,6 +40,13 @@ export function sendRefusal(host, newest) {
 }
 
 const DECISIONS = Object.freeze(['Allow', 'Deny']);
+
+// How long a sealed action is resent as it is. The computer acts on nothing issued more than a day (its command
+// lifetime) and ten minutes of clock skew ago, and a start it refuses for that is reported as not coming from a
+// device it trusts: a tab left open on a failed Create and pressed again the next day had the person's own click
+// called a forgery, and a cancel or an answer was dropped without a word. Four hours short of the day leaves
+// room for this device's clock to be behind and for the command to wait in the queue.
+const RESEAL_AFTER_MS = 20 * 60 * 60 * 1000;
 
 /**
  * A writer over `keystore` (keystore.js), or over nothing when this browser cannot keep keys: then every
@@ -110,9 +117,10 @@ export function createWriter(keystore, now = () => Date.now()) {
  * a cancel or an answer the panel never hears of it, so a click after the rotation that resent the old envelope
  * would do nothing, every time. An action whose envelope is of another epoch than the newest held is sealed
  * again, under a new id - the gateway would refuse the old id with a new envelope. The person clicks again;
- * nothing is resent on its own.
+ * nothing is resent on its own. So is one sealed long enough ago that the computer would take it for kept
+ * and replayed (RESEAL_AFTER_MS). `now` is the clock that age is read from; a test passes its own.
  */
-export function createSendCache() {
+export function createSendCache(now = () => Date.now()) {
   const entries = new Map();
 
   return {
@@ -121,14 +129,15 @@ export function createSendCache() {
       const kept = entries.get(key);
       if (kept) {
         const held = await kept.catch(() => null);
-        if (held && held.epoch === epoch) return held;
+        if (held && held.epoch === epoch && now() - held.at < RESEAL_AFTER_MS) return held;
         if (entries.get(key) === kept) entries.delete(key);
       }
 
       const made = (async () => {
         const id = crypto.randomUUID();
+        const at = now();
         const sealed = await seal(id);
-        return { id, sealed, epoch: epochOf(sealed) };
+        return { id, sealed, epoch: epochOf(sealed), at };
       })();
       entries.set(key, made);
       // A seal that failed sent nothing, so there is nothing a retry must repeat.
@@ -136,11 +145,44 @@ export function createSendCache() {
       return made;
     },
 
+    /** What is kept for the action, whatever key it was sealed under, or null: no seal is made. */
+    async kept(key) {
+      return (await entries.get(key)?.catch(() => null)) ?? null;
+    },
+
     /** Lets an action go once it is done with, so the next one like it is a new action. */
     forget(key) {
       entries.delete(key);
+    },
+
+    /** Lets go of every action whose key begins with `prefix`. */
+    forgetAll(prefix) {
+      for (const key of [...entries.keys()]) {
+        if (key.startsWith(prefix)) entries.delete(key);
+      }
     }
   };
+}
+
+/**
+ * The send-cache key of a task not yet started: a SHA-256 of the computer, the workspace, the title and the
+ * prompt, so pressing Create again with the same words is the same task. A digest and not the words: the
+ * cache outlives a sign-out, and the last person's prompt would otherwise stay in the page in clear for the
+ * next. The fields are hashed as a JSON array, so words moved from the title to the prompt are another draft.
+ */
+export async function draftKey(hostId, workspaceId, title, prompt) {
+  const digest = await crypto.subtle.digest('SHA-256', utf8(JSON.stringify([hostId, workspaceId, title, prompt])));
+  return 'draft:' + [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+/**
+ * Whether the task a draft is kept under has a run already. Its start was committed even if the answer never
+ * came back: the start reaches the gateway, the response is lost, a device is removed and the computer moves
+ * to a new key, and Create pressed again would seal the same words under a new task id - the draft's envelope
+ * is of the key before - and run them a second time. The gateway allows one run per task id, not per prompt.
+ */
+export function draftAlreadyRan(runs, taskId) {
+  return typeof taskId === 'string' && runs.some((run) => run.taskId === taskId);
 }
 
 // A field that is not text would be sealed as null or left out of the JSON, and the computer would refuse
