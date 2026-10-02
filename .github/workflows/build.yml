@@ -172,7 +172,8 @@ jobs:
       # proves one half against a stand-in for the other; the panel's own wiring - app.js, which pairs,
       # admits and removes devices, seals and opens - ran nowhere until this did. Here, before the publish,
       # because what it checks is what the deploy would ship: a pairing that verifies, a tampered grant
-      # refused, a removed device that reads nothing new, two accounts kept apart in one browser.
+      # refused, a removed device that reads nothing new, two accounts kept apart in one browser. On the Node set up
+      # at the top of this job (22), not whatever the runner image carries.
       - name: Install the browser tests
         working-directory: tests/panel-e2e
         run: npm ci

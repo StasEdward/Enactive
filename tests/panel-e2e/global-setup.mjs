@@ -1,7 +1,7 @@
 // One gateway for the whole run, on a database of its own: built, started in Development with the development
 // sign-in, and waited for. The teardown stops it and drops the database, whatever the tests did.
 import { spawn, spawnSync } from 'node:child_process';
-import { createWriteStream, mkdirSync, mkdtempSync } from 'node:fs';
+import { createWriteStream, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { createServer } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -29,6 +29,8 @@ export default async function globalSetup() {
   const origin = `http://127.0.0.1:${port}`;
   mkdirSync(logs, { recursive: true });
   const log = createWriteStream(path.join(logs, 'gateway.log'));
+  // The gateway's Data Protection keys: the run's own, deleted with it.
+  const data = mkdtempSync(path.join(os.tmpdir(), 'enactive-e2e-gateway-'));
 
   // Run from its project folder: that is its content root, where wwwroot is.
   const gateway = spawn('dotnet', [gatewayDll], {
@@ -39,7 +41,7 @@ export default async function globalSetup() {
       ASPNETCORE_URLS: origin,
       ENACTIVE_DEV_SIGNIN: 'true',
       ENACTIVE_REMOTE_DB: `${mysqlServer.replace(/;?$/, ';')}Database=${name};`,
-      ENACTIVE_DATA: mkdtempSync(path.join(os.tmpdir(), 'enactive-e2e-gateway-'))
+      ENACTIVE_DATA: data
     },
     stdio: ['ignore', 'pipe', 'pipe']
   });
@@ -55,6 +57,7 @@ export default async function globalSetup() {
       await gone;
     }
     database('drop', name);
+    rmSync(data, { recursive: true, force: true });
   };
 
   try {

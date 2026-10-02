@@ -97,7 +97,10 @@ internal static class Computer
         await connection.HelloAsync(RemoteProtocol.Version, ct);
 
         var sealer = new Sealer(keys, TimeProvider.System);
-        var loop = new DeliveryLoop(store, connection, sealer, keys);
+        // The grants go out through a window that names each one, so a test can see whom the computer gave a key -
+        // what the gateway does with a grant afterwards (refuse it, sweep it, hide it from a removed device) would
+        // otherwise make a computer that granted the wrong device look exactly like one that did not.
+        var loop = new DeliveryLoop(store, connection, sealer, new SaidGrants(keys));
         var administration = new KeyAdministration(keys, connection, TimeProvider.System);
         var runner = new RemoteRunner(store, new RemoteApprovals(), sealer, (task, wrap, _) =>
         {
@@ -113,9 +116,14 @@ internal static class Computer
                 DateTimeOffset.UtcNow)));
         }, () => administration);
 
-        runner.Noticed += notice => Say("NOTICE", notice.Detail);
-        loop.Noticed += notice => Say("NOTICE", $"{notice.Kind}: {notice.Detail}");
-        administration.Noticed += notice => Say("NOTICE", notice.Detail);
+        // FAULT is what no scenario expects unless it says so: a command the computer refused, a grant the gateway
+        // refused for good, a delivery that stopped, an invitation answer refused. Said as NOTICE, nobody read it.
+        runner.Noticed += notice => Say("FAULT", $"refused {notice.Detail}");
+        loop.Noticed += notice => Say("FAULT", notice.Kind == "GrantDropped"
+            ? $"grant-dropped {notice.Detail}"
+            : $"{notice.Kind} {notice.Detail}");
+        administration.Noticed += notice => Say(notice.Refused ? "FAULT" : "NOTICE",
+            notice.Refused ? $"admission-refused {notice.Detail}" : notice.Detail);
 
         var runs = new List<Task>();
         var nextSync = DateTimeOffset.MinValue;
@@ -161,6 +169,10 @@ internal static class Computer
                 Say("EPOCH", epoch.ToString(System.Globalization.CultureInfo.InvariantCulture));
             }
 
+            // A command whose task threw is said, not dropped with the finished ones: otherwise a runner that failed
+            // showed only as a test waiting thirty seconds for something that was never going to happen.
+            foreach (var faulted in runs.Where(run => run.IsFaulted))
+                Say("FAULT", $"run {faulted.Exception?.GetBaseException().Message}");
             runs.RemoveAll(run => run.IsCompleted);
             await Task.Delay(FlushEvery, ct);
         }
@@ -184,6 +196,28 @@ internal static class Computer
     {
         var at = Array.IndexOf(args, name);
         return at >= 0 && at + 1 < args.Length ? args[at + 1] : null;
+    }
+
+    /// <summary>
+    /// The key store's grant outbox, saying <c>GRANTED &lt;epoch&gt; &lt;deviceId&gt;</c> the first time the delivery loop
+    /// reads each grant - which it does before sending any, so every grant the computer made is said.
+    /// </summary>
+    private sealed class SaidGrants(HostKeyStore keys) : IGrantOutbox
+    {
+        private readonly HashSet<string> _said = [];
+
+        public IReadOnlyList<PendingGrant> PendingGrants()
+        {
+            var pending = keys.PendingGrants();
+            foreach (var grant in pending)
+            {
+                if (_said.Add(grant.Id))
+                    Say("GRANTED", $"{grant.Grant.Epoch} {grant.Grant.DeviceId}");
+            }
+            return pending;
+        }
+
+        public void DiscardGrant(string id) => keys.DiscardGrant(id);
     }
 
     /// <summary>The person at the desk, who is not there: every permission is the panel's to answer.</summary>

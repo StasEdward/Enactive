@@ -51,8 +51,9 @@ test.beforeAll(async ({ browser }) => {
   [contextA, contextB, contextC] = await Promise.all([browser.newContext(), browser.newContext(), browser.newContext()]);
 
   for (const context of [contextA, contextB, contextC]) {
+    // allHeaders, not headers: the latter leaves out the cookie and other headers the browser adds itself.
     context.on('request', (request) => requests.push({
-      url: request.url(), headers: request.headers(), body: request.postData() ?? ''
+      url: request.url(), headers: request.allHeaders().catch(() => request.headers()), body: request.postData() ?? ''
     }));
   }
 
@@ -65,8 +66,30 @@ test.beforeAll(async ({ browser }) => {
   }
 });
 
+/** Where each computer's output stood when the test began, so a test answers only for what it caused. */
+let faultMarks = new Map();
+
+/**
+ * FAULT lines a scenario expects (regexes), set by the scenario. None does today: every one of them is a computer
+ * doing what it should, and a refused command or a grant the gateway refused for good is something gone wrong.
+ */
+let expectedFaults = [];
+
+const computers = () => [['studio', studio], ['carol', carolsComputer]].filter(([, computer]) => computer);
+
+test.beforeEach(() => {
+  expectedFaults = [];
+  faultMarks = new Map(computers().map(([name, computer]) => [name, computer.lines.length]));
+});
+
 test.afterEach(() => {
   expect(pageErrors, 'exceptions the panel did not catch').toEqual([]);
+
+  const faults = computers().flatMap(([name, computer]) => computer.lines
+    .slice(faultMarks.get(name) ?? 0)
+    .filter((line) => line.startsWith('FAULT ') && !expectedFaults.some((expected) => expected.test(line)))
+    .map((line) => `${name}: ${line}`));
+  expect(faults, 'what the computers said went wrong').toEqual([]);
 });
 
 test.afterAll(async () => {
@@ -171,6 +194,52 @@ async function keysHeld(page, userId, hostId) {
 }
 
 /**
+ * Everything the account's key store in this browser holds, as text: the device's public key and id, and for each
+ * computer every epoch's key bytes and the signing key pinned for it.
+ */
+async function keyStoreContents(page, userId) {
+  return page.evaluate(async (userId) => {
+    const { openKeystore } = await import('/js/keystore.js');
+    const hex = (bytes) => (bytes ? Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('') : null);
+    const store = await openKeystore(userId);
+    try {
+      const device = await store.device();
+      const hosts = {};
+      for (const hostId of await store.hosts()) {
+        hosts[hostId] = {
+          keys: Array.from(await store.hostKeys(hostId), ([epoch, key]) => [epoch, hex(key)]),
+          pin: hex(await store.hostSigningKey(hostId))
+        };
+      }
+      return { device: device?.id ?? null, devicePublic: hex(device?.publicRaw), hosts };
+    } finally {
+      store.close();
+    }
+  }, userId);
+}
+
+/** The id of the run of the task titled `title`, found by opening the tasks with this browser's keys. */
+async function runIdOf(page, userId, title) {
+  return page.evaluate(async ([userId, title]) => {
+    const { openKeystore } = await import('/js/keystore.js');
+    const { createReader } = await import('/js/reader.js');
+    const store = await openKeystore(userId);
+    try {
+      const state = await (await fetch('/api/state')).json();
+      const reader = createReader(store);
+      for (const task of state.tasks) {
+        if ((await reader.openTask(task))?.json?.title === title) {
+          return state.runs.find((run) => run.taskId === task.id)?.id ?? null;
+        }
+      }
+      return null;
+    } finally {
+      store.close();
+    }
+  }, [userId, title]);
+}
+
+/**
  * Every run in the account's state, opened with the account's key store in this browser and the panel's own
  * reader: `{createdAt, summary}` with the summary's text, or why it does not open.
  */
@@ -190,6 +259,32 @@ async function runsAsOpenedHere(page, userId) {
       store.close();
     }
   }, userId);
+}
+
+/** Every cell of the dump that contains `words`, as `table.column`. */
+function foundIn(dump, words) {
+  return Object.entries(dump).flatMap(([table, rows]) => rows.flatMap((row) => Object.entries(row)
+    .filter(([, value]) => value?.includes(words))
+    .map(([column]) => `${table}.${column}`)));
+}
+
+/**
+ * Each content column holds envelopes and nothing else - checked on a table that has rows, and a column with at
+ * least one value: a check over no rows passes whatever the gateway would write. So do the sealed members of every
+ * command's payload, the gateway's JSON around the browser's envelopes.
+ */
+function expectSealed(dump, columns) {
+  for (const [table, column] of columns) {
+    const values = (dump[table] ?? []).map((row) => row[column]).filter((value) => value !== null);
+    expect(values.length, `rows with ${table}.${column}`).toBeGreaterThan(0);
+    for (const value of values) expect(value, `${table}.${column}`).toMatch(/^e1:/);
+  }
+  expect(dump.commands.length, 'commands').toBeGreaterThan(0);
+  for (const row of dump.commands) {
+    const sealed = Object.entries(JSON.parse(row.payload)).filter(([member]) => /sealed/i.test(member));
+    expect(sealed.length, `sealed members of a ${row.kind} command`).toBeGreaterThan(0);
+    for (const [member, value] of sealed) expect(value, `commands.payload.${member}`).toMatch(/^e1:/);
+  }
 }
 
 // ── 1 ────────────────────────────────────────────────────────────────────
@@ -219,28 +314,15 @@ test('1. pairing: a computer registered here runs a task, and the database holds
 
   // The gateway's own record of all that: content only as envelopes, and none of the words anywhere.
   const dump = dumpDatabase();
-  const cells = Object.entries(dump).flatMap(([table, rows]) =>
-    rows.flatMap((row) => Object.entries(row).map(([column, value]) => ({ table, column, value }))));
-
   for (const words of [first.title, first.prompt, workspace, '[1/1] Working', 'All done']) {
-    expect(cells.filter(({ value }) => value?.includes(words)), `"${words}" in the database`).toEqual([]);
+    expect(foundIn(dump, words), `"${words}" in the database`).toEqual([]);
   }
 
-  const sealedColumns = [
+  // No approval exists yet; the last scenario looks at the database again once one does.
+  expectSealed(dump, [
     ['tasks', 'sealed'], ['runs', 'sealed_summary'], ['events', 'sealed_detail'], ['notices', 'sealed_detail'],
-    ['host_workspaces', 'sealed_name'], ['approvals', 'sealed_action']
-  ];
-  for (const [table, column] of sealedColumns) {
-    for (const row of dump[table] ?? []) {
-      if (row[column] !== null) expect(row[column], `${table}.${column}`).toMatch(/^e1:/);
-    }
-  }
-  // A command's payload is the gateway's JSON around the browser's envelopes: every sealed member is one.
-  for (const row of dump.commands) {
-    for (const [member, value] of Object.entries(JSON.parse(row.payload))) {
-      if (/sealed/i.test(member)) expect(value, `commands.payload.${member}`).toMatch(/^e1:/);
-    }
-  }
+    ['host_workspaces', 'sealed_name']
+  ]);
   expect(dump.commands.length).toBe(1);
   expect(dump.tasks.length).toBe(1);
   expect(dump.runs.filter((run) => run.sealed_summary !== null).length).toBe(1);
@@ -285,7 +367,7 @@ test('2. a second device by invitation reads the same runs and answers a permiss
   await ask.getByRole('button', { name: 'Allow' }).click();
 
   const [, runId] = await studio.waitFor(/^DECIDED (\S+) allow$/);
-  expect(runId).toBeTruthy();
+  expect(runId).toBe(await runIdOf(pageB, aliceId, asking.title));
   await expect(runCard(pageB, asking.title).locator(':scope > .card-head > .status')).toHaveText('Done');
   expect(await timeline(pageB, asking.title)).toContain('Allowed: echo hi');
 });
@@ -334,16 +416,21 @@ test('3. a grant whose MAC was changed on the way is rejected, and nothing is st
 // ── 4 ────────────────────────────────────────────────────────────────────
 
 test('4. a removed device cannot read what the computer sends after it rotates', async () => {
+  const deviceA = (await keysHeld(pageA, aliceId, studioId)).device;
   const deviceB = (await keysHeld(pageB, aliceId, studioId)).device;
 
   await view(pageA, 'devices');
   const cardB = pageA.locator('#device-list .card').filter({ hasNotText: 'This device' }).filter({ hasNotText: 'Removed' });
   await expect(cardB).toHaveCount(1);
+  const removedAt = studio.lines.length;
   await cardB.getByRole('button', { name: 'Remove' }).click();
   await expect(pageA.locator('#device-list .card', { hasText: 'Removed' })).toHaveCount(1);
 
-  // The computer distrusts it and moves to a new key, which it signs over to the device that stays.
+  // The computer distrusts it and moves to a new key, which it signs over to the device that stays - and to no
+  // other. Checked where the grants are made: the gateway refuses a grant for a removed device and answers it 403,
+  // so a computer that went on granting it would look, from any browser, exactly like one that did not.
   await studio.waitFor(/^EPOCH 2$/);
+  await studio.waitFor(new RegExp(`^GRANTED 2 ${deviceA}$`));
   await expect.poll(async () => (await keysHeld(pageA, aliceId, studioId)).newest).toBe(2);
 
   const card = await startTask(pageA, afterRemoval);
@@ -360,12 +447,20 @@ test('4. a removed device cannot read what the computer sends after it rotates',
   expect(opened.map((run) => run.summary)).toEqual([
     'All done', 'All done', 'this device has not been given the key for this'
   ]);
+
+  // Everything epoch 2 went to, and nothing refused or dropped since the removal (afterEach checks the whole test).
+  // From the removal and not from EPOCH 2: the computer may say a grant before it says the epoch it moved to.
+  const sinceRemoval = studio.lines.slice(removedAt);
+  expect(sinceRemoval.filter((line) => line.startsWith('GRANTED 2 '))).toEqual([`GRANTED 2 ${deviceA}`]);
+  expect(sinceRemoval.filter((line) => /FAULT|GrantDropped/.test(line))).toEqual([]);
 });
 
 // ── 5 ────────────────────────────────────────────────────────────────────
 
 test('5. a second account in the same browser sees none of the first one\'s keys or content', async () => {
   const before = await keysHeld(pageA, aliceId, studioId);
+  const contentsBefore = await keyStoreContents(pageA, aliceId);
+  expect(Object.keys(contentsBefore.hosts)).toEqual([studioId]);
   await signOut(pageA);
   await signIn(pageA, bob);
   const bobId = (await sessionUser(pageA)).id;
@@ -374,9 +469,9 @@ test('5. a second account in the same browser sees none of the first one\'s keys
   await expect(pageA.locator('#runs-empty')).toBeVisible();
   await view(pageA, 'hosts');
   await expect(pageA.locator('#host-list .card')).toHaveCount(0);
-  const page = await pageA.locator('body').innerText();
+  // Retrying, so a late drawing of something of Alice's - a poll of hers still in flight - would be caught too.
   for (const words of [first.title, afterRemoval.title, workspace, 'Studio PC', 'All done']) {
-    expect(page, `"${words}" on Bob's screen`).not.toContain(words);
+    await expect(pageA.locator('body'), `"${words}" on Bob's screen`).not.toContainText(words);
   }
 
   // One database per account: Bob's holds his own device key and nothing else, Alice's is still there.
@@ -385,6 +480,7 @@ test('5. a second account in the same browser sees none of the first one\'s keys
   expect(await keysHeld(pageA, bobId, studioId)).toMatchObject({ hosts: [], newest: null });
   expect((await keysHeld(pageA, bobId, null)).device).not.toBe(before.device);
   expect(await keysHeld(pageA, aliceId, studioId)).toEqual(before);
+  expect(await keyStoreContents(pageA, aliceId)).toEqual(contentsBefore);
 
   // Alice back in this browser reads everything as before.
   await signOut(pageA);
@@ -400,6 +496,8 @@ test('6. a permission whose arguments do not hash to its action hash offers no A
   await studio.waitFor(/^BADHASH /);
 
   await expect(card).toContainText(MISMATCH);
+  await expect(card.getByRole('button', { name: 'Allow' })).toHaveCount(0);
+  await expect(card.getByRole('button', { name: 'Deny' })).toHaveCount(0);
   await view(pageA, 'approvals');
   await expect(pageA.locator('#approval-list .card')).toContainText(MISMATCH);
   await expect(pageA.getByRole('button', { name: 'Allow' })).toHaveCount(0);
@@ -413,14 +511,41 @@ test('6. a permission whose arguments do not hash to its action hash offers no A
 
 // ── 7 ────────────────────────────────────────────────────────────────────
 
-test('7. nothing the person wrote and no pairing secret reached the gateway in the clear', async () => {
+test('7. nothing the person wrote and no secret reached the gateway in the clear', async () => {
   expect(secrets.length).toBe(3);
   expect(requests.length).toBeGreaterThan(50);
 
-  const words = [...tasks.flatMap(({ title, prompt }) => [title, prompt]), workspace, carolWorkspace, ...secrets];
+  // Every key the browser ever held for the computer - epoch 1, which the removed device had too, and epoch 2 -
+  // in each spelling it could be sent in.
+  const held = Object.values((await keyStoreContents(pageA, aliceId)).hosts).flatMap((host) => host.keys);
+  expect(held.map(([epoch]) => epoch)).toEqual([1, 2]);
+  const keys = held.flatMap(([, hex]) => {
+    const bytes = Buffer.from(hex, 'hex');
+    return [hex, bytes.toString('base64'), bytes.toString('base64url')];
+  });
+
+  const words = [
+    ...tasks.flatMap(({ title, prompt }) => [title, prompt]), workspace, carolWorkspace, ...secrets, ...keys
+  ];
+
+  // The gateway's whole database once everything has been written: the permission, its answer, the removal, the
+  // stopped run. Besides what the person wrote, what the computer sealed: the action, the steps, the endings.
+  const dump = dumpDatabase();
+  const sealedByTheComputer = [
+    'Run echo on the computer?', 'echo hi', '/harness/workspace', 'Allowed: echo hi', '[1/1] Working', 'All done',
+    "Stopped at the owner's request."
+  ];
+  for (const found of [...words, ...sealedByTheComputer]) {
+    expect(foundIn(dump, found), `"${found}" in the database`).toEqual([]);
+  }
+  expectSealed(dump, [
+    ['tasks', 'sealed'], ['runs', 'sealed_summary'], ['events', 'sealed_detail'], ['notices', 'sealed_detail'],
+    ['host_workspaces', 'sealed_name'], ['approvals', 'sealed_action']
+  ]);
+  expect(dump.approvals.length).toBe(2);
 
   for (const request of requests) {
-    const sent = [request.url, ...Object.values(request.headers), request.body].join('\n');
+    const sent = [request.url, ...Object.values(await request.headers), request.body].join('\n');
     for (const word of words) {
       const found = sent.includes(word) || sent.includes(encodeURIComponent(word));
       expect(found, `"${word}" in a request to ${request.url}`).toBe(false);
