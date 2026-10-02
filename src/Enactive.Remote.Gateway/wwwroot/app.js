@@ -31,8 +31,9 @@ import {
 } from "./js/writer.js";
 import { formatConnectionCode, formatInviteLink, newPairingSecret, derivePairKey } from "./js/pairing.js";
 import {
-  openInviteLink, keepInvite, takeKeptInvite, newInviteId, enrollThisDevice, inviteAnswered, answerEnrollment,
-  inviteQrSvg, INVITE_LIFETIME_MS, SWAPPED_KEY
+  openInviteLink, keepInvite, takeKeptInvite, newInviteId, enrollThisDevice, inviteJoinStep, countInviteGrants,
+  readableHosts, behindHosts, behindWarning, answerEnrollment, newAnswerProgress, createInviteWatch, inviteQrSvg,
+  INVITE_LIFETIME_MS, SWAPPED_KEY
 } from "./js/invite.js";
 
 const POLL_MS = 3000;
@@ -1022,6 +1023,12 @@ async function takeGrants(started) {
     reader.keysChanged();
   }
 
+  // Counted here, for every delivery of this tab: the page's own poll takes grants too, and the keys of an
+  // invitation it took were the new device's answer as much as those its own wait took.
+  if (joining) {
+    joining.received += countInviteGrants(result, joining.inviteId);
+  }
+
   return result;
 }
 
@@ -1271,6 +1278,7 @@ async function openInviteDialog() {
   stopInviting();
   forgetInviteLink();
   $("invite-status").textContent = "";
+  $("invite-warning").textContent = "";
   $("invite-error").textContent = "";
   $("account").open = false;
   $("invite-dialog").showModal();
@@ -1301,6 +1309,9 @@ async function openInviteDialog() {
     }
 
     deviceId = id;
+    // Before the link, so the person can let this device catch up first rather than spend the invitation on a
+    // computer whose current key it cannot pass on (invite.js behindReason).
+    $("invite-warning").textContent = behindWarning(await behindHosts(store, state.hosts));
     const link = formatInviteLink(location.origin, inviteId, secret);
     $("invite-link").value = link;
     drawQr(link);
@@ -1334,15 +1345,45 @@ function forgetInviteLink() {
 
 function startInviting(invite) {
   stopInviting();
+  const store = keystore;
+  const write = writer;
+  // What this answer has done, across its retries (invite.js newAnswerProgress).
+  const progress = newAnswerProgress();
+
+  const watch = createInviteWatch({
+    read: () => get(`/api/invites/${invite.inviteId}/enrollment`, { headers: { [DEVICE_HEADER]: invite.deviceId } }),
+    // Answered, the invitation is used: the link and its secret come down, whatever the answer comes to.
+    onEnrollment: (enrollment) => {
+      if (inviting?.inviteId === invite.inviteId) {
+        inviting.enrolled = true;
+      }
+
+      forgetInviteLink();
+      $("invite-status").textContent = `Sharing keys with ${enrollment.label}…`;
+    },
+    answer: async (enrollment) => {
+      // This device's keys brought up to date first: a computer refuses an endorsement sealed under a key it has
+      // moved on from, and the new device would be given only the keys this one had.
+      await catchUpKeys();
+
+      return answerEnrollment({
+        keystore: store, api, writer: write, deviceId: invite.deviceId, hosts: state.hosts,
+        pairKey: invite.pairKey, inviteId: invite.inviteId, enrollment, progress
+      });
+    },
+    deadline: invite.deadline,
+    now: () => Date.now()
+  });
+
   // One check at a time: a slow answer overlapping the next tick would answer the same enrollment twice.
-  const check = singleFlight(() => checkInvite(invite));
+  const check = singleFlight(() => checkInvite(invite, watch));
   inviting = {
     inviteId: invite.inviteId,
-    answered: false,
-    countdown: setInterval(() => countDown(invite), 1000),
+    enrolled: false,
+    countdown: setInterval(() => countDown(invite, check), 1000),
     poll: setInterval(check, INVITE_POLL_MS)
   };
-  countDown(invite);
+  countDown(invite, check);
 }
 
 function stopInviting() {
@@ -1354,19 +1395,19 @@ function stopInviting() {
   inviting = null;
 }
 
-/** The time the link has left, said every second. At its end the link comes down: nothing can answer it now. */
-function countDown(invite) {
-  if (inviting?.inviteId !== invite.inviteId || inviting.answered) {
+/**
+ * The time the link has left, said every second. At its end the enrollment is asked for once more (the watch
+ * decides): one posted in the last seconds can still be read, and the new device is waiting on it.
+ */
+function countDown(invite, check) {
+  if (inviting?.inviteId !== invite.inviteId || inviting.enrolled) {
     return;
   }
 
   const left = Math.ceil((invite.deadline - Date.now()) / 1000);
 
   if (left <= 0) {
-    stopInviting();
-    forgetInviteLink();
-    $("invite-status").textContent = "";
-    $("invite-error").textContent = "This invitation has expired. Choose Add a device again for a new link.";
+    check();
     return;
   }
 
@@ -1374,68 +1415,61 @@ function countDown(invite) {
     `Waiting for the new device… ${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")} left.`;
 }
 
-async function checkInvite(invite) {
+async function checkInvite(invite, watch) {
   const waiting = () => isCurrent(invite.started) && inviting?.inviteId === invite.inviteId;
-  const store = keystore;
-  const write = writer;
 
-  if (!waiting() || !store) {
+  if (!waiting()) {
     return;
   }
 
-  try {
-    const enrollment = await get(`/api/invites/${invite.inviteId}/enrollment`,
-      { headers: { [DEVICE_HEADER]: invite.deviceId } });
+  const outcome = await watch.check();
 
-    if (!enrollment || !waiting()) {
-      return;
-    }
-
-    // Answered: an invitation with an answer is used, so its clock no longer matters.
-    inviting.answered = true;
-    $("invite-status").textContent = `Sharing keys with ${enrollment.label}…`;
-
-    // This device's keys brought up to date first: a computer refuses an endorsement sealed under a key it has
-    // moved on from, and the new device would be given only the keys this one had.
-    await catchUpKeys();
-
-    const result = await answerEnrollment({
-      keystore: store, api, writer: write, deviceId: invite.deviceId, hosts: state.hosts,
-      pairKey: invite.pairKey, inviteId: invite.inviteId, enrollment
-    });
-
-    if (!waiting()) {
-      return;
-    }
-
-    stopInviting();
-    forgetInviteLink();
-
-    if (result.refused) {
-      $("invite-status").textContent = "";
-      $("invite-error").textContent = SWAPPED_KEY;
-      return;
-    }
-
-    if (result.granted === 0) {
-      $("invite-status").textContent = "";
-      $("invite-error").textContent =
-        `${enrollment.label} was added, but this device holds the key of no computer still on this account to share.`;
-      return;
-    }
-
-    $("invite-status").textContent = `Added ${enrollment.label}.`;
-    $("invite-error").textContent = result.notEndorsed
-      .map(({ hostId, reason }) => `${hostLabel(hostId)} was not asked to trust it: ${reason}`)
-      .join(" ");
-    toast(`Added ${enrollment.label}`);
-  } catch (error) {
-    // Said, and the next tick asks again. An answer cut off half way is finished then: the enrollment is still
-    // there to read, and a grant the new device holds already is passed over (answerEnrollment).
-    if (waiting() && !(error instanceof Stale)) {
-      $("invite-error").textContent = error.message;
-    }
+  if (!waiting() || outcome.error instanceof Stale) {
+    return;
   }
+
+  if (outcome.state === "waiting") {
+    // The gateway out of reach: said, and the next tick asks again.
+    $("invite-error").textContent = outcome.error ? outcome.error.message : "";
+    return;
+  }
+
+  if (outcome.state === "retrying") {
+    // Picked up where it stopped on the next tick (invite.js newAnswerProgress).
+    $("invite-error").textContent = `${outcome.error.message} Trying again…`;
+    return;
+  }
+
+  stopInviting();
+  forgetInviteLink();
+  $("invite-status").textContent = "";
+
+  if (outcome.state === "expired") {
+    $("invite-error").textContent = "This invitation has expired. Choose Add a device again for a new link.";
+    return;
+  }
+
+  if (outcome.state === "failed") {
+    $("invite-error").textContent = outcome.error.message;
+    return;
+  }
+
+  const { enrollment, result } = outcome;
+
+  if (result.refused) {
+    $("invite-error").textContent = SWAPPED_KEY;
+    return;
+  }
+
+  if (result.granted === 0) {
+    $("invite-error").textContent =
+      `${enrollment.label} was added, but this device holds the key of no computer still on this account to share.`;
+    return;
+  }
+
+  $("invite-status").textContent = `Added ${enrollment.label}.`;
+  $("invite-error").textContent = result.notEndorsed.map(({ reason }) => reason).join(" ");
+  toast(`Added ${enrollment.label}`);
 }
 
 $("add-device").addEventListener("click", openInviteDialog);
@@ -1469,7 +1503,10 @@ $("invite-dialog").addEventListener("close", () => {
  */
 let invitation = null;
 
-/** The new device's wait for its grants; null when it is not waiting. */
+/**
+ * The new device's wait for its grants: the invitation, its deadline, and how many of its keys this tab has
+ * taken (`received`, counted by takeGrants). Null when it is not waiting.
+ */
 let joining = null;
 
 /**
@@ -1492,7 +1529,7 @@ async function joinByInvitation(started) {
   const { inviteId, secret } = invitation;
   invitation = null;
   // Used now: a copy kept for the sign-in would otherwise be answered again on the next sign-in in this tab.
-  takeKeptInvite(tabStorage);
+  takeKeptInvite(tabStorage, Date.now());
   stopJoining();
   $("join-error").textContent = "";
   $("join-status").textContent = "Adding this device to your account…";
@@ -1532,7 +1569,7 @@ function startJoining(join) {
   stopJoining();
   // One check at a time, as for a computer's grant: two overlapping would take the same grants twice.
   const check = singleFlight(() => checkJoining(join));
-  joining = { inviteId: join.inviteId, timer: setInterval(check, INVITE_POLL_MS) };
+  joining = Object.assign(join, { received: 0, shown: 0, timer: setInterval(check, INVITE_POLL_MS) });
 }
 
 function stopJoining() {
@@ -1543,8 +1580,13 @@ function stopJoining() {
   joining = null;
 }
 
+/**
+ * One turn of the new device's wait. Asked for until the invitation's secret expires, not until its first keys:
+ * the inviter sends at most 50 a call (ruling R19). What the device can read is said as soon as it holds some
+ * computer's current key, and said again as more arrive.
+ */
 async function checkJoining(join) {
-  const waiting = () => isCurrent(join.started) && joining?.inviteId === join.inviteId;
+  const waiting = () => isCurrent(join.started) && joining === join;
   const store = keystore;
 
   if (!waiting() || !store) {
@@ -1552,7 +1594,7 @@ async function checkJoining(join) {
   }
 
   try {
-    const outcome = await inviteAnswered({
+    const step = await inviteJoinStep({
       keystore: store, inviteId: join.inviteId, deadline: join.deadline, now: Date.now(),
       collect: async () => {
         const result = await takeGrants(join.started);
@@ -1563,40 +1605,40 @@ async function checkJoining(join) {
       }
     });
 
-    if (outcome === "waiting" || !waiting()) {
+    if (!waiting()) {
       return;
     }
 
-    stopJoining();
+    if (join.received !== join.shown) {
+      join.shown = join.received;
+      // What was drawn as unreadable opens now.
+      await render();
+      // Only computers whose current key is held: one this device holds older keys of cannot be read now.
+      const readable = await readableHosts(store, state.hosts);
 
-    if (outcome === "expired") {
-      $("join-status").textContent = "";
-      $("join-error").textContent =
-        "The invitation expired before your other device answered it. Ask it for a new link.";
-      return;
-    }
-
-    // Taken here or by another tab: either way what was drawn as unreadable opens now.
-    await noticeKeys(store, join.started);
-    await render();
-
-    const readable = [];
-
-    for (const host of state.hosts) {
-      if (await store.newestEpoch(host.id) !== null) {
-        readable.push(host.label);
+      if (!waiting()) {
+        return;
       }
+
+      $("join-error").textContent = "";
+      $("join-status").textContent = readable.length > 0
+        ? `This device can now read ${readable.map((host) => host.label).join(", ")}.`
+        : "Keys arrived, but none is a computer's current one yet. Waiting for more…";
     }
 
-    if (isCurrent(join.started)) {
-      $("join-status").textContent = readable.length > 0
-        ? `This device can now read ${readable.join(", ")}.`
-        : "This device was added.";
+    if (step === "expired") {
+      stopJoining();
+
+      if (join.received === 0) {
+        $("join-status").textContent = "";
+        $("join-error").textContent =
+          "The invitation expired before your other device answered it. Ask it for a new link.";
+      }
     }
   } catch (error) {
     // The gateway out of reach is said, and the next tick asks again. An ended session says nothing.
     if (waiting() && !(error instanceof Stale)) {
-      $("join-status").textContent = `Waiting for your other device to share its keys… (${error.message})`;
+      $("join-error").textContent = `Still waiting for keys… (${error.message})`;
     }
   }
 }
@@ -2053,7 +2095,7 @@ applyTheme(localStorage.getItem(THEME_KEY));
 // An invitation link, /pair#v=2&i=…&p=…: taken out of the address at once (openInviteLink) and held until
 // someone is signed in. Without one, an invitation kept across a sign-in that left the page; taken out of
 // storage either way, so a link opened since replaces it rather than leaving it there to be answered later.
-invitation = takeKeptInvite(tabStorage);
+invitation = takeKeptInvite(tabStorage, Date.now());
 
 if (location.pathname === "/pair" && location.hash) {
   try {

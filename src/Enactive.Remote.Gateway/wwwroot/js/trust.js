@@ -204,7 +204,7 @@ export async function ensureDevice(keystore, api) {
 /**
  * Takes the grants the gateway holds for this device and stores the host keys it can verify.
  *
- * Returns `{added: [{hostId, epoch}], rejected: [{hostId, epoch, code, reason}]}`, and `tampering: hostId` when a
+ * Returns `{added: [{hostId, epoch, authBy}], rejected: [{hostId, epoch, code, reason}]}`, and `tampering: hostId` when a
  * computer's grant carries another signing key than the one pinned for it. That is not "rejected": a forged
  * grant is ignored, but a substituted identity means this device may trust the wrong key, and only the person
  * can put that right. A rejection's `code` is 'no-secret' (NO_SECRET) for a paired grant no secret is waiting
@@ -224,7 +224,7 @@ export async function collectGrants(keystore, api, deviceId) {
   const result = { added: [], rejected: [] };
   const newest = new Map();
   const doubted = new Set();
-  // Pairing secrets that verified a grant in this delivery, dropped once it has been read (see below).
+  // Connection secrets that verified a grant in this delivery, dropped once it has been read (see below).
   const spent = new Set();
 
   for (const group of Array.isArray(served) ? served : []) {
@@ -248,21 +248,26 @@ export async function collectGrants(keystore, api, deviceId) {
       if (outcome === 'rejected') result.rejected.push({ hostId, epoch: grant?.epoch, code: 'unverified', reason: REJECTED });
       if (outcome === 'no-secret') result.rejected.push({ hostId, epoch: grant?.epoch, code: 'no-secret', reason: NO_SECRET });
       if (outcome === 'added') {
-        result.added.push({ hostId, epoch: grant.epoch });
+        result.added.push({ hostId, epoch: grant.epoch, authBy: grant.authBy });
         newest.set(hostId, grant.epoch);
       }
     }
   }
 
-  // A pairing secret authenticates one delivery: the first grant of a connection code, or every key an
-  // invitation hands over, which the computer or the inviting browser publishes in one batch. Kept after that,
-  // anyone who saw the code could go on adding "new" paired grants for as long as it had left to live. Dropped
-  // at the end of the delivery rather than at its first grant, which would refuse the rest of that batch.
-  // What that leaves: a holder of the secret who also sees the genuine first grant (the gateway, given a leaked
-  // code) can add a grant of a higher epoch to the same delivery, naming the computer's real signing key, which
-  // it has just read, and a key of its own. It is taken, and not as tampering, and this device's newest key is
-  // then one the computer does not have. Refusing all but the first grant would refuse a re-pair and every
-  // invitation, so the exposure is one delivery, and only to someone who had the code.
+  // A connection code's secret authenticates one delivery: the computer's first grant. Kept after that, anyone
+  // who saw the code could go on adding "new" paired grants for its whole 24 hours. Dropped at the end of the
+  // delivery rather than at its first grant, which would refuse the rest of that batch. What that leaves: a
+  // holder of the secret who also sees the genuine first grant (the gateway, given a leaked code) can add a grant
+  // of a higher epoch to the same delivery, naming the computer's real signing key, which it has just read, and a
+  // key of its own. It is taken, and not as tampering, and this device's newest key is then one the computer does
+  // not have. Refusing all but the first grant would refuse a re-pair, so the exposure is one delivery, and only
+  // to someone who had the code.
+  //
+  // An invitation's secret is kept until it expires, ten minutes after the link was opened (ruling R19). An
+  // inviting browser sends at most 50 grants a call, and dropped after the first delivery the secret refused every
+  // later call - while the epochs at or below the newest held were passed over as old - so a device that asked
+  // between two calls lost every key past the first 50 for good. The exposure above is the same, widened from one
+  // delivery to the link's ten minutes, and still only to someone who saw the link and also has the gateway.
   for (const id of spent) await keystore.dropPending(id);
 
   return result;
@@ -327,7 +332,7 @@ async function take(keystore, device, deviceId, hostId, grant, newest, spent) {
     if (error instanceof PinMismatchError) return 'tampering';
     throw error;
   }
-  if (pairingId !== null) spent.add(pairingId);
+  if (grant.authBy === CONNECT) spent.add(pairingId);
 
   if (await keystore.addHostKey(hostId, grant.epoch, opened.key.secret)) return 'added';
   // Another tab stored this epoch first. The same key is the same grant taken twice; a different one for an

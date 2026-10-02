@@ -102,7 +102,7 @@ test('a grant verified by the pending connection secret is stored', async () => 
 
   const result = await collectGrants(store, api, DEVICE);
 
-  assert.deepEqual(result, { added: [{ hostId: HOST, epoch: 3 }], rejected: [] });
+  assert.deepEqual(result, { added: [{ hostId: HOST, epoch: 3, authBy: 'pair:connect' }], rejected: [] });
   assert.equal(b64url((await store.hostKeys(HOST)).get(3)), vectors.hostKey.secret);
   assert.equal(b64url(await store.hostSigningKey(HOST)), vectors.hostSigning.public);
   // The grants are this device's: the call says which device it is.
@@ -130,7 +130,7 @@ test('a rotation grant signed by the pinned key is stored', async () => {
   // The gateway keeps every grant it served, so the first one comes again beside the rotation.
   const result = await collectGrants(store, gateway(forHost(g.grant, r.grant)), DEVICE);
 
-  assert.deepEqual(result, { added: [{ hostId: HOST, epoch: 4 }], rejected: [] });
+  assert.deepEqual(result, { added: [{ hostId: HOST, epoch: 4, authBy: 'host' }], rejected: [] });
   assert.equal(b64url((await store.hostKeys(HOST)).get(4)), r.secret);
   assert.equal(await store.newestEpoch(HOST), 4);
 });
@@ -198,7 +198,7 @@ test('an older or already-held epoch is not stored and the current epoch does no
   assert.equal(await store.newestEpoch(HOST), 4);
 });
 
-test('the pending secret is dropped after the delivery it verified, and a later paired grant with it is then refused', async () => {
+test('a connection secret is dropped after the delivery it verified, and a later paired grant with it is then refused', async () => {
   const store = await pairedStore();
   assert.equal(await store.pending(connectPendingId(HOST)), null);
   const later = await pairedGrant(5);
@@ -209,7 +209,7 @@ test('the pending secret is dropped after the delivery it verified, and a later 
   assert.equal(await store.newestEpoch(HOST), 3);
 });
 
-test('every key of one delivery is stored oldest first, and the invitation secret is dropped after it', async () => {
+test('every key of one delivery is stored oldest first, and the invitation secret is kept after it', async () => {
   const store = await vectorStore();
   await store.setPending(invitePendingId('invite-1'), pairingSecret, DAY);
   const grants = [await pairedGrant(3, { pairingId: 'invite-1' }), await pairedGrant(1, { pairingId: 'invite-1' }),
@@ -217,9 +217,34 @@ test('every key of one delivery is stored oldest first, and the invitation secre
 
   const result = await collectGrants(store, gateway(forHost(...grants)), DEVICE);
 
-  assert.deepEqual(result.added, [1, 2, 3].map((epoch) => ({ hostId: HOST, epoch })));
+  assert.deepEqual(result.added, [1, 2, 3].map((epoch) => ({ hostId: HOST, epoch, authBy: 'pair:invite-1' })));
   assert.deepEqual(result.rejected, []);
-  assert.equal(await store.pending(invitePendingId('invite-1')), null);
+  assert.deepEqual(await store.pending(invitePendingId('invite-1')), pairingSecret);
+});
+
+test('an invitation secret is kept until it expires and a second delivery with it is accepted', async () => {
+  let now = 0;
+  const store = await vectorStore(() => now);
+  const lifetime = 10 * 60 * 1000;
+  await store.setPending(invitePendingId('invite-1'), pairingSecret, lifetime);
+  const first = [await pairedGrant(1, { pairingId: 'invite-1' }), await pairedGrant(2, { pairingId: 'invite-1' })];
+  const later = await pairedGrant(3, { pairingId: 'invite-1' });
+  const tooLate = await pairedGrant(4, { pairingId: 'invite-1' });
+
+  await collectGrants(store, gateway(forHost(...first)), DEVICE);
+  // The inviter's next call of grants landed after this device had already taken the first.
+  now = lifetime - 1;
+  const second = await collectGrants(store, gateway(forHost(...first, later)), DEVICE);
+
+  assert.deepEqual(second.added, [{ hostId: HOST, epoch: 3, authBy: 'pair:invite-1' }]);
+  assert.deepEqual([...(await store.hostKeys(HOST)).keys()], [1, 2, 3]);
+
+  now = lifetime;
+  const expired = await collectGrants(store, gateway(forHost(...first, later, tooLate)), DEVICE);
+
+  assert.deepEqual(expired.added, []);
+  assert.deepEqual(expired.rejected, [{ hostId: HOST, epoch: 4, code: 'no-secret', reason: NO_SECRET }]);
+  assert.equal(await store.newestEpoch(HOST), 3);
 });
 
 test('a grant for another device id is rejected without opening', async () => {

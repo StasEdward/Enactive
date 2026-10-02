@@ -3,13 +3,14 @@ import assert from 'node:assert/strict';
 import { openKeystore, memoryAdapter } from '../../src/Enactive.Remote.Gateway/wwwroot/js/keystore.js';
 import { openGrant } from '../../src/Enactive.Remote.Gateway/wwwroot/js/grants.js';
 import { derivePairKey, enrollmentMac, verifyEnrollment } from '../../src/Enactive.Remote.Gateway/wwwroot/js/pairing.js';
-import { invitePendingId } from '../../src/Enactive.Remote.Gateway/wwwroot/js/trust.js';
-import { createWriter, NOT_YET_GIVEN } from '../../src/Enactive.Remote.Gateway/wwwroot/js/writer.js';
+import { invitePendingId, collectGrants } from '../../src/Enactive.Remote.Gateway/wwwroot/js/trust.js';
+import { createWriter } from '../../src/Enactive.Remote.Gateway/wwwroot/js/writer.js';
 import { hostKey } from '../../src/Enactive.Remote.Gateway/wwwroot/js/hostkey.js';
 import { ad, openJson } from '../../src/Enactive.Remote.Gateway/wwwroot/js/sealed.js';
 import { b64url, fromB64url } from '../../src/Enactive.Remote.Gateway/wwwroot/js/bytes.js';
 import {
-  openInviteLink, keepInvite, takeKeptInvite, newInviteId, enrollThisDevice, inviteAnswered, answerEnrollment,
+  openInviteLink, keepInvite, takeKeptInvite, newInviteId, enrollThisDevice, inviteJoinStep, countInviteGrants,
+  readableHosts, behindHosts, behindReason, behindWarning, answerEnrollment, newAnswerProgress, createInviteWatch,
   inviteQrSvg, INVITE_LIFETIME_MS, GRANTS_PER_CALL, SWAPPED_KEY
 } from '../../src/Enactive.Remote.Gateway/wwwroot/js/invite.js';
 import { vectors } from './vectors.mjs';
@@ -80,22 +81,30 @@ async function newcomer(label = 'Safari on iPhone') {
  * A gateway that takes grants and device commands and records them. Like the real one it refuses, with a
  * 409 and the whole call, a grant for a (computer, device, epoch) it already holds.
  */
-function gateway() {
+function gateway({ afterGrants = async () => {}, failGrantCall = () => false } = {}) {
   const stored = new Set();
+  const grants = [];
   const api = {
     grantCalls: [],
     commands: [],
+    // GET /api/grants for the new device: what is stored so far, filed under each computer.
     async get(path) {
-      throw new Error(`Unexpected GET ${path}`);
+      if (path !== '/api/grants') throw new Error(`Unexpected GET ${path}`);
+      const byHost = new Map();
+      for (const grant of grants) byHost.set(grant.hostId, [...(byHost.get(grant.hostId) ?? []), grant]);
+      return [...byHost].map(([hostId, list]) => ({ hostId, keyEpoch: Math.max(...list.map((one) => one.epoch)), grants: list }));
     },
     async post(path, body, options) {
       if (path === '/api/grants') {
         api.grantCalls.push({ body, options });
+        if (failGrantCall(api.grantCalls.length)) throw new TypeError('Failed to fetch');
         const keys = body.map((grant) => `${grant.hostId}|${grant.deviceId}|${grant.epoch}`);
         if (keys.some((key) => stored.has(key))) {
           throw Object.assign(new Error('That device already holds a grant of this key.'), { code: 'conflict', status: 409 });
         }
         keys.forEach((key) => stored.add(key));
+        grants.push(...structuredClone(body));
+        await afterGrants(api.grantCalls.length);
         return null;
       }
       const command = /^\/api\/hosts\/([^/]+)\/device-commands$/.exec(path);
@@ -117,11 +126,13 @@ const hostsOf = (...ids) => ids.map((id) => ({ id, label: id, keyEpoch: 1, revok
 test('a fragment is parsed and the secret is not kept in the url', () => {
   const history = fakeHistory();
 
-  const invite = openInviteLink('#' + vectors.inviteLink.text.split('#')[1], history);
+  const invite = openInviteLink('#' + vectors.inviteLink.text.split('#')[1], history, NOW);
 
   assert.deepEqual(history.calls, [[null, '', '/pair']]);
   assert.equal(invite.inviteId, vectors.inviteLink.inviteId);
   assert.equal(b64url(invite.secret), vectors.inviteLink.secret);
+  // No invitation lives longer than ten minutes, so neither does what this page keeps of one.
+  assert.equal(invite.expiresAt, NOW + INVITE_LIFETIME_MS);
 
   // Taken out of the address before it is read, so a link too damaged to use does not stay there either: its
   // secret may be whole when the rest is not.
@@ -132,20 +143,35 @@ test('a fragment is parsed and the secret is not kept in the url', () => {
 
 test('an invitation kept across a sign-in is read back once, and a storage that fails keeps nothing', () => {
   const storage = fakeStorage();
+  const expiresAt = NOW + INVITE_LIFETIME_MS;
 
-  keepInvite(storage, { inviteId: INVITE, secret });
-  const kept = takeKeptInvite(storage);
+  keepInvite(storage, { inviteId: INVITE, secret, expiresAt });
+  const kept = takeKeptInvite(storage, NOW);
 
   assert.equal(kept.inviteId, INVITE);
   assert.deepEqual(kept.secret, secret);
-  assert.equal(takeKeptInvite(storage), null);
+  assert.equal(kept.expiresAt, expiresAt);
+  assert.equal(takeKeptInvite(storage, NOW), null);
   assert.equal(storage.items.size, 0);
 
   const broken = { getItem() { throw new Error('denied'); }, setItem() { throw new Error('denied'); }, removeItem() {} };
-  assert.doesNotThrow(() => keepInvite(broken, { inviteId: INVITE, secret }));
-  assert.equal(takeKeptInvite(broken), null);
+  assert.doesNotThrow(() => keepInvite(broken, { inviteId: INVITE, secret, expiresAt }));
+  assert.equal(takeKeptInvite(broken, NOW), null);
+  assert.equal(takeKeptInvite(null, NOW), null);
   storage.setItem('enactive.invite', '{"inviteId":5}');
-  assert.equal(takeKeptInvite(storage), null);
+  assert.equal(takeKeptInvite(storage, NOW), null);
+});
+
+test('a kept invitation past its ten minutes is thrown away, secret and all', () => {
+  const storage = fakeStorage();
+  keepInvite(storage, { inviteId: INVITE, secret, expiresAt: NOW + INVITE_LIFETIME_MS });
+
+  assert.equal(takeKeptInvite(storage, NOW + INVITE_LIFETIME_MS), null);
+  assert.equal(storage.items.size, 0);
+
+  // One kept with no expiry is as stale as any: its age cannot be told.
+  storage.setItem('enactive.invite', JSON.stringify({ inviteId: INVITE, secret: b64url(secret) }));
+  assert.equal(takeKeptInvite(storage, NOW), null);
 });
 
 test('the new device enrolls with a mac over its own key and keeps the secret under the invitation for ten minutes', async () => {
@@ -168,30 +194,50 @@ test('the new device enrolls with a mac over its own key and keeps the secret un
   assert.ok(await verifyEnrollment(pairKey, INVITE, NEWCOMER, (await store.device()).publicRaw, posts[0].body.mac));
 });
 
-test('an invitation is answered once a grant spent its secret, here or in another tab, and expires after its ten minutes', async () => {
+test('the new device asks for its grants for as long as the secret is good, after a first delivery too', async () => {
   let clock = NOW;
   const store = await openKeystore(ALICE, memoryAdapter(), () => clock);
   const deadline = NOW + INVITE_LIFETIME_MS;
   await store.setPending(invitePendingId(INVITE), secret, deadline);
   let collected = 0;
-  const nothingYet = async () => { collected += 1; return { added: [], rejected: [] }; };
+  const collect = async () => { collected += 1; };
 
-  assert.equal(await inviteAnswered({ keystore: store, inviteId: INVITE, deadline, now: clock, collect: nothingYet }), 'waiting');
-  assert.equal(collected, 1);
+  assert.equal(await inviteJoinStep({ keystore: store, inviteId: INVITE, deadline, now: clock, collect }), 'collecting');
+  // Keys arrived meanwhile, and the secret is still there: the inviter may have more calls of grants to send.
+  clock = deadline - 1;
+  assert.equal(await inviteJoinStep({ keystore: store, inviteId: INVITE, deadline, now: clock, collect }), 'collecting');
+  assert.equal(collected, 2);
 
-  // collectGrants drops the secret at the end of the delivery a grant of the invitation verified in.
-  const spends = async () => { await store.dropPending(invitePendingId(INVITE)); return { added: [{ hostId: STUDIO, epoch: 1 }], rejected: [] }; };
-  assert.equal(await inviteAnswered({ keystore: store, inviteId: INVITE, deadline, now: clock, collect: spends }), 'answered');
-
-  // Another tab's delivery spent it first: nothing is asked for, and it is answered all the same.
-  collected = 0;
-  assert.equal(await inviteAnswered({ keystore: store, inviteId: INVITE, deadline, now: clock, collect: nothingYet }), 'answered');
-  assert.equal(collected, 0);
-
-  await store.setPending(invitePendingId(INVITE), secret, deadline);
   clock = deadline;
-  assert.equal(await inviteAnswered({ keystore: store, inviteId: INVITE, deadline, now: clock, collect: nothingYet }), 'expired');
-  assert.equal(collected, 0);
+  assert.equal(await inviteJoinStep({ keystore: store, inviteId: INVITE, deadline, now: clock, collect }), 'expired');
+  assert.equal(collected, 2);
+});
+
+test('only grants of this invitation count as its answer', () => {
+  const result = {
+    added: [
+      { hostId: STUDIO, epoch: 1, authBy: `pair:${INVITE}` }, { hostId: STUDIO, epoch: 2, authBy: `pair:${INVITE}` },
+      { hostId: LAPTOP, epoch: 4, authBy: 'host' }, { hostId: LAPTOP, epoch: 1, authBy: 'pair:f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6' }
+    ],
+    rejected: []
+  };
+
+  assert.equal(countInviteGrants(result, INVITE), 2);
+  assert.equal(countInviteGrants(null, INVITE), 0);
+});
+
+test('the new device names as readable only the computers whose current key it holds', async () => {
+  const { store } = await inviterStore({ [STUDIO]: [1, 2], [LAPTOP]: [1] });
+  const hosts = [
+    { id: STUDIO, label: 'Studio PC', keyEpoch: 2, revoked: false },
+    // Behind: what this computer sends now is sealed under epoch 3, which this device does not hold.
+    { id: LAPTOP, label: 'Laptop', keyEpoch: 3, revoked: false },
+    { id: 'f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7', label: 'Never paired', keyEpoch: 1, revoked: false }
+  ];
+
+  assert.deepEqual((await readableHosts(store, hosts)).map((host) => host.label), ['Studio PC']);
+  assert.deepEqual(await readableHosts(store, [{ ...hosts[0], revoked: true }]), []);
+  assert.deepEqual(await readableHosts(null, hosts), []);
 });
 
 // ── the inviting device ─────────────────────────────────────────────────────
@@ -299,8 +345,26 @@ test('a computer that is revoked or no longer listed is not granted, and one thi
   assert.deepEqual(grants.map((grant) => `${grant.hostId}:${grant.epoch}`).sort(), [`${LAPTOP}:1`, `${LAPTOP}:2`]);
   assert.equal(result.granted, 2);
   assert.deepEqual(result.endorsed, []);
-  assert.deepEqual(result.notEndorsed, [{ hostId: LAPTOP, reason: NOT_YET_GIVEN }]);
+  assert.deepEqual(result.notEndorsed, [{ hostId: LAPTOP, reason: behindReason('Laptop') }]);
+  assert.equal(behindReason('Laptop'), 'Laptop: this device does not hold its newest key; add the new device from that '
+    + 'computer, or again from here once this device has caught up.');
   assert.equal(api.commands.length, 0);
+});
+
+test('the inviter is told before the link is shown which computers it is behind on', async () => {
+  const { store } = await inviterStore({ [STUDIO]: [1, 2], [LAPTOP]: [1] });
+  const hosts = [
+    { id: STUDIO, label: 'Studio PC', keyEpoch: 2, revoked: false },
+    { id: LAPTOP, label: 'Laptop', keyEpoch: 2, revoked: false },
+    { id: 'f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7', label: 'Old PC', keyEpoch: 9, revoked: true }
+  ];
+
+  const behind = await behindHosts(store, hosts);
+
+  assert.deepEqual(behind.map((host) => host.label), ['Laptop']);
+  assert.equal(behindWarning(behind), 'Keys for Laptop will not be shared until this device catches up.');
+  assert.equal(behindWarning([{ label: 'A' }, { label: 'B' }]), 'Keys for A, B will not be shared until this device catches up.');
+  assert.equal(behindWarning([]), '');
 });
 
 test('grants are chunked by 50', async () => {
@@ -317,14 +381,154 @@ test('grants are chunked by 50', async () => {
   });
 
   assert.equal(GRANTS_PER_CALL, 50);
-  assert.deepEqual(api.grantCalls.map((call) => call.body.length), [50, 50, 10]);
+  // One computer per call, oldest first: each call only extends that computer's run of keys upwards, so a new
+  // device that takes one call before the next never holds a newer key than one still to come.
+  assert.deepEqual(api.grantCalls.map((call) => call.body.length), [50, 20, 40]);
   assert.equal(result.granted, 110);
-  assert.equal(new Set(api.grantCalls.flatMap((call) => call.body).map((grant) => `${grant.hostId}:${grant.epoch}`)).size, 110);
-  // Every computer's newest key goes in the first call: should the new device take the first call before the
-  // rest arrive, it can read what each computer sends now (see answerEnrollment).
-  const first = api.grantCalls[0].body.map((grant) => `${grant.hostId}:${grant.epoch}`);
-  assert.ok(first.includes(`${STUDIO}:70`));
-  assert.ok(first.includes(`${LAPTOP}:40`));
+  for (const call of api.grantCalls) {
+    assert.equal(new Set(call.body.map((grant) => grant.hostId)).size, 1);
+  }
+  const epochs = (hostId) => api.grantCalls.flatMap((call) => call.body).filter((grant) => grant.hostId === hostId)
+    .map((grant) => grant.epoch);
+  assert.deepEqual(epochs(STUDIO), many);
+  assert.deepEqual(epochs(LAPTOP), some);
+});
+
+test('a new device that takes its grants between two calls still ends up with every key', async () => {
+  const epochs = Array.from({ length: 70 }, (_, i) => i + 1);
+  const { store, held } = await inviterStore({ [STUDIO]: epochs });
+  // The new device, its secret waiting under the invitation as enrollThisDevice leaves it.
+  const joining = await openKeystore(ALICE, memoryAdapter(), () => NOW);
+  const device = await joining.createDevice();
+  await joining.setDeviceId(NEWCOMER);
+  await joining.setPending(invitePendingId(INVITE), secret, NOW + INVITE_LIFETIME_MS);
+  const enrollment = {
+    deviceId: NEWCOMER, publicKey: b64url(device.publicRaw), label: 'Phone',
+    mac: await enrollmentMac(pairKey, INVITE, NEWCOMER, device.publicRaw)
+  };
+  // It asks right after the first call has landed, before the second.
+  const api = gateway({ afterGrants: async (call) => { if (call === 1) await collectGrants(joining, api, NEWCOMER); } });
+
+  await answerEnrollment({
+    keystore: store, api, writer: createWriter(store, () => NOW), deviceId: INVITER,
+    hosts: [{ id: STUDIO, label: 'Studio PC', keyEpoch: 70, revoked: false }], pairKey, inviteId: INVITE, enrollment
+  });
+  assert.equal((await joining.hostKeys(STUDIO)).size, 50);
+  const second = await collectGrants(joining, api, NEWCOMER);
+
+  assert.equal(countInviteGrants(second, INVITE), 20);
+  const keys = await joining.hostKeys(STUDIO);
+  assert.equal(keys.size, 70);
+  for (const [epoch, key] of held.get(STUDIO).keys) assert.deepEqual(keys.get(epoch), key);
+});
+
+test('an answer cut off part way resumes after the last call that landed, and tells each computer once', async () => {
+  const epochs = Array.from({ length: 120 }, (_, i) => i + 1);
+  const { store } = await inviterStore({ [STUDIO]: epochs, [LAPTOP]: [1] });
+  const device = await newcomer();
+  let failing = true;
+  // The second call of grants is lost on the way.
+  const api = gateway({ failGrantCall: (call) => failing && call === 2 });
+  const progress = newAnswerProgress();
+  const answer = () => answerEnrollment({
+    keystore: store, api, writer: createWriter(store, () => NOW), deviceId: INVITER,
+    hosts: [{ id: STUDIO, label: 'Studio PC', keyEpoch: 120, revoked: false }, { id: LAPTOP, label: 'Laptop', keyEpoch: 1, revoked: false }],
+    pairKey, inviteId: INVITE, enrollment: device.enrollment, progress
+  });
+
+  await assert.rejects(answer(), TypeError);
+  failing = false;
+  const result = await answer();
+
+  // Calls: 50 (landed), 50 (lost); then on the retry only what had not landed: 50, 20, and Laptop's 1.
+  assert.deepEqual(api.grantCalls.map((call) => `${call.body[0].epoch}:${call.body.length}`),
+    ['1:50', '51:50', '51:50', '101:20', '1:1']);
+  assert.equal(result.granted, 121);
+  assert.equal(api.stored.size, 121);
+  assert.deepEqual(result.endorsed.sort(), [LAPTOP, STUDIO].sort());
+
+  // Asked again once all is done, it sends nothing more: no grant, and no second endorsement.
+  await answer();
+  assert.equal(api.grantCalls.length, 5);
+  assert.equal(api.commands.length, 2);
+});
+
+// ── the inviting dialog's watch ─────────────────────────────────────────────
+
+/** A watch over a fake clock: `reads` answers each enrollment read in turn (null for none yet). */
+function watch({ reads, answer = async () => ({ granted: 1 }), deadline = NOW + INVITE_LIFETIME_MS }) {
+  const clock = { now: NOW };
+  const log = { reads: 0, answers: 0, answering: [] };
+  const queue = [...reads];
+  const w = createInviteWatch({
+    read: async () => { log.reads += 1; return queue.length > 1 ? queue.shift() : queue[0]; },
+    answer: async (enrollment) => { log.answers += 1; return answer(enrollment); },
+    onEnrollment: (enrollment) => log.answering.push(enrollment),
+    deadline, now: () => clock.now
+  });
+  return { w, clock, log };
+}
+
+test('an enrollment that came in just before the deadline is still read and answered', async () => {
+  const enrollment = { deviceId: NEWCOMER, label: 'Phone' };
+  const { w, clock, log } = watch({ reads: [null, enrollment] });
+
+  assert.equal((await w.check()).state, 'waiting');
+  clock.now = NOW + INVITE_LIFETIME_MS;
+  const last = await w.check();
+
+  assert.equal(last.state, 'answered');
+  assert.deepEqual(last.result, { granted: 1 });
+  assert.equal(log.reads, 2);
+  assert.deepEqual(log.answering, [enrollment]);
+});
+
+test('with no enrollment by the deadline the invitation has expired, and nothing is read after', async () => {
+  const { w, clock, log } = watch({ reads: [null] });
+  clock.now = NOW + INVITE_LIFETIME_MS;
+
+  assert.equal((await w.check()).state, 'expired');
+  assert.equal((await w.check()).state, 'expired');
+  assert.equal(log.reads, 1);
+});
+
+test('an answer that fails is tried again until the deadline, then ends with its error', async () => {
+  const enrollment = { deviceId: NEWCOMER, label: 'Phone' };
+  let fail = true;
+  const { w, clock, log } = watch({
+    reads: [enrollment],
+    answer: async () => { if (fail) throw new Error('Too many requests'); return { granted: 3 }; }
+  });
+
+  const first = await w.check();
+  assert.equal(first.state, 'retrying');
+  assert.equal(first.error.message, 'Too many requests');
+  // Read once: the invitation is used, and its answer is what is retried.
+  assert.equal((await w.check()).state, 'retrying');
+  assert.equal(log.reads, 1);
+  assert.equal(log.answering.length, 1);
+
+  clock.now = NOW + INVITE_LIFETIME_MS;
+  const failed = await w.check();
+  assert.equal(failed.state, 'failed');
+  assert.equal(failed.error.message, 'Too many requests');
+  fail = false;
+  assert.equal((await w.check()).state, 'failed');
+  assert.equal(log.answers, 3);
+});
+
+test('an answer that succeeds on a retry ends the watch', async () => {
+  let fail = true;
+  const { w, log } = watch({
+    reads: [{ deviceId: NEWCOMER, label: 'Phone' }],
+    answer: async () => { if (fail) throw new Error('Failed to fetch'); return { granted: 2 }; }
+  });
+
+  assert.equal((await w.check()).state, 'retrying');
+  fail = false;
+  assert.equal((await w.check()).state, 'answered');
+  assert.equal((await w.check()).state, 'answered');
+  assert.equal(log.answers, 2);
 });
 
 test('a grant the new device already holds is passed over and the rest are still sent', async () => {
