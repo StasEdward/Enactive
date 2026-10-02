@@ -509,7 +509,7 @@ public sealed class RemoteKeyAdministrationTests
     }
 
     /// <summary>
-    /// A credential the gateway refuses at the door - revoked, or its account disabled - reaches the
+    /// A credential the gateway refuses at the door - revoked, its account disabled or deleted - reaches the
     /// Host as a bare 401. Treated as a dropped connection it was dialled again for ever, with nothing
     /// saying why; now the service stops and says what happened in a sentence.
     /// </summary>
@@ -529,6 +529,13 @@ public sealed class RemoteKeyAdministrationTests
         await StoppedAsync(service);
         Assert.Contains(GatewayCredentialRefusedException.Sentence, service.Status, StringComparison.Ordinal);
         Assert.Equal(1, connects);
+
+        // Every cause the gateway's 401 can stand for, a deleted account among them: said as "revoked or
+        // disabled", a person whose account was deleted was told something untrue about it.
+        Assert.Equal(
+            "The service refused this computer's credential - it was revoked, the account is disabled, or the "
+            + "account was deleted. Make a new connection code in the browser and connect this computer with it.",
+            GatewayCredentialRefusedException.Sentence);
     }
 
     /// <summary>

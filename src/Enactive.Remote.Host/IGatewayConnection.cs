@@ -67,7 +67,10 @@ public sealed class GatewayRefusedException(string code, string message) : Excep
 
 /// <summary>
 /// The gateway refused this computer's credential before any call could be made: the device token
-/// was revoked, the account is disabled, or the token was never the gateway's.
+/// was revoked, the account is disabled, the account was deleted (and the computer's row with it), or
+/// the token was never the gateway's. The 401 does not say which, so the sentence names them all: it
+/// named only the first two, and a person who had deleted their account was told their credential had
+/// been revoked.
 ///
 /// <para>It arrives as a bare 401 or 403 at the start of the connection, with no fault code, because
 /// authentication runs before the hub. Left as the transport exception it is, it looked like a
@@ -77,6 +80,6 @@ public sealed class GatewayRefusedException(string code, string message) : Excep
 public sealed class GatewayCredentialRefusedException(Exception? inner = null) : Exception(Sentence, inner)
 {
     public const string Sentence =
-        "The service refused this computer's credential - it was revoked or the account is disabled. "
-        + "Make a new connection code in the browser and connect this computer with it.";
+        "The service refused this computer's credential - it was revoked, the account is disabled, or the "
+        + "account was deleted. Make a new connection code in the browser and connect this computer with it.";
 }

@@ -269,7 +269,9 @@ CREATE TABLE IF NOT EXISTS audit (
   at       DATETIME(3) NOT NULL,
   actor    VARCHAR(80) CHARACTER SET ascii NOT NULL,                  -- user:<id> | host:<id> | device:<id> | operator
   action   VARCHAR(40) CHARACTER SET ascii NOT NULL,
-  target   VARCHAR(100) CHARACTER SET ascii NULL,
+  -- Binary, like the subjects it names: deleting an account removes the operator's rows by their target, and
+  -- compared without regard to case, deleting dev:bob-x also removed the record about dev:Bob-x, someone else.
+  target   VARCHAR(100) CHARACTER SET ascii COLLATE ascii_bin NULL,
   PRIMARY KEY (id),
   KEY ix_audit_owner (owner_id, at),
   CONSTRAINT fk_audit_user FOREIGN KEY (owner_id) REFERENCES users (id) ON DELETE CASCADE

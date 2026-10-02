@@ -87,6 +87,31 @@ public sealed class DeletionTests(TestDatabase database) : IClassFixture<TestDat
     }
 
     /// <summary>
+    /// The operator's rows are found by the identity exactly. Subjects are compared byte for byte everywhere
+    /// else (admissions, external_identities), and a target compared without regard to case made deleting
+    /// dev:bob-x also delete the operator's record about dev:Bob-x, a different identity of somebody else's.
+    /// </summary>
+    [Fact]
+    public async Task Operator_rows_are_matched_exactly_not_by_case()
+    {
+        var stem = Guid.NewGuid().ToString("N")[..8];
+        var upper = "Bob-" + stem;
+        var lower = "bob-" + stem;
+        using var upperBob = await PanelClient.SignedInAsync(_gateway, upper);
+        using var lowerBob = await PanelClient.SignedInAsync(_gateway, lower);
+        Assert.NotEqual(upperBob.UserId, lowerBob.UserId);
+        await ApproveAsync(upper);
+        await ApproveAsync(lower);
+
+        using var deleted = await lowerBob.SendAsync(HttpMethod.Delete, "/api/account");
+        Assert.Equal(HttpStatusCode.OK, deleted.StatusCode);
+
+        Assert.Equal(0, await OperatorRowsAsync(lower));
+        Assert.Equal(1, await OperatorRowsAsync(upper));
+        Assert.Equal(1, await AdmissionRowsAsync(upper));
+    }
+
+    /// <summary>
     /// Bob, with a row in every table too, keeps every one of them, his admission and the operator's
     /// decision about it included.
     /// </summary>
@@ -125,7 +150,9 @@ public sealed class DeletionTests(TestDatabase database) : IClassFixture<TestDat
     public async Task An_old_session_must_sign_in_again_to_delete()
     {
         using var alice = await PanelClient.SignedInAsync(_gateway, Name("alice"));
-        await OpenedAgoAsync(alice.UserId, TimeSpan.FromMinutes(11));
+        // Ten seconds either side of the edge: close enough that a window of nine or eleven minutes fails one
+        // half, and far enough that the time between the update and the request cannot cross it.
+        await OpenedAgoAsync(alice.UserId, TimeSpan.FromMinutes(10) + TimeSpan.FromSeconds(10));
 
         using var refused = await alice.SendAsync(HttpMethod.Delete, "/api/account");
 
@@ -136,7 +163,7 @@ public sealed class DeletionTests(TestDatabase database) : IClassFixture<TestDat
         Assert.Equal(1, await database.ScalarLongAsync($"SELECT COUNT(*) FROM users WHERE id = '{alice.UserId}'"));
 
         // Inside the ten minutes the same session may.
-        await OpenedAgoAsync(alice.UserId, TimeSpan.FromMinutes(9));
+        await OpenedAgoAsync(alice.UserId, TimeSpan.FromMinutes(10) - TimeSpan.FromSeconds(10));
         using var deleted = await alice.SendAsync(HttpMethod.Delete, "/api/account");
 
         Assert.Equal(HttpStatusCode.OK, deleted.StatusCode);
@@ -191,10 +218,19 @@ public sealed class DeletionTests(TestDatabase database) : IClassFixture<TestDat
         using var deleted = await alice.SendAsync(HttpMethod.Delete, "/api/account");
         Assert.Equal(HttpStatusCode.OK, deleted.StatusCode);
 
-        await Assert.ThrowsAnyAsync<Exception>(() => connected.SyncAsync([], CancellationToken.None));
+        // The connection is no longer open, so the call is never sent: the client refuses it itself. A coded
+        // refusal here would be a connection still being served (that the deletion closes it is asserted at the
+        // service, below - over long polling each poll is refused at authentication on its own).
+        await Assert.ThrowsAsync<InvalidOperationException>(() => connected.SyncAsync([], CancellationToken.None));
 
+        // What the desktop then does is dial again, and what it shows is this refusal's sentence: it has to
+        // name a deleted account among its causes, or the person is told their credential was revoked.
         await using var reconnecting = Connect(computer.Token);
-        await Assert.ThrowsAsync<GatewayCredentialRefusedException>(() => reconnecting.StartAsync());
+        var refusedAgain = await Assert.ThrowsAsync<GatewayCredentialRefusedException>(() => reconnecting.StartAsync());
+        Assert.Equal(
+            "The service refused this computer's credential - it was revoked, the account is disabled, or the "
+            + "account was deleted. Make a new connection code in the browser and connect this computer with it.",
+            refusedAgain.Message);
 
         var refused = await Assert.ThrowsAsync<GatewayFault>(() =>
             new HostService(Db).SyncAsync(new HostAccess(computer.Id, alice.UserId), []));
@@ -334,7 +370,8 @@ public sealed class DeletionTests(TestDatabase database) : IClassFixture<TestDat
 
     private Task<long> OperatorRowsAsync(string name)
         => database.ScalarLongAsync(
-            $"SELECT COUNT(*) FROM audit WHERE owner_id IS NULL AND target = '{DevelopmentSignIn.Provider}:{name}'");
+            // Compared as bytes here whatever the column's collation, so this counts one identity's rows only.
+            $"SELECT COUNT(*) FROM audit WHERE owner_id IS NULL AND CAST(target AS BINARY) = CAST('{DevelopmentSignIn.Provider}:{name}' AS BINARY)");
 
     /// <summary>Moves the opening of the person's only session back by <paramref name="ago"/>.</summary>
     private Task OpenedAgoAsync(string userId, TimeSpan ago)
