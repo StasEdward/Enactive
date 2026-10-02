@@ -167,6 +167,47 @@ jobs:
           path: TestResults/*.trx
           retention-days: 7
 
+      # The panel in a real browser, against this gateway on the job's MySQL and a computer
+      # (tests/RemoteHostHarness: the real Enactive.Remote.Host over a scripted engine). Every test above
+      # proves one half against a stand-in for the other; the panel's own wiring - app.js, which pairs,
+      # admits and removes devices, seals and opens - ran nowhere until this did. Here, before the publish,
+      # because what it checks is what the deploy would ship: a pairing that verifies, a tampered grant
+      # refused, a removed device that reads nothing new, two accounts kept apart in one browser.
+      - name: Install the browser tests
+        working-directory: tests/panel-e2e
+        run: npm ci
+
+      - name: Install Chromium for the browser tests
+        working-directory: tests/panel-e2e
+        run: npx playwright install --with-deps chromium
+
+      - name: Build the browser tests' gateway and computer
+        run: |
+          dotnet build src/Enactive.Remote.Gateway/Enactive.Remote.Gateway.csproj --configuration Release
+          dotnet build tests/RemoteHostHarness/RemoteHostHarness.csproj --configuration Release
+
+      # The suite makes its own database on the service (enactive_test_e2e_*) and drops it afterwards; the
+      # gateway it starts runs in Development with the development sign-in, which is refused anywhere else.
+      - name: Test the panel in a browser
+        working-directory: tests/panel-e2e
+        run: npx playwright test
+        env:
+          E2E_CONFIGURATION: Release
+          E2E_NO_BUILD: "1"
+          ENACTIVE_E2E_MYSQL: "Server=127.0.0.1;Port=3306;User ID=root;Password=enactive-dev;"
+
+      # Only on a failure, and only for a week: the report, the traces and what the gateway and the computers
+      # wrote are what a red run needs read, and nothing a green one does (see "Keep it" on storage).
+      - name: Keep the browser tests' report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: panel-e2e-report-${{ github.sha }}
+          path: |
+            tests/panel-e2e/playwright-report
+            tests/panel-e2e/test-results
+          retention-days: 7
+
       # Built here and PULLED from here: the server is on a private address, so nothing in this
       # pipeline can reach it. enactive-deploy.timer asks the API for the newest run of this
       # workflow with status=success and installs its artifact - unless that build carries a
