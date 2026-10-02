@@ -156,18 +156,51 @@ test('the cache returns the same result for the same record and envelope and ret
   const record = await event();
 
   assert.deepEqual(await reader.openEvent(record, HOST), { unreadable: NOT_GIVEN });
+  // Unreadable is remembered until the keys change: asked again on every poll, a device never admitted to
+  // one computer read its key store once for each of that computer's records every three seconds.
+  assert.deepEqual(await reader.openEvent(record, HOST), { unreadable: NOT_GIVEN });
+  assert.equal(keystore.asked, 1, 'an unreadable record is not tried again before a key arrives');
+
   await keystore.addHostKey(HOST, EPOCH, secret);
-  // Unreadable is not remembered: the grant that just arrived opens it.
-  assert.deepEqual(await reader.openEvent(record, HOST), { text: 'Read the disk.' });
+  reader.keysChanged();
+  // The grant that just arrived opens it.
+  const opened = await reader.openEvent(record, HOST);
+  assert.deepEqual(opened, { text: 'Read the disk.' });
 
   const asked = keystore.asked;
-  const again = await reader.openEvent(record, HOST);
-  assert.deepEqual(again, { text: 'Read the disk.' });
-  assert.equal(keystore.asked, asked, 'an opened record is not opened again');
+  assert.equal(await reader.openEvent(record, HOST), opened, 'an opened record is not opened again');
+  assert.equal(keystore.asked, asked);
 
   // A new envelope under the same id is another record to open.
   const resealed = { ...record, sealedDetail: await computer.sealText('Changed.', ad.event(HOST, 'run-1', 7, 'Progress')) };
   assert.deepEqual(await reader.openEvent(resealed, HOST), { text: 'Changed.' });
+});
+
+test("a computer's key is read and derived once for all its records", async () => {
+  const keystore = await store();
+  const reader = createReader(keystore);
+
+  for (let sequence = 1; sequence <= 5; sequence += 1) {
+    assert.deepEqual(await reader.openEvent(await event({ id: `event-${sequence}`, sequence }), HOST), { text: 'Read the disk.' });
+  }
+
+  assert.equal(keystore.asked, 1);
+});
+
+test('the cache lets go of the record used longest ago, not of one still being drawn', async () => {
+  const reader = createReader(await store(), { keep: 2 });
+  const first = await event({ id: 'event-1', sequence: 1 });
+  const second = await event({ id: 'event-2', sequence: 2 });
+  const third = await event({ id: 'event-3', sequence: 3 });
+
+  const opened = await reader.openEvent(first, HOST);
+  const secondOpened = await reader.openEvent(second, HOST);
+  // Drawn again on the next poll: the first record is the newest used, so the third evicts the second.
+  assert.equal(await reader.openEvent(first, HOST), opened);
+  await reader.openEvent(third, HOST);
+
+  assert.equal(await reader.openEvent(first, HOST), opened);
+  assert.notEqual(await reader.openEvent(second, HOST), secondOpened);
 });
 
 test('a task the C# side sealed opens, with its title and prompt', async () => {

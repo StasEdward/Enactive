@@ -21,7 +21,9 @@ import { emptyState, resetState, forgetScreen, pollOnce } from "./js/session-gua
 import { providerLinks, outcomeOf, createDevelopmentProbe } from "./js/signin.js";
 import { singleFlight } from "./js/single-flight.js";
 import { openKeystore } from "./js/keystore.js";
-import { ensureDevice, collectGrants, troubleFor, worthSaying, connectPendingId, keyStanding } from "./js/trust.js";
+import {
+  ensureDevice, collectGrants, troubleFor, worthSaying, connectPendingId, keyStanding, createGrantSchedule
+} from "./js/trust.js";
 import { createReader, answerable, NOT_GIVEN } from "./js/reader.js";
 import { formatConnectionCode, newPairingSecret } from "./js/pairing.js";
 
@@ -273,10 +275,20 @@ function taskTitle(task) {
   return typeof title === "string" && title.length > 0 ? title : "Task";
 }
 
-/** A workspace's name as its computer sealed it, or its id when this device cannot read the name. */
+/**
+ * A workspace's name as its computer sealed it, or its id and why the name cannot be read. Not "unnamed":
+ * the computer did name it, and this device not being able to read the name is a different thing to say.
+ */
 function workspaceName(hostId, workspace) {
-  const name = content(`workspace:${hostId}:${workspace.id}`)?.text;
-  return typeof name === "string" && name.length > 0 ? name : `unnamed workspace (${workspace.id})`;
+  const opened = content(`workspace:${hostId}:${workspace.id}`);
+
+  if (typeof opened?.text === "string" && opened.text.length > 0) {
+    return opened.text;
+  }
+
+  return opened?.unreadable
+    ? `workspace ${workspace.id} (cannot read its name: ${opened.unreadable})`
+    : `workspace ${workspace.id}`;
 }
 
 // ── rendering ────────────────────────────────────────────────────────────
@@ -284,6 +296,13 @@ function workspaceName(hostId, workspace) {
 // Which render is the newest. Opening is asynchronous, so two renders can overlap, and the older one
 // finishing last would draw the snapshot before the one on screen over it.
 let drawing = 0;
+
+/**
+ * The cursor of the snapshot the inbox was last drawn from; null before the first. A poll moves
+ * `state.cursor` on before the drawing that follows it has opened the new notices, and a click in between
+ * marked read notices that were not yet on screen.
+ */
+let drawnCursor = null;
 
 async function render() {
   const turn = ++drawing;
@@ -303,6 +322,9 @@ async function render() {
   renderHosts();
   renderCounts();
   refreshOpenRun();
+  // Taken as the lists are drawn, from the state they were drawn from (see mark-read).
+  drawnCursor = state.cursor;
+  $("mark-read").disabled = drawnCursor === null;
 }
 
 function renderCounts() {
@@ -521,7 +543,11 @@ function renderInbox() {
     const run = state.runs.find((one) => one.id === notice.runId);
 
     if (run) {
-      card.append(node("p", "meta", taskTitle(state.tasks.find((task) => task.id === run.taskId))));
+      const task = state.tasks.find((one) => one.id === run.taskId);
+      const opened = task ? content(`task:${task.id}`) : null;
+      card.append(node("p", "meta", opened?.unreadable
+        ? `task cannot be read: ${opened.unreadable}`
+        : taskTitle(task)));
     }
 
     const detail = content(`notice:${notice.id}`);
@@ -918,15 +944,29 @@ async function takeGrants(started) {
   }
 
   const result = await collectGrants(store, api, deviceId);
-  return isCurrent(started) ? result : null;
+
+  if (!isCurrent(started)) {
+    return null;
+  }
+
+  // The reader keeps what it could not open until it is told keys arrived (reader.js).
+  if (result.added.length > 0) {
+    reader.keysChanged();
+  }
+
+  return result;
 }
+
+/** When to ask for grants while a computer is not current on this device (trust.js); one per session. */
+let grantSchedule = createGrantSchedule();
 
 /**
  * Takes the grants waiting for this device when a snapshot shows a computer whose current key it does not
  * hold. That is how a rotation reaches an open tab: the computer moves to a new key when a device is
  * removed, and grants were otherwise taken only at a page load and in the register dialog, so a tab left
  * open went on showing everything the computer sent after the rotation as unreadable until it was
- * reloaded. Asked at most once per poll, and only while some computer is behind; one at a time, so a slow
+ * reloaded. Asked at most once per poll, and only while some computer is not current - on every poll for one
+ * that rotated, ever less often for one never paired here (createGrantSchedule); one at a time, so a slow
  * answer is shared by the poll after it rather than asked again.
  */
 const catchUpKeys = singleFlight(catchUpKeysNow, generation);
@@ -940,10 +980,10 @@ async function catchUpKeysNow() {
   }
 
   try {
-    const behind = await Promise.all(state.hosts.filter((host) => !host.revoked)
-      .map((host) => keyStanding(store, host)));
+    const hosts = state.hosts.filter((host) => !host.revoked);
+    const standings = await Promise.all(hosts.map(async (host) => [host.id, await keyStanding(store, host)]));
 
-    if (!behind.some(Boolean)) {
+    if (!grantSchedule.due(standings)) {
       return;
     }
 
@@ -1057,6 +1097,8 @@ async function registerHost() {
 /** Asks for the computer's grant every few seconds while the dialog is open. */
 function startPairing(hostId, label) {
   stopPairing();
+  // Waited for by the dialog now; once it closes, the polls ask for this computer's grant again from the start.
+  grantSchedule.reset(hostId);
   const started = generation();
   // One check at a time: a slow answer overlapping the next tick would take the same grants twice.
   const check = singleFlight(() => checkPairing(hostId, label, started));
@@ -1145,6 +1187,8 @@ function resetSession() {
   // Its opened records too: they are the last account's content, in clear.
   reader = createReader(null);
   content = () => undefined;
+  drawnCursor = null;
+  grantSchedule = createGrantSchedule();
   lastTrouble = "";
   resetState(state);
   clearTimeout(toastTimer);
@@ -1497,9 +1541,15 @@ $("host-dialog").addEventListener("close", () => {
 });
 $("host-submit").addEventListener("click", registerHost);
 // Through the cursor of the snapshot on screen, and no further: a notice that arrived after it has not been
-// seen, and marking "everything" read would have marked it too. The gateway refuses the call without one.
-$("mark-read").addEventListener("click", (clicked) =>
-  act(clicked.currentTarget, () => post("/api/notices/read", { through: state.cursor })));
+// seen, and marking "everything" read would have marked it too. With nothing drawn yet there is no cursor,
+// the gateway refuses the call without one, and the button is disabled (render) rather than sending null.
+$("mark-read").addEventListener("click", (clicked) => {
+  const through = drawnCursor;
+
+  if (through !== null) {
+    act(clicked.currentTarget, () => post("/api/notices/read", { through }));
+  }
+});
 
 // A phone puts the page to sleep rather than closing it. Coming back to a
 // screen that is minutes stale, with no sign that it is, is the failure this

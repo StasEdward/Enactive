@@ -7,7 +7,7 @@ import { b64url, fromB64url } from '../../src/Enactive.Remote.Gateway/wwwroot/js
 import { canonicalBytes } from '../../src/Enactive.Remote.Gateway/wwwroot/js/canonical.js';
 import {
   ensureDevice, collectGrants, deviceLabel, tamperingMessage, troubleFor, worthSaying, connectPendingId, invitePendingId,
-  keyStanding, REJECTED, NO_SECRET, DEVICE_LIMIT, NOT_PAIRED, BEHIND
+  keyStanding, createGrantSchedule, REJECTED, NO_SECRET, DEVICE_LIMIT, NOT_PAIRED, BEHIND
 } from '../../src/Enactive.Remote.Gateway/wwwroot/js/trust.js';
 import { vectors } from './vectors.mjs';
 
@@ -346,6 +346,32 @@ test('a computer whose key this device does not hold, or holds only an older one
   await keystore.addHostKey(HOST, 2, new Uint8Array(32).fill(2));
   assert.equal(await keyStanding(keystore, host), null);
   assert.equal(await keyStanding(keystore, { ...host, keyEpoch: 1 }), null);
+});
+
+test('grants are asked for every poll for a computer that moved on, and ever less often for one never paired', () => {
+  const MINUTE = 60 * 1000;
+  let now = 0;
+  const schedule = createGrantSchedule(() => now);
+  const at = (minutes, standings) => { now = minutes * MINUTE; return schedule.due(standings); };
+  const never = [['host-a', NOT_PAIRED]];
+
+  // Never paired: at once, then after 1, 2, 4 and 8 minutes, then every 10 for good.
+  const checked = [];
+  for (let minute = 0; minute <= 60; minute += 0.5) {
+    if (at(minute, never)) checked.push(minute);
+  }
+  assert.deepEqual(checked, [0, 1, 3, 7, 15, 25, 35, 45, 55]);
+
+  // A computer this device is behind on is asked for on every poll, whatever the other one is waiting for.
+  assert.equal(at(55.5, [...never, ['host-b', BEHIND]]), true);
+  assert.equal(at(55.5, [['host-b', BEHIND]]), true);
+
+  // A key for it arrived (or the register dialog asked for it): the next time it is not paired starts over.
+  assert.equal(at(56, [['host-a', null]]), false);
+  assert.equal(at(56, never), true);
+  assert.equal(at(56.5, never), false);
+  schedule.reset('host-a');
+  assert.equal(at(56.5, never), true);
 });
 
 test('the tampering sentence names the computer and says what to do', () => {

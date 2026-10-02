@@ -92,6 +92,53 @@ export async function keyStanding(keystore, host) {
   return newest < host.keyEpoch ? BEHIND : null;
 }
 
+// How long to wait before asking again for the grants of a computer this device holds no key for: one
+// minute, doubling, up to ten.
+const FIRST_WAIT_MS = 60 * 1000;
+const LONGEST_WAIT_MS = 10 * 60 * 1000;
+
+/**
+ * When the panel asks the gateway for this device's grants, poll by poll. A computer this device is BEHIND on
+ * has rotated, and its grant is on its way: asked for on every poll. One it is NOT_PAIRED with is asked for at
+ * once and then ever less often. Every call of the account's tabs and devices shares one limit (300 a minute),
+ * and a computer this device was never admitted to - an ordinary, lasting state - doubled every open tab's
+ * calls for as long as it stayed open: a handful of tabs and the panel's own polls were refused.
+ *
+ * `due(standings)` takes [hostId, keyStanding] pairs for the computers that are not revoked and says whether to
+ * ask now. A computer whose standing is null holds its key, and the next time it is not paired starts over;
+ * `reset(hostId)` starts it over too (the register dialog is waiting for it).
+ */
+export function createGrantSchedule(now = () => Date.now()) {
+  const waiting = new Map();
+
+  return {
+    due(standings) {
+      const at = now();
+      let ask = false;
+
+      for (const [hostId, standing] of standings) {
+        if (standing === BEHIND) {
+          ask = true;
+        } else if (standing === NOT_PAIRED) {
+          const last = waiting.get(hostId);
+          if (last && at < last.dueAt) continue;
+          const tries = last ? last.tries + 1 : 0;
+          waiting.set(hostId, { tries, dueAt: at + Math.min(FIRST_WAIT_MS * 2 ** tries, LONGEST_WAIT_MS) });
+          ask = true;
+        } else {
+          waiting.delete(hostId);
+        }
+      }
+
+      return ask;
+    },
+
+    reset(hostId) {
+      waiting.delete(hostId);
+    }
+  };
+}
+
 // Most specific first: Edge and Opera also say Chrome and Safari, Chrome also says Safari.
 const BROWSERS = [[/Edg(e|A|iOS)?\//, 'Edge'], [/OPR\/|Opera/, 'Opera'], [/Firefox\/|FxiOS\//, 'Firefox'],
   [/Chrome\/|CriOS\//, 'Chrome'], [/Safari\//, 'Safari']];

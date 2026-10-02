@@ -5,7 +5,8 @@
 // The gateway carries every envelope and writes every plaintext field around it. So each record is opened
 // only under the associated data rebuilt from its own fields (sealed.js), and an envelope moved to another
 // record - another run, another step, another workspace - does not open. Nothing opened is believed beyond
-// that: a permission request is answerable only when the action it shows hashes to what the computer asked.
+// that: a permission request is answerable only when the tool, folder and arguments it carries hash to what
+// the computer asked.
 import { ad, openJson } from './sealed.js';
 import { hostKey } from './hostkey.js';
 import { epochOf, EnvelopeError } from './envelope.js';
@@ -21,8 +22,9 @@ export const NOT_GIVEN = 'this device has not been given the key for this';
 export const ALTERED = 'this does not open - it may have been altered';
 
 // A tab left open for a day sees new events and notices for as long as it is open. Without a bound the
-// records it opened would be kept for as long as that; this is more than the page keeps on screen at once
-// (500 events, 200 notices, 200 tasks and runs, the approvals and workspaces), so nothing drawn is evicted.
+// records it opened would be kept for as long as that. This is more than the page keeps on screen at once
+// (500 events, 200 notices, 200 tasks and runs, the approvals and workspaces), and a record found is moved
+// to the back, so what is let go is what was drawn longest ago.
 const KEEP = 4000;
 
 /**
@@ -31,12 +33,35 @@ const KEEP = 4000;
  * to null when the record carries nothing sealed (a run still going has no summary). `openAction` adds
  * `verified`.
  *
- * Results are kept by the record's id, the data it opens under and its envelope, so a redraw every few
- * seconds does not open the same steps again. Only what opened is kept: an unreadable record is tried again
- * on the next call, which is how a grant that arrives between two polls opens what was waiting for it.
+ * Results are kept by the record's id and the data it opens under, with its envelope beside them, so a
+ * redraw every few seconds does not open the same steps again. An unreadable result is kept too, until
+ * `keysChanged()` says this device was given keys: tried again on every call, the records of a computer
+ * this device was never admitted to cost one key-store read each, on every poll, for as long as the tab
+ * stayed open. `keep` is for a test; the page keeps the default.
  */
-export function createReader(keystore) {
+export function createReader(keystore, { keep = KEEP } = {}) {
   const opened = new Map();
+  // Each computer's key for an epoch, derived once: a first load opens hundreds of records under one key,
+  // and each one read the key store and ran the derivation again. Null is kept too - not held - until the
+  // keys change.
+  const derived = new Map();
+  // Moved on by keysChanged(); an unreadable result kept from an earlier count is tried again.
+  let keys = 0;
+
+  function keyFor(hostId, epoch) {
+    const name = `${hostId}
+${epoch}`;
+    if (!derived.has(name)) {
+      const key = (async () => {
+        const secret = keystore ? (await keystore.hostKeys(hostId)).get(epoch) : undefined;
+        return secret ? hostKey(epoch, secret) : null;
+      })();
+      derived.set(name, key);
+      // A key store that failed is asked again next time rather than taken to hold nothing.
+      key.catch(() => { if (derived.get(name) === key) derived.delete(name); });
+    }
+    return derived.get(name);
+  }
 
   async function attempt(hostId, envelope, adBytes, read) {
     let epoch;
@@ -47,11 +72,11 @@ export function createReader(keystore) {
       throw error;
     }
 
-    const secret = keystore ? (await keystore.hostKeys(hostId)).get(epoch) : undefined;
-    if (!secret) return { unreadable: NOT_GIVEN };
+    const key = await keyFor(hostId, epoch);
+    if (!key) return { unreadable: NOT_GIVEN };
 
     try {
-      return await read(await hostKey(epoch, secret), envelope, adBytes);
+      return await read(key, envelope, adBytes);
     } catch (error) {
       if (error instanceof EnvelopeError) return { unreadable: ALTERED };
       throw error;
@@ -72,30 +97,48 @@ export function createReader(keystore) {
     }
 
     // The data is in the name, not only the id: the gateway names records too, and the text of a record
-    // that opened must not be handed back for the same id shown under another run or step.
-    const name = `${id}\n${b64url(adBytes)}\n${envelope}`;
+    // that opened must not be handed back for the same id shown under another run or step. The envelope is
+    // compared whole rather than hashed into the name: it is the string the snapshot already holds, so
+    // keeping it costs a reference while the record is on screen, and no two envelopes can be mistaken.
+    const name = `${id}
+${b64url(adBytes)}`;
     const known = opened.get(name);
-    if (known) return known;
+    if (known && known.envelope === envelope && (!known.unreadable || known.keys === keys)) {
+      opened.delete(name);
+      opened.set(name, known);
+      return known.result;
+    }
 
     // The promise is kept while it runs, so a redraw during a slow open waits for it instead of opening
-    // the record a second time; it is let go as soon as it turns out unreadable.
-    const result = attempt(hostId, envelope, adBytes, read).then((value) => {
-      if (value.unreadable) opened.delete(name);
+    // the record a second time.
+    const entry = { envelope, keys, unreadable: false };
+    entry.result = attempt(hostId, envelope, adBytes, read).then((value) => {
+      entry.unreadable = Boolean(value.unreadable);
       return value;
     }, (error) => {
-      opened.delete(name);
+      if (opened.get(name) === entry) opened.delete(name);
       throw error;
     });
 
-    opened.set(name, result);
-    if (opened.size > KEEP) opened.delete(opened.keys().next().value);
-    return result;
+    opened.delete(name);
+    opened.set(name, entry);
+    if (opened.size > keep) opened.delete(opened.keys().next().value);
+    return entry.result;
   }
 
   const text = async (key, envelope, adBytes) => ({ text: await key.openText(envelope, adBytes) });
   const json = async (key, envelope, adBytes) => ({ json: await openJson(key, envelope, adBytes) });
 
   return {
+    /**
+     * Says this device was given keys (a delivery added some): what did not open before is tried again,
+     * and what was not held is looked for again. Also for keys taken away, so nothing derived outlives them.
+     */
+    keysChanged() {
+      keys += 1;
+      derived.clear();
+    },
+
     /** A task's `{title, prompt}`, as the browser that wrote it sealed it. */
     openTask: (task) => open(task.id, task.hostId, task.sealed,
       () => ad.task(task.hostId, task.id, task.workspaceId), json),
@@ -118,10 +161,15 @@ export function createReader(keystore) {
 
     /**
      * A permission request's `{tool, argumentsJson, fullText, workingDirectory, topic}`, and whether it
-     * is the action the computer asked about. The card shows `fullText`, and the hash the computer checks
-     * an answer against covers `argumentsJson`; both are sealed, so a computer - or a key holder - could
-     * seal one that shows one command and hashes another. `verified` is false then, and the card offers
-     * no answer.
+     * is the action the computer asked about: `verified` recomputes the action hash from the sealed tool,
+     * working directory and arguments and compares it with the approval's. That is what an answer is
+     * bound to - the hash is in the associated data, so the gateway cannot swap it, and the computer runs
+     * only the action that hashes to it. So a request whose sealed action does not match its hash (a fault
+     * on the computer, or JS and C# hashing differently) is not offered an answer here.
+     *
+     * `fullText` is not covered. It is the computer's own rendering of the action for the card, sealed by
+     * the computer like everything else, and a computer that rendered one command and ran another is a
+     * compromised computer, which this protects nobody from (spec section 2).
      */
     openAction: (approval) => open(approval.id, approval.hostId, approval.sealedAction,
       () => ad.approval(approval.hostId, approval.runId, approval.id, approval.toolCallId,
