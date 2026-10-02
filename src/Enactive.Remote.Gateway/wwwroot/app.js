@@ -20,7 +20,7 @@ import {
 import { emptyState, resetState, forgetScreen, pollOnce } from "./js/session-guard.js";
 import { providerLinks, outcomeOf, createDevelopmentProbe } from "./js/signin.js";
 import { singleFlight } from "./js/single-flight.js";
-import { openSessionChannel } from "./js/session-channel.js";
+import { openSessionChannel, onSessionSignal } from "./js/session-channel.js";
 import { openKeystore } from "./js/keystore.js";
 import {
   ensureDevice, collectGrants, troubleFor, worthSaying, connectPendingId, keyStanding, createGrantSchedule, epochsChanged,
@@ -1947,7 +1947,7 @@ function resetSession() {
  * Asks the gateway who is signed in and shows that. The only way onto the panel, so what it draws is
  * always the account a fresh answer named.
  */
-async function boot(outcome) {
+async function bootNow(outcome) {
   let view;
 
   try {
@@ -1968,6 +1968,10 @@ async function boot(outcome) {
     showSignedOut(outcome);
   }
 }
+
+// One at a time within a session: a signal from another tab can arrive while this tab's own first boot is still
+// asking /api/session, and two boots would each enter the panel (two key stores opened, two polls started).
+const boot = singleFlight(bootNow, generation);
 
 async function enterPanel(user) {
   account = user;
@@ -2140,8 +2144,12 @@ const revalidate = singleFlight(revalidateNow, generation);
 
 // Other tabs of this browser, told when the session changes here and telling this tab when it changes there.
 // What they say is only "ask the gateway" (session-channel.js): revalidate decides, from /api/session. Never
-// closed by resetSession - the next account signed in in this tab needs it too.
-const sessionChannel = openSessionChannel({ onChanged: () => revalidate() });
+// closed by resetSession - the next account signed in in this tab needs it too. A tab with an account revalidates;
+// one left at the sign-in or "device removed" view has none, so it boots - asks /api/session and enters the panel
+// if another tab has signed in since (onSessionSignal).
+const sessionChannel = openSessionChannel({
+  onChanged: () => onSessionSignal({ account, boot: () => boot(), revalidate: () => revalidate() })
+});
 
 async function revalidateNow() {
   if (!account) {

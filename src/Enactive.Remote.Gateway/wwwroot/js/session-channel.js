@@ -59,3 +59,14 @@ export function openSessionChannel({ onChanged, channelFactory = (name) => new B
     }
   };
 }
+
+/**
+ * What a tab does when another one announced a change. A tab with an account asks the gateway whether it is still
+ * that account's (`revalidate`). A tab with none - left at the sign-in view, or at "this device was removed" - had
+ * nothing to revalidate, so after another tab signed in it went on offering a sign-in for a session the browser
+ * already holds: it asks the gateway who is signed in instead (`boot`), which enters the panel if somebody is and
+ * stays at the sign-in view if not.
+ */
+export function onSessionSignal({ account, boot, revalidate }) {
+  return account ? revalidate() : boot();
+}

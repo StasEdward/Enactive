@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createGuard, pollOnce, Stale } from '../../src/Enactive.Remote.Gateway/wwwroot/js/session-guard.js';
-import { openSessionChannel } from '../../src/Enactive.Remote.Gateway/wwwroot/js/session-channel.js';
+import { openSessionChannel, onSessionSignal } from '../../src/Enactive.Remote.Gateway/wwwroot/js/session-channel.js';
 
 // Every channel made by one factory is on the same bus: a message posted on one end reaches the others and
 // never the one that posted it, as a BroadcastChannel does.
@@ -144,4 +144,33 @@ test('a factory that throws leaves a channel that does nothing', () => {
 
   assert.doesNotThrow(() => channel.announce());
   assert.doesNotThrow(() => channel.close());
+});
+
+test('a signal revalidates a tab that has an account', () => {
+  const calls = [];
+  onSessionSignal({ account: { id: 'alice' }, boot: () => calls.push('boot'), revalidate: () => calls.push('revalidate') });
+  assert.deepEqual(calls, ['revalidate']);
+});
+
+test('a signal makes a tab with no account boot, so it follows a sign-in made in another tab', () => {
+  const calls = [];
+  onSessionSignal({ account: null, boot: () => calls.push('boot'), revalidate: () => calls.push('revalidate') });
+  assert.deepEqual(calls, ['boot']);
+});
+
+test('a changed signal from another tab boots a tab left at sign-in', () => {
+  const bus = fakeBus();
+  const calls = [];
+  let account = null;
+  openSessionChannel({
+    onChanged: () => onSessionSignal({ account, boot: () => calls.push('boot'), revalidate: () => calls.push('revalidate') }),
+    channelFactory: bus.factory
+  });
+  const other = openSessionChannel({ onChanged: () => {}, channelFactory: bus.factory });
+
+  other.announce();
+  account = { id: 'bob' };
+  other.announce();
+
+  assert.deepEqual(calls, ['boot', 'revalidate']);
 });
