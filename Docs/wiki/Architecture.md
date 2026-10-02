@@ -122,11 +122,15 @@ Truncated model output stops the step rather than executing a partially formed t
 
 ### 8. Review and retry
 
-When a Review model is bound, the reviewer checks a step's report against its evidence. With Review content enabled, a writing-only step can be reviewed on its written text. Quick actions also participate in configured review.
+When a Review model is bound, every step - and a quick action - gets one short verdict: did the step do what it is for, and is what it reported true? The reviewer answers pass or fail with a reason, citing the recorded calls and the files that show it. A claim counts only where a call or a file shows it; a call that was refused, or a tool that failed without running anything, shows nothing done.
+
+The reviewer is shown the request as context, the step and what the plan says it is (one item of a fan-out, or a read-only step), the lines of the request the plan gave this step, the other steps, the worker's report and any values it handed on, the files the step changed - as a diff, with the whole file where it fits, new files, deletions, and who made each change - and the step's tool calls with their output. A change the request did not ask for, where the request limits what may change, fails the step.
+
+A run is **Completed** when every step passed and the engine's own checks are green; there is no second review of the whole run. When it is not, the outcome names each step that is not done and each check that failed. A review that gives no usable answer leaves its step **done, not verified**: the steps after it still run, but the run is not Completed.
 
 A rejection may trigger another execution attempt with feedback. `ReviewRetries = 1` allows one retry, or two attempts in total. Increasing retries increases worker and reviewer calls; it does not improve an inherently unsuitable reviewer.
 
-Revert rejected steps attempts to undo tracked writes from a finally rejected step. Revert refuses to overwrite later writes or subsequent user edits and reports files it cannot safely restore. Shell and MCP side effects are outside this journal.
+Revert rejected steps attempts to undo tracked writes from a finally rejected step - unless the reviewer said the work itself stands and only the report was wrong, in which case the files are kept. Revert refuses to overwrite later writes or subsequent user edits and reports files it cannot safely restore. Shell and MCP side effects are outside this journal.
 
 ### 9. Run success criteria
 
@@ -145,6 +149,6 @@ Template limits cover steps, cumulative reported tokens, and elapsed duration. T
 ## Implementation references
 
 - [Orchestrator](../src/Enactive.Agents/Orchestrator.cs), [Planner](../src/Enactive.Agents/Planner.cs), [DAG scheduler](../src/Enactive.Agents/DagScheduler.cs)
-- [Reviewer](../src/Enactive.Agents/Reviewer.cs), [Execution journal](../src/Enactive.Core/ExecutionJournal.cs)
+- [Step review](../src/Enactive.Agents/StepVerdictReview.cs), [Execution journal](../src/Enactive.Core/ExecutionJournal.cs)
 - [Success evaluator](../src/Enactive.Agents/SuccessEvaluator.cs), [Run budget](../src/Enactive.Core/RunBudget.cs)
 - [Context provider](../src/Enactive.Workspace/ContextProvider.cs), [Workspace guard](../src/Enactive.Core/WorkspaceGuard.cs)
