@@ -54,9 +54,45 @@ internal sealed class PanelClient : IDisposable
 {
     private string _csrf = "";
 
+    private readonly WebApplicationFactory<Program> _gateway;
+    private readonly SemaphoreSlim _registering = new(1, 1);
+    private readonly Dictionary<string, PanelClient> _asDevice = new(StringComparer.Ordinal);
+    private string? _name;
+
     public PanelClient(WebApplicationFactory<Program> gateway)
     {
+        _gateway = gateway;
         Http = gateway.CreateDefaultClient(new NamesItsDevice(this), new CookieContainerHandler(Cookies));
+    }
+
+    /// <summary>
+    /// A browser of the same account calling as <paramref name="deviceId"/>: this one when it names that device
+    /// (or none yet, and then takes it), otherwise a session of its own, signed in as this one was. The gateway
+    /// binds a session to the first device it names and refuses it any other - one browser profile is one device
+    /// - so a test that acts as several devices of one person acts through one session each.
+    /// </summary>
+    public async Task<PanelClient> AsDeviceAsync(string deviceId)
+    {
+        if (DeviceId is null)
+        {
+            DeviceId = deviceId;
+            return this;
+        }
+
+        if (DeviceId == deviceId)
+        {
+            return this;
+        }
+
+        if (!_asDevice.TryGetValue(deviceId, out var other))
+        {
+            other = await SignedInAsync(_gateway, _name
+                ?? throw new InvalidOperationException("This browser never signed in, so it has no account to share."));
+            other.DeviceId = deviceId;
+            _asDevice[deviceId] = other;
+        }
+
+        return other;
     }
 
     public CookieContainer Cookies { get; } = new();
@@ -110,6 +146,7 @@ internal sealed class PanelClient : IDisposable
     /// </summary>
     public async Task SignInAsync(string name)
     {
+        _name = name;
         await SessionAsync();
 
         using var response = await SendAsync(HttpMethod.Post, "/api/dev/sign-in", new { name });
@@ -164,7 +201,11 @@ internal sealed class PanelClient : IDisposable
         return (await response.Content.ReadFromJsonAsync<T>(RemoteJson.Options))!;
     }
 
-    public void Dispose() => Http.Dispose();
+    public void Dispose()
+    {
+        foreach (var other in _asDevice.Values) other.Dispose();
+        Http.Dispose();
+    }
 
     /// <summary>
     /// The calls a browser makes before it has a device to name: the gateway refuses every other private call
@@ -197,8 +238,19 @@ internal sealed class PanelClient : IDisposable
 
             if (!asksForNone && NeedsDevice(request) && !request.Headers.Contains(DeviceHeader.Name))
             {
-                // A browser that is not signed in has no device to register, and is answered 401 without one.
-                browser.DeviceId ??= await RegisterAsync(request.RequestUri!, ct);
+                // A browser that is not signed in has no device to register, and is answered 401 without one. One
+                // registration at a time: calls made at once each registered a device, and the session, bound to
+                // the first, refused the rest.
+                await browser._registering.WaitAsync(ct);
+                try
+                {
+                    browser.DeviceId ??= await RegisterAsync(request.RequestUri!, ct);
+                }
+                finally
+                {
+                    browser._registering.Release();
+                }
+
                 if (browser.DeviceId is not null)
                 {
                     request.Headers.Add(DeviceHeader.Name, browser.DeviceId);

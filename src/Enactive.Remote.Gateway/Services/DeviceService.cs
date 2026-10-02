@@ -109,6 +109,24 @@ public sealed class DeviceService(Database db, Limits limits, TimeProvider clock
                 throw GatewayFault.Unauthenticated();
             }
 
+            // A session bound to a device that has been removed registers nothing. Removing the device ends
+            // the sessions bound to it, but a session bound in the moment after the removal looked for them is
+            // left, refused every call that names its device - and registering is the one private call that
+            // names none: allowed, it gave the removed browser a new device and the API back.
+            var boundRevoked = await connection.ReadOneAsync(transaction,
+                """
+                SELECT d.revoked_at IS NOT NULL
+                FROM user_sessions s
+                JOIN devices d ON d.owner_id = s.user_id AND d.id = s.device_id
+                WHERE s.id = @session AND s.user_id = @owner
+                """,
+                reader => (bool?)reader.GetBoolean(0), ("@session", user.SessionId), ("@owner", user.UserId));
+
+            if (boundRevoked == true)
+            {
+                throw GatewayFault.DeviceRevoked();
+            }
+
             // Under the account's lock, like the count: two tabs of one browser registering at once find
             // each other's row instead of both inserting. Before the limit, so a full account still answers
             // a browser that is only asking again.
@@ -290,6 +308,17 @@ public sealed class DeviceService(Database db, Limits limits, TimeProvider clock
             await Audit.WriteAsync(connection, transaction, now, ownerId, actor, Audit.DeviceRevoked, deviceId);
         }
 
+        // The sessions the device was used through end with it, in this transaction: left open, a removed
+        // browser was still signed in, and could register a new device and have the API back. A session that
+        // removes another device is bound to its own, so it is not among them. On a repeated revoke too, for a
+        // session bound since the first.
+        await connection.ExecuteAsync(transaction,
+            """
+            UPDATE user_sessions FORCE INDEX (ix_sessions_user_device) SET revoked_at = @now
+            WHERE user_id = @owner AND device_id = @device AND revoked_at IS NULL
+            """,
+            ("@now", now), ("@owner", ownerId), ("@device", deviceId));
+
         // Deleted on a repeated revoke too. A grant written by a request that was already past its
         // own check when the device was revoked can land after the first revoke's delete; returning
         // early here would leave that grant for a removed device for ever. The delete is idempotent.
@@ -324,10 +353,49 @@ public sealed class DeviceService(Database db, Limits limits, TimeProvider clock
             return known;
         }
 
-        var device = await RequireAsync(context.UserAccess(), context.RequireDeviceId(), GatewayFault.DeviceRevoked, ct);
+        var user = context.UserAccess();
+        var device = await RequireAsync(user, context.RequireDeviceId(), GatewayFault.DeviceRevoked, ct);
+        await BindAsync(user, device.DeviceId, ct);
         context.Items[typeof(DeviceAccess)] = device;
         return device;
     }
+
+    /// <summary>
+    /// Binds the session to the device it names, on its first call that names one, and refuses it any other
+    /// device afterwards: one browser profile is one device. Without the binding a removed browser's session
+    /// outlived the device - removing a device could not find the sessions to end - and could register a new
+    /// device and go on with the whole API. Only a device already found live and the caller's is bound, so a
+    /// header naming somebody else's device, or none that exists, binds nothing.
+    /// </summary>
+    private async Task BindAsync(UserAccess user, string deviceId, CancellationToken ct)
+    {
+        await using var connection = await db.OpenAsync(ct);
+
+        var bound = await BoundDeviceAsync(connection, user);
+        if (bound is null)
+        {
+            // Only while unbound, so of two first calls naming different devices at once one binds and the other
+            // is refused below.
+            await connection.ExecuteAsync(null,
+                """
+                UPDATE user_sessions SET device_id = @device
+                WHERE id = @session AND user_id = @user AND device_id IS NULL
+                """,
+                ("@device", deviceId), ("@session", user.SessionId), ("@user", user.UserId));
+            bound = await BoundDeviceAsync(connection, user);
+        }
+
+        if (bound is not null && !string.Equals(bound, deviceId, StringComparison.Ordinal))
+        {
+            throw GatewayFault.DeviceRevoked();
+        }
+    }
+
+    private static Task<string?> BoundDeviceAsync(MySqlConnection connection, UserAccess user)
+        => connection.ReadOneAsync(null,
+            "SELECT device_id FROM user_sessions WHERE id = @session AND user_id = @user",
+            reader => reader.IsDBNull(0) ? null : reader.GetString(0),
+            ("@session", user.SessionId), ("@user", user.UserId));
 
     private async Task<DeviceAccess> RequireAsync(
         UserAccess user, string deviceId, Func<GatewayFault> unknown, CancellationToken ct)

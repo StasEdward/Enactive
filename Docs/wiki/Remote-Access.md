@@ -131,8 +131,7 @@ can still read what it has already opened. It will not read anything new. Contin
 refuses every call from that device at once - every call names the browser it comes from - and
 every computer this browser holds the current key of is sent a sealed removal. The computer
 distrusts the device, makes a new key and gives it to every device still trusted. The removed
-browser's session is not ended: still signed in, it could register itself as a new device. If the
-device is lost or stolen, also use **Sign out everywhere**.
+browser is signed out too: every session it was used through ends with it.
 
 The card then has one line per computer, saying only what the panel can see:
 
@@ -185,7 +184,7 @@ is not enough: remove it too.
 
 | What is lost | What to do |
 | --- | --- |
-| One browser | From another browser, **Devices → Remove** on its card, then **Sign out everywhere**: the gateway refuses every call that names the removed browser, but its session stays signed in and could register itself as a new device until it is signed out. Sign in again afterwards. |
+| One browser | From another browser, **Devices → Remove** on its card. The gateway refuses every call that names the removed browser and ends its sessions. If the provider account may be in other hands too, secure it, then use **Sign out everywhere** and sign in again. |
 | Every browser | First, on the computer, **Add a device** (above): the computer still holds its keys and admits a new browser itself. Then remove each lost browser — on the computer under **Settings → Remote access → Trusted devices → Remove**, or under **Devices → Remove** on the new browser — and use **Sign out everywhere** to end their sessions. |
 | The computer | Its history stays readable on the devices that hold its keys. Revoke it under **Computers**, then register the new computer afresh with a new connection code. |
 | The computer and every browser | The history cannot be read by anyone, the service included. From a new browser, remove the lost browsers under **Devices → Remove**, revoke the old computer under **Computers → Revoke access**, and use **Sign out everywhere**: with no computer to tell, the gateway refusing them is what keeps them out. Then delete the account, or pair a new computer. |

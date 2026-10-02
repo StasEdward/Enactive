@@ -454,7 +454,12 @@ test('4. a removed device cannot read what the computer sends after it rotates',
   await expect(card.locator(':scope > .card-head > .status')).toHaveText('Done');
   await expect(card).toContainText('All done');
 
-  // The removed device is told so by the gateway the first time it asks as itself.
+  // Its session ended with it, so the first time it asks it is signed out; signed in again, the gateway tells it
+  // the device was removed the first time it asks as that device.
+  await expect(pageB.locator('#login')).toBeVisible();
+  await expect(pageB.locator('#login-outcome')).toHaveText('You were signed out. Sign in again to go on.');
+  await pageB.fill('#dev-name', alice);
+  await pageB.click('#dev-sign-in button[type=submit]');
   await expect(pageB.locator('#device-removed')).toBeVisible();
 
   // The gateway answers it nothing more: every call names the device, and a removed one is refused all of them.

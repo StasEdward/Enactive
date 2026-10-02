@@ -99,9 +99,10 @@ next epoch:
 
 1. The gateway marks the device removed: it refuses every call that names the device and stops
    serving it keys. Every call of the panel names the browser it comes from, and one that names none
-   is refused, so leaving the name off is no way round it. The device's session is not ended, though:
-   still signed in, it can register itself as a new device. After removing a lost device, also use
-   **Sign out everywhere**.
+   is refused, so leaving the name off is no way round it. Every session the device was used through
+   ends with it, so it cannot register itself as a new device either. Whoever can still sign in to
+   the account at the provider can sign in again, from any browser - secure the provider account
+   first.
 2. Each computer receives the sealed removal, distrusts the device, makes a new key, and sends it to
    every device still trusted, signed with its signing key.
 3. From then on the computer seals with the new key.

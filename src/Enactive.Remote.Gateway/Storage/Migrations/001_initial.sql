@@ -46,8 +46,13 @@ CREATE TABLE IF NOT EXISTS user_sessions (
   created_at       DATETIME(3) NOT NULL,
   expires_at       DATETIME(3) NOT NULL,
   revoked_at       DATETIME(3) NULL,
+  -- The browser device the session first named, which it names for as long as it lasts: removing the device
+  -- ends the session. Null until the session's first call that names one.
+  device_id        CHAR(32)    CHARACTER SET ascii COLLATE ascii_bin NULL,
   PRIMARY KEY (id),
   KEY ix_sessions_user (user_id, revoked_at),
+  -- What a removal ends a device's sessions through, the owner first like every other lookup by a caller's id.
+  KEY ix_sessions_user_device (user_id, device_id),
   CONSTRAINT fk_sessions_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 

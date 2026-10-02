@@ -2311,9 +2311,19 @@ async function signOut(path, outcome) {
   try {
     await post(path, {});
   } catch (error) {
-    // Stale: another sign-out got there first. Unauthenticated: the session was already over, and the
-    // 401 has put the sign-in page up.
-    if (error instanceof Stale || error.code === "unauthenticated") {
+    // Stale: another sign-out got there first.
+    if (error instanceof Stale) {
+      return;
+    }
+
+    // The session was already over, and the 401 has put the sign-in page up. Forgetting this device ends here
+    // every time: the gateway ends a device's sessions when the device is removed, this one's included, so what
+    // the forgetting has to say goes under that page rather than "You were signed out", and the other tabs hear.
+    if (error.code === "unauthenticated") {
+      if (outcome) {
+        showSignedOut(outcome);
+        sessionChannel.announce();
+      }
       return;
     }
 

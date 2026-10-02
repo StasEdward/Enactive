@@ -296,6 +296,9 @@ public sealed class AuditTests(TestDatabase database) : IClassFixture<TestDataba
                 """));
 
         using var alice = await PanelClient.SignedInAsync(_gateway, Name("alice"));
+        // The browser's own device first: removing the device a session is bound to ends the session, and the
+        // tablet removed below is another one.
+        await alice.EnsureDeviceAsync();
         var key = B64.Url(NewPublicKey());
         var device = await alice.PostAsync<JsonElement>(
             "/api/devices", new { publicKey = key, label = "Kitchen tablet" });
@@ -306,7 +309,7 @@ public sealed class AuditTests(TestDatabase database) : IClassFixture<TestDataba
         var rows = await database.StringsAsync(
             $"SELECT CONCAT_WS('|', actor, action, IFNULL(target, '-')) FROM audit WHERE owner_id = '{alice.UserId}'");
 
-        Assert.Equal(4, rows.Count);
+        Assert.Equal(5, rows.Count);
 
         foreach (var row in rows)
         {

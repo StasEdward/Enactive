@@ -1400,10 +1400,10 @@ public sealed class DeviceServiceTests(TestDatabase database) : IClassFixture<Te
         Assert.Equal("device-revoked", (await ErrorAsync(removed)).Code);
         Assert.Equal(0, await database.ScalarLongAsync($"SELECT COUNT(*) FROM enrollments WHERE invite_id = '{invite}'"));
 
-        // A removed browser can no longer make invitations either.
+        // A removed browser can no longer make invitations either: its session ended with it.
         await Devices.RevokeAsync(owner, laptop.Id, default);
         using var revoked = await PostInviteAsync(alice, laptop.Id, Ids.New());
-        Assert.Equal(HttpStatusCode.Forbidden, revoked.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, revoked.StatusCode);
     }
 
     /// <summary>
@@ -1469,6 +1469,121 @@ public sealed class DeviceServiceTests(TestDatabase database) : IClassFixture<Te
 
         using var signedOut = await alice.SendAsync(HttpMethod.Post, "/api/logout-all", new { }, configure: PanelClient.WithoutDevice);
         Assert.True(signedOut.IsSuccessStatusCode, await signedOut.Content.ReadAsStringAsync());
+    }
+
+    /// <summary>
+    /// A removed browser's session ends with it, whoever removed it - another browser of the person's, or a
+    /// computer from its trusted list. Before, the session outlived the device: it was refused every call that
+    /// named the device, and it could register a new device and have the whole API back. Removing another device
+    /// leaves the session that removed it alone.
+    /// </summary>
+    [Theory]
+    [InlineData("browser")]
+    [InlineData("computer")]
+    public async Task A_removed_devices_session_ends_with_it(string removedBy)
+    {
+        var name = Name("alice");
+        using var lost = await PanelClient.SignedInAsync(_gateway, name);
+        using var kept = await PanelClient.SignedInAsync(_gateway, name);
+        var lostDevice = await lost.EnsureDeviceAsync();
+        await kept.EnsureDeviceAsync();
+        await AssertStateAsync(lost, HttpStatusCode.OK);
+        await AssertStateAsync(kept, HttpStatusCode.OK);
+
+        if (removedBy == "browser")
+        {
+            await kept.PostAsync($"/api/devices/{lostDevice}/revoke", new { });
+        }
+        else
+        {
+            var computer = await ComputerAsync(new UserAccess(lost.UserId, "unused"));
+            await Devices.RevokeByComputerAsync(computer, lostDevice, default);
+        }
+
+        await AssertStateAsync(lost, HttpStatusCode.Unauthorized);
+        using (var registering = await lost.SendAsync(HttpMethod.Post, "/api/devices",
+            new { publicKey = KeyText(NewPublicKey()), label = "replacement" }))
+        {
+            Assert.Equal(HttpStatusCode.Unauthorized, registering.StatusCode);
+        }
+
+        await AssertStateAsync(kept, HttpStatusCode.OK);
+        Assert.Equal(1, await database.ScalarLongAsync(
+            $"SELECT COUNT(*) FROM devices WHERE owner_id = '{lost.UserId}' AND revoked_at IS NULL"));
+    }
+
+    /// <summary>
+    /// A session bound to a device that was removed in the moment between its check and its binding is not
+    /// ended by the removal, which looked for sessions bound to the device before this one was. It is refused a
+    /// new device all the same: registering is the one private call made without naming a device, and it is
+    /// what would have given the removed browser the API back.
+    /// </summary>
+    [Fact]
+    public async Task A_session_of_a_removed_device_cannot_register_another()
+    {
+        using var alice = await PanelClient.SignedInAsync(_gateway, Name("alice"));
+        var device = await alice.EnsureDeviceAsync();
+        await AssertStateAsync(alice, HttpStatusCode.OK);
+        await database.ExecuteAsync($"UPDATE devices SET revoked_at = UTC_TIMESTAMP(3) WHERE id = '{device}'");
+
+        using var registering = await alice.SendAsync(HttpMethod.Post, "/api/devices",
+            new { publicKey = KeyText(NewPublicKey()), label = "replacement" });
+
+        Assert.Equal(HttpStatusCode.Forbidden, registering.StatusCode);
+        Assert.Equal("device-revoked", (await ErrorAsync(registering)).Code);
+        Assert.Equal(0, await database.ScalarLongAsync(
+            $"SELECT COUNT(*) FROM devices WHERE owner_id = '{alice.UserId}' AND revoked_at IS NULL"));
+    }
+
+    /// <summary>
+    /// One browser profile is one device, so a session names one device for as long as it lasts. Without this a
+    /// removed browser that knew another device's id - its own replacement's, registered before the removal took
+    /// - went on through the same session under that id.
+    /// </summary>
+    [Fact]
+    public async Task A_session_bound_to_one_device_is_refused_naming_another()
+    {
+        using var alice = await PanelClient.SignedInAsync(_gateway, Name("alice"));
+        await alice.EnsureDeviceAsync();
+        await AssertStateAsync(alice, HttpStatusCode.OK);
+        var other = await DeviceAsync(new UserAccess(alice.UserId, "unused"), "other");
+
+        using var refused = await alice.SendAsync(HttpMethod.Get, "/api/state",
+            configure: request => request.Headers.Add(DeviceHeader.Name, other.Id));
+
+        Assert.Equal(HttpStatusCode.Forbidden, refused.StatusCode);
+        Assert.Equal("device-revoked", (await ErrorAsync(refused)).Code);
+        await AssertStateAsync(alice, HttpStatusCode.OK);
+    }
+
+    /// <summary>
+    /// Signing in again in the browser that was removed opens a new session, bound to nothing, which may register
+    /// the new device the browser needs - after "Delete this device's keys", say. The ended session could not.
+    /// </summary>
+    [Fact]
+    public async Task A_fresh_sign_in_in_a_removed_browser_can_register_a_new_device()
+    {
+        var name = Name("alice");
+        using var removed = await PanelClient.SignedInAsync(_gateway, name);
+        using var other = await PanelClient.SignedInAsync(_gateway, name);
+        var old = await removed.EnsureDeviceAsync();
+        await AssertStateAsync(removed, HttpStatusCode.OK);
+        await other.PostAsync($"/api/devices/{old}/revoke", new { });
+        await AssertStateAsync(removed, HttpStatusCode.Unauthorized);
+
+        await removed.SignInAsync(name);
+        var fresh = (await removed.PostAsync<JsonElement>("/api/devices",
+            new { publicKey = KeyText(NewPublicKey()), label = "laptop again" })).GetProperty("id").GetString()!;
+
+        using var state = await removed.SendAsync(HttpMethod.Get, "/api/state",
+            configure: request => request.Headers.Add(DeviceHeader.Name, fresh));
+        Assert.Equal(HttpStatusCode.OK, state.StatusCode);
+    }
+
+    private static async Task AssertStateAsync(PanelClient browser, HttpStatusCode expected)
+    {
+        using var state = await browser.SendAsync(HttpMethod.Get, "/api/state", csrf: false);
+        Assert.Equal(expected, state.StatusCode);
     }
 
     /// <summary>
@@ -1592,16 +1707,17 @@ public sealed class DeviceServiceTests(TestDatabase database) : IClassFixture<Te
             FROM invites WHERE owner_id = '{ownerId}' AND id = '{inviteId}'
             """);
 
-    private static Task<HttpResponseMessage> PostInviteAsync(PanelClient browser, string deviceId, string inviteId)
-        => browser.SendAsync(HttpMethod.Post, "/api/invites", new { id = inviteId },
+    // Each device through a session of its own (PanelClient.AsDeviceAsync): the gateway binds a session to one device.
+    private static async Task<HttpResponseMessage> PostInviteAsync(PanelClient browser, string deviceId, string inviteId)
+        => await (await browser.AsDeviceAsync(deviceId)).SendAsync(HttpMethod.Post, "/api/invites", new { id = inviteId },
             configure: request => request.Headers.Add(DeviceHeader.Name, deviceId));
 
     private static Task<HttpResponseMessage> PostEnrollmentAsync(
         PanelClient browser, string inviteId, string deviceId, string mac)
         => browser.SendAsync(HttpMethod.Post, "/api/enrollments", new { inviteId, deviceId, mac });
 
-    private static Task<HttpResponseMessage> ReadEnrollmentAsync(PanelClient browser, string deviceId, string inviteId)
-        => browser.SendAsync(HttpMethod.Get, $"/api/invites/{inviteId}/enrollment",
+    private static async Task<HttpResponseMessage> ReadEnrollmentAsync(PanelClient browser, string deviceId, string inviteId)
+        => await (await browser.AsDeviceAsync(deviceId)).SendAsync(HttpMethod.Get, $"/api/invites/{inviteId}/enrollment",
             configure: request => request.Headers.Add(DeviceHeader.Name, deviceId));
 
     private UserService Users => new(Db, Limits.Unlimited, TimeProvider.System);
@@ -1667,8 +1783,9 @@ public sealed class DeviceServiceTests(TestDatabase database) : IClassFixture<Te
     private async Task<byte[]?> SigningPublicAsync(string hostId)
         => await database.ScalarAsync($"SELECT signing_public FROM hosts WHERE id = '{hostId}'") as byte[];
 
-    private static Task<HttpResponseMessage> ReadGrantsAsync(PanelClient browser, string? deviceId)
-        => browser.SendAsync(HttpMethod.Get, "/api/grants", configure: request =>
+    private static async Task<HttpResponseMessage> ReadGrantsAsync(PanelClient browser, string? deviceId)
+        => await (deviceId is null ? browser : await browser.AsDeviceAsync(deviceId)).SendAsync(
+            HttpMethod.Get, "/api/grants", configure: request =>
         {
             if (deviceId is not null)
             {
@@ -1687,8 +1804,8 @@ public sealed class DeviceServiceTests(TestDatabase database) : IClassFixture<Te
         return (await response.Content.ReadFromJsonAsync<List<HostGrantsView>>(RemoteJson.Options))!;
     }
 
-    private static Task<HttpResponseMessage> PostGrantsAsync(PanelClient browser, string deviceId, params KeyGrant[] grants)
-        => browser.SendAsync(HttpMethod.Post, "/api/grants", grants,
+    private static async Task<HttpResponseMessage> PostGrantsAsync(PanelClient browser, string deviceId, params KeyGrant[] grants)
+        => await (await browser.AsDeviceAsync(deviceId)).SendAsync(HttpMethod.Post, "/api/grants", grants,
             configure: request => request.Headers.Add(DeviceHeader.Name, deviceId));
 
     /// <summary>What <c>GET /api/grants</c> answers for one computer. Every field, because the wire refuses unknown ones.</summary>
