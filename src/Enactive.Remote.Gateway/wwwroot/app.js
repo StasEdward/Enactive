@@ -13,6 +13,13 @@
 // sends is a second line, not the first one.
 // =============================================================================
 
+import {
+  get, post, session, Refused, Stale, endSession, generation, isCurrent,
+  onUnauthenticated, onDeviceRevoked
+} from "./js/api.js";
+import { emptyState, resetState } from "./js/session-guard.js";
+import { providerLinks, outcomeOf } from "./js/signin.js";
+
 const POLL_MS = 3000;
 
 // How much of the two streams a long-lived tab keeps. The gateway stops the
@@ -21,20 +28,8 @@ const POLL_MS = 3000;
 const KEEP_EVENTS = 500;
 const KEEP_NOTICES = 200;
 
-const state = {
-  cursor: null,
-  hosts: [],
-  tasks: [],
-  runs: [],
-  approvals: [],
-  notices: [],
-  events: [],
-  unread: 0,
-  retention: null,
-  live: false,
-  // The run whose timeline is open, so the poll can redraw it. Null when the dialog is closed.
-  openRun: null
-};
+// `openRun` is the run whose timeline is open, so the poll can redraw it; null when the dialog is closed.
+const state = emptyState();
 
 // One command id per logical action, kept across retries.
 //
@@ -53,58 +48,6 @@ function commandId(key) {
 }
 
 const $ = (id) => document.getElementById(id);
-
-// ── talking to the gateway ───────────────────────────────────────────────
-
-let csrf = "";
-
-/** A refusal the gateway coded, kept apart from a network failure. */
-class Refused extends Error {
-  constructor(code, message) {
-    super(message);
-    this.code = code;
-  }
-}
-
-async function get(path) {
-  const response = await fetch(path, { headers: { accept: "application/json" } });
-  return await unwrap(response);
-}
-
-async function post(path, body) {
-  const response = await fetch(path, {
-    method: "POST",
-    headers: { "content-type": "application/json", "X-CSRF-TOKEN": csrf },
-    body: JSON.stringify(body ?? {})
-  });
-
-  return await unwrap(response);
-}
-
-async function unwrap(response) {
-  if (response.status === 401) {
-    showLogin();
-    throw new Refused("unauthenticated", "Sign in again.");
-  }
-
-  const text = await response.text();
-  const body = text ? JSON.parse(text) : null;
-
-  if (!response.ok) {
-    // The gateway's faults carry a code, and the page says what the code means
-    // rather than repeating a sentence written for a log.
-    throw new Refused(body?.code ?? "unknown", body?.error ?? "That did not work.");
-  }
-
-  return body;
-}
-
-/** Refreshes the CSRF token, which is also how the page learns whether it is signed in. */
-async function session() {
-  const view = await get("/api/session");
-  csrf = view.csrfToken;
-  return view.authenticated;
-}
 
 // ── the poll ─────────────────────────────────────────────────────────────
 
@@ -140,11 +83,20 @@ function apply(snapshot) {
 }
 
 async function poll() {
+  // Nobody signed in: there is nothing of anybody's to ask for, and the answer would be a 401.
+  if (!account) {
+    return;
+  }
+
+  const started = generation();
+
   try {
     apply(await get(state.cursor === null ? "/api/state" : `/api/state?since=${state.cursor}`));
     setLive(true);
   } catch (error) {
-    if (error instanceof Refused && error.code === "unauthenticated") {
+    // The session ended under it - signed out, a 401 or this browser removed - and the screen that
+    // put up is the right one. Drawing the old state now would draw it over that.
+    if (!isCurrent(started)) {
       return;
     }
 
@@ -605,11 +557,15 @@ async function act(button, action) {
   // leaving Deny live while Allow is in flight offers an answer that is already being given.
   const group = Array.from(button.parentElement?.querySelectorAll("button") ?? [button]);
   group.forEach((one) => { one.disabled = true; });
+  const started = generation();
 
   try {
     await action();
   } catch (error) {
-    toast(error.message, true);
+    // A refusal from a session that has ended is not news to whoever is looking now.
+    if (isCurrent(started)) {
+      toast(error.message, true);
+    }
   } finally {
     // Refreshed BEFORE the buttons come back. They used to be re-enabled first, so a card whose
     // answer the gateway had already accepted spent a whole round trip looking exactly as it did
@@ -684,6 +640,7 @@ async function createTask() {
   const [hostId, workspaceId] = $("task-workspace").value.split("|");
   const button = $("task-submit");
   button.disabled = true;
+  const started = generation();
 
   try {
     const task = await post("/api/tasks", {
@@ -702,7 +659,9 @@ async function createTask() {
     $("task-prompt").value = "";
     toast("Queued. Your computer picks it up on its next check-in.");
   } catch (error) {
-    $("task-error").textContent = error.message;
+    if (isCurrent(started)) {
+      $("task-error").textContent = error.message;
+    }
   } finally {
     button.disabled = false;
     await refresh();
@@ -715,6 +674,7 @@ async function registerHost() {
   const button = $("host-submit");
   button.disabled = true;
   $("host-error").textContent = "";
+  const started = generation();
 
   try {
     const device = await post("/api/hosts", { name: $("host-name").value });
@@ -726,7 +686,9 @@ async function registerHost() {
     $("host-secret").hidden = false;
     button.hidden = true;
   } catch (error) {
-    $("host-error").textContent = error.message;
+    if (isCurrent(started)) {
+      $("host-error").textContent = error.message;
+    }
   } finally {
     button.disabled = false;
     await refresh();
@@ -735,18 +697,211 @@ async function registerHost() {
 
 // ── signing in and out ───────────────────────────────────────────────────
 
-function showLogin() {
+/** Who the panel is showing, as the last /api/session said; null while nobody is signed in. */
+let account = null;
+
+const SIGNED_OUT = "You were signed out. Sign in again to go on.";
+
+/**
+ * Forgets everything the page holds for whoever was signed in.
+ *
+ * The one mechanism behind sign-out, an expired session, another account and a page restored from the
+ * back-forward cache. Before it, only a sign-out reloaded the page: a 401 put the sign-in form over a
+ * panel still holding the last person's runs and cursor, and the next sign-in in that tab showed those
+ * runs until its first poll replaced them. So: polling stops, requests in flight are aborted and whatever
+ * they bring back is dropped, the arrays, cursor, unread count and open run are emptied, every dialog
+ * closes, and nothing private is drawn again until a fresh /api/session says whose it is.
+ */
+function resetSession() {
   stopPolling();
+  endSession();
+  account = null;
+  resetState(state);
+  document.querySelectorAll("dialog[open]").forEach((dialog) => dialog.close());
+  $("account").open = false;
+  $("account-name").textContent = "";
   $("panel").hidden = true;
-  $("login").hidden = false;
+  render();
 }
 
-async function showPanel() {
-  $("login").hidden = true;
-  $("panel").hidden = false;
-  await poll();
-  startPolling();
+/**
+ * Asks the gateway who is signed in and shows that. The only way onto the panel, so what it draws is
+ * always the account a fresh answer named.
+ */
+async function boot(outcome) {
+  let view;
+
+  try {
+    view = await session();
+  } catch (error) {
+    if (!(error instanceof Stale)) {
+      showSignedOut("The gateway could not be reached. Reload to try again.");
+    }
+
+    return;
+  }
+
+  if (view.authenticated) {
+    await enterPanel(view.user);
+  } else {
+    showSignedOut(outcome);
+  }
 }
+
+async function enterPanel(user) {
+  account = user;
+  $("account-name").textContent = user.displayName;
+  $("login").hidden = true;
+  $("device-removed").hidden = true;
+  $("panel").hidden = false;
+
+  const started = generation();
+  await poll();
+
+  // Not when the first poll ended the session: a timer started now would poll for nobody.
+  if (isCurrent(started)) {
+    startPolling();
+  }
+}
+
+function showSignedOut(outcome) {
+  $("panel").hidden = true;
+  $("device-removed").hidden = true;
+  $("login").hidden = false;
+
+  const line = $("login-outcome");
+  line.textContent = outcome ?? "";
+  line.hidden = !outcome;
+
+  offerProviders();
+  offerDevelopmentSignIn();
+}
+
+function showDeviceRemoved() {
+  $("panel").hidden = true;
+  $("login").hidden = true;
+  $("device-removed").hidden = false;
+}
+
+/** One plain link per provider the gateway lists. A link, not a script: signing in is a navigation. */
+async function offerProviders() {
+  const note = $("providers-note");
+
+  try {
+    const links = providerLinks(await get("/api/providers")).map(({ href, label }) => {
+      const link = node("a", "provider", label);
+      link.href = href;
+      return link;
+    });
+
+    $("providers").replaceChildren(...links);
+    note.textContent = "No way of signing in is configured on this gateway.";
+    note.hidden = links.length > 0;
+  } catch (error) {
+    if (error instanceof Stale) {
+      return;
+    }
+
+    $("providers").replaceChildren();
+    note.textContent = "The gateway could not be reached. Reload to try again.";
+    note.hidden = false;
+  }
+}
+
+let developmentProbe = null;
+
+/**
+ * The development sign-in, offered only on this machine and only by a gateway that has it.
+ *
+ * Asked of the gateway rather than assumed from the address: localhost is also where an operator sees a
+ * production gateway through an SSH tunnel, and a form there would sign nobody in while looking like a
+ * way in. A gateway without the endpoint answers 404; one with it refuses an empty name, which is the
+ * whole probe and signs nobody in. Asked once per page.
+ */
+async function offerDevelopmentSignIn() {
+  const form = $("dev-sign-in");
+
+  if (!["localhost", "127.0.0.1", "[::1]"].includes(location.hostname)) {
+    form.hidden = true;
+    return;
+  }
+
+  developmentProbe ??= post("/api/dev/sign-in", {}).then(
+    () => true,
+    (error) => error instanceof Refused && error.status !== 404);
+
+  form.hidden = !(await developmentProbe);
+}
+
+/**
+ * Signs out here, or everywhere, and only then says so. A sign-in page shown while the gateway still
+ * holds the session would claim something untrue: the next reload would open the panel again.
+ */
+async function signOut(path) {
+  try {
+    await post(path, {});
+  } catch (error) {
+    // Stale: another sign-out got there first. Unauthenticated: the session was already over, and the
+    // 401 has put the sign-in page up.
+    if (error instanceof Stale || error.code === "unauthenticated") {
+      return;
+    }
+
+    toast(`Not signed out. ${error instanceof Refused ? error.message : "The gateway could not be reached."}`, true);
+    return;
+  }
+
+  resetSession();
+  showSignedOut();
+}
+
+/**
+ * Checks what is on screen against the gateway's own answer.
+ *
+ * The cookie belongs to the browser, not the tab: in another tab the person may have signed out, or in
+ * as somebody else, and this tab would go on drawing the first account until its next 401 - or, with
+ * somebody else signed in, never get one, and draw the second account's data under the first one's name.
+ * The snapshot does not name its account, so the session is asked instead, before the poll draws more.
+ */
+async function revalidate() {
+  if (!account) {
+    return;
+  }
+
+  const expected = account.id;
+  let view;
+
+  try {
+    view = await session();
+  } catch (error) {
+    if (!(error instanceof Stale)) {
+      poll();
+    }
+
+    return;
+  }
+
+  if (!view.authenticated) {
+    resetSession();
+    showSignedOut(SIGNED_OUT);
+  } else if (view.user.id !== expected) {
+    resetSession();
+    await boot();
+  } else {
+    poll();
+  }
+}
+
+onUnauthenticated(() => {
+  const wasSignedIn = account !== null;
+  resetSession();
+  showSignedOut(wasSignedIn ? SIGNED_OUT : null);
+});
+
+onDeviceRevoked(() => {
+  resetSession();
+  showDeviceRemoved();
+});
 
 let timer = 0;
 
@@ -778,27 +933,40 @@ document.querySelectorAll(".tab").forEach((tab) =>
 document.querySelectorAll("[data-close]").forEach((button) =>
   button.addEventListener("click", () => button.closest("dialog").close()));
 
-$("login-form").addEventListener("submit", async (submitted) => {
-  submitted.preventDefault();
-  $("login-error").textContent = "";
+$("sign-out").addEventListener("click", () => signOut("/api/logout"));
+$("sign-out-all").addEventListener("click", () => signOut("/api/logout-all"));
 
+// The session is still open on the gateway - only this browser was removed - so signing out needs a
+// token, and the reset that put this view up threw the last one away.
+$("removed-sign-out").addEventListener("click", async () => {
   try {
-    await post("/api/login", { key: $("owner-key").value });
-    $("owner-key").value = "";
     await session();
-    await showPanel();
   } catch (error) {
-    // A wrong key and a locked-out gateway are different facts, and the second
-    // one is the difference between "try again" and "wait".
-    $("login-error").textContent = error.code === "locked-out"
-      ? error.message
-      : "That key was not accepted.";
+    if (!(error instanceof Stale)) {
+      toast("The gateway could not be reached.", true);
+    }
+
+    return;
   }
+
+  await signOut("/api/logout");
 });
 
-$("logout").addEventListener("click", async () => {
-  await post("/api/logout", {});
-  location.reload();
+$("dev-sign-in").addEventListener("submit", async (submitted) => {
+  submitted.preventDefault();
+  $("dev-error").textContent = "";
+
+  try {
+    // A fresh token: the one held may be from before a sign-out, bound to whoever that was.
+    await session();
+    await post("/api/dev/sign-in", { name: $("dev-name").value });
+    $("dev-name").value = "";
+    await boot();
+  } catch (error) {
+    if (!(error instanceof Stale)) {
+      $("dev-error").textContent = error.message;
+    }
+  }
 });
 
 $("theme").addEventListener("click", () => {
@@ -822,17 +990,32 @@ $("mark-read").addEventListener("click", (clicked) =>
 
 // A phone puts the page to sleep rather than closing it. Coming back to a
 // screen that is minutes stale, with no sign that it is, is the failure this
-// avoids: the poll runs at once and the banner says so until it succeeds.
+// avoids: the session is checked and the poll runs at once, and the banner says
+// so until it succeeds.
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible" && !$("panel").hidden) {
-    poll();
+  if (document.visibilityState === "visible") {
+    revalidate();
+  }
+});
+
+// A page restored from the back-forward cache is the page as it was left: whoever was signed in then,
+// their runs on screen, and a poll timer that may belong to a session ended since. None of it is
+// trusted - it is all forgotten, and the session asked again.
+window.addEventListener("pageshow", (shown) => {
+  if (shown.persisted) {
+    resetSession();
+    boot();
   }
 });
 
 applyTheme(localStorage.getItem(THEME_KEY));
 
-if (await session()) {
-  await showPanel();
-} else {
-  showLogin();
+// Where a sign-in that opened no session ended. Read once and taken out of the address, so a reload
+// does not say it again; any other fragment is left alone.
+const outcome = outcomeOf(location.hash);
+
+if (outcome) {
+  history.replaceState(null, "", location.pathname + location.search);
 }
+
+await boot(outcome);

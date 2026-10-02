@@ -5,9 +5,11 @@ using System.Security.Cryptography;
 using System.Text.RegularExpressions;
 using Enactive.Remote.Contracts;
 using Enactive.Remote.Contracts.Crypto;
+using Enactive.Remote.Gateway.Accounts;
 using Enactive.Remote.Gateway.Services;
 using Enactive.Remote.Gateway.Storage;
 using Enactive.Remote.Host;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Xunit;
 
@@ -303,6 +305,61 @@ public sealed class PanelTests(TestDatabase database) : IClassFixture<TestDataba
 
         Assert.NotNull(cache);
         Assert.True(cache!.NoCache, $"{path} was served as '{cache}', which a browser may reuse without asking.");
+    }
+
+    // ── signing in ──────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// The page offers exactly the sign-in methods the gateway has, because it has none of its own.
+    ///
+    /// <para>A button written into the page would be offered whatever the gateway was configured with:
+    /// a "Continue with Google" on a gateway without Google is a link to a 404, and the person reads it
+    /// as a broken sign-in rather than a missing one. So the page carries an empty place for the buttons
+    /// and no <c>/auth/</c> link at all, and its script draws one per name in <c>/api/providers</c> -
+    /// which lists only what is configured.</para>
+    ///
+    /// <para>The owner-key form is gone with it. Its password field asked for a key the gateway no
+    /// longer has, and a sign-in that cannot succeed reads as a wrong key, typed again and again.</para>
+    /// </summary>
+    [Fact]
+    public async Task The_page_offers_only_configured_providers()
+    {
+        await using var githubOnly = TestGateway.Create(database, configure: builder =>
+        {
+            builder.UseSetting(ExternalProviders.PublicOriginSetting, "https://remote.example.test");
+            builder.UseSetting("ENACTIVE_GITHUB_CLIENT_ID", "github-client");
+            builder.UseSetting("ENACTIVE_GITHUB_CLIENT_SECRET", "github-secret");
+        });
+        using var browser = new PanelClient(githubOnly);
+
+        Assert.Equal(["github"], await browser.GetAsync<string[]>("/api/providers"));
+
+        var page = await browser.Http.GetStringAsync("/");
+
+        Assert.DoesNotContain("/auth/", page, StringComparison.Ordinal);
+        Assert.DoesNotContain("type=\"password\"", page, StringComparison.Ordinal);
+        Assert.Matches("<div id=\"providers\"[^>]*></div>", page);
+
+        var script = Regex.Match(page, "src=\"(?<path>/app\\.js\\?v=[0-9a-f]+)\"").Groups["path"].Value;
+
+        Assert.Contains("/api/providers", await browser.Http.GetStringAsync(script), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The privacy notice and the terms are pages of their own, served to anyone, and the sign-in links
+    /// to both: a person is asked to sign in with an account of another company's, and what is kept about
+    /// them has to be readable before they do it, not after.
+    /// </summary>
+    [Theory]
+    [InlineData("/privacy.html")]
+    [InlineData("/terms.html")]
+    public async Task Privacy_and_terms_are_served(string path)
+    {
+        using var response = await _stranger.Http.GetAsync(path);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("text/html", response.Content.Headers.ContentType?.MediaType);
+        Assert.Contains($"href=\"{path}\"", await _stranger.Http.GetStringAsync("/"), StringComparison.Ordinal);
     }
 
     private static string TaskIdOf(GatewaySnapshot snapshot, string runId)

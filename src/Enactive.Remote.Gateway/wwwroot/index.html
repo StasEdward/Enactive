@@ -21,13 +21,31 @@
     <img class="mark" src="/brand/mark-loop.svg" alt="" width="40" height="40">
     <h1>Enactive Remote</h1>
     <p class="muted">Your computer does the work. This is the window onto it.</p>
-    <form id="login-form">
-      <label for="owner-key">Owner access key</label>
-      <input id="owner-key" type="password" autocomplete="current-password" required
-             placeholder="The key configured on the gateway">
-      <button class="primary" type="submit">Sign in</button>
-      <p id="login-error" class="error" role="alert"></p>
+    <p id="login-outcome" class="outcome" role="status" hidden></p>
+    <!-- Empty on purpose: the script draws one link per provider the gateway lists, so the page
+         cannot offer a sign-in the gateway does not have. -->
+    <div id="providers" class="providers"></div>
+    <p id="providers-note" class="note" hidden></p>
+    <form id="dev-sign-in" class="dev-sign-in" hidden>
+      <p class="note">Development sign-in. It exists only on a development gateway, and signs in
+        as whatever name is typed - no provider is asked.</p>
+      <label for="dev-name">Name</label>
+      <input id="dev-name" required maxlength="64" autocomplete="off" spellcheck="false">
+      <button class="secondary" type="submit">Sign in for development</button>
+      <p id="dev-error" class="error" role="alert"></p>
     </form>
+    <p class="legal"><a href="/privacy.html">Privacy</a> · <a href="/terms.html">Terms</a></p>
+  </div>
+</section>
+
+<!-- ── this browser removed ────────────────────────────────────────────── -->
+<section id="device-removed" class="login" hidden>
+  <div class="login-card">
+    <img class="mark" src="/brand/mark-loop.svg" alt="" width="40" height="40">
+    <h1>This device was removed</h1>
+    <p>This browser was removed from your account. Sign in again on a device you trust, or add this
+      one again from the computer.</p>
+    <button id="removed-sign-out" class="secondary" type="button">Sign out</button>
   </div>
 </section>
 
@@ -41,7 +59,15 @@
     <span class="spacer"></span>
     <span id="link" class="link-state" title="Gateway connection"><span class="dot"></span><span id="link-label">…</span></span>
     <button id="theme" class="icon-button" type="button" title="Switch theme" aria-label="Switch theme">◐</button>
-    <button id="logout" class="icon-button" type="button" title="Sign out" aria-label="Sign out">⏻</button>
+    <!-- A disclosure rather than a script-built menu: it opens and closes, by pointer or keyboard,
+         with no code of its own. -->
+    <details id="account" class="account">
+      <summary id="account-name" class="account-name" title="Account"></summary>
+      <div class="account-menu">
+        <button id="sign-out" class="secondary" type="button">Sign out</button>
+        <button id="sign-out-all" class="secondary" type="button">Sign out everywhere</button>
+      </div>
+    </details>
   </header>
 
   <p id="stale" class="banner" role="status" hidden>
