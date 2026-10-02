@@ -25,6 +25,7 @@ import {
   ensureDevice, collectGrants, troubleFor, worthSaying, connectPendingId, keyStanding, createGrantSchedule, epochsChanged
 } from "./js/trust.js";
 import { createReader, answerable, NOT_GIVEN } from "./js/reader.js";
+import { createWriter, createSendCache, sendRefusal, NOT_YET_GIVEN } from "./js/writer.js";
 import { formatConnectionCode, newPairingSecret } from "./js/pairing.js";
 
 const POLL_MS = 3000;
@@ -38,27 +39,21 @@ const KEEP_NOTICES = 200;
 // `openRun` is the run whose timeline is open, so the poll can redraw it; null when the dialog is closed.
 const state = emptyState();
 
-// One command id per logical action, kept across retries.
+// One id and one sealed envelope per logical action, kept across retries
+// (writer.js createSendCache).
 //
-// The gateway treats a repeated id as the SAME instruction and returns the
-// command it already queued. That is what makes a tapped button on a flaky
-// phone connection safe: a new id each time would queue a second run of the
-// same task, and the owner would find out by reading the timeline.
+// The gateway treats a repeated id with the same envelope as the SAME
+// instruction and returns the command it already queued. That is what makes a
+// tapped button on a flaky phone connection safe: a new id each time would
+// queue a second run of the same task, and the owner would find out by reading
+// the timeline.
 //
 // Kept across a sign-out and every other reset, on purpose. Each key names the
 // resource it acts on - a task, a run, an approval - which another account
 // cannot act on, so nothing of one account's is reused for another's. Clearing
 // it would give the same person's retry after signing in again a new id, and a
 // command the gateway had already queued before the reset would be queued twice.
-const commandIds = new Map();
-
-function commandId(key) {
-  if (!commandIds.has(key)) {
-    commandIds.set(key, crypto.randomUUID());
-  }
-
-  return commandIds.get(key);
-}
+const sends = createSendCache();
 
 const $ = (id) => document.getElementById(id);
 
@@ -226,6 +221,9 @@ function when(iso) {
 /** Opens what the computers sealed with this device's keys (reader.js); a reader over no keys until a store opens. */
 let reader = createReader(null);
 
+/** Seals what the person sends with the same keys (writer.js); over no keys, it seals nothing. */
+let writer = createWriter(null);
+
 /**
  * What this device opened of the snapshot on screen, looked up by `"<kind>:<id>"`: a task, a run's summary,
  * an event, a notice, an approval's action, a workspace name, or a computer's key standing. Kept for the
@@ -384,8 +382,11 @@ function renderRuns() {
     if (RUNNING.includes(run.status) && run.status !== "CancelRequested") {
       const stop = node("button", "danger", "Stop");
       stop.type = "button";
-      stop.addEventListener("click", () => act(stop, () =>
-        post(`/api/runs/${run.id}/cancel`, { commandId: commandId(`cancel:${run.id}`) })));
+      stop.addEventListener("click", () => act(stop, async () => {
+        const cancel = await sealFor(`cancel:${run.id}`, run.hostId,
+          (write, commandId) => write.sealCancel(run.hostId, commandId, run.id));
+        await post(`/api/runs/${run.id}/cancel`, { commandId: cancel.id, sealed: cancel.sealed });
+      }));
       actions.append(stop);
     }
 
@@ -510,18 +511,26 @@ function decide(approval, decision, className) {
   const button = node("button", className, decision);
   button.type = "button";
 
-  button.addEventListener("click", () => act(button, () =>
-    post(`/api/approvals/${approval.id}/resolve`, {
-      // Keyed by the decision as well as the request. Retrying Allow is the same
-      // instruction and reuses its id; changing your mind to Deny is a different
-      // one, and reusing the id for it would come back as a conflict about ids
-      // instead of the true answer, which is that this was already decided.
-      commandId: commandId(`decide:${approval.id}:${decision}`),
+  button.addEventListener("click", () => act(button, async () => {
+    // Keyed by the decision as well as the request. Retrying Allow is the same
+    // instruction and reuses its id; changing your mind to Deny is a different
+    // one, and reusing the id for it would come back as a conflict about ids
+    // instead of the true answer, which is that this was already decided.
+    //
+    // The action hash is sealed and sent back exactly as it arrived and never
+    // recomputed here: the machine that will carry the action out is the one
+    // that says what the action is.
+    const answer = await sealFor(`decide:${approval.id}:${decision}`, approval.hostId,
+      (write, commandId) => write.sealDecision(approval.hostId, commandId, approval.id, approval.actionHash, decision));
+
+    await post(`/api/approvals/${approval.id}/resolve`, {
+      commandId: answer.id,
+      hostId: approval.hostId,
       decision,
-      // Sent back exactly as it arrived and never recomputed here: the machine
-      // that will carry the action out is the one that says what the action is.
-      actionHash: approval.actionHash
-    })));
+      actionHash: approval.actionHash,
+      sealed: answer.sealed
+    });
+  }));
 
   return button;
 }
@@ -856,17 +865,25 @@ async function createTask() {
   const started = generation();
 
   try {
-    const task = await post("/api/tasks", {
-      hostId,
-      workspaceId,
-      title: $("task-title").value,
-      prompt: $("task-prompt").value
-    });
+    const title = $("task-title").value;
+    const prompt = $("task-prompt").value;
+
+    // The task's id and envelope are kept per draft - this computer, workspace, title and prompt - until it
+    // is started, so pressing Create again after a failure sends the same task: the gateway takes the same
+    // id with another envelope for a different task, and a new id for a second one.
+    const draft = `draft:${JSON.stringify([hostId, workspaceId, title, prompt])}`;
+    const task = await sealFor(draft, hostId,
+      (write, taskId) => write.sealTask(hostId, taskId, workspaceId, { title, prompt }));
+    await post("/api/tasks", { taskId: task.id, hostId, workspaceId, sealedTask: task.sealed });
 
     // Two calls, and the gap between them is real: a task that was created and
     // not started is a draft the owner can see, not a lost request.
-    await post(`/api/tasks/${task.id}/start`, { commandId: commandId(`start:${task.id}`) });
+    const start = await sealFor(`start:${task.id}`, hostId,
+      (write, commandId) => write.sealStart(hostId, commandId, task.id, workspaceId));
+    await post(`/api/tasks/${task.id}/start`, { commandId: start.id, sealed: start.sealed });
 
+    // Started: the same words written again are a new task, not this one retried.
+    sends.forget(draft);
     $("task-dialog").close();
     $("task-title").value = "";
     $("task-prompt").value = "";
@@ -879,6 +896,32 @@ async function createTask() {
     button.disabled = false;
     await refresh();
   }
+}
+
+/**
+ * The `{id, sealed}` to send for one action to computer `hostId`: kept from an earlier attempt of the same
+ * action under the same key, or sealed now by `seal(writer, id)` under the newest key this device holds.
+ *
+ * Refused, with the sentence to show, when this device holds no key for the computer or the snapshot says it
+ * moved to a key whose grant has not reached this device (writer.js sendRefusal): sealed under the key before,
+ * a cancel or an answer would be refused by the computer and the panel would never hear of it. The grants are
+ * asked for at once, so the person's next click goes through.
+ */
+async function sealFor(key, hostId, seal) {
+  const store = keystore;
+  const write = writer;
+  const newest = store ? await store.newestEpoch(hostId) : null;
+  const refusal = sendRefusal(state.hosts.find((host) => host.id === hostId), newest);
+
+  if (refusal === NOT_YET_GIVEN) {
+    catchUpKeys().catch(() => {});
+  }
+
+  if (refusal) {
+    throw new Error(refusal);
+  }
+
+  return sends.once(key, newest, (id) => seal(write, id));
 }
 
 // ── this device's keys ───────────────────────────────────────────────────
@@ -921,6 +964,7 @@ async function openTrust(user) {
 
   keystore = store;
   reader = createReader(store);
+  writer = createWriter(store);
 
   try {
     const id = await ensureDevice(store, api);
@@ -1216,6 +1260,7 @@ function resetSession() {
   deviceId = null;
   // Its opened records too: they are the last account's content, in clear.
   reader = createReader(null);
+  writer = createWriter(null);
   content = () => undefined;
   drawnCursor = null;
   grantSchedule = createGrantSchedule();
