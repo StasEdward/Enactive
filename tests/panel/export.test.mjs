@@ -5,6 +5,7 @@ import { hostKey } from '../../src/Enactive.Remote.Gateway/wwwroot/js/hostkey.js
 import { ad, sealJson } from '../../src/Enactive.Remote.Gateway/wwwroot/js/sealed.js';
 import { fromB64url } from '../../src/Enactive.Remote.Gateway/wwwroot/js/bytes.js';
 import { createReader, NOT_GIVEN } from '../../src/Enactive.Remote.Gateway/wwwroot/js/reader.js';
+import { actionHash } from '../../src/Enactive.Remote.Gateway/wwwroot/js/action-identity.js';
 import {
   exportOpened, exportFile, downloadMyData, exportRefusal
 } from '../../src/Enactive.Remote.Gateway/wwwroot/js/export.js';
@@ -52,6 +53,49 @@ async function gatewayExport() {
   };
 }
 
+const action = {
+  tool: 'run_command', argumentsJson: '{"command":"df -h"}', fullText: 'df -h', workingDirectory: '/home/alice',
+  topic: 'Read the disks?'
+};
+
+/**
+ * One record of each other sealed kind, under the key this device holds, in the rows the gateway writes: its
+ * columns in camelCase (Services/Export.cs), with every field the associated data is rebuilt from. A column
+ * renamed on either side leaves a record that does not open, which these then fail on.
+ */
+async function everyKind() {
+  const computer = await hostKey(EPOCH, secret);
+  const runId = 'run-2';
+  const hash = await actionHash(runId, 'call-1', action.tool, action.workingDirectory, action.argumentsJson);
+
+  return {
+    exportedAt: '2026-10-03T10:15:00.000Z',
+    userId: ALICE,
+    tables: {
+      runs: [{
+        id: runId, taskId: 'task-1', hostId: HOST, status: 'Completed', appliedSequence: 9,
+        createdAt: '2026-10-03T09:00:00.000Z', endedAt: '2026-10-03T09:05:00.000Z', summarySequence: 9,
+        sealedSummary: await computer.sealText('The disks are half full.', ad.event(HOST, runId, 9, 'Completed'))
+      }],
+      notices: [{
+        id: 'notice-1', runId, hostId: HOST, kind: 'run-finished', eventSequence: 9, eventKind: 'Completed',
+        at: '2026-10-03T09:05:00.000Z', isRead: false, ordinal: 3,
+        sealedDetail: await computer.sealText('The disks are half full.', ad.event(HOST, runId, 9, 'Completed'))
+      }],
+      approvals: [{
+        id: 'approval-1', hostId: HOST, runId, toolCallId: 'call-1', actionHash: hash, remoteDecidable: true,
+        status: 'Approved', requestedDecision: 'Allow', createdAt: '2026-10-03T09:01:00.000Z',
+        expiresAt: '2026-10-03T09:11:00.000Z',
+        sealedAction: await sealJson(computer, action, ad.approval(HOST, runId, 'approval-1', 'call-1', hash, true))
+      }],
+      hostWorkspaces: [{
+        hostId: HOST, workspaceId: 'workspace-1',
+        sealedName: await computer.sealText('Home', ad.workspace(HOST, 'workspace-1'))
+      }]
+    }
+  };
+}
+
 test('the panel export opens what it can and names what it cannot', async () => {
   const data = await gatewayExport();
   const original = structuredClone(data);
@@ -80,10 +124,23 @@ test('the panel export opens what it can and names what it cannot', async () => 
   assert.deepEqual(JSON.parse(await file.blob.text()), opened);
 });
 
+test('a run summary, a notice, a permission request and a workspace name open from the gateway rows', async () => {
+  const opened = (await exportOpened(await everyKind(), createReader(await store()))).tables;
+
+  assert.deepEqual(opened.runs[0].sealedSummary, { text: 'The disks are half full.' });
+  assert.deepEqual(opened.notices[0].sealedDetail, { text: 'The disks are half full.' });
+  assert.deepEqual(opened.approvals[0].sealedAction, { json: action, verified: true });
+  assert.deepEqual(opened.hostWorkspaces[0].sealedName, { text: 'Home' });
+});
+
 test('nothing is sent while exporting', async () => {
   const calls = [];
   const api = {
-    get: async (path) => { calls.push(`GET ${path}`); return gatewayExport(); },
+    // With the antiforgery token: the gateway gives the export only to the panel, never to a link (Export.cs).
+    get: async (path, options) => {
+      calls.push(`GET ${path}${options?.antiforgery === true ? ' with the token' : ''}`);
+      return gatewayExport();
+    },
     post: async (path) => { calls.push(`POST ${path}`); },
     remove: async (path) => { calls.push(`DELETE ${path}`); }
   };
@@ -100,7 +157,7 @@ test('nothing is sent while exporting', async () => {
     globalThis.fetch = original;
   }
 
-  assert.deepEqual(calls, ['GET /api/export']);
+  assert.deepEqual(calls, ['GET /api/export with the token']);
   assert.deepEqual(fetched, []);
   assert.equal(JSON.parse(await file.blob.text()).tables.tasks[0].sealed.json.title, 'Disk report');
 });

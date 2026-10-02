@@ -74,10 +74,12 @@ export function exportFile(opened) {
 
 /**
  * Fetches the export with `api.get` (api.js), opens it with `reader`, and resolves to the file `{name, blob}`.
- * Refusals are thrown as api.js throws them; `exportRefusal` says what they mean.
+ * Refusals are thrown as api.js throws them; `exportRefusal` says what they mean. The GET carries the antiforgery
+ * token: the gateway refuses an export without it (or the browser's word that the page asked), so that a link
+ * elsewhere cannot download the account or spend its hour.
  */
 export async function downloadMyData({ api, reader }) {
-  const data = await api.get('/api/export');
+  const data = await api.get('/api/export', { antiforgery: true });
   return exportFile(await exportOpened(data, reader));
 }
 

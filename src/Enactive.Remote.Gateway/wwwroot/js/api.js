@@ -64,8 +64,12 @@ export function generation() { return guard.generation; }
 export function isCurrent(started) { return guard.isCurrent(started); }
 
 // `headers` adds to what every call sends: a call made as this browser's device names it (X-Enactive-Device).
-export function get(path, { headers } = {}) {
-  return request(path, { headers: { ...headers, accept: 'application/json' } });
+// `antiforgery` sends the token with a GET the gateway gives only to the panel - the data export, which a link on
+// another site would otherwise start with the session cookie alone.
+export function get(path, { headers, antiforgery = false } = {}) {
+  return request(path, {
+    headers: { ...headers, accept: 'application/json', ...(antiforgery ? { 'X-CSRF-TOKEN': csrf } : {}) }
+  });
 }
 
 export function post(path, body, { headers } = {}) {

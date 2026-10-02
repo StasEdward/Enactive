@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using Enactive.Remote.Contracts.Crypto;
 using Enactive.Remote.Gateway.Storage;
+using Microsoft.AspNetCore.Antiforgery;
 using MySqlConnector;
 
 /// <summary>
@@ -27,8 +28,15 @@ using MySqlConnector;
 /// never held whole in the gateway's memory. They are read in one REPEATABLE READ transaction, so the file is
 /// one moment of the account: read table by table outside one, a run that ended while the export was being
 /// written would be in the file without the events that ended it. The transaction is held for as long as the
-/// download takes, which the once-an-hour limit (<see cref="RequestLimits.Export"/>) keeps to one at a time per
-/// account.</para>
+/// download takes. The once-an-hour limit (<see cref="ExportLimit"/>) bounds how often one starts, not how long
+/// one lasts: a slow download can still be open when the next hour's starts. What ends a stalled one is its
+/// connection - MySQL drops a result left unread past its net_write_timeout, and Kestrel a reader slower than its
+/// minimum data rate.</para>
+///
+/// <para><b>Asked for by the panel only.</b> This is a GET, and the session cookie goes with a top-level GET from
+/// another site: a link in a mail or on a page would otherwise save the person's whole account into their
+/// downloads unasked, and spend their hour so the export they then want is refused
+/// (<see cref="RequirePanelAsync"/>).</para>
 /// </summary>
 public sealed class Export(Database database, TimeProvider clock)
 {
@@ -139,6 +147,31 @@ public sealed class Export(Database database, TimeProvider clock)
         ("audit",
             "SELECT id, at, actor, action, target FROM audit WHERE owner_id = @owner ORDER BY at, id")
     ];
+
+    /// <summary>
+    /// Refuses with <see cref="GatewayFault.NotFromPanel"/> unless the request is the panel's: the browser says it
+    /// came from this site (<c>Sec-Fetch-Site: same-origin</c>) or from the person typing the address or opening a
+    /// bookmark (<c>none</c>), or it carries this session's antiforgery token, which the panel sends and no other
+    /// site can read. A browser that sends no <c>Sec-Fetch-Site</c> is not trusted on that account; the token
+    /// still lets its panel in. Checked before the hour is counted.
+    /// </summary>
+    public static async Task RequirePanelAsync(HttpContext context, IAntiforgery antiforgery)
+    {
+        if (context.Request.Headers["Sec-Fetch-Site"].ToString() is "same-origin" or "none")
+        {
+            return;
+        }
+
+        try
+        {
+            // ValidateRequestAsync and not IsRequestValidAsync: the latter answers yes to any GET without looking.
+            await antiforgery.ValidateRequestAsync(context);
+        }
+        catch (AntiforgeryValidationException)
+        {
+            throw GatewayFault.NotFromPanel();
+        }
+    }
 
     /// <summary>The file's name for an export made at <paramref name="at"/>: the day, in UTC.</summary>
     public static string FileName(DateTimeOffset at)

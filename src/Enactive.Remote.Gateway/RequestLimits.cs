@@ -29,18 +29,6 @@ public static class RequestLimits
     /// <summary>The session endpoint's policy, per account or, before signing in, per address.</summary>
     public const string Session = "session";
 
-    /// <summary>The data export's policy, per account: one in <see cref="ExportWindow"/>.</summary>
-    public const string Export = "export";
-
-    /// <summary>
-    /// How often a person may download their data: once in this long. An export reads every row the account
-    /// has, in one transaction held open while the file is downloaded - the most the gateway does for any one
-    /// request - and at the API's rate a script, or a button pressed again and again, could keep a database
-    /// connection and a snapshot of the account open for as long as it liked. Nobody needs a second copy of
-    /// everything within the hour.
-    /// </summary>
-    public static readonly TimeSpan ExportWindow = TimeSpan.FromHours(1);
-
     /// <summary>
     /// Sign-in requests under <c>/auth</c> (start and complete) and the development sign-in, per address
     /// and minute. A sign-in is two of them; twenty leaves room for retries and several people behind
@@ -104,18 +92,6 @@ public static class RequestLimits
             o.AddPolicy(Session, context => PerMinute(
                 context.SignedInUserId() is { } userId ? "user:" + userId : "address:" + ClientAddress(context),
                 ApiPerMinute));
-
-            // Per account, after authentication, like the API. The endpoint's policy is the one that applies
-            // to it - an endpoint's own policy replaces its group's - so an export is counted here and not
-            // against the API's minute, and the hour's refusal stops only the export: the rest of the
-            // person's API goes on.
-            o.AddPolicy(Export, context => RateLimitPartition.GetFixedWindowLimiter(
-                context.UserAccess().UserId, _ => new FixedWindowRateLimiterOptions
-                {
-                    PermitLimit = 1,
-                    Window = ExportWindow,
-                    QueueLimit = 0
-                }));
         });
     }
 
@@ -303,4 +279,63 @@ public sealed class HostCallLimit : IDisposable
     }
 
     public void Dispose() => _limiter.Dispose();
+}
+
+/// <summary>
+/// The data export's limit: one per account in <see cref="Window"/>. Not authorization: an export it lets
+/// through is still the account the session names, and nothing else.
+///
+/// <para><b>Why once an hour.</b> An export reads every row the account has, in one transaction held open while
+/// the file is downloaded - the most the gateway does for any one request - and at the API's rate a script, or a
+/// button pressed again and again, could keep a database connection and a snapshot of the account open for as
+/// long as it liked. Nobody needs a second copy of everything within the hour. What is counted is an export
+/// STARTING: one that fails part-way - the database, a tab closed while it was being prepared - has used the
+/// hour too, because what it cost was spent.</para>
+///
+/// <para><b>Why not a rate-limiter policy.</b> It was one, a fixed window, and a refusal from it said "try again
+/// in an hour" whenever it was asked: the limiter reports the window's length, not what is left of it. A person
+/// who exported at 10:00 and pressed again at 10:55 was told 11:55, and waited an hour for what worked at 11:00.
+/// This keeps when each account's last export started, so a refusal says exactly when the next may.</para>
+///
+/// <para>Held in memory, like every other limit here: a restart of the gateway - a deploy - forgets it, and an
+/// account may export again at once after one. A table would survive that, at a write per export, for a limit
+/// whose purpose is load and not a promise to anybody.</para>
+/// </summary>
+public sealed class ExportLimit(TimeProvider clock)
+{
+    /// <summary>How long after one export the next may start.</summary>
+    public static readonly TimeSpan Window = TimeSpan.FromHours(1);
+
+    private readonly Dictionary<string, DateTimeOffset> _started = new(StringComparer.Ordinal);
+    private readonly Lock _lock = new();
+
+    /// <summary>
+    /// Counts an export of <paramref name="userId"/>'s starting now and answers null, or answers how long until one
+    /// may start, without counting anything.
+    /// </summary>
+    public TimeSpan? TryStart(string userId)
+    {
+        var now = clock.GetUtcNow();
+
+        lock (_lock)
+        {
+            if (_started.TryGetValue(userId, out var last) && now - last < Window)
+            {
+                return last + Window - now;
+            }
+
+            // An account whose hour is over has nothing left to remember. Forgotten here, on the rare call that
+            // starts an export, rather than kept for every account that ever exported until the next restart.
+            foreach (var (id, at) in _started)
+            {
+                if (now - at >= Window)
+                {
+                    _started.Remove(id);
+                }
+            }
+
+            _started[userId] = now;
+            return null;
+        }
+    }
 }

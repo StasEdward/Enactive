@@ -8,6 +8,8 @@ using Enactive.Remote.Contracts;
 using Enactive.Remote.Gateway.Accounts;
 using Enactive.Remote.Gateway.Storage;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 /// <summary>
@@ -51,7 +53,7 @@ public sealed class ExportTests(TestDatabase database) : IClassFixture<TestDatab
         await SeedEverythingAsync(alice, aliceName);
         await SeedEverythingAsync(bob, bobName);
 
-        using var response = await alice.SendAsync(HttpMethod.Get, "/api/export", csrf: false);
+        using var response = await alice.SendAsync(HttpMethod.Get, "/api/export");
         var text = await response.Content.ReadAsStringAsync();
         Assert.True(response.StatusCode == HttpStatusCode.OK, text);
 
@@ -133,12 +135,12 @@ public sealed class ExportTests(TestDatabase database) : IClassFixture<TestDatab
         using var alice = await PanelClient.SignedInAsync(_gateway, Name("alice"));
         using var bob = await PanelClient.SignedInAsync(_gateway, Name("bob"));
 
-        using (var first = await alice.SendAsync(HttpMethod.Get, "/api/export", csrf: false))
+        using (var first = await alice.SendAsync(HttpMethod.Get, "/api/export"))
         {
             Assert.Equal(HttpStatusCode.OK, first.StatusCode);
         }
 
-        using var second = await alice.SendAsync(HttpMethod.Get, "/api/export", csrf: false);
+        using var second = await alice.SendAsync(HttpMethod.Get, "/api/export");
         Assert.Equal(HttpStatusCode.TooManyRequests, second.StatusCode);
         Assert.Equal("rate-limited", (await second.Content.ReadFromJsonAsync<ErrorView>(RemoteJson.Options))!.Code);
 
@@ -149,7 +151,7 @@ public sealed class ExportTests(TestDatabase database) : IClassFixture<TestDatab
         using var state = await alice.SendAsync(HttpMethod.Get, "/api/state", csrf: false);
         Assert.Equal(HttpStatusCode.OK, state.StatusCode);
 
-        using var bobs = await bob.SendAsync(HttpMethod.Get, "/api/export", csrf: false);
+        using var bobs = await bob.SendAsync(HttpMethod.Get, "/api/export");
         Assert.Equal(HttpStatusCode.OK, bobs.StatusCode);
     }
 
@@ -165,7 +167,83 @@ public sealed class ExportTests(TestDatabase database) : IClassFixture<TestDatab
         Assert.Equal(HttpStatusCode.Unauthorized, refused.StatusCode);
     }
 
+    /// <summary>
+    /// Retry-After is the time LEFT of the hour since the last export, not a whole hour from now: a person who
+    /// exported at 10:00 and asks again at 10:50 is told 11:00, when the next one works, and at 11:01 it does.
+    /// </summary>
+    [Fact]
+    public async Task A_refused_export_says_how_long_is_left_of_the_hour()
+    {
+        var clock = new MovableClock(DateTimeOffset.UtcNow);
+        await using var gateway = TestGateway.Create(database, configure: builder =>
+            builder.ConfigureTestServices(services => services.AddSingleton(new ExportLimit(clock))));
+        using var alice = await PanelClient.SignedInAsync(gateway, Name("alice"));
+
+        using (var first = await alice.SendAsync(HttpMethod.Get, "/api/export"))
+        {
+            Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+        }
+
+        clock.Now += TimeSpan.FromMinutes(50);
+        using (var early = await alice.SendAsync(HttpMethod.Get, "/api/export"))
+        {
+            Assert.Equal(HttpStatusCode.TooManyRequests, early.StatusCode);
+            Assert.Equal("rate-limited", (await early.Content.ReadFromJsonAsync<ErrorView>(RemoteJson.Options))!.Code);
+            Assert.Equal(TimeSpan.FromMinutes(10), early.Headers.RetryAfter?.Delta);
+        }
+
+        clock.Now += TimeSpan.FromMinutes(11);
+        using var later = await alice.SendAsync(HttpMethod.Get, "/api/export");
+        Assert.Equal(HttpStatusCode.OK, later.StatusCode);
+    }
+
+    /// <summary>
+    /// A link on another site, or in a mail, is a top-level GET that carries the session cookie. It must not
+    /// start a download of the person's data, nor spend their hour: without the antiforgery token, and without
+    /// the browser saying the request came from this site (or from the person typing the address), it is refused
+    /// before the hour is counted, and the panel's own export right after it goes through.
+    /// </summary>
+    [Fact]
+    public async Task An_export_from_another_site_is_refused_and_uses_no_hour()
+    {
+        using var alice = await PanelClient.SignedInAsync(_gateway, Name("alice"));
+
+        foreach (var site in new string?[] { null, "cross-site", "same-site" })
+        {
+            using var refused = await alice.SendAsync(HttpMethod.Get, "/api/export", csrf: false,
+                configure: request =>
+                {
+                    if (site is not null)
+                    {
+                        request.Headers.Add("Sec-Fetch-Site", site);
+                    }
+                });
+
+            Assert.True(refused.StatusCode == HttpStatusCode.Forbidden, $"{site ?? "no Sec-Fetch-Site"}: {refused.StatusCode}");
+            Assert.Equal("cross-site", (await refused.Content.ReadFromJsonAsync<ErrorView>(RemoteJson.Options))!.Code);
+            Assert.Null(refused.Content.Headers.ContentDisposition);
+        }
+
+        // A token that is not this session's is no better than none.
+        using var forged = await alice.SendAsync(HttpMethod.Get, "/api/export", csrf: false,
+            configure: request => request.Headers.Add("X-CSRF-TOKEN", "forged"));
+        Assert.Equal(HttpStatusCode.Forbidden, forged.StatusCode);
+
+        // The browser saying the request is the page's own is enough, as is the token (the other tests).
+        using var own = await alice.SendAsync(HttpMethod.Get, "/api/export", csrf: false,
+            configure: request => request.Headers.Add("Sec-Fetch-Site", "same-origin"));
+        Assert.Equal(HttpStatusCode.OK, own.StatusCode);
+    }
+
     // ── plumbing ────────────────────────────────────────────────────────────
+
+    /// <summary>A clock a test moves by hand.</summary>
+    private sealed class MovableClock(DateTimeOffset now) : TimeProvider
+    {
+        public DateTimeOffset Now { get; set; } = now;
+
+        public override DateTimeOffset GetUtcNow() => Now;
+    }
 
     /// <summary>A table's rows as the file names it: the table's name in camelCase, as every key in it.</summary>
     private static List<JsonElement> Rows(JsonElement tables, string table)

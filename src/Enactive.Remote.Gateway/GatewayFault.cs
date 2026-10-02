@@ -169,6 +169,13 @@ public sealed class GatewayFault(string code, int status, string message) : Exce
     public static GatewayFault Reauthenticate() => new(
         "reauthenticate", 403, "Sign in again to delete the account.");
 
+    /// <summary>
+    /// A request that only the panel may make, made by something else: a link on another site or in a mail,
+    /// which a browser follows with the session cookie but without the antiforgery token (Export).
+    /// </summary>
+    public static GatewayFault NotFromPanel() => new(
+        "cross-site", 403, "Download your data from the panel.");
+
     public static GatewayFault RateLimited() => new(
         "rate-limited", 429, "Too many requests. Wait a moment and try again.");
 

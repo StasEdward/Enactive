@@ -50,3 +50,14 @@ test('a refusal carries the gateway\'s Retry-After, in seconds', async () => {
     globalThis.fetch = original;
   }
 });
+
+// A GET the gateway gives only to the panel (the data export) carries the antiforgery token, which no other site can
+// read; every other GET is sent as before.
+test('a GET carries the antiforgery token only when asked to', async () => {
+  const asked = await sent(() => get('/api/export', { antiforgery: true }));
+  assert.ok('X-CSRF-TOKEN' in asked.init.headers);
+  assert.equal(asked.init.headers.accept, 'application/json');
+
+  const plain = await sent(() => get('/api/state'));
+  assert.ok(!('X-CSRF-TOKEN' in plain.init.headers));
+});

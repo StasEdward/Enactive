@@ -129,6 +129,7 @@ builder.Services.AddSingleton<Projection>();
 builder.Services.AddSingleton<HostConnections>();
 builder.Services.AddSingleton<AccountDeletion>();
 builder.Services.AddSingleton<Export>();
+builder.Services.AddSingleton(new ExportLimit(TimeProvider.System));
 builder.Services.AddHostedService<RetentionLoop>();
 
 // The panel's half of the wire, on the same terms as the Host's.
@@ -509,10 +510,24 @@ api.MapGet("/audit", async (HttpContext context, Database db, CancellationToken 
     Results.Ok(await Audit.ReadAsync(db, context.UserAccess(), ct)));
 
 // Everything stored for the account, streamed as one JSON file (Export): the account's own rows, metadata and
-// envelopes, read by the account the session names. Once an hour per account (RequestLimits.ExportWindow).
-api.MapGet("/export", (HttpContext context, Export export, CancellationToken ct) =>
-    export.WriteAsync(context.UserAccess(), context.Response, ct))
-    .RequireRateLimiting(RequestLimits.Export);
+// envelopes, read by the account the session names. Asked for by the panel only, and once an hour per account
+// (ExportLimit) - in that order, so a link from another site that is refused has not used the person's hour.
+api.MapGet("/export", async (
+    HttpContext context, Export export, ExportLimit limit, IAntiforgery antiforgery, CancellationToken ct) =>
+{
+    await Export.RequirePanelAsync(context, antiforgery);
+    var user = context.UserAccess();
+
+    if (limit.TryStart(user.UserId) is { } wait)
+    {
+        // What is left of the hour, so the panel can say when the next export may start.
+        context.Response.Headers.RetryAfter =
+            ((int)Math.Ceiling(wait.TotalSeconds)).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        throw GatewayFault.RateLimited();
+    }
+
+    await export.WriteAsync(user, context.Response, ct);
+});
 
 api.MapPost("/hosts", async (
     RegisterHostRequest request, HttpContext context, UserService users, CancellationToken ct) =>
