@@ -5,12 +5,14 @@ import { createWriter, createSendCache } from '../../src/Enactive.Remote.Gateway
 import { hostKey } from '../../src/Enactive.Remote.Gateway/wwwroot/js/hostkey.js';
 import { ad, openJson } from '../../src/Enactive.Remote.Gateway/wwwroot/js/sealed.js';
 import {
-  revokeDevice, forgetThisDevice, forgottenSentence, rotationWatch, storeGone, revocationWarning, cannotTell, revokeKey,
-  SENT, ROTATED, NOT_ROTATED_YET, ROTATION_WATCH_MS
+  revokeDevice, forgetThisDevice, forgottenSentence, createRemovalWatch, storeGone, revocationWarning, cannotTell,
+  revokeKey, cardActions, deleteDeviceKeys, SENT, ROTATED, NOT_ROTATED_YET, NOT_CONFIRMED, ROTATION_WATCH_MS,
+  MAX_RESENDS, KEYS_KEPT
 } from '../../src/Enactive.Remote.Gateway/wwwroot/js/devices.js';
 
 const ALICE = '0123456789abcdef0123456789abcdef';
 const PHONE = 'a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1';
+const TABLET = 'b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2';
 const STUDIO = 'd4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4';
 const LAPTOP = 'e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5';
 const NAS = 'f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6';
@@ -154,25 +156,106 @@ test('a refused gateway revocation tells no computer', async () => {
   assert.equal(commandsOf(api).length, 0);
 });
 
-test('rotation is reported once the computer\'s epoch rises', () => {
-  const sent = [
+test('rotation is reported once the computer\'s epoch rises', async () => {
+  const { store } = await storeHolding({ [STUDIO]: [1], [LAPTOP]: [3], [NAS]: [2] });
+  const watch = createRemovalWatch();
+  watch.record(PHONE, [
     { hostId: STUDIO, epoch: 1, at: NOW },
     { hostId: LAPTOP, epoch: 3, at: NOW },
     { hostId: NAS, epoch: 2, at: NOW }
-  ];
+  ]);
+  const step = (hosts, at) => watch.step({
+    hosts, keystore: store, api: fakeApi(), writer: spyWriter(store), sends: createSendCache(), now: () => at
+  });
 
   // Nothing moved yet.
-  assert.deepEqual(rotationWatch(sent, [host(STUDIO, 'S', 1), host(LAPTOP, 'L', 3), host(NAS, 'N', 2)], NOW + 1000),
+  await step([host(STUDIO, 'S', 1), host(LAPTOP, 'L', 3), host(NAS, 'N', 2)], NOW + 1000);
+  assert.deepEqual(watch.lines(PHONE, NOW + 1000),
     [{ hostId: STUDIO, status: SENT }, { hostId: LAPTOP, status: SENT }, { hostId: NAS, status: SENT }]);
 
-  // Studio rotated; the laptop is still at the epoch the command was sealed under.
-  assert.deepEqual(rotationWatch(sent, [host(STUDIO, 'S', 2), host(LAPTOP, 'L', 3), host(NAS, 'N', 2)], NOW + 5000),
+  // Studio rotated once past the epoch the command was sealed under; the laptop has not moved.
+  assert.equal(await step([host(STUDIO, 'S', 2), host(LAPTOP, 'L', 3), host(NAS, 'N', 2)], NOW + 5000), true);
+  assert.deepEqual(watch.lines(PHONE, NOW + 5000),
     [{ hostId: STUDIO, status: ROTATED }, { hostId: LAPTOP, status: SENT }, { hostId: NAS, status: SENT }]);
 
-  // Ten minutes on, a computer that has not moved is no longer watched for; one that rotated stays rotated, and
-  // one missing from the snapshot is not called rotated.
-  assert.deepEqual(rotationWatch(sent, [host(STUDIO, 'S', 2), host(LAPTOP, 'L', 3)], NOW + ROTATION_WATCH_MS),
+  // Ten minutes on, a computer that has not moved is said not to have; one that rotated stays rotated, and one
+  // missing from the snapshot is not called rotated.
+  await step([host(STUDIO, 'S', 2), host(LAPTOP, 'L', 3)], NOW + ROTATION_WATCH_MS);
+  assert.deepEqual(watch.lines(PHONE, NOW + ROTATION_WATCH_MS),
     [{ hostId: STUDIO, status: ROTATED }, { hostId: LAPTOP, status: NOT_ROTATED_YET }, { hostId: NAS, status: NOT_ROTATED_YET }]);
+});
+
+test('a removal sealed before another one is told again under the new key', async () => {
+  const { store } = await storeHolding({ [STUDIO]: [1] });
+  const sends = createSendCache(() => NOW);
+  const api = fakeApi();
+  const writer = spyWriter(store);
+  const watch = createRemovalWatch();
+
+  // The phone and then the tablet, both sealed under epoch 1 while the computer was asleep.
+  for (const deviceId of [PHONE, TABLET]) {
+    const result = await revokeDevice({
+      api, writer, sends, hosts: [host(STUDIO, 'Studio PC', 1)], keystore: store, deviceId, now: () => NOW
+    });
+    watch.record(deviceId, result.sentTo);
+  }
+  const [, tabletFirst] = commandsOf(api);
+  const step = (keyEpoch, at) => watch.step({
+    hosts: [host(STUDIO, 'Studio PC', keyEpoch)], keystore: store, api, writer, sends, now: () => at
+  });
+
+  // The computer removed the phone and moved to epoch 2 - granting it to the tablet, still trusted - then refused
+  // the tablet's command as sealed before a device was removed. Until this device holds epoch 2 nothing is sent:
+  // sealed under epoch 1 again, it would be refused again.
+  api.calls.length = 0;
+  await step(2, NOW + 3000);
+  assert.deepEqual(watch.lines(PHONE, NOW + 3000), [{ hostId: STUDIO, status: ROTATED }]);
+  assert.deepEqual(watch.lines(TABLET, NOW + 3000), [{ hostId: STUDIO, status: SENT }]);
+  assert.equal(api.calls.length, 0);
+
+  // Epoch 2 arrives: the tablet is told again, under it and a new command id, and is not called rotated.
+  const newer = crypto.getRandomValues(new Uint8Array(32));
+  await store.addHostKey(STUDIO, 2, newer);
+  await step(2, NOW + 6000);
+  const [again] = commandsOf(api);
+  assert.equal(api.calls.length, 1);
+  assert.equal(again.path, `/api/hosts/${STUDIO}/device-commands`);
+  assert.notEqual(again.body.commandId, tabletFirst.body.commandId);
+  const opened = await openJson(await hostKey(2, newer), again.body.sealed,
+    ad.command(STUDIO, again.body.commandId, 'RevokeDevice'));
+  assert.equal(opened.deviceId, TABLET);
+  assert.deepEqual(watch.lines(TABLET, NOW + 6000), [{ hostId: STUDIO, status: SENT }]);
+
+  // The computer acts on it and moves to epoch 3: both are done, and nothing more is sent.
+  await step(3, NOW + 9000);
+  assert.deepEqual(watch.lines(PHONE, NOW + 9000), [{ hostId: STUDIO, status: ROTATED }]);
+  assert.deepEqual(watch.lines(TABLET, NOW + 9000), [{ hostId: STUDIO, status: ROTATED }]);
+  assert.equal(api.calls.length, 1);
+});
+
+test('a removal told again without a rotation of its own is not confirmed', async () => {
+  const { store } = await storeHolding({ [STUDIO]: [1] });
+  const sends = createSendCache(() => NOW);
+  const api = fakeApi();
+  const writer = spyWriter(store);
+  const watch = createRemovalWatch();
+  watch.record(PHONE, (await revokeDevice({
+    api, writer, sends, hosts: [host(STUDIO, 'Studio PC', 1)], keystore: store, deviceId: PHONE, now: () => NOW
+  })).sentTo);
+  api.calls.length = 0;
+
+  // Each time the computer has moved on twice since the last command: someone else's rotation came in between,
+  // so this one may have been refused, and it is told again - at most MAX_RESENDS times.
+  for (let epoch = 3; epoch <= 3 + 2 * MAX_RESENDS; epoch += 2) {
+    await store.addHostKey(STUDIO, epoch, crypto.getRandomValues(new Uint8Array(32)));
+    await watch.step({
+      hosts: [host(STUDIO, 'Studio PC', epoch)], keystore: store, api, writer, sends, now: () => NOW
+    });
+  }
+
+  assert.equal(commandsOf(api).length, MAX_RESENDS);
+  assert.deepEqual(watch.lines(PHONE, NOW), [{ hostId: STUDIO, status: NOT_CONFIRMED }]);
+  assert.equal(NOT_CONFIRMED, 'not confirmed - tell the computers again');
 });
 
 test('forgetting this device revokes it everywhere, forgets the store and signs out', async () => {
@@ -235,6 +318,65 @@ test('a key store forgotten or closed is gone; an open one is not', async () => 
   store.close();
   assert.equal(await storeGone(store), true);
   assert.equal(await storeGone(null), true);
+
+  // Another tab's forget() closes this tab's connection, and the browser then answers InvalidStateError.
+  const closedUnder = new Error('The database connection is closing.');
+  closedUnder.name = 'InvalidStateError';
+  assert.equal(await storeGone({ device: async () => { throw closedUnder; } }), true);
+
+  // Any other failure to read is not a forgotten store: the page would say this device was removed when it was not.
+  assert.equal(await storeGone({ device: async () => { throw new Error('UnknownError'); } }), false);
+});
+
+test('a key store that cannot be deleted still signs out, and says the keys stay', async () => {
+  const adapter = memoryAdapter();
+  const broken = { ...adapter, deleteDatabase: async () => { throw new Error('UnknownError'); } };
+  const store = await openKeystore(ALICE, broken, () => NOW);
+  await store.addHostKey(STUDIO, 1, crypto.getRandomValues(new Uint8Array(32)));
+  await store.createDevice();
+  await store.setDeviceId(PHONE);
+  let told = null;
+
+  const result = await forgetThisDevice({
+    api: fakeApi(), writer: spyWriter(store), sends: createSendCache(), keystore: store,
+    hosts: [host(STUDIO, 'Studio PC', 1)],
+    signOut: async (answer) => { told = answer; }
+  });
+
+  // Removed everywhere, and signed out: what is left is for the person to clear, and they are told how.
+  assert.equal(told, result);
+  assert.equal(result.keysKept, true);
+  assert.equal(KEYS_KEPT,
+    "The keys could not be deleted from this browser; clear this site's data in the browser settings.");
+  assert.ok(forgottenSentence(result).includes(KEYS_KEPT));
+  assert.ok(!forgottenSentence(result).includes('its keys are deleted'));
+});
+
+test('the removed page deletes this device\'s keys for the signed-in account', async () => {
+  const adapter = memoryAdapter();
+  const store = await openKeystore(ALICE, adapter);
+  await store.createDevice();
+  await store.addHostKey(STUDIO, 1, crypto.getRandomValues(new Uint8Array(32)));
+  store.close();
+
+  await deleteDeviceKeys({ authenticated: true, user: { id: ALICE } }, (userId) => openKeystore(userId, adapter));
+
+  assert.deepEqual(adapter.databases(), []);
+  await assert.rejects(deleteDeviceKeys({ authenticated: false }, (userId) => openKeystore(userId, adapter)),
+    /Sign in again/);
+});
+
+test('a device card offers what can be done to that device', () => {
+  const none = new Set();
+  assert.deepEqual(cardActions({ id: PHONE, revoked: false }, PHONE, none), [{ kind: 'forget', busy: false }]);
+  assert.deepEqual(cardActions({ id: TABLET, revoked: false }, PHONE, none), [{ kind: 'remove', busy: false }]);
+  // A removed device can always be told about again - after a reload, or from another device, a computer that
+  // missed it is otherwise never told - and the gateway and every computer take it again as nothing new.
+  assert.deepEqual(cardActions({ id: TABLET, revoked: true }, PHONE, none), [{ kind: 'tell-again', busy: false }]);
+  // A removal in flight stays disabled through every redraw until it ends.
+  assert.deepEqual(cardActions({ id: TABLET, revoked: false }, PHONE, new Set([TABLET])),
+    [{ kind: 'remove', busy: true }]);
+  assert.deepEqual(cardActions({ id: PHONE, revoked: true }, PHONE, none), []);
 });
 
 test('the removal is said plainly', () => {

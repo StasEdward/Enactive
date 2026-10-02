@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { openKeystore, memoryAdapter } from '../../src/Enactive.Remote.Gateway/wwwroot/js/keystore.js';
+import {
+  openKeystore, memoryAdapter, indexedDbAdapter, BlockedError, KeystoreClosedError, BLOCKED_AFTER_MS
+} from '../../src/Enactive.Remote.Gateway/wwwroot/js/keystore.js';
 
 // User ids in the gateway's shape: 32 hex characters.
 const ALICE = '0123456789abcdef0123456789abcdef';
@@ -192,5 +194,31 @@ test('a forgotten store cannot be used', async () => {
   const store = await openKeystore(ALICE, memoryAdapter());
   await store.forget();
 
-  await assert.rejects(store.addHostKey('host-a', 1, bytes(1)), /closed/);
+  await assert.rejects(store.addHostKey('host-a', 1, bytes(1)), KeystoreClosedError);
+  await assert.rejects(store.device(), /This key store is closed/);
+});
+
+test('a deletion another tab blocks fails with BlockedError', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  // The browser's deleteDatabase: the request is held while another connection stays open, and onblocked fires.
+  let request = null;
+  const previous = globalThis.indexedDB;
+  globalThis.indexedDB = { deleteDatabase: () => (request = {}) };
+
+  try {
+    let settled = false;
+    const deleting = indexedDbAdapter.deleteDatabase('enactive-keys-x');
+    deleting.catch(() => {}).finally(() => { settled = true; });
+    request.onblocked();
+
+    t.mock.timers.tick(BLOCKED_AFTER_MS - 1);
+    await Promise.resolve();
+    assert.equal(settled, false);
+
+    t.mock.timers.tick(1);
+    await assert.rejects(deleting, (error) => error instanceof BlockedError
+      && error.message === 'Close the other tabs of this site and try again.');
+  } finally {
+    globalThis.indexedDB = previous;
+  }
 });

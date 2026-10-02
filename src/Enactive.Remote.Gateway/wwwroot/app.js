@@ -36,7 +36,8 @@ import {
   INVITE_LIFETIME_MS, SWAPPED_KEY
 } from "./js/invite.js";
 import {
-  revokeDevice, forgetThisDevice, forgottenSentence, rotationWatch, storeGone, revocationWarning, ROTATED
+  revokeDevice, forgetThisDevice, forgottenSentence, createRemovalWatch, cardActions, deleteDeviceKeys, storeGone,
+  revocationWarning, ROTATED
 } from "./js/devices.js";
 
 const POLL_MS = 3000;
@@ -152,6 +153,8 @@ async function pollNow() {
   if (drawn) {
     // Not awaited: a rotation grant is a round trip of its own, and the next poll does not wait on it.
     catchUpKeys();
+    // Nor this: a removal told again under a new key is a round trip too (devices.js createRemovalWatch).
+    watchRemovals();
   }
 }
 
@@ -1295,7 +1298,6 @@ async function openInviteDialog() {
   $("invite-status").textContent = "";
   $("invite-warning").textContent = "";
   $("invite-error").textContent = "";
-  $("account").open = false;
   $("invite-dialog").showModal();
   const started = generation();
 
@@ -1519,11 +1521,16 @@ let devices = null;
 let ownDevice = null;
 
 /**
- * Each removal made from this tab, by device id: revokeDevice's answer, so the list can say of each computer
- * whether it was told and whether it has moved to a new key since. Only this tab's: the gateway does not keep
- * which computers were told, and a device removed elsewhere shows as "Removed" alone.
+ * The last removal of each device made from this tab, by device id: the computers it could not tell and those it
+ * did not reach (devices.js revokeDevice). Only this tab's: the gateway does not keep which computers were told.
  */
 const removals = new Map();
+
+/** Each computer told of a removal from this tab, watched until it has rotated for it (devices.js). */
+const removalWatch = createRemovalWatch();
+
+/** The devices whose removal is under way, so a redraw does not offer the button again (devices.js cardActions). */
+const removing = new Set();
 
 const loadDevices = singleFlight(loadDevicesNow, generation);
 
@@ -1561,15 +1568,44 @@ async function reloadDevices() {
   await loadDevices();
 }
 
+/**
+ * Moves the removals on after a poll (devices.js createRemovalWatch): marks what rotated, and tells a computer
+ * again where its rotation cannot have been for the removal. One at a time, so two polls do not send twice.
+ */
+const watchRemovals = singleFlight(async () => {
+  const started = generation();
+
+  try {
+    const changed = await removalWatch.step({ hosts: state.hosts, keystore, api, writer, sends });
+
+    if (changed && isCurrent(started)) {
+      renderDevices();
+    }
+  } catch {
+    // The key store could not be read: the next poll tries again.
+  }
+}, generation);
+
+const ACTIONS = {
+  forget: { text: "Forget this device", className: "danger", run: (clicked) => forgetDevice(clicked) },
+  remove: { text: "Remove", className: "danger", run: (clicked, device) => removeDevice(clicked, device) },
+  // No confirmation: the device is removed already, and telling the gateway and the computers again changes
+  // nothing for a computer that was told.
+  "tell-again": {
+    text: "Tell the computers again",
+    className: "secondary",
+    run: (clicked, device) => runRemoval(clicked, device.id)
+  }
+};
+
 function renderDevices() {
   const cards = (devices ?? []).map((device) => {
     const card = node("div", device.revoked ? "card is-removed" : "card");
-    const own = device.id === ownDevice;
 
     const head = node("div", "card-head");
     head.append(node("h3", null, device.label));
 
-    if (own) {
+    if (device.id === ownDevice) {
       head.append(node("span", "status is-done", "This device"));
     } else if (device.revoked) {
       head.append(node("span", "status", "Removed"));
@@ -1578,28 +1614,22 @@ function renderDevices() {
     card.append(head);
     card.append(node("p", "meta", `Added ${new Date(device.createdAt).toLocaleDateString()} · `
       + (device.lastSeenAt ? `last seen ${new Date(device.lastSeenAt).toLocaleString()}` : "not seen yet")));
+    card.append(...removalLines(device.id));
 
-    const removal = removals.get(device.id);
+    const offered = cardActions(device, ownDevice, removing);
 
-    if (removal) {
-      card.append(...removalLines(removal));
-    }
+    if (offered.length > 0) {
+      const actions = node("div", "actions");
 
-    const actions = node("div", "actions");
+      for (const { kind, busy } of offered) {
+        const { text, className, run } = ACTIONS[kind];
+        const made = node("button", className, text);
+        made.type = "button";
+        made.disabled = busy;
+        made.addEventListener("click", () => run(made, device));
+        actions.append(made);
+      }
 
-    if (own && !device.revoked) {
-      actions.append(button("Forget this device", "danger", forgetDevice));
-    } else if (!device.revoked) {
-      actions.append(button("Remove", "danger", (clicked) => removeDevice(clicked, device)));
-    } else if (removal?.failed.length > 0) {
-      // Removed at the gateway already, so there is no Remove to press again; the computers that were not
-      // reached are sent the same commands as before.
-      actions.append(button("Tell the other computers again", "secondary", (clicked) => act(clicked, () =>
-        tellRemoval(device.id, state.hosts.filter((host) => removal.failed.some((one) => one.hostId === host.id)),
-          removal))));
-    }
-
-    if (actions.children.length > 0) {
       card.append(actions);
     }
 
@@ -1610,53 +1640,53 @@ function renderDevices() {
 }
 
 /**
- * One line per computer of a removal: told and waiting for its new key, moved to it, or not moved within the
- * watch (devices.js rotationWatch) - read against the snapshot on screen, so each poll moves it on - then the
- * computers this device cannot tell, then those it did not reach.
+ * One line per computer told of a device's removal: waiting for its new key, moved to it, not moved within the
+ * watch, or not confirmed (devices.js createRemovalWatch) - moved on by every poll - then the computers this
+ * device cannot tell, then those it did not reach.
  */
-function removalLines(removal) {
-  return [
-    ...rotationWatch(removal.sentTo, state.hosts, Date.now()).map(({ hostId, status }) =>
-      node("p", status === ROTATED ? "meta" : "muted", `${hostLabel(hostId)}: ${status}`)),
-    ...removal.skipped.map(({ reason }) => node("p", "muted", reason)),
-    ...removal.failed.map(({ reason }) => node("p", "error", reason))
-  ];
-}
+function removalLines(deviceId) {
+  const removal = removals.get(deviceId);
 
-function button(text, className, onClick) {
-  const made = node("button", className, text);
-  made.type = "button";
-  made.addEventListener("click", () => onClick(made));
-  return made;
+  return [
+    ...removalWatch.lines(deviceId, Date.now()).map(({ hostId, status }) =>
+      node("p", status === ROTATED ? "meta" : "muted", `${hostLabel(hostId)}: ${status}`)),
+    ...(removal?.skipped ?? []).map(({ reason }) => node("p", "muted", reason)),
+    ...(removal?.failed ?? []).map(({ reason }) => node("p", "error", reason))
+  ];
 }
 
 /** Removes another device, once the person has read what that does and does not do. */
 function removeDevice(clicked, device) {
   if (confirm(`${revocationWarning(device.label)} Continue?`)) {
-    act(clicked, () => tellRemoval(device.id, state.hosts, null));
+    runRemoval(clicked, device.id);
   }
 }
 
 /**
- * Removes device `removed` at the gateway and tells each computer of `hosts` (devices.js revokeDevice), and keeps
- * what each was told, added to `before`: the removal this one tries again for the computers it did not reach.
+ * Removes device `removed` at the gateway and tells every computer this device can (devices.js revokeDevice):
+ * the same commands as before for a computer told already, which takes them as nothing new.
  */
-async function tellRemoval(removed, hosts, before) {
-  const started = generation();
-  const result = await revokeDevice({ api, writer, sends, hosts, keystore, deviceId: removed });
+function runRemoval(clicked, removed) {
+  removing.add(removed);
+  renderDevices();
 
-  if (!isCurrent(started)) {
-    return;
-  }
+  act(clicked, async () => {
+    const started = generation();
 
-  removals.set(removed, before
-    ? {
-      sentTo: [...before.sentTo, ...result.sentTo],
-      skipped: [...before.skipped, ...result.skipped],
-      failed: result.failed
+    try {
+      const result = await revokeDevice({ api, writer, sends, hosts: state.hosts, keystore, deviceId: removed });
+
+      if (!isCurrent(started)) {
+        return;
+      }
+
+      removals.set(removed, { skipped: result.skipped, failed: result.failed });
+      removalWatch.record(removed, result.sentTo);
+      await reloadDevices();
+    } finally {
+      removing.delete(removed);
     }
-    : result);
-  await reloadDevices();
+  });
 }
 
 function forgetDevice(clicked) {
@@ -1693,8 +1723,8 @@ async function forgetNow() {
     throw error;
   }
 
-  // The keys are gone, but the sign-out was refused and said so: nothing here can read or send any more, and the
-  // view put up now signs out.
+  // The device is removed, but the sign-out was refused and said so: nothing here can read or send any more, and
+  // the view put up now signs out - and deletes the keys, if they could not be deleted just now.
   if (account) {
     resetSession();
     showDeviceRemoved();
@@ -1891,6 +1921,8 @@ function resetSession() {
   devices = null;
   ownDevice = null;
   removals.clear();
+  removalWatch.clear();
+  removing.clear();
   content = () => undefined;
   drawnCursor = null;
   grantSchedule = createGrantSchedule();
@@ -2214,6 +2246,27 @@ $("removed-sign-out").addEventListener("click", async () => {
   }
 
   await signOut("/api/logout");
+});
+
+// A removed device's keys still open what it had already been given. A "Forget this device" that stopped short - a
+// computer out of reach, then a reload - put this page up with only Sign out, and the keys stayed on disk for good.
+$("removed-forget").addEventListener("click", async (clicked) => {
+  const button = clicked.currentTarget;
+  const status = $("removed-status");
+  button.disabled = true;
+  status.textContent = "";
+
+  try {
+    // Whose keys: the account signed in now, asked afresh - the reset that put this page up forgot it.
+    await deleteDeviceKeys(await session(), openKeystore);
+    status.textContent = "This device's keys are deleted from this browser.";
+  } catch (error) {
+    if (!(error instanceof Stale)) {
+      status.textContent = error.message;
+    }
+  } finally {
+    button.disabled = false;
+  }
 });
 
 $("dev-sign-in").addEventListener("submit", async (submitted) => {

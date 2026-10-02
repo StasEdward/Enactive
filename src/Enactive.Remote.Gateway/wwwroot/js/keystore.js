@@ -26,6 +26,27 @@ export class PinMismatchError extends Error {
   }
 }
 
+/** The store was closed, or forgotten: its own error, so a caller can tell it from a failure to read. */
+export class KeystoreClosedError extends Error {
+  constructor() {
+    super('This key store is closed.');
+    this.name = 'KeystoreClosedError';
+  }
+}
+
+/** The database could not be deleted because another tab of this site keeps it open. */
+export class BlockedError extends Error {
+  constructor() {
+    super('Close the other tabs of this site and try again.');
+    this.name = 'BlockedError';
+  }
+}
+
+// How long a deletion another connection blocks is waited for. The browser holds the request, without a word,
+// until every other connection closes: a tab still running a page from before onversionchange closed its
+// connection kept "Forget this device" spinning for as long as that tab stayed open.
+export const BLOCKED_AFTER_MS = 5000;
+
 /**
  * Opens the key store of one account. One database per account (`enactive-keys-<userId>`): two accounts
  * signed in one after the other in one browser profile never see each other's keys, because neither ever
@@ -41,7 +62,7 @@ export async function openKeystore(userId, adapter = indexedDbAdapter, now = () 
 
   // A store used after forget() would write into a database that was just deleted, or recreate it.
   const live = () => {
-    if (closed) throw new Error('This key store is closed.');
+    if (closed) throw new KeystoreClosedError();
     return db;
   };
 
@@ -320,9 +341,21 @@ export const indexedDbAdapter = Object.freeze({
   },
   deleteDatabase(name) {
     return new Promise((resolve, reject) => {
+      let blocked = 0;
       const request = indexedDB.deleteDatabase(name);
-      request.onsuccess = () => resolve();
-      request.onerror = () => reject(request.error);
+      request.onsuccess = () => {
+        clearTimeout(blocked);
+        resolve();
+      };
+      request.onerror = () => {
+        clearTimeout(blocked);
+        reject(request.error);
+      };
+      // The request stays queued and may still finish once the other tab closes; the caller is told now.
+      request.onblocked = () => {
+        clearTimeout(blocked);
+        blocked = setTimeout(() => reject(new BlockedError()), BLOCKED_AFTER_MS);
+      };
     });
   }
 });

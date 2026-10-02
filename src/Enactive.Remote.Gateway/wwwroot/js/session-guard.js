@@ -65,7 +65,7 @@ export function resetState(state) {
 export const FORGOTTEN = {
   values: ['task-title', 'task-prompt', 'host-name', 'host-code', 'invite-link'],
   contents: ['task-workspace', 'run-title', 'run-detail', 'task-error', 'host-status', 'host-error', 'invite-qr',
-    'invite-status', 'invite-warning', 'invite-error', 'join-status', 'join-error', 'toast'],
+    'invite-status', 'invite-warning', 'invite-error', 'join-status', 'join-error', 'removed-status', 'toast'],
   hidden: ['host-secret', 'invite-secret', 'toast']
 };
 
