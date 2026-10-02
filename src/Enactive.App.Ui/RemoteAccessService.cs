@@ -166,6 +166,28 @@ internal sealed class RemoteAccessService : IAsyncDisposable
 
     private volatile KeyAdministration? _administration;
 
+    /// <summary>
+    /// The administration a browser's removal or endorsement is carried out with: the latest one made, kept
+    /// when its connection ends. Those commands never call the gateway, and one acknowledged just before the
+    /// connection dropped is still being carried out after - looked up in <see cref="_administration"/>, it
+    /// found none and was refused, and a device the person removed stayed trusted here.
+    /// </summary>
+    private volatile KeyAdministration? _lastAdministration;
+
+    /// <summary>What removing a device says when there is no connection to tell the gateway on.</summary>
+    public const string NotConnectedForRemove =
+        "This computer is not connected to the gateway right now, so it cannot remove a device. Try again once it is.";
+
+    /// <summary>
+    /// Removes a device with this computer's own list: it reads nothing new from here, every other device gets
+    /// a new key, and the gateway stops serving it. Needs the connection, because the gateway must be told.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">There is no connection past Hello.</exception>
+    public Task RevokeDeviceAsync(string deviceId, CancellationToken ct)
+        => _administration is { } administration
+            ? administration.RevokeHereAsync(deviceId, ct)
+            : throw new InvalidOperationException(NotConnectedForRemove);
+
     /// <summary>A device answered an invitation and was admitted - which invitation, and its label. Not on the UI thread.</summary>
     public event Action<AdmittedDevice>? DeviceAdmitted;
 
@@ -425,7 +447,7 @@ internal sealed class RemoteAccessService : IAsyncDisposable
         var store = Store();
         if (_runner is null)
         {
-            _runner = new RemoteRunner(store, _approvals, _sealer!, PrepareAsync);
+            _runner = new RemoteRunner(store, _approvals, _sealer!, PrepareAsync, () => _lastAdministration);
 
             // A refused command with no run to report on is said here, the same way a command that
             // failed is: otherwise the only trace of a forged command would be a list nobody reads.
@@ -513,7 +535,14 @@ internal sealed class RemoteAccessService : IAsyncDisposable
                     Status = notice.Detail;
                 InvitationNoticed?.Invoke(notice);
             };
+
+            // Said where the person looks: removing a device - here or from a browser - is something they
+            // should see happen, with what it cost, and not only in a list they may not open.
+            administration.Rotated += rotated => Status =
+                $"{rotated.Label} was {rotated.Reason}: it reads nothing new from this computer, and every other device gets a new key.";
+
             _administration = administration;
+            _lastAdministration = administration;
         }
 
         // Said after the invitations are ready: "Connected." is what tells the settings pane that Add a

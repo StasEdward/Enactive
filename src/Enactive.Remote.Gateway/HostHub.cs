@@ -114,6 +114,18 @@ public sealed class HostHub(
             return true;
         });
 
+    /// <summary>
+    /// The person removed a device of theirs on this computer: the gateway stops serving it, as when they
+    /// remove it in a browser. Only a device of this computer's own owner; any other is refused like a
+    /// missing one.
+    /// </summary>
+    public Task<HostReply<bool>> RevokeDevice(string deviceId)
+        => Guard(async () =>
+        {
+            await devices.RevokeByComputerAsync(Access, deviceId, Context.ConnectionAborted);
+            return true;
+        });
+
     private string HostId => Context.UserIdentifier
         ?? throw new HubException("This connection has no identity.");
 

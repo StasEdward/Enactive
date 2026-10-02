@@ -49,12 +49,18 @@ public sealed record RemotePreparation(
 /// <para>It is handed the task as it OPENED, never the payload: the payload's plaintext is written by
 /// the gateway, and only what <see cref="Sealer"/> opened and checked came from the owner.</para>
 /// </param>
+/// <param name="administration">
+/// Who changes the trusted list when a browser removes or endorses a device. A function, asked when such a
+/// command arrives, because the application makes one per connection; null, or a function answering null,
+/// on a computer with no key store to change - those commands are then refused with a reason.
+/// </param>
 public sealed class RemoteRunner(
     HostStore store,
     RemoteApprovals approvals,
     Sealer sealer,
     Func<OpenedStart, Func<IDecisionHandler, IDecisionHandler>, CancellationToken,
-        Task<RemotePreparation>> prepare)
+        Task<RemotePreparation>> prepare,
+    Func<KeyAdministration?>? administration = null)
 {
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _running = new();
     private readonly ConcurrentQueue<DeliveryNotice> _notices = new();
@@ -95,17 +101,38 @@ public sealed class RemoteRunner(
                     Answer(sealer.OpenDecision(command));
                     return;
 
+                // The browser removed the device at the gateway before it sent this, so the gateway is not
+                // asked again: this computer distrusts it and gives everyone else a new key.
+                case CommandKind.RevokeDevice:
+                    var revocation = sealer.OpenRevocation(command);
+                    await Administration().RevokeAsync(revocation.DeviceId, KeyAdministration.RemovedFromBrowser, ct);
+                    return;
+
+                case CommandKind.EndorseDevice:
+                    var endorsement = sealer.OpenEndorsement(command);
+                    await Administration().EndorseAsync(endorsement, ct);
+                    return;
+
                 default:
                     throw new NotSupportedException($"Command kind {command.Kind} is not one this build carries out.");
             }
         }
         catch (CommandRefusedException refused)
         {
-            // Only the opening throws this: StartAsync catches everything a run can throw and reports
-            // it as the run's ending, so nothing that began running is ever reported as refused.
-            Refuse(command, refused.Message);
+            // The opening throws this, and a device command the trusted list will not take: StartAsync
+            // catches everything a run can throw and reports it as the run's ending, so nothing that began
+            // running is ever reported as refused.
+            Refuse(command, refused);
         }
     }
+
+    /// <summary>
+    /// Who changes the trusted list. A refusal rather than an exception when there is nobody: thrown, it
+    /// reached the person as "could not be carried out", as if this computer had failed at something it
+    /// can do.
+    /// </summary>
+    private KeyAdministration Administration()
+        => administration?.Invoke() ?? throw new CommandRefusedException(KeyAdministration.CannotManageDevices);
 
     /// <summary>
     /// A command that did not open, said where a person will see it.
@@ -116,15 +143,22 @@ public sealed class RemoteRunner(
     /// it also claims the command, so a redelivery of the same forgery is not even looked at again.
     /// Every other kind has nothing to report on, and is a notice on this computer.</para>
     /// </summary>
-    private void Refuse(HostCommand command, string reason)
+    private void Refuse(HostCommand command, CommandRefusedException refused)
     {
+        var reason = refused.Message;
+
         if (command.Kind == CommandKind.StartTask && RunOf(command) is { } runId)
         {
             if (store.BeginRun(command.Id, runId))
             {
+                // A start sealed under the key a removal replaced is most likely the owner's own, sent from a
+                // device that had not yet received the new key: it is asked for again, not called forged.
+                var detail = refused.SendAgain
+                    ? $"This computer refused the request: {reason}."
+                    : $"This computer refused the request: {reason}. It did not come from a device this computer trusts.";
+
                 store.Enqueue(runId, RemoteEventKind.Failed, sequence => sealer.Detail(
-                    runId, sequence, RemoteEventKind.Failed,
-                    $"This computer refused the request: {reason}. It did not come from a device this computer trusts."));
+                    runId, sequence, RemoteEventKind.Failed, detail));
             }
 
             return;

@@ -52,6 +52,10 @@ internal sealed partial class SettingsWindow : Window
             remoteDevices.Changed += changed;
             Closed += (_, _) => remoteDevices.Changed -= changed;
             pane.AddDeviceRequested += () => new AddDeviceWindow(remoteDevices).ShowDialog(this);
+            pane.Remove = remoteDevices.RemoveAsync;
+            pane.Confirm = question => ConfirmWindow.AskAsync(this, question,
+                "What it already read stays on it. To use it again, add it again from this computer.",
+                "Remove", "Keep");
         }
         viewModel.CloseRequested += () => Close();
         viewModel.ProviderEditRequested += (config, saved) =>

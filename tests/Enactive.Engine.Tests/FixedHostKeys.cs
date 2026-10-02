@@ -64,6 +64,18 @@ internal sealed class FixedHostKeys(string hostId, HostKey key) : IHostKeys
                 RemoteJson.Serialize(new DecisionAuthorization(approvalId, actionHash, decision, issuedAt ?? DateTimeOffset.UtcNow)),
                 Ad.Command(HostId, commandId, CommandKind.ResolveApproval)))));
 
+    public HostCommand Revoke(string deviceId, string commandId = "command-r", DateTimeOffset? issuedAt = null)
+        => Device(commandId, CommandKind.RevokeDevice, new DeviceRevocation(deviceId, issuedAt ?? DateTimeOffset.UtcNow));
+
+    public HostCommand Endorse(
+        string deviceId, string devicePublic, string label, string commandId = "command-e", DateTimeOffset? issuedAt = null)
+        => Device(commandId, CommandKind.EndorseDevice,
+            new DeviceEndorsement(deviceId, devicePublic, label, issuedAt ?? DateTimeOffset.UtcNow));
+
+    private HostCommand Device<T>(string commandId, CommandKind kind, T record)
+        => Command(commandId, kind, RemoteJson.Serialize(new DevicePayload(
+            Current.SealText(RemoteJson.Serialize(record), Ad.Command(HostId, commandId, kind)))));
+
     public HostCommand Command(string commandId, CommandKind kind, string payload)
         => new(commandId, HostId, kind, payload, CommandStatus.PendingDelivery,
             DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.Add(RemoteProtocol.CommandLifetime));

@@ -10,10 +10,19 @@ public sealed record OpenedStart(string RunId, string TaskId, string WorkspaceId
 
 /// <summary>
 /// A command this computer will not act on: it did not open, it was sealed for another computer or
-/// another command, what is sealed disagrees with the plaintext ids it travelled with, or it is older
-/// than a command may wait. The message is a short reason, written to sit inside a sentence.
+/// another command, what is sealed disagrees with the plaintext ids it travelled with, it is older than a
+/// command may wait, or it is sealed under a key a removal replaced. The message is a short reason, written
+/// to sit inside a sentence.
 /// </summary>
-public sealed class CommandRefusedException(string reason) : Exception(reason);
+public sealed class CommandRefusedException(string reason, bool sendAgain = false) : Exception(reason)
+{
+    /// <summary>
+    /// The command may well be the owner's, sealed under the key a removal has since replaced. A start refused
+    /// so is not said to have come from an untrusted device: the person whose phone sent it the moment another
+    /// device was removed would be told it was forged.
+    /// </summary>
+    public bool SendAgain { get; } = sendAgain;
+}
 
 /// <summary>
 /// The one place the Host seals what it sends and opens what it receives (spec section 6).
@@ -32,6 +41,9 @@ public sealed class Sealer(IHostKeys keys, TimeProvider clock)
     /// one that waited the full lifetime would be refused a minute early.
     /// </summary>
     public static readonly TimeSpan ClockSkew = TimeSpan.FromMinutes(10);
+
+    /// <summary>Why a command sealed under an epoch older than the current one is not acted on.</summary>
+    public const string SealedBeforeRemoval = "sealed before a device was removed - send it again";
 
     // ── sealing what goes out ───────────────────────────────────────────────
 
@@ -154,13 +166,21 @@ public sealed class Sealer(IHostKeys keys, TimeProvider clock)
             throw new CommandRefusedException("it is not sealed");
         }
 
-        var key = keys.Epoch(epoch)
-            ?? throw new CommandRefusedException("sealed under a key this computer does not hold");
+        // Commands open under the current epoch only, never an older one this computer still holds. Every
+        // key holder seals with the same key, so nothing here can tell which device sealed a command: a
+        // device removed a minute ago still holds the old epoch, and its commands still queued - or new ones
+        // it seals - would otherwise be carried out after its removal. A browser that sealed under the old
+        // key only because its grant of the new one had not reached it yet is told to send the command again.
+        var current = keys.Current;
+        if (epoch < current.Epoch)
+            throw new CommandRefusedException(SealedBeforeRemoval, sendAgain: true);
+        if (epoch != current.Epoch)
+            throw new CommandRefusedException("sealed under a key this computer does not hold");
 
         string json;
         try
         {
-            json = key.OpenText(envelope, associatedData);
+            json = current.OpenText(envelope, associatedData);
         }
         catch (CryptographicException)
         {

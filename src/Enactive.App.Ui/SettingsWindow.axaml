@@ -288,11 +288,11 @@
                     <TextBlock Classes="hint" TextWrapping="Wrap"
                                Text="Test connection tries what is stored: it says hello to the gateway and offers this computer's workspaces, which also makes it show as online on the phone." />
 
-                    <!-- Read only: taking a device's trust away means a new key for every other device,
-                         and that is not a button to put next to a list by accident. -->
+                    <!-- Remove asks first: taking a device's trust away means a new key for every other
+                         device, and a button pressed by accident must not do that unasked. -->
                     <TextBlock Classes="label" Text="Trusted devices" Margin="0,10,0,0" />
                     <TextBlock Classes="hint" TextWrapping="Wrap"
-                               Text="The browsers that hold this computer's keys and can read what it sends. Add a device makes a one-time link for another browser signed in to the same account; it can be pressed while this computer is connected." />
+                               Text="The browsers that hold this computer's keys and can read what it sends. Add a device makes a one-time link for another browser signed in to the same account; Remove stops a device reading anything new and gives every other device a new key. Both work while this computer is connected." />
                     <TextBlock Classes="hint" IsVisible="{Binding !RemoteDeviceList.HasDevices}"
                                Text="No device is trusted yet." />
                     <TextBlock Classes="hint" TextWrapping="Wrap" Foreground="{DynamicResource Brand.Danger}"
@@ -301,14 +301,19 @@
                         <ItemsControl.ItemTemplate>
                             <DataTemplate x:DataType="vm:TrustedDeviceRow">
                                 <Border Classes="card" Margin="0,0,0,4" Padding="8">
-                                    <StackPanel Spacing="2">
-                                        <TextBlock Text="{Binding Label}" FontWeight="SemiBold"
-                                                   TextTrimming="CharacterEllipsis" />
-                                        <TextBlock Classes="hint" Text="{Binding Added}" />
-                                        <TextBlock Classes="hint" Text="{Binding State}"
-                                                   Foreground="{DynamicResource Brand.Danger}"
-                                                   IsVisible="{Binding IsRevoked}" />
-                                    </StackPanel>
+                                    <Grid ColumnDefinitions="*,Auto">
+                                        <StackPanel Spacing="2">
+                                            <TextBlock Text="{Binding Label}" FontWeight="SemiBold"
+                                                       TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Classes="hint" Text="{Binding Added}" />
+                                            <TextBlock Classes="hint" Text="{Binding State}"
+                                                       Foreground="{DynamicResource Brand.Danger}"
+                                                       IsVisible="{Binding IsRevoked}" />
+                                        </StackPanel>
+                                        <Button Grid.Column="1" Classes="danger" VerticalAlignment="Center"
+                                                Content="Remove" Command="{Binding RemoveCommand}"
+                                                IsVisible="{Binding CanRemove}" />
+                                    </Grid>
                                 </Border>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>

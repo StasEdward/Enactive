@@ -19,7 +19,8 @@ using MySqlConnector;
 /// <para><b>Lock order for a grant.</b> The account (shared, a computer's call only), then each computer
 /// named, for update, in id order; then each device named, shared, in id order; then the grant rows. No
 /// other path locks a device and then a computer, and a device's revocation locks only the device before
-/// deleting its grants, so the two wait for each other but never in a cycle.</para>
+/// deleting its grants - a computer's revocation of one takes the account and the computer shared first,
+/// in the same order - so the two wait for each other but never in a cycle.</para>
 ///
 /// <para><b>Lock order for an invitation.</b> The account (for update when an invitation is made, shared on a
 /// computer's other calls), then the computer or the browser making the call, shared; then the invitation;
@@ -147,42 +148,68 @@ public sealed class DeviceService(Database db, Limits limits, TimeProvider clock
     /// behind, so a retried tap is harmless.
     /// </summary>
     public Task RevokeAsync(UserAccess user, string deviceId, CancellationToken ct)
-        => db.InTransactionAsync(async (connection, transaction) =>
+        => db.InTransactionAsync(
+            (connection, transaction) => RevokeAsync(connection, transaction, user.UserId, "user:" + user.UserId, deviceId),
+            ct);
+
+    /// <summary>
+    /// A computer removes a device of its owner's ("Remove" in the desktop's trusted list), as the person would
+    /// in a browser: the device is refused from then on and its grants are deleted. The computer has already
+    /// stopped granting it keys; without this the gateway went on serving it the old ones, and its calls.
+    /// Another person's device is refused like a missing one; the account and the computer are read again
+    /// first, as on every call of a computer's, and the device is locked after them.
+    /// </summary>
+    public Task RevokeByComputerAsync(HostAccess host, string? deviceId, CancellationToken ct)
+    {
+        if (string.IsNullOrEmpty(deviceId))
         {
-            // FORCE INDEX: through the primary key on id this would lock another person's row first and
-            // apply the owner filter afterwards, so Bob asking for Alice's id would wait on her
-            // transactions - and learn the id exists.
-            var already = await connection.ReadOneAsync(transaction,
-                """
-                SELECT revoked_at IS NOT NULL FROM devices FORCE INDEX (ux_devices_owner)
-                WHERE owner_id = @owner AND id = @device
-                FOR UPDATE
-                """,
-                reader => (bool?)reader.GetBoolean(0), ("@owner", user.UserId), ("@device", deviceId));
+            throw NoSuchDevice();
+        }
 
-            if (already is null)
-            {
-                throw NoSuchDevice();
-            }
-
-            var now = clock.GetUtcNow();
-
-            if (!already.Value)
-            {
-                await connection.ExecuteAsync(transaction,
-                    "UPDATE devices SET revoked_at = @now WHERE owner_id = @owner AND id = @device",
-                    ("@now", now), ("@owner", user.UserId), ("@device", deviceId));
-
-                await AuditAsync(connection, transaction, user, "device-revoked", deviceId, now);
-            }
-
-            // Deleted on a repeated revoke too. A grant written by a request that was already past its
-            // own check when the device was revoked can land after the first revoke's delete; returning
-            // early here would leave that grant for a removed device for ever. The delete is idempotent.
-            await connection.ExecuteAsync(transaction,
-                "DELETE FROM grants WHERE owner_id = @owner AND device_id = @device",
-                ("@owner", user.UserId), ("@device", deviceId));
+        return db.InTransactionAsync(async (connection, transaction) =>
+        {
+            await AuthorizeComputerAsync(connection, transaction, host, lockAccount: false);
+            await RevokeAsync(connection, transaction, host.OwnerId, "host:" + host.HostId, deviceId);
         }, ct);
+    }
+
+    private async Task RevokeAsync(
+        MySqlConnection connection, MySqlTransaction transaction, string ownerId, string actor, string deviceId)
+    {
+        // FORCE INDEX: through the primary key on id this would lock another person's row first and
+        // apply the owner filter afterwards, so Bob asking for Alice's id would wait on her
+        // transactions - and learn the id exists.
+        var already = await connection.ReadOneAsync(transaction,
+            """
+            SELECT revoked_at IS NOT NULL FROM devices FORCE INDEX (ux_devices_owner)
+            WHERE owner_id = @owner AND id = @device
+            FOR UPDATE
+            """,
+            reader => (bool?)reader.GetBoolean(0), ("@owner", ownerId), ("@device", deviceId));
+
+        if (already is null)
+        {
+            throw NoSuchDevice();
+        }
+
+        var now = clock.GetUtcNow();
+
+        if (!already.Value)
+        {
+            await connection.ExecuteAsync(transaction,
+                "UPDATE devices SET revoked_at = @now WHERE owner_id = @owner AND id = @device",
+                ("@now", now), ("@owner", ownerId), ("@device", deviceId));
+
+            await AuditAsync(connection, transaction, ownerId, actor, "device-revoked", deviceId, now);
+        }
+
+        // Deleted on a repeated revoke too. A grant written by a request that was already past its
+        // own check when the device was revoked can land after the first revoke's delete; returning
+        // early here would leave that grant for a removed device for ever. The delete is idempotent.
+        await connection.ExecuteAsync(transaction,
+            "DELETE FROM grants WHERE owner_id = @owner AND device_id = @device",
+            ("@owner", ownerId), ("@device", deviceId));
+    }
 
     /// <summary>
     /// The device a call says it is made from, if it is this person's and still theirs. A removed device

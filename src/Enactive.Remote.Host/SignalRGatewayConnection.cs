@@ -103,6 +103,9 @@ public sealed class SignalRGatewayConnection : IGatewayConnection, IAsyncDisposa
     public Task AnsweredInviteAsync(string inviteId, CancellationToken ct)
         => InvokeAsync<bool>("AnsweredInvite", ct, inviteId);
 
+    public Task RevokeDeviceAsync(string deviceId, CancellationToken ct)
+        => InvokeAsync<bool>("RevokeDevice", ct, deviceId);
+
     public async ValueTask DisposeAsync() => await _connection.DisposeAsync();
 
     /// <summary>

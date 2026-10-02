@@ -62,6 +62,25 @@ internal sealed class RemoteDevices(Func<RemoteAccessService?> current, Semaphor
     }
 
     /// <summary>
+    /// Removes a device with this computer's own list: a new key for every other device, and the gateway
+    /// told to stop serving it. Under the gate, so it never rotates keys in a store a code is resetting.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">There is no connection past Hello.</exception>
+    public async Task RemoveAsync(string deviceId)
+    {
+        await gate.WaitAsync();
+        try
+        {
+            var service = current() ?? throw new InvalidOperationException(RemoteAccessService.NotConnectedForRemove);
+            await service.RevokeDeviceAsync(deviceId, CancellationToken.None);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    /// <summary>
     /// Closes an invitation nobody answered. Never throws: it is called as a window closes, with nobody
     /// to tell, and an invitation that could not be withdrawn stops counting at its ten minutes anyway.
     /// </summary>

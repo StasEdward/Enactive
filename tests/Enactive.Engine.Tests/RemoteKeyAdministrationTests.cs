@@ -743,6 +743,48 @@ public sealed class RemoteKeyAdministrationTests
         Assert.Equal(["device-1", "phone"], keys.Live.Select(d => d.DeviceId).Order());
     }
 
+    /// <summary>
+    /// A removal a browser sends reaches the trusted list through the running service: the device is
+    /// distrusted, a new epoch is made, the person is told in the status line - and the gateway is not
+    /// asked to remove the device again, since the browser did that before it sent the command.
+    /// </summary>
+    [WindowsFact]
+    public async Task The_service_carries_out_a_removal_sent_from_a_browser()
+    {
+        using var fx = new EngineFixture();
+        var database = fx.PathOf("remote.db");
+        var settings = new RemoteAccessSettings();
+        var (code, device) = NewCode();
+        using var _ = device;
+        await RemoteAccessService.ConnectWithCodeAsync(code, settings, database, NeverAsked);
+        using var phone = P256.Generate();
+        HostCommand removal;
+        using (var store = new HostStore(database))
+        using (var keys = new HostKeyStore(store, code.HostId))
+        {
+            TrustDevice(keys, "phone", phone, "Phone");
+            removal = new FixedHostKeys(code.HostId, keys.Current).Revoke("phone");
+        }
+        var gateway = new FakeGateway { Pending = [removal] };
+
+        await using (var service = new RemoteAccessService(settings, keys: null,
+            _ => throw new InvalidOperationException("No composition expected"), () => [], fx.Decisions, database,
+            connect: _ => Task.FromResult<IGatewayConnection>(gateway)))
+        {
+            service.Start();
+            await Until(() => service.Status.Contains(KeyAdministration.RemovedFromBrowser, StringComparison.Ordinal));
+            Assert.StartsWith("Phone was removed from the browser", service.Status, StringComparison.Ordinal);
+        }
+
+        Assert.DoesNotContain("RevokeDevice", gateway.Calls);
+        using (var store = new HostStore(database))
+        using (var keys = new HostKeyStore(store, code.HostId))
+        {
+            Assert.Equal([code.DeviceId], keys.Live.Select(d => d.DeviceId));
+            Assert.Equal(2u, keys.Current.Epoch);
+        }
+    }
+
     // ── adding a device by invitation ───────────────────────────────────────
 
     /// <summary>
@@ -1158,6 +1200,329 @@ public sealed class RemoteKeyAdministrationTests
         Assert.Equal(new string('a', 78) + face, KeyAdministration.CleanLabel(new string('a', 78) + face + "tail"));
     }
 
+    // ── removing a device, and a device a browser vouches for ───────────────
+
+    /// <summary>
+    /// Spec §5.4: the removed device is no longer trusted, a new epoch is made, and every device that
+    /// remains is owed it. A removal the browser sent is not passed back to the gateway: the browser
+    /// removed the device there before it sent the command.
+    /// </summary>
+    [WindowsFact]
+    public async Task Revoking_a_device_rotates_and_grants_the_rest()
+    {
+        using var fx = new EngineFixture();
+        using var store = new HostStore(fx.PathOf("remote.db"));
+        using var keys = new HostKeyStore(store, "host-1");
+        var gateway = new FakeGateway();
+        var administration = new KeyAdministration(keys, gateway, TimeProvider.System);
+        var rotations = new List<KeyRotated>();
+        administration.Rotated += rotations.Add;
+        using var phone = P256.Generate();
+        using var laptop = P256.Generate();
+        using var tablet = P256.Generate();
+        TrustDevice(keys, "phone", phone, "Phone");
+        TrustDevice(keys, "laptop", laptop, "Laptop");
+        TrustDevice(keys, "tablet", tablet, "Tablet");
+
+        await administration.RevokeAsync("laptop", KeyAdministration.RemovedFromBrowser, CancellationToken.None);
+
+        Assert.Equal(2u, keys.Current.Epoch);
+        Assert.Equal(["phone", "tablet"], keys.Live.Select(d => d.DeviceId).Order());
+        Assert.NotNull(Assert.Single(keys.Trusted, d => d.DeviceId == "laptop").RevokedAt);
+
+        var grants = keys.PendingGrants().Select(p => p.Grant).ToList();
+        Assert.Equal(["phone", "tablet"], grants.Select(g => g.DeviceId).Order());
+        Assert.All(grants, grant =>
+        {
+            Assert.Equal(2u, grant.Epoch);
+            Assert.Equal(Grants.AuthByHost, grant.AuthBy);
+        });
+
+        Assert.Equal(new KeyRotated("laptop", "Laptop", 2u, KeyAdministration.RemovedFromBrowser), Assert.Single(rotations));
+        Assert.Empty(gateway.Calls);
+    }
+
+    /// <summary>
+    /// Review focus 4. The removed device keeps its private key and every grant it was ever given -
+    /// delivered, or still queued when it was removed - and with the gateway's help it can read every
+    /// grant made to anyone. None of it opens what this computer seals after the removal: no grant names
+    /// it, the grants it can read are wrapped for other keys, and every epoch key it holds is an old one.
+    /// The device that stays opens its new grant against the signing key it pinned, and reads the event.
+    /// </summary>
+    [WindowsFact]
+    public async Task The_revoked_device_cannot_open_anything_sealed_after_its_revocation()
+    {
+        using var fx = new EngineFixture();
+        using var store = new HostStore(fx.PathOf("remote.db"));
+        using var keys = new HostKeyStore(store, "host-1");
+        keys.Rotate();
+        var administration = new KeyAdministration(keys, new FakeGateway(), TimeProvider.System);
+        using var phone = P256.Generate();
+        using var laptop = P256.Generate();
+        TrustDevice(keys, "phone", phone, "Phone");
+        TrustDevice(keys, "laptop", laptop, "Laptop");
+        var pinned = keys.SigningPublic;
+
+        // Everything the laptop was given: a grant of every epoch, delivered, and the same again queued.
+        var given = keys.All.Select(k => Grants.CreateSigned(keys.HostId, "laptop", P256.PublicRaw(laptop), k, keys.Signer)).ToList();
+        foreach (var grant in keys.All.Select(k => Grants.CreateSigned(keys.HostId, "laptop", P256.PublicRaw(laptop), k, keys.Signer)))
+        {
+            keys.EnqueueGrant(grant);
+        }
+
+        await administration.RevokeAsync("laptop", KeyAdministration.RemovedHere, CancellationToken.None);
+
+        var sealer = new Sealer(keys, TimeProvider.System);
+        var ad = Ad.Event(keys.HostId, "run-1", 1, RemoteEventKind.Progress);
+        var detail = sealer.Detail("run-1", 1, RemoteEventKind.Progress, "Written after the laptop was removed");
+
+        var pending = keys.PendingGrants().Select(p => p.Grant).ToList();
+        Assert.DoesNotContain(pending, g => g.DeviceId == "laptop");
+
+        var held = given.Select(g => Grants.Open(g, laptop, default, pinned).Key).ToList();
+        Assert.Equal([1u, 2u], held.Select(k => k.Epoch));
+        Assert.All(held, key => Assert.ThrowsAny<CryptographicException>(() => key.OpenText(detail, ad)));
+        Assert.All(pending, grant => Assert.ThrowsAny<CryptographicException>(() => Grants.Open(grant, laptop, default, pinned)));
+
+        var (phoneKey, _) = Grants.Open(Assert.Single(pending, g => g.DeviceId == "phone"), phone, default, pinned);
+        Assert.Equal(3u, phoneKey.Epoch);
+        Assert.Equal("Written after the laptop was removed", phoneKey.OpenText(detail, ad));
+    }
+
+    /// <summary>
+    /// A rotation grant is signed with the computer's signing key, and nothing else will do: an epoch key
+    /// cannot sign one, since the removed device holds those. It opens against the key the device pinned,
+    /// and not with nothing pinned or with another computer's key pinned.
+    /// </summary>
+    [WindowsFact]
+    public async Task Rotation_grants_are_signed_and_open_against_the_pinned_signing_key()
+    {
+        using var fx = new EngineFixture();
+        using var store = new HostStore(fx.PathOf("remote.db"));
+        using var keys = new HostKeyStore(store, "host-1");
+        var administration = new KeyAdministration(keys, new FakeGateway(), TimeProvider.System);
+        using var phone = P256.Generate();
+        using var laptop = P256.Generate();
+        using var stranger = P256.GenerateSigning();
+        TrustDevice(keys, "phone", phone, "Phone");
+        TrustDevice(keys, "laptop", laptop, "Laptop");
+        var pinned = keys.SigningPublic;
+
+        await administration.RevokeAsync("laptop", KeyAdministration.RemovedHere, CancellationToken.None);
+
+        var grant = Assert.Single(keys.PendingGrants()).Grant;
+        Assert.Equal(Grants.AuthByHost, grant.AuthBy);
+        Assert.Equal(B64.Url(pinned), grant.HostSigningPublic);
+
+        var (key, signing) = Grants.Open(grant, phone, default, pinned);
+        Assert.Equal(keys.Current.Secret.ToArray(), key.Secret.ToArray());
+        Assert.Equal(pinned, signing);
+
+        Assert.Throws<EnvelopeException>(() => Grants.Open(grant, phone, default, pinnedHostSigningPublic: null));
+        Assert.Throws<EnvelopeException>(() => Grants.Open(grant, phone, default, P256.SigningPublicRaw(stranger)));
+    }
+
+    /// <summary>
+    /// Every key holder seals with the same key, so this computer cannot tell which device sealed a
+    /// command. After a removal it acts only on what is sealed under the new epoch, which the removed
+    /// device does not have: the removed device's own removal of another device does nothing. A start a
+    /// remaining device sent just before it heard of the new key is refused with a request to send it
+    /// again - not called forged, which it is not.
+    /// </summary>
+    [WindowsFact]
+    public async Task A_command_sealed_under_the_old_epoch_after_rotation_is_refused()
+    {
+        using var fx = new EngineFixture();
+        using var store = new HostStore(fx.PathOf("remote.db"));
+        using var keys = new HostKeyStore(store, "host-1");
+        var administration = new KeyAdministration(keys, new FakeGateway(), TimeProvider.System);
+        var runner = Runner(store, keys, () => administration);
+        using var phone = P256.Generate();
+        using var laptop = P256.Generate();
+        TrustDevice(keys, "phone", phone, "Phone");
+        TrustDevice(keys, "laptop", laptop, "Laptop");
+        var before = new FixedHostKeys(keys.HostId, keys.Current);
+
+        await administration.RevokeAsync("laptop", KeyAdministration.RemovedHere, CancellationToken.None);
+
+        var sealer = new Sealer(keys, TimeProvider.System);
+        var refused = Assert.Throws<CommandRefusedException>(() => sealer.OpenStart(before.Start()));
+        Assert.Equal(Sealer.SealedBeforeRemoval, refused.Message);
+
+        await runner.ApplyAsync(before.Revoke("phone"));
+        Assert.Equal(["phone"], keys.Live.Select(d => d.DeviceId));
+        Assert.Equal(2u, keys.Current.Epoch);
+        Assert.Contains(runner.Notices, n => n.Kind == "Refused" && n.Detail.EndsWith(Sealer.SealedBeforeRemoval, StringComparison.Ordinal));
+
+        var oldStart = before.Start(commandId: "command-old", runId: "run-old");
+        store.Accept(oldStart);
+        await runner.ApplyAsync(oldStart);
+        var ending = Assert.Single(store.NextOwed(), o => o.RunId == "run-old").Event;
+        Assert.Equal(
+            $"This computer refused the request: {Sealer.SealedBeforeRemoval}.",
+            keys.Current.OpenText(ending.SealedDetail!, Ad.Event(keys.HostId, "run-old", ending.Sequence, ending.Kind)));
+
+        var after = new FixedHostKeys(keys.HostId, keys.Current);
+        Assert.Equal("run-1", sealer.OpenStart(after.Start()).RunId);
+    }
+
+    /// <summary>
+    /// A trusted browser that admitted a device by its own invitation sends this computer an endorsement,
+    /// and the device is trusted here under the label it was given, kept to one line - so the next
+    /// removal grants it the new key. Nothing is granted to it now: the browser that admitted it granted
+    /// it the keys it holds. The same endorsement again, from another browser, changes nothing.
+    /// </summary>
+    [WindowsFact]
+    public async Task An_endorsed_device_is_trusted()
+    {
+        using var fx = new EngineFixture();
+        using var store = new HostStore(fx.PathOf("remote.db"));
+        using var keys = new HostKeyStore(store, "host-1");
+        var administration = new KeyAdministration(keys, new FakeGateway(), TimeProvider.System);
+        var runner = Runner(store, keys, () => administration);
+        using var phone = P256.Generate();
+        using var tablet = P256.Generate();
+        TrustDevice(keys, "phone", phone, "Phone");
+        var browser = new FixedHostKeys(keys.HostId, keys.Current);
+
+        await runner.ApplyAsync(browser.Endorse("tablet", B64.Url(P256.PublicRaw(tablet)), "  Tablet\r\nforged line"));
+        await runner.ApplyAsync(browser.Endorse("tablet", B64.Url(P256.PublicRaw(tablet)), "Another name", commandId: "command-e2"));
+
+        Assert.Empty(runner.Notices);
+        var endorsed = Assert.Single(keys.Live, d => d.DeviceId == "tablet");
+        Assert.Equal(P256.PublicRaw(tablet), endorsed.PublicKey);
+        Assert.Equal("Tablet  forged line", endorsed.Label);
+        Assert.Equal(KeyAdministration.EndorsedBy, endorsed.AddedBy);
+        Assert.Empty(keys.PendingGrants());
+
+        await runner.ApplyAsync(browser.Revoke("phone"));
+
+        var grant = Assert.Single(keys.PendingGrants()).Grant;
+        Assert.Equal(("tablet", 2u), (grant.DeviceId, grant.Epoch));
+    }
+
+    /// <summary>
+    /// An endorsement is sealed under an epoch key, which a device removed since may still hold. So it
+    /// never brings a removed device back - that is an admission, made on this computer - and never binds
+    /// a known id to another key, which would hand that key the next epoch under someone else's name. A
+    /// key that is not a P-256 point is no device's either.
+    /// </summary>
+    [WindowsTheory]
+    [InlineData("removed")]
+    [InlineData("another-key")]
+    [InlineData("not-a-point")]
+    public async Task An_endorsement_that_would_rebind_or_bring_back_a_device_is_refused(string kind)
+    {
+        using var fx = new EngineFixture();
+        using var store = new HostStore(fx.PathOf("remote.db"));
+        using var keys = new HostKeyStore(store, "host-1");
+        var administration = new KeyAdministration(keys, new FakeGateway(), TimeProvider.System);
+        var runner = Runner(store, keys, () => administration);
+        using var phone = P256.Generate();
+        using var other = P256.Generate();
+        TrustDevice(keys, "phone", phone, "Phone");
+        if (kind == "removed") keys.Distrust("phone");
+        var browser = new FixedHostKeys(keys.HostId, keys.Current);
+        var key = kind switch
+        {
+            "another-key" => B64.Url(P256.PublicRaw(other)),
+            "not-a-point" => B64.Url(P256.PublicRaw(phone)[..64]),
+            _ => B64.Url(P256.PublicRaw(phone))
+        };
+        var deviceId = kind == "not-a-point" ? "tablet" : "phone";
+
+        var command = browser.Endorse(deviceId, key, "Phone");
+        await runner.ApplyAsync(command);
+
+        var notice = Assert.Single(runner.Notices);
+        Assert.Equal("Refused", notice.Kind);
+        Assert.Contains(command.Id, notice.Detail, StringComparison.Ordinal);
+        if (kind == "removed")
+            Assert.EndsWith(KeyAdministration.RemovedCannotBeEndorsed, notice.Detail, StringComparison.Ordinal);
+
+        var known = Assert.Single(keys.Trusted);
+        Assert.Equal(P256.PublicRaw(phone), known.PublicKey);
+        Assert.Equal(kind == "removed", known.RevokedAt is not null);
+        Assert.Empty(keys.PendingGrants());
+    }
+
+    /// <summary>
+    /// A computer that holds no key store - one fixed key, as the oldest tests have it - has no trusted
+    /// list to change. A device command there is said refused, with a reason, and is not an exception
+    /// thrown out of the run.
+    /// </summary>
+    [Fact]
+    public async Task A_device_command_on_a_computer_that_cannot_manage_devices_is_refused()
+    {
+        using var fx = new EngineFixture();
+        using var store = new HostStore(fx.PathOf("remote.db"));
+        var keys = new FixedHostKeys();
+        var runner = new RemoteRunner(store, new RemoteApprovals(), keys.Sealer(),
+            (_, _, _) => throw new InvalidOperationException("No run expected"), () => null);
+
+        await runner.ApplyAsync(keys.Revoke("phone"));
+        await runner.ApplyAsync(keys.Endorse("tablet", "key", "Tablet"));
+
+        Assert.Equal(2, runner.Notices.Count);
+        Assert.All(runner.Notices, notice =>
+        {
+            Assert.Equal("Refused", notice.Kind);
+            Assert.EndsWith(KeyAdministration.CannotManageDevices, notice.Detail, StringComparison.Ordinal);
+        });
+    }
+
+    /// <summary>
+    /// Removing a device here also tells the gateway, so it stops serving that device - its API calls and
+    /// the grants it holds. The computer's own part comes first: should the gateway be out of reach, the
+    /// device already reads nothing new.
+    /// </summary>
+    [WindowsFact]
+    public async Task Removing_a_device_on_this_computer_tells_the_gateway_too()
+    {
+        using var fx = new EngineFixture();
+        using var store = new HostStore(fx.PathOf("remote.db"));
+        using var keys = new HostKeyStore(store, "host-1");
+        var gateway = new FakeGateway();
+        var administration = new KeyAdministration(keys, gateway, TimeProvider.System);
+        using var phone = P256.Generate();
+        using var laptop = P256.Generate();
+        TrustDevice(keys, "phone", phone, "Phone");
+        TrustDevice(keys, "laptop", laptop, "Laptop");
+
+        await administration.RevokeHereAsync("laptop", CancellationToken.None);
+
+        Assert.Equal(["laptop"], gateway.Revoked);
+        Assert.Equal(2u, keys.Current.Epoch);
+        Assert.Equal(["phone"], keys.Live.Select(d => d.DeviceId));
+    }
+
+    /// <summary>
+    /// A removal of a device that is already removed - by a second browser, or on the desktop after the
+    /// browser - makes no second epoch: there is nothing more to keep from it. One this computer never
+    /// trusted is refused and changes nothing.
+    /// </summary>
+    [WindowsFact]
+    public async Task Removing_a_removed_device_rotates_nothing_and_an_unknown_one_is_refused()
+    {
+        using var fx = new EngineFixture();
+        using var store = new HostStore(fx.PathOf("remote.db"));
+        using var keys = new HostKeyStore(store, "host-1");
+        var administration = new KeyAdministration(keys, new FakeGateway(), TimeProvider.System);
+        using var phone = P256.Generate();
+        using var laptop = P256.Generate();
+        TrustDevice(keys, "phone", phone, "Phone");
+        TrustDevice(keys, "laptop", laptop, "Laptop");
+
+        await administration.RevokeAsync("laptop", KeyAdministration.RemovedFromBrowser, CancellationToken.None);
+        await administration.RevokeAsync("laptop", KeyAdministration.RemovedHere, CancellationToken.None);
+        var unknown = await Assert.ThrowsAsync<CommandRefusedException>(
+            () => administration.RevokeAsync("stranger", KeyAdministration.RemovedFromBrowser, CancellationToken.None));
+
+        Assert.Equal(KeyAdministration.UnknownDevice, unknown.Message);
+        Assert.Equal(2u, keys.Current.Epoch);
+        Assert.Single(keys.PendingGrants());
+    }
+
     // ── the window and the pane, without a window ───────────────────────────
 
     /// <summary>
@@ -1313,6 +1678,81 @@ public sealed class RemoteKeyAdministrationTests
         Assert.StartsWith("added by invitation", pane.Devices[0].Added, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// Removing a device is asked first, in words that say what it costs - the device reads nothing new and
+    /// every other device gets a new key - and only a live device has the button. A no removes nothing; a
+    /// yes removes it and reads the list again, so the row says it was revoked.
+    /// </summary>
+    [Fact]
+    public async Task Removing_a_device_asks_first_and_reads_the_list_again()
+    {
+        using var phone = P256.Generate();
+        var at = new DateTimeOffset(2026, 10, 2, 12, 0, 0, TimeSpan.Zero);
+        var reads = 0;
+        var answer = false;
+        var questions = new List<string>();
+        var removed = new List<string>();
+        var pane = new RemoteDevicesViewModel
+        {
+            Trusted = () =>
+            {
+                reads++;
+                return Task.FromResult<IReadOnlyList<TrustedDevice>>(
+                [
+                    new TrustedDevice("phone", P256.PublicRaw(phone), "Phone", KeyAdministration.AddedBy, at, null),
+                    new TrustedDevice("old", P256.PublicRaw(phone), "Old laptop", "connection code", at, at.AddDays(1))
+                ]);
+            },
+            Confirm = question =>
+            {
+                questions.Add(question);
+                return Task.FromResult(answer);
+            },
+            Remove = deviceId =>
+            {
+                removed.Add(deviceId);
+                return Task.CompletedTask;
+            }
+        };
+        await pane.RefreshAsync();
+
+        Assert.Equal([true, false], pane.Devices.Select(d => d.CanRemove));
+
+        await pane.RemoveAsync(pane.Devices[1]);
+        await pane.RemoveAsync(pane.Devices[0]);
+
+        Assert.Equal(["Phone will not read anything new. Every other device gets a new key. Continue?"], questions);
+        Assert.Empty(removed);
+        Assert.Equal(1, reads);
+
+        answer = true;
+        await pane.RemoveAsync(pane.Devices[0]);
+
+        Assert.Equal(["phone"], removed);
+        Assert.Equal(2, reads);
+        Assert.False(pane.HasProblem);
+    }
+
+    /// <summary>A removal that could not be made is said under the list, not thrown out of a button.</summary>
+    [Fact]
+    public async Task A_removal_that_failed_is_said_under_the_list()
+    {
+        using var phone = P256.Generate();
+        var pane = new RemoteDevicesViewModel
+        {
+            Trusted = () => Task.FromResult<IReadOnlyList<TrustedDevice>>(
+                [new TrustedDevice("phone", P256.PublicRaw(phone), "Phone", KeyAdministration.AddedBy, DateTimeOffset.UtcNow, null)]),
+            Confirm = _ => Task.FromResult(true),
+            Remove = _ => Task.FromException(new InvalidOperationException(RemoteAccessService.NotConnectedForRemove))
+        };
+        await pane.RefreshAsync();
+
+        await pane.RemoveAsync(pane.Devices[0]);
+
+        Assert.True(pane.HasProblem);
+        Assert.Contains(RemoteAccessService.NotConnectedForRemove, pane.Problem, StringComparison.Ordinal);
+    }
+
     // ── the key store ───────────────────────────────────────────────────────
 
     /// <summary>Reset leaves nothing of the old identity behind: no key, no device, no invitation, no grant.</summary>
@@ -1393,6 +1833,14 @@ public sealed class RemoteKeyAdministrationTests
 
         public void Notice(AdmissionNotice notice) => Noticed?.Invoke(notice);
     }
+
+    private static void TrustDevice(HostKeyStore keys, string deviceId, ECDiffieHellman device, string label)
+        => keys.Trust(new TrustedDevice(deviceId, P256.PublicRaw(device), label, "test", DateTimeOffset.UtcNow, null));
+
+    /// <summary>A runner over the key store, as the service makes one: device commands go to the administration.</summary>
+    private static RemoteRunner Runner(HostStore store, HostKeyStore keys, Func<KeyAdministration?> administration)
+        => new(store, new RemoteApprovals(), new Sealer(keys, TimeProvider.System),
+            (_, _, _) => throw new InvalidOperationException("No run expected"), administration);
 
     private static string[] Labels(IReadOnlyList<AdmittedDevice> admitted) => [.. admitted.Select(d => d.Label)];
 

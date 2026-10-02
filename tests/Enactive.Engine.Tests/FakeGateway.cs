@@ -16,6 +16,7 @@ internal sealed class FakeGateway : IGatewayConnection
     private readonly List<string> _calls = [];
     private readonly List<string> _invites = [];
     private readonly List<string> _answered = [];
+    private readonly List<string> _revoked = [];
     private readonly List<EnrollmentView> _enrollments = [];
 
     public List<HostCommand> Pending { get; init; } = [];
@@ -71,6 +72,12 @@ internal sealed class FakeGateway : IGatewayConnection
     public void Enroll(EnrollmentView enrollment)
     {
         lock (_calls) _enrollments.Add(enrollment);
+    }
+
+    /// <summary>The devices this computer asked the gateway to stop serving, in order.</summary>
+    public IReadOnlyList<string> Revoked
+    {
+        get { lock (_calls) return [.. _revoked]; }
     }
 
     /// <summary>The methods called so far, in order.</summary>
@@ -151,6 +158,13 @@ internal sealed class FakeGateway : IGatewayConnection
     {
         Record("AnsweredInvite");
         lock (_calls) _answered.Add(inviteId);
+        return Task.CompletedTask;
+    }
+
+    public Task RevokeDeviceAsync(string deviceId, CancellationToken ct)
+    {
+        Record("RevokeDevice");
+        lock (_calls) _revoked.Add(deviceId);
         return Task.CompletedTask;
     }
 

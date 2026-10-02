@@ -49,9 +49,10 @@ public sealed class HostKeysUnreadableException(string message) : Exception(mess
 /// constructor throws <see cref="HostKeysUnreadableException"/>, and the person connects the
 /// computer again with a new code.</para>
 ///
-/// <para><b>All epoch keys are kept.</b> A command may arrive sealed under an epoch the computer has
-/// since rotated away from, and events already delivered stay sealed under theirs, so rotation adds
-/// a key and never removes one.</para>
+/// <para><b>All epoch keys are kept.</b> Events already delivered stay sealed under theirs, and a
+/// device added later is granted every one so it can read them, so rotation adds a key and never
+/// removes one. Commands are another matter: they are acted on only under the newest epoch (see
+/// <see cref="Sealer"/>).</para>
 ///
 /// <para><b>The signing key is made with epoch 1 and never rotated.</b> Every device pins it at its
 /// first verified grant and checks every rotation grant against it, so a new one would make every

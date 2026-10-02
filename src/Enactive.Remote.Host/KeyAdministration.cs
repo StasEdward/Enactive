@@ -22,6 +22,12 @@ public sealed record AdmissionNotice(string InviteId, bool Refused, string Detai
 public sealed record AdmittedDevice(string InviteId, string DeviceId, string Label);
 
 /// <summary>
+/// A device was removed and a new epoch made: which device, the label it was listed under, the epoch
+/// everything is sealed under from now on, and how it was removed - on this computer, or from a browser.
+/// </summary>
+public sealed record KeyRotated(string DeviceId, string Label, uint Epoch, string Reason);
+
+/// <summary>
 /// Adding a browser device from this computer (spec §5.3): an invitation link with a pairing secret in it,
 /// and - once the device answers through the gateway - the answer checked with the pair key, the device
 /// trusted, and a grant of every key this computer holds queued for it.
@@ -34,6 +40,11 @@ public sealed record AdmittedDevice(string InviteId, string DeviceId, string Lab
 /// key, and public keys are public: a gateway that put its own key there would receive every key this
 /// computer holds, wrapped for it. Only the device that opened the link has the pairing secret, so only it
 /// can make a MAC over its key that verifies here.</para>
+///
+/// <para>And keeping the trusted list as the person changes it (spec §5.4): a device removed - here, or from
+/// a browser by a sealed command - is distrusted and every remaining device is granted a new epoch, signed
+/// with the computer's signing key; a device a trusted browser admitted by its own invitation is trusted
+/// here when that browser endorses it.</para>
 /// </summary>
 public sealed partial class KeyAdministration(HostKeyStore keys, IGatewayConnection gateway, TimeProvider clock)
 {
@@ -56,6 +67,47 @@ public sealed partial class KeyAdministration(HostKeyStore keys, IGatewayConnect
     public const string CouldNotAdmit =
         "This computer could not add the device that answered this invitation, so nothing was shared. "
         + "Make a new link and try again.";
+
+    /// <summary>Who decided to trust a device a trusted browser endorsed, as the trusted list records it.</summary>
+    public const string EndorsedBy = "a trusted browser";
+
+    /// <summary>How a device removed with the desktop's own list was removed.</summary>
+    public const string RemovedHere = "removed on this computer";
+
+    /// <summary>How a device removed by a browser's sealed command was removed.</summary>
+    public const string RemovedFromBrowser = "removed from the browser";
+
+    /// <summary>Why a device command is refused on a computer with no trusted list to change.</summary>
+    public const string CannotManageDevices = "this computer cannot manage devices";
+
+    /// <summary>Why a removal naming a device this computer never trusted changes nothing.</summary>
+    public const string UnknownDevice = "it names a device this computer has never trusted";
+
+    /// <summary>
+    /// Why an endorsement of a removed device is refused. An endorsement is sealed under an epoch key, and
+    /// the removed device may hold one: it could vouch for itself and be granted every epoch made since.
+    /// Bringing a device back is an admission, from this computer, with a secret the gateway never sees.
+    /// </summary>
+    public const string RemovedCannotBeEndorsed =
+        "a removed device cannot be endorsed back; add it again from this computer";
+
+    /// <summary>
+    /// Why an endorsement naming a trusted id with another key is refused: bound to the new key, the id's
+    /// next grant would go to whoever holds that key, under the name of the device the person trusted.
+    /// </summary>
+    private const string AnotherKey = "it names a device this computer trusts with another key";
+
+    private const string NotADeviceKey = "the key it names is not a device's";
+
+    private const string NoDevice = "it names no device";
+
+    /// <summary>
+    /// One removal or endorsement at a time, for the whole process: there is one key store. A removal from
+    /// the desktop and one from a browser at once each read the trusted list and rotated, and an endorsement
+    /// trusted between a removal's reading of the list and its grants missed the new epoch - a device
+    /// trusted here that could read nothing sealed from then on, until the next removal.
+    /// </summary>
+    private static readonly Lock TrustedListGate = new();
 
     /// <summary>What the trusted list calls a device that gave no label.</summary>
     public const string UnnamedDevice = "A device added by invitation";
@@ -82,6 +134,9 @@ public sealed partial class KeyAdministration(HostKeyStore keys, IGatewayConnect
 
     /// <summary>Raised for an answer refused or set aside. On the caller's thread.</summary>
     public event Action<AdmissionNotice>? Noticed;
+
+    /// <summary>Raised once a device was removed and the new epoch granted to the rest. On the caller's thread.</summary>
+    public event Action<KeyRotated>? Rotated;
 
     /// <summary>
     /// Opens an invitation: a new id and pairing secret here, the id registered with the gateway.
@@ -169,6 +224,103 @@ public sealed partial class KeyAdministration(HostKeyStore keys, IGatewayConnect
         }
 
         return admitted;
+    }
+
+    /// <summary>
+    /// Takes a device's trust away (spec §5.4): it is distrusted - its grants still queued go with it - a new
+    /// epoch is made, and the new key is granted to every device that remains, signed with the computer's
+    /// signing key. Everything sealed from then on is under the new epoch, which the removed device never
+    /// receives; what it already read it keeps.
+    ///
+    /// <para>The grants are signed, not authenticated with any epoch key: the removed device holds every one
+    /// of those, and with the gateway's help it could otherwise hand the others a next key of its choosing.
+    /// More than the gateway takes in one call go out in several: the delivery loop splits them.</para>
+    ///
+    /// <para>A device already removed is left as it is - removed by a second browser, or here after the
+    /// browser - with no second epoch: nothing more is kept from it, and every device would be sent a grant
+    /// for nothing.</para>
+    /// </summary>
+    /// <exception cref="CommandRefusedException">This computer never trusted the device.</exception>
+    public Task RevokeAsync(string deviceId, string reason, CancellationToken ct)
+    {
+        KeyRotated rotated;
+        lock (TrustedListGate)
+        {
+            var device = keys.Trusted.FirstOrDefault(d => d.DeviceId == deviceId)
+                ?? throw new CommandRefusedException(UnknownDevice);
+
+            if (device.RevokedAt is not null)
+                return Task.CompletedTask;
+
+            // Distrusted before the new key exists: a key made first and then lost to a crash before the
+            // device was distrusted would be granted to it, as a device still trusted, at the next removal.
+            keys.Distrust(deviceId);
+            var next = keys.Rotate();
+
+            foreach (var remaining in keys.Live)
+            {
+                keys.EnqueueGrant(Grants.CreateSigned(
+                    keys.HostId, remaining.DeviceId, remaining.PublicKey, next, keys.Signer));
+            }
+
+            rotated = new KeyRotated(deviceId, device.Label, next.Epoch, reason);
+        }
+
+        Rotated?.Invoke(rotated);
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// A removal made with this computer's own list: the removal above, and then the gateway asked to stop
+    /// serving the device - its calls and the grants it holds there. This computer's part comes first: with
+    /// the gateway out of reach, the device already reads nothing new. A removal a browser sent does not
+    /// come here, since that browser removed the device at the gateway before it sent the command.
+    /// </summary>
+    public async Task RevokeHereAsync(string deviceId, CancellationToken ct)
+    {
+        await RevokeAsync(deviceId, RemovedHere, ct);
+        await gateway.RevokeDeviceAsync(deviceId, ct);
+    }
+
+    /// <summary>
+    /// Trusts a device a trusted browser admitted by its own invitation and vouched for (spec §5.3, step 3),
+    /// so this computer's next removal grants it the new key. Nothing is granted to it now: the browser that
+    /// admitted it granted it every key that browser holds.
+    ///
+    /// <para>The seal is the whole of the endorsement's authenticity - only a holder of this computer's
+    /// current key can make one - and a holder may be a device about to be removed. So this only ever adds
+    /// a device never seen here: a device trusted with that very key is left as it is, one trusted with
+    /// another key is refused, and so is one this computer removed. <see cref="HostKeyStore.Retrust"/> is
+    /// never called from here.</para>
+    /// </summary>
+    /// <exception cref="CommandRefusedException">The endorsement would rebind or bring back a device, or names none.</exception>
+    public Task EndorseAsync(DeviceEndorsement endorsement, CancellationToken ct)
+    {
+        if (string.IsNullOrEmpty(endorsement.DeviceId))
+            throw new CommandRefusedException(NoDevice);
+
+        var devicePublic = DevicePublic(endorsement.DevicePublic)
+            ?? throw new CommandRefusedException(NotADeviceKey);
+
+        lock (TrustedListGate)
+        {
+            var known = keys.Trusted.FirstOrDefault(d => d.DeviceId == endorsement.DeviceId);
+
+            if (known is { RevokedAt: not null })
+                throw new CommandRefusedException(RemovedCannotBeEndorsed);
+
+            if (known is not null)
+            {
+                return CryptographicOperations.FixedTimeEquals(known.PublicKey, devicePublic)
+                    ? Task.CompletedTask
+                    : throw new CommandRefusedException(AnotherKey);
+            }
+
+            keys.Trust(new TrustedDevice(endorsement.DeviceId, devicePublic, CleanLabel(endorsement.Label),
+                EndorsedBy, clock.GetUtcNow(), RevokedAt: null));
+        }
+
+        return Task.CompletedTask;
     }
 
     /// <summary>

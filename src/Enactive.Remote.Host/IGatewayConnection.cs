@@ -43,6 +43,12 @@ public interface IGatewayConnection
 
     /// <summary>The answer to this invitation was handled; the gateway stops handing it over.</summary>
     Task AnsweredInviteAsync(string inviteId, CancellationToken ct);
+
+    /// <summary>
+    /// A device of this computer's owner was removed on this computer: the gateway stops serving it - its
+    /// calls and the grants it holds - as it does when the person removes it in a browser.
+    /// </summary>
+    Task RevokeDeviceAsync(string deviceId, CancellationToken ct);
 }
 
 /// <summary>

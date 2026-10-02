@@ -336,6 +336,41 @@ public sealed class DeviceServiceTests(TestDatabase database) : IClassFixture<Te
             .GetProperty("revoked").GetBoolean());
     }
 
+    /// <summary>
+    /// A computer removes a device of its own owner's - Remove in the desktop's trusted list - and the
+    /// gateway stops serving it as it does after a browser's removal: refused from then on, its grants gone,
+    /// the computer named in the audit. Another person's device is refused in the words used for a missing
+    /// one, and stays as it was.
+    /// </summary>
+    [Fact]
+    public async Task A_computer_revokes_only_its_own_owners_device()
+    {
+        var owner = await PersonAsync("alice");
+        var stranger = await PersonAsync("bob");
+        var mine = await DeviceAsync(owner);
+        var theirs = await DeviceAsync(stranger);
+        var host = await ComputerAsync(owner);
+        using var signer = P256.GenerateSigning();
+        using var limit = new HostCallLimit();
+        var hub = Hub(host, limit);
+        Assert.Null((await hub.PublishGrants([Paired(host.HostId, mine, 1, signer)])).Fault);
+
+        Assert.Null((await hub.RevokeDevice(mine.Id)).Fault);
+        Assert.Null((await hub.RevokeDevice(mine.Id)).Fault);
+        var foreign = (await hub.RevokeDevice(theirs.Id)).Fault!;
+        var missing = (await hub.RevokeDevice(Ids.New())).Fault!;
+
+        Assert.Equal("not-found", foreign.Code);
+        Assert.Equal((missing.Code, missing.Message), (foreign.Code, foreign.Message));
+        Assert.Equal("device-revoked",
+            (await Assert.ThrowsAsync<GatewayFault>(() => Devices.RequireAsync(owner, mine.Id, default))).Code);
+        Assert.Equal(theirs.Id, (await Devices.RequireAsync(stranger, theirs.Id, default)).DeviceId);
+        Assert.Equal(0, await GrantCountAsync(host.HostId));
+        Assert.Equal(1, await database.ScalarLongAsync(
+            $"SELECT COUNT(*) FROM audit WHERE owner_id = '{owner.UserId}' AND actor = 'host:{host.HostId}' "
+            + $"AND action = 'device-revoked' AND target = '{mine.Id}'"));
+    }
+
     [Fact]
     public void The_device_header_names_the_device_or_nothing()
     {

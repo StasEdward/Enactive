@@ -1,5 +1,6 @@
 namespace Enactive.Remote.Gateway.Tests;
 
+using System.Net;
 using System.Net.Http.Json;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
@@ -306,6 +307,67 @@ public sealed class EndToEndTests(TestDatabase database) : IClassFixture<TestDat
         Assert.Equal(1u, forComputer.KeyEpoch);
         Assert.Equal(keys.Current.Secret.ToArray(), key.Secret.ToArray());
         Assert.Equal(keys.SigningPublic, signing);
+    }
+
+    /// <summary>
+    /// Spec §5.4 through the real gateway, from the desktop. A device removed in the computer's own list is
+    /// refused by the gateway from then on - it no longer even reads the grants it had - and the new epoch
+    /// reaches the device that stays as a grant the computer signed: stored by the gateway, which takes a
+    /// computer's grant only with the signing key it pinned at the first one, and opened by the device
+    /// against the key it pinned itself.
+    /// </summary>
+    [Fact]
+    public async Task A_device_removed_on_the_computer_is_refused_and_the_rest_get_a_signed_key()
+    {
+        using var phoneKey = P256.Generate();
+        using var laptopKey = P256.Generate();
+        var phonePublic = P256.PublicRaw(phoneKey);
+        var phoneId = (await _owner.PostAsync<IdView>("/api/devices", new { publicKey = B64.Url(phonePublic), label = "Phone" })).Id;
+        var laptopId = (await _owner.PostAsync<IdView>("/api/devices",
+            new { publicKey = B64.Url(P256.PublicRaw(laptopKey)), label = "Laptop" })).Id;
+        var computer = await _owner.PostAsync<DeviceView>("/api/hosts", new { name = "Studio PC" });
+        var code = new ConnectionCode(_gateway.Server.BaseAddress, computer.Id, computer.Token, phoneId, phonePublic,
+            RandomNumberGenerator.GetBytes(32));
+        var pairKey = code.PairKey;
+
+        using var store = OpenStore();
+        using var keys = new HostKeyStore(store, code.HostId);
+        Pairing.Apply(code, keys);
+        keys.Trust(new TrustedDevice(laptopId, P256.PublicRaw(laptopKey), "Laptop", "test", DateTimeOffset.UtcNow, null));
+
+        await using var host = Connect(code.Token);
+        await host.StartAsync();
+        await host.HelloAsync(RemoteProtocol.Version, CancellationToken.None);
+        var loop = new DeliveryLoop(store, host, new Sealer(keys, TimeProvider.System), keys);
+        await loop.TurnAsync([]);
+        var paired = Assert.Single(Assert.Single(await GrantsOfAsync(phoneId), g => g.HostId == computer.Id).Grants);
+        var (_, pinned) = Grants.Open(paired, phoneKey, pairKey, pinnedHostSigningPublic: null);
+
+        await new KeyAdministration(keys, host, TimeProvider.System).RevokeHereAsync(laptopId, CancellationToken.None);
+        await loop.FlushGrantsAsync();
+
+        Assert.Empty(keys.PendingGrants());
+
+        using var refused = await _owner.SendAsync(HttpMethod.Get, "/api/grants",
+            configure: request => request.Headers.Add(DeviceHeader.Name, laptopId));
+        Assert.Equal(HttpStatusCode.Forbidden, refused.StatusCode);
+        Assert.Contains("device-revoked", await refused.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+
+        var forComputer = Assert.Single(await GrantsOfAsync(phoneId), g => g.HostId == computer.Id);
+        Assert.Equal(2u, forComputer.KeyEpoch);
+        var rotation = Assert.Single(forComputer.Grants, g => g.Epoch == 2);
+        Assert.Equal(Grants.AuthByHost, rotation.AuthBy);
+        var (key, _) = Grants.Open(rotation, phoneKey, default, pinned);
+        Assert.Equal(keys.Current.Secret.ToArray(), key.Secret.ToArray());
+    }
+
+    /// <summary>What <c>GET /api/grants</c> answers a device of the owner's, read with its device header.</summary>
+    private async Task<List<HostGrantsView>> GrantsOfAsync(string deviceId)
+    {
+        using var response = await _owner.SendAsync(HttpMethod.Get, "/api/grants",
+            configure: request => request.Headers.Add(DeviceHeader.Name, deviceId));
+        Assert.True(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync());
+        return (await response.Content.ReadFromJsonAsync<List<HostGrantsView>>(RemoteJson.Options))!;
     }
 
     // ── a gateway that writes commands itself ───────────────────────────────

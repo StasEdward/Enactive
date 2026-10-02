@@ -6,14 +6,15 @@ using Enactive.App.Ui.Mvvm;
 using Enactive.Remote.Host;
 
 /// <summary>
-/// The trusted devices part of the Remote access pane: the list, and Add a device.
+/// The trusted devices part of the Remote access pane: the list, Add a device, and Remove on each device
+/// still trusted.
 ///
 /// <para>Its own view model, apart from the rest of the settings, so whether Add a device can be pressed
 /// is proven without a window: it can only while the computer is connected past Hello, where an
 /// invitation can be registered - pressed otherwise, it opened a window that could only say it failed.</para>
 ///
-/// <para>Read only: taking a device's trust away means a new key for every other device, which is its own
-/// piece of work.</para>
+/// <para>Removing is asked first, in words that say what it costs: the device reads nothing new, and every
+/// other device is sent a new key. A list button pressed by accident must not do that unasked.</para>
 /// </summary>
 internal sealed class RemoteDevicesViewModel : ObservableObject
 {
@@ -32,6 +33,16 @@ internal sealed class RemoteDevicesViewModel : ObservableObject
     /// <summary>Reads the devices this computer has trusted, revoked ones included. Set by the window.</summary>
     public Func<Task<IReadOnlyList<TrustedDevice>>>? Trusted { get; set; }
 
+    /// <summary>Asks the person a yes-or-no question, and answers yes as true. Set by the window.</summary>
+    public Func<string, Task<bool>>? Confirm { get; set; }
+
+    /// <summary>Removes the device with this id, or throws with a sentence saying why not. Set by the window.</summary>
+    public Func<string, Task>? Remove { get; set; }
+
+    /// <summary>What removing a device asks before it does anything.</summary>
+    public static string RemoveQuestion(string label)
+        => $"{label} will not read anything new. Every other device gets a new key. Continue?";
+
     /// <summary>Asks the window to open Add a device. It answers once that window has closed.</summary>
     public event Func<Task>? AddDeviceRequested;
 
@@ -41,7 +52,7 @@ internal sealed class RemoteDevicesViewModel : ObservableObject
 
     public bool HasDevices => Devices.Count > 0;
 
-    /// <summary>The list could not be read, in a sentence.</summary>
+    /// <summary>The list could not be read, or a device could not be removed, in a sentence.</summary>
     public string Problem
     {
         get => _problem;
@@ -101,9 +112,39 @@ internal sealed class RemoteDevicesViewModel : ObservableObject
         Devices.Clear();
         foreach (var device in devices)
         {
-            Devices.Add(TrustedDeviceRow.From(device));
+            TrustedDeviceRow? row = null;
+            row = TrustedDeviceRow.From(device, () => _ = RemoveAsync(row!));
+            Devices.Add(row);
         }
         OnPropertyChanged(nameof(HasDevices));
+    }
+
+    /// <summary>
+    /// Removes one device, once the person has said yes, and reads the list again so its row says revoked. A
+    /// removal that could not be made is said under the list: thrown, it went nowhere from a button.
+    /// </summary>
+    public async Task RemoveAsync(TrustedDeviceRow row)
+    {
+        if (!row.CanRemove || Confirm is not { } confirm || Remove is not { } remove)
+            return;
+
+        if (!await confirm(RemoveQuestion(row.Label)))
+            return;
+
+        string? failed = null;
+        try
+        {
+            await remove(row.DeviceId);
+        }
+        catch (Exception failure)
+        {
+            failed = $"{row.Label} could not be removed: {failure.Message}";
+        }
+
+        // Read again either way: a removal that failed telling the gateway was still made on this computer.
+        await RefreshAsync();
+        if (failed is not null)
+            Problem = failed;
     }
 
     /// <summary>Opens Add a device, and reads the list again once it has closed: it may have added one.</summary>
@@ -117,14 +158,22 @@ internal sealed class RemoteDevicesViewModel : ObservableObject
     }
 }
 
-/// <summary>One trusted device, as the remote pane lists it.</summary>
-internal sealed record TrustedDeviceRow(string Label, string Added, string State, bool IsRevoked)
+/// <summary>One trusted device, as the remote pane lists it. Only a device still trusted can be removed.</summary>
+internal sealed record TrustedDeviceRow(string DeviceId, string Label, string Added, string State, bool IsRevoked)
 {
-    public static TrustedDeviceRow From(TrustedDevice device) => new(
+    public bool CanRemove => !IsRevoked;
+
+    public RelayCommand? RemoveCommand { get; private init; }
+
+    public static TrustedDeviceRow From(TrustedDevice device, Action? remove = null) => new(
+        device.DeviceId,
         device.Label,
         $"added by {device.AddedBy}, {When(device.AddedAt)}",
         device.RevokedAt is { } revoked ? $"revoked {When(revoked)}" : "trusted",
-        device.RevokedAt is not null);
+        device.RevokedAt is not null)
+    {
+        RemoveCommand = remove is null ? null : new RelayCommand(remove)
+    };
 
     private static string When(DateTimeOffset at)
         => at.ToLocalTime().ToString("d MMM yyyy HH:mm", CultureInfo.CurrentCulture);
