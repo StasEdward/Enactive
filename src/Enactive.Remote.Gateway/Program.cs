@@ -481,6 +481,12 @@ api.MapPost("/logout-all", async (HttpContext context, SessionStore sessions, Ca
 api.MapGet("/state", (string? since, HttpContext context, Projection projection, CancellationToken ct) =>
     projection.ReadAsync(context.UserAccess(), since, ct));
 
+// The person's own security log, the newest first: sign-ins, devices and computers added and removed, and
+// what the operator did to the account. Read by the account the session names, so another person's rows
+// are not in it to leak.
+api.MapGet("/audit", async (HttpContext context, Database db, CancellationToken ct) =>
+    Results.Ok(await Audit.ReadAsync(db, context.UserAccess(), ct)));
+
 api.MapPost("/hosts", async (
     RegisterHostRequest request, HttpContext context, UserService users, CancellationToken ct) =>
 {

@@ -40,6 +40,7 @@ import {
   revokeDevice, forgetThisDevice, forgottenSentence, createRemovalWatch, cardActions, deleteDeviceKeys, storeGone,
   revocationWarning, NOT_CONFIRMED, KEY_NEVER_RECEIVED
 } from "./js/devices.js";
+import { describe, newestFirst } from "./js/audit.js";
 
 const POLL_MS = 3000;
 
@@ -1739,6 +1740,67 @@ async function forgetNow() {
   sessionChannel.announce();
 }
 
+// ── the security log ─────────────────────────────────────────────────────
+
+const loadAudit = singleFlight(loadAuditNow, generation);
+
+/**
+ * The account's own security log (`GET /api/audit`), drawn into the open dialog. An answer for a session that
+ * has ended is dropped, like every other: Alice's log arriving after Bob signed in must not be drawn for him.
+ */
+async function loadAuditNow() {
+  const started = generation();
+  $("audit-error").textContent = "";
+
+  try {
+    const rows = await get("/api/audit");
+
+    if (isCurrent(started)) {
+      drawAudit(rows);
+    }
+  } catch (error) {
+    if (isCurrent(started) && !(error instanceof Stale)) {
+      $("audit-error").textContent = error.message;
+    }
+  }
+}
+
+/**
+ * One line per row: what happened, the device or computer it happened to when this page knows its name, and
+ * when. The gateway records ids, never labels, so a name is only ever one this page already shows.
+ */
+function drawAudit(rows) {
+  const names = new Map([
+    ...(devices ?? []).map((device) => [device.id, device.label]),
+    ...state.hosts.map((host) => [host.id, host.label])
+  ]);
+
+  const items = newestFirst(rows).map((row) => {
+    const item = node("li", "audit-row");
+    item.append(node("span", "audit-what", describe(row)));
+
+    const name = row.target ? names.get(row.target) : undefined;
+    if (name) {
+      item.append(node("span", "meta", name));
+    }
+
+    item.append(when(row.at));
+    return item;
+  });
+
+  $("audit-list").replaceChildren(...items);
+  $("audit-empty").hidden = items.length > 0;
+}
+
+/** Opens the log empty and fills it from a fresh answer: a log drawn earlier may be another account's. */
+function openAudit() {
+  $("account").open = false;
+  $("audit-list").replaceChildren();
+  $("audit-empty").hidden = true;
+  $("audit-dialog").showModal();
+  loadAudit();
+}
+
 // ── joining by an invitation ─────────────────────────────────────────────
 
 /**
@@ -2315,6 +2377,7 @@ document.querySelectorAll(".tab").forEach((tab) =>
 document.querySelectorAll("[data-close]").forEach((button) =>
   button.addEventListener("click", () => button.closest("dialog").close()));
 
+$("security-log").addEventListener("click", openAudit);
 $("sign-out").addEventListener("click", () => signOut("/api/logout"));
 $("sign-out-all").addEventListener("click", () => signOut("/api/logout-all"));
 

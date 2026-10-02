@@ -19,6 +19,6 @@ internal static class TestAccounts
         var userId = await new AccountService(db, TimeProvider.System)
             .ProvisionWithoutAdmissionAsync(Provider, name, name, CancellationToken.None);
 
-        return await new SessionStore(db, TimeProvider.System).OpenAsync(userId, CancellationToken.None);
+        return await new SessionStore(db, TimeProvider.System).OpenAsync(userId, Provider, CancellationToken.None);
     }
 }

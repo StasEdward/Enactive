@@ -456,7 +456,7 @@ public sealed class SessionTests(TestDatabase database) : IClassFixture<TestData
         // A whole millisecond, which is what DATETIME(3) stores. MySQL ROUNDS a finer time on insert, so
         // an expiry written from one could land just after the instant this test calls its end.
         var opened = DateTimeOffset.FromUnixTimeMilliseconds(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
-        var session = await new SessionStore(Db, new FixedClock(opened)).OpenAsync(alice, default);
+        var session = await new SessionStore(Db, new FixedClock(opened)).OpenAsync(alice, TestAccounts.Provider, default);
 
         Assert.True(await Sessions.ValidAsync(alice, session.SessionId, 1, default));
         Assert.False(await Sessions.ValidAsync(bob, session.SessionId, 1, default));

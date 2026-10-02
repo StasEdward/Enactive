@@ -145,7 +145,8 @@ public sealed class DeviceService(Database db, Limits limits, TimeProvider clock
                 """,
                 ("@id", id), ("@owner", user.UserId), ("@key", publicKey), ("@label", name), ("@now", now));
 
-            await AuditAsync(connection, transaction, user, "device-registered", id, now);
+            await Audit.WriteAsync(
+                connection, transaction, now, user.UserId, Audit.User(user.UserId), Audit.DeviceRegistered, id);
             return id;
         }, ct);
     }
@@ -233,7 +234,8 @@ public sealed class DeviceService(Database db, Limits limits, TimeProvider clock
     /// </summary>
     public Task RevokeAsync(UserAccess user, string deviceId, CancellationToken ct)
         => db.InTransactionAsync(
-            (connection, transaction) => RevokeAsync(connection, transaction, user.UserId, "user:" + user.UserId, deviceId),
+            (connection, transaction) => RevokeAsync(
+                connection, transaction, user.UserId, Audit.User(user.UserId), deviceId),
             ct);
 
     /// <summary>
@@ -253,7 +255,7 @@ public sealed class DeviceService(Database db, Limits limits, TimeProvider clock
         return db.InTransactionAsync(async (connection, transaction) =>
         {
             await AuthorizeComputerAsync(connection, transaction, host, lockAccount: false);
-            await RevokeAsync(connection, transaction, host.OwnerId, "host:" + host.HostId, deviceId);
+            await RevokeAsync(connection, transaction, host.OwnerId, Audit.Host(host.HostId), deviceId);
         }, ct);
     }
 
@@ -284,7 +286,7 @@ public sealed class DeviceService(Database db, Limits limits, TimeProvider clock
                 "UPDATE devices SET revoked_at = @now WHERE owner_id = @owner AND id = @device",
                 ("@now", now), ("@owner", ownerId), ("@device", deviceId));
 
-            await AuditAsync(connection, transaction, ownerId, actor, "device-revoked", deviceId, now);
+            await Audit.WriteAsync(connection, transaction, now, ownerId, actor, Audit.DeviceRevoked, deviceId);
         }
 
         // Deleted on a repeated revoke too. A grant written by a request that was already past its
@@ -793,7 +795,7 @@ public sealed class DeviceService(Database db, Limits limits, TimeProvider clock
             await RequireLiveDeviceAsync(connection, transaction, device.OwnerId, device.DeviceId);
 
             return await InsertInviteAsync(
-                connection, transaction, device.OwnerId, inviteId, null, device.DeviceId, "user:" + device.OwnerId);
+                connection, transaction, device.OwnerId, inviteId, null, device.DeviceId, Audit.User(device.OwnerId));
         }, ct);
     }
 
@@ -807,7 +809,7 @@ public sealed class DeviceService(Database db, Limits limits, TimeProvider clock
             await AuthorizeComputerAsync(connection, transaction, host, lockAccount: true);
 
             return await InsertInviteAsync(
-                connection, transaction, host.OwnerId, inviteId, host.HostId, null, "host:" + host.HostId);
+                connection, transaction, host.OwnerId, inviteId, host.HostId, null, Audit.Host(host.HostId));
         }, ct);
     }
 
@@ -853,7 +855,7 @@ public sealed class DeviceService(Database db, Limits limits, TimeProvider clock
             throw GatewayFault.Conflict("You already have an invitation with that id; make another id.");
         }
 
-        await AuditAsync(connection, transaction, ownerId, actor, "invite-created", inviteId, now);
+        await Audit.WriteAsync(connection, transaction, now, ownerId, actor, Audit.InviteCreated, inviteId);
         return expires;
     }
 
@@ -931,7 +933,8 @@ public sealed class DeviceService(Database db, Limits limits, TimeProvider clock
                 "UPDATE invites SET consumed_at = @now WHERE owner_id = @owner AND id = @id",
                 ("@now", now), ("@owner", user.UserId), ("@id", invite));
 
-            await AuditAsync(connection, transaction, user, "device-enrolled", deviceId, now);
+            await Audit.WriteAsync(
+                connection, transaction, now, user.UserId, Audit.User(user.UserId), Audit.DeviceEnrolled, deviceId);
         }, ct);
     }
 
@@ -1163,18 +1166,6 @@ public sealed class DeviceService(Database db, Limits limits, TimeProvider clock
 
         return trimmed;
     }
-
-    private static Task AuditAsync(
-        MySqlConnection connection, MySqlTransaction transaction, UserAccess user, string action,
-        string target, DateTimeOffset now)
-        => AuditAsync(connection, transaction, user.UserId, "user:" + user.UserId, action, target, now);
-
-    private static Task AuditAsync(
-        MySqlConnection connection, MySqlTransaction transaction, string ownerId, string actor, string action,
-        string target, DateTimeOffset now)
-        => connection.ExecuteAsync(transaction,
-            "INSERT INTO audit (owner_id, at, actor, action, target) VALUES (@owner, @at, @actor, @action, @target)",
-            ("@owner", ownerId), ("@at", now), ("@actor", actor), ("@action", action), ("@target", target));
 }
 
 /// <summary>A device as the panel lists it. The key is base64url text, as it was registered.</summary>

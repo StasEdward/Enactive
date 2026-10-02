@@ -135,7 +135,7 @@ public sealed class AccountService(Database db, TimeProvider clock, AdmissionMod
 
         try
         {
-            var (access, version) = await _sessions.OpenWithVersionAsync(userId, ct);
+            var (access, version) = await _sessions.OpenWithVersionAsync(userId, provider, ct);
             return new SignInOutcome.SignedIn(access, version);
         }
         catch (GatewayFault fault) when (fault.Code == FaultCode.AccountDisabled)

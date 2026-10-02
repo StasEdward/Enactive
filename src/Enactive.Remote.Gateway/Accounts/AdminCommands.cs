@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 using Enactive.Remote.Contracts;
+using Enactive.Remote.Gateway.Services;
 using Enactive.Remote.Gateway.Storage;
 using MySqlConnector;
 
@@ -20,12 +21,7 @@ using MySqlConnector;
 /// </summary>
 public static partial class AdminCommands
 {
-    public const string Actor = "operator";
-
-    // The width of audit.target. A longer identity is cut in the audit row only: the admissions row holds
-    // the whole of it and is what the decision is made on, but an insert past the column's width would
-    // fail and the operator's approval with it.
-    private const int AuditTargetWidth = 100;
+    public const string Actor = Audit.Operator;
 
     private const string Usage =
         """
@@ -177,7 +173,7 @@ public static partial class AdminCommands
                 "UPDATE commands SET status = @rejected WHERE owner_id = @user AND status = 'PendingDelivery'",
                 ("@rejected", CommandStatus.Rejected), ("@user", userId));
 
-            await AuditAsync(connection, transaction, clock, userId, "account.disabled", userId);
+            await AuditAsync(connection, transaction, clock, userId, Audit.AccountDisabled, userId);
             return count;
         }, ct);
 
@@ -203,7 +199,7 @@ public static partial class AdminCommands
 
             await connection.ExecuteAsync(transaction,
                 "UPDATE users SET status = 'Active' WHERE id = @user", ("@user", userId));
-            await AuditAsync(connection, transaction, clock, userId, "account.enabled", userId);
+            await AuditAsync(connection, transaction, clock, userId, Audit.AccountEnabled, userId);
             return true;
         }, ct);
 
@@ -227,7 +223,7 @@ public static partial class AdminCommands
             }
 
             await SessionStore.RevokeAllAsync(connection, transaction, userId, clock.GetUtcNow());
-            await AuditAsync(connection, transaction, clock, userId, "sessions.revoked", userId);
+            await AuditAsync(connection, transaction, clock, userId, Audit.SessionsRevoked, userId);
             return true;
         }, ct);
 
@@ -252,13 +248,14 @@ public static partial class AdminCommands
         => connection.ExistsAsync(transaction,
             "SELECT 1 FROM users WHERE id = @user FOR UPDATE", ("@user", userId));
 
+    /// <summary>
+    /// A row of the operator's. An identity longer than the audit's target column is cut in the row only:
+    /// the admissions row holds the whole of it and is what the decision is made on.
+    /// </summary>
     private static Task AuditAsync(
         MySqlConnection connection, MySqlTransaction transaction,
         TimeProvider clock, string? owner, string action, string target)
-        => connection.ExecuteAsync(transaction,
-            "INSERT INTO audit (owner_id, at, actor, action, target) VALUES (@owner, @at, @actor, @action, @target)",
-            ("@owner", (object?)owner ?? DBNull.Value), ("@at", clock.GetUtcNow()), ("@actor", Actor),
-            ("@action", action), ("@target", target.Length <= AuditTargetWidth ? target : target[..AuditTargetWidth]));
+        => Audit.WriteAsync(connection, transaction, clock.GetUtcNow(), owner, Actor, action, target);
 
     /// <summary>
     /// Text a stranger chose, made safe for the operator's terminal. A display name is whatever the

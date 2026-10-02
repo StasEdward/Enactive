@@ -494,6 +494,32 @@ public sealed class SignInTests(TestDatabase database) : IClassFixture<TestDatab
         AssertNoSecretLogged(answer.Fields["state"]);
     }
 
+    /// <summary>
+    /// A sign-in is written to the person's security log as the provider it came through and nothing else:
+    /// not the provider's subject, not the name it reports, not the address the browser came from. The log
+    /// is shown to whoever holds a session of the account, and the row is the whole of what it says.
+    /// </summary>
+    [Theory]
+    [InlineData("github")]
+    [InlineData("google")]
+    public async Task A_sign_in_writes_one_audit_row_naming_only_the_provider(string provider)
+    {
+        await using var gateway = Gateway();
+        var subject = Admit(provider, "octocat");
+        await ApproveAsync($"{provider}:{subject}");
+        var before = await database.ScalarLongAsync("SELECT IFNULL(MAX(id), 0) FROM audit");
+
+        using var browser = new Browser(gateway);
+        Assert.Equal("/", await browser.DeliverAsync(await browser.AnswerAsync(provider, _fake)));
+        var userId = (await browser.SessionAsync()).User!.Id;
+
+        Assert.Equal(
+            [$"{userId}|user:{userId}|signin.{provider}|-"],
+            await database.StringsAsync(
+                "SELECT CONCAT_WS('|', owner_id, actor, action, IFNULL(target, '-')) FROM audit "
+                + $"WHERE id > {before} ORDER BY id"));
+    }
+
     // ── helpers ─────────────────────────────────────────────────────────────
 
     private WebApplicationFactory<Program> Gateway(

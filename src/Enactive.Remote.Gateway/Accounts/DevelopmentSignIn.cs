@@ -69,7 +69,7 @@ public static partial class DevelopmentSignIn
                 }
 
                 var userId = await accounts.ProvisionWithoutAdmissionAsync(Provider, name, name, ct);
-                await UserCookie.SignInAsync(context, sessions, userId, ct);
+                await UserCookie.SignInAsync(context, sessions, userId, Provider, ct);
 
                 return Results.Ok(new { id = userId });
             })

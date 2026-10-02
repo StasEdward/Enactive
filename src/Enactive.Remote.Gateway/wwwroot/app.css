@@ -194,6 +194,13 @@ main {
 /* A removed device stays listed, so the person sees what was removed - muted, so it does not read as one in use. */
 .card.is-removed { opacity: 0.6; }
 
+/* The security log: one line per row, what happened first and when last, wrapping on a phone. */
+.audit-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-2); }
+.audit-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1) var(--space-3);
+  padding: var(--space-2) 0; border-bottom: 1px solid var(--border); }
+.audit-row .audit-what { flex: 1 1 12rem; min-width: 0; overflow-wrap: anywhere; }
+.audit-row .meta, .audit-row time { color: var(--text-faint); font-size: var(--step--1); overflow-wrap: anywhere; }
+
 .status {
   font-size: var(--step--1); font-weight: 600; white-space: nowrap;
   padding: var(--space-1) var(--space-3); border-radius: var(--radius-pill);

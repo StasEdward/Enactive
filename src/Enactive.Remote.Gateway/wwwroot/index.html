@@ -66,6 +66,7 @@
     <details id="account" class="account">
       <summary id="account-name" class="account-name" title="Account"></summary>
       <div class="account-menu">
+        <button id="security-log" class="secondary" type="button">Security log</button>
         <button id="sign-out" class="secondary" type="button">Sign out</button>
         <button id="sign-out-all" class="secondary" type="button">Sign out everywhere</button>
       </div>
@@ -225,6 +226,19 @@
     <button type="button" class="icon-button" data-close aria-label="Close">×</button>
   </div>
   <div id="run-detail"></div>
+</dialog>
+
+<!-- The account's security log. Its rows are drawn with textContent, like everything else from the wire. -->
+<dialog id="audit-dialog" class="wide">
+  <div class="dialog-head">
+    <h2>Security log</h2>
+    <button type="button" class="icon-button" data-close aria-label="Close">×</button>
+  </div>
+  <p class="note">Sign-ins, devices and computers added or removed, and what the operator did to this account -
+    the newest first. Where you signed in from is not recorded.</p>
+  <p id="audit-error" class="error" role="alert"></p>
+  <ol id="audit-list" class="audit-list"></ol>
+  <p id="audit-empty" class="empty" hidden>Nothing recorded yet.</p>
 </dialog>
 
 <div id="toast" class="toast" role="status" hidden></div>

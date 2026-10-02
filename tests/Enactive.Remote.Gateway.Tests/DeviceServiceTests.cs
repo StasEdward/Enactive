@@ -85,7 +85,7 @@ public sealed class DeviceServiceTests(TestDatabase database) : IClassFixture<Te
 
         Assert.Equal(1, await database.ScalarLongAsync(
             $"SELECT COUNT(*) FROM audit WHERE owner_id = '{browser.UserId}' AND actor = 'user:{browser.UserId}' "
-            + $"AND action = 'device-registered' AND target = '{id}'"));
+            + $"AND action = 'device.registered' AND target = '{id}'"));
     }
 
     [Fact]
@@ -215,7 +215,7 @@ public sealed class DeviceServiceTests(TestDatabase database) : IClassFixture<Te
         Assert.Equal(1, await database.ScalarLongAsync(
             $"SELECT COUNT(*) FROM devices WHERE owner_id = '{alice.UserId}'"));
         Assert.Equal(1, await database.ScalarLongAsync(
-            $"SELECT COUNT(*) FROM audit WHERE owner_id = '{alice.UserId}' AND action = 'device-registered'"));
+            $"SELECT COUNT(*) FROM audit WHERE owner_id = '{alice.UserId}' AND action = 'device.registered'"));
 
         // Only the owner's own device is found by its key: Bob registering the same key gets his own.
         Assert.NotEqual(first, await devices.RegisterAsync(bob, key, "laptop", default));
@@ -344,7 +344,7 @@ public sealed class DeviceServiceTests(TestDatabase database) : IClassFixture<Te
         Assert.Equal(1, await database.ScalarLongAsync($"SELECT COUNT(*) FROM grants WHERE device_id = '{kept}'"));
         Assert.Equal(1, await database.ScalarLongAsync(
             $"SELECT COUNT(*) FROM audit WHERE owner_id = '{owner.UserId}' AND actor = 'user:{owner.UserId}' "
-            + $"AND action = 'device-revoked' AND target = '{removed}'"));
+            + $"AND action = 'device.revoked' AND target = '{removed}'"));
     }
 
     [Fact]
@@ -359,7 +359,7 @@ public sealed class DeviceServiceTests(TestDatabase database) : IClassFixture<Te
         await browser.PostAsync($"/api/devices/{id}/revoke", new { });
 
         Assert.Equal(1, await database.ScalarLongAsync(
-            $"SELECT COUNT(*) FROM audit WHERE action = 'device-revoked' AND target = '{id}'"));
+            $"SELECT COUNT(*) FROM audit WHERE action = 'device.revoked' AND target = '{id}'"));
     }
 
     [Fact]
@@ -416,7 +416,7 @@ public sealed class DeviceServiceTests(TestDatabase database) : IClassFixture<Te
         Assert.Equal(1, await GrantCountAsync(strangersHost.HostId));
         Assert.Equal(1, await database.ScalarLongAsync(
             $"SELECT COUNT(*) FROM audit WHERE owner_id = '{owner.UserId}' AND actor = 'host:{host.HostId}' "
-            + $"AND action = 'device-revoked' AND target = '{mine.Id}'"));
+            + $"AND action = 'device.revoked' AND target = '{mine.Id}'"));
     }
 
     [Fact]
@@ -469,7 +469,7 @@ public sealed class DeviceServiceTests(TestDatabase database) : IClassFixture<Te
 
         Assert.Equal(0, await database.ScalarLongAsync($"SELECT COUNT(*) FROM grants WHERE device_id = '{id}'"));
         Assert.Equal(1, await database.ScalarLongAsync(
-            $"SELECT COUNT(*) FROM audit WHERE action = 'device-revoked' AND target = '{id}'"));
+            $"SELECT COUNT(*) FROM audit WHERE action = 'device.revoked' AND target = '{id}'"));
     }
 
     /// <summary>An account deleted since its session was checked is refused cleanly, not with a foreign-key 500.</summary>
@@ -1326,10 +1326,10 @@ public sealed class DeviceServiceTests(TestDatabase database) : IClassFixture<Te
         Assert.Equal(0, await database.ScalarLongAsync(
             $"SELECT COUNT(*) FROM enrollments WHERE owner_id = '{alice.UserId}' AND invite_id = '{id}'"));
         Assert.Equal(1, await database.ScalarLongAsync(
-            $"SELECT COUNT(*) FROM audit WHERE owner_id = '{alice.UserId}' AND action = 'invite-created' AND target = '{id}'"));
+            $"SELECT COUNT(*) FROM audit WHERE owner_id = '{alice.UserId}' AND action = 'invite.created' AND target = '{id}'"));
         Assert.Equal(1, await database.ScalarLongAsync(
             $"SELECT COUNT(*) FROM audit WHERE owner_id = '{bob.UserId}' AND actor = 'user:{bob.UserId}' "
-            + $"AND action = 'invite-created' AND target = '{id}'"));
+            + $"AND action = 'invite.created' AND target = '{id}'"));
     }
 
     /// <summary>

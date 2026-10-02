@@ -3,6 +3,7 @@ namespace Enactive.Remote.Gateway.Accounts;
 using System.Globalization;
 using System.Security.Claims;
 using Enactive.Remote.Contracts;
+using Enactive.Remote.Gateway.Services;
 using Enactive.Remote.Gateway.Storage;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
@@ -25,9 +26,13 @@ public sealed class SessionStore(Database db, TimeProvider clock)
     /// </summary>
     public static readonly TimeSpan Lifetime = TimeSpan.FromHours(8);
 
-    /// <summary>A new session of an active account.</summary>
-    public async Task<UserAccess> OpenAsync(string userId, CancellationToken ct)
-        => (await OpenWithVersionAsync(userId, ct)).Access;
+    /// <summary>
+    /// A new session of an active account, signed in through <paramref name="provider"/>. The sign-in is
+    /// written to the account's security log, as the provider and nothing else, in the same transaction:
+    /// a session the person cannot see was opened is the one they would never think to end.
+    /// </summary>
+    public async Task<UserAccess> OpenAsync(string userId, string provider, CancellationToken ct)
+        => (await OpenWithVersionAsync(userId, provider, ct)).Access;
 
     /// <summary>
     /// As <see cref="OpenAsync"/>, with the security version the session was opened under, which the
@@ -35,7 +40,7 @@ public sealed class SessionStore(Database db, TimeProvider clock)
     /// version at the moment the row was made.
     /// </summary>
     internal async Task<(UserAccess Access, int SecurityVersion)> OpenWithVersionAsync(
-        string userId, CancellationToken ct)
+        string userId, string provider, CancellationToken ct)
     {
         await using var connection = await db.OpenAsync(ct);
         await using var transaction = await connection.BeginAsync(ct);
@@ -67,6 +72,8 @@ public sealed class SessionStore(Database db, TimeProvider clock)
             """,
             ("@id", sessionId), ("@user", userId), ("@version", account.Version), ("@now", now),
             ("@expires", now.Add(Lifetime)));
+
+        await Audit.WriteAsync(connection, transaction, now, userId, Audit.User(userId), Audit.SignIn(provider), null);
 
         await transaction.CommitAsync(ct);
         return (new UserAccess(userId, sessionId), account.Version);
@@ -108,16 +115,21 @@ public sealed class SessionStore(Database db, TimeProvider clock)
     }
 
     /// <summary>
-    /// Ends every session of the account, and moves its security version on. The version is what makes
-    /// this complete: a session opened by a sign-in racing this one is stamped with the old version
-    /// whichever way the race goes, and no longer matches.
+    /// The person signing themselves out everywhere: ends every session of the account, and moves its
+    /// security version on. The version is what makes this complete: a session opened by a sign-in racing
+    /// this one is stamped with the old version whichever way the race goes, and no longer matches. Written
+    /// to the account's security log as the person's own act; the operator's revocation is written as the
+    /// operator's (<see cref="AdminCommands"/>).
     /// </summary>
     public async Task RevokeAllAsync(string userId, CancellationToken ct)
     {
         await using var connection = await db.OpenAsync(ct);
         await using var transaction = await connection.BeginAsync(ct);
+        var now = clock.GetUtcNow();
 
-        await RevokeAllAsync(connection, transaction, userId, clock.GetUtcNow());
+        await RevokeAllAsync(connection, transaction, userId, now);
+        await Audit.WriteAsync(
+            connection, transaction, now, userId, Audit.User(userId), Audit.SignOutEverywhere, null);
 
         await transaction.CommitAsync(ct);
     }
@@ -155,10 +167,14 @@ public static class UserCookie
     private const string SessionClaim = "sid";
     private const string VersionClaim = "sv";
 
-    /// <summary>Opens a session for <paramref name="userId"/> and gives this browser its cookie.</summary>
-    public static async Task SignInAsync(HttpContext context, SessionStore sessions, string userId, CancellationToken ct)
+    /// <summary>
+    /// Opens a session for <paramref name="userId"/>, signed in through <paramref name="provider"/>, and
+    /// gives this browser its cookie.
+    /// </summary>
+    public static async Task SignInAsync(
+        HttpContext context, SessionStore sessions, string userId, string provider, CancellationToken ct)
     {
-        var (access, version) = await sessions.OpenWithVersionAsync(userId, ct);
+        var (access, version) = await sessions.OpenWithVersionAsync(userId, provider, ct);
         await IssueAsync(context, access, version);
     }
 
