@@ -21,6 +21,14 @@ using MySqlConnector;
 /// <c>user_streams</c> value stays where it is, so no ordinal is handed out twice and a cursor from
 /// before the trim is still a cursor of the same line.</para>
 ///
+/// <para><b>The bytes are given back.</b> An account's sealed history counts against its storage limit
+/// (<see cref="Limits.SealedBytesPerUser"/>), so each batch takes the size of exactly the rows it deleted off
+/// the account's total, in the same transaction. Without it an account filled up once and stayed full, however
+/// much of its history had gone.</para>
+///
+/// <para><b>The audit trail has a window of its own.</b> It is not the panel's history, so trimming it does
+/// not write the person's marker, and it is kept longer: see <see cref="AuditDays"/>.</para>
+///
 /// <para><b>Trimming events cannot resurrect a duplicate.</b> A Host that replayed an event whose
 /// row had been deleted would get past the id check - but not past the run's
 /// <c>applied_sequence</c>, which is on the run row, is never trimmed, and refuses anything at or
@@ -41,6 +49,14 @@ public sealed class Retention(Database database, int days)
     /// </summary>
     private const int Owners = 500;
 
+    /// <summary>
+    /// How long the audit trail is kept. Every registration, removal and invitation writes a row, so without
+    /// a window a script that adds and removes devices grew the table for ever. Longer than the history's
+    /// month, because what happened to an account - a device removed, a computer revoked - is still worth
+    /// reading when the person notices weeks later; a season is long enough for that.
+    /// </summary>
+    public const int AuditDays = 90;
+
     public int Days { get; } = days > 0
         ? days
         : throw new ArgumentOutOfRangeException(nameof(days), days, "Retention must be at least one day.");
@@ -52,6 +68,7 @@ public sealed class Retention(Database database, int days)
     public async Task<int> TrimAsync(CancellationToken ct = default)
     {
         var cutoff = DateTimeOffset.UtcNow.AddDays(-Days);
+        var auditCutoff = DateTimeOffset.UtcNow.AddDays(-AuditDays);
         await using var connection = await database.OpenAsync(ct);
 
         var removed = 0;
@@ -67,8 +84,9 @@ public sealed class Retention(Database database, int days)
 
             foreach (var owner in owners)
             {
-                removed += await TrimTableAsync(connection, owner, "events", cutoff, ct);
-                removed += await TrimTableAsync(connection, owner, "notices", cutoff, ct);
+                removed += await TrimTableAsync(connection, owner, Events, cutoff, ct);
+                removed += await TrimTableAsync(connection, owner, Notices, cutoff, ct);
+                removed += await TrimTableAsync(connection, owner, Audit, auditCutoff, ct);
             }
 
             if (owners.Count < Owners)
@@ -82,6 +100,25 @@ public sealed class Retention(Database database, int days)
         return removed;
     }
 
+    /// <summary>What is trimmed: a table, the key its rows are read through, and what trimming it writes.</summary>
+    /// <param name="Key">The table's key on (owner_id, at).</param>
+    /// <param name="Order">
+    /// The time and then the primary key: the batch that is measured and the batch that is deleted are
+    /// the same rows only if the order leaves no ties to break differently. The primary key is the tail of
+    /// every secondary key in InnoDB, so the order is still a read of the time key.
+    /// </param>
+    /// <param name="Sealed">The sealed column whose size is given back, or null for a table with none.</param>
+    /// <param name="History">Whether this is the panel's history, whose trimming the person is told of.</param>
+    internal sealed record Trimmed(string Table, string Key, string Order, string? Sealed, bool History);
+
+    internal static readonly Trimmed Events =
+        new("events", "ix_events_owner_at", "at, host_id, id", "sealed_detail", History: true);
+
+    internal static readonly Trimmed Notices =
+        new("notices", "ix_notices_owner_at", "at, id", "sealed_detail", History: true);
+
+    internal static readonly Trimmed Audit = new("audit", "ix_audit_owner", "at, id", null, History: false);
+
     /// <summary>
     /// One person's rows of one table, in batches.
     ///
@@ -90,9 +127,15 @@ public sealed class Retention(Database database, int days)
     /// - the quiet month this class exists to prevent. A batch that deleted nothing writes nothing:
     /// stamping the cutoff anyway would have an account three days old announce that history before
     /// last month had been trimmed - true of no data that ever existed.</para>
+    ///
+    /// <para>A table with sealed rows is trimmed under the account's lock, taken first, as every path that
+    /// writes those rows takes it. The batch is measured and then deleted, and the lock keeps a new row out
+    /// of it in between. And without the lock first, a computer's publish holding the account and inserting
+    /// into the range this batch had locked would wait for the batch, while the batch waited for the account
+    /// to take its bytes back - a deadlock.</para>
     /// </summary>
     private static async Task<int> TrimTableAsync(
-        MySqlConnection connection, string owner, string table, DateTimeOffset cutoff, CancellationToken ct)
+        MySqlConnection connection, string owner, Trimmed table, DateTimeOffset cutoff, CancellationToken ct)
     {
         var total = 0;
 
@@ -100,10 +143,35 @@ public sealed class Retention(Database database, int days)
         {
             await using var transaction = await connection.BeginAsync(ct);
 
+            long bytes = 0;
+
+            if (table.Sealed is not null)
+            {
+                // Gone since the page of owners was read: its rows went with it.
+                if (!await connection.ExistsAsync(transaction,
+                        "SELECT 1 FROM users WHERE id = @owner FOR UPDATE", ("@owner", owner)))
+                {
+                    await transaction.CommitAsync(ct);
+                    return total;
+                }
+
+                var sizes = await connection.ReadAllAsync(transaction, MeasureBatch(table),
+                    reader => reader.IsDBNull(0) ? 0L : reader.GetInt64(0),
+                    ("@owner", owner), ("@cutoff", cutoff));
+                bytes = sizes.Sum();
+            }
+
             var deleted = await connection.ExecuteAsync(transaction, DeleteBatch(table),
                 ("@owner", owner), ("@cutoff", cutoff));
 
-            if (deleted > 0)
+            if (deleted > 0 && bytes > 0)
+            {
+                await connection.ExecuteAsync(transaction,
+                    "UPDATE users SET sealed_bytes = sealed_bytes - @bytes WHERE id = @owner",
+                    ("@bytes", bytes), ("@owner", owner));
+            }
+
+            if (deleted > 0 && table.History)
             {
                 await connection.ExecuteAsync(transaction,
                     """
@@ -135,11 +203,19 @@ public sealed class Retention(Database database, int days)
     /// account, whose old rows are a large share of the table, it chose to read the whole table and
     /// sort it - and a DELETE at REPEATABLE READ locks every row it reads, so the batch locked every
     /// account's rows until it committed. A single-table DELETE takes no FORCE INDEX, so this is the
-    /// optimizer hint; it names an index of the same name in each table this is called for.</para>
+    /// optimizer hint, naming the table's own key.</para>
     /// </summary>
-    internal static string DeleteBatch(string table)
-        => $"DELETE /*+ INDEX({table} ix_{table}_owner_at) */ FROM {table} "
-           + $"WHERE owner_id = @owner AND at < @cutoff ORDER BY at LIMIT {Batch}";
+    internal static string DeleteBatch(Trimmed table)
+        => $"DELETE /*+ INDEX({table.Table} {table.Key}) */ FROM {table.Table} "
+           + $"WHERE owner_id = @owner AND at < @cutoff ORDER BY {table.Order} LIMIT {Batch}";
+
+    /// <summary>
+    /// The size of each sealed field in the batch <see cref="DeleteBatch"/> deletes next: the same rows, read
+    /// through the same key in the same order, locked so they are still there for the delete.
+    /// </summary>
+    internal static string MeasureBatch(Trimmed table)
+        => $"SELECT LENGTH({table.Sealed}) FROM {table.Table} FORCE INDEX ({table.Key}) "
+           + $"WHERE owner_id = @owner AND at < @cutoff ORDER BY {table.Order} LIMIT {Batch} FOR UPDATE";
 }
 
 /// <summary>

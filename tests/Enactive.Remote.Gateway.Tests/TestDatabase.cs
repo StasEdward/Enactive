@@ -62,7 +62,15 @@ public sealed class TestDatabase : IAsyncLifetime
         await Migrator.ApplyAsync(ConnectionString);
     }
 
-    public async Task DisposeAsync() => await ExecuteOnServerAsync($"DROP DATABASE IF EXISTS `{Name}`");
+    public async Task DisposeAsync()
+    {
+        // The class's pooled connections are closed with its database. Left to the pool's idle timeout they
+        // stayed open for minutes after their database was dropped, every finished class's on top of every
+        // running one's, and the suite reached the server's 151 connections and failed with "Too many
+        // connections" in whichever classes happened to be opening one at the time.
+        await MySqlConnection.ClearPoolAsync(new MySqlConnection(ConnectionString));
+        await ExecuteOnServerAsync($"DROP DATABASE IF EXISTS `{Name}`");
+    }
 
     /// <summary>An open connection to this test's own database.</summary>
     public async Task<MySqlConnection> OpenAsync()

@@ -29,9 +29,10 @@ using MySqlConnector;
 /// commands) need no hint.</para>
 ///
 /// <para><b>Lock order.</b> The same as <see cref="HostService"/>'s, so no two paths wait for each other
-/// in a cycle: the computer first, FOR SHARE; then the target - the task, the run or the request;
-/// then the command row; and a revocation locks the computer and then its commands. A command whose
-/// target names its computer reads that one column without a lock to find it. Locking the target
+/// in a cycle: the account first, FOR UPDATE, in every call that creates something counted against a
+/// limit (see <see cref="Quota"/>); then the computer, FOR SHARE; then the target - the task, the run
+/// or the request; then the command row; and a revocation locks the computer and then its commands. A
+/// command whose target names its computer reads that one column without a lock to find it. Locking the target
 /// first was a three-way deadlock: an answer held its request and waited to read the computer
 /// behind a revocation queued for it exclusively, the revocation waited for the computer's own
 /// report holding it shared, and the report waited for the request. A deadlock the order cannot
@@ -62,10 +63,6 @@ public sealed class UserService(Database db, Limits limits, TimeProvider clock)
     // will recognise the computer by, and a silently shortened one may not be.
     private const int MaxLabel = 80;
 
-    // Taken now so the signature does not change again when per-account limits are enforced; until
-    // then every caller passes Limits.Unlimited and nothing reads it.
-    private readonly Limits _limits = limits;
-
     // ── computers ───────────────────────────────────────────────────────────
 
     /// <summary>
@@ -79,14 +76,28 @@ public sealed class UserService(Database db, Limits limits, TimeProvider clock)
         var id = Ids.New();
         var token = Ids.NewToken();
 
-        await using var connection = await db.OpenAsync(ct);
-        await connection.ExecuteAsync(null,
-            """
-            INSERT INTO hosts (id, owner_id, label, token_hash, revoked, created_at)
-            VALUES (@id, @owner, @label, @hash, 0, @now)
-            """,
-            ("@id", id), ("@owner", user.UserId), ("@label", name), ("@hash", Ids.Hash(token)),
-            ("@now", clock.GetUtcNow()));
+        await db.InTransactionAsync(async (connection, transaction) =>
+        {
+            await Quota.LockAccountAsync(connection, transaction, user.UserId);
+
+            // A revoked computer does not count: revoking one is how the person makes room for another.
+            var held = await connection.ReadOneAsync(transaction,
+                "SELECT COUNT(*) FROM hosts WHERE owner_id = @owner AND revoked = 0",
+                reader => reader.GetInt64(0), ("@owner", user.UserId));
+
+            if (held >= limits.HostsPerUser)
+            {
+                throw GatewayFault.QuotaExceeded("computers", limits.HostsPerUser, "revoke one to add another");
+            }
+
+            await connection.ExecuteAsync(transaction,
+                """
+                INSERT INTO hosts (id, owner_id, label, token_hash, revoked, created_at)
+                VALUES (@id, @owner, @label, @hash, 0, @now)
+                """,
+                ("@id", id), ("@owner", user.UserId), ("@label", name), ("@hash", Ids.Hash(token)),
+                ("@now", clock.GetUtcNow()));
+        }, ct);
 
         return (id, name, token);
     }
@@ -147,6 +158,7 @@ public sealed class UserService(Database db, Limits limits, TimeProvider clock)
 
         await db.InTransactionAsync(async (connection, transaction) =>
         {
+            await Quota.LockAccountAsync(connection, transaction, user.UserId);
             await EnsureLiveHostAsync(connection, transaction, user.UserId, hostId);
 
             var previous = await connection.ReadOneAsync(transaction,
@@ -177,13 +189,30 @@ public sealed class UserService(Database db, Limits limits, TimeProvider clock)
                     "Choose a workspace this computer has published. It publishes them when it connects.");
             }
 
+            var now = clock.GetUtcNow();
+
+            // After the retry above, so a repeated create of a task the person already has is answered at
+            // the limit too. Nothing deletes a task, so a day's count is what keeps a script from writing
+            // them as fast as the request limit allows, each one up to the size of a request.
+            var today = await connection.ReadOneAsync(transaction,
+                "SELECT COUNT(*) FROM tasks WHERE owner_id = @owner AND created_at > @since",
+                reader => reader.GetInt64(0), ("@owner", user.UserId), ("@since", now.AddDays(-1)));
+
+            if (today >= limits.TasksPerDay)
+            {
+                throw GatewayFault.QuotaExceeded(
+                    "tasks made in the last day", limits.TasksPerDay, "make more tomorrow");
+            }
+
+            await Quota.ChargeSealedAsync(connection, transaction, user.UserId, Quota.SizeOf(sealedTask), limits);
+
             await connection.ExecuteAsync(transaction,
                 """
                 INSERT INTO tasks (owner_id, id, host_id, workspace_id, sealed, fingerprint, created_at)
                 VALUES (@owner, @id, @host, @workspace, @sealed, @fingerprint, @now)
                 """,
                 ("@owner", user.UserId), ("@id", taskId), ("@host", hostId), ("@workspace", workspaceId),
-                ("@sealed", sealedTask), ("@fingerprint", fingerprint), ("@now", clock.GetUtcNow()));
+                ("@sealed", sealedTask), ("@fingerprint", fingerprint), ("@now", now));
         }, ct);
     }
 
@@ -213,6 +242,8 @@ public sealed class UserService(Database db, Limits limits, TimeProvider clock)
 
         return await db.InTransactionAsync(async (connection, transaction) =>
         {
+            await Quota.LockAccountAsync(connection, transaction, user.UserId);
+
             // The computer is locked before the task, so the task's computer is read first and
             // without a lock. A task never moves to another computer: what this finds is still true
             // once both are locked.
@@ -259,6 +290,22 @@ public sealed class UserService(Database db, Limits limits, TimeProvider clock)
                 throw GatewayFault.Conflict("This task is already running. Wait for it, or stop it first.");
             }
 
+            // Every run of the account's that has not ended, on any of its computers: each holds a
+            // computer's model and the account's share of the queue until it does.
+            var running = await connection.ReadOneAsync(transaction,
+                """
+                SELECT COUNT(*) FROM runs
+                WHERE owner_id = @owner
+                  AND status NOT IN ('Completed', 'Failed', 'Incomplete', 'Cancelled', 'Interrupted')
+                """,
+                reader => reader.GetInt64(0), ("@owner", user.UserId));
+
+            if (running >= limits.ActiveRunsPerUser)
+            {
+                throw GatewayFault.QuotaExceeded(
+                    "runs in progress", limits.ActiveRunsPerUser, "wait for one to end, or stop one, to start another");
+            }
+
             var runId = Ids.New();
             var now = clock.GetUtcNow();
 
@@ -294,6 +341,8 @@ public sealed class UserService(Database db, Limits limits, TimeProvider clock)
 
         return await db.InTransactionAsync(async (connection, transaction) =>
         {
+            await Quota.LockAccountAsync(connection, transaction, user.UserId);
+
             // The computer is locked before the run, so the run's computer is read first and without
             // a lock. A run never moves to another computer: what this finds is still true once both
             // are locked.
@@ -360,7 +409,8 @@ public sealed class UserService(Database db, Limits limits, TimeProvider clock)
 
         return await db.InTransactionAsync(async (connection, transaction) =>
         {
-            // The computer before the request: see the lock order in the class comment.
+            // The account, then the computer before the request: see the lock order in the class comment.
+            await Quota.LockAccountAsync(connection, transaction, user.UserId);
             await EnsureLiveHostAsync(connection, transaction, user.UserId, hostId);
 
             // Addressed by its computer as well: approval ids are made by the Host and unique only
@@ -457,6 +507,7 @@ public sealed class UserService(Database db, Limits limits, TimeProvider clock)
 
         return await db.InTransactionAsync(async (connection, transaction) =>
         {
+            await Quota.LockAccountAsync(connection, transaction, user.UserId);
             await EnsureLiveHostAsync(connection, transaction, user.UserId, hostId);
 
             if (await ExistingCommandAsync(connection, transaction, user.UserId, commandId, fingerprint)
@@ -555,11 +606,32 @@ public sealed class UserService(Database db, Limits limits, TimeProvider clock)
             : throw GatewayFault.Conflict("That request id was already used for a different action.");
     }
 
-    private static async Task<HostCommand> QueueAsync(
+    /// <summary>
+    /// Queues a command for the computer, within its allowance. The caller holds the account's lock, which
+    /// is what the count is taken under, and has already answered a retry of this id, which takes no place.
+    /// </summary>
+    private async Task<HostCommand> QueueAsync(
         MySqlConnection connection, MySqlTransaction transaction, string ownerId,
         string commandId, string hostId, CommandKind kind, string payload, string fingerprint,
         DateTimeOffset now)
     {
+        // Commands the computer has not collected. One that expired no longer counts, whether or not a
+        // sync has written it off yet: a computer that was off for a day would otherwise come back to an
+        // account that could not ask it anything until it had synced.
+        var waiting = await connection.ReadOneAsync(transaction,
+            """
+            SELECT COUNT(*) FROM commands
+            WHERE host_id = @host AND status = 'PendingDelivery' AND expires_at > @now AND owner_id = @owner
+            """,
+            reader => reader.GetInt64(0), ("@host", hostId), ("@now", now), ("@owner", ownerId));
+
+        if (waiting >= limits.QueuedCommandsPerHost)
+        {
+            throw GatewayFault.QuotaExceeded(
+                "requests waiting for this computer", limits.QueuedCommandsPerHost,
+                "wait for the computer to collect them");
+        }
+
         // The protocol's lifetime, not one of the gateway's own: the computer refuses a sealed
         // command issued longer ago than this, so a gateway that kept it longer would only be
         // delivering a refusal.

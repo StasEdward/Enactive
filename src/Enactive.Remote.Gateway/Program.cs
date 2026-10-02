@@ -106,11 +106,11 @@ builder.Services.AddSingleton(services => new AccountService(
     services.GetRequiredService<Database>(), TimeProvider.System, admission));
 builder.Services.AddSingleton<SessionStore>();
 builder.Services.AddSingleton(services => new Retention(services.GetRequiredService<Database>(), retentionDays));
-builder.Services.AddSingleton<HostService>();
-// Unlimited until per-account limits are enforced: the services take them now so their signatures do
-// not change again when they are. Task 8.1 replaces this with limits read from configuration; the open
-// admission check below reads whatever is registered here, so it starts working the moment that does.
-builder.Services.AddSingleton(Limits.Unlimited);
+// Read now, like the settings above: a limit that is not a whole number of at least one stops the start
+// rather than being read as its default. The open admission check below reads whatever is registered here.
+builder.Services.AddSingleton(Limits.FromConfiguration(builder.Configuration));
+builder.Services.AddSingleton(services => new HostService(
+    services.GetRequiredService<Database>(), services.GetRequiredService<Limits>()));
 builder.Services.AddSingleton(services => new UserService(
     services.GetRequiredService<Database>(), services.GetRequiredService<Limits>(), TimeProvider.System));
 builder.Services.AddSingleton(services => new DeviceService(

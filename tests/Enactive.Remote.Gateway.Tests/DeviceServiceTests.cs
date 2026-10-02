@@ -1586,7 +1586,7 @@ public sealed class DeviceServiceTests(TestDatabase database) : IClassFixture<Te
     };
 
     private HostHub Hub(HostAccess host, HostCallLimit limit)
-        => new(new HostService(Db), Devices, new HostConnections(), limit) { Context = new ComputerCaller(host) };
+        => new(new HostService(Db, Limits.Unlimited), Devices, new HostConnections(), limit) { Context = new ComputerCaller(host) };
 
     private Task<long> GrantCountAsync(string hostId)
         => database.ScalarLongAsync($"SELECT COUNT(*) FROM grants WHERE host_id = '{hostId}'");

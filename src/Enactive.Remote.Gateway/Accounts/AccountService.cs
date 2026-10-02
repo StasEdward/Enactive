@@ -48,15 +48,16 @@ public static class Admission
     /// nothing about the running gateway would look wrong until it did.
     ///
     /// <para>Compared by value, so a limits object that merely equals <see cref="Limits.Unlimited"/>
-    /// counts as having none. Until the limits are read from configuration (Task 8.1) nothing registers
-    /// real ones, so this keeps open admission impossible rather than merely discouraged.</para>
+    /// counts as having none. The gateway reads its limits from configuration, which never gives these;
+    /// this keeps a host that registers the unlimited ones - a test, a tool built on the gateway - from
+    /// admitting the world with them.</para>
     /// </summary>
     public static void RequireLimits(AdmissionMode mode, Limits limits)
     {
         if (mode == AdmissionMode.Open && limits == Limits.Unlimited)
         {
             throw new InvalidOperationException(
-                $"{Setting} is open, and the gateway has no per-account limits yet: every stranger who "
+                $"{Setting} is open, and the gateway has no per-account limits: every stranger who "
                 + "signed in could use as much as they liked. Set real limits first, or use list.");
         }
     }

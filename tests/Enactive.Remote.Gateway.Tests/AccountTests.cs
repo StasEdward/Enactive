@@ -202,14 +202,18 @@ public sealed class AccountTests(TestDatabase database) : IClassFixture<TestData
 
     /// <summary>
     /// Open admission is only safe behind quotas: without them one stranger's script fills the
-    /// database for everybody. Until real limits exist the gateway will not start in that mode. Shown
-    /// red by removing the check, which leaves a gateway that starts and admits the world.
+    /// database for everybody. The gateway reads real limits from configuration, so this registers the
+    /// unlimited ones in their place; with those it will not start in that mode. Shown red by removing
+    /// the check, which leaves a gateway that starts and admits the world.
     /// </summary>
     [Fact]
     public async Task Open_admission_refuses_to_start_without_limits()
     {
-        await using var gateway = TestGateway.Create(database,
-            configure: builder => builder.UseSetting(Admission.Setting, "open"));
+        await using var gateway = TestGateway.Create(database, configure: builder =>
+        {
+            builder.UseSetting(Admission.Setting, "open");
+            builder.ConfigureTestServices(services => services.AddSingleton(Limits.Unlimited));
+        });
 
         var refused = await Assert.ThrowsAnyAsync<InvalidOperationException>(
             () => gateway.CreateClient().GetAsync("/health"));
@@ -318,7 +322,7 @@ public sealed class AccountTests(TestDatabase database) : IClassFixture<TestData
     {
         var owner = await AdmittedAsync("github", Subject());
         var users = new UserService(Db, Limits.Unlimited, TimeProvider.System);
-        var hosts = new HostService(Db);
+        var hosts = new HostService(Db, Limits.Unlimited);
         var (hostId, _, _) = await users.RegisterHostAsync(owner.Access, "Studio PC", default);
         var host = new HostAccess(hostId, owner.Access.UserId);
         var commandId = await QueueCommandAsync(host);

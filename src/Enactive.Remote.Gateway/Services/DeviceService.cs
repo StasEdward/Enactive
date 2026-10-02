@@ -55,6 +55,14 @@ public sealed class DeviceService(Database db, Limits limits, TimeProvider clock
     private const int HmacLength = 32;
     private const int SignatureLength = 64;
 
+    /// <summary>
+    /// How many device rows an account keeps, as a multiple of its device limit. A removed device keeps its
+    /// row so the panel can say it was removed, so a script that adds and removes devices grew the table, and
+    /// the device list, without bound. Five times the limit keeps every live device and the recently removed
+    /// ones; the longest-removed go first.
+    /// </summary>
+    internal const int RowsPerAllowedDevice = 5;
+
     // The pairing a computer's own connection code starts; every other pairing is an invitation's id.
     private static readonly string AuthByConnect = Grants.AuthByPairing("connect");
 
@@ -126,6 +134,8 @@ public sealed class DeviceService(Database db, Limits limits, TimeProvider clock
                 throw GatewayFault.DeviceLimit(limits.DevicesPerUser);
             }
 
+            await PruneRemovedAsync(connection, transaction, user.UserId);
+
             var id = Ids.New();
             var now = clock.GetUtcNow();
             await connection.ExecuteAsync(transaction,
@@ -140,15 +150,69 @@ public sealed class DeviceService(Database db, Limits limits, TimeProvider clock
         }, ct);
     }
 
-    /// <summary>The person's own devices, oldest first, removed ones included so the panel can say so.</summary>
+    /// <summary>
+    /// Makes room for one more row within <see cref="RowsPerAllowedDevice"/> times the limit, by deleting the
+    /// longest-removed devices; their grants and enrollments go with them by the schema's cascade. Called
+    /// under the account's lock, when a device is added, which is the only thing that adds a row.
+    ///
+    /// <para>The rows are chosen by a plain read and deleted by their keys. A deleting scan over the account's
+    /// devices would lock every row it read, the live ones too, and wait behind a removal in progress - which
+    /// itself waits for the account's row, held here, to write its audit line: a deadlock.</para>
+    /// </summary>
+    private async Task PruneRemovedAsync(MySqlConnection connection, MySqlTransaction transaction, string ownerId)
+    {
+        var rows = await connection.ReadOneAsync(transaction,
+            "SELECT COUNT(*) FROM devices WHERE owner_id = @owner",
+            reader => reader.GetInt64(0), ("@owner", ownerId));
+
+        var surplus = rows + 1 - KeptRows;
+
+        if (surplus <= 0)
+        {
+            return;
+        }
+
+        var oldest = await connection.ReadAllAsync(transaction,
+            $"""
+            SELECT id FROM devices
+            WHERE owner_id = @owner AND revoked_at IS NOT NULL
+            ORDER BY revoked_at, created_at, id
+            LIMIT {surplus}
+            """,
+            reader => reader.GetString(0), ("@owner", ownerId));
+
+        foreach (var id in oldest)
+        {
+            await connection.ExecuteAsync(transaction,
+                "DELETE FROM devices WHERE owner_id = @owner AND id = @id AND revoked_at IS NOT NULL",
+                ("@owner", ownerId), ("@id", id));
+        }
+    }
+
+    /// <summary>The rows an account keeps; in 64 bits, because the limit may be as large as an int.</summary>
+    private long KeptRows => (long)limits.DevicesPerUser * RowsPerAllowedDevice;
+
+    /// <summary>
+    /// The person's own devices, oldest first, removed ones included so the panel can say so.
+    ///
+    /// <para>At most <see cref="RowsPerAllowedDevice"/> times the limit, the live devices and then the newest
+    /// first: pruning keeps the table to that, but rows left from before a lower limit are pruned only as
+    /// devices are added, and one answer must not be as long as the table meanwhile.</para>
+    /// </summary>
     public async Task<IReadOnlyList<DeviceInfo>> ListAsync(UserAccess user, CancellationToken ct)
     {
         await using var connection = await db.OpenAsync(ct);
 
         return await connection.ReadAllAsync(null,
-            """
+            $"""
             SELECT id, label, public_key, created_at, last_seen_at, revoked_at
-            FROM devices WHERE owner_id = @owner ORDER BY created_at, id
+            FROM (
+              SELECT id, label, public_key, created_at, last_seen_at, revoked_at
+              FROM devices WHERE owner_id = @owner
+              ORDER BY revoked_at IS NULL DESC, created_at DESC, id DESC
+              LIMIT {KeptRows}
+            ) AS kept
+            ORDER BY created_at, id
             """,
             reader => new DeviceInfo(
                 reader.GetString("id"),

@@ -484,17 +484,22 @@ public sealed class SchemaTests(TestDatabase database) : IClassFixture<TestDatab
 
         await database.ExecuteAsync($"ANALYZE TABLE {table}");
 
-        await using var connection = await database.OpenAsync();
-        await using var explain = new MySqlConnector.MySqlCommand(
-            "EXPLAIN " + Retention.DeleteBatch(table), connection);
-        explain.Parameters.AddWithValue("@owner", alice.UserId);
-        explain.Parameters.AddWithValue("@cutoff", DateTime.UtcNow.AddDays(-30));
-        await using var plan = await explain.ExecuteReaderAsync();
+        // The batch is measured before it is deleted, so both statements must read through the key.
+        var trimmed = table == "events" ? Retention.Events : Retention.Notices;
 
-        Assert.True(await plan.ReadAsync());
-        var extra = plan["Extra"] as string ?? "";
-        Assert.Equal(key, plan["key"] as string);
-        Assert.DoesNotContain("filesort", extra, StringComparison.OrdinalIgnoreCase);
+        foreach (var statement in new[] { Retention.DeleteBatch(trimmed), Retention.MeasureBatch(trimmed) })
+        {
+            await using var connection = await database.OpenAsync();
+            await using var explain = new MySqlConnector.MySqlCommand("EXPLAIN " + statement, connection);
+            explain.Parameters.AddWithValue("@owner", alice.UserId);
+            explain.Parameters.AddWithValue("@cutoff", DateTime.UtcNow.AddDays(-30));
+            await using var plan = await explain.ExecuteReaderAsync();
+
+            Assert.True(await plan.ReadAsync());
+            var extra = plan["Extra"] as string ?? "";
+            Assert.Equal(key, plan["key"] as string);
+            Assert.DoesNotContain("filesort", extra, StringComparison.OrdinalIgnoreCase);
+        }
     }
 
     /// <summary>

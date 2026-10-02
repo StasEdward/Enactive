@@ -26,9 +26,10 @@ using MySqlConnector;
 /// already running instead of slipping past it.</para>
 ///
 /// <para><b>Lock order.</b> One order for every path, the computer's and the person's (see
-/// <see cref="UserService"/>): the account, then the computer, both FOR SHARE here; then the run and
-/// its requests; then the command rows, each by its own key and never a range of them (a person's
-/// command is inserted into that range while its run is locked); then the owner's stream counter.
+/// <see cref="UserService"/>): the account - FOR UPDATE when the call adds to its byte total, FOR SHARE
+/// otherwise - then the computer, FOR SHARE; then the run and its requests; then the command rows,
+/// each by its own key and never a range of them (a person's command is inserted into that range
+/// while its run is locked); then the owner's stream counter.
 /// Transactions that take their locks in one order wait for each other but never in a cycle. The
 /// order holds for shared reads too: a revocation waiting to lock the computer exclusively queues
 /// ahead of every later shared read of it, so a person's answer that held its request and then read
@@ -43,7 +44,7 @@ using MySqlConnector;
 /// permission requests arrive sealed. This checks that each is an envelope of a sensible size and
 /// stores it as it came; only a trusted browser can open it.</para>
 /// </summary>
-public sealed class HostService(Database database)
+public sealed class HostService(Database database, Limits limits)
 {
     private const int MaxWorkspaces = 100;
 
@@ -252,7 +253,7 @@ public sealed class HostService(Database database)
 
         await database.InTransactionAsync(async (connection, transaction) =>
         {
-            await AuthorizeAsync(connection, transaction, host);
+            await AuthorizeAsync(connection, transaction, host, lockAccount: true);
 
             // The run id is the Host's to name, so this lookup goes through the key that starts with the
             // owner and the computer. Through the primary key, MySQL locked the row with that id first and
@@ -299,6 +300,9 @@ public sealed class HostService(Database database)
             var now = DateTimeOffset.UtcNow;
             var status = await ApplyAsync(connection, transaction, run, published, now);
 
+            await Quota.ChargeSealedAsync(
+                connection, transaction, run.OwnerId, Quota.SizeOf(published.SealedDetail), limits);
+
             await connection.ExecuteAsync(transaction,
                 """
                 INSERT INTO events (owner_id, host_id, id, run_id, sequence, kind, sealed_detail, at, ordinal)
@@ -337,7 +341,7 @@ public sealed class HostService(Database database)
     /// The transition itself: what this kind of event does to a run in this state, and to the
     /// approvals hanging off it. Returns the status the run is left in.
     /// </summary>
-    private static async Task<RemoteRunStatus> ApplyAsync(
+    private async Task<RemoteRunStatus> ApplyAsync(
         MySqlConnection connection, MySqlTransaction transaction,
         RunRow run, HostEvent published, DateTimeOffset now)
     {
@@ -399,7 +403,7 @@ public sealed class HostService(Database database)
         }
     }
 
-    private static async Task<RemoteRunStatus> RequestApprovalAsync(
+    private async Task<RemoteRunStatus> RequestApprovalAsync(
         MySqlConnection connection, MySqlTransaction transaction,
         RunRow run, HostEvent published, DateTimeOffset now)
     {
@@ -418,6 +422,9 @@ public sealed class HostService(Database database)
         {
             throw GatewayFault.Conflict($"Approval {request.ApprovalId} already exists.");
         }
+
+        await Quota.ChargeSealedAsync(
+            connection, transaction, run.OwnerId, Quota.SizeOf(request.SealedAction), limits);
 
         // What the request is about stays sealed. The tool call, the hash an answer must carry and
         // whether it may be answered from the web are in the clear because the gateway enforces them.
@@ -510,12 +517,18 @@ public sealed class HostService(Database database)
     /// live in its snapshot and applied an event after the revocation had committed. Shared, so calls
     /// of one computer do not wait on each other, and so a person's command can still read the
     /// computer while this holds it (see the lock order in the class comment).</para>
+    ///
+    /// <para>The account's row is locked for update instead when the call adds to the account's byte
+    /// total (<paramref name="lockAccount"/>): that total is a column of this row, and two publishes each
+    /// holding it shared and then wanting to write it deadlock rather than queue.</para>
     /// </summary>
     private static async Task AuthorizeAsync(
-        MySqlConnection connection, MySqlTransaction transaction, HostAccess host)
+        MySqlConnection connection, MySqlTransaction transaction, HostAccess host, bool lockAccount = false)
     {
         var status = await connection.ReadOneAsync(transaction,
-            "SELECT status FROM users WHERE id = @owner FOR SHARE",
+            lockAccount
+                ? "SELECT status FROM users WHERE id = @owner FOR UPDATE"
+                : "SELECT status FROM users WHERE id = @owner FOR SHARE",
             reader => reader.GetString("status"), ("@owner", host.OwnerId));
 
         // Not there at all is a computer whose account is gone - its row went with it - so it is the
@@ -643,10 +656,15 @@ public sealed class HostService(Database database)
     /// envelope copied as it came, with the event's sequence and kind, which are what the panel
     /// rebuilds the associated data from - without them the copy could never be opened.
     /// </summary>
-    private static async Task NoticeAsync(
+    private async Task NoticeAsync(
         MySqlConnection connection, MySqlTransaction transaction,
         RunRow run, string kind, HostEvent published, DateTimeOffset at)
-        => await connection.ExecuteAsync(transaction,
+    {
+        // A copy is stored bytes like the original, and retention gives it back when it deletes the notice.
+        await Quota.ChargeSealedAsync(
+            connection, transaction, run.OwnerId, Quota.SizeOf(published.SealedDetail), limits);
+
+        await connection.ExecuteAsync(transaction,
             """
             INSERT INTO notices (id, owner_id, run_id, kind, sealed_detail, event_sequence, event_kind,
                                  at, is_read, ordinal)
@@ -656,6 +674,7 @@ public sealed class HostService(Database database)
             ("@detail", published.SealedDetail), ("@sequence", published.Sequence),
             ("@eventKind", published.Kind), ("@at", at),
             ("@ordinal", await StreamCursor.NextAsync(connection, transaction, run.OwnerId)));
+    }
 
     private static void Required(string? value, int max, string field)
     {

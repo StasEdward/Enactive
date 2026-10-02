@@ -178,6 +178,17 @@ public sealed class GatewayFault(string code, int status, string message) : Exce
         + "Remove one that is no longer used to add another.");
 
     /// <summary>
+    /// An account at one of its limits (see <c>Limits</c>). A state the person resolves by removing
+    /// something or waiting, not a rate a client should retry at once: so 409, where a computer calling
+    /// too often is a 429 under the same code. One sentence for every limit, naming the number, so the
+    /// person learns what the ceiling is rather than only that there is one.
+    /// </summary>
+    public static GatewayFault QuotaExceeded(
+        string things, long limit, string remedy = "remove one to add another") => new(
+        FaultCode.QuotaExceeded, 409,
+        $"This account already has {limit:N0} {things}, the most it may; {remedy}.");
+
+    /// <summary>
     /// A device-bound call that does not say which device it is made from. One code here so every such
     /// endpoint answers it the same way, and the panel can tell it from an unknown device.
     /// </summary>

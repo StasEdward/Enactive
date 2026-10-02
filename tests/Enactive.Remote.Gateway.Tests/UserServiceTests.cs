@@ -989,7 +989,7 @@ public sealed class UserServiceTests(TestDatabase database) : IClassFixture<Test
     {
         var alice = await PersonAsync("alice");
         var (hostId, runId, approvalId) = await WaitingForApprovalAsync(alice, remoteDecidable: true);
-        var computer = new HostService(Db);
+        var computer = new HostService(Db, Limits.Unlimited);
 
         // Holds the report at the right moment: it has read the account and the computer, shared,
         // and waits for the run.
