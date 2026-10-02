@@ -504,6 +504,43 @@ api.MapPost("/grants", async (
     return Results.Ok();
 });
 
+// A trusted browser invites another device. The id is the browser's own, and the link it shows carries the
+// pairing secret in its fragment, which never reaches this server.
+api.MapPost("/invites", async (
+    CreateInviteRequest request, HttpContext context, DeviceService devices, CancellationToken ct) =>
+{
+    var device = await devices.RequireAsync(context.UserAccess(), context.RequireDeviceId(), ct);
+    var expiresAt = await devices.CreateInviteAsync(device, request.Id, ct);
+    return Results.Ok(new { id = request.Id, expiresAt });
+});
+
+// The new device's answer. Which device answers is in the body, not the header: it may be a browser that
+// has only just registered its key, and the device named must be the person's own and not removed.
+api.MapPost("/enrollments", async (
+    EnrollmentRequest request, HttpContext context, DeviceService devices, CancellationToken ct) =>
+{
+    await devices.EnrollAsync(context.UserAccess(), request.InviteId, request.DeviceId, request.Mac, ct);
+    return Results.Ok();
+});
+
+// The inviting browser asks until there is an answer: 204 while there is none. The public key and label are
+// the answering device's own, from its row; the MAC is what lets the browser check the key was not swapped.
+api.MapGet("/invites/{id}/enrollment", async (
+    string id, HttpContext context, DeviceService devices, CancellationToken ct) =>
+{
+    var device = await devices.RequireAsync(context.UserAccess(), context.RequireDeviceId(), ct);
+
+    return await devices.ReadEnrollmentAsync(device, id, ct) is { } enrollment
+        ? Results.Ok(new
+        {
+            deviceId = enrollment.DeviceId,
+            publicKey = enrollment.DevicePublic,
+            label = enrollment.Label,
+            mac = enrollment.Mac
+        })
+        : Results.NoContent();
+});
+
 api.MapPost("/tasks", async (
     CreateTaskRequest request, HttpContext context, UserService users, CancellationToken ct) =>
 {
@@ -548,6 +585,8 @@ app.Run();
 
 internal sealed record RegisterHostRequest(string? Name);
 internal sealed record RegisterDeviceRequest(string? PublicKey, string? Label);
+internal sealed record CreateInviteRequest(string? Id);
+internal sealed record EnrollmentRequest(string? InviteId, string? DeviceId, string? Mac);
 internal sealed record CreateTaskRequest(string TaskId, string HostId, string WorkspaceId, string SealedTask);
 internal sealed record CommandRequest(string CommandId, string Sealed);
 internal sealed record DecisionRequest(

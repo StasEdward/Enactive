@@ -139,6 +139,7 @@ CREATE TABLE IF NOT EXISTS enrollments (
   device_id  CHAR(32)    CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   mac        VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   created_at DATETIME(3) NOT NULL,
+  answered_at DATETIME(3) NULL,                                           -- the inviting computer has handled it
   PRIMARY KEY (invite_id),
   CONSTRAINT fk_enrollments_invite FOREIGN KEY (owner_id, invite_id) REFERENCES invites (owner_id, id) ON DELETE CASCADE,
   CONSTRAINT fk_enrollments_device FOREIGN KEY (owner_id, device_id) REFERENCES devices (owner_id, id) ON DELETE CASCADE

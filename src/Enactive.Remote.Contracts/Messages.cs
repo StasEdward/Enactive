@@ -121,3 +121,11 @@ public sealed record HostEvent(
     string? SealedDetail = null,
     ApprovalRequest? Approval = null,
     ApprovalResolution? Resolution = null);
+
+/// <summary>
+/// A new device's answer to an invitation, as the gateway relays it to whoever made the invitation. The
+/// device's public key and label come from the device's own row, not from the answer: the MAC, made with the
+/// invitation's pair key over the invitation, the device and that key, is what tells the inviter the
+/// gateway did not put another key in its place. The gateway has no pair key and cannot check it.
+/// </summary>
+public sealed record EnrollmentView(string InviteId, string DeviceId, string DevicePublic, string Label, string Mac);

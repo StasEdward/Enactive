@@ -44,6 +44,11 @@ public static class FaultCode
     public const string ProtocolMismatch = "protocol-mismatch";
     public const string QuotaExceeded = "quota-exceeded";
     public const string AccountDisabled = "account-disabled";
+    public const string BadGrant = "bad-grant";
+    public const string UnknownInvite = "unknown-invite";
+    public const string InviteLimit = "invite-limit";
+    public const string InviteUsed = "invite-used";
+    public const string InviteExpired = "invite-expired";
 }
 
 /// <summary>
@@ -99,6 +104,16 @@ public static class RemoteFaults
         [FaultCode.MalformedEvent] = FaultDisposition.Drop,
         [FaultCode.UnknownEventKind] = FaultDisposition.Drop,
         [FaultCode.EnvelopeMalformed] = FaultDisposition.Drop,
+        [FaultCode.BadGrant] = FaultDisposition.Drop,
+
+        // An invitation that is not there, already used, expired, or one too many. Each is a fact about
+        // the invitation, which a second attempt cannot change; and making one is a person's action at the
+        // computer, so a background retry would make an invitation after the person had stopped waiting
+        // for it - one nobody will show.
+        [FaultCode.UnknownInvite] = FaultDisposition.Drop,
+        [FaultCode.InviteLimit] = FaultDisposition.Drop,
+        [FaultCode.InviteUsed] = FaultDisposition.Drop,
+        [FaultCode.InviteExpired] = FaultDisposition.Drop,
 
         // The account is over its storage or rate for now. That passes - retention frees space, the
         // window moves on - so the event is kept and sent again rather than lost.

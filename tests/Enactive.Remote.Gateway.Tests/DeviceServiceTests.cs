@@ -914,7 +914,405 @@ public sealed class DeviceServiceTests(TestDatabase database) : IClassFixture<Te
         Assert.Equal(first.AddSeconds(61), Assert.Single(await devices.ListAsync(owner, default)).LastSeenAt);
     }
 
+    // ── invitations ─────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Two new devices answering one invitation at the same moment: the invite row is read under a lock,
+    /// so the second waits for the first and then finds the invite used. Without the lock both read it
+    /// unused and both enrolled, and the inviter would be shown whichever it read first.
+    /// </summary>
+    [Fact]
+    public async Task An_invite_is_used_once()
+    {
+        using var alice = await PanelClient.SignedInAsync(_gateway, Name("alice"));
+        var owner = new UserAccess(alice.UserId, "unused");
+        var laptop = await DeviceAsync(owner, "laptop");
+        var contenders = new[]
+        {
+            await DeviceAsync(owner, "phone"), await DeviceAsync(owner, "tablet"),
+            await DeviceAsync(owner, "desk"), await DeviceAsync(owner, "tv")
+        };
+        var pairKey = RandomNumberGenerator.GetBytes(32);
+        var invite = Ids.New();
+
+        using (var created = await PostInviteAsync(alice, laptop.Id, invite))
+        {
+            Assert.True(created.IsSuccessStatusCode, await created.Content.ReadAsStringAsync());
+        }
+
+        using (var none = await ReadEnrollmentAsync(alice, laptop.Id, invite))
+        {
+            Assert.Equal(HttpStatusCode.NoContent, none.StatusCode);
+        }
+
+        var attempts = await Task.WhenAll(contenders.Select(async device =>
+        {
+            try
+            {
+                await Devices.EnrollAsync(
+                    owner, invite, device.Id, Enrollment.Mac(pairKey, invite, device.Id, device.Key), default);
+                return (Device: device, Fault: (GatewayFault?)null);
+            }
+            catch (GatewayFault fault)
+            {
+                return (Device: device, Fault: fault);
+            }
+        }));
+
+        var winner = Assert.Single(attempts, attempt => attempt.Fault is null).Device;
+        Assert.All(attempts.Where(attempt => attempt.Fault is not null), attempt =>
+        {
+            Assert.Equal("invite-used", attempt.Fault!.Code);
+            Assert.Equal(409, attempt.Fault.Status);
+        });
+        Assert.Equal(1, await database.ScalarLongAsync($"SELECT COUNT(*) FROM enrollments WHERE invite_id = '{invite}'"));
+        Assert.Equal(1, await database.ScalarLongAsync(
+            $"SELECT COUNT(*) FROM invites WHERE id = '{invite}' AND consumed_at IS NOT NULL"));
+
+        // The browser that made the invitation is shown the winner, with the key from the winner's own
+        // row - and the MAC the new device made over it verifies with the pair key.
+        using var read = await ReadEnrollmentAsync(alice, laptop.Id, invite);
+        Assert.Equal(HttpStatusCode.OK, read.StatusCode);
+        var enrollment = await read.Content.ReadFromJsonAsync<JsonElement>(RemoteJson.Options);
+        Assert.Equal(winner.Id, enrollment.GetProperty("deviceId").GetString());
+        Assert.Equal(B64.Url(winner.Key), enrollment.GetProperty("publicKey").GetString());
+        Assert.Equal(new[] { "phone", "tablet", "desk", "tv" }[Array.IndexOf(contenders, winner)],
+            enrollment.GetProperty("label").GetString());
+        Assert.True(Enrollment.Verify(pairKey, invite, winner.Id, winner.Key, enrollment.GetProperty("mac").GetString()!));
+
+        // A later attempt over the API is told the invitation is used, in its own code.
+        var late = contenders.First(device => device != winner);
+        using var again = await PostEnrollmentAsync(
+            alice, invite, late.Id, Enrollment.Mac(pairKey, invite, late.Id, late.Key));
+        Assert.Equal(HttpStatusCode.Conflict, again.StatusCode);
+        Assert.Equal("invite-used", (await ErrorAsync(again)).Code);
+    }
+
+    [Fact]
+    public async Task An_expired_invite_is_refused()
+    {
+        var owner = await PersonAsync("alice");
+        var start = new DateTimeOffset(2026, 10, 2, 9, 0, 0, TimeSpan.Zero);
+        var clock = new MovableClock(start);
+        var devices = new DeviceService(Db, Limits.Unlimited, clock);
+        var inviter = new DeviceAccess((await DeviceAsync(owner, "laptop")).Id, owner.UserId);
+        var phone = await DeviceAsync(owner, "phone");
+        var lapsed = Ids.New();
+        var timely = Ids.New();
+
+        Assert.Equal(start.AddMinutes(10), await devices.CreateInviteAsync(inviter, lapsed, default));
+        Assert.Equal(start.AddMinutes(10), await devices.CreateInviteAsync(inviter, timely, default));
+
+        clock.Now = start.AddMinutes(10).AddSeconds(-1);
+        await devices.EnrollAsync(owner, timely, phone.Id, MacOf(timely, phone), default);
+
+        clock.Now = start.AddMinutes(10);
+        var refused = await Assert.ThrowsAsync<GatewayFault>(
+            () => devices.EnrollAsync(owner, lapsed, phone.Id, MacOf(lapsed, phone), default));
+
+        Assert.Equal("invite-expired", refused.Code);
+        Assert.Equal(410, refused.Status);
+        Assert.Equal(0, await database.ScalarLongAsync($"SELECT COUNT(*) FROM enrollments WHERE invite_id = '{lapsed}'"));
+        Assert.Equal(1, await database.ScalarLongAsync(
+            $"SELECT COUNT(*) FROM invites WHERE id = '{lapsed}' AND consumed_at IS NULL"));
+    }
+
+    [Fact]
+    public async Task Bob_cannot_enroll_with_alices_invite()
+    {
+        using var alice = await PanelClient.SignedInAsync(_gateway, Name("alice"));
+        using var bob = await PanelClient.SignedInAsync(_gateway, Name("bob"));
+        var owner = new UserAccess(alice.UserId, "unused");
+        var laptop = await DeviceAsync(owner, "laptop");
+        var phone = await DeviceAsync(owner, "phone");
+        var bobs = await DeviceAsync(new UserAccess(bob.UserId, "unused"), "bobs");
+        var invite = Ids.New();
+        var missing = Ids.New();
+
+        using (var created = await PostInviteAsync(alice, laptop.Id, invite))
+        {
+            Assert.True(created.IsSuccessStatusCode, await created.Content.ReadAsStringAsync());
+        }
+
+        using var foreign = await PostEnrollmentAsync(bob, invite, bobs.Id, MacOf(invite, bobs));
+        using var absent = await PostEnrollmentAsync(bob, missing, bobs.Id, MacOf(missing, bobs));
+
+        Assert.Equal(HttpStatusCode.NotFound, foreign.StatusCode);
+        Assert.Equal(await absent.Content.ReadAsStringAsync(), await foreign.Content.ReadAsStringAsync());
+        Assert.Equal(0, await database.ScalarLongAsync($"SELECT COUNT(*) FROM enrollments WHERE invite_id = '{invite}'"));
+        Assert.Equal(1, await database.ScalarLongAsync(
+            $"SELECT COUNT(*) FROM invites WHERE id = '{invite}' AND consumed_at IS NULL"));
+
+        // Nor can he answer it with Alice's device: that is not a device of his.
+        using var hers = await PostEnrollmentAsync(bob, invite, phone.Id, MacOf(invite, phone));
+        Assert.Equal(HttpStatusCode.NotFound, hers.StatusCode);
+
+        // Untouched, so Alice's own new device still can.
+        using var own = await PostEnrollmentAsync(alice, invite, phone.Id, MacOf(invite, phone));
+        Assert.True(own.IsSuccessStatusCode, await own.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task A_computer_sees_enrollments_for_its_own_invites_only()
+    {
+        var owner = await PersonAsync("alice");
+        var bob = await PersonAsync("bob");
+        var studio = await ComputerAsync(owner);
+        var office = await ComputerAsync(owner);
+        var bobsComputer = await ComputerAsync(bob);
+        var laptop = await DeviceAsync(owner, "laptop");
+        var phone = await DeviceAsync(owner, "phone");
+        var tablet = await DeviceAsync(owner, "tablet");
+        var desk = await DeviceAsync(owner, "desk");
+        var bobs = await DeviceAsync(bob, "bobs");
+        using var limit = new HostCallLimit();
+        var studioHub = Hub(studio, limit);
+        var (fromStudio, fromOffice, fromBrowser, fromBob) = (Ids.New(), Ids.New(), Ids.New(), Ids.New());
+
+        Assert.Null((await studioHub.CreateInvite(fromStudio)).Fault);
+        Assert.Null((await Hub(office, limit).CreateInvite(fromOffice)).Fault);
+        Assert.Null((await Hub(bobsComputer, limit).CreateInvite(fromBob)).Fault);
+        await Devices.CreateInviteAsync(new DeviceAccess(laptop.Id, owner.UserId), fromBrowser, default);
+
+        await Devices.EnrollAsync(owner, fromStudio, phone.Id, MacOf(fromStudio, phone), default);
+        await Devices.EnrollAsync(owner, fromOffice, tablet.Id, MacOf(fromOffice, tablet), default);
+        await Devices.EnrollAsync(owner, fromBrowser, desk.Id, MacOf(fromBrowser, desk), default);
+        await Devices.EnrollAsync(bob, fromBob, bobs.Id, MacOf(fromBob, bobs), default);
+
+        var seen = (await studioHub.Enrollments()).Value!;
+        Assert.Equal(
+            new EnrollmentView(fromStudio, phone.Id, B64.Url(phone.Key), "phone", MacOf(fromStudio, phone)),
+            Assert.Single(seen));
+
+        // Answered, it is not handed over again; answering twice is a retry after a lost reply, not an error.
+        Assert.Null((await studioHub.AnsweredInvite(fromStudio)).Fault);
+        Assert.Empty((await studioHub.Enrollments()).Value!);
+        Assert.Null((await studioHub.AnsweredInvite(fromStudio)).Fault);
+
+        // Another computer's invitation and another person's are refused exactly like one that does not
+        // exist, with a code the computer drops rather than retries.
+        var absent = (await studioHub.AnsweredInvite(Ids.New())).Fault!;
+        Assert.Equal(FaultCode.UnknownInvite, absent.Code);
+        Assert.Equal(FaultDisposition.Drop, absent.Disposition);
+        Assert.Equal(absent, (await studioHub.AnsweredInvite(fromOffice)).Fault);
+        Assert.Equal(absent, (await studioHub.AnsweredInvite(fromBob)).Fault);
+        Assert.Equal(absent, (await studioHub.AnsweredInvite(fromBrowser)).Fault);
+
+        // The office computer's is still waiting for it, and Bob's computer sees only his own.
+        Assert.Equal(fromOffice, Assert.Single((await Hub(office, limit).Enrollments()).Value!).InviteId);
+        Assert.Equal(fromBob, Assert.Single((await Hub(bobsComputer, limit).Enrollments()).Value!).InviteId);
+    }
+
+    [Fact]
+    public async Task The_sixth_open_invite_is_refused()
+    {
+        var alice = await PersonAsync("alice");
+        var bob = await PersonAsync("bob");
+        var start = new DateTimeOffset(2026, 10, 2, 9, 0, 0, TimeSpan.Zero);
+        var clock = new MovableClock(start);
+        var devices = new DeviceService(Db, Limits.Unlimited with { OpenInvitesPerUser = 5 }, clock);
+        var browser = new DeviceAccess((await DeviceAsync(alice, "laptop")).Id, alice.UserId);
+        var computer = await ComputerAsync(alice);
+        var phone = await DeviceAsync(alice, "phone");
+        var first = Ids.New();
+
+        await devices.CreateInviteAsync(browser, first, default);
+        await devices.CreateInviteAsync(browser, Ids.New(), default);
+        await devices.CreateInviteAsync(browser, Ids.New(), default);
+        await devices.CreateInviteAsync(computer, Ids.New(), default);
+        await devices.CreateInviteAsync(computer, Ids.New(), default);
+
+        async Task AssertFullAsync()
+        {
+            foreach (var attempt in new Func<Task>[]
+                     {
+                         () => devices.CreateInviteAsync(browser, Ids.New(), default),
+                         () => devices.CreateInviteAsync(computer, Ids.New(), default)
+                     })
+            {
+                var refused = await Assert.ThrowsAsync<GatewayFault>(attempt);
+                Assert.Equal("invite-limit", refused.Code);
+                Assert.Equal(409, refused.Status);
+                Assert.Contains("5 open invitations", refused.Message);
+            }
+        }
+
+        await AssertFullAsync();
+
+        // Another person has an allowance of their own.
+        await devices.CreateInviteAsync(new DeviceAccess((await DeviceAsync(bob, "bobs")).Id, bob.UserId), Ids.New(), default);
+
+        // A used invitation is no longer open, and frees its place.
+        await devices.EnrollAsync(alice, first, phone.Id, MacOf(first, phone), default);
+        await devices.CreateInviteAsync(browser, Ids.New(), default);
+        await AssertFullAsync();
+
+        // So does an expired one, though nothing has deleted it.
+        clock.Now = start.AddMinutes(10);
+        for (var i = 0; i < 5; i++)
+        {
+            await (i % 2 == 0
+                ? devices.CreateInviteAsync(browser, Ids.New(), default)
+                : devices.CreateInviteAsync(computer, Ids.New(), default));
+        }
+
+        await AssertFullAsync();
+    }
+
+    /// <summary>
+    /// Invitations made at once, by browsers and computers of one person's, racing for the last places: the
+    /// count is taken under the account's lock, so each waits for the one before it and then counts it.
+    /// </summary>
+    [Fact]
+    public async Task Concurrent_invitations_cannot_pass_the_limit_together()
+    {
+        var alice = await PersonAsync("alice");
+        var devices = new DeviceService(Db, Limits.Unlimited with { OpenInvitesPerUser = 3 }, TimeProvider.System);
+        var browser = new DeviceAccess((await DeviceAsync(alice, "laptop")).Id, alice.UserId);
+        var computer = await ComputerAsync(alice);
+
+        var attempts = await Task.WhenAll(Enumerable.Range(0, 8).Select(async n =>
+        {
+            try
+            {
+                await (n % 2 == 0
+                    ? devices.CreateInviteAsync(browser, Ids.New(), default)
+                    : devices.CreateInviteAsync(computer, Ids.New(), default));
+                return true;
+            }
+            catch (GatewayFault fault) when (fault.Code == "invite-limit")
+            {
+                return false;
+            }
+        }));
+
+        Assert.Equal(3, attempts.Count(ok => ok));
+        Assert.Equal(3, await database.ScalarLongAsync($"SELECT COUNT(*) FROM invites WHERE owner_id = '{alice.UserId}'"));
+    }
+
+    /// <summary>
+    /// An invitation's id is the caller's to make, and it names one invitation. Used again - by the same
+    /// person or anyone else - it is refused rather than made to name a second invitation.
+    /// </summary>
+    [Fact]
+    public async Task An_invite_id_names_one_invitation()
+    {
+        var alice = await PersonAsync("alice");
+        var bob = await PersonAsync("bob");
+        var laptop = new DeviceAccess((await DeviceAsync(alice, "laptop")).Id, alice.UserId);
+        var computer = await ComputerAsync(alice);
+        var bobs = new DeviceAccess((await DeviceAsync(bob, "bobs")).Id, bob.UserId);
+        var id = Ids.New();
+        await Devices.CreateInviteAsync(laptop, id, default);
+
+        foreach (var attempt in new Func<Task>[]
+                 {
+                     () => Devices.CreateInviteAsync(laptop, id, default),
+                     () => Devices.CreateInviteAsync(computer, id, default),
+                     () => Devices.CreateInviteAsync(bobs, id, default)
+                 })
+        {
+            var refused = await Assert.ThrowsAsync<GatewayFault>(attempt);
+            Assert.Equal("conflict", refused.Code);
+            Assert.Equal(409, refused.Status);
+        }
+
+        Assert.Equal(1, await database.ScalarLongAsync($"SELECT COUNT(*) FROM invites WHERE id = '{id}'"));
+        Assert.Equal(1, await database.ScalarLongAsync(
+            $"SELECT COUNT(*) FROM audit WHERE owner_id = '{alice.UserId}' AND actor = 'user:{alice.UserId}' "
+            + $"AND action = 'invite-created' AND target = '{id}'"));
+    }
+
+    /// <summary>
+    /// Ids and the MAC as they are made and nothing else. The id columns ignore trailing spaces, so "id "
+    /// would find the invitation and store an enrollment under a spelling nobody asks for; a MAC that is
+    /// not 32 bytes of base64url could never verify, and the inviter would only find out by refusing it.
+    /// </summary>
+    [Theory]
+    [InlineData("inviteId", "trailing-space")]
+    [InlineData("inviteId", "uppercase")]
+    [InlineData("deviceId", "trailing-space")]
+    [InlineData("mac", "short")]
+    [InlineData("mac", "padded")]
+    [InlineData("mac", "missing")]
+    public async Task A_malformed_enrollment_is_refused(string field, string variant)
+    {
+        var owner = await PersonAsync("alice");
+        var laptop = new DeviceAccess((await DeviceAsync(owner, "laptop")).Id, owner.UserId);
+        var phone = await DeviceAsync(owner, "phone");
+        var invite = Ids.New();
+        await Devices.CreateInviteAsync(laptop, invite, default);
+        var mac = MacOf(invite, phone);
+
+        var refused = await Assert.ThrowsAsync<GatewayFault>(() => (field, variant) switch
+        {
+            ("inviteId", "trailing-space") => Devices.EnrollAsync(owner, invite + " ", phone.Id, mac, default),
+            ("inviteId", _) => Devices.EnrollAsync(owner, invite.ToUpperInvariant(), phone.Id, mac, default),
+            ("deviceId", _) => Devices.EnrollAsync(owner, invite, phone.Id + " ", mac, default),
+            ("mac", "short") => Devices.EnrollAsync(owner, invite, phone.Id, B64.Url(new byte[31]), default),
+            ("mac", "padded") => Devices.EnrollAsync(owner, invite, phone.Id, mac + "=", default),
+            _ => Devices.EnrollAsync(owner, invite, phone.Id, null, default)
+        });
+
+        Assert.Equal("bad-request", refused.Code);
+        Assert.Contains($"'{field}'", refused.Message);
+        Assert.Equal(0, await database.ScalarLongAsync($"SELECT COUNT(*) FROM enrollments WHERE invite_id = '{invite}'"));
+    }
+
+    [Fact]
+    public async Task Inviting_and_enrolling_need_a_live_device_of_the_callers()
+    {
+        using var alice = await PanelClient.SignedInAsync(_gateway, Name("alice"));
+        var owner = new UserAccess(alice.UserId, "unused");
+        var laptop = await DeviceAsync(owner, "laptop");
+        var phone = await DeviceAsync(owner, "phone");
+        var invite = Ids.New();
+
+        using (var unnamed = await alice.SendAsync(HttpMethod.Post, "/api/invites", new { id = invite }))
+        {
+            Assert.Equal(HttpStatusCode.BadRequest, unnamed.StatusCode);
+            Assert.Equal("device-header", (await ErrorAsync(unnamed)).Code);
+        }
+
+        using (var created = await PostInviteAsync(alice, laptop.Id, invite))
+        {
+            Assert.True(created.IsSuccessStatusCode, await created.Content.ReadAsStringAsync());
+        }
+
+        await Devices.RevokeAsync(owner, phone.Id, default);
+        using var removed = await PostEnrollmentAsync(alice, invite, phone.Id, MacOf(invite, phone));
+
+        Assert.Equal(HttpStatusCode.Forbidden, removed.StatusCode);
+        Assert.Equal("device-revoked", (await ErrorAsync(removed)).Code);
+        Assert.Equal(0, await database.ScalarLongAsync($"SELECT COUNT(*) FROM enrollments WHERE invite_id = '{invite}'"));
+
+        // A removed browser can no longer make invitations either.
+        await Devices.RevokeAsync(owner, laptop.Id, default);
+        using var revoked = await PostInviteAsync(alice, laptop.Id, Ids.New());
+        Assert.Equal(HttpStatusCode.Forbidden, revoked.StatusCode);
+    }
+
     // ── helpers ─────────────────────────────────────────────────────────────
+
+    /// <summary>An enrollment MAC, made the way a new device makes it, under a pair key nobody else holds.</summary>
+    private static string MacOf(string inviteId, (string Id, byte[] Key) device)
+        => Enrollment.Mac(PairKeyOfTests, inviteId, device.Id, device.Key);
+
+    // One key for the MACs these tests make, so a test can make the same MAC twice and compare it with the
+    // stored one. The gateway never checks it: it has no pair key.
+    private static readonly byte[] PairKeyOfTests = RandomNumberGenerator.GetBytes(32);
+
+    private static Task<HttpResponseMessage> PostInviteAsync(PanelClient browser, string deviceId, string inviteId)
+        => browser.SendAsync(HttpMethod.Post, "/api/invites", new { id = inviteId },
+            configure: request => request.Headers.Add(DeviceHeader.Name, deviceId));
+
+    private static Task<HttpResponseMessage> PostEnrollmentAsync(
+        PanelClient browser, string inviteId, string deviceId, string mac)
+        => browser.SendAsync(HttpMethod.Post, "/api/enrollments", new { inviteId, deviceId, mac });
+
+    private static Task<HttpResponseMessage> ReadEnrollmentAsync(PanelClient browser, string deviceId, string inviteId)
+        => browser.SendAsync(HttpMethod.Get, $"/api/invites/{inviteId}/enrollment",
+            configure: request => request.Headers.Add(DeviceHeader.Name, deviceId));
 
     private UserService Users => new(Db, Limits.Unlimited, TimeProvider.System);
 

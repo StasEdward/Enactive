@@ -118,11 +118,31 @@ public sealed class GatewayFault(string code, int status, string message) : Exce
 
     /// <summary>
     /// A grant that is not the shape of one, or that may not come from the caller. Both a computer and a
-    /// browser can be refused with it. It has no <see cref="FaultCode"/> yet: nothing on the Host sends
-    /// grants so far, and the code is classified there when something does - until then an unknown code is
-    /// retried, a bounded number of times, which loses nothing.
+    /// browser can be refused with it.
     /// </summary>
-    public static GatewayFault BadGrant(string message) => new("bad-grant", 400, message);
+    public static GatewayFault BadGrant(string message) => new(FaultCode.BadGrant, 400, message);
+
+    /// <summary>
+    /// An invitation that is not the caller's, or not there at all, in the same words for both: a refusal
+    /// that differed would answer "does somebody else have an invitation by that id?".
+    /// </summary>
+    public static GatewayFault UnknownInvite() => new(
+        FaultCode.UnknownInvite, 404, "That invitation does not exist.");
+
+    public static GatewayFault InviteLimit(int max) => new(
+        FaultCode.InviteLimit, 409,
+        $"This account already has {max:N0} open {(max == 1 ? "invitation" : "invitations")}. "
+        + "Wait for one to be used or to expire - each lasts ten minutes - to make another.");
+
+    /// <summary>
+    /// The invitation was answered already. Its own code, not a plain conflict: the new device that lost the
+    /// race tells the person to ask for a new invitation, which is the only thing that helps.
+    /// </summary>
+    public static GatewayFault InviteUsed() => new(
+        FaultCode.InviteUsed, 409, "That invitation has already been used. Ask for a new one.");
+
+    public static GatewayFault InviteExpired() => new(
+        FaultCode.InviteExpired, 410, "That invitation has expired. Ask for a new one.");
 
     // ── the ones only the owner API produces ────────────────────────────────
     //

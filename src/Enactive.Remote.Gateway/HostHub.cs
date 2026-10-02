@@ -91,6 +91,29 @@ public sealed class HostHub(
             return true;
         });
 
+    /// <summary>
+    /// An invitation for another device of this computer's owner, under an id the computer made. Its link,
+    /// with the pairing secret, is the computer's to show; the gateway only keeps the id, for ten minutes.
+    /// </summary>
+    public Task<HostReply<bool>> CreateInvite(string id)
+        => Guard(async () =>
+        {
+            await devices.CreateInviteAsync(Access, id, Context.ConnectionAborted);
+            return true;
+        });
+
+    /// <summary>The answers to this computer's invitations that it has not said it handled.</summary>
+    public Task<HostReply<IReadOnlyList<EnrollmentView>>> Enrollments()
+        => Guard(() => devices.EnrollmentsAsync(Access, Context.ConnectionAborted));
+
+    /// <summary>The computer has handled the answer to its invitation; it is not handed over again.</summary>
+    public Task<HostReply<bool>> AnsweredInvite(string id)
+        => Guard(async () =>
+        {
+            await devices.AnsweredInviteAsync(Access, id, Context.ConnectionAborted);
+            return true;
+        });
+
     private string HostId => Context.UserIdentifier
         ?? throw new HubException("This connection has no identity.");
 

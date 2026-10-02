@@ -1,5 +1,6 @@
 namespace Enactive.Remote.Gateway.Services;
 
+using System.Diagnostics.CodeAnalysis;
 using System.Security.Cryptography;
 using Enactive.Remote.Contracts;
 using Enactive.Remote.Contracts.Crypto;
@@ -19,6 +20,10 @@ using MySqlConnector;
 /// named, for update, in id order; then each device named, shared, in id order; then the grant rows. No
 /// other path locks a device and then a computer, and a device's revocation locks only the device before
 /// deleting its grants, so the two wait for each other but never in a cycle.</para>
+///
+/// <para><b>Lock order for an invitation.</b> The account (for update when an invitation is made, shared on a
+/// computer's other calls), then the computer that made it, shared; then the invitation; then its
+/// enrollment. Answering an invitation locks only the invitation, so it waits on nothing above it.</para>
 /// </summary>
 public sealed class DeviceService(Database db, Limits limits, TimeProvider clock)
 {
@@ -606,11 +611,14 @@ public sealed class DeviceService(Database db, Limits limits, TimeProvider clock
     /// </summary>
     private static void RequireId(int index, string? id, string field)
     {
-        if (id is not { Length: 32 } || id.AsSpan().ContainsAnyExcept("0123456789abcdef"))
+        if (!IsId(id))
         {
             throw BadGrant(index, field, "must be an id as this service issues them: 32 lowercase hex characters.");
         }
     }
+
+    private static bool IsId([NotNullWhen(true)] string? id)
+        => id is { Length: 32 } && !id.AsSpan().ContainsAnyExcept("0123456789abcdef");
 
     /// <summary>
     /// The bytes of a field, of the given length, in the one spelling <see cref="B64.Url"/> writes. The
@@ -619,9 +627,12 @@ public sealed class DeviceService(Database db, Limits limits, TimeProvider clock
     /// here and was then refused by every device it reached.
     /// </summary>
     private static byte[] RequireBytes(int index, string? text, int length, string field)
-    {
-        byte[] bytes;
+        => IsCanonical(text, length, out var bytes)
+            ? bytes
+            : throw BadGrant(index, field, $"must be {length} bytes, as base64url text.");
 
+    private static bool IsCanonical(string? text, int length, out byte[] bytes)
+    {
         try
         {
             bytes = B64.FromUrl(text ?? "");
@@ -631,9 +642,7 @@ public sealed class DeviceService(Database db, Limits limits, TimeProvider clock
             bytes = [];
         }
 
-        return bytes.Length == length && string.Equals(B64.Url(bytes), text, StringComparison.Ordinal)
-            ? bytes
-            : throw BadGrant(index, field, $"must be {length} bytes, as base64url text.");
+        return bytes.Length == length && string.Equals(B64.Url(bytes), text, StringComparison.Ordinal);
     }
 
     // Numbered from 1 and naming the field, so the sender can tell which grant of a batch was refused, and why.
@@ -641,6 +650,334 @@ public sealed class DeviceService(Database db, Limits limits, TimeProvider clock
         => GatewayFault.BadGrant($"Grant {index + 1}: '{field}' {why}");
 
     private sealed record CheckedGrant(KeyGrant Grant, byte[] SigningPublic);
+
+    // ── invitations ─────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// How long an invitation can be answered. Its link carries the pairing secret, and a link left in a
+    /// chat history or a screenshot must stop admitting anybody soon after the person who made it is done.
+    /// </summary>
+    public static readonly TimeSpan InviteLifetime = TimeSpan.FromMinutes(10);
+
+    /// <summary>
+    /// A trusted browser invites another device. The id is the browser's own making: it is in the link the
+    /// browser shows, beside the pairing secret this gateway never sees. Returns when the invitation expires.
+    /// </summary>
+    public Task<DateTimeOffset> CreateInviteAsync(DeviceAccess device, string? id, CancellationToken ct)
+    {
+        var inviteId = RequireInviteId(id, "id");
+
+        return db.InTransactionAsync(async (connection, transaction) =>
+        {
+            // The lock the count is taken under, and the refusal for an account deleted since its session was
+            // checked, as in RegisterAsync.
+            if (!await connection.ExistsAsync(transaction,
+                    "SELECT 1 FROM users WHERE id = @owner FOR UPDATE", ("@owner", device.OwnerId)))
+            {
+                throw GatewayFault.Unauthenticated();
+            }
+
+            return await InsertInviteAsync(
+                connection, transaction, device.OwnerId, inviteId, null, device.DeviceId, "user:" + device.OwnerId);
+        }, ct);
+    }
+
+    /// <summary>A computer invites another device of its owner's ("Add a device" on the desktop).</summary>
+    public Task<DateTimeOffset> CreateInviteAsync(HostAccess host, string? id, CancellationToken ct)
+    {
+        var inviteId = RequireInviteId(id, "id");
+
+        return db.InTransactionAsync(async (connection, transaction) =>
+        {
+            await AuthorizeComputerAsync(connection, transaction, host, lockAccount: true);
+
+            return await InsertInviteAsync(
+                connection, transaction, host.OwnerId, inviteId, host.HostId, null, "host:" + host.HostId);
+        }, ct);
+    }
+
+    /// <summary>
+    /// The account's row is locked by the caller, so the count and the insert are one step: counted without
+    /// the lock, two invitations that both read "one place left" were both made. The count comes after the
+    /// lock for the reason given in <see cref="RegisterAsync"/>.
+    /// </summary>
+    private async Task<DateTimeOffset> InsertInviteAsync(
+        MySqlConnection connection, MySqlTransaction transaction, string ownerId, string inviteId,
+        string? byHost, string? byDevice, string actor)
+    {
+        var now = clock.GetUtcNow();
+
+        // Used and expired invitations are not open. An expired one can no longer admit anybody, and nothing
+        // deletes it yet: counted, it would hold a place for nothing until something did.
+        var open = await connection.ReadOneAsync(transaction,
+            "SELECT COUNT(*) FROM invites WHERE owner_id = @owner AND consumed_at IS NULL AND expires_at > @now",
+            reader => reader.GetInt64(0), ("@owner", ownerId), ("@now", now));
+
+        if (open >= limits.OpenInvitesPerUser)
+        {
+            throw GatewayFault.InviteLimit(limits.OpenInvitesPerUser);
+        }
+
+        var expires = now + InviteLifetime;
+
+        try
+        {
+            await connection.ExecuteAsync(transaction,
+                """
+                INSERT INTO invites (id, owner_id, created_by_host, created_by_device, created_at, expires_at)
+                VALUES (@id, @owner, @host, @device, @now, @expires)
+                """,
+                ("@id", inviteId), ("@owner", ownerId), ("@host", (object?)byHost ?? DBNull.Value),
+                ("@device", (object?)byDevice ?? DBNull.Value), ("@now", now), ("@expires", expires));
+        }
+        catch (MySqlException error) when (error.ErrorCode == MySqlErrorCode.DuplicateKeyEntry)
+        {
+            // The caller makes the id, and one id names one invitation: replacing the one there would hand its
+            // answer to another inviter. The same words whoever holds it, so the refusal tells nobody whose it is.
+            throw GatewayFault.Conflict("An invitation with that id exists already; make another id.");
+        }
+
+        await AuditAsync(connection, transaction, ownerId, actor, "invite-created", inviteId, now);
+        return expires;
+    }
+
+    /// <summary>
+    /// A new device answers an invitation of its person's. The invitation's row is read under a lock and
+    /// marked used in the same transaction as the enrollment is stored, so two devices answering at once
+    /// queue there and the second is told it is used: read without the lock, both found it open and both
+    /// enrolled.
+    ///
+    /// <para>The MAC is stored as sent, after a check of its shape only. The gateway has no pair key and
+    /// cannot verify it; the inviter does, and that check is what stops a gateway putting another key in
+    /// the new device's place.</para>
+    /// </summary>
+    public async Task EnrollAsync(
+        UserAccess user, string? inviteId, string? deviceId, string? mac, CancellationToken ct)
+    {
+        var invite = RequireInviteId(inviteId, "inviteId");
+
+        if (!IsId(deviceId))
+        {
+            throw GatewayFault.BadRequest(
+                "'deviceId' must be an id as this service issues them: 32 lowercase hex characters.");
+        }
+
+        // One spelling of the bytes, as for a grant's MAC: a MAC that could never verify is refused here,
+        // where the new device sees the refusal, not later by an inviter nobody is watching.
+        if (!IsCanonical(mac, HmacLength, out _))
+        {
+            throw GatewayFault.BadRequest($"'mac' must be {HmacLength} bytes, as base64url text.");
+        }
+
+        // The answering device is the person's own and not removed - whichever device makes the call.
+        await RequireAsync(user, deviceId, ct);
+
+        await db.InTransactionAsync(async (connection, transaction) =>
+        {
+            // FORCE INDEX, as in RevokeAsync: through the primary key Bob naming Alice's invitation would
+            // lock her row before the owner filter refused it.
+            var row = await connection.ReadOneAsync(transaction,
+                """
+                SELECT consumed_at IS NOT NULL AS used, expires_at FROM invites FORCE INDEX (ux_invites_owner)
+                WHERE owner_id = @owner AND id = @id
+                FOR UPDATE
+                """,
+                reader => ((bool Used, DateTimeOffset ExpiresAt)?)(reader.GetBoolean("used"), reader.Utc("expires_at")),
+                ("@owner", user.UserId), ("@id", invite));
+
+            if (row is null)
+            {
+                throw GatewayFault.UnknownInvite();
+            }
+
+            if (row.Value.Used)
+            {
+                throw GatewayFault.InviteUsed();
+            }
+
+            var now = clock.GetUtcNow();
+
+            if (row.Value.ExpiresAt <= now)
+            {
+                throw GatewayFault.InviteExpired();
+            }
+
+            await connection.ExecuteAsync(transaction,
+                """
+                INSERT INTO enrollments (invite_id, owner_id, device_id, mac, created_at)
+                VALUES (@id, @owner, @device, @mac, @now)
+                """,
+                ("@id", invite), ("@owner", user.UserId), ("@device", deviceId), ("@mac", mac), ("@now", now));
+
+            await connection.ExecuteAsync(transaction,
+                "UPDATE invites SET consumed_at = @now WHERE owner_id = @owner AND id = @id",
+                ("@now", now), ("@owner", user.UserId), ("@id", invite));
+
+            await AuditAsync(connection, transaction, user, "device-enrolled", deviceId, now);
+        }, ct);
+    }
+
+    /// <summary>
+    /// The answer to an invitation a browser of this person's made, or null while there is none. Any of the
+    /// person's live devices may read it: the pairing secret, not the reader, is what protects it - the MAC
+    /// is worth nothing to anybody without the secret. An invitation a computer made is the computer's to
+    /// read, and is refused here like a missing one.
+    /// </summary>
+    public async Task<EnrollmentView?> ReadEnrollmentAsync(DeviceAccess device, string inviteId, CancellationToken ct)
+    {
+        // Not an id at all is not anybody's invitation. Checked because the id column ignores trailing
+        // spaces: "id " would have found the invitation.
+        if (!IsId(inviteId))
+        {
+            throw GatewayFault.UnknownInvite();
+        }
+
+        await using var connection = await db.OpenAsync(ct);
+
+        // An answer from a device removed since is left out, as for a computer below: the inviter would
+        // otherwise grant keys to a browser the person has already cut off.
+        var rows = await connection.ReadAllAsync(null,
+            """
+            SELECT e.device_id, d.public_key, d.label, e.mac
+            FROM invites i
+            LEFT JOIN enrollments e ON e.owner_id = i.owner_id AND e.invite_id = i.id
+            LEFT JOIN devices d ON d.owner_id = e.owner_id AND d.id = e.device_id AND d.revoked_at IS NULL
+            WHERE i.owner_id = @owner AND i.id = @id AND i.created_by_device IS NOT NULL
+            """,
+            reader => reader.IsDBNull(reader.GetOrdinal("public_key")) ? null : Enrollment(reader, inviteId),
+            ("@owner", device.OwnerId), ("@id", inviteId));
+
+        return rows.Count == 0 ? throw GatewayFault.UnknownInvite() : rows[0];
+    }
+
+    /// <summary>
+    /// The answers to this computer's own invitations that it has not handled yet, oldest first. Another
+    /// computer's are not among them, nor a browser's: each is for whoever holds its invitation's secret.
+    /// </summary>
+    public Task<IReadOnlyList<EnrollmentView>> EnrollmentsAsync(HostAccess host, CancellationToken ct)
+        => db.InTransactionAsync<IReadOnlyList<EnrollmentView>>(async (connection, transaction) =>
+        {
+            await AuthorizeComputerAsync(connection, transaction, host, lockAccount: false);
+
+            return await connection.ReadAllAsync(transaction,
+                """
+                SELECT e.invite_id, e.device_id, d.public_key, d.label, e.mac
+                FROM invites i
+                JOIN enrollments e ON e.owner_id = i.owner_id AND e.invite_id = i.id
+                JOIN devices d ON d.owner_id = e.owner_id AND d.id = e.device_id
+                WHERE i.owner_id = @owner AND i.created_by_host = @host
+                  AND e.answered_at IS NULL AND d.revoked_at IS NULL
+                ORDER BY e.created_at, e.invite_id
+                """,
+                reader => Enrollment(reader, reader.GetString("invite_id")),
+                ("@owner", host.OwnerId), ("@host", host.HostId));
+        }, ct);
+
+    /// <summary>
+    /// The computer has handled the answer to its invitation, so it is not handed over again. Saying so
+    /// twice succeeds: the computer repeats it after a reply it did not receive, and a refusal would have it
+    /// repeat it for ever. Another computer's invitation, another person's, and one nobody has answered are
+    /// all refused like a missing one.
+    /// </summary>
+    public Task AnsweredInviteAsync(HostAccess host, string? inviteId, CancellationToken ct)
+    {
+        if (!IsId(inviteId))
+        {
+            throw GatewayFault.UnknownInvite();
+        }
+
+        return db.InTransactionAsync(async (connection, transaction) =>
+        {
+            await AuthorizeComputerAsync(connection, transaction, host, lockAccount: false);
+
+            // Two statements, not one join: in a join the optimiser may read the enrollment first, through its
+            // primary key, and lock another person's row before any owner filter applies. Once the invitation
+            // is known to be this computer's, its enrollment is the same person's.
+            var own = await connection.ExistsAsync(transaction,
+                """
+                SELECT 1 FROM invites FORCE INDEX (ux_invites_owner)
+                WHERE owner_id = @owner AND id = @id AND created_by_host = @host
+                """,
+                ("@owner", host.OwnerId), ("@id", inviteId), ("@host", host.HostId));
+
+            var answered = own
+                ? await connection.ReadOneAsync(transaction,
+                    "SELECT answered_at IS NOT NULL FROM enrollments WHERE owner_id = @owner AND invite_id = @id FOR UPDATE",
+                    reader => (bool?)reader.GetBoolean(0), ("@owner", host.OwnerId), ("@id", inviteId))
+                : null;
+
+            if (answered is null)
+            {
+                throw GatewayFault.UnknownInvite();
+            }
+
+            if (!answered.Value)
+            {
+                await connection.ExecuteAsync(transaction,
+                    "UPDATE enrollments SET answered_at = @now WHERE owner_id = @owner AND invite_id = @id",
+                    ("@now", clock.GetUtcNow()), ("@owner", host.OwnerId), ("@id", inviteId));
+            }
+        }, ct);
+    }
+
+    private static EnrollmentView Enrollment(MySqlDataReader reader, string inviteId) => new(
+        inviteId,
+        reader.GetString("device_id"),
+        B64.Url((byte[])reader["public_key"]),
+        reader.GetString("label"),
+        reader.GetString("mac"));
+
+    /// <summary>
+    /// The account is active and the computer live, read inside the call's transaction as on every call of a
+    /// computer's (see <see cref="HostService"/>). The account's row is locked for update when the call counts
+    /// the account's invitations under it, and shared otherwise; nothing here writes the computer's row, so
+    /// it is shared. Taken shared and then wanted for update, the account's row would deadlock two
+    /// invitations made at once, each holding it shared and waiting for the other to let go.
+    /// </summary>
+    private static async Task AuthorizeComputerAsync(
+        MySqlConnection connection, MySqlTransaction transaction, HostAccess host, bool lockAccount)
+    {
+        var status = await connection.ReadOneAsync(transaction,
+            lockAccount
+                ? "SELECT status FROM users WHERE id = @owner FOR UPDATE"
+                : "SELECT status FROM users WHERE id = @owner FOR SHARE",
+            reader => reader.GetString("status"), ("@owner", host.OwnerId));
+
+        // Not there at all is a computer whose account is gone, and its row with it: the unknown-computer
+        // refusal below.
+        if (status is not null && status != "Active")
+        {
+            throw GatewayFault.AccountDisabled();
+        }
+
+        var revoked = await connection.ReadOneAsync(transaction,
+            """
+            SELECT revoked FROM hosts FORCE INDEX (ux_hosts_owner)
+            WHERE owner_id = @owner AND id = @host
+            FOR SHARE
+            """,
+            reader => (bool?)reader.GetBoolean("revoked"), ("@owner", host.OwnerId), ("@host", host.HostId));
+
+        if (revoked is null)
+        {
+            throw GatewayFault.UnknownHost();
+        }
+
+        if (revoked.Value)
+        {
+            throw GatewayFault.HostRevoked();
+        }
+    }
+
+    /// <summary>
+    /// An invitation's id as its maker sends it: 32 lowercase hex characters, as <see cref="Ids.New"/> makes
+    /// them. Anything else is refused rather than stored: the id column ignores trailing spaces, so "id "
+    /// would name the same invitation as "id".
+    /// </summary>
+    private static string RequireInviteId(string? id, string field)
+        => IsId(id)
+            ? id
+            : throw GatewayFault.BadRequest($"'{field}' must be an invitation id: 32 lowercase hex characters.");
 
     /// <summary>
     /// A key as the panel sends it, decoded. Text that is not base64url is a bad key, like one of the
@@ -683,10 +1020,14 @@ public sealed class DeviceService(Database db, Limits limits, TimeProvider clock
     private static Task AuditAsync(
         MySqlConnection connection, MySqlTransaction transaction, UserAccess user, string action,
         string target, DateTimeOffset now)
+        => AuditAsync(connection, transaction, user.UserId, "user:" + user.UserId, action, target, now);
+
+    private static Task AuditAsync(
+        MySqlConnection connection, MySqlTransaction transaction, string ownerId, string actor, string action,
+        string target, DateTimeOffset now)
         => connection.ExecuteAsync(transaction,
             "INSERT INTO audit (owner_id, at, actor, action, target) VALUES (@owner, @at, @actor, @action, @target)",
-            ("@owner", user.UserId), ("@at", now), ("@actor", "user:" + user.UserId), ("@action", action),
-            ("@target", target));
+            ("@owner", ownerId), ("@at", now), ("@actor", actor), ("@action", action), ("@target", target));
 }
 
 /// <summary>A device as the panel lists it. The key is base64url text, as it was registered.</summary>

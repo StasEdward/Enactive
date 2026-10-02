@@ -117,6 +117,11 @@ public sealed class RemoteContractsTests
     [InlineData(FaultCode.ActionHashMismatch)]
     [InlineData(FaultCode.MalformedEvent)]
     [InlineData(FaultCode.EnvelopeMalformed)]
+    [InlineData(FaultCode.BadGrant)]
+    [InlineData(FaultCode.UnknownInvite)]
+    [InlineData(FaultCode.InviteLimit)]
+    [InlineData(FaultCode.InviteUsed)]
+    [InlineData(FaultCode.InviteExpired)]
     public void A_settled_condition_is_dropped(string code)
         => Assert.Equal(FaultDisposition.Drop, RemoteFaults.DispositionOf(code));
 
