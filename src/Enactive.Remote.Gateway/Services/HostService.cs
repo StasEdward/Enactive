@@ -44,7 +44,7 @@ using MySqlConnector;
 /// permission requests arrive sealed. This checks that each is an envelope of a sensible size and
 /// stores it as it came; only a trusted browser can open it.</para>
 /// </summary>
-public sealed class HostService(Database database, Limits limits)
+public sealed class HostService(Database database)
 {
     private const int MaxWorkspaces = 100;
 
@@ -300,8 +300,8 @@ public sealed class HostService(Database database, Limits limits)
             var now = DateTimeOffset.UtcNow;
             var status = await ApplyAsync(connection, transaction, run, published, now);
 
-            await Quota.ChargeSealedAsync(
-                connection, transaction, run.OwnerId, Quota.SizeOf(published.SealedDetail), limits);
+            // Counted, never refused: a run must always be able to report, and to end (see Quota.AddSealedAsync).
+            await Quota.AddSealedAsync(connection, transaction, run.OwnerId, Quota.SizeOf(published.SealedDetail));
 
             await connection.ExecuteAsync(transaction,
                 """
@@ -320,6 +320,12 @@ public sealed class HostService(Database database, Limits limits)
             // of its own. It opens only under that event's associated data, so its sequence is kept
             // beside it; the kind is the run's terminal status, which is named like the event's kind.
             var ended = RunLifecycle.IsTerminal(status);
+
+            // The summary is a second copy and is counted as one; retention gives it back with the run.
+            if (ended)
+            {
+                await Quota.AddSealedAsync(connection, transaction, run.OwnerId, Quota.SizeOf(published.SealedDetail));
+            }
 
             await connection.ExecuteAsync(transaction,
                 """
@@ -341,7 +347,7 @@ public sealed class HostService(Database database, Limits limits)
     /// The transition itself: what this kind of event does to a run in this state, and to the
     /// approvals hanging off it. Returns the status the run is left in.
     /// </summary>
-    private async Task<RemoteRunStatus> ApplyAsync(
+    private static async Task<RemoteRunStatus> ApplyAsync(
         MySqlConnection connection, MySqlTransaction transaction,
         RunRow run, HostEvent published, DateTimeOffset now)
     {
@@ -403,7 +409,7 @@ public sealed class HostService(Database database, Limits limits)
         }
     }
 
-    private async Task<RemoteRunStatus> RequestApprovalAsync(
+    private static async Task<RemoteRunStatus> RequestApprovalAsync(
         MySqlConnection connection, MySqlTransaction transaction,
         RunRow run, HostEvent published, DateTimeOffset now)
     {
@@ -423,8 +429,7 @@ public sealed class HostService(Database database, Limits limits)
             throw GatewayFault.Conflict($"Approval {request.ApprovalId} already exists.");
         }
 
-        await Quota.ChargeSealedAsync(
-            connection, transaction, run.OwnerId, Quota.SizeOf(request.SealedAction), limits);
+        await Quota.AddSealedAsync(connection, transaction, run.OwnerId, Quota.SizeOf(request.SealedAction));
 
         // What the request is about stays sealed. The tool call, the hash an answer must carry and
         // whether it may be answered from the web are in the clear because the gateway enforces them.
@@ -656,13 +661,12 @@ public sealed class HostService(Database database, Limits limits)
     /// envelope copied as it came, with the event's sequence and kind, which are what the panel
     /// rebuilds the associated data from - without them the copy could never be opened.
     /// </summary>
-    private async Task NoticeAsync(
+    private static async Task NoticeAsync(
         MySqlConnection connection, MySqlTransaction transaction,
         RunRow run, string kind, HostEvent published, DateTimeOffset at)
     {
         // A copy is stored bytes like the original, and retention gives it back when it deletes the notice.
-        await Quota.ChargeSealedAsync(
-            connection, transaction, run.OwnerId, Quota.SizeOf(published.SealedDetail), limits);
+        await Quota.AddSealedAsync(connection, transaction, run.OwnerId, Quota.SizeOf(published.SealedDetail));
 
         await connection.ExecuteAsync(transaction,
             """

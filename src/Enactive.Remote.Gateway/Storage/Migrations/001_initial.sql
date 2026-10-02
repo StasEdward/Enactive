@@ -177,6 +177,11 @@ CREATE TABLE IF NOT EXISTS runs (
   UNIQUE KEY ux_runs_owner_host (owner_id, host_id, id),
   KEY ix_runs_owner_task (owner_id, task_id, created_at),
   KEY ix_runs_owner_created (owner_id, created_at),
+  -- What a start counts its account's active runs through, under the account's lock. Without it the count
+  -- read every run the account ever had, on every start, while the account's other calls waited.
+  KEY ix_runs_owner_status (owner_id, status),
+  -- What retention removes ended runs through, the longest-ended first.
+  KEY ix_runs_owner_ended (owner_id, ended_at),
   CONSTRAINT fk_runs_task FOREIGN KEY (owner_id, host_id, task_id) REFERENCES tasks (owner_id, host_id, id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
@@ -184,6 +189,7 @@ CREATE TABLE IF NOT EXISTS commands (
   owner_id    CHAR(32)    CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   id          VARCHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   host_id     CHAR(32)    CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  run_id      CHAR(32)    CHARACTER SET ascii COLLATE ascii_bin NULL,      -- the run it is about; retention removes it with the run
   kind        VARCHAR(20) CHARACTER SET ascii NOT NULL,
   payload     MEDIUMTEXT  CHARACTER SET ascii NOT NULL,
   fingerprint CHAR(64)    CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
@@ -193,6 +199,7 @@ CREATE TABLE IF NOT EXISTS commands (
   PRIMARY KEY (owner_id, id),
   KEY ix_commands_delivery (host_id, status, created_at),
   KEY ix_commands_expiry (status, expires_at),
+  KEY ix_commands_owner_run (owner_id, run_id),
   CONSTRAINT fk_commands_host FOREIGN KEY (owner_id, host_id) REFERENCES hosts (owner_id, id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 

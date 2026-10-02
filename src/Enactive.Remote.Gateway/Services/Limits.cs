@@ -115,15 +115,17 @@ internal static class Quota
     }
 
     /// <summary>
-    /// Adds <paramref name="bytes"/> of sealed text to the account's total, or refuses when it would pass
-    /// the limit. The caller holds the account's lock and writes the rows in the same transaction, so the
-    /// total and the rows commit together or not at all.
+    /// Adds <paramref name="bytes"/> of sealed text the PERSON is creating to the account's total, or refuses
+    /// when it would pass the limit. The caller holds the account's lock and writes the rows in the same
+    /// transaction, so the total and the rows commit together or not at all.
     ///
     /// <para>The sealed columns are ASCII, so a string's length is its size in bytes, which is what
     /// <c>LENGTH()</c> gives back when retention subtracts them again.</para>
     /// </summary>
+    /// <param name="retentionDays">How long until retention gives space back, for the refusal to say.</param>
     public static async Task ChargeSealedAsync(
-        MySqlConnection connection, MySqlTransaction transaction, string ownerId, long bytes, Limits limits)
+        MySqlConnection connection, MySqlTransaction transaction, string ownerId, long bytes, Limits limits,
+        int retentionDays)
     {
         if (bytes <= 0)
         {
@@ -136,15 +138,26 @@ internal static class Quota
 
         if (held + bytes > limits.SealedBytesPerUser)
         {
-            throw GatewayFault.QuotaExceeded(
-                "bytes of sealed tasks and history", limits.SealedBytesPerUser,
-                "older history is removed as it passes the retention window");
+            throw GatewayFault.StorageFull(limits.SealedBytesPerUser, retentionDays);
         }
 
-        await connection.ExecuteAsync(transaction,
-            "UPDATE users SET sealed_bytes = sealed_bytes + @bytes WHERE id = @owner",
-            ("@bytes", bytes), ("@owner", ownerId));
+        await AddSealedAsync(connection, transaction, ownerId, bytes);
     }
+
+    /// <summary>
+    /// Adds what a COMPUTER stores about a run to the account's total, and never refuses it (controller ruling
+    /// I2 of Task 8.1). Refused, a run's events - its end among them - reached the computer as the code it
+    /// waits out, so the whole outbox stopped, the run stayed "running" on the panel and kept its active-run
+    /// place. A run in progress may take the account past its limit by its own output; the person's next
+    /// start is what is refused, and retention gives the bytes back with the run.
+    /// </summary>
+    public static Task AddSealedAsync(
+        MySqlConnection connection, MySqlTransaction transaction, string ownerId, long bytes)
+        => bytes <= 0
+            ? Task.CompletedTask
+            : connection.ExecuteAsync(transaction,
+                "UPDATE users SET sealed_bytes = sealed_bytes + @bytes WHERE id = @owner",
+                ("@bytes", bytes), ("@owner", ownerId));
 
     /// <summary>The length of each sealed field, none counting nothing.</summary>
     public static long SizeOf(params string?[] sealedFields)

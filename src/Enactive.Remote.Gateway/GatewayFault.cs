@@ -189,6 +189,16 @@ public sealed class GatewayFault(string code, int status, string message) : Exce
         $"This account already has {limit:N0} {things}, the most it may; {remedy}.");
 
     /// <summary>
+    /// The account's sealed tasks and history would pass its storage limit. Its own sentence, in megabytes and
+    /// with what frees the space: a count of bytes means little to a person, and "already has" was untrue -
+    /// it is the refused task or start that would pass the limit.
+    /// </summary>
+    public static GatewayFault StorageFull(long limitBytes, int retentionDays) => new(
+        FaultCode.QuotaExceeded, 409,
+        $"This would take this account past its {limitBytes / (1024.0 * 1024.0):0.#} MB of stored tasks and "
+        + $"history, the most it may; older runs are removed after {retentionDays} days.");
+
+    /// <summary>
     /// A device-bound call that does not say which device it is made from. One code here so every such
     /// endpoint answers it the same way, and the panel can tell it from an unknown device.
     /// </summary>

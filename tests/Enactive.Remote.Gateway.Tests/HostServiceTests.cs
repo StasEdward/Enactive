@@ -35,7 +35,7 @@ public sealed class HostServiceTests(TestDatabase database) : IClassFixture<Test
 
     private Database Db => new(database.ConnectionString);
 
-    private HostService Service => new(Db, Limits.Unlimited);
+    private HostService Service => new(Db);
 
     private UserService Users => new(Db, Limits.Unlimited, TimeProvider.System);
 

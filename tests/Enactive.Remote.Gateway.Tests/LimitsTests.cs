@@ -59,6 +59,26 @@ public sealed class LimitsTests(TestDatabase database) : IClassFixture<TestDatab
     private Task<long> SealedBytesAsync(UserAccess user)
         => CountAsync($"SELECT sealed_bytes FROM users WHERE id = '{user.UserId}'");
 
+    /// <summary>
+    /// The size of every sealed field the account stores that is charged: what its total must equal. A start
+    /// command's whole payload is charged, since it carries a copy of the task.
+    /// </summary>
+    private Task<long> StoredAsync(UserAccess user)
+    {
+        var owner = $"owner_id = '{user.UserId}'";
+        return CountAsync(
+            $"""
+            SELECT (SELECT COALESCE(SUM(LENGTH(sealed)), 0) FROM tasks WHERE {owner})
+                 + (SELECT COALESCE(SUM(LENGTH(sealed_summary)), 0) FROM runs WHERE {owner})
+                 + (SELECT COALESCE(SUM(LENGTH(sealed_detail)), 0) FROM events WHERE {owner})
+                 + (SELECT COALESCE(SUM(LENGTH(sealed_action)), 0) FROM approvals WHERE {owner})
+                 + (SELECT COALESCE(SUM(LENGTH(sealed_detail)), 0) FROM notices WHERE {owner})
+                 + (SELECT COALESCE(SUM(LENGTH(payload)), 0) FROM commands WHERE {owner} AND kind = 'StartTask')
+            """);
+    }
+
+    private static string RunOf(HostCommand start) => RemoteJson.Deserialize<StartTaskPayload>(start.Payload).RunId;
+
     // ── computers ───────────────────────────────────────────────────────────
 
     /// <summary>
@@ -122,7 +142,7 @@ public sealed class LimitsTests(TestDatabase database) : IClassFixture<TestDatab
         var alice = await PersonAsync("alice");
         var limits = Limits.Unlimited with { ActiveRunsPerUser = 2 };
         var users = new UserService(Db, limits, TimeProvider.System);
-        var host = await ComputerAsync(users, new HostService(Db, limits), alice);
+        var host = await ComputerAsync(users, new HostService(Db), alice);
 
         var tasks = new List<string>();
         for (var i = 0; i < 3; i++)
@@ -133,13 +153,20 @@ public sealed class LimitsTests(TestDatabase database) : IClassFixture<TestDatab
         }
 
         var started = await users.StartAsync(alice, tasks[0], Uuid(), Sealed("start"), default);
-        await users.StartAsync(alice, tasks[1], Uuid(), Sealed("start"), default);
+        var secondId = Uuid();
+        var secondSeal = Sealed("start");
+        var second = await users.StartAsync(alice, tasks[1], secondId, secondSeal, default);
 
         var refused = await Assert.ThrowsAsync<GatewayFault>(
             () => users.StartAsync(alice, tasks[2], Uuid(), Sealed("start"), default));
         Assert.Equal(FaultCode.QuotaExceeded, refused.Code);
         Assert.Equal(409, refused.Status);
         Assert.Contains("2 ", refused.Message, StringComparison.Ordinal);
+
+        // A retry of a start already queued is answered with the same command at the limit, not refused: its
+        // reply was lost, and the run it asked for is one of the two.
+        var retried = await users.StartAsync(alice, tasks[1], secondId, secondSeal, default);
+        Assert.Equal((second.Id, RunOf(second)), (retried.Id, RunOf(retried)));
 
         var runId = RemoteJson.Deserialize<StartTaskPayload>(started.Payload).RunId;
         await database.ExecuteAsync($"UPDATE runs SET status = 'Completed' WHERE id = '{runId}'");
@@ -157,7 +184,7 @@ public sealed class LimitsTests(TestDatabase database) : IClassFixture<TestDatab
         var alice = await PersonAsync("alice");
         var limits = Limits.Unlimited with { TasksPerDay = 2 };
         var users = new UserService(Db, limits, TimeProvider.System);
-        var host = await ComputerAsync(users, new HostService(Db, limits), alice);
+        var host = await ComputerAsync(users, new HostService(Db), alice);
 
         var first = Uuid();
         var sealedFirst = Sealed("first");
@@ -186,7 +213,7 @@ public sealed class LimitsTests(TestDatabase database) : IClassFixture<TestDatab
         var alice = await PersonAsync("alice");
         var limits = Limits.Unlimited with { QueuedCommandsPerHost = 2 };
         var users = new UserService(Db, limits, TimeProvider.System);
-        var hosts = new HostService(Db, limits);
+        var hosts = new HostService(Db);
         var busy = await ComputerAsync(users, hosts, alice);
         var other = await ComputerAsync(users, hosts, alice);
 
@@ -210,12 +237,75 @@ public sealed class LimitsTests(TestDatabase database) : IClassFixture<TestDatab
         await RevokeOn(busy, Uuid(), Sealed("device-3"));
     }
 
+    /// <summary>
+    /// A computer that is revoked can never report again, and its runs cannot be stopped from here: they are
+    /// ended when it is revoked, their open requests withdrawn, and a run that is somehow still open on a
+    /// revoked computer holds no place. Shown red by revoking without ending the runs and counting every
+    /// computer's runs: the account can then start nothing, for good.
+    /// </summary>
+    [Fact]
+    public async Task A_run_on_a_revoked_computer_does_not_hold_a_place()
+    {
+        var alice = await PersonAsync("alice");
+        var users = new UserService(Db, Limits.Unlimited with { ActiveRunsPerUser = 1 }, TimeProvider.System);
+        var hosts = new HostService(Db);
+        var dead = await ComputerAsync(users, hosts, alice);
+        var live = await ComputerAsync(users, hosts, alice);
+
+        var deadTask = Uuid();
+        await users.CreateTaskAsync(alice, deadTask, dead.HostId, "workspace-1", Sealed("on the old PC"), default);
+        var liveTask = Uuid();
+        await users.CreateTaskAsync(alice, liveTask, live.HostId, "workspace-1", Sealed("on the new PC"), default);
+
+        var runId = RunOf(await users.StartAsync(alice, deadTask, Uuid(), Sealed("start"), default));
+        await hosts.PublishAsync(dead, new HostEvent(Uuid(), runId, 1, RemoteEventKind.Running));
+        await hosts.PublishAsync(dead, new HostEvent(Uuid(), runId, 2, RemoteEventKind.ApprovalRequested,
+            Sealed("May I?"), new ApprovalRequest("approval-1", "call-1", "hash-1", true, Sealed("rm -rf"))));
+
+        await users.RevokeHostAsync(alice, dead.HostId, default);
+
+        Assert.Equal("Interrupted", Assert.Single(await database.StringsAsync(
+            $"SELECT status FROM runs WHERE id = '{runId}' AND ended_at IS NOT NULL AND sealed_summary IS NULL")));
+        Assert.Equal("Invalidated", Assert.Single(await database.StringsAsync(
+            $"SELECT status FROM approvals WHERE run_id = '{runId}'")));
+
+        // Even a run left open on the revoked computer does not count.
+        await database.ExecuteAsync($"UPDATE runs SET status = 'Running', ended_at = NULL WHERE id = '{runId}'");
+
+        await users.StartAsync(alice, liveTask, Uuid(), Sealed("start"), default);
+    }
+
+    /// <summary>
+    /// A start copies the task into its command, so every start stores the task again, and every start is
+    /// charged for it. Shown red by not charging the command: a script restarting one large task stored it
+    /// without limit.
+    /// </summary>
+    [Fact]
+    public async Task A_restarted_task_is_charged_for_each_start()
+    {
+        var alice = await PersonAsync("alice");
+        var users = new UserService(Db, Limits.Unlimited, TimeProvider.System);
+        var hosts = new HostService(Db);
+        var host = await ComputerAsync(users, hosts, alice);
+        var taskId = Uuid();
+        await users.CreateTaskAsync(alice, taskId, host.HostId, "workspace-1", Sealed(new string('x', 2000)), default);
+        var before = await SealedBytesAsync(alice);
+
+        var first = await users.StartAsync(alice, taskId, Uuid(), Sealed("start"), default);
+        await hosts.PublishAsync(host, new HostEvent(Uuid(), RunOf(first), 1, RemoteEventKind.Running));
+        await hosts.PublishAsync(host, new HostEvent(Uuid(), RunOf(first), 2, RemoteEventKind.Completed));
+        var second = await users.StartAsync(alice, taskId, Uuid(), Sealed("start"), default);
+
+        Assert.Equal(before + first.Payload.Length + second.Payload.Length, await SealedBytesAsync(alice));
+        Assert.Equal(await StoredAsync(alice), await SealedBytesAsync(alice));
+    }
+
     // ── sealed bytes ────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Every sealed field stored for the account is added to its total in the same transaction, and a write
-    /// that would pass the limit is refused whole - from the person or from the computer. Shown red by not
-    /// adding: the total stays at zero and nothing is refused.
+    /// The person's work is what the byte limit refuses: a task, and a start, whose command carries a copy of
+    /// the task. Refused whole, and in a sentence that says the limit in megabytes and what frees the space.
+    /// Shown red by not charging: the total stays at zero and nothing is refused.
     /// </summary>
     [Fact]
     public async Task Sealed_bytes_stop_at_the_limit()
@@ -224,8 +314,7 @@ public sealed class LimitsTests(TestDatabase database) : IClassFixture<TestDatab
         var sealedTask = Sealed("Run the tests");
         var limits = Limits.Unlimited with { SealedBytesPerUser = sealedTask.Length + 10 };
         var users = new UserService(Db, limits, TimeProvider.System);
-        var hosts = new HostService(Db, limits);
-        var host = await ComputerAsync(users, hosts, alice);
+        var host = await ComputerAsync(users, new HostService(Db), alice);
 
         var taskId = Uuid();
         await users.CreateTaskAsync(alice, taskId, host.HostId, "workspace-1", sealedTask, default);
@@ -234,19 +323,55 @@ public sealed class LimitsTests(TestDatabase database) : IClassFixture<TestDatab
         var refused = await Assert.ThrowsAsync<GatewayFault>(() =>
             users.CreateTaskAsync(alice, Uuid(), host.HostId, "workspace-1", Sealed("Another"), default));
         Assert.Equal(FaultCode.QuotaExceeded, refused.Code);
+        Assert.Equal(409, refused.Status);
+        Assert.Contains(" MB ", refused.Message, StringComparison.Ordinal);
+        Assert.Contains(
+            $"older runs are removed after {Retention.DefaultDays} days", refused.Message, StringComparison.Ordinal);
 
-        var start = await users.StartAsync(alice, taskId, Uuid(), Sealed("start"), default);
-        var runId = RemoteJson.Deserialize<StartTaskPayload>(start.Payload).RunId;
-        await hosts.PublishAsync(host, new HostEvent(Uuid(), runId, 1, RemoteEventKind.Running));
+        var start = await Assert.ThrowsAsync<GatewayFault>(
+            () => users.StartAsync(alice, taskId, Uuid(), Sealed("start"), default));
+        Assert.Equal(FaultCode.QuotaExceeded, start.Code);
 
-        var fromComputer = await Assert.ThrowsAsync<GatewayFault>(() => hosts.PublishAsync(host,
-            new HostEvent(Uuid(), runId, 2, RemoteEventKind.Progress, Sealed("Built the solution"))));
-        Assert.Equal(FaultCode.QuotaExceeded, fromComputer.Code);
-
-        // Refused whole: no event, no step of the run, no bytes.
-        Assert.Equal(1, await CountAsync($"SELECT COUNT(*) FROM events WHERE run_id = '{runId}'"));
-        Assert.Equal(1, await CountAsync($"SELECT applied_sequence FROM runs WHERE id = '{runId}'"));
+        // Refused whole: no run, no command, no bytes.
+        Assert.Equal(0, await CountAsync($"SELECT COUNT(*) FROM runs WHERE task_id = '{taskId}'"));
+        Assert.Equal(0, await CountAsync($"SELECT COUNT(*) FROM commands WHERE owner_id = '{alice.UserId}'"));
         Assert.Equal(sealedTask.Length, await SealedBytesAsync(alice));
+    }
+
+    /// <summary>
+    /// What a computer reports about a run is always taken, and counted, even past the limit: the run must be
+    /// able to end. The person's next start is what is refused. Shown red by refusing the computer's writes at
+    /// the limit: its events - the run's end among them - are then refused with the code a computer waits out,
+    /// and the run stays "running" for good.
+    /// </summary>
+    [Fact]
+    public async Task A_full_account_still_hears_its_runs_end()
+    {
+        var alice = await PersonAsync("alice");
+        var setup = new UserService(Db, Limits.Unlimited, TimeProvider.System);
+        var hosts = new HostService(Db);
+        var host = await ComputerAsync(setup, hosts, alice);
+        var taskId = Uuid();
+        await setup.CreateTaskAsync(alice, taskId, host.HostId, "workspace-1", Sealed("Run the tests"), default);
+        var runId = RunOf(await setup.StartAsync(alice, taskId, Uuid(), Sealed("start"), default));
+
+        // Full: the limit is exactly what it holds.
+        var full = Limits.Unlimited with { SealedBytesPerUser = await SealedBytesAsync(alice) };
+
+        await hosts.PublishAsync(host, new HostEvent(Uuid(), runId, 1, RemoteEventKind.Running));
+        await hosts.PublishAsync(host, new HostEvent(Uuid(), runId, 2, RemoteEventKind.Progress, Sealed("Built")));
+        await hosts.PublishAsync(host, new HostEvent(Uuid(), runId, 3, RemoteEventKind.Completed, Sealed("Done")));
+
+        Assert.Equal("Completed", Assert.Single(
+            await database.StringsAsync($"SELECT status FROM runs WHERE id = '{runId}'")));
+        Assert.Equal(3, await CountAsync($"SELECT COUNT(*) FROM events WHERE run_id = '{runId}'"));
+        Assert.True(await SealedBytesAsync(alice) > full.SealedBytesPerUser);
+        Assert.Equal(await StoredAsync(alice), await SealedBytesAsync(alice));
+
+        var refused = await Assert.ThrowsAsync<GatewayFault>(() =>
+            new UserService(Db, full, TimeProvider.System).StartAsync(alice, taskId, Uuid(), Sealed("start"), default));
+        Assert.Equal(FaultCode.QuotaExceeded, refused.Code);
+        Assert.Equal(409, refused.Status);
     }
 
     /// <summary>
@@ -258,7 +383,7 @@ public sealed class LimitsTests(TestDatabase database) : IClassFixture<TestDatab
     {
         var alice = await PersonAsync("alice");
         var users = new UserService(Db, Limits.Unlimited, TimeProvider.System);
-        var hosts = new HostService(Db, Limits.Unlimited);
+        var hosts = new HostService(Db);
         var host = await ComputerAsync(users, hosts, alice);
 
         var taskId = Uuid();
@@ -273,13 +398,7 @@ public sealed class LimitsTests(TestDatabase database) : IClassFixture<TestDatab
         await hosts.PublishAsync(host, new HostEvent(Uuid(), runId, 4, RemoteEventKind.Completed, Sealed("Done")));
 
         var owner = $"owner_id = '{alice.UserId}'";
-        var stored = await CountAsync(
-            $"""
-            SELECT (SELECT COALESCE(SUM(LENGTH(sealed)), 0) FROM tasks WHERE {owner})
-                 + (SELECT COALESCE(SUM(LENGTH(sealed_detail)), 0) FROM events WHERE {owner})
-                 + (SELECT COALESCE(SUM(LENGTH(sealed_action)), 0) FROM approvals WHERE {owner})
-                 + (SELECT COALESCE(SUM(LENGTH(sealed_detail)), 0) FROM notices WHERE {owner})
-            """);
+        var stored = await StoredAsync(alice);
         Assert.True(stored > 0);
         Assert.Equal(stored, await SealedBytesAsync(alice));
 
@@ -302,6 +421,80 @@ public sealed class LimitsTests(TestDatabase database) : IClassFixture<TestDatab
         Assert.Equal(stored - trimmed, await SealedBytesAsync(alice));
     }
 
+    /// <summary>
+    /// A run that ended before the window goes whole: its events, requests, notices, commands and summary with
+    /// it, and every byte it was charged comes back. Its task, made inside the window, stays. Shown red by
+    /// trimming only events and notices: the run's request, summary and start command were then kept, and
+    /// charged, for good.
+    /// </summary>
+    [Fact]
+    public async Task Retention_removes_an_ended_run_with_everything_it_owns_and_returns_its_bytes()
+    {
+        var alice = await PersonAsync("alice");
+        var users = new UserService(Db, Limits.Unlimited, TimeProvider.System);
+        var hosts = new HostService(Db);
+        var host = await ComputerAsync(users, hosts, alice);
+        var taskId = Uuid();
+        var sealedTask = Sealed("Run the tests");
+        await users.CreateTaskAsync(alice, taskId, host.HostId, "workspace-1", sealedTask, default);
+        var runId = RunOf(await users.StartAsync(alice, taskId, Uuid(), Sealed("start"), default));
+
+        await hosts.PublishAsync(host, new HostEvent(Uuid(), runId, 1, RemoteEventKind.Running));
+        await hosts.PublishAsync(host, new HostEvent(Uuid(), runId, 2, RemoteEventKind.ApprovalRequested,
+            Sealed("May I?"), new ApprovalRequest("approval-1", "call-1", "hash-1", true, Sealed("dotnet test"))));
+        await users.DecideAsync(alice, "approval-1", host.HostId, Uuid(), RemoteDecision.Allow, "hash-1",
+            Sealed("allow"), default);
+        await hosts.PublishAsync(host, new HostEvent(Uuid(), runId, 3, RemoteEventKind.Completed, Sealed("Done")));
+
+        // Only the run is old: its events and notices are recent, so they go because the run does.
+        await database.ExecuteAsync(
+            $"UPDATE runs SET ended_at = UTC_TIMESTAMP(3) - INTERVAL 400 DAY WHERE id = '{runId}'");
+
+        await new Retention(Db, days: 30).TrimAsync();
+
+        foreach (var table in new[] { "runs WHERE id", "events WHERE run_id", "approvals WHERE run_id",
+                     "notices WHERE run_id", "commands WHERE run_id" })
+        {
+            Assert.Equal(0, await CountAsync($"SELECT COUNT(*) FROM {table} = '{runId}'"));
+        }
+
+        Assert.Equal(1, await CountAsync($"SELECT COUNT(*) FROM tasks WHERE id = '{taskId}'"));
+        Assert.Equal(sealedTask.Length, await SealedBytesAsync(alice));
+        Assert.Equal(1, await CountAsync(
+            $"SELECT COUNT(*) FROM user_retention WHERE owner_id = '{alice.UserId}' AND trimmed_before IS NOT NULL"));
+    }
+
+    /// <summary>
+    /// A task made before the window with no run left goes, and its bytes come back; one with a run still
+    /// going stays, and so does a recent one. Shown red by never deleting tasks: an account that filled up with
+    /// tasks stayed full.
+    /// </summary>
+    [Fact]
+    public async Task A_task_with_no_run_is_removed_after_the_window()
+    {
+        var alice = await PersonAsync("alice");
+        var users = new UserService(Db, Limits.Unlimited, TimeProvider.System);
+        var host = await ComputerAsync(users, new HostService(Db), alice);
+
+        var unused = Uuid();
+        var running = Uuid();
+        var recent = Uuid();
+        foreach (var id in new[] { unused, running, recent })
+        {
+            await users.CreateTaskAsync(alice, id, host.HostId, "workspace-1", Sealed($"task {id}"), default);
+        }
+
+        await users.StartAsync(alice, running, Uuid(), Sealed("start"), default);
+        await database.ExecuteAsync(
+            $"UPDATE tasks SET created_at = UTC_TIMESTAMP(3) - INTERVAL 400 DAY WHERE id IN ('{unused}', '{running}')");
+
+        await new Retention(Db, days: 30).TrimAsync();
+
+        Assert.Equal(new[] { recent, running }.Order(), (await database.StringsAsync(
+            $"SELECT id FROM tasks WHERE owner_id = '{alice.UserId}'")).Order());
+        Assert.Equal(await StoredAsync(alice), await SealedBytesAsync(alice));
+    }
+
     // ── bounded rows ────────────────────────────────────────────────────────
 
     /// <summary>
@@ -314,6 +507,8 @@ public sealed class LimitsTests(TestDatabase database) : IClassFixture<TestDatab
     {
         var alice = await PersonAsync("alice");
         var devices = new DeviceService(Db, Limits.Unlimited with { DevicesPerUser = 1 }, TimeProvider.System);
+        var (hostId, _, _) = await new UserService(Db, Limits.Unlimited, TimeProvider.System)
+            .RegisterHostAsync(alice, "Studio PC", default);
 
         var removed = new List<string>();
         for (var i = 0; i < 7; i++)
@@ -321,6 +516,19 @@ public sealed class LimitsTests(TestDatabase database) : IClassFixture<TestDatab
             var id = await devices.RegisterAsync(alice, NewPublicKey(), $"browser {i}", default);
             await devices.RevokeAsync(alice, id, default);
             removed.Add(id);
+
+            // A grant that landed after the removal, and the invitation the device answered: rows the
+            // device's own row takes with it when it goes.
+            var invite = Guid.NewGuid().ToString("N");
+            await database.ExecuteAsync(
+                $"""
+                INSERT INTO grants (owner_id, host_id, device_id, epoch, grant_json, created_at)
+                  VALUES ('{alice.UserId}', '{hostId}', '{id}', 1, 'grant', UTC_TIMESTAMP(3));
+                INSERT INTO invites (id, owner_id, created_at, expires_at, consumed_at)
+                  VALUES ('{invite}', '{alice.UserId}', UTC_TIMESTAMP(3), UTC_TIMESTAMP(3), UTC_TIMESTAMP(3));
+                INSERT INTO enrollments (invite_id, owner_id, device_id, mac, created_at)
+                  VALUES ('{invite}', '{alice.UserId}', '{id}', 'mac', UTC_TIMESTAMP(3));
+                """);
         }
 
         var live = await devices.RegisterAsync(alice, NewPublicKey(), "this browser", default);
@@ -329,6 +537,12 @@ public sealed class LimitsTests(TestDatabase database) : IClassFixture<TestDatab
         Assert.Equal(5, kept.Count);
         Assert.Contains(live, kept);
         Assert.Equal(removed[^4..].Order(), kept.Where(id => id != live).Order());
+
+        foreach (var table in new[] { "grants", "enrollments" })
+        {
+            Assert.Equal(removed[^4..].Order(), (await database.StringsAsync(
+                $"SELECT device_id FROM {table} WHERE owner_id = '{alice.UserId}'")).Order());
+        }
     }
 
     /// <summary>

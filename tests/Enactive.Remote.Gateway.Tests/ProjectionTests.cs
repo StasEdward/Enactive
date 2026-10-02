@@ -24,7 +24,7 @@ public sealed class ProjectionTests(TestDatabase database) : IClassFixture<TestD
 {
     private Database Db => new(database.ConnectionString);
 
-    private HostService Host => new(Db, Limits.Unlimited);
+    private HostService Host => new(Db);
 
     private UserService Users => new(Db, Limits.Unlimited, TimeProvider.System);
 

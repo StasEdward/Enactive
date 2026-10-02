@@ -37,7 +37,7 @@ public sealed class CursorTests(TestDatabase database) : IClassFixture<TestDatab
     private Task<long> CommittedValueAsync(string ownerId)
         => database.ScalarLongAsync($"SELECT value FROM user_streams WHERE owner_id = '{ownerId}'");
 
-    private HostService Host => new(Db, Limits.Unlimited);
+    private HostService Host => new(Db);
 
     private static string Sealed(string text)
         => Envelope.Seal(RandomNumberGenerator.GetBytes(32), 1, Encoding.UTF8.GetBytes(text), []);

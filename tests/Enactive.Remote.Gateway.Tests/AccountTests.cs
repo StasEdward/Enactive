@@ -322,7 +322,7 @@ public sealed class AccountTests(TestDatabase database) : IClassFixture<TestData
     {
         var owner = await AdmittedAsync("github", Subject());
         var users = new UserService(Db, Limits.Unlimited, TimeProvider.System);
-        var hosts = new HostService(Db, Limits.Unlimited);
+        var hosts = new HostService(Db);
         var (hostId, _, _) = await users.RegisterHostAsync(owner.Access, "Studio PC", default);
         var host = new HostAccess(hostId, owner.Access.UserId);
         var commandId = await QueueCommandAsync(host);

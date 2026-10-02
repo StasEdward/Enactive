@@ -32,7 +32,7 @@ public sealed class PanelTests(TestDatabase database) : IClassFixture<TestDataba
     private PanelClient _owner = null!;
     private PanelClient _stranger = null!;
 
-    private HostService Hosts => new(new Database(database.ConnectionString), Limits.Unlimited);
+    private HostService Hosts => new(new Database(database.ConnectionString));
 
     // xUnit makes a new instance for each test, so each test signs in a person of its own: counts such
     // as the unread notices are then this test's alone, whatever its neighbours left in the database.

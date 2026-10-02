@@ -42,7 +42,12 @@ using MySqlConnector;
 /// command, arrive sealed by the browser. This checks that each is an envelope of a sensible size and
 /// passes it through; only the computer can open it.</para>
 /// </summary>
-public sealed class UserService(Database db, Limits limits, TimeProvider clock)
+/// <param name="retentionDays">
+/// How long ended runs and unused tasks are kept (see <see cref="Retention"/>). Read only to tell a person whose
+/// storage is full when it frees itself; the gateway passes the configured value.
+/// </param>
+public sealed class UserService(
+    Database db, Limits limits, TimeProvider clock, int retentionDays = Retention.DefaultDays)
 {
     // A request body is at most 64 KB, so no sealed field can be larger; each bound below is what is
     // left for that field once the rest of its request is accounted for. A task carries the
@@ -106,10 +111,21 @@ public sealed class UserService(Database db, Limits limits, TimeProvider clock)
     /// Withdraws a credential. Commands nobody has accepted yet are withdrawn with it; commands the
     /// Host already ACCEPTED are left alone, because it owns them now and may well be carrying one
     /// out - pretending otherwise would make the panel claim a stop that never happened.
+    ///
+    /// <para>The computer's runs that have not ended are marked Interrupted, with no summary - the
+    /// gateway has no key to write one - and their open requests are withdrawn. A revoked computer can
+    /// never report again and its runs cannot be stopped from here, so left as they were they stayed
+    /// "running" on the panel for ever and each held one of the account's active-run places: three of
+    /// them and the account could start nothing, with no remedy (controller ruling I1 of Task 8.1).
+    /// Revoking a computer that died is how the person gets those places back.</para>
     /// </summary>
     public Task RevokeHostAsync(UserAccess user, string hostId, CancellationToken ct)
         => db.InTransactionAsync(async (connection, transaction) =>
         {
+            // The account first, as every path that writes runs takes it: retention deletes ended runs
+            // under it, and taking runs here without it could meet that pass in the other order.
+            await Quota.LockAccountAsync(connection, transaction, user.UserId);
+
             // FORCE INDEX (see the class comment): through the primary key this locked another person's row.
             var exists = await connection.ExistsAsync(transaction,
                 """
@@ -127,6 +143,24 @@ public sealed class UserService(Database db, Limits limits, TimeProvider clock)
             await connection.ExecuteAsync(transaction,
                 "UPDATE hosts SET revoked = 1, last_seen_at = NULL WHERE owner_id = @owner AND id = @host",
                 ("@owner", user.UserId), ("@host", hostId));
+
+            // The runs, then their requests, then the commands: the lock order of the class comment.
+            await connection.ExecuteAsync(transaction,
+                """
+                UPDATE runs FORCE INDEX (ux_runs_owner_host)
+                SET status = @interrupted, ended_at = @now
+                WHERE owner_id = @owner AND host_id = @host
+                  AND status NOT IN ('Completed', 'Failed', 'Incomplete', 'Cancelled', 'Interrupted')
+                """,
+                ("@interrupted", RemoteRunStatus.Interrupted), ("@now", clock.GetUtcNow()),
+                ("@owner", user.UserId), ("@host", hostId));
+
+            await connection.ExecuteAsync(transaction,
+                """
+                UPDATE approvals SET status = @invalidated
+                WHERE owner_id = @owner AND host_id = @host AND status IN ('Pending', 'DecisionQueued')
+                """,
+                ("@invalidated", ApprovalStatus.Invalidated), ("@owner", user.UserId), ("@host", hostId));
 
             await connection.ExecuteAsync(transaction,
                 """
@@ -204,7 +238,8 @@ public sealed class UserService(Database db, Limits limits, TimeProvider clock)
                     "tasks made in the last day", limits.TasksPerDay, "make more tomorrow");
             }
 
-            await Quota.ChargeSealedAsync(connection, transaction, user.UserId, Quota.SizeOf(sealedTask), limits);
+            await Quota.ChargeSealedAsync(
+                connection, transaction, user.UserId, Quota.SizeOf(sealedTask), limits, retentionDays);
 
             await connection.ExecuteAsync(transaction,
                 """
@@ -290,13 +325,16 @@ public sealed class UserService(Database db, Limits limits, TimeProvider clock)
                 throw GatewayFault.Conflict("This task is already running. Wait for it, or stop it first.");
             }
 
-            // Every run of the account's that has not ended, on any of its computers: each holds a
-            // computer's model and the account's share of the queue until it does.
+            // Every run of the account's that has not ended, on any of its live computers: each holds a
+            // computer's model and the account's share of the queue until it does. A revoked computer's
+            // runs are ended when it is revoked; they are left out here as well, so a run that slipped past
+            // that can still never hold a place it cannot give back (controller ruling I1 of Task 8.1).
             var running = await connection.ReadOneAsync(transaction,
                 """
-                SELECT COUNT(*) FROM runs
-                WHERE owner_id = @owner
-                  AND status NOT IN ('Completed', 'Failed', 'Incomplete', 'Cancelled', 'Interrupted')
+                SELECT COUNT(*) FROM runs r
+                JOIN hosts h ON h.owner_id = r.owner_id AND h.id = r.host_id
+                WHERE r.owner_id = @owner AND h.revoked = 0
+                  AND r.status NOT IN ('Completed', 'Failed', 'Incomplete', 'Cancelled', 'Interrupted')
                 """,
                 reader => reader.GetInt64(0), ("@owner", user.UserId));
 
@@ -309,6 +347,16 @@ public sealed class UserService(Database db, Limits limits, TimeProvider clock)
             var runId = Ids.New();
             var now = clock.GetUtcNow();
 
+            var payload = RemoteJson.Serialize(new StartTaskPayload(
+                runId, taskId, task.WorkspaceId, task.Sealed, sealedStart));
+
+            // The command carries a copy of the sealed task, so every start stores the task again; uncounted,
+            // a script restarting one large task stored it without limit. This is where the byte limit is
+            // checked for a run: what the computer then reports about it is always taken (see HostService),
+            // and retention gives this back with the run.
+            await Quota.ChargeSealedAsync(
+                connection, transaction, user.UserId, payload.Length, limits, retentionDays);
+
             await connection.ExecuteAsync(transaction,
                 """
                 INSERT INTO runs (id, owner_id, task_id, host_id, status, applied_sequence, created_at)
@@ -317,10 +365,7 @@ public sealed class UserService(Database db, Limits limits, TimeProvider clock)
                 ("@id", runId), ("@owner", user.UserId), ("@task", taskId), ("@host", task.HostId),
                 ("@queued", RemoteRunStatus.Queued), ("@now", now));
 
-            var payload = RemoteJson.Serialize(new StartTaskPayload(
-                runId, taskId, task.WorkspaceId, task.Sealed, sealedStart));
-
-            return await QueueAsync(connection, transaction, user.UserId, commandId, task.HostId,
+            return await QueueAsync(connection, transaction, user.UserId, commandId, task.HostId, runId,
                 CommandKind.StartTask, payload, fingerprint, now);
         }, ct);
     }
@@ -380,7 +425,7 @@ public sealed class UserService(Database db, Limits limits, TimeProvider clock)
                 "UPDATE runs SET status = @requested WHERE owner_id = @owner AND id = @run",
                 ("@requested", RemoteRunStatus.CancelRequested), ("@owner", user.UserId), ("@run", runId));
 
-            return await QueueAsync(connection, transaction, user.UserId, commandId, run.HostId,
+            return await QueueAsync(connection, transaction, user.UserId, commandId, run.HostId, runId,
                 CommandKind.CancelRun, RemoteJson.Serialize(new CancelRunPayload(runId, sealedCancel)),
                 fingerprint, clock.GetUtcNow());
         }, ct);
@@ -479,7 +524,7 @@ public sealed class UserService(Database db, Limits limits, TimeProvider clock)
             var payload = RemoteJson.Serialize(new ResolveApprovalPayload(
                 approvalId, approval.RunId, approval.ActionHash, sealedDecision));
 
-            return await QueueAsync(connection, transaction, user.UserId, commandId, hostId,
+            return await QueueAsync(connection, transaction, user.UserId, commandId, hostId, approval.RunId,
                 CommandKind.ResolveApproval, payload, fingerprint, clock.GetUtcNow());
         }, ct);
     }
@@ -516,7 +561,7 @@ public sealed class UserService(Database db, Limits limits, TimeProvider clock)
                 return repeated;
             }
 
-            return await QueueAsync(connection, transaction, user.UserId, commandId, hostId, kind,
+            return await QueueAsync(connection, transaction, user.UserId, commandId, hostId, runId: null, kind,
                 RemoteJson.Serialize(new DevicePayload(sealedPayload)), fingerprint, clock.GetUtcNow());
         }, ct);
     }
@@ -610,9 +655,13 @@ public sealed class UserService(Database db, Limits limits, TimeProvider clock)
     /// Queues a command for the computer, within its allowance. The caller holds the account's lock, which
     /// is what the count is taken under, and has already answered a retry of this id, which takes no place.
     /// </summary>
+    /// <param name="runId">
+    /// The run the command is about, or null for one about no run. Kept so retention removes the command
+    /// with its run: a start's command holds a copy of the task, and nothing else ever deleted one.
+    /// </param>
     private async Task<HostCommand> QueueAsync(
         MySqlConnection connection, MySqlTransaction transaction, string ownerId,
-        string commandId, string hostId, CommandKind kind, string payload, string fingerprint,
+        string commandId, string hostId, string? runId, CommandKind kind, string payload, string fingerprint,
         DateTimeOffset now)
     {
         // Commands the computer has not collected. One that expired no longer counts, whether or not a
@@ -639,10 +688,12 @@ public sealed class UserService(Database db, Limits limits, TimeProvider clock)
 
         await connection.ExecuteAsync(transaction,
             """
-            INSERT INTO commands (owner_id, id, host_id, kind, payload, fingerprint, status, created_at, expires_at)
-            VALUES (@owner, @id, @host, @kind, @payload, @fingerprint, @pending, @now, @expires)
+            INSERT INTO commands (owner_id, id, host_id, run_id, kind, payload, fingerprint, status, created_at,
+                                  expires_at)
+            VALUES (@owner, @id, @host, @run, @kind, @payload, @fingerprint, @pending, @now, @expires)
             """,
-            ("@owner", ownerId), ("@id", commandId), ("@host", hostId), ("@kind", kind),
+            ("@owner", ownerId), ("@id", commandId), ("@host", hostId),
+            ("@run", (object?)runId ?? DBNull.Value), ("@kind", kind),
             ("@payload", payload), ("@fingerprint", fingerprint),
             ("@pending", CommandStatus.PendingDelivery), ("@now", now), ("@expires", expires));
 

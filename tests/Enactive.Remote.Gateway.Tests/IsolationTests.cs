@@ -47,7 +47,7 @@ public sealed class IsolationTests(TestDatabase database) : IClassFixture<TestDa
 
     private Database Db => new(database.ConnectionString);
 
-    private HostService Host => new(Db, Limits.Unlimited);
+    private HostService Host => new(Db);
 
     private DeviceService Devices => new(Db, Limits.Unlimited, TimeProvider.System);
 

@@ -88,7 +88,7 @@ builder.Services.AddDataProtection().PersistKeysToFileSystem(new DirectoryInfo(P
 
 // How long the panel's history is kept. Configurable because a month is a guess, and validated
 // here because a zero or a typo would otherwise delete everything the first time the job ran.
-var retentionDays = builder.Configuration.GetValue<int?>("ENACTIVE_RETENTION_DAYS") ?? 30;
+var retentionDays = builder.Configuration.GetValue<int?>("ENACTIVE_RETENTION_DAYS") ?? Retention.DefaultDays;
 if (retentionDays < 1)
 {
     throw new InvalidOperationException(
@@ -109,10 +109,10 @@ builder.Services.AddSingleton(services => new Retention(services.GetRequiredServ
 // Read now, like the settings above: a limit that is not a whole number of at least one stops the start
 // rather than being read as its default. The open admission check below reads whatever is registered here.
 builder.Services.AddSingleton(Limits.FromConfiguration(builder.Configuration));
-builder.Services.AddSingleton(services => new HostService(
-    services.GetRequiredService<Database>(), services.GetRequiredService<Limits>()));
+builder.Services.AddSingleton<HostService>();
 builder.Services.AddSingleton(services => new UserService(
-    services.GetRequiredService<Database>(), services.GetRequiredService<Limits>(), TimeProvider.System));
+    services.GetRequiredService<Database>(), services.GetRequiredService<Limits>(), TimeProvider.System,
+    retentionDays));
 builder.Services.AddSingleton(services => new DeviceService(
     services.GetRequiredService<Database>(), services.GetRequiredService<Limits>(), TimeProvider.System));
 builder.Services.AddSingleton<Projection>();
