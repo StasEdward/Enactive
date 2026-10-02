@@ -21,6 +21,7 @@ internal sealed class RemoteDevicesViewModel : ObservableObject
     private bool _paneBusy;
     private bool _canAddDevice;
     private string _problem = string.Empty;
+    private string _note = string.Empty;
 
     public RemoteDevicesViewModel() => AddDeviceCommand = new RelayCommand(() => _ = AddDeviceAsync());
 
@@ -36,8 +37,11 @@ internal sealed class RemoteDevicesViewModel : ObservableObject
     /// <summary>Asks the person a yes-or-no question, and answers yes as true. Set by the window.</summary>
     public Func<string, Task<bool>>? Confirm { get; set; }
 
-    /// <summary>Removes the device with this id, or throws with a sentence saying why not. Set by the window.</summary>
-    public Func<string, Task>? Remove { get; set; }
+    /// <summary>
+    /// Removes the device with this id and says what happened in a sentence, or throws with one saying why
+    /// it could not. Set by the window.
+    /// </summary>
+    public Func<string, Task<string>>? Remove { get; set; }
 
     /// <summary>What removing a device asks before it does anything.</summary>
     public static string RemoveQuestion(string label)
@@ -64,6 +68,22 @@ internal sealed class RemoteDevicesViewModel : ObservableObject
     }
 
     public bool HasProblem => Problem.Length > 0;
+
+    /// <summary>
+    /// What the last removal did, in a sentence - including that the gateway is still to be told. Not a
+    /// problem: the device was removed on this computer either way.
+    /// </summary>
+    public string Note
+    {
+        get => _note;
+        private set
+        {
+            if (Set(ref _note, value))
+                OnPropertyChanged(nameof(HasNote));
+        }
+    }
+
+    public bool HasNote => Note.Length > 0;
 
     /// <summary>Something else of the pane - a connect, a check - is running. Set by the settings view model.</summary>
     public bool PaneBusy
@@ -134,14 +154,15 @@ internal sealed class RemoteDevicesViewModel : ObservableObject
         string? failed = null;
         try
         {
-            await remove(row.DeviceId);
+            Note = await remove(row.DeviceId);
         }
         catch (Exception failure)
         {
+            // Only this computer's own part fails here, and it fails whole: the device is still trusted.
+            Note = string.Empty;
             failed = $"{row.Label} could not be removed: {failure.Message}";
         }
 
-        // Read again either way: a removal that failed telling the gateway was still made on this computer.
         await RefreshAsync();
         if (failed is not null)
             Problem = failed;

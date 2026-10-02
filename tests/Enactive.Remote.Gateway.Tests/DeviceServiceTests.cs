@@ -354,6 +354,9 @@ public sealed class DeviceServiceTests(TestDatabase database) : IClassFixture<Te
         using var limit = new HostCallLimit();
         var hub = Hub(host, limit);
         Assert.Null((await hub.PublishGrants([Paired(host.HostId, mine, 1, signer)])).Fault);
+        var strangersHost = await ComputerAsync(stranger);
+        using var strangersSigner = P256.GenerateSigning();
+        Assert.Null((await Hub(strangersHost, limit).PublishGrants([Paired(strangersHost.HostId, theirs, 1, strangersSigner)])).Fault);
 
         Assert.Null((await hub.RevokeDevice(mine.Id)).Fault);
         Assert.Null((await hub.RevokeDevice(mine.Id)).Fault);
@@ -366,6 +369,7 @@ public sealed class DeviceServiceTests(TestDatabase database) : IClassFixture<Te
             (await Assert.ThrowsAsync<GatewayFault>(() => Devices.RequireAsync(owner, mine.Id, default))).Code);
         Assert.Equal(theirs.Id, (await Devices.RequireAsync(stranger, theirs.Id, default)).DeviceId);
         Assert.Equal(0, await GrantCountAsync(host.HostId));
+        Assert.Equal(1, await GrantCountAsync(strangersHost.HostId));
         Assert.Equal(1, await database.ScalarLongAsync(
             $"SELECT COUNT(*) FROM audit WHERE owner_id = '{owner.UserId}' AND actor = 'host:{host.HostId}' "
             + $"AND action = 'device-revoked' AND target = '{mine.Id}'"));

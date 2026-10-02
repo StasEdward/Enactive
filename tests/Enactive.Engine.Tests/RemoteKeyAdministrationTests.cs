@@ -785,6 +785,96 @@ public sealed class RemoteKeyAdministrationTests
         }
     }
 
+    /// <summary>
+    /// Removing a device does not wait for a connection: the part that keeps it from reading anything new
+    /// is this computer's alone. The person is told the gateway will hear of it, not that it failed.
+    /// </summary>
+    [WindowsFact]
+    public async Task A_device_is_removed_while_this_computer_is_offline_and_the_gateway_is_owed()
+    {
+        using var fx = new EngineFixture();
+        var database = fx.PathOf("remote.db");
+        var settings = new RemoteAccessSettings();
+        var (code, device) = NewCode();
+        using var _ = device;
+        await RemoteAccessService.ConnectWithCodeAsync(code, settings, database, NeverAsked);
+        using var laptop = P256.Generate();
+        using (var store = new HostStore(database))
+        using (var keys = new HostKeyStore(store, code.HostId))
+        {
+            TrustDevice(keys, "laptop", laptop, "Laptop");
+        }
+
+        string said;
+        await using (var service = new RemoteAccessService(settings, keys: null,
+            _ => throw new InvalidOperationException("No composition expected"), () => [], fx.Decisions, database,
+            connect: _ => Task.FromException<IGatewayConnection>(new IOException("The gateway is down.")),
+            firstRetry: TimeSpan.FromHours(1)))
+        {
+            service.Start();
+
+            said = await service.RevokeDeviceAsync("laptop", CancellationToken.None);
+
+            Assert.Equal("Laptop was removed here; the gateway will be told when this computer next connects.", said);
+            Assert.Equal(said, service.Status);
+        }
+
+        using (var store = new HostStore(database))
+        using (var keys = new HostKeyStore(store, code.HostId))
+        {
+            Assert.Equal(2u, keys.Current.Epoch);
+            Assert.Equal([code.DeviceId], keys.Live.Select(d => d.DeviceId));
+            Assert.Equal(["laptop"], keys.OwedRevocations());
+        }
+    }
+
+    /// <summary>
+    /// A connection that cannot pass the removal on keeps it owed, and the next connection tells the
+    /// gateway after its sync, before anything else is asked of it.
+    /// </summary>
+    [WindowsFact]
+    public async Task The_next_connection_tells_the_gateway_of_a_removal_the_last_one_could_not()
+    {
+        using var fx = new EngineFixture();
+        var database = fx.PathOf("remote.db");
+        var settings = new RemoteAccessSettings();
+        var (code, device) = NewCode();
+        using var _ = device;
+        await RemoteAccessService.ConnectWithCodeAsync(code, settings, database, NeverAsked);
+        using var laptop = P256.Generate();
+        using (var store = new HostStore(database))
+        using (var keys = new HostKeyStore(store, code.HostId))
+        {
+            TrustDevice(keys, "laptop", laptop, "Laptop");
+        }
+        var first = new FakeGateway { RevokeRefusal = new IOException("The connection to the gateway closed.") };
+        var second = new FakeGateway();
+        var gateways = new Queue<FakeGateway>([first, second]);
+
+        await using (var service = new RemoteAccessService(settings, keys: null,
+            _ => throw new InvalidOperationException("No composition expected"), () => [], fx.Decisions, database,
+            connect: _ => Task.FromResult<IGatewayConnection>(gateways.Dequeue()),
+            firstRetry: TimeSpan.FromMilliseconds(10)))
+        {
+            service.Start();
+            await Until(() => first.Calls.Contains("Sync"));
+
+            var said = await service.RevokeDeviceAsync("laptop", CancellationToken.None);
+            Assert.Equal("Laptop was removed here; the gateway will be told when this computer next connects.", said);
+
+            first.IsOpen = false;
+            await Until(() => second.Revoked.Count > 0);
+        }
+
+        Assert.Equal(["laptop"], second.Revoked);
+        var calls = second.Calls.ToList();
+        Assert.Equal("Hello", calls[0]);
+        Assert.True(calls.IndexOf("Sync") < calls.IndexOf("RevokeDevice"), string.Join(", ", calls));
+        using var reopened = new HostStore(database);
+        using var keys2 = new HostKeyStore(reopened, code.HostId);
+        Assert.Empty(keys2.OwedRevocations());
+    }
+
     // ── adding a device by invitation ───────────────────────────────────────
 
     /// <summary>
@@ -1367,6 +1457,39 @@ public sealed class RemoteKeyAdministrationTests
     }
 
     /// <summary>
+    /// The epoch is written in the envelope in the clear, so a gateway can put an old one on a forgery.
+    /// What does not open under that old key is refused as forged, not as a command to send again - or
+    /// every forgery could be made to read as an honest phone's late command.
+    /// </summary>
+    [WindowsFact]
+    public async Task A_forgery_naming_an_old_epoch_is_refused_as_forged_not_as_stale()
+    {
+        using var fx = new EngineFixture();
+        using var store = new HostStore(fx.PathOf("remote.db"));
+        using var keys = new HostKeyStore(store, "host-1");
+        var administration = new KeyAdministration(keys, new FakeGateway(), TimeProvider.System);
+        var runner = Runner(store, keys, () => administration);
+        using var phone = P256.Generate();
+        using var laptop = P256.Generate();
+        TrustDevice(keys, "phone", phone, "Phone");
+        TrustDevice(keys, "laptop", laptop, "Laptop");
+        await administration.RevokeAsync("laptop", KeyAdministration.RemovedHere, CancellationToken.None);
+        var gateway = new FixedHostKeys(keys.HostId, HostKey.Create(1));
+
+        var refused = Assert.Throws<CommandRefusedException>(() => new Sealer(keys, TimeProvider.System).OpenStart(gateway.Start()));
+        Assert.Equal(Sealer.NotSealedHere, refused.Message);
+        Assert.False(refused.SendAgain);
+
+        var forged = gateway.Start(commandId: "command-forged", runId: "run-forged");
+        store.Accept(forged);
+        await runner.ApplyAsync(forged);
+        var ending = Assert.Single(store.NextOwed(), o => o.RunId == "run-forged").Event;
+        Assert.EndsWith("It did not come from a device this computer trusts.",
+            keys.Current.OpenText(ending.SealedDetail!, Ad.Event(keys.HostId, "run-forged", ending.Sequence, ending.Kind)),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// A trusted browser that admitted a device by its own invitation sends this computer an endorsement,
     /// and the device is trusted here under the label it was given, kept to one line - so the next
     /// removal grants it the new key. Nothing is granted to it now: the browser that admitted it granted
@@ -1408,10 +1531,10 @@ public sealed class RemoteKeyAdministrationTests
     /// key that is not a P-256 point is no device's either.
     /// </summary>
     [WindowsTheory]
-    [InlineData("removed")]
-    [InlineData("another-key")]
-    [InlineData("not-a-point")]
-    public async Task An_endorsement_that_would_rebind_or_bring_back_a_device_is_refused(string kind)
+    [InlineData("removed", KeyAdministration.RemovedCannotBeEndorsed)]
+    [InlineData("another-key", KeyAdministration.AnotherKey)]
+    [InlineData("not-a-point", KeyAdministration.NotADeviceKey)]
+    public async Task An_endorsement_that_would_rebind_or_bring_back_a_device_is_refused(string kind, string reason)
     {
         using var fx = new EngineFixture();
         using var store = new HostStore(fx.PathOf("remote.db"));
@@ -1437,8 +1560,7 @@ public sealed class RemoteKeyAdministrationTests
         var notice = Assert.Single(runner.Notices);
         Assert.Equal("Refused", notice.Kind);
         Assert.Contains(command.Id, notice.Detail, StringComparison.Ordinal);
-        if (kind == "removed")
-            Assert.EndsWith(KeyAdministration.RemovedCannotBeEndorsed, notice.Detail, StringComparison.Ordinal);
+        Assert.EndsWith(": " + reason, notice.Detail, StringComparison.Ordinal);
 
         var known = Assert.Single(keys.Trusted);
         Assert.Equal(P256.PublicRaw(phone), known.PublicKey);
@@ -1494,6 +1616,99 @@ public sealed class RemoteKeyAdministrationTests
         Assert.Equal(["laptop"], gateway.Revoked);
         Assert.Equal(2u, keys.Current.Epoch);
         Assert.Equal(["phone"], keys.Live.Select(d => d.DeviceId));
+    }
+
+    /// <summary>
+    /// A removal that fails part of the way changes nothing - the device is still trusted, the epoch the
+    /// one it was - so it can simply be made again, and the second time rotates once. Made as three steps,
+    /// the failure left the device shown as removed while it read everything new, and a second removal was
+    /// a no-op.
+    /// </summary>
+    [WindowsFact]
+    public async Task A_removal_that_fails_part_way_leaves_the_device_trusted_and_can_be_made_again()
+    {
+        using var fx = new EngineFixture();
+        var path = fx.PathOf("remote.db");
+        using var store = new HostStore(path);
+        using var keys = new HostKeyStore(store, "host-1");
+        var administration = new KeyAdministration(keys, new FakeGateway(), TimeProvider.System);
+        var rotations = new List<KeyRotated>();
+        administration.Rotated += rotations.Add;
+        using var phone = P256.Generate();
+        using var laptop = P256.Generate();
+        TrustDevice(keys, "phone", phone, "Phone");
+        TrustDevice(keys, "laptop", laptop, "Laptop");
+        HostKeyStoreTests.TrustUngrantable(path, "broken");
+
+        await Assert.ThrowsAnyAsync<CryptographicException>(
+            () => administration.RevokeAsync("laptop", KeyAdministration.RemovedFromBrowser, CancellationToken.None));
+
+        Assert.Equal(1u, keys.Current.Epoch);
+        Assert.Contains("laptop", keys.Live.Select(d => d.DeviceId));
+        Assert.Empty(keys.PendingGrants());
+        Assert.Empty(rotations);
+
+        keys.Distrust("broken");
+        await administration.RevokeAsync("laptop", KeyAdministration.RemovedFromBrowser, CancellationToken.None);
+
+        Assert.Equal(2u, keys.Current.Epoch);
+        Assert.Equal(["phone"], keys.Live.Select(d => d.DeviceId));
+        Assert.Single(rotations);
+    }
+
+    /// <summary>
+    /// The gateway half of a removal made here is not lost when the gateway cannot be reached: the device
+    /// is removed on this computer all the same, the gateway is owed word of it, and the next connection
+    /// tells it. Said as a failure, it contradicted the list - which showed the device removed - and was
+    /// never retried.
+    /// </summary>
+    [WindowsFact]
+    public async Task A_removal_the_gateway_could_not_be_told_of_is_owed_and_told_on_the_next_connection()
+    {
+        using var fx = new EngineFixture();
+        using var store = new HostStore(fx.PathOf("remote.db"));
+        using var keys = new HostKeyStore(store, "host-1");
+        var unreachable = new FakeGateway { RevokeRefusal = new IOException("The connection to the gateway closed.") };
+        using var phone = P256.Generate();
+        using var laptop = P256.Generate();
+        TrustDevice(keys, "phone", phone, "Phone");
+        TrustDevice(keys, "laptop", laptop, "Laptop");
+
+        var told = await new KeyAdministration(keys, unreachable, TimeProvider.System).RevokeHereAsync("laptop", CancellationToken.None);
+
+        Assert.False(told);
+        Assert.Contains("RevokeDevice", unreachable.Calls);
+        Assert.Equal(2u, keys.Current.Epoch);
+        Assert.Equal(["phone"], keys.Live.Select(d => d.DeviceId));
+        Assert.Equal(["laptop"], keys.OwedRevocations());
+
+        var next = new FakeGateway();
+        Assert.True(await new KeyAdministration(keys, next, TimeProvider.System).SettleOwedRevocationsAsync(CancellationToken.None));
+
+        Assert.Equal(["laptop"], next.Revoked);
+        Assert.Empty(keys.OwedRevocations());
+    }
+
+    /// <summary>
+    /// A gateway that answers it has no such device settles what is owed: there is nothing left there to
+    /// stop serving, and asking again on every connection would be asking for ever.
+    /// </summary>
+    [WindowsFact]
+    public async Task A_gateway_that_no_longer_has_the_device_settles_what_is_owed()
+    {
+        using var fx = new EngineFixture();
+        using var store = new HostStore(fx.PathOf("remote.db"));
+        using var keys = new HostKeyStore(store, "host-1");
+        var gateway = new FakeGateway { RevokeRefusal = new GatewayRefusedException("not-found", "That device is not registered.") };
+        using var phone = P256.Generate();
+        using var laptop = P256.Generate();
+        TrustDevice(keys, "phone", phone, "Phone");
+        TrustDevice(keys, "laptop", laptop, "Laptop");
+
+        Assert.True(await new KeyAdministration(keys, gateway, TimeProvider.System).RevokeHereAsync("laptop", CancellationToken.None));
+
+        Assert.Empty(keys.OwedRevocations());
+        Assert.Equal(2u, keys.Current.Epoch);
     }
 
     /// <summary>
@@ -1711,7 +1926,7 @@ public sealed class RemoteKeyAdministrationTests
             Remove = deviceId =>
             {
                 removed.Add(deviceId);
-                return Task.CompletedTask;
+                return Task.FromResult("Phone was removed on this computer.");
             }
         };
         await pane.RefreshAsync();
@@ -1731,6 +1946,7 @@ public sealed class RemoteKeyAdministrationTests
         Assert.Equal(["phone"], removed);
         Assert.Equal(2, reads);
         Assert.False(pane.HasProblem);
+        Assert.Equal("Phone was removed on this computer.", pane.Note);
     }
 
     /// <summary>A removal that could not be made is said under the list, not thrown out of a button.</summary>
@@ -1743,14 +1959,14 @@ public sealed class RemoteKeyAdministrationTests
             Trusted = () => Task.FromResult<IReadOnlyList<TrustedDevice>>(
                 [new TrustedDevice("phone", P256.PublicRaw(phone), "Phone", KeyAdministration.AddedBy, DateTimeOffset.UtcNow, null)]),
             Confirm = _ => Task.FromResult(true),
-            Remove = _ => Task.FromException(new InvalidOperationException(RemoteAccessService.NotConnectedForRemove))
+            Remove = _ => Task.FromException<string>(new InvalidOperationException(RemoteAccessService.CannotRemove))
         };
         await pane.RefreshAsync();
 
         await pane.RemoveAsync(pane.Devices[0]);
 
         Assert.True(pane.HasProblem);
-        Assert.Contains(RemoteAccessService.NotConnectedForRemove, pane.Problem, StringComparison.Ordinal);
+        Assert.Contains(RemoteAccessService.CannotRemove, pane.Problem, StringComparison.Ordinal);
     }
 
     // ── the key store ───────────────────────────────────────────────────────
@@ -1769,6 +1985,9 @@ public sealed class RemoteKeyAdministrationTests
             {
                 Pairing.Apply(code, keys);
                 keys.CreateInvite();
+                using var spare = P256.Generate();
+                TrustDevice(keys, "spare", spare, "Spare");
+                keys.RevokeAndRotate("spare", tellGateway: true);
             }
 
             Assert.True(HostKeyStore.HasKeys(store));
@@ -1776,7 +1995,7 @@ public sealed class RemoteKeyAdministrationTests
             Assert.False(HostKeyStore.HasKeys(store));
         }
 
-        foreach (var table in new[] { "host_keys", "host_signing", "trusted_devices", "pending_invites", "pending_grants" })
+        foreach (var table in new[] { "host_keys", "host_signing", "trusted_devices", "pending_invites", "pending_grants", "owed_revocations" })
         {
             Assert.Equal(0L, Count(database, table));
         }

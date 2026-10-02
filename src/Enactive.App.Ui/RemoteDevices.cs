@@ -63,16 +63,17 @@ internal sealed class RemoteDevices(Func<RemoteAccessService?> current, Semaphor
 
     /// <summary>
     /// Removes a device with this computer's own list: a new key for every other device, and the gateway
-    /// told to stop serving it. Under the gate, so it never rotates keys in a store a code is resetting.
+    /// told to stop serving it, now or at the next connection. Under the gate, so it never rotates keys in
+    /// a store a code is resetting. What happened, in a sentence.
     /// </summary>
-    /// <exception cref="InvalidOperationException">There is no connection past Hello.</exception>
-    public async Task RemoveAsync(string deviceId)
+    /// <exception cref="InvalidOperationException">Remote access is not running, or has no keys.</exception>
+    public async Task<string> RemoveAsync(string deviceId)
     {
         await gate.WaitAsync();
         try
         {
-            var service = current() ?? throw new InvalidOperationException(RemoteAccessService.NotConnectedForRemove);
-            await service.RevokeDeviceAsync(deviceId, CancellationToken.None);
+            var service = current() ?? throw new InvalidOperationException(RemoteAccessService.CannotRemove);
+            return await service.RevokeDeviceAsync(deviceId, CancellationToken.None);
         }
         finally
         {

@@ -129,10 +129,13 @@ public sealed class HostKeyStore : IHostKeys, IGrantOutbox, IDisposable
     // ── trusted devices ─────────────────────────────────────────────────────
 
     /// <summary>Every device this computer has trusted, revoked ones included.</summary>
-    public IReadOnlyList<TrustedDevice> Trusted => _store.Locked(connection =>
+    public IReadOnlyList<TrustedDevice> Trusted => _store.Locked(connection => Devices(connection, null));
+
+    private static IReadOnlyList<TrustedDevice> Devices(SqliteConnection connection, SqliteTransaction? transaction)
     {
         var devices = new List<TrustedDevice>();
         using var statement = connection.CreateCommand();
+        statement.Transaction = transaction;
         statement.CommandText = """
             SELECT device_id, public_key, label, added_by, added_at, revoked_at
             FROM trusted_devices ORDER BY added_at, device_id
@@ -144,8 +147,8 @@ public sealed class HostKeyStore : IHostKeys, IGrantOutbox, IDisposable
                 reader.GetString(0), (byte[])reader.GetValue(1), reader.GetString(2), reader.GetString(3),
                 Parse(reader.GetString(4)), reader.IsDBNull(5) ? null : Parse(reader.GetString(5))));
         }
-        return (IReadOnlyList<TrustedDevice>)devices;
-    });
+        return devices;
+    }
 
     /// <summary>The devices that are trusted now: the ones a rotation grants its new key to.</summary>
     public IReadOnlyList<TrustedDevice> Live => [.. Trusted.Where(d => d.RevokedAt is null)];
@@ -234,6 +237,79 @@ public sealed class HostKeyStore : IHostKeys, IGrantOutbox, IDisposable
         transaction.Commit();
         return 0;
     });
+
+    /// <summary>
+    /// Removes a device and gives every other one a new key, as one step (spec §5.4): in a single
+    /// transaction the device is distrusted and its queued grants dropped, the next epoch is written, a
+    /// grant of it signed with the signing key is queued for every device still trusted, and - when
+    /// <paramref name="tellGateway"/> - the gateway is owed word of the removal. The new epoch is sealed
+    /// with only once all of that is committed.
+    ///
+    /// <para>One step because three left a hole: a removal that failed after the distrust - DPAPI or the
+    /// disk refusing the new key, a grant that could not be made - left the device shown as removed while
+    /// it still held the current key and read everything new, and a second removal did nothing, since the
+    /// device was already marked removed. Now a failure leaves everything as it was, and the removal can
+    /// simply be made again.</para>
+    ///
+    /// <para><paramref name="tellGateway"/> is for a removal made on this computer. A browser that sends
+    /// one has removed the device at the gateway already.</para>
+    /// </summary>
+    /// <returns>The new epoch, and the devices it was granted to.</returns>
+    /// <exception cref="InvalidOperationException">The device is not trusted now.</exception>
+    public (HostKey Next, IReadOnlyList<TrustedDevice> Remaining) RevokeAndRotate(string deviceId, bool tellGateway)
+        => _store.Locked(connection =>
+        {
+            var now = Format(_clock.GetUtcNow());
+            var next = HostKey.Create(_keys[^1].Epoch + 1);
+
+            // Disposed without a commit, the transaction rolls back whatever was written before the throw.
+            using var transaction = connection.BeginTransaction();
+
+            var revoked = Execute(connection, transaction,
+                "UPDATE trusted_devices SET revoked_at = $now WHERE device_id = $id AND revoked_at IS NULL",
+                ("$now", now), ("$id", deviceId));
+            if (revoked == 0)
+                throw new InvalidOperationException($"Device {deviceId} is not trusted now, so there is nothing to remove.");
+
+            Execute(connection, transaction, "DELETE FROM pending_grants WHERE device_id = $id", ("$id", deviceId));
+
+            if (tellGateway)
+            {
+                Execute(connection, transaction,
+                    "INSERT INTO owed_revocations (device_id, since) VALUES ($id, $now) ON CONFLICT (device_id) DO NOTHING",
+                    ("$id", deviceId), ("$now", now));
+            }
+
+            Execute(connection, transaction, "INSERT INTO host_keys (epoch, secret) VALUES ($epoch, $secret)",
+                ("$epoch", (long)next.Epoch), ("$secret", Protect(next.Secret.Span)));
+
+            IReadOnlyList<TrustedDevice> remaining = [.. Devices(connection, transaction).Where(d => d.RevokedAt is null)];
+            foreach (var device in remaining)
+            {
+                InsertGrant(connection, transaction,
+                    Grants.CreateSigned(HostId, device.DeviceId, device.PublicKey, next, _signer), now);
+            }
+
+            transaction.Commit();
+            _keys = [.. _keys, next];
+            return (next, remaining);
+        });
+
+    /// <summary>The devices removed on this computer that the gateway has not yet been told of, oldest first.</summary>
+    public IReadOnlyList<string> OwedRevocations() => _store.Locked(connection =>
+    {
+        var owed = new List<string>();
+        using var statement = connection.CreateCommand();
+        statement.CommandText = "SELECT device_id FROM owed_revocations ORDER BY since, device_id";
+        using var reader = statement.ExecuteReader();
+        while (reader.Read()) owed.Add(reader.GetString(0));
+        return (IReadOnlyList<string>)owed;
+    });
+
+    /// <summary>The gateway was told of this removal, or no longer has the device: nothing is owed.</summary>
+    public void SettleRevocation(string deviceId)
+        => _store.Locked(connection => Execute(connection, null,
+            "DELETE FROM owed_revocations WHERE device_id = $id", ("$id", deviceId)));
 
     // Refused here rather than when the first grant to it is made: a key that is not a P-256 point
     // cannot be granted to, and a rotation that met it would fail for every device after it.
@@ -348,15 +424,18 @@ public sealed class HostKeyStore : IHostKeys, IGrantOutbox, IDisposable
                 throw new InvalidOperationException(
                     $"Device {grant.DeviceId} is not trusted by this computer, so nothing is granted to it.");
 
-            return Execute(connection, null,
-                """
-                INSERT INTO pending_grants (id, device_id, json, created_at) VALUES ($id, $device, $json, $now)
-                ON CONFLICT (id) DO UPDATE SET json = excluded.json, created_at = excluded.created_at
-                """,
-                ("$id", GrantId(grant)), ("$device", grant.DeviceId), ("$json", RemoteJson.Serialize(grant)),
-                ("$now", Format(_clock.GetUtcNow())));
+            return InsertGrant(connection, null, grant, Format(_clock.GetUtcNow()));
         });
     }
+
+    private static int InsertGrant(SqliteConnection connection, SqliteTransaction? transaction, KeyGrant grant, string now)
+        => Execute(connection, transaction,
+            """
+            INSERT INTO pending_grants (id, device_id, json, created_at) VALUES ($id, $device, $json, $now)
+            ON CONFLICT (id) DO UPDATE SET json = excluded.json, created_at = excluded.created_at
+            """,
+            ("$id", GrantId(grant)), ("$device", grant.DeviceId), ("$json", RemoteJson.Serialize(grant)),
+            ("$now", now));
 
     /// <summary>The grants still owed, oldest first.</summary>
     public IReadOnlyList<PendingGrant> PendingGrants() => _store.Locked(connection =>
@@ -387,7 +466,7 @@ public sealed class HostKeyStore : IHostKeys, IGrantOutbox, IDisposable
     /// NEW identity's keys, by a computer that no longer has any reason to trust it.
     /// </summary>
     private static readonly string[] IdentityTables =
-        ["pending_grants", "pending_invites", "trusted_devices", "host_signing", "host_keys"];
+        ["owed_revocations", "pending_grants", "pending_invites", "trusted_devices", "host_signing", "host_keys"];
 
     /// <summary>
     /// Whether remote.db holds any key of this computer's, readable or not. Asked before a key store is

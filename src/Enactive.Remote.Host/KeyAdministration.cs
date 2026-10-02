@@ -95,9 +95,17 @@ public sealed partial class KeyAdministration(HostKeyStore keys, IGatewayConnect
     /// Why an endorsement naming a trusted id with another key is refused: bound to the new key, the id's
     /// next grant would go to whoever holds that key, under the name of the device the person trusted.
     /// </summary>
-    private const string AnotherKey = "it names a device this computer trusts with another key";
+    public const string AnotherKey = "it names a device this computer trusts with another key";
 
-    private const string NotADeviceKey = "the key it names is not a device's";
+    /// <summary>Why an endorsement naming a key that is not a P-256 point is refused: nothing can be granted to it.</summary>
+    public const string NotADeviceKey = "the key it names is not a device's";
+
+    /// <summary>
+    /// The code the gateway answers a device id with that it does not have for this computer's owner. A
+    /// removal owed to it is settled by that answer: there is nothing left there to stop serving, and asking
+    /// again on every connection would be asking for ever.
+    /// </summary>
+    private const string GatewayHasNoSuchDevice = "not-found";
 
     private const string NoDevice = "it names no device";
 
@@ -137,6 +145,15 @@ public sealed partial class KeyAdministration(HostKeyStore keys, IGatewayConnect
 
     /// <summary>Raised once a device was removed and the new epoch granted to the rest. On the caller's thread.</summary>
     public event Action<KeyRotated>? Rotated;
+
+    /// <summary>
+    /// The gateway could not be told of a removal made here, with why; it stays owed. Raised once per device
+    /// on this connection, though the telling is tried after every sync: said every fifteen seconds, it
+    /// would be the only thing a person saw.
+    /// </summary>
+    public event Action<string, string>? RevocationOwed;
+
+    private readonly HashSet<string> _owedSaid = [];
 
     /// <summary>
     /// Opens an invitation: a new id and pairing secret here, the id registered with the gateway.
@@ -239,9 +256,70 @@ public sealed partial class KeyAdministration(HostKeyStore keys, IGatewayConnect
     /// <para>A device already removed is left as it is - removed by a second browser, or here after the
     /// browser - with no second epoch: nothing more is kept from it, and every device would be sent a grant
     /// for nothing.</para>
+    ///
+    /// <para>All of it is one step in the key store (<see cref="HostKeyStore.RevokeAndRotate"/>): a failure
+    /// part of the way changes nothing, and the removal can be made again.</para>
     /// </summary>
     /// <exception cref="CommandRefusedException">This computer never trusted the device.</exception>
     public Task RevokeAsync(string deviceId, string reason, CancellationToken ct)
+    {
+        Revoke(deviceId, reason, tellGateway: false);
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// A removal made with this computer's own list: the removal above, with the gateway owed word of it in
+    /// the same step, and then the gateway told - asked to stop serving the device, its calls and the grants
+    /// it holds there. This computer's part never waits for the gateway: offline, or on a connection that
+    /// drops, the device already reads nothing new, and the gateway is told at the next connection.
+    /// A removal a browser sent does not come here, since that browser removed the device at the gateway
+    /// before it sent the command.
+    /// </summary>
+    /// <returns>Whether the gateway has been told of every removal made here.</returns>
+    public async Task<bool> RevokeHereAsync(string deviceId, CancellationToken ct)
+    {
+        Revoke(deviceId, RemovedHere, tellGateway: true);
+        return await SettleOwedRevocationsAsync(ct);
+    }
+
+    /// <summary>
+    /// Tells the gateway of every removal made here that it has not yet heard of. One it acknowledges, or
+    /// answers it has no such device, is settled; anything else - a dropped connection, a refusal - leaves
+    /// it owed for the next try. Called after a removal and after every sync.
+    /// </summary>
+    /// <returns>Whether nothing is owed any more.</returns>
+    public async Task<bool> SettleOwedRevocationsAsync(CancellationToken ct)
+    {
+        var settled = true;
+
+        foreach (var deviceId in keys.OwedRevocations())
+        {
+            try
+            {
+                await gateway.RevokeDeviceAsync(deviceId, ct);
+            }
+            catch (GatewayRefusedException refused) when (refused.Code == GatewayHasNoSuchDevice)
+            {
+                // Settled below: the gateway has nothing left to serve it.
+            }
+            catch (Exception failure) when (failure is not OperationCanceledException || !ct.IsCancellationRequested)
+            {
+                settled = false;
+                bool first;
+                // Under a lock: the desktop's removal and the service's turn can settle at once.
+                lock (_owedSaid) first = _owedSaid.Add(deviceId);
+                if (first)
+                    RevocationOwed?.Invoke(deviceId, failure.Message);
+                continue;
+            }
+
+            keys.SettleRevocation(deviceId);
+        }
+
+        return settled;
+    }
+
+    private void Revoke(string deviceId, string reason, bool tellGateway)
     {
         KeyRotated rotated;
         lock (TrustedListGate)
@@ -250,36 +328,13 @@ public sealed partial class KeyAdministration(HostKeyStore keys, IGatewayConnect
                 ?? throw new CommandRefusedException(UnknownDevice);
 
             if (device.RevokedAt is not null)
-                return Task.CompletedTask;
+                return;
 
-            // Distrusted before the new key exists: a key made first and then lost to a crash before the
-            // device was distrusted would be granted to it, as a device still trusted, at the next removal.
-            keys.Distrust(deviceId);
-            var next = keys.Rotate();
-
-            foreach (var remaining in keys.Live)
-            {
-                keys.EnqueueGrant(Grants.CreateSigned(
-                    keys.HostId, remaining.DeviceId, remaining.PublicKey, next, keys.Signer));
-            }
-
+            var (next, _) = keys.RevokeAndRotate(deviceId, tellGateway);
             rotated = new KeyRotated(deviceId, device.Label, next.Epoch, reason);
         }
 
         Rotated?.Invoke(rotated);
-        return Task.CompletedTask;
-    }
-
-    /// <summary>
-    /// A removal made with this computer's own list: the removal above, and then the gateway asked to stop
-    /// serving the device - its calls and the grants it holds there. This computer's part comes first: with
-    /// the gateway out of reach, the device already reads nothing new. A removal a browser sent does not
-    /// come here, since that browser removed the device at the gateway before it sent the command.
-    /// </summary>
-    public async Task RevokeHereAsync(string deviceId, CancellationToken ct)
-    {
-        await RevokeAsync(deviceId, RemovedHere, ct);
-        await gateway.RevokeDeviceAsync(deviceId, ct);
     }
 
     /// <summary>

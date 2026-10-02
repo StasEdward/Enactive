@@ -123,6 +123,14 @@ public sealed class HostStore : IDisposable
               json       TEXT NOT NULL,
               created_at TEXT NOT NULL
             );
+
+            -- Devices removed on this computer that the gateway has not yet been told of. Written with
+            -- the removal itself, so a removal made offline, or on a connection that dropped, is passed
+            -- on at the next connection instead of being lost.
+            CREATE TABLE IF NOT EXISTS owed_revocations (
+              device_id TEXT PRIMARY KEY,
+              since     TEXT NOT NULL
+            );
             """);
     }
 

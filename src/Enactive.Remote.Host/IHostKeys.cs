@@ -19,10 +19,10 @@ public interface IHostKeys
     HostKey Current { get; }
 
     /// <summary>
-    /// The key for one epoch, or null when this computer does not hold it. Not for opening commands: those
-    /// are acted on only under <see cref="Current"/> (see <see cref="Sealer"/>), so a device removed since an
-    /// older epoch cannot command this computer with the key it kept. Older epochs stay readable for what
-    /// this computer sealed under them.
+    /// The key for one epoch, or null when this computer does not hold it. Never for acting on a command:
+    /// commands are acted on only under <see cref="Current"/>, so a device removed since an older epoch
+    /// cannot command this computer with the key it kept. <see cref="Sealer"/> opens an older one only to
+    /// tell a command sent just before a removal - asked for again - from a forgery naming an old epoch.
     /// </summary>
     HostKey? Epoch(uint epoch);
 }

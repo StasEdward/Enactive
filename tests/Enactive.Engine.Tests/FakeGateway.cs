@@ -161,9 +161,14 @@ internal sealed class FakeGateway : IGatewayConnection
         return Task.CompletedTask;
     }
 
+    /// <summary>What RevokeDevice answers instead of yes - a dropped socket, or the gateway not having the device.</summary>
+    public Exception? RevokeRefusal { get; set; }
+
     public Task RevokeDeviceAsync(string deviceId, CancellationToken ct)
     {
         Record("RevokeDevice");
+        if (RevokeRefusal is not null) return Task.FromException(RevokeRefusal);
+
         lock (_calls) _revoked.Add(deviceId);
         return Task.CompletedTask;
     }

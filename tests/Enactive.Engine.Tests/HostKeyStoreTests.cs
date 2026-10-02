@@ -403,7 +403,119 @@ public sealed class HostKeyStoreTests
         Assert.Equal(["host-1:laptop:1", "host-1:laptop:2"], keys.PendingGrants().Select(p => p.Id).Order());
     }
 
+    /// <summary>
+    /// A removal is one step: the device distrusted with its queued grants dropped, the next epoch written,
+    /// a grant of it signed for every device that remains, and - when the desktop removed it - the gateway
+    /// owed word of it. The new epoch is kept across a restart.
+    /// </summary>
+    [WindowsFact]
+    public void Revoke_and_rotate_distrusts_makes_the_next_epoch_and_grants_the_rest_in_one_step()
+    {
+        using var fx = new EngineFixture();
+        var path = fx.PathOf("remote.db");
+        using var phone = P256.Generate();
+        using var laptop = P256.Generate();
+        using (var store = new HostStore(path))
+        using (var keys = new HostKeyStore(store, HostId))
+        {
+            keys.Trust(Device("phone", phone, DateTimeOffset.UtcNow));
+            keys.Trust(Device("laptop", laptop, DateTimeOffset.UtcNow));
+            keys.EnqueueGrant(Grants.CreateSigned(HostId, "laptop", P256.PublicRaw(laptop), keys.Current, keys.Signer));
+
+            var (next, remaining) = keys.RevokeAndRotate("laptop", tellGateway: true);
+
+            Assert.Equal(2u, next.Epoch);
+            Assert.Equal(2u, keys.Current.Epoch);
+            Assert.Equal(["phone"], remaining.Select(d => d.DeviceId));
+            Assert.NotNull(Assert.Single(keys.Trusted, d => d.DeviceId == "laptop").RevokedAt);
+            var grant = Assert.Single(keys.PendingGrants()).Grant;
+            Assert.Equal(("phone", 2u, Grants.AuthByHost), (grant.DeviceId, grant.Epoch, grant.AuthBy));
+            Assert.Equal(next.Secret.ToArray(), Grants.Open(grant, phone, default, keys.SigningPublic).Key.Secret.ToArray());
+            Assert.Equal(["laptop"], keys.OwedRevocations());
+
+            keys.RevokeAndRotate("phone", tellGateway: false);
+            Assert.Equal(["laptop"], keys.OwedRevocations());
+        }
+
+        using (var store = new HostStore(path))
+        using (var keys = new HostKeyStore(store, HostId))
+        {
+            Assert.Equal(3u, keys.Current.Epoch);
+        }
+    }
+
+    /// <summary>
+    /// A removal that fails part of the way - here, a grant that cannot be made for the second device that
+    /// remains - changes nothing: the device is still trusted, the epoch is the one it was, and no grant
+    /// and no word owed to the gateway is left behind. Made as three steps, the device was left shown as
+    /// removed while it still held the current key and read everything new, and a second removal was a
+    /// no-op because it was already marked removed.
+    /// </summary>
+    [WindowsFact]
+    public void A_revoke_and_rotate_that_fails_part_way_changes_nothing()
+    {
+        using var fx = new EngineFixture();
+        var path = fx.PathOf("remote.db");
+        using var store = new HostStore(path);
+        using var keys = new HostKeyStore(store, HostId);
+        using var phone = P256.Generate();
+        using var laptop = P256.Generate();
+        keys.Trust(Device("phone", phone, DateTimeOffset.UtcNow));
+        keys.Trust(Device("laptop", laptop, DateTimeOffset.UtcNow));
+        TrustUngrantable(path, "broken");
+
+        Assert.ThrowsAny<CryptographicException>(() => keys.RevokeAndRotate("laptop", tellGateway: true));
+
+        Assert.Equal(1u, keys.Current.Epoch);
+        Assert.Equal(1L, Count(path, "host_keys"));
+        Assert.Null(Assert.Single(keys.Trusted, d => d.DeviceId == "laptop").RevokedAt);
+        Assert.Empty(keys.PendingGrants());
+        Assert.Empty(keys.OwedRevocations());
+
+        keys.Distrust("broken");
+        keys.RevokeAndRotate("laptop", tellGateway: true);
+
+        Assert.Equal(2u, keys.Current.Epoch);
+        Assert.Equal(["phone"], keys.Live.Select(d => d.DeviceId));
+        Assert.Equal(["host-1:phone:2"], keys.PendingGrants().Select(p => p.Id));
+    }
+
+    /// <summary>A removal names a device trusted now; anything else is refused and changes nothing.</summary>
+    [WindowsFact]
+    public void Revoke_and_rotate_refuses_a_device_that_is_not_trusted_now()
+    {
+        using var fx = new EngineFixture();
+        using var store = new HostStore(fx.PathOf("remote.db"));
+        using var keys = new HostKeyStore(store, HostId);
+        using var phone = P256.Generate();
+        keys.Trust(Device("phone", phone, DateTimeOffset.UtcNow));
+        keys.Distrust("phone");
+
+        Assert.Throws<InvalidOperationException>(() => keys.RevokeAndRotate("phone", tellGateway: true));
+        Assert.Throws<InvalidOperationException>(() => keys.RevokeAndRotate("stranger", tellGateway: true));
+
+        Assert.Equal(1u, keys.Current.Epoch);
+        Assert.Empty(keys.OwedRevocations());
+    }
+
     // ── helpers ─────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// A trusted device no grant can be made for - its key is off the curve - written past the store's own
+    /// check, and listed after every other device.
+    /// </summary>
+    internal static void TrustUngrantable(string path, string deviceId)
+    {
+        using var connection = Open(path);
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO trusted_devices (device_id, public_key, label, added_by, added_at, revoked_at)
+            VALUES ($id, $key, 'Broken', 'test', '9999-12-31T00:00:00.0000000+00:00', NULL)
+            """;
+        command.Parameters.AddWithValue("$id", deviceId);
+        command.Parameters.AddWithValue("$key", (byte[])[0x04, .. Enumerable.Repeat((byte)0x01, 64)]);
+        command.ExecuteNonQuery();
+    }
 
     private static string OtherCurveSigningKey()
     {

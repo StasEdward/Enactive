@@ -45,6 +45,9 @@ public sealed class Sealer(IHostKeys keys, TimeProvider clock)
     /// <summary>Why a command sealed under an epoch older than the current one is not acted on.</summary>
     public const string SealedBeforeRemoval = "sealed before a device was removed - send it again";
 
+    /// <summary>Why a command that does not open, for this command on this computer, is not acted on.</summary>
+    public const string NotSealedHere = "it was not sealed for this command on this computer";
+
     // ── sealing what goes out ───────────────────────────────────────────────
 
     /// <summary>An event's sentence, sealed so that it opens only as this run's event of this sequence and kind.</summary>
@@ -173,7 +176,7 @@ public sealed class Sealer(IHostKeys keys, TimeProvider clock)
         // key only because its grant of the new one had not reached it yet is told to send the command again.
         var current = keys.Current;
         if (epoch < current.Epoch)
-            throw new CommandRefusedException(SealedBeforeRemoval, sendAgain: true);
+            throw Stale(epoch, envelope, associatedData);
         if (epoch != current.Epoch)
             throw new CommandRefusedException("sealed under a key this computer does not hold");
 
@@ -186,7 +189,7 @@ public sealed class Sealer(IHostKeys keys, TimeProvider clock)
         {
             // Wrong key, another computer's id, another command's id or kind, or altered bytes: the
             // associated data makes all of these the same failure, and none of them is the owner.
-            throw new CommandRefusedException("it was not sealed for this command on this computer");
+            throw new CommandRefusedException(NotSealedHere);
         }
 
         try
@@ -197,6 +200,30 @@ public sealed class Sealer(IHostKeys keys, TimeProvider clock)
         {
             throw new CommandRefusedException("what was sealed could not be read");
         }
+    }
+
+    /// <summary>
+    /// The refusal of a command naming an epoch older than the current one. It is called stale - send it
+    /// again - only when it truly opens under that old key for this command: the epoch is written in the
+    /// envelope in the clear, so without the check a gateway could put an old epoch on any forgery and have
+    /// it read as an honest phone's late command instead of as forged. Opened only to tell the two apart;
+    /// nothing in it is acted on.
+    /// </summary>
+    private CommandRefusedException Stale(uint epoch, string envelope, byte[] associatedData)
+    {
+        if (keys.Epoch(epoch) is not { } old)
+            return new CommandRefusedException(NotSealedHere);
+
+        try
+        {
+            old.OpenText(envelope, associatedData);
+        }
+        catch (CryptographicException)
+        {
+            return new CommandRefusedException(NotSealedHere);
+        }
+
+        return new CommandRefusedException(SealedBeforeRemoval, sendAgain: true);
     }
 
     /// <summary>

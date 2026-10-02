@@ -174,19 +174,107 @@ internal sealed class RemoteAccessService : IAsyncDisposable
     /// </summary>
     private volatile KeyAdministration? _lastAdministration;
 
-    /// <summary>What removing a device says when there is no connection to tell the gateway on.</summary>
-    public const string NotConnectedForRemove =
-        "This computer is not connected to the gateway right now, so it cannot remove a device. Try again once it is.";
+    /// <summary>
+    /// Removals made while there is no connection: over the same key store, with a gateway that is not
+    /// there, so each one is made here and left owed to the gateway. Made when first needed, and kept.
+    /// </summary>
+    private KeyAdministration? _offlineAdministration;
+
+    /// <summary>What removing a device says when this computer has no trusted list to change.</summary>
+    public const string CannotRemove =
+        "Remote access is not set up on this computer, so it has no devices to remove.";
 
     /// <summary>
     /// Removes a device with this computer's own list: it reads nothing new from here, every other device gets
-    /// a new key, and the gateway stops serving it. Needs the connection, because the gateway must be told.
+    /// a new key, and the gateway stops serving it. The gateway half never holds up the rest: with no
+    /// connection, or one that cannot pass it on, the gateway is told at the next connection - and the
+    /// sentence returned, also the status, says so rather than calling the removal failed.
     /// </summary>
-    /// <exception cref="InvalidOperationException">There is no connection past Hello.</exception>
-    public Task RevokeDeviceAsync(string deviceId, CancellationToken ct)
-        => _administration is { } administration
-            ? administration.RevokeHereAsync(deviceId, ct)
-            : throw new InvalidOperationException(NotConnectedForRemove);
+    /// <returns>What happened, in a sentence for the person.</returns>
+    /// <exception cref="InvalidOperationException">This computer's keys could not be read, or it has none.</exception>
+    public async Task<string> RevokeDeviceAsync(string deviceId, CancellationToken ct)
+    {
+        if (!TryKeys(out var why))
+            throw new InvalidOperationException(why);
+        if (_keys is not HostKeyStore hostKeys)
+            throw new InvalidOperationException(CannotRemove);
+
+        var label = hostKeys.Trusted.FirstOrDefault(d => d.DeviceId == deviceId)?.Label ?? deviceId;
+        var administration = _administration ?? Offline(hostKeys);
+
+        var said = await administration.RevokeHereAsync(deviceId, ct)
+            ? Removed(label, KeyAdministration.RemovedHere)
+            : $"{label} was removed here; the gateway will be told when this computer next connects.";
+
+        Status = said;
+        return said;
+    }
+
+    private KeyAdministration Offline(HostKeyStore hostKeys)
+    {
+        lock (_lifecycle)
+            return _offlineAdministration ??= Administration(hostKeys, new NoGateway());
+    }
+
+    /// <summary>What the status line says once a device was removed, and how.</summary>
+    private static string Removed(string label, string how)
+        => $"{label} was {how}: it reads nothing new from this computer, and every other device gets a new key.";
+
+    /// <summary>
+    /// An administration over the key store, on one connection, saying what it does in the status line.
+    /// </summary>
+    private KeyAdministration Administration(HostKeyStore hostKeys, IGatewayConnection connection)
+    {
+        var administration = new KeyAdministration(hostKeys, connection, TimeProvider.System);
+        administration.Noticed += notice =>
+        {
+            // A refused answer is said in the status line as well: it is someone other than the
+            // invited device holding the link, and the window that asked may have been closed.
+            if (notice.Refused)
+                Status = notice.Detail;
+            InvitationNoticed?.Invoke(notice);
+        };
+
+        // Said where the person looks: removing a device - here or from a browser - is something they
+        // should see happen, with what it cost, and not only in a list they may not open.
+        administration.Rotated += rotated => Status = Removed(rotated.Label, rotated.Reason);
+
+        administration.RevocationOwed += (_, reason) => Status =
+            $"The gateway has not yet been told of a device removed here ({reason}); it will be told when this computer next connects.";
+
+        return administration;
+    }
+
+    /// <summary>
+    /// The gateway while there is no connection: every call fails as a dropped one would, so a removal made
+    /// meanwhile is kept owed. Nothing else is ever asked of it.
+    /// </summary>
+    private sealed class NoGateway : IGatewayConnection
+    {
+        public bool IsOpen => false;
+
+        private static Task Down() => Task.FromException(new IOException("This computer is not connected to the gateway."));
+
+        public Task HelloAsync(int protocolVersion, CancellationToken ct) => Down();
+
+        public Task<IReadOnlyList<HostCommand>> SyncAsync(IReadOnlyList<WorkspaceRef> workspaces, CancellationToken ct)
+            => Task.FromException<IReadOnlyList<HostCommand>>(new IOException("This computer is not connected to the gateway."));
+
+        public Task AcknowledgeAsync(string commandId, CancellationToken ct) => Down();
+
+        public Task PublishAsync(HostEvent published, CancellationToken ct) => Down();
+
+        public Task PublishGrantsAsync(IReadOnlyList<KeyGrant> grants, CancellationToken ct) => Down();
+
+        public Task CreateInviteAsync(string inviteId, CancellationToken ct) => Down();
+
+        public Task<IReadOnlyList<EnrollmentView>> EnrollmentsAsync(CancellationToken ct)
+            => Task.FromException<IReadOnlyList<EnrollmentView>>(new IOException("This computer is not connected to the gateway."));
+
+        public Task AnsweredInviteAsync(string inviteId, CancellationToken ct) => Down();
+
+        public Task RevokeDeviceAsync(string deviceId, CancellationToken ct) => Down();
+    }
 
     /// <summary>A device answered an invitation and was admitted - which invitation, and its label. Not on the UI thread.</summary>
     public event Action<AdmittedDevice>? DeviceAdmitted;
@@ -526,21 +614,7 @@ internal sealed class RemoteAccessService : IAsyncDisposable
         var hostKeys = _keys as HostKeyStore;
         if (hostKeys is not null)
         {
-            var administration = new KeyAdministration(hostKeys, connection, TimeProvider.System);
-            administration.Noticed += notice =>
-            {
-                // A refused answer is said in the status line as well: it is someone other than the
-                // invited device holding the link, and the window that asked may have been closed.
-                if (notice.Refused)
-                    Status = notice.Detail;
-                InvitationNoticed?.Invoke(notice);
-            };
-
-            // Said where the person looks: removing a device - here or from a browser - is something they
-            // should see happen, with what it cost, and not only in a list they may not open.
-            administration.Rotated += rotated => Status =
-                $"{rotated.Label} was {rotated.Reason}: it reads nothing new from this computer, and every other device gets a new key.";
-
+            var administration = Administration(hostKeys, connection);
             _administration = administration;
             _lastAdministration = administration;
         }
@@ -599,6 +673,12 @@ internal sealed class RemoteAccessService : IAsyncDisposable
                 {
                     Begin(command);
                 }
+
+                // Removals made here that the gateway has not heard of - made offline, or on a connection
+                // that dropped - are passed on after every sync that worked: until then it still serves the
+                // removed device. Nothing is asked when nothing is owed.
+                if (_administration is { } owedOn)
+                    await owedOn.SettleOwedRevocationsAsync(ct);
 
                 // Asked only while an invitation is open: otherwise it is one more call every turn, for
                 // nothing. The grants an answer queues go out with the next flush, two seconds on.
