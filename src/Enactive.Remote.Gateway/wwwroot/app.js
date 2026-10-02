@@ -22,7 +22,7 @@ import { providerLinks, outcomeOf, createDevelopmentProbe } from "./js/signin.js
 import { singleFlight } from "./js/single-flight.js";
 import { openKeystore } from "./js/keystore.js";
 import {
-  ensureDevice, collectGrants, troubleFor, worthSaying, connectPendingId, keyStanding, createGrantSchedule
+  ensureDevice, collectGrants, troubleFor, worthSaying, connectPendingId, keyStanding, createGrantSchedule, epochsChanged
 } from "./js/trust.js";
 import { createReader, answerable, NOT_GIVEN } from "./js/reader.js";
 import { formatConnectionCode, newPairingSecret } from "./js/pairing.js";
@@ -980,27 +980,57 @@ async function catchUpKeysNow() {
   }
 
   try {
+    // Keys another tab of this browser stored since the last poll (epochsChanged).
+    let changed = await noticeKeys(store, started);
+
     const hosts = state.hosts.filter((host) => !host.revoked);
     const standings = await Promise.all(hosts.map(async (host) => [host.id, await keyStanding(store, host)]));
 
-    if (!grantSchedule.due(standings)) {
-      return;
+    if (grantSchedule.due(standings)) {
+      const result = await takeGrants(started);
+
+      if (!result) {
+        return;
+      }
+
+      sayTrouble(result);
+      // Read again after the delivery rather than trusting `added`: a grant another tab stored first is
+      // passed over here as skipped, and the key store is what says this tab now holds a newer epoch.
+      changed = (await noticeKeys(store, started)) || changed;
     }
 
-    const result = await takeGrants(started);
-
-    if (!result) {
-      return;
-    }
-
-    sayTrouble(result);
-
-    if (result.added.length > 0) {
+    if (changed) {
       await render();
     }
   } catch {
     // Not reaching the gateway is what the poll already shows, and the next poll asks again.
   }
+}
+
+/** Each listed computer's newest epoch in the key store, as this tab last read it. */
+let seenEpochs = new Map();
+
+/**
+ * Reads the newest epoch of every listed computer and, if any differs from the last read, tells the reader
+ * (keysChanged), so what it remembered as unreadable or not held is tried again. Returns whether it did.
+ */
+async function noticeKeys(store, started) {
+  const current = new Map(await Promise.all(state.hosts.map(async (host) =>
+    [host.id, await store.newestEpoch(host.id)])));
+
+  // The session ended while the store was read: what was read is not the next session's.
+  if (!isCurrent(started)) {
+    return false;
+  }
+
+  const changed = epochsChanged(seenEpochs, current);
+  seenEpochs = current;
+
+  if (changed) {
+    reader.keysChanged();
+  }
+
+  return changed;
 }
 
 /** The last trouble with grants this page told the person of. */
@@ -1189,6 +1219,7 @@ function resetSession() {
   content = () => undefined;
   drawnCursor = null;
   grantSchedule = createGrantSchedule();
+  seenEpochs = new Map();
   lastTrouble = "";
   resetState(state);
   clearTimeout(toastTimer);

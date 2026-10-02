@@ -7,7 +7,7 @@ import { b64url, fromB64url } from '../../src/Enactive.Remote.Gateway/wwwroot/js
 import { canonicalBytes } from '../../src/Enactive.Remote.Gateway/wwwroot/js/canonical.js';
 import {
   ensureDevice, collectGrants, deviceLabel, tamperingMessage, troubleFor, worthSaying, connectPendingId, invitePendingId,
-  keyStanding, createGrantSchedule, REJECTED, NO_SECRET, DEVICE_LIMIT, NOT_PAIRED, BEHIND
+  keyStanding, createGrantSchedule, epochsChanged, REJECTED, NO_SECRET, DEVICE_LIMIT, NOT_PAIRED, BEHIND
 } from '../../src/Enactive.Remote.Gateway/wwwroot/js/trust.js';
 import { vectors } from './vectors.mjs';
 
@@ -372,6 +372,22 @@ test('grants are asked for every poll for a computer that moved on, and ever les
   assert.equal(at(56.5, never), false);
   schedule.reset('host-a');
   assert.equal(at(56.5, never), true);
+});
+
+test('the keys held changed when a computer has a newer key, a first key, or none any more', () => {
+  const seen = new Map([['host-a', 2], ['host-b', null]]);
+
+  assert.equal(epochsChanged(seen, new Map([['host-a', 2], ['host-b', null]])), false);
+  // Another tab of this browser took a rotation grant, or a pairing, into the store all tabs share.
+  assert.equal(epochsChanged(seen, new Map([['host-a', 3], ['host-b', null]])), true);
+  assert.equal(epochsChanged(seen, new Map([['host-a', 2], ['host-b', 1]])), true);
+  // A computer forgotten: what was derived from its key must go too.
+  assert.equal(epochsChanged(seen, new Map([['host-a', null], ['host-b', null]])), true);
+  // A computer first listed: held already is news to a reader that may have found nothing; held by nobody is not.
+  assert.equal(epochsChanged(seen, new Map([['host-a', 2], ['host-b', null], ['host-c', 1]])), true);
+  assert.equal(epochsChanged(seen, new Map([['host-a', 2], ['host-b', null], ['host-c', null]])), false);
+  // A computer no longer listed changes nothing that is drawn.
+  assert.equal(epochsChanged(seen, new Map([['host-a', 2]])), false);
 });
 
 test('the tampering sentence names the computer and says what to do', () => {

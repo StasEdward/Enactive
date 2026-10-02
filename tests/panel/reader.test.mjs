@@ -6,6 +6,7 @@ import { ad } from '../../src/Enactive.Remote.Gateway/wwwroot/js/sealed.js';
 import { actionHash } from '../../src/Enactive.Remote.Gateway/wwwroot/js/action-identity.js';
 import { fromB64url } from '../../src/Enactive.Remote.Gateway/wwwroot/js/bytes.js';
 import { createReader, answerable, NOT_GIVEN, ALTERED } from '../../src/Enactive.Remote.Gateway/wwwroot/js/reader.js';
+import { epochsChanged } from '../../src/Enactive.Remote.Gateway/wwwroot/js/trust.js';
 import { vectors } from './vectors.mjs';
 
 const ALICE = '0123456789abcdef0123456789abcdef';
@@ -174,6 +175,28 @@ test('the cache returns the same result for the same record and envelope and ret
   // A new envelope under the same id is another record to open.
   const resealed = { ...record, sealedDetail: await computer.sealText('Changed.', ad.event(HOST, 'run-1', 7, 'Progress')) };
   assert.deepEqual(await reader.openEvent(resealed, HOST), { text: 'Changed.' });
+});
+
+test('a key another tab stored is found once the panel sees the keys changed', async () => {
+  // One key store per account in this browser, shared by every tab: tab A takes the grant, and tab B's
+  // reader, which found no key, is never told by a delivery of its own.
+  const keystore = await store({ holding: false });
+  const reader = createReader(keystore);
+  const record = await event();
+  const epochs = async () => new Map([[HOST, await keystore.newestEpoch(HOST)]]);
+
+  const seen = await epochs();
+  assert.deepEqual(await reader.openEvent(record, HOST), { unreadable: NOT_GIVEN });
+
+  await keystore.addHostKey(HOST, EPOCH, secret);
+  // Remembered as unreadable until something says the keys changed.
+  assert.deepEqual(await reader.openEvent(record, HOST), { unreadable: NOT_GIVEN });
+
+  // What the panel does after every drawn poll.
+  const now = await epochs();
+  assert.equal(epochsChanged(seen, now), true);
+  reader.keysChanged();
+  assert.deepEqual(await reader.openEvent(record, HOST), { text: 'Read the disk.' });
 });
 
 test("a computer's key is read and derived once for all its records", async () => {

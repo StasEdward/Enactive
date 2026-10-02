@@ -92,6 +92,23 @@ export async function keyStanding(keystore, host) {
   return newest < host.keyEpoch ? BEHIND : null;
 }
 
+/**
+ * Whether the keys this browser holds changed between two reads of the key store, each a Map of computer id to
+ * its newest epoch (null for none). The store is one IndexedDB database per account, shared by every tab of the
+ * browser, so a key can arrive without this tab taking it: a pairing or an invitation answered in another tab,
+ * or a rotation grant another tab collected first - this tab's own delivery then adds nothing, the epoch being
+ * held already. A reader that has found no key keeps saying so until told (reader.js keysChanged), and without
+ * this the tab showed everything from that computer as unreadable until it was reloaded, under a Computers card
+ * that said all was well. A computer first listed counts only if a key for it is held; one no longer listed
+ * changes nothing drawn.
+ */
+export function epochsChanged(previous, current) {
+  for (const [hostId, epoch] of current) {
+    if ((epoch ?? null) !== (previous.get(hostId) ?? null)) return true;
+  }
+  return false;
+}
+
 // How long to wait before asking again for the grants of a computer this device holds no key for: one
 // minute, doubling, up to ten.
 const FIRST_WAIT_MS = 60 * 1000;

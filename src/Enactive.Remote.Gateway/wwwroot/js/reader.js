@@ -131,7 +131,8 @@ ${b64url(adBytes)}`;
 
   return {
     /**
-     * Says this device was given keys (a delivery added some): what did not open before is tried again,
+     * Says the keys this browser holds changed: a delivery this tab took added some, or another tab stored
+     * some in the key store they share (trust.js epochsChanged). What did not open before is tried again,
      * and what was not held is looked for again. Also for keys taken away, so nothing derived outlives them.
      */
     keysChanged() {
