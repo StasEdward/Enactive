@@ -23,6 +23,12 @@
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.5" />
     <ProjectReference Include="..\Enactive.Remote.Contracts\Enactive.Remote.Contracts.csproj" />
     <ProjectReference Include="..\Enactive.Core\Enactive.Core.csproj" />
+
+    <!--
+      The computer's remote keys are kept the way the API key is: DPAPI, this Windows user. One
+      implementation of "protected at rest", so a fix to it reaches both.
+    -->
+    <ProjectReference Include="..\Enactive.Secrets\Enactive.Secrets.csproj" />
   </ItemGroup>
 
 </Project>

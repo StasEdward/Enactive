@@ -86,7 +86,54 @@ public sealed class HostStore : IDisposable
               started_at    TEXT NOT NULL,
               ended_at      TEXT NULL
             );
+
+            -- The computer's keys and whom it trusts, kept by HostKeyStore. In this file rather than
+            -- one of their own so there is one place that says what this machine knows about remote
+            -- access, and one lock in front of it. Every secret below is DPAPI-protected text.
+            CREATE TABLE IF NOT EXISTS host_keys (
+              epoch  INTEGER PRIMARY KEY,
+              secret TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS host_signing (
+              id          INTEGER PRIMARY KEY CHECK (id = 1),
+              private_key TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS trusted_devices (
+              device_id  TEXT PRIMARY KEY,
+              public_key BLOB NOT NULL,
+              label      TEXT NOT NULL,
+              added_by   TEXT NOT NULL,
+              added_at   TEXT NOT NULL,
+              revoked_at TEXT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS pending_invites (
+              id         TEXT PRIMARY KEY,
+              secret     TEXT NOT NULL,
+              expires_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS pending_grants (
+              id         TEXT PRIMARY KEY,
+              json       TEXT NOT NULL,
+              created_at TEXT NOT NULL
+            );
             """);
+    }
+
+    /// <summary>
+    /// The connection, for the key store, while this store's lock is held.
+    ///
+    /// <para>The key store keeps its tables in this file, and a second connection to it would be a
+    /// second writer that this lock knows nothing about. Handing out the connection only inside the
+    /// lock keeps every statement against remote.db behind the same gate.</para>
+    /// </summary>
+    internal T Locked<T>(Func<SqliteConnection, T> work)
+    {
+        using var guard = _gate.EnterScope();
+        return work(_connection);
     }
 
     // ── commands coming in ──────────────────────────────────────────────────
