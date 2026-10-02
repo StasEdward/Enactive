@@ -1,0 +1,47 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="using:Enactive.App.Ui"
+        x:Class="Enactive.App.Ui.AddDeviceWindow"
+        Title="Add a device"
+        SizeToContent="Height" Width="460"
+        CanResize="False"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False"
+        Background="{DynamicResource Brand.Bg}"
+        WindowDecorations="BorderOnly"
+        ExtendClientAreaToDecorationsHint="True">
+
+    <Grid RowDefinitions="Auto,Auto" Margin="{Binding $parent[Window].OffScreenMargin}">
+
+        <local:TitleBarView Grid.Row="0" />
+
+        <StackPanel Grid.Row="1" Margin="20" Spacing="10">
+            <TextBlock FontSize="15" FontWeight="SemiBold" Text="Add a device" />
+            <TextBlock FontSize="12" TextWrapping="Wrap" Foreground="{DynamicResource Brand.TextBody}"
+                       Text="Open this link on the device you want to add, signed in to the same account - scan the code with its camera, or send the link to yourself in a way only you can read. It works once, for ten minutes." />
+
+            <!-- Dark on white whatever the theme, with a quiet zone of four modules: a camera reads a
+                 QR code by its contrast and its margin, and a dark theme's light-on-dark is neither. -->
+            <Border x:Name="QrFrame" Background="White" Padding="16" HorizontalAlignment="Center"
+                    IsVisible="False">
+                <Path x:Name="QrPath" Fill="Black" Width="208" Height="208" Stretch="Uniform" />
+            </Border>
+
+            <Grid ColumnDefinitions="*,Auto" x:Name="LinkRow" IsVisible="False">
+                <TextBox Grid.Column="0" x:Name="LinkBox" IsReadOnly="True" TextWrapping="NoWrap"
+                         FontFamily="Consolas, Menlo, monospace" FontSize="11" />
+                <Button Grid.Column="1" x:Name="CopyButton" Content="Copy" Margin="6,0,0,0" Padding="12,4" />
+            </Grid>
+
+            <TextBlock x:Name="CountdownText" FontSize="12" Foreground="{DynamicResource Brand.TextFaint}" />
+            <TextBlock x:Name="StatusText" FontSize="12" TextWrapping="Wrap" />
+            <TextBlock x:Name="ProblemText" FontSize="12" TextWrapping="Wrap"
+                       Foreground="{DynamicResource Brand.Danger}" />
+
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <Button x:Name="CancelButton" Content="Cancel" Padding="14,4" IsCancel="True" />
+            </StackPanel>
+        </StackPanel>
+    </Grid>
+
+</Window>

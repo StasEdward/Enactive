@@ -25,17 +25,33 @@ internal sealed partial class SettingsWindow : Window
     /// Applies a connection code. Supplied by the main window, because the code changes the keys the
     /// running service holds - it has to be stopped first - and the settings it saves are the live ones.
     /// </param>
+    /// <param name="remoteDevices">
+    /// The trusted devices and invitations, through whichever service is running. Supplied by the main
+    /// window, which replaces that service when the settings change.
+    /// </param>
     public SettingsWindow(
         AppSettings settings, Action<AppSettings> onSaved,
         string? workspaceRoot = null, IReadOnlyList<string>? toolNames = null,
         Func<CancellationToken, Task<string>>? remoteCheck = null,
-        Func<ConnectionCode, Func<string, Task<bool>>, Task<(bool Connected, string Detail)>>? remoteConnect = null)
+        Func<ConnectionCode, Func<string, Task<bool>>, Task<(bool Connected, string Detail)>>? remoteConnect = null,
+        RemoteDevices? remoteDevices = null)
     {
         var viewModel = new SettingsViewModel(settings, onSaved, workspaceRoot, toolNames)
         {
             RemoteCheck = remoteCheck,
-            RemoteConnect = remoteConnect
+            RemoteConnect = remoteConnect,
+            RemoteCanInvite = remoteDevices is null ? null : () => remoteDevices.CanInvite,
+            RemoteTrusted = remoteDevices is null ? null : remoteDevices.TrustedAsync
         };
+        if (remoteDevices is not null)
+        {
+            // The connection comes and goes while this window is open; Add a device follows it. Let go of
+            // on close, or every settings window ever opened would be kept alive by the main window's bridge.
+            Action changed = viewModel.RefreshRemoteConnection;
+            remoteDevices.Changed += changed;
+            Closed += (_, _) => remoteDevices.Changed -= changed;
+            viewModel.AddDeviceRequested += () => new AddDeviceWindow(remoteDevices).ShowDialog(this);
+        }
         viewModel.CloseRequested += () => Close();
         viewModel.ProviderEditRequested += (config, saved) =>
             new ProviderEditWindow(config, saved).Show(this);

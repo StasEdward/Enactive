@@ -154,6 +154,43 @@ internal sealed class RemoteAccessService : IAsyncDisposable
     /// <summary>Raised when <see cref="Status"/> changed. Not on the UI thread.</summary>
     public event Action? Changed;
 
+    /// <summary>What "Add a device" says when there is no connection to make an invitation on.</summary>
+    public const string NotConnectedForInvite =
+        "This computer is not connected to the gateway right now, so it cannot make an invitation. Try again once it is.";
+
+    /// <summary>
+    /// Adding devices by invitation, on the connection that is up - null while there is none past Hello,
+    /// and when the keys were handed in rather than read from remote.db (a test's).
+    /// </summary>
+    public KeyAdministration? KeyAdministration => _administration;
+
+    private volatile KeyAdministration? _administration;
+
+    /// <summary>A device answered an invitation and was admitted; its label. Not on the UI thread.</summary>
+    public event Action<string>? DeviceAdmitted;
+
+    /// <summary>An answer to an invitation was refused, or set aside. Not on the UI thread.</summary>
+    public event Action<AdmissionNotice>? InvitationNoticed;
+
+    /// <summary>
+    /// Opens an invitation on the connection that is up, for the gateway the settings name. The link holds
+    /// the pairing secret: the caller shows it and wipes <see cref="InviteLink.PairingSecret"/> after.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">There is no connection past Hello.</exception>
+    public Task<InviteLink> InviteAsync(CancellationToken ct)
+        => _administration is { } administration
+            ? administration.InviteAsync(new Uri(_settings.GatewayUrl), ct)
+            : throw new InvalidOperationException(NotConnectedForInvite);
+
+    /// <summary>
+    /// Closes an invitation nobody answered - its window was cancelled or ran out. Here rather than on the
+    /// connection, because the invitation is in the key store and the connection may be down.
+    /// </summary>
+    public void WithdrawInvite(string inviteId) => (_keys as HostKeyStore)?.ForgetInvite(inviteId);
+
+    /// <summary>Every device this computer has trusted, revoked ones included; none before its keys are read.</summary>
+    public IReadOnlyList<TrustedDevice> TrustedDevices() => (_keys as HostKeyStore)?.Trusted ?? [];
+
     /// <summary>Runs started from a phone that are still going, by remote run id.</summary>
     public IReadOnlyCollection<string> Running => _runner?.Running ?? [];
 
@@ -463,6 +500,24 @@ internal sealed class RemoteAccessService : IAsyncDisposable
             loop.RecoverInterruptedRuns();
         }
 
+        // Only over keys read from remote.db: invitations and the devices they admit live in that store.
+        var hostKeys = _keys as HostKeyStore;
+        if (hostKeys is not null)
+        {
+            var administration = new KeyAdministration(hostKeys, connection, TimeProvider.System);
+            administration.Noticed += notice =>
+            {
+                // A refused answer is said in the status line as well: it is someone other than the
+                // invited device holding the link, and the window that asked may have been closed.
+                if (notice.Refused)
+                    Status = notice.Detail;
+                InvitationNoticed?.Invoke(notice);
+            };
+            _administration = administration;
+        }
+
+        // Said after the invitations are ready: "Connected." is what tells the settings pane that Add a
+        // device can be pressed, and a press that found no connection to invite on would say it is down.
         Status = "Connected.";
 
         // A connection that got as far as Hello was a working one, so the wait after it drops starts
@@ -470,6 +525,33 @@ internal sealed class RemoteAccessService : IAsyncDisposable
         // computer that lost its network twice in a week waited two minutes to come back.
         _connectedSinceFailure = true;
 
+        try
+        {
+            await ServeTurnsAsync(connection, loop, hostKeys, ct);
+        }
+        finally
+        {
+            // An invitation made on a connection that is gone would be registered nowhere; "Add a device"
+            // says there is no connection instead.
+            _administration = null;
+        }
+
+        if (loop.Stopped)
+        {
+            // A fatal refusal: a revoked token, a computer the gateway no longer knows. The queue is
+            // kept intact and nothing is retried, because retrying is what turns a revoked token
+            // into a machine hammering a server it is not allowed to talk to.
+            var why = loop.Notices.LastOrDefault(n => n.Kind == "Stopped")?.Detail;
+
+            Status = why is null
+                ? "The gateway refused this computer, so remote access has stopped."
+                : $"The gateway refused this computer, so remote access has stopped: {why}";
+        }
+    }
+
+    private async Task ServeTurnsAsync(
+        IGatewayConnection connection, DeliveryLoop loop, HostKeyStore? hostKeys, CancellationToken ct)
+    {
         var nextSync = DateTimeOffset.MinValue;
 
         while (!ct.IsCancellationRequested && !loop.Stopped)
@@ -488,6 +570,16 @@ internal sealed class RemoteAccessService : IAsyncDisposable
                 {
                     Begin(command);
                 }
+
+                // Asked only while an invitation is open: otherwise it is one more call every turn, for
+                // nothing. The grants an answer queues go out with the next flush, two seconds on.
+                if (_administration is { } administration && hostKeys!.HasPendingInvites)
+                {
+                    foreach (var label in await administration.AnswerEnrollmentsAsync(ct))
+                    {
+                        DeviceAdmitted?.Invoke(label);
+                    }
+                }
             }
             else
             {
@@ -495,18 +587,6 @@ internal sealed class RemoteAccessService : IAsyncDisposable
             }
 
             await Task.Delay(FlushEvery, ct);
-        }
-
-        if (loop.Stopped)
-        {
-            // A fatal refusal: a revoked token, a computer the gateway no longer knows. The queue is
-            // kept intact and nothing is retried, because retrying is what turns a revoked token
-            // into a machine hammering a server it is not allowed to talk to.
-            var why = loop.Notices.LastOrDefault(n => n.Kind == "Stopped")?.Detail;
-
-            Status = why is null
-                ? "The gateway refused this computer, so remote access has stopped."
-                : $"The gateway refused this computer, so remote access has stopped: {why}";
         }
     }
 

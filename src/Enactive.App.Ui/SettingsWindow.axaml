@@ -247,7 +247,9 @@
                                Text="" />
                 </StackPanel>
 
-                <StackPanel IsVisible="{Binding IsRemote}" Margin="12" Spacing="6">
+                <!-- Scrolls: the trusted list grows with every device added. -->
+                <ScrollViewer IsVisible="{Binding IsRemote}">
+                <StackPanel Margin="12" Spacing="6">
                     <TextBlock Classes="label" Text="Remote access" />
                     <TextBlock Classes="hint" TextWrapping="Wrap"
                                Text="Lets you start tasks on this computer from a phone. This computer connects out to the gateway and holds the connection open; nothing listens for incoming connections here, and no port needs opening." />
@@ -286,9 +288,36 @@
                     <TextBlock Classes="hint" TextWrapping="Wrap"
                                Text="Test connection tries what is stored: it says hello to the gateway and offers this computer's workspaces, which also makes it show as online on the phone." />
 
+                    <!-- Read only: taking a device's trust away means a new key for every other device,
+                         and that is not a button to put next to a list by accident. -->
+                    <TextBlock Classes="label" Text="Trusted devices" Margin="0,10,0,0" />
+                    <TextBlock Classes="hint" TextWrapping="Wrap"
+                               Text="The browsers that hold this computer's keys and can read what it sends. Add a device makes a one-time link for another browser signed in to the same account; it can be pressed while this computer is connected." />
+                    <TextBlock Classes="hint" IsVisible="{Binding !HasRemoteDevices}"
+                               Text="No device is trusted yet." />
+                    <ItemsControl ItemsSource="{Binding RemoteDevices}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:TrustedDeviceRow">
+                                <Border Classes="card" Margin="0,0,0,4" Padding="8">
+                                    <StackPanel Spacing="2">
+                                        <TextBlock Text="{Binding Label}" FontWeight="SemiBold"
+                                                   TextTrimming="CharacterEllipsis" />
+                                        <TextBlock Classes="hint" Text="{Binding Added}" />
+                                        <TextBlock Classes="hint" Text="{Binding State}"
+                                                   Foreground="{DynamicResource Brand.Danger}"
+                                                   IsVisible="{Binding IsRevoked}" />
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <Button Content="Add a device" Command="{Binding AddDeviceCommand}"
+                            IsEnabled="{Binding RemoteCanAddDevice}" HorizontalAlignment="Left" />
+
                     <TextBlock Classes="hint" TextWrapping="Wrap" Margin="0,10,0,0"
                                Text="A task started from the phone runs at the autonomy level set on the main window and never runs shell commands, whatever that level says. Permission questions it does raise can be answered from either the phone or here - whichever answers first decides." />
                 </StackPanel>
+                </ScrollViewer>
 
                 <DockPanel IsVisible="{Binding IsAbout}" Margin="12" LastChildFill="True">
 

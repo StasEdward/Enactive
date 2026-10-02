@@ -224,6 +224,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
                 toolNames: _toolRegistry.Definitions.Select(d => d.Name).ToArray(),
                 remoteCheck: CheckRemoteAsync,
                 remoteConnect: ConnectRemoteAsync,
+                remoteDevices: RemoteDeviceAccess,
                 onSaved: saved =>
             {
                 if (!saved.Save(replaceUnreadable: true))
@@ -324,6 +325,14 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     /// </summary>
     private RemoteAccessService? _remote;
 
+    /// <summary>
+    /// The trusted devices and invitations, for the settings pane and the Add a device window - through
+    /// whichever service is running, behind <see cref="_remoteGate"/>.
+    /// </summary>
+    private RemoteDevices RemoteDeviceAccess => _remoteDevices ??= new RemoteDevices(() => _remote, _remoteGate);
+
+    private RemoteDevices? _remoteDevices;
+
     /// <summary>Where this computer keeps what it was asked to do and has not yet reported.</summary>
     private static string RemoteDatabasePath()
         => Path.Combine(
@@ -364,6 +373,14 @@ public sealed partial class MainWindow : Window, IDecisionHandler
 
         _remote.Changed += () => Dispatcher.UIThread.Post(() =>
             _log.Info(LogSource.System, "Remote access: " + _remote!.Status));
+
+        // Said in the log as well as in the window that made the invitation: that window may have been
+        // closed, and a device that now holds every key of this computer must be traceable to a moment.
+        _remote.DeviceAdmitted += label => Dispatcher.UIThread.Post(() =>
+            _log.Info(LogSource.System, $"Remote access: \"{label}\" answered an invitation and is now trusted."));
+        _remote.InvitationNoticed += notice => Dispatcher.UIThread.Post(() =>
+            _log.Info(LogSource.System, "Remote access: " + notice.Detail));
+        RemoteDeviceAccess.Attach(_remote);
 
         _remote.Start();
         _log.Info(LogSource.System, "Remote access: " + _remote.Status);

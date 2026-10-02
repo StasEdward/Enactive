@@ -1,5 +1,6 @@
 namespace Enactive.Engine.Tests;
 
+using System.Collections.Concurrent;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
@@ -19,6 +20,10 @@ using Xunit;
 /// <para>The code also carries the pairing secret, and that is the part with the strictest rule: it
 /// authenticates the first grant and is then forgotten. Kept anywhere, it would let whoever read it
 /// later make a grant that browser accepts as this computer's.</para>
+///
+/// <para>And adding another device from this computer with an invitation link (spec §5.3), where the
+/// same secret authenticates the device's answer: the gateway relays that answer, and without the check
+/// it could put its own key in it and receive every key this computer holds.</para>
 /// </summary>
 public sealed class RemoteKeyAdministrationTests
 {
@@ -687,6 +692,306 @@ public sealed class RemoteKeyAdministrationTests
         Assert.Equal(["Hello", "Sync"], second.Calls.Take(2));
     }
 
+    /// <summary>
+    /// The service asks the gateway for answers to invitations only while this computer has one open -
+    /// one more call every turn otherwise, for nothing - and says who was added when one is answered.
+    /// The first connection has no invitation and closes after its turn; the second opens one at its
+    /// Sync, and the same turn finds the device's answer.
+    /// </summary>
+    [WindowsFact]
+    public async Task The_service_reads_enrollments_only_while_an_invitation_is_open_and_says_who_was_added()
+    {
+        using var fx = new EngineFixture();
+        var database = fx.PathOf("remote.db");
+        var settings = new RemoteAccessSettings();
+        var (code, device) = NewCode();
+        using var _ = device;
+        await RemoteAccessService.ConnectWithCodeAsync(code, settings, database, NeverAsked);
+        using var phone = P256.Generate();
+        RemoteAccessService? service = null;
+        var invited = false;
+        var first = new FakeGateway { OnSync = g => g.IsOpen = false };
+        var second = new FakeGateway
+        {
+            OnSync = g =>
+            {
+                if (invited) return;
+                invited = true;
+                var link = service!.KeyAdministration!.InviteAsync(Gateway, CancellationToken.None).GetAwaiter().GetResult();
+                g.Enroll(Enrolled(link, "phone", phone, "Phone"));
+            }
+        };
+        var gateways = new Queue<FakeGateway>([first, second]);
+        var admitted = new ConcurrentQueue<string>();
+
+        await using (service = new RemoteAccessService(settings, keys: null,
+            _ => throw new InvalidOperationException("No composition expected"), () => [], fx.Decisions, database,
+            connect: _ => Task.FromResult<IGatewayConnection>(gateways.Dequeue()),
+            firstRetry: TimeSpan.FromMilliseconds(10)))
+        {
+            service.DeviceAdmitted += admitted.Enqueue;
+            service.Start();
+            await Until(() => !admitted.IsEmpty);
+        }
+
+        Assert.Equal(["Hello", "PublishGrants", "Sync"], first.Calls);
+        Assert.Equal(["Phone"], admitted);
+        Assert.Equal(["Hello", "Sync", "CreateInvite", "Enrollments", "AnsweredInvite"], second.Calls.Take(5));
+        using var store = new HostStore(database);
+        using var keys = new HostKeyStore(store, code.HostId);
+        Assert.Equal(["device-1", "phone"], keys.Live.Select(d => d.DeviceId).Order());
+    }
+
+    // ── adding a device by invitation ───────────────────────────────────────
+
+    /// <summary>
+    /// The whole of an invitation: a link carrying the secret, the device's answer checked with the pair
+    /// key, the device trusted under the label it gave, and a grant of every epoch waiting for it -
+    /// authenticated with that same pair key, the only thing a device with nothing pinned can check.
+    /// The invitation is single use: said answered to the gateway, and forgotten here.
+    /// </summary>
+    [WindowsFact]
+    public async Task An_enrollment_with_a_valid_mac_gets_every_epoch()
+    {
+        using var fx = new EngineFixture();
+        using var store = new HostStore(fx.PathOf("remote.db"));
+        using var keys = new HostKeyStore(store, "host-1");
+        keys.Rotate();
+        var gateway = new FakeGateway();
+        var administration = new KeyAdministration(keys, gateway, TimeProvider.System);
+        using var phone = P256.Generate();
+
+        var link = await administration.InviteAsync(Gateway, CancellationToken.None);
+        var pairKey = link.PairKey;
+        gateway.Enroll(Enrolled(link, "phone", phone, "  Pixel 9  "));
+
+        var admitted = await administration.AnswerEnrollmentsAsync(CancellationToken.None);
+
+        Assert.Equal(["Pixel 9"], admitted);
+        Assert.StartsWith($"https://remote.example.test/pair#v=2&i={link.InviteId}&p=", link.Format(), StringComparison.Ordinal);
+        var trusted = Assert.Single(keys.Live);
+        Assert.Equal("phone", trusted.DeviceId);
+        Assert.Equal(P256.PublicRaw(phone), trusted.PublicKey);
+        Assert.Equal("Pixel 9", trusted.Label);
+        Assert.Equal(KeyAdministration.AddedBy, trusted.AddedBy);
+
+        var grants = keys.PendingGrants().Select(p => p.Grant).ToList();
+        Assert.Equal([1u, 2u], grants.Select(g => g.Epoch).Order());
+        foreach (var grant in grants)
+        {
+            Assert.Equal("phone", grant.DeviceId);
+            Assert.Equal(Grants.AuthByPairing(link.InviteId), grant.AuthBy);
+            var (opened, signing) = Grants.Open(grant, phone, pairKey, pinnedHostSigningPublic: null);
+            Assert.Equal(keys.Epoch(grant.Epoch)!.Secret.ToArray(), opened.Secret.ToArray());
+            Assert.Equal(keys.SigningPublic, signing);
+        }
+
+        Assert.Equal([link.InviteId], gateway.InvitesCreated);
+        Assert.Equal([link.InviteId], gateway.Answered);
+        Assert.Null(keys.Invite(link.InviteId));
+        Assert.False(keys.HasPendingInvites);
+    }
+
+    /// <summary>
+    /// Review focus 2: the gateway relays the answer, and puts its own public key in it. The MAC was made
+    /// over the device's key with a secret the gateway never saw, so it does not verify - and nothing is
+    /// trusted or granted. The invitation is closed: whoever holds the link has shown they are not alone.
+    /// </summary>
+    [WindowsFact]
+    public async Task An_enrollment_with_a_swapped_public_key_gets_nothing()
+    {
+        using var fx = new EngineFixture();
+        using var store = new HostStore(fx.PathOf("remote.db"));
+        using var keys = new HostKeyStore(store, "host-1");
+        var gateway = new FakeGateway();
+        var administration = new KeyAdministration(keys, gateway, TimeProvider.System);
+        var notices = new List<AdmissionNotice>();
+        administration.Noticed += notices.Add;
+        using var phone = P256.Generate();
+        using var gatewaysOwn = P256.Generate();
+
+        var link = await administration.InviteAsync(Gateway, CancellationToken.None);
+        gateway.Enroll(Enrolled(link, "phone", phone, "Phone") with { DevicePublic = B64.Url(P256.PublicRaw(gatewaysOwn)) });
+
+        var admitted = await administration.AnswerEnrollmentsAsync(CancellationToken.None);
+
+        Assert.Empty(admitted);
+        Assert.Empty(keys.Trusted);
+        Assert.Empty(keys.PendingGrants());
+        Assert.Equal([link.InviteId], gateway.Answered);
+        Assert.Null(keys.Invite(link.InviteId));
+        var notice = Assert.Single(notices);
+        Assert.Equal(link.InviteId, notice.InviteId);
+        Assert.True(notice.Refused);
+        Assert.Equal(KeyAdministration.Tampered, notice.Detail);
+    }
+
+    /// <summary>
+    /// A link copied to two devices admits the first answer and no other: the invitation is forgotten
+    /// once it is used, and a second answer to it - in the same batch, or later - is ignored.
+    /// </summary>
+    [WindowsFact]
+    public async Task An_invite_answers_one_device_only()
+    {
+        using var fx = new EngineFixture();
+        using var store = new HostStore(fx.PathOf("remote.db"));
+        using var keys = new HostKeyStore(store, "host-1");
+        var gateway = new FakeGateway();
+        var administration = new KeyAdministration(keys, gateway, TimeProvider.System);
+        using var phone = P256.Generate();
+        using var laptop = P256.Generate();
+
+        var link = await administration.InviteAsync(Gateway, CancellationToken.None);
+        gateway.Enroll(Enrolled(link, "phone", phone, "Phone"));
+        gateway.Enroll(Enrolled(link, "laptop", laptop, "Laptop"));
+
+        Assert.Equal(["Phone"], await administration.AnswerEnrollmentsAsync(CancellationToken.None));
+        Assert.Empty(await administration.AnswerEnrollmentsAsync(CancellationToken.None));
+
+        Assert.Equal("phone", Assert.Single(keys.Trusted).DeviceId);
+        Assert.All(keys.PendingGrants(), p => Assert.Equal("phone", p.Grant.DeviceId));
+    }
+
+    /// <summary>
+    /// An invitation the gateway would not register - too many open, say - is forgotten here too. Kept,
+    /// it would be a secret stored for ten minutes that no device can ever answer, and the service would
+    /// ask the gateway for answers every turn until it expired.
+    /// </summary>
+    [WindowsFact]
+    public async Task An_invitation_the_gateway_refuses_is_forgotten()
+    {
+        using var fx = new EngineFixture();
+        using var store = new HostStore(fx.PathOf("remote.db"));
+        using var keys = new HostKeyStore(store, "host-1");
+        var gateway = new FakeGateway
+        {
+            InviteRefusal = new GatewayRefusedException(FaultCode.InviteLimit, "Too many open invitations.")
+        };
+        var administration = new KeyAdministration(keys, gateway, TimeProvider.System);
+
+        await Assert.ThrowsAsync<GatewayRefusedException>(() => administration.InviteAsync(Gateway, CancellationToken.None));
+
+        Assert.False(keys.HasPendingInvites);
+    }
+
+    /// <summary>
+    /// An answer that arrives after the invitation's ten minutes admits nothing, however good its MAC: a
+    /// link found later in a chat or a screenshot must be useless. It is said answered, so the gateway
+    /// stops handing it over.
+    /// </summary>
+    [WindowsFact]
+    public async Task An_enrollment_for_an_expired_invitation_is_answered_and_ignored()
+    {
+        using var fx = new EngineFixture();
+        var clock = new MovableClock(new DateTimeOffset(2026, 10, 2, 12, 0, 0, TimeSpan.Zero));
+        using var store = new HostStore(fx.PathOf("remote.db"));
+        using var keys = new HostKeyStore(store, "host-1", clock);
+        var gateway = new FakeGateway();
+        var administration = new KeyAdministration(keys, gateway, clock);
+        var notices = new List<AdmissionNotice>();
+        administration.Noticed += notices.Add;
+        using var phone = P256.Generate();
+
+        var link = await administration.InviteAsync(Gateway, CancellationToken.None);
+        gateway.Enroll(Enrolled(link, "phone", phone, "Phone"));
+        clock.Advance(HostKeyStore.InviteLifetime);
+
+        Assert.Empty(await administration.AnswerEnrollmentsAsync(CancellationToken.None));
+
+        Assert.Empty(keys.Trusted);
+        Assert.Empty(keys.PendingGrants());
+        Assert.Equal([link.InviteId], gateway.Answered);
+        Assert.False(Assert.Single(notices).Refused);
+    }
+
+    /// <summary>
+    /// An answer naming a device this computer trusts with another key gets nothing, even with a good
+    /// MAC: a device id is never rebound to a new key, and the device that has it keeps it.
+    /// </summary>
+    [WindowsFact]
+    public async Task An_enrollment_for_a_device_trusted_with_another_key_gets_nothing()
+    {
+        using var fx = new EngineFixture();
+        using var store = new HostStore(fx.PathOf("remote.db"));
+        using var keys = new HostKeyStore(store, "host-1");
+        var gateway = new FakeGateway();
+        var administration = new KeyAdministration(keys, gateway, TimeProvider.System);
+        var notices = new List<AdmissionNotice>();
+        administration.Noticed += notices.Add;
+        using var original = P256.Generate();
+        using var other = P256.Generate();
+        keys.Trust(new TrustedDevice("phone", P256.PublicRaw(original), "Phone", "test", DateTimeOffset.UtcNow, null));
+
+        var link = await administration.InviteAsync(Gateway, CancellationToken.None);
+        gateway.Enroll(Enrolled(link, "phone", other, "Phone"));
+
+        Assert.Empty(await administration.AnswerEnrollmentsAsync(CancellationToken.None));
+
+        Assert.Equal(P256.PublicRaw(original), Assert.Single(keys.Live).PublicKey);
+        Assert.Empty(keys.PendingGrants());
+        Assert.Equal([link.InviteId], gateway.Answered);
+        Assert.Null(keys.Invite(link.InviteId));
+        Assert.True(Assert.Single(notices).Refused);
+    }
+
+    /// <summary>
+    /// A device this computer revoked can be brought back by an invitation - the person made the link
+    /// on this computer - with the key it had, and it is owed every epoch, the ones made since too.
+    /// </summary>
+    [WindowsFact]
+    public async Task A_revoked_device_is_trusted_again_by_an_invitation_with_its_own_key()
+    {
+        using var fx = new EngineFixture();
+        using var store = new HostStore(fx.PathOf("remote.db"));
+        using var keys = new HostKeyStore(store, "host-1");
+        var gateway = new FakeGateway();
+        var administration = new KeyAdministration(keys, gateway, TimeProvider.System);
+        using var phone = P256.Generate();
+        keys.Trust(new TrustedDevice("phone", P256.PublicRaw(phone), "Phone", "test", DateTimeOffset.UtcNow, null));
+        keys.Distrust("phone");
+        keys.Rotate();
+
+        var link = await administration.InviteAsync(Gateway, CancellationToken.None);
+        gateway.Enroll(Enrolled(link, "phone", phone, "Phone"));
+
+        Assert.Equal(["Phone"], await administration.AnswerEnrollmentsAsync(CancellationToken.None));
+
+        var back = Assert.Single(keys.Live);
+        Assert.Equal(KeyAdministration.AddedBy, back.AddedBy);
+        Assert.Equal([1u, 2u], keys.PendingGrants().Select(p => p.Grant.Epoch).Order());
+    }
+
+    /// <summary>
+    /// The pairing secret read back to check an answer, and the pair key made from it, are wiped once the
+    /// answer is handled. Either one lets whoever finds it in memory make grants the new device accepts
+    /// as this computer's; nothing needs them after. The link's own copy is the caller's, to wipe once it
+    /// is no longer shown.
+    /// </summary>
+    [WindowsFact]
+    public async Task Answering_wipes_the_pairing_secret_and_the_pair_key()
+    {
+        using var fx = new EngineFixture();
+        using var store = new HostStore(fx.PathOf("remote.db"));
+        using var keys = new HostKeyStore(store, "host-1");
+        var gateway = new FakeGateway();
+        var made = new List<byte[]>();
+        var administration = new KeyAdministration(keys, gateway, TimeProvider.System, watchSecrets: made.Add);
+        using var phone = P256.Generate();
+
+        var link = await administration.InviteAsync(Gateway, CancellationToken.None);
+        gateway.Enroll(Enrolled(link, "phone", phone, "Phone"));
+
+        Assert.Equal(["Phone"], await administration.AnswerEnrollmentsAsync(CancellationToken.None));
+
+        Assert.Equal(2, made.Count);
+        Assert.All(made, secret =>
+        {
+            Assert.Equal(32, secret.Length);
+            Assert.All(secret, b => Assert.Equal(0, b));
+        });
+        Assert.Contains(link.PairingSecret, b => b != 0);
+    }
+
     // ── the key store ───────────────────────────────────────────────────────
 
     /// <summary>Reset leaves nothing of the old identity behind: no key, no device, no invitation, no grant.</summary>
@@ -727,6 +1032,22 @@ public sealed class RemoteKeyAdministrationTests
     /// </summary>
     private static ConnectionCode Fresh(ConnectionCode code)
         => code with { PairingSecret = (byte[])code.PairingSecret.Clone() };
+
+    /// <summary>A device's answer to an invitation, as the device makes it: its MAC over its own key.</summary>
+    private static EnrollmentView Enrolled(InviteLink link, string deviceId, ECDiffieHellman device, string label)
+    {
+        var publicKey = P256.PublicRaw(device);
+        var pairKey = link.PairKey;
+        return new EnrollmentView(link.InviteId, deviceId, B64.Url(publicKey), label,
+            Enrollment.Mac(pairKey, link.InviteId, deviceId, publicKey));
+    }
+
+    private sealed class MovableClock(DateTimeOffset now) : TimeProvider
+    {
+        private DateTimeOffset _now = now;
+        public override DateTimeOffset GetUtcNow() => _now;
+        public void Advance(TimeSpan by) => _now += by;
+    }
 
     private static string[] LiveDevices(string database, string hostId)
     {

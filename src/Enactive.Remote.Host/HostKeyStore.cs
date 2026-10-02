@@ -287,11 +287,7 @@ public sealed class HostKeyStore : IHostKeys, IGrantOutbox, IDisposable
     /// </summary>
     public PendingInvite? Invite(string id) => _store.Locked(connection =>
     {
-        var now = _clock.GetUtcNow();
-
-        // Every expires_at is written by Format, in UTC with the same width, so comparing the
-        // text compares the times.
-        Execute(connection, null, "DELETE FROM pending_invites WHERE expires_at <= $now", ("$now", Format(now)));
+        DeleteExpiredInvites(connection);
 
         using var statement = connection.CreateCommand();
         statement.CommandText = "SELECT secret, expires_at FROM pending_invites WHERE id = $id";
@@ -304,6 +300,26 @@ public sealed class HostKeyStore : IHostKeys, IGrantOutbox, IDisposable
         var secret = Unprotect(reader.GetString(0));
         return secret is null ? null : new PendingInvite(id, secret, Parse(reader.GetString(1)));
     });
+
+    /// <summary>
+    /// Whether any invitation is open now. Asked every turn by the service, which asks the gateway for
+    /// answers only while one is: otherwise that would be one more call on every turn, for nothing.
+    /// Expired invitations are deleted here as in <see cref="Invite"/>, so one left open by a window that
+    /// was never closed stops the asking after ten minutes.
+    /// </summary>
+    public bool HasPendingInvites => _store.Locked(connection =>
+    {
+        DeleteExpiredInvites(connection);
+
+        using var statement = connection.CreateCommand();
+        statement.CommandText = "SELECT EXISTS (SELECT 1 FROM pending_invites)";
+        return Convert.ToInt64(statement.ExecuteScalar(), CultureInfo.InvariantCulture) != 0;
+    });
+
+    // Every expires_at is written by Format, in UTC with the same width, so comparing the text
+    // compares the times.
+    private void DeleteExpiredInvites(SqliteConnection connection)
+        => Execute(connection, null, "DELETE FROM pending_invites WHERE expires_at <= $now", ("$now", Format(_clock.GetUtcNow())));
 
     /// <summary>Closes an invitation: it was answered, or withdrawn. Single use either way.</summary>
     public void ForgetInvite(string id)
