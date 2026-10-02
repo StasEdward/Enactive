@@ -207,7 +207,8 @@ dotnet run --project src/Enactive.App.Console -- --template improve-tests --work
 
 Env: `ENACTIVE_MODEL`, `ENACTIVE_OLLAMA_URL`, `ENACTIVE_STORE` (sqlite|mysql|json), `ENACTIVE_MYSQL`,
 `ENACTIVE_LOG_LEVEL`, `ENACTIVE_WORKSPACE` (UI). Remote access reads its own: `ENACTIVE_DATA`,
-`ENACTIVE_REMOTE_DB`, `ENACTIVE_OWNER_KEY`, `ENACTIVE_RETENTION_DAYS`, `ENACTIVE_BEHIND_TUNNEL` —
+`ENACTIVE_REMOTE_DB`, `ENACTIVE_PUBLIC_ORIGIN`, the GitHub/Google client settings, `ENACTIVE_ADMISSION`,
+`ENACTIVE_LIMIT_*`, `ENACTIVE_RETENTION_DAYS`, `ENACTIVE_BEHIND_TUNNEL` —
 see `REMOTE_OPERATIONS.md`. The UI persists endpoint/model/num_ctx/global-instructions/
 the provider list / worker team / phase bindings / toggles to `%APPDATA%/Enactive/settings.json` (API keys encrypted). Per-run data lives in
 `<workspace>/.enactive/` (enactive.db, memory.json, inbox.json, permissions.json).

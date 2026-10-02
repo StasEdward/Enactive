@@ -20,10 +20,38 @@ jobs:
     with:
       ref: ${{ github.event.inputs.tag || github.ref_name }}
 
+  # The panel's fingerprints for the release notes: what a gateway built from this tag publishes at
+  # /.well-known/enactive-panel.json, made from a publish for the server's platform. Its own job on
+  # Linux because the release job below runs on Windows, whose checkout gives the panel's text files
+  # CRLF endings - the same tag hashes differently there, and that list would match no server.
+  panel:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Publish the gateway
+        run: dotnet publish src/Enactive.Remote.Gateway/Enactive.Remote.Gateway.csproj --configuration Release --runtime linux-x64 --no-self-contained --output publish
+
+      - name: Fingerprint the panel
+        run: bash deploy/panel-manifest.sh publish/wwwroot > panel-manifest.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: panel-manifest
+          path: panel-manifest.json
+          retention-days: 1
+
   release:
     permissions:
       contents: write
-    needs: gateway
+    needs: [gateway, panel]
     runs-on: windows-latest
 
     steps:
@@ -87,10 +115,37 @@ jobs:
             -Path artifacts/enactive-win-x64/* `
             -DestinationPath "artifacts/Enactive-$env:VERSION-win-x64.zip"
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: panel-manifest
+          path: artifacts
+
+      # Bash, which the Windows runner has: the list goes into the notes exactly as it was made, and
+      # PowerShell's quoting of backticks and newlines is not a place to keep bytes that must compare.
+      - name: Release notes
+        shell: bash
+        run: |
+          {
+            echo "## Panel fingerprints"
+            echo
+            echo "The SHA-256 of every script and stylesheet a gateway built from this release serves. Compare it with"
+            echo "\`/.well-known/enactive-panel.json\` on a server that says it runs this release; the same list is attached"
+            echo "as \`panel-manifest.json\` for \`cmp\`."
+            echo
+            echo '```json'
+            cat artifacts/panel-manifest.json
+            echo
+            echo '```'
+          } > artifacts/release-notes.md
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.release.outputs.tag }}
           name: Enactive ${{ steps.release.outputs.tag }}
+          # Put before the generated notes, which are still added.
+          body_path: artifacts/release-notes.md
           generate_release_notes: true
-          files: artifacts/Enactive-${{ steps.release.outputs.version }}-win-x64.zip
+          files: |
+            artifacts/Enactive-${{ steps.release.outputs.version }}-win-x64.zip
+            artifacts/panel-manifest.json

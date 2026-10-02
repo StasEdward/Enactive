@@ -15,6 +15,13 @@
 # /etc/enactive-remote/gateway.env, which is 0600 and owned by the service account. They are passed
 # to mysql on stdin rather than as arguments, because an argument is visible in `ps` to every
 # account on the machine for as long as the command runs.
+#
+# The sign-in settings are NOT generated: they come from OAuth apps registered with GitHub and Google,
+# which only a person can do. The first run writes gateway.env from gateway.env.example and stops
+# until they are filled in; a re-run keeps everything in that file except the database line.
+#
+# This is the install of a FRESH machine. Moving a machine that runs protocol 1 onto protocol 2 is the
+# cutover in Docs/REMOTE_OPERATIONS.md, done by hand.
 set -euo pipefail
 
 PACKAGE="${1:-}"
@@ -22,7 +29,9 @@ SERVICE=enactive-remote
 ACCOUNT=enactive
 ROOT=/opt/enactive-remote
 CONFIG=/etc/enactive-remote
-DATABASE=enactive_remote
+# Protocol 2's database. Not the protocol-1 name: on a machine that ever ran protocol 1 that database
+# is the rollback, and a new schema created inside it would mix two sets of tables nothing can tell apart.
+DATABASE=enactive_remote_v2
 PORT=5099
 
 say() { printf '\n== %s\n' "$1"; }
@@ -85,25 +94,34 @@ ALTER USER 'enactive_backup'@'localhost'  IDENTIFIED BY '$backup_password';
 FLUSH PRIVILEGES;
 SQL
 
-say "Secrets"
+say "Settings"
 
-# The owner key is only generated if there is not one already: rotating it signs every browser out,
-# which is not something a re-run of an install script should do to somebody.
-if [ -f "$CONFIG/gateway.env" ] && grep -q '^ENACTIVE_OWNER_KEY=' "$CONFIG/gateway.env"; then
-  owner_key=$(grep '^ENACTIVE_OWNER_KEY=' "$CONFIG/gateway.env" | cut -d= -f2-)
-  say "Keeping the existing owner key"
-else
-  owner_key=$(openssl rand -base64 36 | tr -d '\n')
-  new_owner_key=yes
+# Kept, apart from the database line, which carries the password rotated above. Rewriting the whole
+# file the way the first version did would throw away the OAuth secrets somebody registered by hand -
+# and ENACTIVE_OWNER_KEY, which protocol 1 read, is dropped: nothing reads it, and a secret left lying
+# in a file is one more thing to protect for nothing.
+env_file="$CONFIG/gateway.env"
+[ -f "$env_file" ] || install -o "$ACCOUNT" -g "$ACCOUNT" -m 0600 "$(dirname "$0")/gateway.env.example" "$env_file"
+
+env_new=$(mktemp "$CONFIG/gateway.env.XXXXXX")
+DB_LINE="ENACTIVE_REMOTE_DB=Server=127.0.0.1;User ID=enactive_gateway;Password=$gateway_password;Database=$DATABASE;" \
+  awk '/^ENACTIVE_REMOTE_DB=/ { print ENVIRON["DB_LINE"]; written = 1; next }
+       /^ENACTIVE_OWNER_KEY=/ { next }
+       { print }
+       END { if (!written) print ENVIRON["DB_LINE"] }' "$env_file" > "$env_new"
+chown "$ACCOUNT:$ACCOUNT" "$env_new"
+chmod 0600 "$env_new"
+mv "$env_new" "$env_file"
+
+# Nobody could sign in without a provider, and the gateway would start and answer /health regardless -
+# an install that reports success and that nobody can use. So it stops here, before the service, with
+# the one thing left to do.
+setting() { grep "^$1=" "$env_file" | tail -n 1 | cut -d= -f2- || true; }
+if [ -z "$(setting ENACTIVE_GITHUB_CLIENT_ID)" ] && [ -z "$(setting ENACTIVE_GOOGLE_CLIENT_ID)" ]; then
+  die "no sign-in provider is configured. Fill in ENACTIVE_PUBLIC_ORIGIN and the GitHub or Google
+  client id and secret in $env_file (its comments say where they come from), then run this again:
+    sudo \$EDITOR $env_file"
 fi
-
-install -o "$ACCOUNT" -g "$ACCOUNT" -m 0600 /dev/null "$CONFIG/gateway.env"
-cat > "$CONFIG/gateway.env" <<ENV
-ENACTIVE_REMOTE_DB=Server=127.0.0.1;User ID=enactive_gateway;Password=$gateway_password;Database=$DATABASE;
-ENACTIVE_OWNER_KEY=$owner_key
-ENV
-chown "$ACCOUNT:$ACCOUNT" "$CONFIG/gateway.env"
-chmod 0600 "$CONFIG/gateway.env"
 
 # Read by backup.sh and verify-restore.sh, which run as $ACCOUNT and never see the password on a
 # command line either.
@@ -235,21 +253,13 @@ Two steps remain, and they are yours because they take the site down and put it 
 
      Disable it, do not delete it. It is the rollback.
 
-Then open the site, sign in, and register a computer under Computers. The token it shows you is
-shown ONCE.
+Then open the site and sign in. Admission is a list (ENACTIVE_ADMISSION=list), so the first sign-in
+of anybody - you included - is told to wait. Approve yourself from this machine:
 
-A thing worth knowing before you look: until the desktop app is wired to connect, the panel will
-show no computers at all. That is expected and not a fault of this install.
+  sudo systemd-run --quiet --pipe --wait --uid=$ACCOUNT \\
+       --property=EnvironmentFile=$CONFIG/gateway.env \\
+       /usr/bin/dotnet $ROOT/current/Enactive.Remote.Gateway.dll admin admissions
+  # ... then the same with: admin approve github:<id>   (or google:<id>, as the list printed it)
+
+Sign in again, and connect a computer under Computers with the code it shows you.
 NEXT
-
-if [ "${new_owner_key:-}" = yes ]; then
-  cat <<KEY
-
-The owner key is new. It is in $CONFIG/gateway.env, readable only by root and $ACCOUNT:
-
-  sudo grep ENACTIVE_OWNER_KEY $CONFIG/gateway.env
-
-It is not printed here on purpose - this output is going to a terminal, a scrollback buffer, and
-possibly a chat window.
-KEY
-fi

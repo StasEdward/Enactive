@@ -29,6 +29,16 @@ if (args.Contains("--schema-version"))
     return;
 }
 
+// Asked by the deploy timer in the same place, for the same reason. The schema version cannot tell it
+// that a release speaks another protocol: protocol 2 started its schema again at 1, below the protocol-1
+// database's 2, so by schema alone it reads as a rollback and would be installed onto a database it
+// cannot read. The number and nothing else on stdout: the timer compares it with the running release's.
+if (args.Contains("--protocol-version"))
+{
+    Console.WriteLine(RemoteProtocol.Version);
+    return;
+}
+
 // The operator's command line, on the same binary: `admin approve github:12345`. Handled before the web
 // application is built, so it never binds a port or touches the providers, and needs only the database.
 // Without this the arguments would be passed on to a web server that waits for ever for requests.

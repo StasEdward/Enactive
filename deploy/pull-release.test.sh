@@ -152,5 +152,116 @@ check "pruning never removes the release that is running" \
     "yes" "$([ -d "$ROOT/releases/r1" ] && echo yes || echo no)"
 cleanup
 
+# ── a protocol change ───────────────────────────────────────────────────────
+
+# main() itself, end to end. The guard is not a comparison worth testing on its own: what matters is
+# that nothing after it - the schema check, --allow-migration - installs a release it refused. So
+# GitHub, the download and the database are stood in for, and the BUILDS are faked by a `dotnet` on
+# PATH that answers for the release directory it is pointed at, the way the real one does.
+SAVED_PATH=$PATH
+
+fake_server() {
+    mkdir -p "$ROOT/bin" "$ROOT/config"
+    CONFIG="$ROOT/config"
+
+    # main() names any of these that is missing before it does anything.
+    for tool in curl unzip python3 mysql systemctl; do
+        printf '#!/usr/bin/env bash\nexit 0\n' > "$ROOT/bin/$tool"
+    done
+
+    # A build answers --schema-version and --protocol-version from files beside it. A build with no
+    # .protocol file is the protocol-1 gateway, which had no such switch: it went on to start as a web
+    # server, and died for want of a database with nothing on stdout - which is what this does.
+    cat > "$ROOT/bin/dotnet" <<'FAKE'
+#!/usr/bin/env bash
+dir=$(dirname "$1")
+case $2 in
+    --schema-version) cat "$dir/.schema" ;;
+    --protocol-version)
+        [ -f "$dir/.protocol" ] && exec cat "$dir/.protocol"
+        echo "Unhandled exception. System.InvalidOperationException: Set ENACTIVE_REMOTE_DB" >&2
+        exit 134 ;;
+esac
+FAKE
+    chmod +x "$ROOT/bin/"*
+    PATH="$ROOT/bin:$SAVED_PATH"
+
+    export ENACTIVE_DEPLOY_REPO=owner/repo ENACTIVE_DEPLOY_BRANCH=main ENACTIVE_DEPLOY_TOKEN=token
+
+    # What is running: the protocol-1 gateway at schema 2, on a database at 2.
+    printf '2\n' > "$ROOT/releases/old/.schema"
+    APPLIED=2
+
+    newest_green_run() { echo "1 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"; }
+    artifact_url() { echo "https://example.invalid/right"; }
+    applied_schema_version() { echo "$APPLIED"; }
+    health_ok() { return 0; }
+
+    # Sourcing the script put the real one back; this one only moves the symlink.
+    activate() { ln -sfn "$1" "$ROOT/current"; }
+
+    # A new name for every run, as a real clock gives when the timer comes back ten minutes later. Two
+    # runs inside one second would otherwise share a name and hide a second download.
+    cat > "$ROOT/bin/date" <<'FAKE'
+#!/usr/bin/env bash
+count=$(( $(cat "$ENACTIVE_DEPLOY_ROOT/date-count" 2>/dev/null || echo 0) + 1 ))
+printf '%s\n' "$count" > "$ENACTIVE_DEPLOY_ROOT/date-count"
+printf '20260101T0000%02dZ\n' "$count"
+FAKE
+    chmod +x "$ROOT/bin/date"
+
+    # The download: a build of the schema and protocol this test sets.
+    fetch() {
+        printf 'x' >> "$ROOT/fetches"
+        mkdir -p "$2"
+        printf '%s\n' "$NEW_SCHEMA" > "$2/.schema"
+        [ -z "$NEW_PROTOCOL" ] || printf '%s\n' "$NEW_PROTOCOL" > "$2/.protocol"
+    }
+}
+
+# Run in a subshell, because fail() exits; what it did is read back from the tree.
+run_main() { ( main "$@" ) >"$ROOT/out" 2>"$ROOT/err"; }
+running() { cat "$ROOT/current/.commit"; }
+
+sandbox
+fake_server
+
+# The case the guard exists for. The protocol-2 schema starts again at version 1, BELOW the protocol-1
+# database's 2, so the migration check reads it as a rollback and would install it - onto a database
+# it cannot read, where it would create its own tables beside the old ones.
+NEW_SCHEMA=1 NEW_PROTOCOL=2
+run_main
+
+check "a protocol change is parked even when the schema version is lower" \
+    "aaaaaaaaaaaa parked" "$(running) $([ -s "$ROOT/PARKED" ] && echo parked || echo not-parked)"
+
+check "and it says to install it by hand" \
+    "yes" "$(grep -qF 'protocol change - install by hand (REMOTE_OPERATIONS §cutover)' "$ROOT/err" && echo yes || echo no)"
+
+# --allow-migration is the answer to a migration. A protocol change needs a new database and a new
+# environment first, which no flag on this script provides.
+run_main --allow-migration
+check "--allow-migration does not install a protocol change either" \
+    "aaaaaaaaaaaa" "$(running)"
+
+# A protocol-2 build can sit parked for days before somebody does the cutover, and the timer comes back
+# every ten minutes. Fetched again each time, under a new name each time, it filled the disk with copies.
+check "a parked release is downloaded once, not on every run" \
+    "x" "$(cat "$ROOT/fetches")"
+cleanup
+
+sandbox
+fake_server
+
+# And the guard does not stand in the way of an ordinary release of the protocol that is running.
+printf '2\n' > "$ROOT/releases/old/.protocol"
+NEW_SCHEMA=2 NEW_PROTOCOL=2
+run_main
+check "a release of the running protocol at the same schema is installed" \
+    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" "$(running)"
+cleanup
+
+PATH=$SAVED_PATH
+
 printf '\n%s passed, %s failed\n' "$passed" "$failed"
 [ "$failed" -eq 0 ]

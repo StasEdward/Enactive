@@ -226,6 +226,33 @@ jobs:
         if: success()
         run: dotnet publish src/Enactive.Remote.Gateway/Enactive.Remote.Gateway.csproj --configuration Release --runtime linux-x64 --no-self-contained --output publish
 
+      # The panel's fingerprints, made from the files this build SHIPS - publish/wwwroot, not the
+      # checkout - because they are compared with what a server sends, and a server sends what was
+      # published. A server's own /.well-known/enactive-panel.json proves nothing alone: a server that
+      # sends altered code can list it too. This list is made where the server cannot reach.
+      #
+      # Into the artifact, so the server holds the list of its own release beside it; and into the
+      # run's summary, which anyone can read on a public repository, where the artifact needs a token.
+      #
+      # Here and not in a Windows job: a Windows checkout gives the panel's text files CRLF endings, so
+      # the same commit hashes differently there and the list would match no server. It can fail - a
+      # file name it cannot write as the gateway does - and then the build is not green and is not
+      # deployed, which is right for a release whose list cannot be published.
+      - name: Fingerprint the panel
+        if: success()
+        run: |
+          bash deploy/panel-manifest.sh publish/wwwroot > publish/panel-manifest.json
+          {
+            echo "### Panel fingerprints"
+            echo
+            echo "What a gateway built from ${GITHUB_SHA} publishes at \`/.well-known/enactive-panel.json\`, byte for byte."
+            echo
+            echo '```json'
+            cat publish/panel-manifest.json
+            echo
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       # Only on a PUSH, and only for a week.
       #
       # The deploy timer asks GitHub for the newest green run with `event=push` (§4 of

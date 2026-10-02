@@ -17,7 +17,7 @@ set -euo pipefail
 cd /
 
 DEFAULTS_FILE="${ENACTIVE_BACKUP_DEFAULTS:-/etc/enactive-remote/backup.cnf}"
-DATABASE="${ENACTIVE_BACKUP_DATABASE:-enactive_remote}"
+DATABASE="${ENACTIVE_BACKUP_DATABASE:-enactive_remote_v2}"
 DESTINATION="${ENACTIVE_BACKUP_DIR:-/var/backups/enactive-remote}"
 
 newest=$(find "$DESTINATION" -name "$DATABASE-*.sql.gz" -type f -printf '%T@ %p\n' \

@@ -13,6 +13,10 @@
 # applied. A release carrying a migration is downloaded, checked and PARKED, and this says so
 # loudly; installing it is a person's decision, made with --allow-migration while looking at it.
 #
+# Nor will it install a release that speaks a different PROTOCOL from the running one. A protocol
+# change means a new database and a new environment, and no flag here provides either; such a release
+# is parked for the cutover in Docs/REMOTE_OPERATIONS.md.
+#
 # cd / first, always. Started from a directory that later disappears, every relative path in here
 # resolves somewhere else or fails with an error about the working directory that reads like a
 # permissions problem - which cost an afternoon during the first install.
@@ -24,6 +28,11 @@ CONFIG=${ENACTIVE_DEPLOY_CONFIG:-/etc/enactive-remote}
 UNIT=${ENACTIVE_DEPLOY_UNIT:-enactive-remote}
 HEALTH=${ENACTIVE_DEPLOY_HEALTH:-http://127.0.0.1:5099/health}
 KEEP=${ENACTIVE_DEPLOY_KEEP:-5}
+
+# The database the running gateway uses. Protocol 2 lives in a new one beside the protocol-1 database,
+# which is kept untouched as the rollback - so asking the old name would compare a protocol-2 release
+# with the schema of a database it never runs against.
+DATABASE=${ENACTIVE_DEPLOY_DATABASE:-enactive_remote_v2}
 
 # How long to give the service to come up before calling it failed. It restarts in about a second;
 # this is generous because the cost of being wrong is a rollback nobody needed.
@@ -49,7 +58,7 @@ deployed_commit() {
 # credential that can write.
 applied_schema_version() {
     mysql --defaults-file="$CONFIG/backup.cnf" -N -B \
-          -e "SELECT COALESCE(MAX(version), 0) FROM schema_version" enactive_remote
+          -e "SELECT COALESCE(MAX(version), 0) FROM schema_version" "$DATABASE"
 }
 
 # What a release WOULD apply. Asked of the build itself: migrations are embedded resources, so an
@@ -57,6 +66,41 @@ applied_schema_version() {
 release_schema_version() {
     local dir=$1
     dotnet "$dir/Enactive.Remote.Gateway.dll" --schema-version
+}
+
+# The protocol a build speaks, asked of the build the same way. The schema version cannot answer this:
+# protocol 2 started its schema again at version 1, BELOW the protocol-1 database's 2, so by schema
+# alone a protocol-2 release reads as a rollback and would be installed onto a database it cannot read.
+#
+# A build that does not answer is the protocol-1 gateway, which has no such switch: it does not refuse
+# an unknown argument but goes on to start as a web server, and dies for want of ENACTIVE_REMOTE_DB with
+# nothing on stdout. So anything but a number counts as 1. The variable is taken away so that dying is
+# what it does, and the timeout bounds the case where it starts anyway.
+protocol_version() {
+    local dir=$1 answer
+    answer=$(env -u ENACTIVE_REMOTE_DB timeout 60 \
+                 dotnet "$dir/Enactive.Remote.Gateway.dll" --protocol-version 2>/dev/null) || answer=
+    # A build run on Windows ends the line with \r, which would read as "not a number" there.
+    answer=${answer%$'\r'}
+    case $answer in
+        ''|*[!0-9]*) echo 1 ;;
+        *) echo "$answer" ;;
+    esac
+}
+
+# The directory this commit was already downloaded into, if a run before this one fetched it and
+# parked it. Found by the commit, not by the name a run would give it: that name starts with the
+# moment of the run, so it never matched, and a release parked for days was downloaded again every ten
+# minutes until the disk filled. Only a directory holding .commit counts - it is written after the
+# download succeeds, so a half-unzipped one is fetched again rather than trusted.
+downloaded_release() {
+    local sha=$1 dir
+    for dir in "$ROOT/releases/"*-"${sha:0:12}"; do
+        if [ -r "$dir/.commit" ] && [ "$(cat "$dir/.commit")" = "$sha" ]; then
+            printf '%s\n' "$dir"
+            return 0
+        fi
+    done
 }
 
 # ── deciding ────────────────────────────────────────────────────────────────
@@ -213,12 +257,15 @@ main() {
         return 0
     fi
 
-    local release="$ROOT/releases/$(date --utc +%Y%m%dT%H%M%SZ)-${sha:0:12}"
+    local release
+    release=$(downloaded_release "$sha")
 
-    if [ -d "$release" ]; then
+    if [ -n "$release" ]; then
         # A parked release this timer already downloaded. Do not fetch it twice.
         say "Release ${sha:0:12} is already downloaded at $release."
     else
+        release="$ROOT/releases/$(date --utc +%Y%m%dT%H%M%SZ)-${sha:0:12}"
+
         local url
         url=$(artifact_url "$run" "$sha")
         [ -n "$url" ] || fail "Run $run has no gateway-$sha artifact (see above). Artifacts expire after 30 days."
@@ -226,6 +273,26 @@ main() {
         say "Fetching ${sha:0:12} from run $run."
         fetch "$url" "$release"
         printf '%s\n' "$sha" > "$release/.commit"
+    fi
+
+    local speaks running
+    speaks=$(protocol_version "$release")
+    running=$(protocol_version "$ROOT/current")
+
+    # Before the schema check, and whatever the arguments: --allow-migration answers a migration, and a
+    # protocol change is not one. It needs a new database and a new environment, made by a person.
+    if [ "$speaks" != "$running" ]; then
+        printf '%s\n' "$release" > "$ROOT/PARKED"
+        cat >&2 <<PARKED
+Release ${sha:0:12} speaks protocol $speaks and the running gateway speaks protocol $running:
+protocol change - install by hand (REMOTE_OPERATIONS §cutover).
+It has been downloaded to $release and NOT installed.
+
+A new protocol runs on a new database with a new environment, and nothing here creates either.
+Installing it onto this one would leave every computer and browser unable to talk to it.
+
+PARKED
+        return 0
     fi
 
     local wants applied
