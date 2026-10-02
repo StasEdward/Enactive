@@ -28,10 +28,16 @@ export const behindReason = (label) =>
   `${label}: this device does not hold its newest key; add the new device from that computer, or again from here `
   + 'once this device has caught up.';
 
-/** Said before the link is shown, so the person can catch up first rather than spend the invitation. */
+/**
+ * Said before the link is shown, so the person can catch up first rather than spend the invitation. What
+ * answerEnrollment does for such a computer: every key this device holds of it is shared, its current one is not,
+ * and it is not asked to trust the new device. "Keys for ... will not be shared" said the older keys were kept
+ * back too, which they are not.
+ */
 export const behindWarning = (hosts) => hosts.length === 0
   ? ''
-  : `Keys for ${hosts.map((host) => host.label).join(', ')} will not be shared until this device catches up.`;
+  : `The current key of ${hosts.map((host) => host.label).join(', ')} will not be shared, and those computers will `
+    + 'not be asked to trust the new device, until this device catches up; older keys are shared.';
 
 const LINK_PATH = '/pair';
 const KEPT = 'enactive.invite';

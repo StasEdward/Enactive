@@ -362,8 +362,13 @@ test('the inviter is told before the link is shown which computers it is behind 
   const behind = await behindHosts(store, hosts);
 
   assert.deepEqual(behind.map((host) => host.label), ['Laptop']);
-  assert.equal(behindWarning(behind), 'Keys for Laptop will not be shared until this device catches up.');
-  assert.equal(behindWarning([{ label: 'A' }, { label: 'B' }]), 'Keys for A, B will not be shared until this device catches up.');
+  // What answerEnrollment does for such a computer (the test above): every key this device holds of it is shared,
+  // the computer's current one is not, and the computer is not asked to trust the new device. Said before as "keys
+  // for Laptop will not be shared", it told the person the older keys were kept back when they were not.
+  assert.equal(behindWarning(behind), 'The current key of Laptop will not be shared, and those computers will not be '
+    + 'asked to trust the new device, until this device catches up; older keys are shared.');
+  assert.equal(behindWarning([{ label: 'A' }, { label: 'B' }]), 'The current key of A, B will not be shared, and those '
+    + 'computers will not be asked to trust the new device, until this device catches up; older keys are shared.');
   assert.equal(behindWarning([]), '');
 });
 

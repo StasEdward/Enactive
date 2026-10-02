@@ -107,9 +107,10 @@ removes it from the address bar once read. If anybody but your new device answer
 the trusted device says *"Someone other than your new device answered this invitation. Nothing was
 shared."*
 
-A trusted device that is behind on a computer's newest key says so before showing the link, and
-does not share that computer's keys. Add the new device from that computer instead, or try again
-once this device has caught up.
+A trusted device that is behind on a computer's newest key says so before showing the link: it
+shares the older keys it holds of that computer, but not the current one, and does not ask that
+computer to trust the new device. Add the new device from that computer instead, or try again once
+this device has caught up.
 
 ### From the computer
 
