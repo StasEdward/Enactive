@@ -19,6 +19,7 @@ import {
 } from "./js/api.js";
 import { emptyState, resetState, forgetScreen, pollOnce } from "./js/session-guard.js";
 import { providerLinks, outcomeOf, createDevelopmentProbe } from "./js/signin.js";
+import { singleFlight } from "./js/single-flight.js";
 
 const POLL_MS = 3000;
 
@@ -88,7 +89,12 @@ function apply(snapshot) {
   state.cursor = snapshot.cursor;
 }
 
-async function poll() {
+// One poll at a time (see single-flight.js): two at once carry the same cursor and get the same delta,
+// and apply() appends it twice. Keyed by the session generation, so the first poll of a new session
+// never waits on one of the session before it.
+const poll = singleFlight(pollNow, generation);
+
+async function pollNow() {
   // Nobody signed in: there is nothing of anybody's to ask for, and the answer would be a 401.
   if (!account) {
     return;
@@ -105,7 +111,7 @@ async function poll() {
       // gateway afresh who is signed in.
       otherAccount: () => {
         resetSession();
-        boot();
+        bootAfterMismatch();
       }
     });
 
@@ -130,8 +136,12 @@ async function poll() {
   render();
 }
 
-/** Polls now rather than waiting out the interval - used after every action. */
+/**
+ * Polls now rather than waiting out the interval - used after every action. A poll already running
+ * started before the action and may not show it, so this waits for it to finish and then asks again.
+ */
 async function refresh() {
+  await poll.pending;
   await poll();
 }
 
@@ -890,11 +900,15 @@ async function signOut(path) {
  * Checks what is on screen against the gateway's own answer.
  *
  * The cookie belongs to the browser, not the tab: in another tab the person may have signed out, or in
- * as somebody else, and this tab would go on drawing the first account until its next 401 - or, with
- * somebody else signed in, never get one, and draw the second account's data under the first one's name.
- * The snapshot does not name its account, so the session is asked instead, before the poll draws more.
+ * as somebody else. Every snapshot names its account (pollOnce), but a session that has ended gives no
+ * snapshot to compare, so the session is asked first, before the poll restarts.
+ *
+ * One at a time, like the poll: coming back to a tab fires visibilitychange and focus together, and two
+ * checks would each start a poll.
  */
-async function revalidate() {
+const revalidate = singleFlight(revalidateNow, generation);
+
+async function revalidateNow() {
   if (!account) {
     return;
   }
@@ -909,7 +923,10 @@ async function revalidate() {
     // snapshot is still checked against the account (pollOnce), so nothing unconfirmed is drawn.
     if (!(error instanceof Stale) && account?.id === expected) {
       await poll();
-      startPolling();
+
+      if (account?.id === expected && document.visibilityState === "visible") {
+        startPolling();
+      }
     }
 
     return;
@@ -928,6 +945,26 @@ async function revalidate() {
       startPolling();
     }
   }
+}
+
+// Both ids come from the same place on the gateway today. A gateway that contradicted itself - a snapshot
+// that never matches its own session - would otherwise reset and boot in a loop: the page flickering, and
+// asking for the session and the state as fast as they are answered. At most one such boot per pause.
+const MISMATCH_PAUSE_MS = 5000;
+let lastMismatchBoot = -Infinity;
+
+/** Boots after a snapshot named another account: at once the first time, then at most once per pause. */
+function bootAfterMismatch() {
+  const started = generation();
+  const wait = Math.max(0, lastMismatchBoot + MISMATCH_PAUSE_MS - Date.now());
+
+  setTimeout(() => {
+    // A sign-in or sign-out in the meantime has booted the page already.
+    if (isCurrent(started)) {
+      lastMismatchBoot = Date.now();
+      boot();
+    }
+  }, wait);
 }
 
 onUnauthenticated(() => {
