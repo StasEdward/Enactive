@@ -64,6 +64,7 @@
     <details id="account" class="account">
       <summary id="account-name" class="account-name" title="Account"></summary>
       <div class="account-menu">
+        <button id="add-device" class="secondary" type="button">Add a device</button>
         <button id="sign-out" class="secondary" type="button">Sign out</button>
         <button id="sign-out-all" class="secondary" type="button">Sign out everywhere</button>
       </div>
@@ -166,6 +167,39 @@
     <div class="actions">
       <button type="button" class="secondary" data-close>Close</button>
       <button id="host-submit" type="button" class="primary">Create connection code</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="invite-dialog">
+  <form id="invite-form" method="dialog">
+    <h2>Add a device</h2>
+    <p class="note">Open this link on the new device, signed in to this same account, or scan the code with its
+      camera. It works once, for 10 minutes, and gives the device that opens it every computer's key this one
+      holds - give it to nobody else. Keep this open until the device answers.</p>
+    <div id="invite-secret" hidden>
+      <div id="invite-qr" class="qr"></div>
+      <label for="invite-link">Invitation link</label>
+      <input id="invite-link" readonly spellcheck="false" autocomplete="off">
+      <div class="actions">
+        <button id="invite-copy" type="button" class="secondary">Copy</button>
+      </div>
+    </div>
+    <p id="invite-status" class="note" role="status"></p>
+    <p id="invite-error" class="error" role="alert"></p>
+    <div class="actions">
+      <button type="button" class="secondary" data-close>Close</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="join-dialog">
+  <form id="join-form" method="dialog">
+    <h2>Adding this device</h2>
+    <p id="join-status" class="note" role="status"></p>
+    <p id="join-error" class="error" role="alert"></p>
+    <div class="actions">
+      <button type="button" class="secondary" data-close>Close</button>
     </div>
   </form>
 </dialog>

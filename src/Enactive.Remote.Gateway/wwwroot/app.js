@@ -22,13 +22,18 @@ import { providerLinks, outcomeOf, createDevelopmentProbe } from "./js/signin.js
 import { singleFlight } from "./js/single-flight.js";
 import { openKeystore } from "./js/keystore.js";
 import {
-  ensureDevice, collectGrants, troubleFor, worthSaying, connectPendingId, keyStanding, createGrantSchedule, epochsChanged
+  ensureDevice, collectGrants, troubleFor, worthSaying, connectPendingId, keyStanding, createGrantSchedule, epochsChanged,
+  DEVICE_HEADER
 } from "./js/trust.js";
 import { createReader, answerable, NOT_GIVEN } from "./js/reader.js";
 import {
   createWriter, createSendCache, sendRefusal, draftKey, draftAlreadyRan, NOT_YET_GIVEN
 } from "./js/writer.js";
-import { formatConnectionCode, newPairingSecret } from "./js/pairing.js";
+import { formatConnectionCode, formatInviteLink, newPairingSecret, derivePairKey } from "./js/pairing.js";
+import {
+  openInviteLink, keepInvite, takeKeptInvite, newInviteId, enrollThisDevice, inviteAnswered, answerEnrollment,
+  inviteQrSvg, INVITE_LIFETIME_MS, SWAPPED_KEY
+} from "./js/invite.js";
 
 const POLL_MS = 3000;
 
@@ -1250,6 +1255,354 @@ $("host-copy").addEventListener("click", async () => {
   }
 });
 
+// ── adding a device ──────────────────────────────────────────────────────
+
+const INVITE_POLL_MS = 3000;
+
+/** The invitation the open "Add a device" dialog is waiting on, and its two timers; null when none. */
+let inviting = null;
+
+/**
+ * "Add a device": makes an invitation and shows its link, as text and as a QR code, for its ten minutes, then
+ * answers the device that enrolls (invite.js answerEnrollment). The pairing secret is made here and goes
+ * nowhere but the link; the gateway is told the invitation's id only.
+ */
+async function openInviteDialog() {
+  stopInviting();
+  forgetInviteLink();
+  $("invite-status").textContent = "";
+  $("invite-error").textContent = "";
+  $("account").open = false;
+  $("invite-dialog").showModal();
+  const started = generation();
+
+  try {
+    const store = keystore;
+
+    if (!store) {
+      throw new Error("This browser cannot keep keys, so it has none to share.");
+    }
+
+    // A device added from here would be let in and could read nothing.
+    if ((await store.hosts()).length === 0) {
+      throw new Error("This device holds no computer's key yet, so it has nothing to share. Pair it with a computer first.");
+    }
+
+    const id = deviceId ?? await ensureDevice(store, api);
+    const inviteId = newInviteId();
+    const secret = newPairingSecret();
+    const pairKey = await derivePairKey(secret);
+    await post("/api/invites", { id: inviteId }, { headers: { [DEVICE_HEADER]: id } });
+
+    // Closed while the invitation was made, or signed out: nobody is looking and nobody is waited for. The
+    // invitation lapses on its own, and its secret was never shown to anyone.
+    if (!isCurrent(started) || !$("invite-dialog").open) {
+      return;
+    }
+
+    deviceId = id;
+    const link = formatInviteLink(location.origin, inviteId, secret);
+    $("invite-link").value = link;
+    drawQr(link);
+    $("invite-secret").hidden = false;
+    startInviting({ inviteId, deviceId: id, pairKey, deadline: Date.now() + INVITE_LIFETIME_MS, started });
+  } catch (error) {
+    if (isCurrent(started) && !(error instanceof Stale)) {
+      $("invite-error").textContent = error.message;
+    }
+  }
+}
+
+/**
+ * Draws the link as a QR code. The generator writes SVG text, which is parsed as an SVG document and imported,
+ * never put into the page as markup; and what it encodes is only the link this page made from its own origin,
+ * a random id and a random secret.
+ */
+function drawQr(link) {
+  const svg = new DOMParser().parseFromString(inviteQrSvg(link), "image/svg+xml").documentElement;
+
+  // A parse that failed gives a document describing the error, which is not drawn: the link is there as text.
+  $("invite-qr").replaceChildren(...(svg.localName === "svg" ? [document.importNode(svg, true)] : []));
+}
+
+/** Takes the link and its QR code off the screen: they carry the secret, which nothing needs once it is used. */
+function forgetInviteLink() {
+  $("invite-secret").hidden = true;
+  $("invite-link").value = "";
+  $("invite-qr").replaceChildren();
+}
+
+function startInviting(invite) {
+  stopInviting();
+  // One check at a time: a slow answer overlapping the next tick would answer the same enrollment twice.
+  const check = singleFlight(() => checkInvite(invite));
+  inviting = {
+    inviteId: invite.inviteId,
+    answered: false,
+    countdown: setInterval(() => countDown(invite), 1000),
+    poll: setInterval(check, INVITE_POLL_MS)
+  };
+  countDown(invite);
+}
+
+function stopInviting() {
+  if (inviting) {
+    clearInterval(inviting.countdown);
+    clearInterval(inviting.poll);
+  }
+
+  inviting = null;
+}
+
+/** The time the link has left, said every second. At its end the link comes down: nothing can answer it now. */
+function countDown(invite) {
+  if (inviting?.inviteId !== invite.inviteId || inviting.answered) {
+    return;
+  }
+
+  const left = Math.ceil((invite.deadline - Date.now()) / 1000);
+
+  if (left <= 0) {
+    stopInviting();
+    forgetInviteLink();
+    $("invite-status").textContent = "";
+    $("invite-error").textContent = "This invitation has expired. Choose Add a device again for a new link.";
+    return;
+  }
+
+  $("invite-status").textContent =
+    `Waiting for the new device… ${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")} left.`;
+}
+
+async function checkInvite(invite) {
+  const waiting = () => isCurrent(invite.started) && inviting?.inviteId === invite.inviteId;
+  const store = keystore;
+  const write = writer;
+
+  if (!waiting() || !store) {
+    return;
+  }
+
+  try {
+    const enrollment = await get(`/api/invites/${invite.inviteId}/enrollment`,
+      { headers: { [DEVICE_HEADER]: invite.deviceId } });
+
+    if (!enrollment || !waiting()) {
+      return;
+    }
+
+    // Answered: an invitation with an answer is used, so its clock no longer matters.
+    inviting.answered = true;
+    $("invite-status").textContent = `Sharing keys with ${enrollment.label}…`;
+
+    // This device's keys brought up to date first: a computer refuses an endorsement sealed under a key it has
+    // moved on from, and the new device would be given only the keys this one had.
+    await catchUpKeys();
+
+    const result = await answerEnrollment({
+      keystore: store, api, writer: write, deviceId: invite.deviceId, hosts: state.hosts,
+      pairKey: invite.pairKey, inviteId: invite.inviteId, enrollment
+    });
+
+    if (!waiting()) {
+      return;
+    }
+
+    stopInviting();
+    forgetInviteLink();
+
+    if (result.refused) {
+      $("invite-status").textContent = "";
+      $("invite-error").textContent = SWAPPED_KEY;
+      return;
+    }
+
+    if (result.granted === 0) {
+      $("invite-status").textContent = "";
+      $("invite-error").textContent =
+        `${enrollment.label} was added, but this device holds the key of no computer still on this account to share.`;
+      return;
+    }
+
+    $("invite-status").textContent = `Added ${enrollment.label}.`;
+    $("invite-error").textContent = result.notEndorsed
+      .map(({ hostId, reason }) => `${hostLabel(hostId)} was not asked to trust it: ${reason}`)
+      .join(" ");
+    toast(`Added ${enrollment.label}`);
+  } catch (error) {
+    // Said, and the next tick asks again. An answer cut off half way is finished then: the enrollment is still
+    // there to read, and a grant the new device holds already is passed over (answerEnrollment).
+    if (waiting() && !(error instanceof Stale)) {
+      $("invite-error").textContent = error.message;
+    }
+  }
+}
+
+$("add-device").addEventListener("click", openInviteDialog);
+
+$("invite-copy").addEventListener("click", async () => {
+  const link = $("invite-link");
+
+  try {
+    await navigator.clipboard.writeText(link.value);
+    toast("Copied. Open it on the new device.");
+  } catch {
+    // No clipboard here: the link is selected, for the person's own copy.
+    link.focus();
+    link.select();
+  }
+});
+
+// Closed - by its button, Escape, a reset or the end of the answer - nobody is waiting any more, and the link
+// goes with it: it carries the secret, which would otherwise stay in the page until the next invitation.
+$("invite-dialog").addEventListener("close", () => {
+  stopInviting();
+  forgetInviteLink();
+});
+
+// ── joining by an invitation ─────────────────────────────────────────────
+
+/**
+ * The invitation this tab was opened with and has not answered yet, `{inviteId, secret}`: read from the link
+ * at load, or from session storage after a sign-in that left the page, and answered once the panel is
+ * entered. Null when there is none.
+ */
+let invitation = null;
+
+/** The new device's wait for its grants; null when it is not waiting. */
+let joining = null;
+
+/**
+ * Where an invitation is kept across a sign-in (invite.js keepInvite): session storage, or null where the
+ * browser refuses it - reading the property itself throws then.
+ */
+const tabStorage = (() => {
+  try {
+    return sessionStorage;
+  } catch {
+    return null;
+  }
+})();
+
+/**
+ * Answers the invitation this tab was opened with: this device's key registered, the enrollment posted, and
+ * then a wait for the grants the inviting device makes for it.
+ */
+async function joinByInvitation(started) {
+  const { inviteId, secret } = invitation;
+  invitation = null;
+  // Used now: a copy kept for the sign-in would otherwise be answered again on the next sign-in in this tab.
+  takeKeptInvite(tabStorage);
+  stopJoining();
+  $("join-error").textContent = "";
+  $("join-status").textContent = "Adding this device to your account…";
+  $("join-dialog").showModal();
+
+  try {
+    const store = keystore;
+
+    if (!store) {
+      throw new Error("This browser cannot keep keys, so it cannot be added.");
+    }
+
+    const id = deviceId ?? await ensureDevice(store, api);
+
+    if (isCurrent(started)) {
+      deviceId = id;
+    }
+
+    const deadline = await enrollThisDevice({ keystore: store, api, deviceId: id, inviteId, secret, now: Date.now() });
+
+    // Closed meanwhile: the page's own poll takes the grants when they come, while the secret waits for them.
+    if (!isCurrent(started) || !$("join-dialog").open) {
+      return;
+    }
+
+    $("join-status").textContent = "Waiting for your other device to share its keys…";
+    startJoining({ inviteId, deadline, started });
+  } catch (error) {
+    if (isCurrent(started) && !(error instanceof Stale)) {
+      $("join-status").textContent = "";
+      $("join-error").textContent = error.message;
+    }
+  }
+}
+
+function startJoining(join) {
+  stopJoining();
+  // One check at a time, as for a computer's grant: two overlapping would take the same grants twice.
+  const check = singleFlight(() => checkJoining(join));
+  joining = { inviteId: join.inviteId, timer: setInterval(check, INVITE_POLL_MS) };
+}
+
+function stopJoining() {
+  if (joining) {
+    clearInterval(joining.timer);
+  }
+
+  joining = null;
+}
+
+async function checkJoining(join) {
+  const waiting = () => isCurrent(join.started) && joining?.inviteId === join.inviteId;
+  const store = keystore;
+
+  if (!waiting() || !store) {
+    return;
+  }
+
+  try {
+    const outcome = await inviteAnswered({
+      keystore: store, inviteId: join.inviteId, deadline: join.deadline, now: Date.now(),
+      collect: async () => {
+        const result = await takeGrants(join.started);
+
+        if (result) {
+          sayTrouble(result);
+        }
+      }
+    });
+
+    if (outcome === "waiting" || !waiting()) {
+      return;
+    }
+
+    stopJoining();
+
+    if (outcome === "expired") {
+      $("join-status").textContent = "";
+      $("join-error").textContent =
+        "The invitation expired before your other device answered it. Ask it for a new link.";
+      return;
+    }
+
+    // Taken here or by another tab: either way what was drawn as unreadable opens now.
+    await noticeKeys(store, join.started);
+    await render();
+
+    const readable = [];
+
+    for (const host of state.hosts) {
+      if (await store.newestEpoch(host.id) !== null) {
+        readable.push(host.label);
+      }
+    }
+
+    if (isCurrent(join.started)) {
+      $("join-status").textContent = readable.length > 0
+        ? `This device can now read ${readable.join(", ")}.`
+        : "This device was added.";
+    }
+  } catch (error) {
+    // The gateway out of reach is said, and the next tick asks again. An ended session says nothing.
+    if (waiting() && !(error instanceof Stale)) {
+      $("join-status").textContent = `Waiting for your other device to share its keys… (${error.message})`;
+    }
+  }
+}
+
+$("join-dialog").addEventListener("close", stopJoining);
+
 // ── signing in and out ───────────────────────────────────────────────────
 
 /** Who the panel is showing, as the last /api/session said; null while nobody is signed in. */
@@ -1271,6 +1624,8 @@ const SIGNED_OUT = "You were signed out. Sign in again to go on.";
 function resetSession() {
   stopPolling();
   stopPairing();
+  stopInviting();
+  stopJoining();
   endSession();
   account = null;
   // Closed, not only dropped: one database per account, and this one's keys are not the next person's.
@@ -1364,6 +1719,12 @@ async function enterPanel(user) {
   if (isCurrent(started) && document.visibilityState === "visible") {
     startPolling();
   }
+
+  // Opened by an invitation link: answered now that someone is signed in, after the first poll so the
+  // computers this device comes to read are named.
+  if (invitation && isCurrent(started)) {
+    joinByInvitation(started);
+  }
 }
 
 function showSignedOut(outcome) {
@@ -1371,9 +1732,15 @@ function showSignedOut(outcome) {
   $("device-removed").hidden = true;
   $("login").hidden = false;
 
+  // A provider's sign-in leaves this page and comes back to another address, without the link's fragment.
+  if (invitation) {
+    keepInvite(tabStorage, invitation);
+  }
+
+  const said = outcome ?? (invitation ? "Sign in to the account you are adding this device to." : null);
   const line = $("login-outcome");
-  line.textContent = outcome ?? "";
-  line.hidden = !outcome;
+  line.textContent = said ?? "";
+  line.hidden = !said;
 
   offerProviders();
   offerDevelopmentSignIn();
@@ -1682,6 +2049,41 @@ window.addEventListener("pageshow", (shown) => {
 });
 
 applyTheme(localStorage.getItem(THEME_KEY));
+
+// An invitation link, /pair#v=2&i=…&p=…: taken out of the address at once (openInviteLink) and held until
+// someone is signed in. Without one, an invitation kept across a sign-in that left the page; taken out of
+// storage either way, so a link opened since replaces it rather than leaving it there to be answered later.
+invitation = takeKeptInvite(tabStorage);
+
+if (location.pathname === "/pair" && location.hash) {
+  try {
+    invitation = openInviteLink(location.hash, history);
+  } catch (error) {
+    toast(error.message, true);
+  }
+}
+
+// A link pasted into a tab already at /pair changes only the fragment: the page is not loaded again, so the
+// lines above never ran, and the secret stayed in the address with nothing done about it.
+window.addEventListener("hashchange", () => {
+  if (location.pathname !== "/pair" || !location.hash) {
+    return;
+  }
+
+  try {
+    invitation = openInviteLink(location.hash, history);
+  } catch (error) {
+    toast(error.message, true);
+    return;
+  }
+
+  if (account) {
+    joinByInvitation(generation());
+  } else if (!$("login").hidden) {
+    // Said on the sign-in page, and kept for a sign-in that leaves it.
+    showSignedOut();
+  }
+});
 
 // Where a sign-in that opened no session ended. Read once and taken out of the address, so a reload
 // does not say it again; any other fragment is left alone.

@@ -89,6 +89,38 @@ public sealed class PanelTests(TestDatabase database) : IClassFixture<TestDataba
     }
 
     /// <summary>
+    /// An invitation link opens the panel. The link is <c>/pair#…</c>, and the page was served only for
+    /// <c>/</c> and <c>/index.html</c>: the new device opening it met a 404, and the secret in its fragment
+    /// was never read. The same page, fingerprinted and revalidated like the one at <c>/</c>.
+    /// </summary>
+    [Fact]
+    public async Task The_pair_route_serves_the_panel_page()
+    {
+        using var pair = await _stranger.Http.GetAsync("/pair");
+        var root = await _stranger.Http.GetStringAsync("/");
+
+        Assert.Equal(HttpStatusCode.OK, pair.StatusCode);
+        Assert.Equal("text/html", pair.Content.Headers.ContentType?.MediaType);
+        Assert.True(pair.Headers.CacheControl?.NoCache);
+        Assert.Equal(root, await pair.Content.ReadAsStringAsync());
+    }
+
+    /// <summary>
+    /// The vendored QR generator is served as JavaScript. The panel imports it as a module, and a browser runs
+    /// a module only when it comes with a JavaScript type: served as anything else, or not at all, the import
+    /// fails and with it the whole panel, whose first line imports everything it uses.
+    /// </summary>
+    [Fact]
+    public async Task The_vendored_qr_module_is_served_as_javascript()
+    {
+        using var module = await _stranger.Http.GetAsync("/vendor/qrcode.mjs");
+
+        Assert.Equal(HttpStatusCode.OK, module.StatusCode);
+        Assert.Equal("text/javascript", module.Content.Headers.ContentType?.MediaType);
+        Assert.True(module.Headers.CacheControl?.NoCache);
+    }
+
+    /// <summary>
     /// The cursor survives the query string. It is a <c>string?</c> bound from <c>?since=</c>, and a
     /// binding that quietly failed would send a full snapshot every three seconds while every test
     /// that calls the projection directly stayed green.

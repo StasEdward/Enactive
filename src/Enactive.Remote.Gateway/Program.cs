@@ -313,8 +313,10 @@ var panel = PanelAssets.Load(app.Environment.WebRootPath!);
 
 app.Use(async (context, next) =>
 {
+    // /pair too: an invitation link is /pair#..., and the new device that opens it needs the panel, which reads
+    // the invitation from the fragment. Without it the link met a 404.
     if (!HttpMethods.IsGet(context.Request.Method)
-        || (context.Request.Path != "/" && context.Request.Path != "/index.html"))
+        || (context.Request.Path != "/" && context.Request.Path != "/index.html" && context.Request.Path != "/pair"))
     {
         await next();
         return;

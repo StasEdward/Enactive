@@ -245,6 +245,10 @@ dialog h2 { margin-bottom: var(--space-4); }
 .dialog-head { display: flex; align-items: center; gap: var(--space-3); }
 .dialog-head h2 { flex: 1; margin-bottom: 0; }
 dialog .actions { display: flex; justify-content: flex-end; gap: var(--space-2); margin-top: var(--space-4); }
+/* White in both themes, with its own quiet zone: a camera reads dark modules on light, and a dark page around
+   the code without a margin of its own is read as part of it. */
+.qr { margin: 0 auto var(--space-4); width: min(16rem, 100%); }
+.qr svg { display: block; width: 100%; height: auto; background: #fff; border-radius: var(--radius-lg); }
 
 .toast {
   position: fixed; left: 50%; transform: translateX(-50%);

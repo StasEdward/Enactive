@@ -63,9 +63,10 @@ export function resetState(state) {
 // one's title and prompt filled in, ready to send as their own, and the last computer's credential sat in
 // a hidden field. Every field of every dialog is on it; tests/panel/session-guard.test.mjs checks the page.
 export const FORGOTTEN = {
-  values: ['task-title', 'task-prompt', 'host-name', 'host-code'],
-  contents: ['task-workspace', 'run-title', 'run-detail', 'task-error', 'host-status', 'host-error', 'toast'],
-  hidden: ['host-secret', 'toast']
+  values: ['task-title', 'task-prompt', 'host-name', 'host-code', 'invite-link'],
+  contents: ['task-workspace', 'run-title', 'run-detail', 'task-error', 'host-status', 'host-error', 'invite-qr',
+    'invite-status', 'invite-error', 'join-status', 'join-error', 'toast'],
+  hidden: ['host-secret', 'invite-secret', 'toast']
 };
 
 /** Empties everything on FORGOTTEN and closes `openDialogs`. `byId` finds an element by its id. */
