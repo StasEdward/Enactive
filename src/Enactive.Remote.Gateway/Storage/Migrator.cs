@@ -48,8 +48,23 @@ public static class Migrator
             await EnsureVersionTableAsync(connection, ct);
             var applied = await AppliedVersionsAsync(connection, ct);
             var newlyApplied = new List<int>();
+            var migrations = Migrations();
 
-            foreach (var (version, name, sql) in Migrations())
+            // A version this build has no migration for was written by another protocol of the gateway: protocol
+            // 1's database records version 2, and this build ships no 002. Passed over, as every recorded version
+            // was, the gateway started on tables of another shape and answered its health check while every call
+            // failed - and the install script took that for a success. Refused before anything is applied, so the
+            // database is left as it was, and the start fails where the operator is looking.
+            var foreign = applied.Except(migrations.Select(m => m.Version)).ToArray();
+            if (foreign.Length > 0)
+            {
+                throw new InvalidOperationException(
+                    "This database was written by another protocol of Enactive Remote (schema version "
+                    + foreign.Max().ToString(CultureInfo.InvariantCulture)
+                    + "). Install by hand: Docs/REMOTE_OPERATIONS.md §cutover.");
+            }
+
+            foreach (var (version, name, sql) in migrations)
             {
                 if (applied.Contains(version))
                 {

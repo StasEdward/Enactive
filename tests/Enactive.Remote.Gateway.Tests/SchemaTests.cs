@@ -2,6 +2,7 @@ namespace Enactive.Remote.Gateway.Tests;
 
 using Enactive.Remote.Gateway.Services;
 using Enactive.Remote.Gateway.Storage;
+using MySqlConnector;
 using Xunit;
 
 /// <summary>
@@ -130,6 +131,36 @@ public sealed class SchemaTests(TestDatabase database) : IClassFixture<TestDatab
         var version = Assert.Single(await database.StringsAsync("SELECT VERSION()"));
 
         Assert.StartsWith("8.0.", version, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A database that records a schema version this build has no migration for was written by another protocol
+    /// of the gateway - protocol 1's database records version 2, which this build does not ship. Started on it,
+    /// the gateway passed over the versions it did not know, started, and answered its health check while every
+    /// call failed on tables of another shape: the install was reported a success and the service was down for
+    /// everyone. It refuses to start instead, with what to do, and changes nothing.
+    /// </summary>
+    [Fact]
+    public async Task A_database_of_another_protocol_stops_the_start_with_the_cutovers_instructions()
+    {
+        await database.WithScratchDatabaseAsync("utf8mb4", "utf8mb4_0900_ai_ci", async connectionString =>
+        {
+            var unknown = Migrator.KnownVersions().Max() + 1;
+            await using (var connection = new MySqlConnection(connectionString))
+            {
+                await connection.OpenAsync();
+                await using var command = new MySqlCommand(
+                    $"INSERT INTO schema_version (version, applied_at) VALUES ({unknown}, UTC_TIMESTAMP(3))", connection);
+                await command.ExecuteNonQueryAsync();
+            }
+
+            var refused = await Assert.ThrowsAsync<InvalidOperationException>(() => Migrator.ApplyAsync(connectionString));
+
+            Assert.Equal(
+                $"This database was written by another protocol of Enactive Remote (schema version {unknown}). "
+                + "Install by hand: Docs/REMOTE_OPERATIONS.md §cutover.",
+                refused.Message);
+        });
     }
 
     /// <summary>

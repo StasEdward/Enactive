@@ -490,6 +490,11 @@ it comes, means step 0 was done and the rest is due. Protocol 2 shares nothing w
 owner key, not a device token — so nothing is migrated: the new gateway starts on a **new, empty
 database**, `enactive_remote_v2`, and the old one is kept untouched beside it.
 
+If step 0 was missed and a protocol-2 gateway is started on the protocol-1 database, it refuses to start, and
+leaves the database as it was: *This database was written by another protocol of Enactive Remote (schema
+version 2). Install by hand: Docs/REMOTE_OPERATIONS.md §cutover.* Put the old binary back (§4.3) and do this
+section from step 0.
+
 **There is no rollback to protocol 1 on the new database.** Rollback means the old binary on the old
 database, which this procedure never writes to. Plan the window: the site is down from step 1 to step 4.
 

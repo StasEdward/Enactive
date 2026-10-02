@@ -423,6 +423,9 @@ app.UseComputerRelease();
 // limit everybody's. A request with no session is refused by authorization before it is counted.
 app.UseRateLimiter();
 
+// Static on purpose: it says the process is up and which protocol it speaks, and touches nothing. A database of
+// another protocol is refused before the gateway listens at all (Migrator.ApplyAsync, below), so a health check
+// is never answered over one - and a check that read the database would turn every slow query into "down".
 app.MapGet("/health", () => new { status = "ok", protocolVersion = RemoteProtocol.Version });
 
 // Who is signed in, if anyone, and the antiforgery token for what they send next. Anonymous, since the
