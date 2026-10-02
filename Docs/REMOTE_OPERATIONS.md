@@ -83,7 +83,7 @@ measurement. A refusal names the limit to the person who met it.
 | `ENACTIVE_LIMIT_HOSTS_PER_USER` | 5 | Computers connected to one account. |
 | `ENACTIVE_LIMIT_DEVICES_PER_USER` | 10 | Browsers and phones holding the account's keys. |
 | `ENACTIVE_LIMIT_ACTIVE_RUNS_PER_USER` | 3 | Runs started and not yet ended, across the account's computers. |
-| `ENACTIVE_LIMIT_QUEUED_COMMANDS_PER_HOST` | 50 | Commands waiting for one computer to collect them. |
+| `ENACTIVE_LIMIT_QUEUED_COMMANDS_PER_HOST` | 50 | Commands waiting for one computer to collect them. Removals and endorsements of devices are counted apart, up to twice the devices limit, so a full queue never refuses a removal. |
 | `ENACTIVE_LIMIT_TASKS_PER_DAY` | 200 | Tasks one account makes in the last 24 hours. |
 | `ENACTIVE_LIMIT_OPEN_INVITES_PER_USER` | 5 | Invitations to add a device that are not yet used or expired. |
 | `ENACTIVE_LIMIT_SEALED_BYTES_PER_USER` | 209715200 | Bytes of sealed content one account keeps (200 MiB). Retention gives them back. |

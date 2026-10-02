@@ -147,6 +147,11 @@ is refused there; this is why the panel tells it again rather than assuming it w
 device keeps a **Tell the computers again** button, on every device and after a reload. Pressing it
 sends the same removal again; a computer that already acted takes it as nothing new.
 
+A removal waits up to 30 days for a computer that is off, and a full queue of other requests never
+turns it away. If a computer has not collected it after 30 days, the inbox says *Removal not
+delivered*: *"Your computer &lt;label&gt; never received the removal of a device - remove it again
+when the computer is back."* Until then that computer still trusts the device.
+
 **From the computer.** **Settings → Remote access → Trusted devices → Remove**. It asks *"&lt;label&gt;
 will not read anything new. Every other device gets a new key. Continue?"* The gateway is told at
 once, or when the computer next connects.

@@ -44,8 +44,15 @@ using MySqlConnector;
 /// permission requests arrive sealed. This checks that each is an envelope of a sensible size and
 /// stores it as it came; only a trusted browser can open it.</para>
 /// </summary>
-public sealed class HostService(Database database)
+/// <param name="clock">
+/// The time every expiry and every stamp here is read from - the system's unless a test passes another.
+/// Read from the system directly, expiry could be tested only by writing rows by hand, and the lifetime a
+/// removal was given went untested until it lapsed.
+/// </param>
+public sealed class HostService(Database database, TimeProvider? clock = null)
 {
+    private readonly TimeProvider _clock = clock ?? TimeProvider.System;
+
     private const int MaxWorkspaces = 100;
 
     // A Sync carries every workspace in one hub message, and the hub refuses a message over 64 KB.
@@ -156,7 +163,7 @@ public sealed class HostService(Database database)
                 reader.Enum<CommandStatus>("status"),
                 reader.Utc("created_at"),
                 reader.Utc("expires_at")),
-            ("@owner", host.OwnerId), ("@host", host.HostId), ("@now", DateTimeOffset.UtcNow));
+            ("@owner", host.OwnerId), ("@host", host.HostId), ("@now", _clock.GetUtcNow()));
 
         // After the commit, on its own: writing last_seen_at locks the hosts row EXCLUSIVELY, which
         // inside the transaction above, already holding it shared, would be an upgrade - see the lock
@@ -167,7 +174,7 @@ public sealed class HostService(Database database)
             UPDATE hosts SET last_seen_at = @now
             WHERE owner_id = @owner AND id = @host AND revoked = 0
             """,
-            ("@now", DateTimeOffset.UtcNow), ("@owner", host.OwnerId), ("@host", host.HostId));
+            ("@now", _clock.GetUtcNow()), ("@owner", host.OwnerId), ("@host", host.HostId));
 
         return pending;
     }
@@ -297,7 +304,7 @@ public sealed class HostService(Database database)
                 throw GatewayFault.RunEnded(run.Id);
             }
 
-            var now = DateTimeOffset.UtcNow;
+            var now = _clock.GetUtcNow();
             var status = await ApplyAsync(connection, transaction, run, published, now);
 
             // Counted, never refused: a run must always be able to report, and to end (see Quota.AddSealedAsync).
@@ -570,6 +577,10 @@ public sealed class HostService(Database database)
     /// never going to happen, and it is reported Incomplete rather than left Queued forever - an
     /// absence is not an answer.
     ///
+    /// <para>A removal or an endorsement that expired undelivered is said too, as a notice naming the
+    /// computer. Written off in silence, the panel's "told" stood while the computer went on trusting the
+    /// removed browser, and nobody had a reason to remove it again.</para>
+    ///
     /// <para><b>Runs before commands.</b> The expired commands are found WITHOUT a lock; the runs of
     /// the expired starts are locked next, in id order; and only then is each command locked, by its
     /// own primary key, and written off if it is still undelivered. Finding them with a locking scan
@@ -577,10 +588,10 @@ public sealed class HostService(Database database)
     /// person's cancel of that run holds the run and then inserts its command into that very range.
     /// Each waited for the other, and the database rolled one of them back.</para>
     /// </summary>
-    private static async Task ExpireCommandsAsync(
+    private async Task ExpireCommandsAsync(
         MySqlConnection connection, MySqlTransaction transaction, HostAccess host)
     {
-        var now = DateTimeOffset.UtcNow;
+        var now = _clock.GetUtcNow();
 
         var expiring = await connection.ReadAllAsync(transaction,
             """
@@ -626,7 +637,31 @@ public sealed class HostService(Database database)
                 """,
                 ("@expired", CommandStatus.Expired), ("@owner", host.OwnerId), ("@id", command.Id));
 
-            if (expired == 0 || !starts.TryGetValue(command.Id, out var runId))
+            if (expired == 0)
+            {
+                continue;
+            }
+
+            if (command.Kind is CommandKind.RevokeDevice or CommandKind.EndorseDevice)
+            {
+                // No detail, as for a start that never started: the gateway has no key to seal a sentence, and
+                // it does not know which device the command named - that is inside the seal. The kind and the
+                // computer are what the panel says it with.
+                await connection.ExecuteAsync(transaction,
+                    """
+                    INSERT INTO notices (id, owner_id, host_id, kind, at, is_read, ordinal)
+                    VALUES (@id, @owner, @host, @kind, @at, 0, @ordinal)
+                    """,
+                    ("@id", Ids.New()), ("@owner", host.OwnerId), ("@host", host.HostId),
+                    ("@kind", command.Kind == CommandKind.RevokeDevice
+                        ? NoticeKind.RemovalNotDelivered
+                        : NoticeKind.EndorsementNotDelivered),
+                    ("@at", now),
+                    ("@ordinal", await StreamCursor.NextAsync(connection, transaction, host.OwnerId)));
+                continue;
+            }
+
+            if (!starts.TryGetValue(command.Id, out var runId))
             {
                 continue;
             }
@@ -705,5 +740,7 @@ public sealed class HostService(Database database)
         public const string PermissionRequested = "PermissionRequested";
         public const string PermissionAtComputer = "PermissionAtComputer";
         public const string NotStarted = "NotStarted";
+        public const string RemovalNotDelivered = "RemovalNotDelivered";
+        public const string EndorsementNotDelivered = "EndorsementNotDelivered";
     }
 }

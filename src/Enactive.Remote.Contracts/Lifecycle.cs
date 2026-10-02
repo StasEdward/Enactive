@@ -15,6 +15,21 @@ public static class RemoteProtocol
     /// this (plus clock skew), which is what stops a gateway that kept an old command from replaying it.
     /// </summary>
     public static readonly TimeSpan CommandLifetime = TimeSpan.FromHours(24);
+
+    /// <summary>
+    /// How long a removal or an endorsement of a browser waits for its computer. Longer than any other command
+    /// because what it carries does not go stale: a removal is as wanted after a week as after a minute. Given
+    /// the day a start has, a removal made while a laptop was closed over a weekend - which is when phones are
+    /// lost - was written off before the laptop came back, and the laptop went on trusting the lost phone with
+    /// nobody told. Thirty days covers a holiday; the gateway tells the person of one that waited even longer.
+    /// The Host refuses a device command sealed longer ago than this, as it refuses any command older than its
+    /// lifetime, so a gateway cannot keep one and replay it later.
+    /// </summary>
+    public static readonly TimeSpan DeviceCommandLifetime = TimeSpan.FromDays(30);
+
+    /// <summary>How long a command of this kind waits for its computer, and may be acted on after it was sealed.</summary>
+    public static TimeSpan LifetimeOf(CommandKind kind)
+        => kind is CommandKind.RevokeDevice or CommandKind.EndorseDevice ? DeviceCommandLifetime : CommandLifetime;
 }
 
 /// <summary>

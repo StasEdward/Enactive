@@ -682,24 +682,35 @@ public sealed class UserService(
         // Commands the computer has not collected. One that expired no longer counts, whether or not a
         // sync has written it off yet: a computer that was off for a day would otherwise come back to an
         // account that could not ask it anything until it had synced.
+        //
+        // Removals and endorsements are counted apart, against an allowance of their own: counted with the
+        // rest, a computer that was off while the person - or a thief - kept asking it things came back with
+        // a full queue, and the removal of the lost phone was the one request turned away. Their allowance is
+        // two for each device the account may hold - a removal and the endorsement of its replacement - so a
+        // script cannot use them to grow the queue without bound either.
+        var deviceCommand = kind is CommandKind.RevokeDevice or CommandKind.EndorseDevice;
+        var allowance = deviceCommand ? limits.DevicesPerUser * 2L : limits.QueuedCommandsPerHost;
+
         var waiting = await connection.ReadOneAsync(transaction,
-            """
+            $"""
             SELECT COUNT(*) FROM commands
             WHERE host_id = @host AND status = 'PendingDelivery' AND expires_at > @now AND owner_id = @owner
+              AND kind {(deviceCommand ? "IN" : "NOT IN")} (@revoke, @endorse)
             """,
-            reader => reader.GetInt64(0), ("@host", hostId), ("@now", now), ("@owner", ownerId));
+            reader => reader.GetInt64(0), ("@host", hostId), ("@now", now), ("@owner", ownerId),
+            ("@revoke", CommandKind.RevokeDevice), ("@endorse", CommandKind.EndorseDevice));
 
-        if (waiting >= limits.QueuedCommandsPerHost)
+        if (waiting >= allowance)
         {
             throw GatewayFault.QuotaExceeded(
-                "requests waiting for this computer", limits.QueuedCommandsPerHost,
-                "wait for the computer to collect them");
+                deviceCommand ? "device changes waiting for this computer" : "requests waiting for this computer",
+                allowance, "wait for the computer to collect them");
         }
 
-        // The protocol's lifetime, not one of the gateway's own: the computer refuses a sealed
-        // command issued longer ago than this, so a gateway that kept it longer would only be
+        // The protocol's lifetime for the kind, not one of the gateway's own: the computer refuses a
+        // sealed command issued longer ago than this, so a gateway that kept it longer would only be
         // delivering a refusal.
-        var expires = now.Add(RemoteProtocol.CommandLifetime);
+        var expires = now.Add(RemoteProtocol.LifetimeOf(kind));
 
         await connection.ExecuteAsync(transaction,
             """

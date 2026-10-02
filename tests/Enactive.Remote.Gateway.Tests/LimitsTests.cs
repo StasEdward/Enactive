@@ -206,12 +206,13 @@ public sealed class LimitsTests(TestDatabase database) : IClassFixture<TestDatab
     /// Commands a computer has not collected count against that computer; another computer of the same
     /// person has its own allowance, and one the computer acknowledges frees a place. Shown red by not
     /// counting: a computer that is off for a day collects a queue as long as the person's script made it.
+    /// Device commands have an allowance of their own, two for each device the account may hold.
     /// </summary>
     [Fact]
     public async Task Queued_commands_per_computer_stop_at_the_limit()
     {
         var alice = await PersonAsync("alice");
-        var limits = Limits.Unlimited with { QueuedCommandsPerHost = 2 };
+        var limits = Limits.Unlimited with { QueuedCommandsPerHost = 1, DevicesPerUser = 1 };
         var users = new UserService(Db, limits, TimeProvider.System);
         var hosts = new HostService(Db);
         var busy = await ComputerAsync(users, hosts, alice);
@@ -235,6 +236,33 @@ public sealed class LimitsTests(TestDatabase database) : IClassFixture<TestDatab
 
         await hosts.AcknowledgeAsync(busy, firstId);
         await RevokeOn(busy, Uuid(), Sealed("device-3"));
+    }
+
+    /// <summary>
+    /// A removal is never refused because the computer's queue is full. A computer that was off while the
+    /// person kept asking it things - or while a thief did - came back with a queue at its limit, and the
+    /// removal of the lost phone was the one request the gateway turned away.
+    /// </summary>
+    [Fact]
+    public async Task A_full_queue_still_takes_a_removal()
+    {
+        var alice = await PersonAsync("alice");
+        var users = new UserService(Db, Limits.Unlimited with { QueuedCommandsPerHost = 1 }, TimeProvider.System);
+        var hosts = new HostService(Db);
+        var host = await ComputerAsync(users, hosts, alice);
+        var first = Uuid();
+        await users.CreateTaskAsync(alice, first, host.HostId, "workspace-1", Sealed("first"), default);
+        await users.StartAsync(alice, first, Uuid(), Sealed("start"), default);
+        var second = Uuid();
+        await users.CreateTaskAsync(alice, second, host.HostId, "workspace-1", Sealed("second"), default);
+
+        var full = await Assert.ThrowsAsync<GatewayFault>(
+            () => users.StartAsync(alice, second, Uuid(), Sealed("start"), default));
+        Assert.Equal(FaultCode.QuotaExceeded, full.Code);
+
+        var removal = await users.SendDeviceCommandAsync(
+            alice, host.HostId, CommandKind.RevokeDevice, Uuid(), Sealed("device"), default);
+        Assert.Equal(CommandStatus.PendingDelivery, removal.Status);
     }
 
     /// <summary>

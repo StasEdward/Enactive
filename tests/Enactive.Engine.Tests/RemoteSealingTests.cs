@@ -106,6 +106,25 @@ public sealed class RemoteSealingTests : IDisposable
             Sealer.OpenStart(_keys.Start(issuedAt: Now + TimeSpan.FromMinutes(11))));
     }
 
+    /// <summary>
+    /// A removal or an endorsement is acted on for as long as the gateway keeps it waiting - thirty days -
+    /// because a computer that was off for a weekend must still hear that a lost phone was removed. Refused
+    /// after a day like a start, it was a removal the gateway delivered and the computer threw away.
+    /// </summary>
+    [Fact]
+    public void A_device_command_is_acted_on_for_thirty_days()
+    {
+        Sealer.OpenRevocation(_keys.Revoke("phone", issuedAt: Now - TimeSpan.FromDays(20)));
+        Sealer.OpenEndorsement(_keys.Endorse("tablet", "key", "Tablet", issuedAt: Now - TimeSpan.FromDays(20)));
+
+        Assert.Throws<CommandRefusedException>(() =>
+            Sealer.OpenRevocation(_keys.Revoke("phone", issuedAt: Now - TimeSpan.FromDays(31))));
+        Assert.Throws<CommandRefusedException>(() =>
+            Sealer.OpenEndorsement(_keys.Endorse("tablet", "key", "Tablet", issuedAt: Now - TimeSpan.FromDays(31))));
+        Assert.Throws<CommandRefusedException>(() =>
+            Sealer.OpenStart(_keys.Start(issuedAt: Now - TimeSpan.FromDays(20))));
+    }
+
     // ── rule 2: an epoch this computer does not hold ────────────────────────
 
     [Fact]
@@ -170,7 +189,7 @@ public sealed class RemoteSealingTests : IDisposable
         Assert.Equal("device-1", Sealer.OpenRevocation(revocation).DeviceId);
         Assert.Equal("device-2", Sealer.OpenEndorsement(endorsement).DeviceId);
 
-        var old = DeviceCommand("command-o", CommandKind.RevokeDevice, new DeviceRevocation("device-1", Now.AddHours(-25)));
+        var old = DeviceCommand("command-o", CommandKind.RevokeDevice, new DeviceRevocation("device-1", Now.AddDays(-31)));
         Assert.Throws<CommandRefusedException>(() => Sealer.OpenRevocation(old));
     }
 

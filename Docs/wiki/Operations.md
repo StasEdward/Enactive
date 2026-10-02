@@ -196,7 +196,7 @@ a bad one stops the gateway with a sentence naming it.
 | `ENACTIVE_LIMIT_HOSTS_PER_USER` | 5 | Computers per account |
 | `ENACTIVE_LIMIT_DEVICES_PER_USER` | 10 | Devices per account |
 | `ENACTIVE_LIMIT_ACTIVE_RUNS_PER_USER` | 3 | Runs in progress per account |
-| `ENACTIVE_LIMIT_QUEUED_COMMANDS_PER_HOST` | 50 | Commands waiting for one computer |
+| `ENACTIVE_LIMIT_QUEUED_COMMANDS_PER_HOST` | 50 | Commands waiting for one computer; device removals and endorsements are counted apart, up to twice the devices limit |
 | `ENACTIVE_LIMIT_TASKS_PER_DAY` | 200 | Tasks per account in the last 24 hours |
 | `ENACTIVE_LIMIT_OPEN_INVITES_PER_USER` | 5 | Unused, unexpired invitations per account |
 | `ENACTIVE_LIMIT_SEALED_BYTES_PER_USER` | 209715200 | Bytes of encrypted content per account (200 MiB) |

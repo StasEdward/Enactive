@@ -81,7 +81,7 @@ public sealed class Sealer(IHostKeys keys, TimeProvider clock)
             throw new CommandRefusedException("it names no run");
 
         var start = Open<StartAuthorization>(payload.SealedStart, Ad.Command(keys.HostId, command.Id, CommandKind.StartTask));
-        Fresh(start.IssuedAt);
+        Fresh(start.IssuedAt, CommandKind.StartTask);
 
         if (!Same(start.TaskId, payload.TaskId))
             throw new CommandRefusedException("the task it carries is not the task the owner started");
@@ -96,7 +96,7 @@ public sealed class Sealer(IHostKeys keys, TimeProvider clock)
     {
         var payload = Payload<CancelRunPayload>(command);
         var cancel = Open<CancelAuthorization>(payload.Sealed, Ad.Command(keys.HostId, command.Id, CommandKind.CancelRun));
-        Fresh(cancel.IssuedAt);
+        Fresh(cancel.IssuedAt, CommandKind.CancelRun);
 
         if (!Same(cancel.RunId, payload.RunId))
             throw new CommandRefusedException("the run it names is not the run the owner asked to stop");
@@ -112,7 +112,7 @@ public sealed class Sealer(IHostKeys keys, TimeProvider clock)
     {
         var payload = Payload<ResolveApprovalPayload>(command);
         var decision = Open<DecisionAuthorization>(payload.Sealed, Ad.Command(keys.HostId, command.Id, CommandKind.ResolveApproval));
-        Fresh(decision.IssuedAt);
+        Fresh(decision.IssuedAt, CommandKind.ResolveApproval);
 
         if (!Same(decision.ApprovalId, payload.ApprovalId) || !Same(decision.ActionHash, payload.ActionHash))
             throw new CommandRefusedException("the answer was given for a different permission request");
@@ -124,7 +124,7 @@ public sealed class Sealer(IHostKeys keys, TimeProvider clock)
     {
         var revocation = Open<DeviceRevocation>(Payload<DevicePayload>(command).Sealed,
             Ad.Command(keys.HostId, command.Id, CommandKind.RevokeDevice));
-        Fresh(revocation.IssuedAt);
+        Fresh(revocation.IssuedAt, CommandKind.RevokeDevice);
         return revocation;
     }
 
@@ -132,7 +132,7 @@ public sealed class Sealer(IHostKeys keys, TimeProvider clock)
     {
         var endorsement = Open<DeviceEndorsement>(Payload<DevicePayload>(command).Sealed,
             Ad.Command(keys.HostId, command.Id, CommandKind.EndorseDevice));
-        Fresh(endorsement.IssuedAt);
+        Fresh(endorsement.IssuedAt, CommandKind.EndorseDevice);
         return endorsement;
     }
 
@@ -229,13 +229,16 @@ public sealed class Sealer(IHostKeys keys, TimeProvider clock)
     /// <summary>
     /// The inbox refuses a command id it has seen, but a gateway that kept a genuine command could
     /// still deliver it a week later under its own id before the inbox ever saw it. The time it was
-    /// sealed at closes that: nothing older than the lifetime a command may wait is acted on.
+    /// sealed at closes that: nothing older than the lifetime a command of its kind may wait is acted on.
+    /// A removal's is thirty days (<see cref="RemoteProtocol.DeviceCommandLifetime"/>): refused after a day,
+    /// it was a removal the gateway kept waiting for a computer that was off, and that the computer then threw
+    /// away.
     /// </summary>
-    private void Fresh(DateTimeOffset issuedAt)
+    private void Fresh(DateTimeOffset issuedAt, CommandKind kind)
     {
         var now = clock.GetUtcNow();
 
-        if (issuedAt < now - RemoteProtocol.CommandLifetime - ClockSkew)
+        if (issuedAt < now - RemoteProtocol.LifetimeOf(kind) - ClockSkew)
             throw new CommandRefusedException("it was issued too long ago to act on");
         if (issuedAt > now + ClockSkew)
             throw new CommandRefusedException("it claims to have been issued in the future");

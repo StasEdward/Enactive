@@ -37,6 +37,12 @@ public sealed class HostServiceTests(TestDatabase database) : IClassFixture<Test
 
     private HostService Service => new(Db);
 
+    /// <summary>A clock that says what it is told, for expiry, which depends on the time.</summary>
+    private sealed class FixedClock(DateTimeOffset now) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => now;
+    }
+
     private UserService Users => new(Db, Limits.Unlimited, TimeProvider.System);
 
     private static string NewId() => Guid.NewGuid().ToString("N");
@@ -1013,6 +1019,43 @@ public sealed class HostServiceTests(TestDatabase database) : IClassFixture<Test
             SELECT CONCAT(kind, '|', COALESCE(sealed_detail, event_sequence, event_kind, 'none'))
             FROM notices WHERE run_id = '{runId}' AND owner_id = '{host.OwnerId}'
             """)));
+    }
+
+    /// <summary>
+    /// A removal or an endorsement waits for its computer for thirty days, not one: a laptop closed for a
+    /// weekend while travelling - which is when phones get lost - came back after the removal had been written
+    /// off without a word, still trusting the removed browser. When even thirty days pass, the person is told,
+    /// in the gateway's own words with no sealed detail, which computer never heard of it.
+    /// </summary>
+    [Theory]
+    [InlineData(CommandKind.RevokeDevice, "RemovalNotDelivered")]
+    [InlineData(CommandKind.EndorseDevice, "EndorsementNotDelivered")]
+    public async Task A_device_command_waits_thirty_days_and_its_write_off_is_said(CommandKind kind, string noticeKind)
+    {
+        var alice = await PersonAsync("alice");
+        var host = await ComputerAsync(alice);
+        var sent = DateTimeOffset.UtcNow;
+        var command = await new UserService(Db, Limits.Unlimited, new FixedClock(sent))
+            .SendDeviceCommandAsync(alice, host.HostId, kind, Guid.NewGuid().ToString(), Sealed("device"), default);
+
+        var dayLater = await new HostService(Db, new FixedClock(sent.AddHours(25))).SyncAsync(host, []);
+
+        Assert.Equal([command.Id], dayLater.Select(c => c.Id));
+        Assert.Empty(await database.StringsAsync($"SELECT id FROM notices WHERE owner_id = '{alice.UserId}'"));
+
+        var monthLater = await new HostService(Db, new FixedClock(sent.AddDays(31))).SyncAsync(host, []);
+
+        Assert.Empty(monthLater);
+        Assert.Equal("Expired", (await database.StringsAsync(
+            $"SELECT status FROM commands WHERE id = '{command.Id}'")).Single());
+        Assert.Equal($"{noticeKind}|{host.HostId}|none", Assert.Single(await database.StringsAsync(
+            $"""
+            SELECT CONCAT(kind, '|', host_id, '|', COALESCE(run_id, sealed_detail, event_sequence, event_kind, 'none'))
+            FROM notices WHERE owner_id = '{alice.UserId}'
+            """)));
+
+        var notice = Assert.Single((await new Projection(Db, new Retention(Db, days: 30)).ReadAsync(alice, null, default)).Notices);
+        Assert.Equal((noticeKind, host.HostId, (string?)null), (notice.Kind, notice.HostId, notice.RunId));
     }
 
     /// <summary>

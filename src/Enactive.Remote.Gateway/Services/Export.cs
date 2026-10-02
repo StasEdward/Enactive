@@ -134,14 +134,14 @@ public sealed class Export(Database database, TimeProvider clock)
             SELECT id, host_id, run_id, sequence, kind, sealed_detail, at, ordinal FROM events
             WHERE owner_id = @owner ORDER BY ordinal
             """),
-        // A notice has no computer of its own; it is its run's, whose key opens the detail, read through the
-        // run's owner key as the snapshot reads it.
+        // A notice about a run has no computer of its own; it is its run's, whose key opens the detail, read
+        // through the run's owner key as the snapshot reads it. One about no run names its computer itself.
         ("notices",
             """
-            SELECT n.id, n.run_id, r.host_id, n.kind, n.sealed_detail, n.event_sequence, n.event_kind, n.at,
-                   n.is_read, n.ordinal
+            SELECT n.id, n.run_id, COALESCE(r.host_id, n.host_id) AS host_id, n.kind, n.sealed_detail,
+                   n.event_sequence, n.event_kind, n.at, n.is_read, n.ordinal
             FROM notices n
-            JOIN runs r ON r.owner_id = n.owner_id AND r.id = n.run_id
+            LEFT JOIN runs r ON r.owner_id = n.owner_id AND r.id = n.run_id
             WHERE n.owner_id = @owner ORDER BY n.ordinal
             """),
         ("audit",

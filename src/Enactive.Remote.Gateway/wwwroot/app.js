@@ -38,7 +38,7 @@ import {
 } from "./js/invite.js";
 import {
   revokeDevice, forgetThisDevice, forgottenSentence, createRemovalWatch, cardActions, deleteDeviceKeys, storeGone,
-  revocationWarning, NOT_CONFIRMED, KEY_NEVER_RECEIVED
+  revocationWarning, undeliveredSentence, NOT_CONFIRMED, KEY_NEVER_RECEIVED
 } from "./js/devices.js";
 import { describe, newestFirst } from "./js/audit.js";
 import { deleteAccount, DELETE_QUESTION } from "./js/account.js";
@@ -588,6 +588,9 @@ function renderInbox() {
     } else if (notice.kind === "NotStarted") {
       // The gateway's own notice: the computer never saw the run, so there is no sealed sentence to show.
       card.append(node("p", null, "Your computer did not pick this task up in time, so it never started."));
+    } else if (undeliveredSentence(notice, state.hosts)) {
+      // The gateway's own notice too, about no run: a removal or an endorsement its computer never collected.
+      card.append(node("p", null, undeliveredSentence(notice, state.hosts)));
     }
 
     return card;
@@ -605,7 +608,9 @@ function noticeTitle(kind) {
   return {
     PermissionRequested: "Permission requested",
     PermissionAtComputer: "Permission asked at the computer",
-    NotStarted: "Not started"
+    NotStarted: "Not started",
+    RemovalNotDelivered: "Removal not delivered",
+    EndorsementNotDelivered: "New device not trusted"
   }[kind] ?? statusText(kind);
 }
 

@@ -246,7 +246,10 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE TABLE IF NOT EXISTS notices (
   id            CHAR(32)    CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   owner_id      CHAR(32)    CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
-  run_id        CHAR(32)    CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  -- The run it is about, or - for a removal or an endorsement that never reached its computer, which is about
+  -- no run - the computer. One of the two is set; each takes the notice with it when it is deleted.
+  run_id        CHAR(32)    CHARACTER SET ascii COLLATE ascii_bin NULL,
+  host_id       CHAR(32)    CHARACTER SET ascii COLLATE ascii_bin NULL,
   kind          VARCHAR(40) CHARACTER SET ascii NOT NULL,              -- metadata: the gateway's own words
   sealed_detail MEDIUMTEXT  CHARACTER SET ascii NULL,                  -- the event's envelope, copied
   event_sequence BIGINT     NULL,                                      -- with what the panel needs to rebuild
@@ -260,7 +263,9 @@ CREATE TABLE IF NOT EXISTS notices (
   -- What retention deletes through, a person's oldest first. Without it the per-owner DELETE read and
   -- locked all of that person's notices to find the oldest thousand.
   KEY ix_notices_owner_at (owner_id, at),
-  CONSTRAINT fk_notices_run FOREIGN KEY (owner_id, run_id) REFERENCES runs (owner_id, id) ON DELETE CASCADE
+  KEY ix_notices_owner_host (owner_id, host_id),
+  CONSTRAINT fk_notices_run FOREIGN KEY (owner_id, run_id) REFERENCES runs (owner_id, id) ON DELETE CASCADE,
+  CONSTRAINT fk_notices_host FOREIGN KEY (owner_id, host_id) REFERENCES hosts (owner_id, id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE IF NOT EXISTS audit (

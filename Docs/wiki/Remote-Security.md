@@ -76,7 +76,8 @@ Starting a task, cancelling a run, answering a permission, and removing or endor
 **commands** to a computer. Each is sealed by the device that sends it with the computer's current
 key, which the gateway does not have, and bound to the computer, the command's id and its kind. The
 computer acts only on a command that opens under its current key, and refuses one sealed more than 24
-hours (plus 10 minutes of clock difference) ago — so the gateway can neither make a command up nor
+hours (plus 10 minutes of clock difference) ago, or 30 days for removing or endorsing a device, which
+must still reach a computer that was off for a weekend — so the gateway can neither make a command up nor
 replay an old one.
 
 The keys themselves reach a device as **grants**, each wrapped for one device's public key and

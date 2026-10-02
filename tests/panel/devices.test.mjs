@@ -7,7 +7,7 @@ import { ad, openJson } from '../../src/Enactive.Remote.Gateway/wwwroot/js/seale
 import {
   revokeDevice, forgetThisDevice, forgottenSentence, createRemovalWatch, storeGone, revocationWarning, cannotTell,
   revokeKey, cardActions, deleteDeviceKeys, toldUnder, toldAgainUnder, waitingForKey, NOT_CONFIRMED, MAX_RESENDS,
-  KEYS_KEPT, KEY_NEVER_RECEIVED, GATEWAY_UNREACHED, KEY_WAIT_MS
+  KEYS_KEPT, KEY_NEVER_RECEIVED, GATEWAY_UNREACHED, KEY_WAIT_MS, undeliveredSentence
 } from '../../src/Enactive.Remote.Gateway/wwwroot/js/devices.js';
 
 const ALICE = '0123456789abcdef0123456789abcdef';
@@ -460,4 +460,20 @@ test('a device card offers what can be done to that device', () => {
 test('the removal is said plainly', () => {
   assert.equal(revocationWarning('Phone'),
     'Phone can still read what it has already opened. It will not read anything new.');
+});
+
+// A removal the gateway wrote off after thirty days is said in the inbox, naming the computer: before, the line
+// "told under key N" stood (and after a reload there was no line at all) while the computer went on trusting the
+// removed browser. The gateway cannot say which device - that is inside the seal - so the sentence does not either.
+test('a removal or an endorsement that never reached its computer is said, naming the computer', () => {
+  const hosts = [host(STUDIO, 'Studio PC', 2)];
+
+  assert.equal(undeliveredSentence({ kind: 'RemovalNotDelivered', hostId: STUDIO }, hosts),
+    'Your computer Studio PC never received the removal of a device - remove it again when the computer is back.');
+  assert.equal(undeliveredSentence({ kind: 'EndorsementNotDelivered', hostId: STUDIO }, hosts),
+    'Your computer Studio PC never received the request to trust a new device, so it will not share new keys '
+      + 'with it - add the device again when the computer is back.');
+  assert.equal(undeliveredSentence({ kind: 'RemovalNotDelivered', hostId: LAPTOP }, hosts),
+    'Your computer (no longer listed) never received the removal of a device - remove it again when the computer is back.');
+  assert.equal(undeliveredSentence({ kind: 'NotStarted', hostId: STUDIO }, hosts), null);
 });

@@ -36,6 +36,24 @@ export const KEY_WAIT_MS = 10 * 60 * 1000;
 // removals made one after another, which is how they come.
 export const MAX_RESENDS = 3;
 
+/**
+ * What the inbox says of a removal or an endorsement the gateway wrote off after it waited thirty days for its
+ * computer, or null for any other notice. The line "told under key N" lives only in the tab that made the removal,
+ * so without this a removal that lapsed was said nowhere while the computer went on trusting the removed browser.
+ * Which device it named is inside the seal, so the gateway cannot say, and neither does this.
+ */
+export function undeliveredSentence(notice, hosts) {
+  const computer = hosts.find((one) => one.id === notice.hostId)?.label ?? '(no longer listed)';
+  if (notice.kind === 'RemovalNotDelivered') {
+    return `Your computer ${computer} never received the removal of a device - remove it again when the computer is back.`;
+  }
+  if (notice.kind === 'EndorsementNotDelivered') {
+    return `Your computer ${computer} never received the request to trust a new device, so it will not share new `
+      + 'keys with it - add the device again when the computer is back.';
+  }
+  return null;
+}
+
 /** The send-cache key of one removal to one computer (writer.js createSendCache). */
 export const revokeKey = (deviceId, hostId) => `revoke:${deviceId}:${hostId}`;
 

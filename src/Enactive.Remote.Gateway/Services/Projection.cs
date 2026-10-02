@@ -80,10 +80,11 @@ public sealed record EventView(
 /// <summary>
 /// A notice. <see cref="Kind"/> is the gateway's own word; the detail is the raising event's
 /// envelope, copied, with that event's sequence and kind so the panel can rebuild what it was sealed
-/// under. <see cref="HostId"/> is the run's computer, whose key opens it.
+/// under. <see cref="HostId"/> is the run's computer, whose key opens it - or, for a notice about no run
+/// (a removal that never reached its computer, with <see cref="RunId"/> null), the computer it is about.
 /// </summary>
 public sealed record NoticeView(
-    string Id, string RunId, string HostId, string Kind, string? SealedDetail, long? EventSequence,
+    string Id, string? RunId, string HostId, string Kind, string? SealedDetail, long? EventSequence,
     RemoteEventKind? EventKind, DateTimeOffset At, bool Read, long Ordinal);
 
 /// <summary>
@@ -343,23 +344,24 @@ public sealed class Projection(Database database, Retention retention)
             ("@owner", owner), ("@after", after));
 
     /// <summary>
-    /// As <see cref="ReadEventsAsync"/>. A notice has no computer of its own; it is its run's, read
-    /// through the run's owner key so the join cannot reach another person's run.
+    /// As <see cref="ReadEventsAsync"/>. A notice about a run has no computer of its own; it is its
+    /// run's, read through the run's owner key so the join cannot reach another person's run. One about no
+    /// run names its computer itself.
     /// </summary>
     private static Task<List<NoticeView>> ReadNoticesAsync(
         MySqlConnection connection, MySqlTransaction transaction, string owner, long? after, int limit)
         => connection.ReadAllAsync(transaction,
             $"""
-            SELECT n.id, n.run_id, r.host_id, n.kind, n.sealed_detail, n.event_sequence, n.event_kind,
-                   n.at, n.is_read, n.ordinal
+            SELECT n.id, n.run_id, COALESCE(r.host_id, n.host_id) AS host_id, n.kind, n.sealed_detail,
+                   n.event_sequence, n.event_kind, n.at, n.is_read, n.ordinal
             FROM notices n
-            JOIN runs r ON r.owner_id = n.owner_id AND r.id = n.run_id
+            LEFT JOIN runs r ON r.owner_id = n.owner_id AND r.id = n.run_id
             WHERE n.owner_id = @owner {(after is null ? "" : "AND n.ordinal > @after")}
             ORDER BY n.ordinal {(after is null ? "DESC" : "")}
             LIMIT {limit}
             """,
             reader => new NoticeView(
-                reader.GetString("id"), reader.GetString("run_id"), reader.GetString("host_id"),
+                reader.GetString("id"), reader.StringOrNull("run_id"), reader.GetString("host_id"),
                 reader.GetString("kind"), reader.StringOrNull("sealed_detail"),
                 reader.IsDBNull(reader.GetOrdinal("event_sequence")) ? null : reader.GetInt64("event_sequence"),
                 reader.IsDBNull(reader.GetOrdinal("event_kind")) ? null : reader.Enum<RemoteEventKind>("event_kind"),
