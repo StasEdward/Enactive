@@ -15,8 +15,25 @@ import { b64url, equal } from './bytes.js';
 /** The header every call made as this device carries (DeviceHeader.Name on the gateway). */
 export const DEVICE_HEADER = 'X-Enactive-Device';
 
-/** Why a grant went into `rejected`. One sentence for every cause: to the person they are all the same. */
+/** Why a grant that does not verify went into `rejected` (code 'unverified'): to the person every cause is the same. */
 export const REJECTED = 'This key was not sent by your computer or a device you trust; it was ignored.';
+
+/**
+ * Why a paired grant went into `rejected` when no secret is waiting for its pairing (code 'no-secret'). Mostly a
+ * code answered after its 24 hours, or after the pairing it answers was finished: the gateway goes on listing
+ * that grant on every call, and calling it "not sent by your computer" told the person their own computer lied.
+ */
+export const NO_SECRET = 'No code is waiting for this computer any more - make a new one from Computers.';
+
+/**
+ * Where a pending pairing secret is kept. A connection code's secret answers only for its own computer and an
+ * invitation's only for its own invitation, so each lives in its own namespace and is looked up from the grant's
+ * fields, never from the text after "pair:" alone. Kept under the bare ids, a grant for computer B naming
+ * "pair:<computer A's id>" was checked - and taken - with A's connection secret: whoever held A's code could
+ * then pin a signing key of their own for B.
+ */
+export const connectPendingId = (hostId) => `connect:${hostId}`;
+export const invitePendingId = (inviteId) => `invite:${inviteId}`;
 
 /** What a person is told when the gateway refuses to register this browser as one device too many. */
 export const DEVICE_LIMIT = 'This account has as many devices as it may; remove one in Devices.';
@@ -35,6 +52,25 @@ const MAX_LABEL = 80;
 
 const CONNECT = authByPairing('connect');
 const PAIRING_PREFIX = authByPairing('');
+
+/**
+ * What the register dialog for `hostId` shows of a delivery: that computer's tampering or refused grant, and
+ * nothing of any other computer's. Before, a dialog waiting for one computer showed another's refusal every 3 s.
+ */
+export function troubleFor(result, hostId, label) {
+  if (result.tampering === hostId) return tamperingMessage(label);
+  return result.rejected.find((one) => one.hostId === hostId)?.reason ?? '';
+}
+
+/**
+ * What a page load tells the person of a delivery: tampering first, then a grant that does not verify. A grant
+ * with no secret waiting is left out: the gateway lists it on every call, and a toast on every load for a code
+ * answered too late helped nobody - the computer it names says so in the register dialog instead.
+ */
+export function worthSaying(result, labelOf) {
+  if (result.tampering) return tamperingMessage(labelOf(result.tampering));
+  return result.rejected.find((one) => one.code === 'unverified')?.reason ?? '';
+}
 
 // Most specific first: Edge and Opera also say Chrome and Safari, Chrome also says Safari.
 const BROWSERS = [[/Edg(e|A|iOS)?\//, 'Edge'], [/OPR\/|Opera/, 'Opera'], [/Firefox\/|FxiOS\//, 'Firefox'],
@@ -84,10 +120,11 @@ export async function ensureDevice(keystore, api) {
 /**
  * Takes the grants the gateway holds for this device and stores the host keys it can verify.
  *
- * Returns `{added: [{hostId, epoch}], rejected: [{hostId, epoch, reason}]}`, and `tampering: hostId` when a
+ * Returns `{added: [{hostId, epoch}], rejected: [{hostId, epoch, code, reason}]}`, and `tampering: hostId` when a
  * computer's grant carries another signing key than the one pinned for it. That is not "rejected": a forged
  * grant is ignored, but a substituted identity means this device may trust the wrong key, and only the person
- * can put that right.
+ * can put that right. A rejection's `code` is 'no-secret' (NO_SECRET) for a paired grant no secret is waiting
+ * for, and 'unverified' (REJECTED) for every other grant that is refused.
  *
  * What `openGrant` leaves to its caller is checked here, before anything is opened: the grant is for this
  * device and filed under its own computer, and its epoch is newer than every key held for that computer. A
@@ -124,7 +161,8 @@ export async function collectGrants(keystore, api, deviceId) {
         doubted.add(hostId);
         break;
       }
-      if (outcome === 'rejected') result.rejected.push({ hostId, epoch: grant?.epoch, reason: REJECTED });
+      if (outcome === 'rejected') result.rejected.push({ hostId, epoch: grant?.epoch, code: 'unverified', reason: REJECTED });
+      if (outcome === 'no-secret') result.rejected.push({ hostId, epoch: grant?.epoch, code: 'no-secret', reason: NO_SECRET });
       if (outcome === 'added') {
         result.added.push({ hostId, epoch: grant.epoch });
         newest.set(hostId, grant.epoch);
@@ -136,6 +174,11 @@ export async function collectGrants(keystore, api, deviceId) {
   // invitation hands over, which the computer or the inviting browser publishes in one batch. Kept after that,
   // anyone who saw the code could go on adding "new" paired grants for as long as it had left to live. Dropped
   // at the end of the delivery rather than at its first grant, which would refuse the rest of that batch.
+  // What that leaves: a holder of the secret who also sees the genuine first grant (the gateway, given a leaked
+  // code) can add a grant of a higher epoch to the same delivery, naming the computer's real signing key, which
+  // it has just read, and a key of its own. It is taken, and not as tampering, and this device's newest key is
+  // then one the computer does not have. Refusing all but the first grant would refuse a re-pair and every
+  // invitation, so the exposure is one delivery, and only to someone who had the code.
   for (const id of spent) await keystore.dropPending(id);
 
   return result;
@@ -143,36 +186,45 @@ export async function collectGrants(keystore, api, deviceId) {
 
 const epochOf = (grant) => (Number.isSafeInteger(grant?.epoch) ? grant.epoch : 0);
 
-/** One grant: 'added', 'rejected', 'tampering', or 'skipped' (an epoch this device has moved past). */
+/**
+ * One grant: 'added', 'rejected', 'no-secret' (a paired grant with no secret waiting for it), 'tampering', or
+ * 'skipped' (an epoch this device has moved past).
+ */
 async function take(keystore, device, deviceId, hostId, grant, newest, spent) {
   // The gateway files grants under computers and devices; nothing in a grant for another device or computer is
   // this one's business, however well it is authenticated.
   if (grant?.deviceId !== deviceId || grant?.hostId !== hostId) return 'rejected';
   // Epoch 0 is a uint32 the grant format takes, but no computer has a key for it, and the key store refuses it.
   if (!Number.isSafeInteger(grant.epoch) || grant.epoch < 1) return 'rejected';
-  if (newest !== null && grant.epoch <= newest) return 'skipped';
 
   const pinned = await keystore.hostSigningKey(hostId);
   // Compared before openGrant, which would refuse it too but as one more bad grant. Base64url has one spelling
-  // per byte string, so the text compares the keys.
+  // per byte string, so the text compares the keys. Before the epoch check too: a device admitted by a
+  // compromised inviter that also handed it a high epoch would otherwise pass over the computer's real, lower
+  // rotation grants without a word, where spec §2 has it say so as tampering. Every grant of one computer names
+  // the same key, so the grants the gateway lists again on every call raise nothing.
   if (pinned !== null && typeof grant.hostSigningPublic === 'string' && grant.hostSigningPublic !== b64url(pinned)) {
     return 'tampering';
   }
+  if (newest !== null && grant.epoch <= newest) return 'skipped';
 
-  // Which secret vouches for the grant is named by the grant, and only one this device holds can.
+  // Which secret vouches for the grant is named by the grant, and only one this device holds can: a connection
+  // code's for the grant's own computer, or the invitation's it names (see connectPendingId).
   let pairingId = null;
   let pairKey = null;
   if (grant.authBy === CONNECT) {
-    pairingId = hostId;
+    pairingId = connectPendingId(hostId);
   } else if (typeof grant.authBy === 'string' && grant.authBy.startsWith(PAIRING_PREFIX)) {
-    pairingId = grant.authBy.slice(PAIRING_PREFIX.length);
+    const inviteId = grant.authBy.slice(PAIRING_PREFIX.length);
+    if (inviteId.length === 0) return 'rejected';
+    pairingId = invitePendingId(inviteId);
   } else if (grant.authBy !== AUTH_BY_HOST) {
     return 'rejected';
   }
   if (pairingId !== null) {
-    const secret = pairingId.length > 0 ? await keystore.pending(pairingId) : null;
-    // Not pending: the pairing is over, or never happened here. Its secret is no longer anyone's say-so.
-    if (secret === null) return 'rejected';
+    const secret = await keystore.pending(pairingId);
+    // Not pending: the pairing is over, expired, or never happened here. Its secret is no longer anyone's say-so.
+    if (secret === null) return 'no-secret';
     pairKey = await derivePairKey(secret);
   }
 

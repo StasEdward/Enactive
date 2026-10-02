@@ -6,7 +6,8 @@ import { derivePairKey } from '../../src/Enactive.Remote.Gateway/wwwroot/js/pair
 import { b64url, fromB64url } from '../../src/Enactive.Remote.Gateway/wwwroot/js/bytes.js';
 import { canonicalBytes } from '../../src/Enactive.Remote.Gateway/wwwroot/js/canonical.js';
 import {
-  ensureDevice, collectGrants, deviceLabel, tamperingMessage, REJECTED, DEVICE_LIMIT
+  ensureDevice, collectGrants, deviceLabel, tamperingMessage, troubleFor, worthSaying, connectPendingId, invitePendingId,
+  REJECTED, NO_SECRET, DEVICE_LIMIT
 } from '../../src/Enactive.Remote.Gateway/wwwroot/js/trust.js';
 import { vectors } from './vectors.mjs';
 
@@ -85,7 +86,7 @@ async function otherSigner() {
 /** A store paired with the vector computer at epoch 3, as the first grant of a connection code leaves it. */
 async function pairedStore() {
   const store = await vectorStore();
-  await store.setPending(HOST, pairingSecret, DAY);
+  await store.setPending(connectPendingId(HOST), pairingSecret, DAY);
   await collectGrants(store, gateway(forHost(g.grant)), DEVICE);
   return store;
 }
@@ -96,7 +97,7 @@ const nothing = { added: [], rejected: [] };
 
 test('a grant verified by the pending connection secret is stored', async () => {
   const store = await vectorStore();
-  await store.setPending(HOST, pairingSecret, DAY);
+  await store.setPending(connectPendingId(HOST), pairingSecret, DAY);
   const api = gateway(forHost(g.grant));
 
   const result = await collectGrants(store, api, DEVICE);
@@ -110,17 +111,17 @@ test('a grant verified by the pending connection secret is stored', async () => 
 
 test('a grant with a changed mac is rejected and not stored', async () => {
   const store = await vectorStore();
-  await store.setPending(HOST, pairingSecret, DAY);
+  await store.setPending(connectPendingId(HOST), pairingSecret, DAY);
   const last = g.grant.mac.at(-1) === 'A' ? 'B' : 'A';
   const changed = { ...g.grant, mac: g.grant.mac.slice(0, -1) + last };
 
   const result = await collectGrants(store, gateway(forHost(changed)), DEVICE);
 
-  assert.deepEqual(result, { added: [], rejected: [{ hostId: HOST, epoch: 3, reason: REJECTED }] });
+  assert.deepEqual(result, { added: [], rejected: [{ hostId: HOST, epoch: 3, code: 'unverified', reason: REJECTED }] });
   assert.equal((await store.hostKeys(HOST)).size, 0);
   assert.equal(await store.hostSigningKey(HOST), null);
   // Nothing verified, so the pairing is still waiting for its grant.
-  assert.deepEqual(await store.pending(HOST), pairingSecret);
+  assert.deepEqual(await store.pending(connectPendingId(HOST)), pairingSecret);
 });
 
 test('a rotation grant signed by the pinned key is stored', async () => {
@@ -142,7 +143,7 @@ test('a rotation grant with another signing key is rejected', async () => {
 
   const result = await collectGrants(store, gateway(forHost(forged)), DEVICE);
 
-  assert.deepEqual(result, { added: [], rejected: [{ hostId: HOST, epoch: 4, reason: REJECTED }] });
+  assert.deepEqual(result, { added: [], rejected: [{ hostId: HOST, epoch: 4, code: 'unverified', reason: REJECTED }] });
   assert.equal(await store.newestEpoch(HOST), 3);
 });
 
@@ -151,7 +152,7 @@ test('a rotation grant before any key is pinned is rejected', async () => {
 
   const result = await collectGrants(store, gateway(forHost(r.grant)), DEVICE);
 
-  assert.deepEqual(result, { added: [], rejected: [{ hostId: HOST, epoch: 4, reason: REJECTED }] });
+  assert.deepEqual(result, { added: [], rejected: [{ hostId: HOST, epoch: 4, code: 'unverified', reason: REJECTED }] });
   assert.equal(await store.hostSigningKey(HOST), null);
 });
 
@@ -171,7 +172,7 @@ test('a grant whose signing key differs from the pinned one is reported as tampe
 test('a paired grant naming another signing key than the pinned one is tampering too', async () => {
   const store = await pairedStore();
   const other = await otherSigner();
-  await store.setPending('invite-1', pairingSecret, DAY);
+  await store.setPending(invitePendingId('invite-1'), pairingSecret, DAY);
   const invited = await pairedGrant(4, { pairingId: 'invite-1', signingPublic: other.publicRaw });
 
   const result = await collectGrants(store, gateway(forHost(invited)), DEVICE);
@@ -185,7 +186,7 @@ test('an older or already-held epoch is not stored and the current epoch does no
   await collectGrants(store, gateway(forHost(r.grant)), DEVICE);
   const held = (await store.hostKeys(HOST)).get(4);
   // Authentic grants: a holder of the pairing secret made them. Only their epochs are wrong.
-  await store.setPending(HOST, pairingSecret, DAY);
+  await store.setPending(connectPendingId(HOST), pairingSecret, DAY);
   const older = await pairedGrant(2);
   const again = await pairedGrant(4);
 
@@ -197,20 +198,20 @@ test('an older or already-held epoch is not stored and the current epoch does no
   assert.equal(await store.newestEpoch(HOST), 4);
 });
 
-test('the pending secret is dropped after the first grant it verifies, and a second paired grant with it is then refused', async () => {
+test('the pending secret is dropped after the delivery it verified, and a later paired grant with it is then refused', async () => {
   const store = await pairedStore();
-  assert.equal(await store.pending(HOST), null);
+  assert.equal(await store.pending(connectPendingId(HOST)), null);
   const later = await pairedGrant(5);
 
   const result = await collectGrants(store, gateway(forHost(g.grant, later)), DEVICE);
 
-  assert.deepEqual(result, { added: [], rejected: [{ hostId: HOST, epoch: 5, reason: REJECTED }] });
+  assert.deepEqual(result, { added: [], rejected: [{ hostId: HOST, epoch: 5, code: 'no-secret', reason: NO_SECRET }] });
   assert.equal(await store.newestEpoch(HOST), 3);
 });
 
 test('every key of one delivery is stored oldest first, and the invitation secret is dropped after it', async () => {
   const store = await vectorStore();
-  await store.setPending('invite-1', pairingSecret, DAY);
+  await store.setPending(invitePendingId('invite-1'), pairingSecret, DAY);
   const grants = [await pairedGrant(3, { pairingId: 'invite-1' }), await pairedGrant(1, { pairingId: 'invite-1' }),
     await pairedGrant(2, { pairingId: 'invite-1' })];
 
@@ -218,29 +219,116 @@ test('every key of one delivery is stored oldest first, and the invitation secre
 
   assert.deepEqual(result.added, [1, 2, 3].map((epoch) => ({ hostId: HOST, epoch })));
   assert.deepEqual(result.rejected, []);
-  assert.equal(await store.pending('invite-1'), null);
+  assert.equal(await store.pending(invitePendingId('invite-1')), null);
 });
 
 test('a grant for another device id is rejected without opening', async () => {
   const store = await vectorStore();
-  await store.setPending(HOST, pairingSecret, DAY);
+  await store.setPending(connectPendingId(HOST), pairingSecret, DAY);
 
   // Wrapped to this device's key and authenticated: opened, it would be stored. It names another device.
   const result = await collectGrants(store, gateway(forHost(g.grant)), 'device-other');
 
-  assert.deepEqual(result, { added: [], rejected: [{ hostId: HOST, epoch: 3, reason: REJECTED }] });
+  assert.deepEqual(result, { added: [], rejected: [{ hostId: HOST, epoch: 3, code: 'unverified', reason: REJECTED }] });
   assert.equal((await store.hostKeys(HOST)).size, 0);
-  assert.deepEqual(await store.pending(HOST), pairingSecret);
+  assert.deepEqual(await store.pending(connectPendingId(HOST)), pairingSecret);
 });
 
 test('a grant filed under another computer than its own is rejected', async () => {
   const store = await vectorStore();
-  await store.setPending(HOST, pairingSecret, DAY);
+  await store.setPending(connectPendingId(HOST), pairingSecret, DAY);
 
   const result = await collectGrants(store, gateway([{ hostId: 'host-other', keyEpoch: 3, grants: [g.grant] }]), DEVICE);
 
-  assert.deepEqual(result, { added: [], rejected: [{ hostId: 'host-other', epoch: 3, reason: REJECTED }] });
+  assert.deepEqual(result, { added: [], rejected: [{ hostId: 'host-other', epoch: 3, code: 'unverified', reason: REJECTED }] });
   assert.equal((await store.hostKeys(HOST)).size, 0);
+});
+
+const HOST_B = 'host-b7c3e1';
+
+// A paired grant for computer B, wrapped to the vector device and authenticated with the vector pair key.
+async function grantForB(epoch, pairingId, signingPublic) {
+  return createGrant({
+    hostId: HOST_B, deviceId: DEVICE, devicePublicRaw,
+    key: { epoch, secret: crypto.getRandomValues(new Uint8Array(32)) },
+    pairingId, pairKey: await derivePairKey(pairingSecret), hostSigningPublic: signingPublic
+  });
+}
+
+const forB = (...grants) => [{ hostId: HOST_B, keyEpoch: 1, grants }];
+
+test('a connection secret for one computer does not vouch for another computer\'s grant', async () => {
+  const store = await vectorStore();
+  await store.setPending(connectPendingId(HOST), pairingSecret, DAY);
+  const attacker = await otherSigner();
+  // Named as an invitation whose id is A's computer id: before pending ids had namespaces, that found A's secret.
+  const borrowed = await grantForB(1, HOST, attacker.publicRaw);
+  const prefixed = await grantForB(1, `connect:${HOST}`, attacker.publicRaw);
+
+  const result = await collectGrants(store, gateway(forB(borrowed, prefixed)), DEVICE);
+
+  assert.deepEqual(result.added, []);
+  assert.deepEqual(result.rejected.map((one) => one.code), ['no-secret', 'no-secret']);
+  assert.equal(await store.hostSigningKey(HOST_B), null);
+  assert.deepEqual(await store.pending(connectPendingId(HOST)), pairingSecret);
+});
+
+test('a connection grant for another computer is not checked with the secret of the code made for this one', async () => {
+  const store = await vectorStore();
+  await store.setPending(connectPendingId(HOST), pairingSecret, DAY);
+
+  const result = await collectGrants(store, gateway(forB(await grantForB(1, 'connect', pinned))), DEVICE);
+
+  assert.deepEqual(result, { added: [], rejected: [{ hostId: HOST_B, epoch: 1, code: 'no-secret', reason: NO_SECRET }] });
+  assert.equal(await store.hostSigningKey(HOST_B), null);
+  assert.deepEqual(await store.pending(connectPendingId(HOST)), pairingSecret);
+});
+
+test('a code answered after its secret expired is told apart from a grant that does not verify', async () => {
+  let now = 0;
+  const store = await vectorStore(() => now);
+  await store.setPending(connectPendingId(HOST), pairingSecret, DAY);
+  now = DAY;
+
+  const result = await collectGrants(store, gateway(forHost(g.grant)), DEVICE);
+
+  assert.deepEqual(result, { added: [], rejected: [{ hostId: HOST, epoch: 3, code: 'no-secret', reason: NO_SECRET }] });
+  assert.equal(NO_SECRET, 'No code is waiting for this computer any more - make a new one from Computers.');
+});
+
+test('a grant under another signing key is tampering even when its epoch is older than the newest held', async () => {
+  const store = await vectorStore();
+  await store.setPending(connectPendingId(HOST), pairingSecret, DAY);
+  await collectGrants(store, gateway(forHost(await pairedGrant(9))), DEVICE);
+  const other = await otherSigner();
+  const older = await signedBy(other.privateKey, { ...r.grant, epoch: 5, hostSigningPublic: b64url(other.publicRaw) });
+
+  const result = await collectGrants(store, gateway(forHost(older)), DEVICE);
+
+  assert.deepEqual(result, { ...nothing, tampering: HOST });
+  assert.equal(await store.newestEpoch(HOST), 9);
+});
+
+test('the register dialog is told only of its own computer\'s trouble', () => {
+  const result = {
+    added: [],
+    rejected: [{ hostId: 'host-y', epoch: 1, code: 'unverified', reason: REJECTED }],
+    tampering: 'host-z'
+  };
+
+  assert.equal(troubleFor(result, 'host-x', 'Studio PC'), '');
+  assert.equal(troubleFor(result, 'host-y', 'Laptop'), REJECTED);
+  assert.equal(troubleFor(result, 'host-z', 'Office'), tamperingMessage('Office'));
+});
+
+test('a load tells of tampering and of grants that do not verify, not of codes that were never answered in time', () => {
+  const label = (id) => `name of ${id}`;
+  const expired = { hostId: 'host-a', epoch: 1, code: 'no-secret', reason: NO_SECRET };
+  const forged = { hostId: 'host-b', epoch: 2, code: 'unverified', reason: REJECTED };
+
+  assert.equal(worthSaying({ added: [], rejected: [expired] }, label), '');
+  assert.equal(worthSaying({ added: [], rejected: [expired, forged] }, label), REJECTED);
+  assert.equal(worthSaying({ added: [], rejected: [forged], tampering: 'host-c' }, label), tamperingMessage('name of host-c'));
 });
 
 test('the tampering sentence names the computer and says what to do', () => {

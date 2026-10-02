@@ -21,7 +21,7 @@ import { emptyState, resetState, forgetScreen, pollOnce } from "./js/session-gua
 import { providerLinks, outcomeOf, createDevelopmentProbe } from "./js/signin.js";
 import { singleFlight } from "./js/single-flight.js";
 import { openKeystore } from "./js/keystore.js";
-import { ensureDevice, collectGrants, tamperingMessage } from "./js/trust.js";
+import { ensureDevice, collectGrants, troubleFor, worthSaying, connectPendingId } from "./js/trust.js";
 import { formatConnectionCode, newPairingSecret } from "./js/pairing.js";
 
 const POLL_MS = 3000;
@@ -767,15 +767,6 @@ async function takeGrants(started) {
   return isCurrent(started) ? result : null;
 }
 
-/** What a person is told of a delivery: a computer in doubt first, then a refused key; nothing when all went well. */
-function grantTrouble(result, labelOf = hostLabel) {
-  if (result.tampering) {
-    return tamperingMessage(labelOf(result.tampering));
-  }
-
-  return result.rejected[0]?.reason ?? "";
-}
-
 function hostLabel(hostId) {
   return state.hosts.find((host) => host.id === hostId)?.name ?? "A computer";
 }
@@ -810,10 +801,19 @@ async function registerHost() {
     // The pairing secret stays on this device; the gateway never sees it. The code carries it to the
     // computer by hand, and the computer's first grant is checked with it.
     const secret = newPairingSecret();
-    await store.setPending(host.id, secret, Date.now() + PAIRING_LIFETIME_MS);
+    await store.setPending(connectPendingId(host.id), secret, Date.now() + PAIRING_LIFETIME_MS);
     const device = await store.device();
 
     if (!isCurrent(started)) {
+      return;
+    }
+
+    // Closed while the computer was being registered: nobody is looking, so no code is shown and nobody is
+    // waited for. Started anyway, the poll asked for grants every 3 s behind a closed dialog until the next
+    // "Register". The computer stays registered, with no code that could ever reach it; the person sees it in
+    // the list and can revoke it.
+    if (!$("host-dialog").open) {
+      await store.dropPending(connectPendingId(host.id));
       return;
     }
 
@@ -870,7 +870,7 @@ async function checkPairing(hostId, label, started) {
       return;
     }
 
-    $("host-error").textContent = grantTrouble(result, (id) => (id === hostId ? label : hostLabel(id)));
+    $("host-error").textContent = troubleFor(result, hostId, label);
 
     // Held rather than "added now": another tab of this browser may have taken the grant first.
     if (await keystore.newestEpoch(hostId) !== null && waiting()) {
@@ -980,11 +980,16 @@ async function enterPanel(user) {
   // After the poll, so a computer in doubt is named rather than called "A computer".
   try {
     const result = await takeGrants(started);
-    const trouble = result && grantTrouble(result);
+    const trouble = result && worthSaying(result, hostLabel);
 
     if (trouble) {
       toast(trouble, true);
     }
+
+    // A code answered after it expired is listed by the gateway on every call. Said in a toast it was said on
+    // every load, for good; the console keeps it for whoever is looking into why a computer never paired.
+    result?.rejected.filter((one) => one.code === "no-secret").forEach((one) =>
+      console.info(`${hostLabel(one.hostId)}: ${one.reason}`));
   } catch {
     // Not reaching the gateway is what the poll already shows.
   }
@@ -1260,8 +1265,13 @@ $("add-host").addEventListener("click", () => {
   $("host-code").value = "";
   $("host-dialog").showModal();
 });
-// Closed - by its button, Escape or a reset - nobody is waiting for the answer any more.
-$("host-dialog").addEventListener("close", stopPairing);
+// Closed - by its button, Escape, a reset or the computer's answer - nobody is waiting for the answer any more,
+// and the code goes with it: it carries the computer's token, which would otherwise stay in the page until the
+// next "Register".
+$("host-dialog").addEventListener("close", () => {
+  stopPairing();
+  $("host-code").value = "";
+});
 $("host-submit").addEventListener("click", registerHost);
 $("mark-read").addEventListener("click", (clicked) =>
   act(clicked.currentTarget, () => post("/api/notices/read", {})));
