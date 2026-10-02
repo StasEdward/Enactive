@@ -916,7 +916,11 @@ public sealed class HostServiceTests(TestDatabase database) : IClassFixture<Test
     public async Task Another_protocol_is_refused_at_hello()
     {
         using var limit = new HostCallLimit();
-        var hub = new HostHub(Service, new HostConnections(), limit) { Context = new CallerOf("host-1") };
+        var hub = new HostHub(
+            Service, new DeviceService(Db, Limits.Unlimited, TimeProvider.System), new HostConnections(), limit)
+        {
+            Context = new CallerOf("host-1")
+        };
 
         var older = await hub.Hello(RemoteProtocol.Version - 1);
         var same = await hub.Hello(RemoteProtocol.Version);

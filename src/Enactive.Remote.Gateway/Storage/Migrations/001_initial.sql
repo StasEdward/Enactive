@@ -86,6 +86,7 @@ CREATE TABLE IF NOT EXISTS hosts (
   label        VARCHAR(80)  NOT NULL,                                   -- plaintext by design (spec §6)
   token_hash   CHAR(64)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   key_epoch    INT UNSIGNED NOT NULL DEFAULT 0,
+  signing_public VARBINARY(65) NULL,                                  -- the computer's signing key, pinned by its first grant
   revoked      TINYINT(1)   NOT NULL DEFAULT 0,
   last_seen_at DATETIME(3)  NULL,
   created_at   DATETIME(3)  NOT NULL,

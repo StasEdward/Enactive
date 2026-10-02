@@ -1,5 +1,6 @@
 using System.Net;
 using Enactive.Remote.Contracts;
+using Enactive.Remote.Contracts.Crypto;
 using Enactive.Remote.Gateway;
 using Enactive.Remote.Gateway.Accounts;
 using Enactive.Remote.Gateway.Services;
@@ -482,6 +483,24 @@ api.MapPost("/devices/{id}/revoke", async (
     string id, HttpContext context, DeviceService devices, CancellationToken ct) =>
 {
     await devices.RevokeAsync(context.UserAccess(), id, ct);
+    return Results.Ok();
+});
+
+// The grants made to the browser the call names, for every computer of the person's. The gateway hands
+// them over as they were stored; it has no key to open one.
+api.MapGet("/grants", async (HttpContext context, DeviceService devices, CancellationToken ct) =>
+{
+    var device = await devices.RequireAsync(context.UserAccess(), context.RequireDeviceId(), ct);
+    return Results.Ok(await devices.ReadGrantsAsync(device, ct));
+});
+
+// A trusted browser passing keys it holds to another of the person's devices, after an invitation. The
+// browser making the call must be one of the person's and not removed, like the devices it grants to.
+api.MapPost("/grants", async (
+    List<KeyGrant>? grants, HttpContext context, DeviceService devices, CancellationToken ct) =>
+{
+    var device = await devices.RequireAsync(context.UserAccess(), context.RequireDeviceId(), ct);
+    await devices.PublishGrantsAsync(device, grants, ct);
     return Results.Ok();
 });
 

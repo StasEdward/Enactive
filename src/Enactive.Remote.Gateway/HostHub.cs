@@ -3,6 +3,7 @@ namespace Enactive.Remote.Gateway;
 using System.Collections.Concurrent;
 using System.Security.Claims;
 using Enactive.Remote.Contracts;
+using Enactive.Remote.Contracts.Crypto;
 using Enactive.Remote.Gateway.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
@@ -34,7 +35,8 @@ public sealed class HostConnections
 /// person's account", is not a request that can be made rather than one that is refused.
 /// </summary>
 [Authorize(AuthenticationSchemes = HostAuthentication.SchemeName)]
-public sealed class HostHub(HostService hosts, HostConnections connections, HostCallLimit limit) : Hub
+public sealed class HostHub(
+    HostService hosts, DeviceService devices, HostConnections connections, HostCallLimit limit) : Hub
 {
     public override Task OnConnectedAsync()
     {
@@ -75,6 +77,17 @@ public sealed class HostHub(HostService hosts, HostConnections connections, Host
         => Guard(async () =>
         {
             await hosts.PublishAsync(Access, published, Context.ConnectionAborted);
+            return true;
+        });
+
+    /// <summary>
+    /// Grants of this computer's own keys to its owner's devices: answering a pairing or an invitation, or
+    /// a rotation. All of them are stored or none is.
+    /// </summary>
+    public Task<HostReply<bool>> PublishGrants(List<KeyGrant> grants)
+        => Guard(async () =>
+        {
+            await devices.PublishGrantsAsync(Access, grants, Context.ConnectionAborted);
             return true;
         });
 

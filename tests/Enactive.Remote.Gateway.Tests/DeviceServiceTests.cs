@@ -2,13 +2,18 @@ namespace Enactive.Remote.Gateway.Tests;
 
 using System.Net;
 using System.Net.Http.Json;
+using System.Security.Claims;
+using System.Security.Cryptography;
 using System.Text.Json;
 using Enactive.Remote.Contracts;
 using Enactive.Remote.Contracts.Crypto;
 using Enactive.Remote.Gateway;
 using Enactive.Remote.Gateway.Services;
 using Enactive.Remote.Gateway.Storage;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.SignalR;
+using MySqlConnector;
 using Xunit;
 
 /// <summary>
@@ -401,7 +406,519 @@ public sealed class DeviceServiceTests(TestDatabase database) : IClassFixture<Te
     public void The_limit_message_counts_in_the_right_number(int max, string expected)
         => Assert.Contains(expected, GatewayFault.DeviceLimit(max).Message);
 
+    // ── grants ──────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task A_computer_publishes_a_grant_for_its_owners_device()
+    {
+        using var browser = await PanelClient.SignedInAsync(_gateway, Name("alice"));
+        var owner = new UserAccess(browser.UserId, "unused");
+        var device = await DeviceAsync(owner);
+        var host = await ComputerAsync(owner);
+        using var signer = P256.GenerateSigning();
+        using var limit = new HostCallLimit();
+        var grant = Paired(host.HostId, device, 1, signer);
+
+        var reply = await Hub(host, limit).PublishGrants([grant]);
+
+        Assert.Null(reply.Fault);
+        var listed = Assert.Single(await GrantsOfAsync(browser, device.Id));
+        Assert.Equal(host.HostId, listed.HostId);
+        Assert.Equal(1u, listed.KeyEpoch);
+        Assert.Equal(grant, Assert.Single(listed.Grants));
+
+        // The first grant stored for a computer pins its signing key.
+        Assert.Equal(P256.SigningPublicRaw(signer), await SigningPublicAsync(host.HostId));
+    }
+
+    [Fact]
+    public async Task A_grant_for_another_owners_device_is_refused()
+    {
+        using var alice = await PanelClient.SignedInAsync(_gateway, Name("alice"));
+        var owner = new UserAccess(alice.UserId, "unused");
+        var own = await DeviceAsync(owner);
+        var host = await ComputerAsync(owner);
+        var bobs = await DeviceAsync(await PersonAsync("bob"));
+        var missing = (Ids.New(), NewPublicKey());
+        using var signer = P256.GenerateSigning();
+        using var limit = new HostCallLimit();
+        var hub = Hub(host, limit);
+
+        var foreign = (await hub.PublishGrants([Paired(host.HostId, bobs, 1, signer)])).Fault!;
+        var absent = (await hub.PublishGrants([Paired(host.HostId, missing, 1, signer)])).Fault!;
+
+        Assert.Equal("not-found", foreign.Code);
+        Assert.Equal((absent.Code, absent.Message), (foreign.Code, foreign.Message));
+
+        // A browser of Alice's is refused in the same words as for a device that does not exist.
+        using var foreignPost = await PostGrantsAsync(alice, own.Id, Paired(host.HostId, bobs, 1, signer, Ids.New()));
+        using var absentPost = await PostGrantsAsync(alice, own.Id, Paired(host.HostId, missing, 1, signer, Ids.New()));
+
+        Assert.Equal(HttpStatusCode.NotFound, foreignPost.StatusCode);
+        Assert.Equal(await absentPost.Content.ReadAsStringAsync(), await foreignPost.Content.ReadAsStringAsync());
+        Assert.Equal(0, await GrantCountAsync(host.HostId));
+        Assert.Null(await SigningPublicAsync(host.HostId));
+    }
+
+    [Fact]
+    public async Task A_grant_for_a_revoked_device_is_refused()
+    {
+        using var alice = await PanelClient.SignedInAsync(_gateway, Name("alice"));
+        var owner = new UserAccess(alice.UserId, "unused");
+        var own = await DeviceAsync(owner, "laptop");
+        var removed = await DeviceAsync(owner, "phone");
+        var host = await ComputerAsync(owner);
+        using var signer = P256.GenerateSigning();
+        using var limit = new HostCallLimit();
+        await Devices.RevokeAsync(owner, removed.Id, default);
+
+        var fault = (await Hub(host, limit).PublishGrants([Paired(host.HostId, removed, 1, signer)])).Fault!;
+        using var posted = await PostGrantsAsync(alice, own.Id, Paired(host.HostId, removed, 1, signer, Ids.New()));
+
+        Assert.Equal("not-found", fault.Code);
+        Assert.Equal(HttpStatusCode.NotFound, posted.StatusCode);
+        Assert.Equal(0, await GrantCountAsync(host.HostId));
+    }
+
+    /// <summary>
+    /// A revocation that has locked the device and not yet committed, and a grant to that device arriving
+    /// meanwhile. The grant must wait for it and then be refused: read without a lock, the device still
+    /// looked live and the grant was stored while the revocation was under way, for a device being removed.
+    /// </summary>
+    [Fact]
+    public async Task A_grant_racing_the_revocation_of_its_device_does_not_survive_it()
+    {
+        var owner = await PersonAsync("alice");
+        var device = await DeviceAsync(owner);
+        var host = await ComputerAsync(owner);
+        using var signer = P256.GenerateSigning();
+
+        await using var revoker = await database.OpenAsync();
+        await using var revocation = await revoker.BeginTransactionAsync();
+        await using (var revoke = new MySqlCommand(
+            "UPDATE devices SET revoked_at = UTC_TIMESTAMP(3) WHERE owner_id = @owner AND id = @device",
+            revoker, revocation))
+        {
+            revoke.Parameters.AddWithValue("@owner", owner.UserId);
+            revoke.Parameters.AddWithValue("@device", device.Id);
+            await revoke.ExecuteNonQueryAsync();
+        }
+
+        var publishing = Devices.PublishGrantsAsync(host, [Paired(host.HostId, device, 1, signer)], default);
+        await Task.Delay(TimeSpan.FromMilliseconds(500));
+        Assert.False(publishing.IsCompleted);
+
+        await revocation.CommitAsync();
+
+        var refused = await Assert.ThrowsAsync<GatewayFault>(() => publishing);
+        Assert.Equal("not-found", refused.Code);
+        Assert.Equal(0, await GrantCountAsync(host.HostId));
+    }
+
+    [Fact]
+    public async Task A_device_reads_only_its_own_grants()
+    {
+        using var alice = await PanelClient.SignedInAsync(_gateway, Name("alice"));
+        var owner = new UserAccess(alice.UserId, "unused");
+        var laptop = await DeviceAsync(owner, "laptop");
+        var phone = await DeviceAsync(owner, "phone");
+        var studio = await ComputerAsync(owner);
+        var old = await ComputerAsync(owner);
+        using var studioSigner = P256.GenerateSigning();
+        using var oldSigner = P256.GenerateSigning();
+
+        await Devices.PublishGrantsAsync(studio,
+            [Paired(studio.HostId, laptop, 1, studioSigner), Paired(studio.HostId, phone, 1, studioSigner)], default);
+        await Devices.PublishGrantsAsync(old, [Paired(old.HostId, laptop, 1, oldSigner)], default);
+        await Users.RevokeHostAsync(owner, old.HostId, default);
+
+        // The phone's grant is not the laptop's, and a revoked computer's keys are not handed out at all.
+        var seen = Assert.Single(await GrantsOfAsync(alice, laptop.Id));
+        Assert.Equal(studio.HostId, seen.HostId);
+        Assert.Equal(laptop.Id, Assert.Single(seen.Grants).DeviceId);
+        Assert.Equal(phone.Id, Assert.Single(Assert.Single(await GrantsOfAsync(alice, phone.Id)).Grants).DeviceId);
+
+        // Bob naming Alice's device is refused in the words used for one that does not exist, and his own
+        // device has nothing of hers.
+        using var bob = await PanelClient.SignedInAsync(_gateway, Name("bob"));
+        var bobs = await DeviceAsync(new UserAccess(bob.UserId, "unused"));
+        using var foreign = await ReadGrantsAsync(bob, laptop.Id);
+        using var missing = await ReadGrantsAsync(bob, Ids.New());
+
+        Assert.Equal(HttpStatusCode.NotFound, foreign.StatusCode);
+        Assert.Equal(await missing.Content.ReadAsStringAsync(), await foreign.Content.ReadAsStringAsync());
+        Assert.Empty(await GrantsOfAsync(bob, bobs.Id));
+
+        using var unnamed = await ReadGrantsAsync(alice, null);
+        Assert.Equal(HttpStatusCode.BadRequest, unnamed.StatusCode);
+        Assert.Equal("device-header", (await ErrorAsync(unnamed)).Code);
+    }
+
+    [Theory]
+    [InlineData("epoch", "zero")]
+    [InlineData("ephemeralPublic", "short")]
+    [InlineData("nonce", "short")]
+    [InlineData("ciphertext", "short")]
+    [InlineData("mac", "signature-length")]
+    [InlineData("mac", "not-base64url")]
+    [InlineData("authBy", "uppercase")]
+    [InlineData("authBy", "trailing-newline")]
+    [InlineData("authBy", "unknown")]
+    [InlineData("hostSigningPublic", "short")]
+    [InlineData("hostSigningPublic", "off-curve")]
+    [InlineData("hostId", "missing")]
+    [InlineData("deviceId", "missing")]
+    public async Task A_malformed_grant_is_refused(string field, string variant)
+    {
+        var owner = await PersonAsync("alice");
+        var device = await DeviceAsync(owner);
+        var host = await ComputerAsync(owner);
+        using var signer = P256.GenerateSigning();
+        var good = Paired(host.HostId, device, 1, signer);
+        var bad = Malformed(Paired(host.HostId, device, 2, signer), field, variant);
+
+        var refused = await Assert.ThrowsAsync<GatewayFault>(
+            () => Devices.PublishGrantsAsync(host, [good, bad], default));
+
+        Assert.Equal("bad-grant", refused.Code);
+        Assert.Equal(400, refused.Status);
+        Assert.Contains($"'{field}'", refused.Message);
+
+        // One bad grant refuses the whole batch: the good one beside it is not stored either.
+        Assert.Equal(0, await GrantCountAsync(host.HostId));
+    }
+
+    /// <summary>
+    /// A grant the computer signed carries a 64-byte signature where a paired one carries a 32-byte HMAC.
+    /// One length for both would refuse every rotation grant, or let a truncated signature through.
+    /// </summary>
+    [Fact]
+    public async Task A_signed_grant_carries_a_signature_and_a_paired_one_an_hmac()
+    {
+        var owner = await PersonAsync("alice");
+        var device = await DeviceAsync(owner);
+        var host = await ComputerAsync(owner);
+        using var signer = P256.GenerateSigning();
+        var signed = Signed(host.HostId, device, 1, signer);
+
+        var refused = await Assert.ThrowsAsync<GatewayFault>(() => Devices.PublishGrantsAsync(
+            host, [signed with { Mac = B64.Url(new byte[32]) }], default));
+        await Devices.PublishGrantsAsync(host, [signed], default);
+
+        Assert.Contains("'mac'", refused.Message);
+        Assert.Equal(1, await GrantCountAsync(host.HostId));
+    }
+
+    [Fact]
+    public async Task More_than_fifty_grants_in_one_call_are_refused()
+    {
+        var owner = await PersonAsync("alice");
+        var device = await DeviceAsync(owner);
+        var host = await ComputerAsync(owner);
+        using var signer = P256.GenerateSigning();
+        var grants = Enumerable.Range(1, 51).Select(epoch => Paired(host.HostId, device, (uint)epoch, signer)).ToList();
+
+        var refused = await Assert.ThrowsAsync<GatewayFault>(() => Devices.PublishGrantsAsync(host, grants, default));
+        await Devices.PublishGrantsAsync(host, grants[..50], default);
+
+        Assert.Equal("bad-grant", refused.Code);
+        Assert.Equal(50, await GrantCountAsync(host.HostId));
+    }
+
+    [Fact]
+    public async Task A_computer_grants_only_its_own_keys()
+    {
+        var owner = await PersonAsync("alice");
+        var device = await DeviceAsync(owner);
+        var studio = await ComputerAsync(owner);
+        var laptop = await ComputerAsync(owner);
+        using var signer = P256.GenerateSigning();
+        using var limit = new HostCallLimit();
+
+        var fault = (await Hub(studio, limit).PublishGrants([Paired(laptop.HostId, device, 1, signer)])).Fault!;
+
+        Assert.Equal("bad-grant", fault.Code);
+        Assert.Contains("'hostId'", fault.Message);
+        Assert.Equal(0, await GrantCountAsync(laptop.HostId));
+    }
+
+    [Fact]
+    public async Task A_revoked_computer_cannot_publish_grants()
+    {
+        var owner = await PersonAsync("alice");
+        var device = await DeviceAsync(owner);
+        var host = await ComputerAsync(owner);
+        using var signer = P256.GenerateSigning();
+        using var limit = new HostCallLimit();
+        await Users.RevokeHostAsync(owner, host.HostId, default);
+
+        var fault = (await Hub(host, limit).PublishGrants([Paired(host.HostId, device, 1, signer)])).Fault!;
+
+        Assert.Equal(FaultCode.HostRevoked, fault.Code);
+        Assert.Equal(0, await GrantCountAsync(host.HostId));
+    }
+
+    /// <summary>
+    /// A trusted browser answers an invitation with grants authenticated by that invitation's pair key. It
+    /// never makes the grant that answers a computer's own pairing, nor one the computer signed.
+    /// </summary>
+    [Fact]
+    public async Task A_browser_grants_its_keys_only_under_an_invitations_pair_key()
+    {
+        using var alice = await PanelClient.SignedInAsync(_gateway, Name("alice"));
+        var owner = new UserAccess(alice.UserId, "unused");
+        var laptop = await DeviceAsync(owner, "laptop");
+        var phone = await DeviceAsync(owner, "phone");
+        var host = await ComputerAsync(owner);
+        using var signer = P256.GenerateSigning();
+        var invited = Paired(host.HostId, phone, 1, signer, Ids.New());
+
+        using var accepted = await PostGrantsAsync(alice, laptop.Id, invited);
+        using var connect = await PostGrantsAsync(alice, laptop.Id, Paired(host.HostId, phone, 2, signer));
+        using var signed = await PostGrantsAsync(alice, laptop.Id, Signed(host.HostId, phone, 2, signer));
+
+        Assert.True(accepted.IsSuccessStatusCode, await accepted.Content.ReadAsStringAsync());
+        Assert.Equal(invited, Assert.Single(Assert.Single(await GrantsOfAsync(alice, phone.Id)).Grants));
+
+        foreach (var response in new[] { connect, signed })
+        {
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+            var error = await ErrorAsync(response);
+            Assert.Equal("bad-grant", error.Code);
+            Assert.Contains("'authBy'", error.Error);
+        }
+    }
+
+    [Fact]
+    public async Task A_browser_grants_keys_only_of_its_persons_live_computers()
+    {
+        using var alice = await PanelClient.SignedInAsync(_gateway, Name("alice"));
+        var owner = new UserAccess(alice.UserId, "unused");
+        var laptop = await DeviceAsync(owner, "laptop");
+        var phone = await DeviceAsync(owner, "phone");
+        var revoked = await ComputerAsync(owner);
+        var bobs = await ComputerAsync(await PersonAsync("bob"));
+        using var signer = P256.GenerateSigning();
+        await Users.RevokeHostAsync(owner, revoked.HostId, default);
+
+        using var foreign = await PostGrantsAsync(alice, laptop.Id, Paired(bobs.HostId, phone, 1, signer, Ids.New()));
+        using var missing = await PostGrantsAsync(alice, laptop.Id, Paired(Ids.New(), phone, 1, signer, Ids.New()));
+        using var gone = await PostGrantsAsync(alice, laptop.Id, Paired(revoked.HostId, phone, 1, signer, Ids.New()));
+
+        Assert.Equal(HttpStatusCode.NotFound, foreign.StatusCode);
+        Assert.Equal(await missing.Content.ReadAsStringAsync(), await foreign.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.NotFound, gone.StatusCode);
+        Assert.Equal(0, await GrantCountAsync(bobs.HostId));
+        Assert.Equal(0, await GrantCountAsync(revoked.HostId));
+    }
+
+    [Fact]
+    public async Task Key_epoch_follows_the_newest_grant()
+    {
+        using var alice = await PanelClient.SignedInAsync(_gateway, Name("alice"));
+        var owner = new UserAccess(alice.UserId, "unused");
+        var device = await DeviceAsync(owner);
+        var host = await ComputerAsync(owner);
+        using var signer = P256.GenerateSigning();
+
+        await Devices.PublishGrantsAsync(host, [Paired(host.HostId, device, 1, signer)], default);
+        Assert.Equal(1, await KeyEpochAsync(host.HostId));
+
+        await Devices.PublishGrantsAsync(host, [Signed(host.HostId, device, 3, signer)], default);
+        Assert.Equal(3, await KeyEpochAsync(host.HostId));
+
+        // An older grant sent late does not take it back.
+        await Devices.PublishGrantsAsync(host, [Signed(host.HostId, device, 2, signer)], default);
+        Assert.Equal(3, await KeyEpochAsync(host.HostId));
+
+        // A browser passes on keys the computer made; an epoch it names says nothing about the computer's newest.
+        using var posted = await PostGrantsAsync(alice, device.Id, Paired(host.HostId, device, 7, signer, Ids.New()));
+        Assert.True(posted.IsSuccessStatusCode, await posted.Content.ReadAsStringAsync());
+        Assert.Equal(3, await KeyEpochAsync(host.HostId));
+
+        var listed = Assert.Single(await GrantsOfAsync(alice, device.Id));
+        Assert.Equal(3u, listed.KeyEpoch);
+        Assert.Equal([1u, 2u, 3u, 7u], listed.Grants.Select(grant => grant.Epoch));
+    }
+
+    [Fact]
+    public async Task A_grant_carrying_another_signing_key_than_the_first_is_refused()
+    {
+        var owner = await PersonAsync("alice");
+        var device = await DeviceAsync(owner);
+        var host = await ComputerAsync(owner);
+        using var pinned = P256.GenerateSigning();
+        using var other = P256.GenerateSigning();
+        await Devices.PublishGrantsAsync(host, [Paired(host.HostId, device, 1, pinned)], default);
+
+        var refused = await Assert.ThrowsAsync<GatewayFault>(
+            () => Devices.PublishGrantsAsync(host, [Signed(host.HostId, device, 2, other)], default));
+
+        Assert.Equal("bad-grant", refused.Code);
+        Assert.Contains("'hostSigningPublic'", refused.Message);
+        Assert.Contains("earlier grants", refused.Message);
+        Assert.Equal(1, await GrantCountAsync(host.HostId));
+        Assert.Equal(P256.SigningPublicRaw(pinned), await SigningPublicAsync(host.HostId));
+
+        // Two keys in a computer's first batch: neither is pinned, because nothing of the batch is kept.
+        var fresh = await ComputerAsync(owner);
+        await Assert.ThrowsAsync<GatewayFault>(() => Devices.PublishGrantsAsync(fresh,
+            [Paired(fresh.HostId, device, 1, pinned), Paired(fresh.HostId, device, 2, other)], default));
+        Assert.Null(await SigningPublicAsync(fresh.HostId));
+    }
+
+    /// <summary>A rotation can be sent again, and the last one sent is the one the device needs.</summary>
+    [Fact]
+    public async Task A_grant_sent_again_replaces_the_earlier_one()
+    {
+        using var alice = await PanelClient.SignedInAsync(_gateway, Name("alice"));
+        var owner = new UserAccess(alice.UserId, "unused");
+        var device = await DeviceAsync(owner);
+        var host = await ComputerAsync(owner);
+        using var signer = P256.GenerateSigning();
+        var later = Signed(host.HostId, device, 1, signer);
+
+        await Devices.PublishGrantsAsync(host, [Signed(host.HostId, device, 1, signer)], default);
+        await Devices.PublishGrantsAsync(host, [later], default);
+
+        Assert.Equal(later, Assert.Single(Assert.Single(await GrantsOfAsync(alice, device.Id)).Grants));
+    }
+
+    /// <summary>
+    /// The panel asks for its grants often, and each device-bound call wrote the device's row. A visit
+    /// within a minute of the last one recorded is not written again.
+    /// </summary>
+    [Fact]
+    public async Task A_devices_visit_is_recorded_at_most_once_a_minute()
+    {
+        var owner = await PersonAsync("alice");
+        var clock = new MovableClock(new DateTimeOffset(2026, 10, 2, 9, 0, 0, TimeSpan.Zero));
+        var devices = new DeviceService(Db, Limits.Unlimited, clock);
+        var id = await devices.RegisterAsync(owner, NewPublicKey(), "laptop", default);
+        var first = clock.Now;
+
+        await devices.RequireAsync(owner, id, default);
+        clock.Now = first.AddSeconds(30);
+        await devices.RequireAsync(owner, id, default);
+        Assert.Equal(first, Assert.Single(await devices.ListAsync(owner, default)).LastSeenAt);
+
+        clock.Now = first.AddSeconds(61);
+        await devices.RequireAsync(owner, id, default);
+        Assert.Equal(first.AddSeconds(61), Assert.Single(await devices.ListAsync(owner, default)).LastSeenAt);
+    }
+
     // ── helpers ─────────────────────────────────────────────────────────────
+
+    private UserService Users => new(Db, Limits.Unlimited, TimeProvider.System);
+
+    private async Task<HostAccess> ComputerAsync(UserAccess owner)
+    {
+        var (id, _, _) = await Users.RegisterHostAsync(owner, "Studio PC", default);
+        return new HostAccess(id, owner.UserId);
+    }
+
+    /// <summary>A device of <paramref name="owner"/>'s, with the public key grants to it are sealed to.</summary>
+    private async Task<(string Id, byte[] Key)> DeviceAsync(UserAccess owner, string label = "laptop")
+    {
+        var key = NewPublicKey();
+        return (await Devices.RegisterAsync(owner, key, label, default), key);
+    }
+
+    /// <summary>
+    /// A grant authenticated with a pair key: <c>connect</c> for the one answering a computer's pairing,
+    /// 32 hex characters for one answering an invitation.
+    /// </summary>
+    private static KeyGrant Paired(
+        string hostId, (string Id, byte[] Key) device, uint epoch, ECDsa signer, string pairing = "connect")
+        => Grants.CreatePaired(hostId, device.Id, device.Key, HostKey.Create(epoch), pairing,
+            RandomNumberGenerator.GetBytes(32), P256.SigningPublicRaw(signer));
+
+    /// <summary>A rotation grant, signed by the computer.</summary>
+    private static KeyGrant Signed(string hostId, (string Id, byte[] Key) device, uint epoch, ECDsa signer)
+        => Grants.CreateSigned(hostId, device.Id, device.Key, HostKey.Create(epoch), signer);
+
+    private static KeyGrant Malformed(KeyGrant grant, string field, string variant) => (field, variant) switch
+    {
+        ("epoch", _) => grant with { Epoch = 0 },
+        ("ephemeralPublic", _) => grant with { EphemeralPublic = B64.Url(new byte[64]) },
+        ("nonce", _) => grant with { Nonce = B64.Url(new byte[11]) },
+        ("ciphertext", _) => grant with { Ciphertext = B64.Url(new byte[47]) },
+        ("mac", "signature-length") => grant with { Mac = B64.Url(new byte[64]) },
+        ("mac", _) => grant with { Mac = "not base64url!" },
+        ("authBy", "uppercase") => grant with { AuthBy = "pair:" + Ids.New().ToUpperInvariant() },
+        ("authBy", "trailing-newline") => grant with { AuthBy = "pair:connect\n" },
+        ("authBy", _) => grant with { AuthBy = "device" },
+        ("hostSigningPublic", "short") => grant with { HostSigningPublic = B64.Url(new byte[64]) },
+        ("hostSigningPublic", _) => grant with { HostSigningPublic = B64.Url(OffCurveKey()) },
+        ("hostId", _) => grant with { HostId = null! },
+        ("deviceId", _) => grant with { DeviceId = null! },
+        _ => throw new ArgumentException($"No such malformation: {field}/{variant}.")
+    };
+
+    private HostHub Hub(HostAccess host, HostCallLimit limit)
+        => new(new HostService(Db), Devices, new HostConnections(), limit) { Context = new ComputerCaller(host) };
+
+    private Task<long> GrantCountAsync(string hostId)
+        => database.ScalarLongAsync($"SELECT COUNT(*) FROM grants WHERE host_id = '{hostId}'");
+
+    private Task<long> KeyEpochAsync(string hostId)
+        => database.ScalarLongAsync($"SELECT key_epoch FROM hosts WHERE id = '{hostId}'");
+
+    private async Task<byte[]?> SigningPublicAsync(string hostId)
+        => await database.ScalarAsync($"SELECT signing_public FROM hosts WHERE id = '{hostId}'") as byte[];
+
+    private static Task<HttpResponseMessage> ReadGrantsAsync(PanelClient browser, string? deviceId)
+        => browser.SendAsync(HttpMethod.Get, "/api/grants", configure: request =>
+        {
+            if (deviceId is not null)
+            {
+                request.Headers.Add(DeviceHeader.Name, deviceId);
+            }
+        });
+
+    private static async Task<List<HostGrantsView>> GrantsOfAsync(PanelClient browser, string deviceId)
+    {
+        using var response = await ReadGrantsAsync(browser, deviceId);
+        Assert.True(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync());
+        return (await response.Content.ReadFromJsonAsync<List<HostGrantsView>>(RemoteJson.Options))!;
+    }
+
+    private static Task<HttpResponseMessage> PostGrantsAsync(PanelClient browser, string deviceId, params KeyGrant[] grants)
+        => browser.SendAsync(HttpMethod.Post, "/api/grants", grants,
+            configure: request => request.Headers.Add(DeviceHeader.Name, deviceId));
+
+    /// <summary>What <c>GET /api/grants</c> answers for one computer. Every field, because the wire refuses unknown ones.</summary>
+    private sealed record HostGrantsView(string HostId, uint KeyEpoch, List<KeyGrant> Grants);
+
+    /// <summary>A clock a test moves by hand.</summary>
+    private sealed class MovableClock(DateTimeOffset now) : TimeProvider
+    {
+        public DateTimeOffset Now { get; set; } = now;
+
+        public override DateTimeOffset GetUtcNow() => Now;
+    }
+
+    /// <summary>The connection a hub method is called on, as a computer's token opens it: which computer, and whose.</summary>
+    private sealed class ComputerCaller(HostAccess host) : HubCallerContext
+    {
+        public override string ConnectionId { get; } = Guid.NewGuid().ToString();
+
+        public override string? UserIdentifier { get; } = host.HostId;
+
+        public override ClaimsPrincipal? User { get; } = new(new ClaimsIdentity(
+            [new Claim(ClaimTypes.NameIdentifier, host.HostId), new Claim(HostAuthentication.OwnerClaim, host.OwnerId)],
+            HostAuthentication.SchemeName));
+
+        public override IDictionary<object, object?> Items { get; } = new Dictionary<object, object?>();
+
+        public override IFeatureCollection Features { get; } = new FeatureCollection();
+
+        public override CancellationToken ConnectionAborted => CancellationToken.None;
+
+        public override void Abort()
+        {
+        }
+    }
 
     private static async Task AssertRefusedAsync(PanelClient browser, string publicKey, string code)
     {

@@ -116,6 +116,14 @@ public sealed class GatewayFault(string code, int status, string message) : Exce
         FaultCode.QuotaExceeded, 429,
         "This computer is calling the service more often than it allows. It will try again shortly.");
 
+    /// <summary>
+    /// A grant that is not the shape of one, or that may not come from the caller. Both a computer and a
+    /// browser can be refused with it. It has no <see cref="FaultCode"/> yet: nothing on the Host sends
+    /// grants so far, and the code is classified there when something does - until then an unknown code is
+    /// retried, a bounded number of times, which loses nothing.
+    /// </summary>
+    public static GatewayFault BadGrant(string message) => new("bad-grant", 400, message);
+
     // ── the ones only the owner API produces ────────────────────────────────
     //
     // These have no FaultCode: nothing on a Host's retry path can reach them, and inventing codes a
