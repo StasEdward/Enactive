@@ -20,7 +20,7 @@ import {
 import { emptyState, resetState, forgetScreen, pollOnce } from "./js/session-guard.js";
 import { providerLinks, outcomeOf, createDevelopmentProbe } from "./js/signin.js";
 import { singleFlight } from "./js/single-flight.js";
-import { openSessionChannel, onSessionSignal } from "./js/session-channel.js";
+import { openSessionChannel, onSessionSignal, removedViewAction } from "./js/session-channel.js";
 import { openKeystore } from "./js/keystore.js";
 import {
   ensureDevice, collectGrants, troubleFor, worthSaying, connectPendingId, keyStanding, createGrantSchedule, epochsChanged,
@@ -1095,8 +1095,9 @@ async function catchUpKeysNow() {
     // can no longer be read is something else: "Forget this device" in another tab of this browser deleted it
     // (devices.js storeGone), and this tab went on polling with everything drawn unreadable and no word of why.
     if (isCurrent(started) && await storeGone(store) && isCurrent(started)) {
+      const removedId = account?.id;
       resetSession();
-      showDeviceRemoved();
+      showDeviceRemoved(removedId);
     }
   }
 }
@@ -1728,8 +1729,9 @@ async function forgetNow() {
   // The device is removed, but the sign-out was refused and said so: nothing here can read or send any more, and
   // the view put up now signs out - and deletes the keys, if they could not be deleted just now.
   if (account) {
+    const removedId = account.id;
     resetSession();
-    showDeviceRemoved();
+    showDeviceRemoved(removedId);
   }
 
   // Either way the keys of this device are gone from this browser: a tab of the same account that still holds
@@ -1975,6 +1977,7 @@ const boot = singleFlight(bootNow, generation);
 
 async function enterPanel(user) {
   deviceRemovedShown = false;
+  deviceRemovedFor = null;
   account = user;
   $("account-name").textContent = user.displayName;
   $("login").hidden = true;
@@ -2027,6 +2030,7 @@ async function enterPanel(user) {
 
 function showSignedOut(outcome) {
   deviceRemovedShown = false;
+  deviceRemovedFor = null;
   $("panel").hidden = true;
   $("device-removed").hidden = true;
   $("login").hidden = false;
@@ -2048,8 +2052,16 @@ function showSignedOut(outcome) {
 /** Whether "this device was removed" is what the tab shows: a signal from another tab treats it differently (sessionChannel). */
 let deviceRemovedShown = false;
 
-function showDeviceRemoved() {
+/**
+ * The account the "device removed" view was put up for. The reset that precedes the view forgets the account, and
+ * the view's buttons act on whoever is signed in when they are pressed: with Bob signed in, in another tab,
+ * "Delete this device's keys" deleted Bob's keys in this browser, and a signal from that tab left Alice's view up.
+ */
+let deviceRemovedFor = null;
+
+function showDeviceRemoved(accountId) {
   deviceRemovedShown = true;
+  deviceRemovedFor = accountId ?? null;
   $("panel").hidden = true;
   $("login").hidden = true;
   $("device-removed").hidden = false;
@@ -2154,23 +2166,24 @@ const revalidate = singleFlight(revalidateNow, generation);
 // What they say is only "ask the gateway" (session-channel.js): revalidate decides, from /api/session. Never
 // closed by resetSession - the next account signed in in this tab needs it too. A tab with an account revalidates;
 // one left at the sign-in view has none, so it boots - asks /api/session and enters the panel if another tab has
-// signed in since. One at "this device was removed" must not enter the panel: the gateway session is still open
-// there on purpose, and booting would use the removed device's keys again, or - after a forget - recreate the
-// deleted store and register this browser as a new device without the person asking. It only checks the session
-// and leaves for the sign-in view if there is none (onSessionSignal).
+// signed in since. One at "this device was removed" must not enter the panel for the account it was removed
+// from: the gateway session is still open there on purpose, and booting would use the removed device's keys again,
+// or - after a forget - recreate the deleted store and register this browser as a new device without the person
+// asking. It only checks the session: none moves it to the sign-in view, another account's resets and boots as
+// an account change does, the same account leaves it as it is (removedViewAction).
 const sessionChannel = openSessionChannel({
   onChanged: () => onSessionSignal({
     account,
     view: deviceRemovedShown ? "removed" : "other",
     boot: () => boot(),
     revalidate: () => revalidate(),
-    toSignIn: () => leaveRemovedIfSignedOut()
+    toSignIn: () => leaveRemovedIfSessionChanged()
   })
 });
 
-const leaveRemovedIfSignedOut = singleFlight(leaveRemovedIfSignedOutNow, generation);
+const leaveRemovedIfSessionChanged = singleFlight(leaveRemovedIfSessionChangedNow, generation);
 
-async function leaveRemovedIfSignedOutNow() {
+async function leaveRemovedIfSessionChangedNow() {
   const started = generation();
   let view;
 
@@ -2182,8 +2195,18 @@ async function leaveRemovedIfSignedOutNow() {
   }
 
   // Not when the tab has moved on (a sign-out or sign-in here) while the answer was on its way.
-  if (!view.authenticated && isCurrent(started) && deviceRemovedShown) {
+  if (!isCurrent(started) || !deviceRemovedShown) {
+    return;
+  }
+
+  const action = removedViewAction(view, deviceRemovedFor);
+
+  if (action === "sign-in") {
     showSignedOut();
+  } else if (action === "boot") {
+    // Another account is signed in: the normal account change. Nothing of the removed account's is kept.
+    resetSession();
+    await boot();
   }
 }
 
@@ -2257,8 +2280,9 @@ onUnauthenticated(() => {
 });
 
 onDeviceRevoked(() => {
+  const removedId = account?.id;
   resetSession();
-  showDeviceRemoved();
+  showDeviceRemoved(removedId);
 });
 
 let timer = 0;
@@ -2319,8 +2343,9 @@ $("removed-forget").addEventListener("click", async (clicked) => {
   status.textContent = "";
 
   try {
-    // Whose keys: the account signed in now, asked afresh - the reset that put this page up forgot it.
-    await deleteDeviceKeys(await session(), openKeystore);
+    // Whose keys: the account this page was put up for, and only if it is the one signed in now (asked afresh - the
+    // reset that put this page up forgot it). Another account's keys in this browser are not this device's to delete.
+    await deleteDeviceKeys(await session(), openKeystore, deviceRemovedFor);
     status.textContent = "This device's keys are deleted from this browser.";
   } catch (error) {
     if (!(error instanceof Stale)) {

@@ -145,9 +145,16 @@ export function forgottenSentence(result) {
  * device removed at the gateway, and the removed page offered only Sign out: the keys stayed on disk for good.
  * `open` opens a store by account id (keystore.js openKeystore). Rejects with BlockedError while another tab
  * keeps the store open.
+ *
+ * `removedFor` is the account the page was put up for. Another account signing in, in this browser, makes the
+ * session name that one instead, and its keys are not the removed device's: the button deleted them. Refused
+ * unless the session names `removedFor`.
  */
-export async function deleteDeviceKeys(view, open) {
+export async function deleteDeviceKeys(view, open, removedFor) {
   if (!view?.authenticated) throw new Error('Sign in again to delete this device\'s keys.');
+  if (!removedFor || view.user.id !== removedFor) {
+    throw new Error('Another account is signed in in this browser. Sign out and sign in as the account this device was removed from to delete its keys.');
+  }
   const store = await open(view.user.id);
   await store.forget();
 }

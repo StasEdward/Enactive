@@ -76,3 +76,15 @@ export function onSessionSignal({ account, view, boot, revalidate, toSignIn }) {
   if (view === 'removed') return toSignIn();
   return boot();
 }
+
+/**
+ * What a tab at "this device was removed" does with the gateway's /api/session answer after a signal: `'sign-in'`
+ * when nobody is signed in any more, `'boot'` when another account is (the view is Alice's, the browser is Bob's:
+ * the normal account change), `'stay'` when it is the same account - or when the view does not know which account
+ * it was for, which cannot be shown to be another one. Never a boot into the panel for the removed account.
+ */
+export function removedViewAction(view, removedFor) {
+  if (!view?.authenticated) return 'sign-in';
+  if (removedFor && view.user.id !== removedFor) return 'boot';
+  return 'stay';
+}

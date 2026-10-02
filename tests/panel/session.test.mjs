@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { pollOnce } from '../../src/Enactive.Remote.Gateway/wwwroot/js/session-guard.js';
 import { get, abandonRequests, Stale } from '../../src/Enactive.Remote.Gateway/wwwroot/js/api.js';
-import { openSessionChannel, onSessionSignal } from '../../src/Enactive.Remote.Gateway/wwwroot/js/session-channel.js';
+import { openSessionChannel, onSessionSignal, removedViewAction } from '../../src/Enactive.Remote.Gateway/wwwroot/js/session-channel.js';
 
 // Every channel made by one factory is on the same bus: a message posted on one end reaches the others and
 // never the one that posted it, as a BroadcastChannel does.
@@ -216,4 +216,21 @@ test('a changed signal over the channel reaches each branch', () => {
   other.announce();
 
   assert.deepEqual(calls, ['boot', 'toSignIn', 'revalidate']);
+});
+
+test('a signal at "device removed" leaves for sign-in when nobody is signed in', () => {
+  assert.equal(removedViewAction({ authenticated: false }, 'alice'), 'sign-in');
+});
+
+test('a signal at "device removed" boots when another account is signed in', () => {
+  assert.equal(removedViewAction({ authenticated: true, user: { id: 'bob' } }, 'alice'), 'boot');
+});
+
+test('a signal at "device removed" stays put when the removed account is the one signed in', () => {
+  // Its session is still open on purpose: entering the panel would use the removed device's keys again.
+  assert.equal(removedViewAction({ authenticated: true, user: { id: 'alice' } }, 'alice'), 'stay');
+});
+
+test('a view that does not know its account is never taken into the panel', () => {
+  assert.equal(removedViewAction({ authenticated: true, user: { id: 'bob' } }, null), 'stay');
 });

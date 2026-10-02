@@ -419,11 +419,29 @@ test('the removed page deletes this device\'s keys for the signed-in account', a
   await store.addHostKey(STUDIO, 1, crypto.getRandomValues(new Uint8Array(32)));
   store.close();
 
-  await deleteDeviceKeys({ authenticated: true, user: { id: ALICE } }, (userId) => openKeystore(userId, adapter));
+  await deleteDeviceKeys({ authenticated: true, user: { id: ALICE } }, (userId) => openKeystore(userId, adapter), ALICE);
 
   assert.deepEqual(adapter.databases(), []);
-  await assert.rejects(deleteDeviceKeys({ authenticated: false }, (userId) => openKeystore(userId, adapter)),
+  await assert.rejects(deleteDeviceKeys({ authenticated: false }, (userId) => openKeystore(userId, adapter), ALICE),
     /Sign in again/);
+});
+
+test("the removed page does not delete another account's keys", async () => {
+  const adapter = memoryAdapter();
+  const bobs = await openKeystore('bob', adapter);
+  await bobs.createDevice();
+  bobs.close();
+
+  // The page was put up for Alice; Bob signed in, in another tab, and the session now names him.
+  await assert.rejects(
+    deleteDeviceKeys({ authenticated: true, user: { id: 'bob' } }, (userId) => openKeystore(userId, adapter), ALICE),
+    /Another account is signed in/);
+  // And a page that does not know whose it is has no account to name.
+  await assert.rejects(
+    deleteDeviceKeys({ authenticated: true, user: { id: 'bob' } }, (userId) => openKeystore(userId, adapter), null),
+    /Another account is signed in/);
+
+  assert.equal(adapter.databases().length, 1);
 });
 
 test('a device card offers what can be done to that device', () => {
