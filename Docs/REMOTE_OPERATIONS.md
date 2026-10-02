@@ -405,9 +405,12 @@ sudo systemctl start enactive-remote
 ```
 
 `verify-restore.sh` is the half nobody writes. A backup job that has never been restored is a cron
-entry with a good reputation. It restores the newest dump into a scratch database, checks three
-things that could only be true of a working copy — every table this build expects, a recorded
-schema version, and a stream counter that is not behind the rows numbered from it — and drops it.
+entry with a good reputation. It restores the newest dump into a scratch database, checks what
+could only be true of a working copy — every table this build expects, a recorded schema version,
+for **each account** an event line (`user_streams`) that is not behind the events and notices
+numbered from it, and **no row in any owned table** whose `owner_id` or `user_id` has no account —
+and drops it. The last is what the foreign keys forbid, and a restore is when one would find out
+otherwise: a dump loads with the checks turned off.
 It refuses a backup older than two days, because a job that stopped a week ago and a job that works
 look identical if you only ever restore the newest file. On failure it leaves the scratch database
 behind to look at.

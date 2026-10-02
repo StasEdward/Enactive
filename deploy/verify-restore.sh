@@ -63,9 +63,12 @@ ask() { mysql --defaults-file="$DEFAULTS_FILE" -N -B -D "$scratch" -e "$1"; }
 failed=0
 complain() { echo "FAILED: $1" >&2; failed=1; }
 
-# 1. The tables this build expects. A dump that ended early restores without error and simply has
-#    fewer tables in it, which is the exact shape of a truncated backup.
-expected="approvals commands counters events host_workspaces hosts notices retention_state runs schema_version tasks"
+# 1. The tables this build expects: protocol 2's (001_initial.sql), and the Migrator's schema_version.
+#    A dump that ended early restores without error and simply has fewer tables in it, which is the
+#    exact shape of a truncated backup.
+expected="admissions approvals audit commands devices enrollments events external_identities grants
+          host_workspaces hosts invites notices runs schema_version tasks user_retention user_sessions
+          user_streams users"
 actual=$(ask "SELECT table_name FROM information_schema.tables
               WHERE table_schema = '$scratch' ORDER BY table_name" | tr '\n' ' ')
 
@@ -84,16 +87,49 @@ if [ "$version" -lt 1 ]; then
 fi
 echo "Schema version $version, $(echo "$actual" | wc -w) tables."
 
-# 3. The stream counter is at least as high as the rows that were numbered from it. If it is not,
-#    a restored gateway would hand out ordinals that already exist, and the panel would stop seeing
-#    new events the moment it did.
-behind=$(ask "SELECT (SELECT COALESCE(value, 0) FROM counters WHERE name = 'stream')
-              < GREATEST(
-                  (SELECT COALESCE(MAX(ordinal), 0) FROM events),
-                  (SELECT COALESCE(MAX(ordinal), 0) FROM notices))")
-if [ "$behind" != "0" ]; then
-  complain "the stream counter is behind the rows numbered from it"
-fi
+# 3. Each account's line is ahead of the rows numbered from it. Every account has its own counter in
+#    user_streams, and its events and notices take their ordinals from it; one behind would hand out
+#    an ordinal that already exists, the insert would fail on the account's unique ordinal, and that
+#    person's panel would stop seeing anything new - while everybody else's went on working, which is
+#    why one global check could not see it.
+behind=$(ask "SELECT s.owner_id FROM user_streams s
+              WHERE s.value < GREATEST(
+                  COALESCE((SELECT MAX(e.ordinal) FROM events e WHERE e.owner_id = s.owner_id), 0),
+                  COALESCE((SELECT MAX(n.ordinal) FROM notices n WHERE n.owner_id = s.owner_id), 0))
+              ORDER BY s.owner_id")
+for owner in $behind; do
+  complain "the event line of account $owner is behind the rows numbered from it"
+done
+
+#    And every account HAS a line. The gateway refuses to number anything for an account without one,
+#    so such an account could start nothing - and the check above, which reads the lines, cannot see it.
+lineless=$(ask "SELECT u.id FROM users u
+                WHERE NOT EXISTS (SELECT 1 FROM user_streams s WHERE s.owner_id = u.id)
+                ORDER BY u.id")
+for owner in $lineless; do
+  complain "account $owner has no event line (no user_streams row)"
+done
+
+# 4. Nothing belongs to an account that does not exist. The foreign keys should make that impossible -
+#    and a restore is exactly when one would find out otherwise: a dump turns the checks off while it
+#    loads, so rows it carries are never checked against their owners. Every column that names an
+#    owner is found by its name rather than listed here, so a table added later is covered without
+#    anybody remembering this file.
+owned=$(ask "SELECT CONCAT(table_name, '.', column_name) FROM information_schema.columns
+             WHERE table_schema = '$scratch' AND column_name IN ('owner_id', 'user_id')
+               AND table_name <> 'users'
+             ORDER BY table_name, column_name")
+for column in $owned; do
+  table=${column%%.*}
+  name=${column#*.}
+  orphans=$(ask "SELECT COUNT(*) FROM \`$table\` t
+                 WHERE t.\`$name\` IS NOT NULL
+                   AND NOT EXISTS (SELECT 1 FROM users u WHERE u.id = t.\`$name\`)")
+  if [ "$orphans" != "0" ]; then
+    complain "$orphans row(s) in $table name an owner ($name) that has no account"
+  fi
+done
+echo "Ownership checked in $(echo "$owned" | wc -w) columns."
 
 if [ "$failed" -ne 0 ]; then
   echo "Left $scratch in place to look at." >&2
