@@ -449,15 +449,18 @@ public sealed class DeviceServiceTests(TestDatabase database) : IClassFixture<Te
 
         Assert.Equal("not-found", foreign.Code);
         Assert.Equal((absent.Code, absent.Message), (foreign.Code, foreign.Message));
+        Assert.Equal(0, await GrantCountAsync(host.HostId));
+        Assert.Null(await SigningPublicAsync(host.HostId));
 
-        // A browser of Alice's is refused in the same words as for a device that does not exist.
+        // A browser of Alice's, once the computer has granted her a key, is refused in the same words as
+        // for a device that does not exist.
+        Assert.Null((await hub.PublishGrants([Paired(host.HostId, own, 1, signer)])).Fault);
         using var foreignPost = await PostGrantsAsync(alice, own.Id, Paired(host.HostId, bobs, 1, signer, Ids.New()));
         using var absentPost = await PostGrantsAsync(alice, own.Id, Paired(host.HostId, missing, 1, signer, Ids.New()));
 
         Assert.Equal(HttpStatusCode.NotFound, foreignPost.StatusCode);
         Assert.Equal(await absentPost.Content.ReadAsStringAsync(), await foreignPost.Content.ReadAsStringAsync());
-        Assert.Equal(0, await GrantCountAsync(host.HostId));
-        Assert.Null(await SigningPublicAsync(host.HostId));
+        Assert.Equal(1, await GrantCountAsync(host.HostId));
     }
 
     [Fact]
@@ -472,12 +475,15 @@ public sealed class DeviceServiceTests(TestDatabase database) : IClassFixture<Te
         using var limit = new HostCallLimit();
         await Devices.RevokeAsync(owner, removed.Id, default);
 
-        var fault = (await Hub(host, limit).PublishGrants([Paired(host.HostId, removed, 1, signer)])).Fault!;
+        var hub = Hub(host, limit);
+
+        var fault = (await hub.PublishGrants([Paired(host.HostId, removed, 1, signer)])).Fault!;
+        Assert.Null((await hub.PublishGrants([Paired(host.HostId, own, 1, signer)])).Fault);
         using var posted = await PostGrantsAsync(alice, own.Id, Paired(host.HostId, removed, 1, signer, Ids.New()));
 
         Assert.Equal("not-found", fault.Code);
         Assert.Equal(HttpStatusCode.NotFound, posted.StatusCode);
-        Assert.Equal(0, await GrantCountAsync(host.HostId));
+        Assert.Equal(1, await GrantCountAsync(host.HostId));
     }
 
     /// <summary>
@@ -557,6 +563,7 @@ public sealed class DeviceServiceTests(TestDatabase database) : IClassFixture<Te
     [Theory]
     [InlineData("epoch", "zero")]
     [InlineData("ephemeralPublic", "short")]
+    [InlineData("ephemeralPublic", "off-curve")]
     [InlineData("nonce", "short")]
     [InlineData("ciphertext", "short")]
     [InlineData("mac", "signature-length")]
@@ -566,6 +573,7 @@ public sealed class DeviceServiceTests(TestDatabase database) : IClassFixture<Te
     [InlineData("authBy", "unknown")]
     [InlineData("hostSigningPublic", "short")]
     [InlineData("hostSigningPublic", "off-curve")]
+    [InlineData("hostSigningPublic", "padded")]
     [InlineData("hostId", "missing")]
     [InlineData("deviceId", "missing")]
     public async Task A_malformed_grant_is_refused(string field, string variant)
@@ -672,6 +680,8 @@ public sealed class DeviceServiceTests(TestDatabase database) : IClassFixture<Te
         var host = await ComputerAsync(owner);
         using var signer = P256.GenerateSigning();
         var invited = Paired(host.HostId, phone, 1, signer, Ids.New());
+        await Devices.PublishGrantsAsync(
+            host, [Paired(host.HostId, laptop, 1, signer), Signed(host.HostId, laptop, 2, signer)], default);
 
         using var accepted = await PostGrantsAsync(alice, laptop.Id, invited);
         using var connect = await PostGrantsAsync(alice, laptop.Id, Paired(host.HostId, phone, 2, signer));
@@ -731,14 +741,111 @@ public sealed class DeviceServiceTests(TestDatabase database) : IClassFixture<Te
         await Devices.PublishGrantsAsync(host, [Signed(host.HostId, device, 2, signer)], default);
         Assert.Equal(3, await KeyEpochAsync(host.HostId));
 
-        // A browser passes on keys the computer made; an epoch it names says nothing about the computer's newest.
+        // A browser passes on keys the computer made, and a key newer than the computer's newest is not one.
         using var posted = await PostGrantsAsync(alice, device.Id, Paired(host.HostId, device, 7, signer, Ids.New()));
-        Assert.True(posted.IsSuccessStatusCode, await posted.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.BadRequest, posted.StatusCode);
+        var error = await ErrorAsync(posted);
+        Assert.Equal("bad-grant", error.Code);
+        Assert.Contains("'epoch'", error.Error);
         Assert.Equal(3, await KeyEpochAsync(host.HostId));
 
         var listed = Assert.Single(await GrantsOfAsync(alice, device.Id));
         Assert.Equal(3u, listed.KeyEpoch);
-        Assert.Equal([1u, 2u, 3u, 7u], listed.Grants.Select(grant => grant.Epoch));
+        Assert.Equal([1u, 2u, 3u], listed.Grants.Select(grant => grant.Epoch));
+    }
+
+    /// <summary>
+    /// Only the computer pins its signing key. A browser's grant stored first pinned whatever key it carried,
+    /// so any signed-in session could lock a computer that had not paired yet out of its own pairing.
+    /// </summary>
+    [Fact]
+    public async Task A_browser_cannot_grant_a_key_of_a_computer_that_has_granted_none()
+    {
+        using var alice = await PanelClient.SignedInAsync(_gateway, Name("alice"));
+        var owner = new UserAccess(alice.UserId, "unused");
+        var laptop = await DeviceAsync(owner, "laptop");
+        var host = await ComputerAsync(owner);
+        using var computer = P256.GenerateSigning();
+        using var impostor = P256.GenerateSigning();
+
+        using var first = await PostGrantsAsync(alice, laptop.Id, Paired(host.HostId, laptop, 1, impostor, Ids.New()));
+
+        Assert.Equal(HttpStatusCode.BadRequest, first.StatusCode);
+        var error = await ErrorAsync(first);
+        Assert.Equal("bad-grant", error.Code);
+        Assert.Contains("has not granted any key yet", error.Error);
+        Assert.Null(await SigningPublicAsync(host.HostId));
+        Assert.Equal(0, await GrantCountAsync(host.HostId));
+
+        // The computer's own first grant still goes through and pins its key, and a browser's grant carrying
+        // another key is refused from then on.
+        await Devices.PublishGrantsAsync(host, [Paired(host.HostId, laptop, 1, computer)], default);
+        Assert.Equal(P256.SigningPublicRaw(computer), await SigningPublicAsync(host.HostId));
+
+        var phone = await DeviceAsync(owner, "phone");
+        using var other = await PostGrantsAsync(alice, laptop.Id, Paired(host.HostId, phone, 1, impostor, Ids.New()));
+
+        Assert.Equal(HttpStatusCode.BadRequest, other.StatusCode);
+        Assert.Contains("'hostSigningPublic'", (await ErrorAsync(other)).Error);
+        Assert.Equal(1, await GrantCountAsync(host.HostId));
+    }
+
+    /// <summary>
+    /// A browser never replaces a grant already stored: the computer's grant for that device and epoch would
+    /// be swapped for one of the browser's making, and a device that cannot open it loses the key it had.
+    /// The computer replacing its own is the re-sent rotation, and stays allowed.
+    /// </summary>
+    [Fact]
+    public async Task A_browser_grant_never_replaces_one_already_stored()
+    {
+        using var alice = await PanelClient.SignedInAsync(_gateway, Name("alice"));
+        var owner = new UserAccess(alice.UserId, "unused");
+        var laptop = await DeviceAsync(owner, "laptop");
+        var phone = await DeviceAsync(owner, "phone");
+        var host = await ComputerAsync(owner);
+        using var signer = P256.GenerateSigning();
+        var computers = Paired(host.HostId, phone, 1, signer);
+        await Devices.PublishGrantsAsync(host, [Paired(host.HostId, laptop, 1, signer), computers], default);
+
+        using var posted = await PostGrantsAsync(alice, laptop.Id, Paired(host.HostId, phone, 1, signer, Ids.New()));
+
+        Assert.Equal(HttpStatusCode.Conflict, posted.StatusCode);
+        Assert.Equal("conflict", (await ErrorAsync(posted)).Code);
+        Assert.Equal(computers, Assert.Single(Assert.Single(await GrantsOfAsync(alice, phone.Id)).Grants));
+    }
+
+    /// <summary>
+    /// Ids as the service issues them and nothing else. The id columns ignore trailing spaces, so a computer
+    /// named with one was found and the grant stored, naming an id no device asks for; an id in capitals
+    /// was refused as a missing one, where it is a malformed grant.
+    /// </summary>
+    [Theory]
+    [InlineData("hostId", "trailing-space")]
+    [InlineData("hostId", "uppercase")]
+    [InlineData("deviceId", "trailing-space")]
+    [InlineData("deviceId", "uppercase")]
+    public async Task A_grant_naming_an_id_not_as_issued_is_refused(string field, string variant)
+    {
+        using var alice = await PanelClient.SignedInAsync(_gateway, Name("alice"));
+        var owner = new UserAccess(alice.UserId, "unused");
+        var laptop = await DeviceAsync(owner, "laptop");
+        var phone = await DeviceAsync(owner, "phone");
+        var host = await ComputerAsync(owner);
+        using var signer = P256.GenerateSigning();
+        await Devices.PublishGrantsAsync(host, [Paired(host.HostId, laptop, 1, signer)], default);
+        var grant = Paired(host.HostId, phone, 1, signer, Ids.New());
+        string Spelled(string id) => variant == "uppercase" ? id.ToUpperInvariant() : id + " ";
+
+        using var posted = await PostGrantsAsync(alice, laptop.Id, field == "hostId"
+            ? grant with { HostId = Spelled(grant.HostId) }
+            : grant with { DeviceId = Spelled(grant.DeviceId) });
+
+        Assert.Equal(HttpStatusCode.BadRequest, posted.StatusCode);
+        var error = await ErrorAsync(posted);
+        Assert.Equal("bad-grant", error.Code);
+        Assert.Contains($"'{field}'", error.Error);
+        Assert.Equal(1, await GrantCountAsync(host.HostId));
+        Assert.Equal(P256.SigningPublicRaw(signer), await SigningPublicAsync(host.HostId));
     }
 
     [Fact]
@@ -840,7 +947,8 @@ public sealed class DeviceServiceTests(TestDatabase database) : IClassFixture<Te
     private static KeyGrant Malformed(KeyGrant grant, string field, string variant) => (field, variant) switch
     {
         ("epoch", _) => grant with { Epoch = 0 },
-        ("ephemeralPublic", _) => grant with { EphemeralPublic = B64.Url(new byte[64]) },
+        ("ephemeralPublic", "short") => grant with { EphemeralPublic = B64.Url(new byte[64]) },
+        ("ephemeralPublic", _) => grant with { EphemeralPublic = B64.Url(OffCurveKey()) },
         ("nonce", _) => grant with { Nonce = B64.Url(new byte[11]) },
         ("ciphertext", _) => grant with { Ciphertext = B64.Url(new byte[47]) },
         ("mac", "signature-length") => grant with { Mac = B64.Url(new byte[64]) },
@@ -849,7 +957,11 @@ public sealed class DeviceServiceTests(TestDatabase database) : IClassFixture<Te
         ("authBy", "trailing-newline") => grant with { AuthBy = "pair:connect\n" },
         ("authBy", _) => grant with { AuthBy = "device" },
         ("hostSigningPublic", "short") => grant with { HostSigningPublic = B64.Url(new byte[64]) },
-        ("hostSigningPublic", _) => grant with { HostSigningPublic = B64.Url(OffCurveKey()) },
+        ("hostSigningPublic", "off-curve") => grant with { HostSigningPublic = B64.Url(OffCurveKey()) },
+
+        // The same key, spelled with the padding base64url leaves out: the bytes match the pin, the text a
+        // device compares does not.
+        ("hostSigningPublic", _) => grant with { HostSigningPublic = grant.HostSigningPublic + "=" },
         ("hostId", _) => grant with { HostId = null! },
         ("deviceId", _) => grant with { DeviceId = null! },
         _ => throw new ArgumentException($"No such malformation: {field}/{variant}.")

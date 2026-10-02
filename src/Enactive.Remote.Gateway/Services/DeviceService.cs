@@ -246,7 +246,7 @@ public sealed class DeviceService(Database db, Limits limits, TimeProvider clock
                 [host.HostId] = await LockComputerAsync(connection, transaction, host)
             };
 
-            await StoreAsync(connection, transaction, host.OwnerId, batch, pins);
+            await StoreAsync(connection, transaction, host.OwnerId, batch, pins, fromComputer: true);
 
             if (batch.Count > 0)
             {
@@ -265,9 +265,10 @@ public sealed class DeviceService(Database db, Limits limits, TimeProvider clock
     /// pairing and the rotation grants are the computer's to make, and a browser sending one is mistaken or
     /// passing itself off as the computer. Every computer named must be the person's and not revoked.
     ///
-    /// <para>The computer's newest epoch is not moved from here. A browser can only pass on keys the
-    /// computer made, so an epoch above the computer's newest says nothing true about it, and the panel
-    /// would show every device a key it can never be given.</para>
+    /// <para>A browser passes on keys the computer made, and nothing more: the computer must have granted
+    /// a key already, the grant must carry the signing key the computer's own grants pinned, its epoch may
+    /// not be newer than the computer's newest, and it never replaces a grant already stored. The computer's
+    /// newest epoch is not moved from here.</para>
     /// </summary>
     public Task PublishGrantsAsync(DeviceAccess device, IReadOnlyList<KeyGrant>? grants, CancellationToken ct)
     {
@@ -276,6 +277,7 @@ public sealed class DeviceService(Database db, Limits limits, TimeProvider clock
         return db.InTransactionAsync(async (connection, transaction) =>
         {
             var pins = new Dictionary<string, byte[]?>(StringComparer.Ordinal);
+            var newest = new Dictionary<string, uint>(StringComparer.Ordinal);
 
             // In id order, so two calls naming the same computers lock them in the same order.
             foreach (var hostId in batch.Select(item => item.Grant.HostId).Distinct(StringComparer.Ordinal)
@@ -293,10 +295,32 @@ public sealed class DeviceService(Database db, Limits limits, TimeProvider clock
                     throw GatewayFault.NotFound("That computer has been revoked.");
                 }
 
+                // Only the computer pins its signing key. When a browser's grant could be the first stored, it
+                // pinned whatever key it carried, and any signed-in session - one with no trusted device at
+                // all - could register a computer's key before the computer did; the computer's own pairing
+                // grant was then refused as carrying another key, for good.
+                if (computer.Value.SigningPublic is null)
+                {
+                    throw BadGrant(batch.FindIndex(item => item.Grant.HostId == hostId), "hostId",
+                        "names a computer that has not granted any key yet: its first grant is its own to make.");
+                }
+
                 pins[hostId] = computer.Value.SigningPublic;
+                newest[hostId] = computer.Value.KeyEpoch;
             }
 
-            await StoreAsync(connection, transaction, device.OwnerId, batch, pins);
+            // A key newer than the computer's newest is not one the computer made, and a device given it would
+            // hold a key nothing is sealed with.
+            for (var i = 0; i < batch.Count; i++)
+            {
+                if (batch[i].Grant.Epoch > newest[batch[i].Grant.HostId])
+                {
+                    throw BadGrant(i, "epoch",
+                        $"is newer than the newest key this computer has granted ({newest[batch[i].Grant.HostId]}).");
+                }
+            }
+
+            await StoreAsync(connection, transaction, device.OwnerId, batch, pins, fromComputer: false);
         }, ct);
     }
 
@@ -335,8 +359,9 @@ public sealed class DeviceService(Database db, Limits limits, TimeProvider clock
     /// computer's - but the computer's row is locked for update, not shared. A publish writes that row (its
     /// newest epoch, and its signing key at the first grant), and a shared lock would have to become an
     /// exclusive one: two publishes of one computer, each holding the row shared and each waiting for the
-    /// other to let go of it, deadlocked. Exclusive from the start they queue, and a browser's grant for the
-    /// same computer queues with them, so two first grants cannot both pin a key.
+    /// other to let go of it, deadlocked. Exclusive from the start they queue, so two first grants cannot
+    /// both pin a key, and a browser's grant for the same computer queues with them and reads the pin and
+    /// the newest epoch they left.
     /// </summary>
     private static async Task<byte[]?> LockComputerAsync(
         MySqlConnection connection, MySqlTransaction transaction, HostAccess host)
@@ -372,27 +397,30 @@ public sealed class DeviceService(Database db, Limits limits, TimeProvider clock
     /// key Bob naming Alice's computer locked her row before the owner filter refused it (see
     /// <see cref="UserService"/>).
     /// </summary>
-    private static Task<(bool Revoked, byte[]? SigningPublic)?> LockHostRowAsync(
+    private static Task<(bool Revoked, byte[]? SigningPublic, uint KeyEpoch)?> LockHostRowAsync(
         MySqlConnection connection, MySqlTransaction transaction, string ownerId, string hostId)
         => connection.ReadOneAsync(transaction,
             """
-            SELECT revoked, signing_public FROM hosts FORCE INDEX (ux_hosts_owner)
+            SELECT revoked, signing_public, key_epoch FROM hosts FORCE INDEX (ux_hosts_owner)
             WHERE owner_id = @owner AND id = @host
             FOR UPDATE
             """,
-            reader => ((bool Revoked, byte[]? SigningPublic)?)(
+            reader => ((bool Revoked, byte[]? SigningPublic, uint KeyEpoch)?)(
                 reader.GetBoolean("revoked"),
-                reader.IsDBNull(reader.GetOrdinal("signing_public")) ? null : (byte[])reader["signing_public"]),
+                reader.IsDBNull(reader.GetOrdinal("signing_public")) ? null : (byte[])reader["signing_public"],
+                reader.GetUInt32("key_epoch")),
             ("@owner", ownerId), ("@host", hostId));
 
     /// <summary>
     /// Every device named is the owner's and not removed, the computer's signing key is pinned or matched,
-    /// and the grants are written - a grant sent again for the same computer, device and epoch replacing the
-    /// earlier one, because a rotation can be re-sent and the last one sent is what the device needs.
+    /// and the grants are written. The computer's grant sent again for the same computer, device and epoch
+    /// replaces the earlier one, because a rotation can be re-sent and the last one sent is what the device
+    /// needs. A browser's never replaces one: it would put a grant of the browser's making where the
+    /// computer's was, and a device that cannot open it loses the key it had been given.
     /// </summary>
     private async Task StoreAsync(
         MySqlConnection connection, MySqlTransaction transaction, string ownerId, List<CheckedGrant> batch,
-        Dictionary<string, byte[]?> pins)
+        Dictionary<string, byte[]?> pins, bool fromComputer)
     {
         // Locked for share, in this transaction: a revocation holds the device's row until it commits, so a
         // grant to that device waits for it and then finds it removed. Read without a lock, a grant arriving
@@ -429,10 +457,11 @@ public sealed class DeviceService(Database db, Limits limits, TimeProvider clock
             var (grant, signingPublic) = batch[i];
             var pinned = pins[grant.HostId];
 
-            // The first grant stored for a computer fixes its signing key, and every later one must carry the
-            // same. Devices pin the key at their own first grant and refuse any other, so this changes nothing
-            // they would accept; it only makes a computer or a panel that sends the wrong key find out now,
-            // rather than through a device that silently refuses the grant later.
+            // The computer's first grant fixes its signing key, and every later one must carry the same. Devices
+            // pin the key at their own first grant and refuse any other, so this changes nothing they would
+            // accept; it only makes a computer or a panel that sends the wrong key find out now, rather than
+            // through a device that silently refuses the grant later. Only the computer's own path can find
+            // nothing pinned: the browser's refuses a computer that has granted no key before it gets here.
             if (pinned is null)
             {
                 await connection.ExecuteAsync(transaction,
@@ -444,6 +473,20 @@ public sealed class DeviceService(Database db, Limits limits, TimeProvider clock
             {
                 throw BadGrant(i, "hostSigningPublic",
                     "is not the signing key this computer's earlier grants carry, and devices refuse any other.");
+            }
+
+            // The computer's row is locked for update, and every grant of that computer is written under that
+            // lock, so nothing can insert this grant between the check and the insert.
+            if (!fromComputer && await connection.ExistsAsync(transaction,
+                    """
+                    SELECT 1 FROM grants
+                    WHERE owner_id = @owner AND host_id = @host AND device_id = @device AND epoch = @epoch
+                    """,
+                    ("@owner", ownerId), ("@host", grant.HostId), ("@device", grant.DeviceId), ("@epoch", grant.Epoch)))
+            {
+                throw GatewayFault.Conflict(
+                    $"Grant {i + 1}: that device already holds a grant of this computer's key for epoch {grant.Epoch}, "
+                    + "and a browser does not replace one.");
             }
 
             await connection.ExecuteAsync(transaction,
@@ -490,7 +533,19 @@ public sealed class DeviceService(Database db, Limits limits, TimeProvider clock
                 throw BadGrant(i, "epoch", "must be 1 or more: a computer's first key is epoch 1.");
             }
 
-            RequireBytes(i, grant.EphemeralPublic, PointLength, "ephemeralPublic");
+            var ephemeral = RequireBytes(i, grant.EphemeralPublic, PointLength, "ephemeralPublic");
+
+            // A point on the curve, as the signing key below and every device key are: no key can be agreed
+            // with one that is not, and the device the grant was meant for would never open it.
+            try
+            {
+                using var imported = P256.ImportPublic(ephemeral);
+            }
+            catch (CryptographicException)
+            {
+                throw BadGrant(i, "ephemeralPublic", "must be an uncompressed P-256 public key.");
+            }
+
             RequireBytes(i, grant.Nonce, NonceLength, "nonce");
             RequireBytes(i, grant.Ciphertext, WrappedKeyLength, "ciphertext");
 
@@ -557,6 +612,12 @@ public sealed class DeviceService(Database db, Limits limits, TimeProvider clock
         }
     }
 
+    /// <summary>
+    /// The bytes of a field, of the given length, in the one spelling <see cref="B64.Url"/> writes. The
+    /// decoder also takes other spellings of the same bytes - with padding, for one - and the gateway compares
+    /// the signing key as bytes where a device compares it as text: a second spelling of the pinned key passed
+    /// here and was then refused by every device it reached.
+    /// </summary>
     private static byte[] RequireBytes(int index, string? text, int length, string field)
     {
         byte[] bytes;
@@ -570,7 +631,7 @@ public sealed class DeviceService(Database db, Limits limits, TimeProvider clock
             bytes = [];
         }
 
-        return bytes.Length == length
+        return bytes.Length == length && string.Equals(B64.Url(bytes), text, StringComparison.Ordinal)
             ? bytes
             : throw BadGrant(index, field, $"must be {length} bytes, as base64url text.");
     }

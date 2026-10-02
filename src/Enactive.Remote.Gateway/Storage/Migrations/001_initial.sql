@@ -81,15 +81,15 @@ CREATE TABLE IF NOT EXISTS devices (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE IF NOT EXISTS hosts (
-  id           CHAR(32)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
-  owner_id     CHAR(32)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
-  label        VARCHAR(80)  NOT NULL,                                   -- plaintext by design (spec §6)
-  token_hash   CHAR(64)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
-  key_epoch    INT UNSIGNED NOT NULL DEFAULT 0,
-  signing_public VARBINARY(65) NULL,                                  -- the computer's signing key, pinned by its first grant
-  revoked      TINYINT(1)   NOT NULL DEFAULT 0,
-  last_seen_at DATETIME(3)  NULL,
-  created_at   DATETIME(3)  NOT NULL,
+  id             CHAR(32)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  owner_id       CHAR(32)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  label          VARCHAR(80)  NOT NULL,                                   -- plaintext by design (spec §6)
+  token_hash     CHAR(64)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  key_epoch      INT UNSIGNED NOT NULL DEFAULT 0,
+  signing_public VARBINARY(65) NULL,                                      -- the computer's signing key, pinned by its first grant
+  revoked        TINYINT(1)   NOT NULL DEFAULT 0,
+  last_seen_at   DATETIME(3)  NULL,
+  created_at     DATETIME(3)  NOT NULL,
   PRIMARY KEY (id),
   UNIQUE KEY ux_hosts_token (token_hash),
   UNIQUE KEY ux_hosts_owner (owner_id, id),
