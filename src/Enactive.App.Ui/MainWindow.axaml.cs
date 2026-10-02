@@ -371,8 +371,17 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             this,
             RemoteDatabasePath());
 
-        _remote.Changed += () => Dispatcher.UIThread.Post(() =>
-            _log.Info(LogSource.System, "Remote access: " + _remote!.Status));
+        // The service this handler belongs to, not whatever _remote is when the post runs. A restart sets _remote
+        // to null and then disposes the old service, and a status the old one raised while stopping was posted
+        // here and read _remote!.Status - null when remote access had been switched off, and the next service's
+        // status otherwise. So only the service still in use is logged; one that has been replaced is ignored.
+        // Not under test: the handler is the window's, and nothing smaller than the window runs it.
+        var service = _remote;
+        service.Changed += () => Dispatcher.UIThread.Post(() =>
+        {
+            if (ReferenceEquals(service, _remote))
+                _log.Info(LogSource.System, "Remote access: " + service.Status);
+        });
 
         // Said in the log as well as in the window that made the invitation: that window may have been
         // closed, and a device that now holds every key of this computer must be traceable to a moment.
