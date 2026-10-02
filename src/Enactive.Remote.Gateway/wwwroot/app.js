@@ -35,6 +35,9 @@ import {
   readableHosts, behindHosts, behindWarning, answerEnrollment, newAnswerProgress, createInviteWatch, inviteQrSvg,
   INVITE_LIFETIME_MS, SWAPPED_KEY
 } from "./js/invite.js";
+import {
+  revokeDevice, forgetThisDevice, forgottenSentence, rotationWatch, storeGone, revocationWarning, ROTATED
+} from "./js/devices.js";
 
 const POLL_MS = 3000;
 
@@ -327,6 +330,7 @@ async function render() {
   renderApprovals();
   renderInbox();
   renderHosts();
+  renderDevices();
   renderCounts();
   refreshOpenRun();
   // Taken as the lists are drawn, from the state they were drawn from (see mark-read).
@@ -827,13 +831,18 @@ function setLive(live) {
 }
 
 function showView(name) {
-  ["runs", "approvals", "inbox", "hosts"].forEach((view) => {
+  ["runs", "approvals", "inbox", "hosts", "devices"].forEach((view) => {
     $(`view-${view}`).hidden = view !== name;
   });
 
   document.querySelectorAll(".tab").forEach((tab) => {
     tab.classList.toggle("is-current", tab.dataset.view === name);
   });
+
+  // The devices are not in the snapshot, so they are asked for when they are looked at.
+  if (name === "devices") {
+    reloadDevices();
+  }
 }
 
 // ── new task ─────────────────────────────────────────────────────────────
@@ -1078,7 +1087,13 @@ async function catchUpKeysNow() {
       await render();
     }
   } catch {
-    // Not reaching the gateway is what the poll already shows, and the next poll asks again.
+    // Not reaching the gateway is what the poll already shows, and the next poll asks again. A key store that
+    // can no longer be read is something else: "Forget this device" in another tab of this browser deleted it
+    // (devices.js storeGone), and this tab went on polling with everything drawn unreadable and no word of why.
+    if (isCurrent(started) && await storeGone(store) && isCurrent(started)) {
+      resetSession();
+      showDeviceRemoved();
+    }
   }
 }
 
@@ -1470,6 +1485,7 @@ async function checkInvite(invite, watch) {
   $("invite-status").textContent = `Added ${enrollment.label}.`;
   $("invite-error").textContent = result.notEndorsed.map(({ reason }) => reason).join(" ");
   toast(`Added ${enrollment.label}`);
+  reloadDevices();
 }
 
 $("add-device").addEventListener("click", openInviteDialog);
@@ -1493,6 +1509,197 @@ $("invite-dialog").addEventListener("close", () => {
   stopInviting();
   forgetInviteLink();
 });
+
+// ── devices ──────────────────────────────────────────────────────────────
+
+/** The account's devices as the gateway last listed them (DeviceInfo); null until the Devices view is opened. */
+let devices = null;
+
+/** This browser's device id, as its key store names it, read with the list: the device called "This device". */
+let ownDevice = null;
+
+/**
+ * Each removal made from this tab, by device id: revokeDevice's answer, so the list can say of each computer
+ * whether it was told and whether it has moved to a new key since. Only this tab's: the gateway does not keep
+ * which computers were told, and a device removed elsewhere shows as "Removed" alone.
+ */
+const removals = new Map();
+
+const loadDevices = singleFlight(loadDevicesNow, generation);
+
+async function loadDevicesNow() {
+  const started = generation();
+  const store = keystore;
+
+  try {
+    const [list, own] = await Promise.all([
+      get("/api/devices"),
+      // A store that cannot be read names no device as this one; the list is still the account's.
+      store ? store.device().then((device) => device?.id ?? null, () => null) : null
+    ]);
+
+    if (!isCurrent(started)) {
+      return;
+    }
+
+    devices = list;
+    ownDevice = own;
+  } catch (error) {
+    if (isCurrent(started) && !(error instanceof Stale)) {
+      toast(error.message, true);
+    }
+
+    return;
+  }
+
+  renderDevices();
+}
+
+/** Asks for the list again. A load already running started before the change and may not show it. */
+async function reloadDevices() {
+  await loadDevices.pending;
+  await loadDevices();
+}
+
+function renderDevices() {
+  const cards = (devices ?? []).map((device) => {
+    const card = node("div", device.revoked ? "card is-removed" : "card");
+    const own = device.id === ownDevice;
+
+    const head = node("div", "card-head");
+    head.append(node("h3", null, device.label));
+
+    if (own) {
+      head.append(node("span", "status is-done", "This device"));
+    } else if (device.revoked) {
+      head.append(node("span", "status", "Removed"));
+    }
+
+    card.append(head);
+    card.append(node("p", "meta", `Added ${new Date(device.createdAt).toLocaleDateString()} · `
+      + (device.lastSeenAt ? `last seen ${new Date(device.lastSeenAt).toLocaleString()}` : "not seen yet")));
+
+    const removal = removals.get(device.id);
+
+    if (removal) {
+      card.append(...removalLines(removal));
+    }
+
+    const actions = node("div", "actions");
+
+    if (own && !device.revoked) {
+      actions.append(button("Forget this device", "danger", forgetDevice));
+    } else if (!device.revoked) {
+      actions.append(button("Remove", "danger", (clicked) => removeDevice(clicked, device)));
+    } else if (removal?.failed.length > 0) {
+      // Removed at the gateway already, so there is no Remove to press again; the computers that were not
+      // reached are sent the same commands as before.
+      actions.append(button("Tell the other computers again", "secondary", (clicked) => act(clicked, () =>
+        tellRemoval(device.id, state.hosts.filter((host) => removal.failed.some((one) => one.hostId === host.id)),
+          removal))));
+    }
+
+    if (actions.children.length > 0) {
+      card.append(actions);
+    }
+
+    return card;
+  });
+
+  fill($("device-list"), cards, null);
+}
+
+/**
+ * One line per computer of a removal: told and waiting for its new key, moved to it, or not moved within the
+ * watch (devices.js rotationWatch) - read against the snapshot on screen, so each poll moves it on - then the
+ * computers this device cannot tell, then those it did not reach.
+ */
+function removalLines(removal) {
+  return [
+    ...rotationWatch(removal.sentTo, state.hosts, Date.now()).map(({ hostId, status }) =>
+      node("p", status === ROTATED ? "meta" : "muted", `${hostLabel(hostId)}: ${status}`)),
+    ...removal.skipped.map(({ reason }) => node("p", "muted", reason)),
+    ...removal.failed.map(({ reason }) => node("p", "error", reason))
+  ];
+}
+
+function button(text, className, onClick) {
+  const made = node("button", className, text);
+  made.type = "button";
+  made.addEventListener("click", () => onClick(made));
+  return made;
+}
+
+/** Removes another device, once the person has read what that does and does not do. */
+function removeDevice(clicked, device) {
+  if (confirm(`${revocationWarning(device.label)} Continue?`)) {
+    act(clicked, () => tellRemoval(device.id, state.hosts, null));
+  }
+}
+
+/**
+ * Removes device `removed` at the gateway and tells each computer of `hosts` (devices.js revokeDevice), and keeps
+ * what each was told, added to `before`: the removal this one tries again for the computers it did not reach.
+ */
+async function tellRemoval(removed, hosts, before) {
+  const started = generation();
+  const result = await revokeDevice({ api, writer, sends, hosts, keystore, deviceId: removed });
+
+  if (!isCurrent(started)) {
+    return;
+  }
+
+  removals.set(removed, before
+    ? {
+      sentTo: [...before.sentTo, ...result.sentTo],
+      skipped: [...before.skipped, ...result.skipped],
+      failed: result.failed
+    }
+    : result);
+  await reloadDevices();
+}
+
+function forgetDevice(clicked) {
+  if (confirm("Forget this device? It is removed from your account and from every computer it can tell, its keys "
+    + "are deleted from this browser and it is signed out. It will not read anything new. Continue?")) {
+    act(clicked, forgetNow);
+  }
+}
+
+async function forgetNow() {
+  const store = keystore;
+
+  if (!store) {
+    throw new Error("This browser keeps no keys for this account, so it has nothing to forget.");
+  }
+
+  // From here the page makes no call as this device. Once the gateway has removed it, such a call - the grants a
+  // poll takes - is refused, and the page reset and closed the key store under the forgetting: the keys stayed
+  // on disk. Left so if the forgetting stops short: the device is on its way out, and a reload starts afresh.
+  stopPolling();
+  deviceId = null;
+  await catchUpKeys.pending;
+
+  try {
+    await forgetThisDevice({
+      api, writer, sends, keystore: store, hosts: state.hosts,
+      signOut: (result) => signOut("/api/logout", forgottenSentence(result))
+    });
+  } catch (error) {
+    if (account && document.visibilityState === "visible") {
+      startPolling();
+    }
+
+    throw error;
+  }
+
+  // The keys are gone, but the sign-out was refused and said so: nothing here can read or send any more, and the
+  // view put up now signs out.
+  if (account) {
+    resetSession();
+    showDeviceRemoved();
+  }
+}
 
 // ── joining by an invitation ─────────────────────────────────────────────
 
@@ -1680,6 +1887,10 @@ function resetSession() {
   // Drafts too: a draft is the last person's task, and nothing of it is the next one's to resend. Commands
   // stay (see `sends`): each names a task, run or approval only its own account can act on.
   sends.forgetAll("draft:");
+  // The last account's devices and what was told of their removal: labels of theirs, drawn for nobody else.
+  devices = null;
+  ownDevice = null;
+  removals.clear();
   content = () => undefined;
   drawnCursor = null;
   grantSchedule = createGrantSchedule();
@@ -1840,10 +2051,11 @@ async function offerDevelopmentSignIn() {
 }
 
 /**
- * Signs out here, or everywhere, and only then says so. A sign-in page shown while the gateway still
- * holds the session would claim something untrue: the next reload would open the panel again.
+ * Signs out here, or everywhere, and only then says so - `outcome` on the sign-in page, when there is more to
+ * say. A sign-in page shown while the gateway still holds the session would claim something untrue: the next
+ * reload would open the panel again.
  */
-async function signOut(path) {
+async function signOut(path, outcome) {
   // Before the request, not after it. A poll in flight that is answered 401 once the gateway has ended
   // the session would run the 401's reset, which aborts this very request - and the sign-out would end
   // in "Not signed out" over the sign-in page. Abandoned now, its answer is dropped unread.
@@ -1870,7 +2082,7 @@ async function signOut(path) {
   }
 
   resetSession();
-  showSignedOut();
+  showSignedOut(outcome);
 }
 
 /**

@@ -64,7 +64,6 @@
     <details id="account" class="account">
       <summary id="account-name" class="account-name" title="Account"></summary>
       <div class="account-menu">
-        <button id="add-device" class="secondary" type="button">Add a device</button>
         <button id="sign-out" class="secondary" type="button">Sign out</button>
         <button id="sign-out-all" class="secondary" type="button">Sign out everywhere</button>
       </div>
@@ -83,6 +82,7 @@
     <button class="tab" type="button" data-view="approvals">Permissions<span id="count-approvals" class="count"></span></button>
     <button class="tab" type="button" data-view="inbox">Inbox<span id="count-inbox" class="count"></span></button>
     <button class="tab" type="button" data-view="hosts">Computers</button>
+    <button class="tab" type="button" data-view="devices">Devices</button>
   </nav>
 
   <main>
@@ -124,6 +124,17 @@
       <p class="note">A computer publishes the workspaces it offers when it connects. This page
         never learns where any of them are on disk.</p>
       <div id="host-list" class="list"></div>
+    </section>
+
+    <!-- Devices ------------------------------------------------------------->
+    <section id="view-devices" class="view" hidden>
+      <div class="view-head">
+        <h2>Devices</h2>
+        <button id="add-device" class="secondary" type="button">Add a device</button>
+      </div>
+      <p class="note">The browsers that can read what your computers send. A device you remove can still read
+        what it has already opened; it will not read anything new, once each computer has changed its key.</p>
+      <div id="device-list" class="list"></div>
     </section>
   </main>
 </div>
