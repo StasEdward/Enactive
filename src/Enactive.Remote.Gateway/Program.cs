@@ -255,13 +255,36 @@ if (behindTunnel)
     app.UseForwardedHeaders();
 }
 
+// The security headers, on every response the gateway gives: set here, before anything below can
+// answer, so a redirect, a refusal or a 404 carries them as the page does. A header added only to the
+// page is missing from the one response nobody thought of, and that is the one somebody frames or sniffs.
 app.Use(async (context, next) =>
 {
     context.Response.Headers["X-Content-Type-Options"] = "nosniff";
+
+    // No address of this site leaves it in a Referer. An invitation is /pair#..., and the fragment is
+    // never sent - but the path is, and even the path tells another site that its visitor was just
+    // handed a device invitation, and from where.
     context.Response.Headers["Referrer-Policy"] = "no-referrer";
+
+    // The panel uses none of what these name: no plugin, no worker, no web app manifest. A page that
+    // holds keys allows nothing it does not use, so a script slipped into it that tries to load a plugin
+    // or start a worker - code running beside the page rather than in it - is refused rather than run.
     context.Response.Headers["Content-Security-Policy"] =
         "default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self'; "
-        + "connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
+        + "connect-src 'self'; object-src 'none'; worker-src 'none'; manifest-src 'none'; "
+        + "frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
+
+    // Nor does it need a camera, a microphone, a location or a payment. Refused for the page and for
+    // anything it might embed, so no script it was tricked into running can ask a person for them.
+    context.Response.Headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=(), payment=()";
+
+    // A window another site opened, or opened from here, cannot reach into the panel through
+    // window.opener; and no other site can load these responses into its own page as an image or a
+    // script. Same-origin is safe for sign-in: the redirect to the provider and its callback are
+    // top-level navigations, which neither header restricts.
+    context.Response.Headers["Cross-Origin-Opener-Policy"] = "same-origin";
+    context.Response.Headers["Cross-Origin-Resource-Policy"] = "same-origin";
 
     if (context.Request.Path.StartsWithSegments("/api"))
     {
@@ -313,6 +336,18 @@ var panel = PanelAssets.Load(app.Environment.WebRootPath!);
 
 app.Use(async (context, next) =>
 {
+    // The published list of what the panel is: every script and stylesheet with its SHA-256, so anyone can
+    // compare what this server sends with what a release says it sent. Revalidated always, like the page:
+    // a cached list compared against a newer release reads as an altered server when nothing was altered.
+    if (HttpMethods.IsGet(context.Request.Method) && context.Request.Path == "/.well-known/enactive-panel.json")
+    {
+        context.Response.Headers.CacheControl = "no-cache";
+        context.Response.ContentType = "application/json; charset=utf-8";
+
+        await context.Response.WriteAsync(panel.Manifest, context.RequestAborted);
+        return;
+    }
+
     // /pair too: an invitation link is /pair#..., and the new device that opens it needs the panel, which reads
     // the invitation from the fragment. Without it the link met a 404.
     if (!HttpMethods.IsGet(context.Request.Method)

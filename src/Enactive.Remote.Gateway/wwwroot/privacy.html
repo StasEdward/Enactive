@@ -4,8 +4,163 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Enactive · Privacy</title>
+  <meta name="theme-color" content="#101216">
+  <link rel="icon" href="/brand/mark-loop.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/brand/brand.css">
+  <link rel="stylesheet" href="/fonts.css">
+  <link rel="stylesheet" href="/app.css">
 </head>
 <body>
-<p>Privacy — text to be published before sign-up opens.</p>
+<!-- A draft. The operator reviews and approves this text before sign-up opens; until then the banner
+     stays, and it is removed only together with the approval. -->
+<main class="policy">
+  <p class="draft-banner" role="note"><strong>DRAFT — not yet approved by the operator.</strong>
+    This text may still change before the service opens to sign-up.</p>
+
+  <p class="home"><a href="/">← Enactive Remote</a></p>
+
+  <h1>Privacy</h1>
+
+  <p>Enactive Remote is a window onto your own computer: from a browser you start tasks there, follow
+    them, and answer the questions it asks. Your computer does the work. This service carries the
+    messages between your computer and your browsers, and keeps them so a browser that was away can
+    catch up.</p>
+
+  <p>What you write and what your computer reports back is encrypted on your computer and on your
+    browsers before it reaches the service. The service stores it and passes it on, but cannot read it.
+    This page says what it can read, what it cannot, how long it keeps things, and how to take your
+    data out or delete it.</p>
+
+  <h2>What the service cannot read</h2>
+  <ul>
+    <li>The titles and the text of your tasks.</li>
+    <li>What a run reports while it works, and its summary when it ends.</li>
+    <li>The permission requests your computer sends you: which tool, with what arguments, in which
+      folder, and the full text of the question.</li>
+    <li>The details of your notifications.</li>
+    <li>The names of your workspaces.</li>
+  </ul>
+  <p>All of this is stored only as encrypted data. The keys that open it are made on your computer
+    and on the browsers you have added, and they never reach the service. A leak of the database, of
+    a backup or of the server's disk shows the encrypted data and nothing more. The same holds for
+    anyone who runs the service: they can look at the stored data, and it is unreadable to them.</p>
+
+  <h2>What the service can see</h2>
+  <p>To do its job the service has to know who you are, which devices are yours, and what to deliver
+    where. It keeps:</p>
+  <ul>
+    <li><strong>Your account and how you sign in:</strong> the name shown for your account and, for
+      each way you sign in, the provider (GitHub or Google), the provider's id for your account, and
+      the display name the provider gives it.</li>
+    <li><strong>Your sign-in sessions:</strong> when each began, when it ends, and whether it was
+      ended early.</li>
+    <li><strong>Your browsers:</strong> each one's public key, the name you gave it, when it was
+      added, when it was last seen, and when it was removed.</li>
+    <li><strong>Your computers:</strong> the name you give each one (this name is not encrypted, and
+      the panel says so where you type it), a fingerprint of its connection token (not the token
+      itself), when it was last seen, and which generation of its keys it is on.</li>
+    <li><strong>Your workspaces:</strong> their ids, not their names.</li>
+    <li><strong>Your tasks, runs, commands, permission requests, progress messages and
+      notifications:</strong> their ids, kinds, statuses and times, and how large their encrypted
+      contents are.</li>
+    <li><strong>Invitations to add a browser:</strong> when each was made, when it expires, and
+      whether it was used.</li>
+    <li><strong>Keys sent to your browsers:</strong> encrypted, so that only the browser they are
+      for can open them.</li>
+    <li><strong>Your security log:</strong> see below.</li>
+  </ul>
+  <p>Put plainly: the service knows that you use it, how many computers and browsers you have, when
+    you run tasks and how many, whether they finished, failed or were cancelled, how many permission
+    requests they raised, how much encrypted data they produced, and the names you give your
+    computers.</p>
+
+  <h2>What we do not keep</h2>
+  <ul>
+    <li><strong>No IP addresses.</strong> None is stored with your account or in the security log.
+      Limits on how often a request can be made use the address for a few minutes, in memory only,
+      and it is never written down.</li>
+    <li><strong>No email address and no password.</strong> The service does not ask GitHub or Google
+      for your email address, and it has no password of its own.</li>
+    <li><strong>No provider tokens.</strong> GitHub or Google confirms who you are once, at sign-in;
+      the service keeps no access to your account there, and asks for no access to your repositories,
+      mail or files.</li>
+    <li><strong>No tracking.</strong> No analytics, no advertising, and nothing loaded from another
+      site. The cookies are the ones signing in needs: one for your session, one that protects the
+      forms you send, and short-lived ones during sign-in itself.</li>
+  </ul>
+
+  <h2>What this design cannot protect against</h2>
+  <ul>
+    <li><strong>Altered code.</strong> The panel you use in a browser is code this service sends.
+      An operator who sent altered code — or someone who had taken over the server — could take your
+      keys from the browser. No web page can prevent this. What the service does is make an
+      alteration visible: it publishes the fingerprint (SHA-256) of every script and stylesheet it
+      serves at <a href="/.well-known/enactive-panel.json"><code>/.well-known/enactive-panel.json</code></a>,
+      and each release lists the same fingerprints, so anyone can compare what was served with what
+      was released.</li>
+    <li><strong>What the service can see,</strong> listed above. It is not encrypted, because the
+      service needs it to deliver anything at all.</li>
+    <li><strong>A compromised computer or browser.</strong> Whatever can read your screen or your
+      browser's storage can read what you read there. Remove a browser you no longer trust from the
+      panel; adding a browser again from your computer does not depend on any other browser.</li>
+  </ul>
+  <p>If someone takes over your GitHub or Google account, they can sign in and see what the service
+    sees. They cannot read your tasks or send anything to your computer: that needs a key held only
+    by your computer and the browsers it trusts.</p>
+
+  <h2>Signing in</h2>
+  <p>You sign in with GitHub or Google. From GitHub the service keeps your account's number and your
+    username; from Google, your account's id and your profile name. Each provider handles its own
+    sign-in under its own privacy policy.</p>
+
+  <h2>Who else carries your traffic</h2>
+  <p>The service is reached through Cloudflare, which carries the traffic between your browser and the
+    server. Like any network carrier it sees your IP address and when you connect; of your tasks it
+    sees only the encrypted data.</p>
+
+  <h2>Sessions</h2>
+  <p>A sign-in lasts at most 8 hours, after which you sign in again. You can sign out of one browser,
+    or of every session at once.</p>
+
+  <h2>Your security log</h2>
+  <p>The service keeps a log of what happened to your account: sign-ins (which provider, not from
+    where), browsers added and removed, computers added and removed, the operator disabling or
+    enabling the account, and signing out everywhere. Only you can read your log, in the panel. It
+    holds no secrets, no encrypted contents and no addresses, and each entry is kept for 90 days.</p>
+
+  <h2>How long things are kept</h2>
+  <ul>
+    <li><strong>Progress messages and notifications</strong> are deleted after a number of days the
+      operator sets. The panel shows the current number, and says when older history was
+      deleted.</li>
+    <li><strong>The security log</strong> is kept for 90 days.</li>
+    <li><strong>Everything else</strong> — your account, browsers, computers, tasks and runs — is kept
+      while your account exists.</li>
+  </ul>
+
+  <h2>Backups</h2>
+  <p>The database is backed up. Backups are kept for 30 days and then removed. Like the database, a
+    backup holds your contents only in encrypted form.</p>
+
+  <h2>Deleting your account</h2>
+  <p>You can delete your account from the panel. Everything stored for it — computers, browsers,
+    tasks, history and the security log — is deleted at once. Copies of it in backups are gone when
+    those backups are removed, within 30 days. Your computer is told the account no longer exists,
+    and stops.</p>
+
+  <h2>Taking your data out</h2>
+  <p>"Download my data" in the panel gives you everything the service stores for your account. Your
+    browser opens what it has keys for and writes a file you keep; the readable text is put together
+    in your browser and is never sent anywhere.</p>
+
+  <h2>Changes to this page</h2>
+  <p>Changes are announced on this page before they take effect.</p>
+
+  <h2>Contact</h2>
+  <!-- OPERATOR CONTACT -->
+  <p>Contact details will be published here.</p>
+
+  <p class="home"><a href="/">← Back to Enactive Remote</a> · <a href="/terms.html">Terms</a></p>
+</main>
 </body>
 </html>

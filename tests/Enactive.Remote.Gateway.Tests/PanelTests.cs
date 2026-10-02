@@ -467,6 +467,38 @@ public sealed class PanelTests(TestDatabase database) : IClassFixture<TestDataba
         Assert.Contains($"href=\"{path}\"", await _stranger.Http.GetStringAsync("/"), StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// Both texts are drafts until the operator approves them, and say so at the top: they are legal
+    /// documents, and a page that read as final before anyone had agreed to it would be promising what
+    /// nobody had decided. Removing the banner is part of approving the text, and so is changing this
+    /// test. Neither page runs a script - a page about what the service can see should not itself be
+    /// code - and each leads back to the panel.
+    /// </summary>
+    [Theory]
+    [InlineData("/privacy.html", "Enactive · Privacy")]
+    [InlineData("/terms.html", "Enactive · Terms")]
+    public async Task The_policy_pages_are_drafts_without_scripts(string path, string title)
+    {
+        var page = await _stranger.Http.GetStringAsync(path);
+
+        Assert.Contains($"<title>{title}</title>", page, StringComparison.Ordinal);
+        Assert.Contains("DRAFT — not yet approved by the operator", page, StringComparison.Ordinal);
+        Assert.Contains("href=\"/\"", page, StringComparison.Ordinal);
+        Assert.DoesNotContain("<script", page, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// The privacy notice points at the published list of the panel's files: it is where the notice tells
+    /// a person how to check the one thing encryption in a web page cannot promise.
+    /// </summary>
+    [Fact]
+    public async Task The_privacy_notice_points_at_the_panel_manifest()
+    {
+        var page = await _stranger.Http.GetStringAsync("/privacy.html");
+
+        Assert.Contains("href=\"/.well-known/enactive-panel.json\"", page, StringComparison.Ordinal);
+    }
+
     private static string TaskIdOf(GatewaySnapshot snapshot, string runId)
         => Assert.Single(snapshot.Runs, r => r.Id == runId).TaskId;
 
