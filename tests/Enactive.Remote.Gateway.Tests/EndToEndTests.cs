@@ -1,12 +1,15 @@
 namespace Enactive.Remote.Gateway.Tests;
 
+using System.Net.Http.Json;
 using System.Runtime.CompilerServices;
+using System.Security.Cryptography;
 using Enactive.Core.Context;
 using Enactive.Core.Events;
 using Enactive.Core.History;
 using Enactive.Core.Intents;
 using Enactive.Core.Orchestration;
 using Enactive.Remote.Contracts;
+using Enactive.Remote.Contracts.Crypto;
 using Enactive.Remote.Gateway.Services;
 using Enactive.Remote.Host;
 using Microsoft.AspNetCore.Http.Connections;
@@ -237,13 +240,70 @@ public sealed class EndToEndTests(TestDatabase database) : IClassFixture<TestDat
     /// <summary>
     /// The credential goes in a header. A connection carrying none is refused before any hub method
     /// runs, which is what makes "the identity decides the HostId" true rather than aspirational.
+    ///
+    /// <para>And the Host says so in a sentence. The refusal arrives as a bare 401, which the service
+    /// used to treat as a dropped connection and dial again for ever, with nothing saying why.</para>
     /// </summary>
     [Fact]
     public async Task A_connection_without_a_credential_is_refused()
     {
         await using var anonymous = Connect("not-a-real-token");
 
-        await Assert.ThrowsAnyAsync<Exception>(() => anonymous.StartAsync());
+        var refused = await Assert.ThrowsAsync<GatewayCredentialRefusedException>(() => anonymous.StartAsync());
+
+        Assert.Equal(GatewayCredentialRefusedException.Sentence, refused.Message);
+    }
+
+    // ── connecting with a code ──────────────────────────────────────────────
+
+    /// <summary>
+    /// Spec §5.2 through the real gateway: the browser registers a computer, shows a connection code,
+    /// and the computer that applies it says hello and publishes a grant that browser - and only a
+    /// holder of the code's pairing secret - can verify. Opened here as the browser opens it: with the
+    /// code's pair key, nothing pinned yet, and the signing key it carries being the one to pin.
+    ///
+    /// <para>The key store is the real one, on a file of its own, because the grant is made from what
+    /// it holds: a fixed key standing in for it would prove the grant format and not that the keys the
+    /// computer keeps are the keys it grants.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_connection_code_pairs_the_device_it_names()
+    {
+        // The browser: its device key, registered, then a computer registered and a code made.
+        using var browserKey = P256.Generate();
+        var devicePublic = P256.PublicRaw(browserKey);
+        var deviceId = (await _owner.PostAsync<IdView>("/api/devices", new { publicKey = B64.Url(devicePublic), label = "Laptop" })).Id;
+        var computer = await _owner.PostAsync<DeviceView>("/api/hosts", new { name = "Studio PC" });
+        var text = new ConnectionCode(_gateway.Server.BaseAddress, computer.Id, computer.Token, deviceId, devicePublic,
+            RandomNumberGenerator.GetBytes(32)).Format();
+
+        // The computer: the code as the person pasted it, applied to its own key store.
+        var code = Assert.IsType<ConnectionCode>(Pairing.TryRead(text, out var problem), exactMatch: true);
+        Assert.Equal(string.Empty, problem);
+        using var store = OpenStore();
+        using var keys = new HostKeyStore(store, code.HostId);
+        Pairing.Apply(code, keys);
+
+        await using var host = Connect(code.Token);
+        await host.StartAsync();
+        await host.HelloAsync(RemoteProtocol.Version, CancellationToken.None);
+        await new DeliveryLoop(store, host, new Sealer(keys, TimeProvider.System), keys).TurnAsync([]);
+
+        Assert.Empty(keys.PendingGrants());
+
+        // The browser again: its grants, read with its device header, and opened.
+        using var response = await _owner.SendAsync(HttpMethod.Get, "/api/grants",
+            configure: request => request.Headers.Add(DeviceHeader.Name, deviceId));
+        Assert.True(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync());
+        var held = await response.Content.ReadFromJsonAsync<List<HostGrantsView>>(RemoteJson.Options);
+        var forComputer = Assert.Single(held!, g => g.HostId == computer.Id);
+        var grant = Assert.Single(forComputer.Grants);
+
+        var (key, signing) = Grants.Open(grant, browserKey, code.PairKey, pinnedHostSigningPublic: null);
+
+        Assert.Equal(1u, forComputer.KeyEpoch);
+        Assert.Equal(keys.Current.Secret.ToArray(), key.Secret.ToArray());
+        Assert.Equal(keys.SigningPublic, signing);
     }
 
     // ── plumbing ────────────────────────────────────────────────────────────
@@ -292,6 +352,9 @@ public sealed class EndToEndTests(TestDatabase database) : IClassFixture<TestDat
     private sealed record DeviceView(string Id, string Name, string Token);
 
     private sealed record IdView(string Id);
+
+    /// <summary>What <c>GET /api/grants</c> answers for one computer. Every field, because the wire refuses unknown ones.</summary>
+    private sealed record HostGrantsView(string HostId, uint KeyEpoch, List<KeyGrant> Grants);
 
     /// <summary>An engine that emits what the test says, and remembers the prompt it was given.</summary>
     private sealed class ScriptedEngine(params WorkEvent[] events) : IOrchestrator

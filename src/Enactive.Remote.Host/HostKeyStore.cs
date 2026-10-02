@@ -18,6 +18,20 @@ public sealed record PendingInvite(string Id, byte[] Secret, DateTimeOffset Expi
 public sealed record PendingGrant(string Id, KeyGrant Grant);
 
 /// <summary>
+/// The grants this computer still owes the gateway, as the delivery loop sees them: read, and
+/// discarded once delivered or refused for good. An interface so the loop's handling of a refusal
+/// can be proven without a key store protected for a Windows user.
+/// </summary>
+public interface IGrantOutbox
+{
+    /// <summary>The grants still owed, oldest first.</summary>
+    IReadOnlyList<PendingGrant> PendingGrants();
+
+    /// <summary>Delivered, or no longer wanted.</summary>
+    void DiscardGrant(string id);
+}
+
+/// <summary>
 /// The computer's remote keys could not be read, or are not all there. The service says so and does
 /// not connect; nothing has been replaced.
 /// </summary>
@@ -47,7 +61,7 @@ public sealed class HostKeysUnreadableException(string message) : Exception(mess
 /// a second instance over the same file would rotate from its own idea of the highest epoch and
 /// never see the other's keys. The service makes one at startup and shares it.</para>
 /// </summary>
-public sealed class HostKeyStore : IHostKeys, IDisposable
+public sealed class HostKeyStore : IHostKeys, IGrantOutbox, IDisposable
 {
     /// <summary>What the service tells the person when the keys cannot be read on this account.</summary>
     public const string UnreadableMessage =
@@ -347,6 +361,49 @@ public sealed class HostKeyStore : IHostKeys, IDisposable
         => _store.Locked(connection => Execute(connection, null, "DELETE FROM pending_grants WHERE id = $id", ("$id", id)));
 
     public void Dispose() => _signer.Dispose();
+
+    // ── the identity as a whole ─────────────────────────────────────────────
+
+    /// <summary>
+    /// The tables that make up this computer's remote identity. Listed once, so that clearing the
+    /// identity cannot forget one: a trusted device or a queued grant left behind would be granted the
+    /// NEW identity's keys, by a computer that no longer has any reason to trust it.
+    /// </summary>
+    private static readonly string[] IdentityTables =
+        ["pending_grants", "pending_invites", "trusted_devices", "host_signing", "host_keys"];
+
+    /// <summary>
+    /// Whether remote.db holds any key of this computer's, readable or not. Asked before a key store is
+    /// made, because making one is what creates the keys.
+    /// </summary>
+    public static bool HasKeys(HostStore store) => store.Locked(connection =>
+    {
+        using var statement = connection.CreateCommand();
+        statement.CommandText =
+            "SELECT EXISTS (SELECT 1 FROM host_keys) OR EXISTS (SELECT 1 FROM host_signing)";
+        return Convert.ToInt64(statement.ExecuteScalar(), CultureInfo.InvariantCulture) != 0;
+    });
+
+    /// <summary>
+    /// Forgets this computer's remote identity: every key, every trusted device, every invitation and
+    /// every grant still owed, in one transaction. The next key store made over this file starts again
+    /// at epoch 1 with a new signing key.
+    ///
+    /// <para>Static, because the case it exists for includes keys that cannot be read - and a key
+    /// store cannot be made over those, which is the whole of what <see cref="HostKeysUnreadableException"/>
+    /// says. Nobody may hold a key store over the file while this runs: it would go on sealing with
+    /// keys that are no longer written anywhere.</para>
+    /// </summary>
+    public static void Reset(HostStore store) => store.Locked(connection =>
+    {
+        using var transaction = connection.BeginTransaction();
+        foreach (var table in IdentityTables)
+        {
+            Execute(connection, transaction, $"DELETE FROM {table}");
+        }
+        transaction.Commit();
+        return 0;
+    });
 
     // ── loading ─────────────────────────────────────────────────────────────
 

@@ -26,6 +26,7 @@ using Enactive.Core.Templates;
 using Enactive.Core.Tools;
 using Enactive.Core.Workers;
 using Enactive.Providers;
+using Enactive.Remote.Contracts.Crypto;
 using Enactive.Settings;
 using Enactive.Tools;
 using Enactive.Tools.Mcp;
@@ -222,6 +223,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             new SettingsWindow(_settings, workspaceRoot: WorkspaceRootOrNull(),
                 toolNames: _toolRegistry.Definitions.Select(d => d.Name).ToArray(),
                 remoteCheck: CheckRemoteAsync,
+                remoteConnect: ConnectRemoteAsync,
                 onSaved: saved =>
             {
                 if (!saved.Save(replaceUnreadable: true))
@@ -333,8 +335,9 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         if (_shuttingDown) return;
         _remote = new RemoteAccessService(
             _settings.RemoteAccess,
-            // No keys until this computer is paired under protocol 2 (a connection code makes them).
-            // The service says so rather than connecting with nothing to seal or open with.
+            // Read by the service from remote.db, under the computer id a connection code stored in
+            // the settings. With no id it has none, and says so rather than connecting with nothing
+            // to seal or open with.
             keys: null,
             // On the UI thread, because it reads the worker list and the app settings. Governed by
             // the workspace THE TASK NAMED, not by the slider: the slider is about the folder open
@@ -363,12 +366,11 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     ///
     /// <para>The token is compared by whether there is one, not by what it is: this decides whether
     /// to reconnect, and putting a bearer credential into a string that is compared, logged by
-    /// accident or held in a local is not worth the precision. A token REPLACED with a different
-    /// one of the same emptiness is the one case this misses, and Test connection is what covers
-    /// it.</para>
+    /// accident or held in a local is not worth the precision. A new token always comes with a new
+    /// connection code, and applying a code restarts the service itself.</para>
     /// </summary>
     private static string Describe(RemoteAccessSettings remote)
-        => $"{remote.Enabled}|{remote.GatewayUrl}|{remote.Token.Length > 0}";
+        => $"{remote.Enabled}|{remote.GatewayUrl}|{remote.HostId}|{remote.Token.Length > 0}";
 
     /// <summary>
     /// Applies changed remote settings without restarting the application.
@@ -396,16 +398,70 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     /// <summary>
     /// Answers the settings window's "Test connection", and says what happened.
     ///
-    /// <para>A real check publishes this computer's workspace list, and under protocol 2 the names in
-    /// it are sealed with keys this computer does not have until it is paired. Probing anyway would
-    /// either send the names in the clear or send an empty list and unpublish every workspace, so
-    /// until pairing exists it says what is missing instead.</para>
+    /// <para>Through the running service, because the check publishes this computer's workspace list
+    /// and the names in it are sealed with the keys that service holds - one key store per remote.db.
+    /// A check that sent an empty list instead would unpublish every workspace.</para>
     /// </summary>
-    private Task<string> CheckRemoteAsync(string gatewayUrl, string token, CancellationToken ct)
+    private async Task<string> CheckRemoteAsync(CancellationToken ct)
     {
-        _log.Info(LogSource.System, "Remote access check: " + RemoteAccessService.NeedsPairing);
+        var detail = _remote is { } remote
+            ? await remote.CheckAsync(ct)
+            : "Remote access is restarting - try again in a moment.";
 
-        return Task.FromResult(RemoteAccessService.NeedsPairing);
+        _log.Info(LogSource.System, "Remote access check: " + detail);
+        return detail;
+    }
+
+    /// <summary>
+    /// Applies a connection code from the settings window: this computer's keys, then the live
+    /// settings, saved - and remote access started again on them.
+    ///
+    /// <para>The service is stopped first. It holds the key store over remote.db, and a code can
+    /// replace the keys in it; a service still running would go on sealing with keys that are no
+    /// longer written anywhere. It is started again whatever happened, so a declined or broken code
+    /// leaves remote access as it was.</para>
+    ///
+    /// <para>Nothing here logs the code or the settings it fills: both hold the token, and the code
+    /// holds the pairing secret too.</para>
+    /// </summary>
+    private async Task<(bool Connected, string Detail)> ConnectRemoteAsync(
+        ConnectionCode code, Func<Task<bool>> confirmReplace)
+    {
+        var previous = _remote;
+        _remote = null;
+
+        try
+        {
+            if (previous is not null)
+                await previous.DisposeAsync();
+
+            var outcome = await RemoteAccessService.ConnectWithCodeAsync(
+                code, _settings.RemoteAccess, RemoteDatabasePath(), confirmReplace);
+
+            if (!outcome.Paired)
+                return (false, "Nothing was changed: this computer keeps the keys and the connection it had.");
+
+            _log.Info(LogSource.System,
+                $"Remote access: connected as computer {outcome.HostId}; device {outcome.DeviceId} is trusted"
+                + (outcome.Replaced ? ", and the previous keys were replaced." : "."));
+
+            // The keys are already written, so a failed save is not a failed connection: the settings
+            // window's copy takes the same values, and its Save writes them.
+            if (!_settings.Save(replaceUnreadable: true))
+                return (true, "Connected, but the settings could not be saved - press Save to try again. "
+                    + (_settings.LastSaveError ?? string.Empty));
+
+            return (true, "Connected. The browser that made the code is trusted, and gets this computer's key "
+                + "as soon as the connection is up.");
+        }
+        catch (Exception failure)
+        {
+            return (false, "The code could not be applied: " + failure.Message);
+        }
+        finally
+        {
+            StartRemoteAccess();
+        }
     }
 
     // ── Closing ──────────────────────────────────────────────────────────────

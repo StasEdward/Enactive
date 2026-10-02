@@ -2,6 +2,7 @@ using Enactive.Core.Context;
 using Enactive.Core.Intents;
 using Enactive.Core.Permissions;
 using Enactive.Remote.Contracts;
+using Enactive.Remote.Contracts.Crypto;
 using Enactive.Remote.Host;
 using Enactive.Workspace;
 using Enactive.Settings;
@@ -46,10 +47,19 @@ internal sealed class RemoteAccessService : IAsyncDisposable
     /// What a person is told while this computer has no protocol-2 keys. Connecting without them would
     /// publish workspaces nobody can read and take commands this computer cannot open, so it does not.
     /// </summary>
-    public const string NeedsPairing = "Remote access needs this computer to be paired again (protocol 2).";
+    public const string NeedsPairing =
+        "Remote access needs this computer to be connected with a connection code - see Settings, Remote access.";
 
     private readonly RemoteAccessSettings _settings;
-    private readonly Sealer? _sealer;
+    private readonly Func<CancellationToken, Task<IGatewayConnection>> _connect;
+
+    /// <summary>
+    /// The keys, as handed in or as read from remote.db under the settings' computer id - and the key
+    /// store itself when this service made it, because then it is this service's to dispose.
+    /// </summary>
+    private IHostKeys? _keys;
+    private HostKeyStore? _ownedKeys;
+    private Sealer? _sealer;
     private readonly Func<WorkspaceEntry, Task<RunEnvironment>> _environment;
     private readonly Func<IReadOnlyList<WorkspaceEntry>> _workspaces;
     private readonly IDecisionHandler _desktop;
@@ -61,7 +71,7 @@ internal sealed class RemoteAccessService : IAsyncDisposable
     private Task? _shutdown;
 
     private HostStore? _store;
-    private SignalRGatewayConnection? _connection;
+    private IGatewayConnection? _connection;
     private Task? _loop;
     private bool _recovered;
     private string _status = "Not connected.";
@@ -79,8 +89,9 @@ internal sealed class RemoteAccessService : IAsyncDisposable
     private readonly RemoteApprovals _approvals = new();
 
     /// <param name="keys">
-    /// This computer's keys, or null when it has none yet - which is every computer until it is paired
-    /// under protocol 2. Null is not an error: the service says so and does not connect.
+    /// This computer's keys, or null to read them from remote.db under the computer id the settings
+    /// hold - which is what the application does. With no id there are none: the computer has not been
+    /// connected with a code, and the service says so and does not connect.
     /// </param>
     /// <param name="environment">
     /// The run setup for one workspace. A function of the WORKSPACE rather than a value, because
@@ -94,16 +105,24 @@ internal sealed class RemoteAccessService : IAsyncDisposable
     /// raised by a remote run appears on the desktop AND on the phone, and whichever answers first
     /// decides.
     /// </param>
+    /// <param name="connect">
+    /// Opens a connection to the gateway. The SignalR one unless a test hands in a fake; what the
+    /// service does with a refusal is the thing under test, and a real gateway cannot be made to speak
+    /// another protocol on cue.
+    /// </param>
     public RemoteAccessService(
         RemoteAccessSettings settings,
         IHostKeys? keys,
         Func<WorkspaceEntry, Task<RunEnvironment>> environment,
         Func<IReadOnlyList<WorkspaceEntry>> workspaces,
         IDecisionHandler desktop,
-        string databasePath)
+        string databasePath,
+        Func<CancellationToken, Task<IGatewayConnection>>? connect = null)
     {
         _settings = settings;
+        _keys = keys;
         _sealer = keys is null ? null : new Sealer(keys, TimeProvider.System);
+        _connect = connect ?? ConnectSignalRAsync;
         _environment = environment;
         _workspaces = workspaces;
         _desktop = desktop;
@@ -147,9 +166,9 @@ internal sealed class RemoteAccessService : IAsyncDisposable
             return;
         }
 
-        if (_sealer is null)
+        if (!TryKeys(out var why))
         {
-            Status = NeedsPairing;
+            Status = why;
             return;
         }
 
@@ -164,6 +183,146 @@ internal sealed class RemoteAccessService : IAsyncDisposable
             if (_shutdown is not null || _loop is not null) return;
             _loop = Task.Run(() => RunAsync(_stopping.Token));
         }
+    }
+
+    /// <summary>
+    /// Makes sure this service has keys to seal and open with, reading them from remote.db under the
+    /// computer id the settings hold. False, with what a person should be told, when it cannot.
+    ///
+    /// <para>Read once and kept: a key store is one per remote.db, and a second one would rotate from
+    /// its own idea of the newest epoch.</para>
+    /// </summary>
+    private bool TryKeys(out string why)
+    {
+        lock (_lifecycle)
+        {
+            why = string.Empty;
+
+            if (_sealer is not null)
+                return true;
+
+            if (_shutdown is not null)
+            {
+                why = "Remote access is stopping.";
+                return false;
+            }
+
+            if (string.IsNullOrWhiteSpace(_settings.HostId))
+            {
+                why = NeedsPairing;
+                return false;
+            }
+
+            try
+            {
+                var store = Store();
+
+                // A computer id with no keys behind it is a remote.db that was deleted or replaced.
+                // Making keys now would connect a computer that no device can read - the same silent
+                // breakage as replacing keys that cannot be read - so it is said instead.
+                if (!HostKeyStore.HasKeys(store))
+                {
+                    why = "This computer's remote keys are missing - connect it again with a new connection code.";
+                    return false;
+                }
+
+                _ownedKeys = new HostKeyStore(store, _settings.HostId);
+            }
+            catch (HostKeysUnreadableException unreadable)
+            {
+                why = unreadable.Message;
+                return false;
+            }
+            catch (Exception failure)
+            {
+                why = $"Remote access could not open this computer's records: {failure.Message}";
+                return false;
+            }
+
+            _keys = _ownedKeys;
+            _sealer = new Sealer(_ownedKeys, TimeProvider.System);
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Opened once and kept: the store is this computer's record of what it was asked to do and what
+    /// it has not yet managed to report, and it must outlive any one connection.
+    /// </summary>
+    private HostStore Store()
+    {
+        lock (_lifecycle)
+            return _store ??= new HostStore(_databasePath);
+    }
+
+    private async Task<IGatewayConnection> ConnectSignalRAsync(CancellationToken ct)
+    {
+        var connection = new SignalRGatewayConnection(GatewayAddress.Hub(_settings.GatewayUrl), _settings.Token);
+        try
+        {
+            await connection.StartAsync(ct);
+            return connection;
+        }
+        catch
+        {
+            await connection.DisposeAsync();
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// "Test connection": the stored settings tried once against the gateway - hello, and a sync with
+    /// the workspace list sealed as the running connection seals it - and what happened, in a sentence.
+    ///
+    /// <para>The stored settings, because they are the only ones there are: the address, the computer
+    /// and the token all come from one connection code, and there is nothing typed to try instead.</para>
+    /// </summary>
+    public async Task<string> CheckAsync(CancellationToken ct)
+    {
+        if (!TryKeys(out var why))
+            return why;
+
+        var check = await GatewayProbe.CheckAsync(
+            _settings.GatewayUrl, _settings.Token, Publishable(_workspaces(), _sealer!), ct);
+
+        return check.Detail;
+    }
+
+    /// <summary>
+    /// Applies a connection code: the keys in remote.db (see <see cref="Pairing.ConnectAsync"/>), then
+    /// the settings it names - the gateway, the computer and its token, and remote access turned on.
+    /// The caller saves the settings; the token reaches disk only as DPAPI ciphertext.
+    ///
+    /// <para>No service may be running over <paramref name="databasePath"/> while this runs: it holds a
+    /// key store over the same file, and replacing the keys under it would leave it sealing with keys
+    /// written nowhere. Nothing in the settings changes when the person declines.</para>
+    /// </summary>
+    public static async Task<PairingOutcome> ConnectWithCodeAsync(
+        ConnectionCode code, RemoteAccessSettings settings, string databasePath, Func<Task<bool>> confirmReplace)
+    {
+        PairingOutcome outcome;
+        using (var store = new HostStore(databasePath))
+        {
+            outcome = await Pairing.ConnectAsync(store, settings.HostId, code, confirmReplace);
+        }
+
+        if (outcome.Paired)
+            Remember(code, settings);
+
+        return outcome;
+    }
+
+    /// <summary>
+    /// What a code leaves in the settings: the gateway, the computer and its token, and remote access
+    /// on. One place, because the settings window writes the same into its own copy - a copy that
+    /// still held the old values would put them back at the next Save.
+    /// </summary>
+    public static void Remember(ConnectionCode code, RemoteAccessSettings settings)
+    {
+        settings.GatewayUrl = code.Gateway.GetLeftPart(UriPartial.Authority);
+        settings.HostId = code.HostId;
+        settings.Token = code.Token;
+        settings.Enabled = true;
     }
 
     private async Task RunAsync(CancellationToken ct)
@@ -209,25 +368,64 @@ internal sealed class RemoteAccessService : IAsyncDisposable
 
     private async Task ConnectAndServeAsync(CancellationToken ct)
     {
-        // Opened once and kept: the store is this computer's record of what it was asked to do and
-        // what it has not yet managed to report, and it must outlive any one connection.
-        _store ??= new HostStore(_databasePath);
+        var store = Store();
         if (_runner is null)
         {
-            _runner = new RemoteRunner(_store, _approvals, _sealer!, PrepareAsync);
+            _runner = new RemoteRunner(store, _approvals, _sealer!, PrepareAsync);
 
             // A refused command with no run to report on is said here, the same way a command that
             // failed is: otherwise the only trace of a forged command would be a list nobody reads.
             _runner.Noticed += notice => Status = $"A remote command was refused: {notice.Detail}";
         }
 
-        await using var connection = new SignalRGatewayConnection(
-            GatewayAddress.Hub(_settings.GatewayUrl), _settings.Token);
+        IGatewayConnection connection;
+        try
+        {
+            connection = await _connect(ct);
+        }
+        catch (GatewayCredentialRefusedException refused)
+        {
+            // Returned from, not thrown: RunAsync would dial again, and the same credential is
+            // refused the same way every time.
+            Status = refused.Message;
+            return;
+        }
 
         _connection = connection;
-        await connection.StartAsync(ct);
+        try
+        {
+            await ServeAsync(store, connection, ct);
+        }
+        finally
+        {
+            if (connection is IAsyncDisposable disposable)
+                await disposable.DisposeAsync();
+        }
+    }
 
-        var loop = new DeliveryLoop(_store, connection, _sealer!);
+    private async Task ServeAsync(HostStore store, IGatewayConnection connection, CancellationToken ct)
+    {
+        try
+        {
+            await connection.HelloAsync(RemoteProtocol.Version, ct);
+        }
+        catch (GatewayRefusedException refused) when (refused.Disposition == FaultDisposition.Fatal)
+        {
+            // Another protocol, or a credential gone between connecting and the first call. The
+            // gateway's sentence says which and what to do; a reconnect would only hear it again.
+            Status = $"The gateway refused this computer, so remote access has stopped: {refused.Message}";
+            return;
+        }
+
+        var loop = new DeliveryLoop(store, connection, _sealer!, _keys as IGrantOutbox);
+
+        // Said as it happens: a device whose grant was refused for good will never be able to read
+        // this computer, and the only other trace of that is a list nobody reads.
+        loop.Noticed += notice =>
+        {
+            if (notice.Kind == "GrantDropped")
+                Status = notice.Detail;
+        };
 
         // Once per PROCESS, not once per connection. "In flight" means a run with no ending
         // written, and a run going right now is one of those - so doing this after a dropped socket
@@ -423,11 +621,12 @@ internal sealed class RemoteAccessService : IAsyncDisposable
         }
         try
         {
-            if (_connection is not null) await _connection.DisposeAsync();
+            if (_connection is IAsyncDisposable connection) await connection.DisposeAsync();
         }
         finally
         {
             _store?.Dispose();
+            _ownedKeys?.Dispose();
             _stopping.Dispose();
         }
     }

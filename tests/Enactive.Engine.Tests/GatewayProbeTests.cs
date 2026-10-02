@@ -57,4 +57,37 @@ public sealed class GatewayProbeTests
         Assert.False(check.Reached);
         Assert.DoesNotContain("no device token", check.Detail, StringComparison.OrdinalIgnoreCase);
     }
+
+    /// <summary>
+    /// Hello comes before Sync, and a gateway of another protocol is reported in its own words.
+    /// Syncing first would publish workspace names sealed in a format that gateway's browsers may not
+    /// open, and the check would then report whatever Sync happened to say instead of the reason.
+    /// </summary>
+    [Fact]
+    public async Task A_gateway_of_another_protocol_is_reported_in_its_own_words_before_anything_is_published()
+    {
+        const string words = "This computer and the service speak different versions - update Enactive.";
+        var gateway = new FakeGateway
+        {
+            HelloRefusal = new GatewayRefusedException(Remote.Contracts.FaultCode.ProtocolMismatch, words)
+        };
+
+        var check = await GatewayProbe.CheckAsync(gateway, [], CancellationToken.None);
+
+        Assert.False(check.Reached);
+        Assert.Contains(words, check.Detail, StringComparison.Ordinal);
+        Assert.Equal(["Hello"], gateway.Calls);
+    }
+
+    /// <summary>On a gateway that speaks this protocol the check says hello and then syncs once.</summary>
+    [Fact]
+    public async Task A_check_says_hello_and_then_syncs()
+    {
+        var gateway = new FakeGateway();
+
+        var check = await GatewayProbe.CheckAsync(gateway, [], CancellationToken.None);
+
+        Assert.True(check.Reached, check.Detail);
+        Assert.Equal(["Hello", "Sync"], gateway.Calls);
+    }
 }

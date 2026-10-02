@@ -63,6 +63,31 @@ public sealed class SettingsSaveTests : IDisposable
         Assert.Equal("MARKER-SMTP-PASSWORD", loaded.Smtp.Password);
     }
 
+    /// <summary>
+    /// What a connection code leaves in the settings: the gateway and the computer's id in the clear -
+    /// the id is no secret, and without it the keys in remote.db would not say whose they are - and
+    /// the token only encrypted.
+    /// </summary>
+    [WindowsFact]
+    public void A_connected_computer_keeps_its_id_in_the_clear_and_its_token_encrypted()
+    {
+        var settings = new AppSettings();
+        settings.RemoteAccess.GatewayUrl = "https://remote.example.test";
+        settings.RemoteAccess.HostId = "0123456789abcdef0123456789abcdef";
+        settings.RemoteAccess.Token = "MARKER-REMOTE-TOKEN";
+
+        Assert.True(settings.Save(Path_), settings.LastSaveError);
+
+        var raw = File.ReadAllText(Path_);
+        Assert.Contains("0123456789abcdef0123456789abcdef", raw, StringComparison.Ordinal);
+        Assert.DoesNotContain("MARKER-REMOTE-TOKEN", raw, StringComparison.Ordinal);
+
+        var loaded = AppSettings.Load(Path_);
+        Assert.Equal("0123456789abcdef0123456789abcdef", loaded.RemoteAccess.HostId);
+        Assert.Equal("https://remote.example.test", loaded.RemoteAccess.GatewayUrl);
+        Assert.Equal("MARKER-REMOTE-TOKEN", loaded.RemoteAccess.Token);
+    }
+
     /// <summary>The plaintext field is restored in memory after Save, not left blank - it is only
     /// SERIALIZATION that must never see it.</summary>
     [WindowsFact]

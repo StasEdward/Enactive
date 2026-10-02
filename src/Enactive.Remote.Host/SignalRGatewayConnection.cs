@@ -1,6 +1,8 @@
 namespace Enactive.Remote.Host;
 
+using System.Net;
 using Enactive.Remote.Contracts;
+using Enactive.Remote.Contracts.Crypto;
 using Microsoft.AspNetCore.Http.Connections.Client;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.AspNetCore.SignalR.Client;
@@ -51,7 +53,28 @@ public sealed class SignalRGatewayConnection : IGatewayConnection, IAsyncDisposa
             .Build();
     }
 
-    public Task StartAsync(CancellationToken ct = default) => _connection.StartAsync(ct);
+    /// <summary>
+    /// Opens the connection.
+    /// </summary>
+    /// <exception cref="GatewayCredentialRefusedException">
+    /// The gateway refused the credential (401 or 403). Thrown as its own type because nothing about
+    /// it is transient: dialling again with the same token is refused the same way, for ever.
+    /// </exception>
+    public async Task StartAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            await _connection.StartAsync(ct);
+        }
+        catch (HttpRequestException refused)
+            when (refused.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+        {
+            throw new GatewayCredentialRefusedException(refused);
+        }
+    }
+
+    public Task HelloAsync(int protocolVersion, CancellationToken ct)
+        => InvokeAsync<bool>("Hello", ct, protocolVersion);
 
     public async Task<IReadOnlyList<HostCommand>> SyncAsync(
         IReadOnlyList<WorkspaceRef> workspaces, CancellationToken ct)
@@ -62,6 +85,18 @@ public sealed class SignalRGatewayConnection : IGatewayConnection, IAsyncDisposa
 
     public Task PublishAsync(HostEvent published, CancellationToken ct)
         => InvokeAsync<bool>("Publish", ct, published);
+
+    public Task PublishGrantsAsync(IReadOnlyList<KeyGrant> grants, CancellationToken ct)
+        => InvokeAsync<bool>("PublishGrants", ct, grants.ToList());
+
+    public Task CreateInviteAsync(string inviteId, CancellationToken ct)
+        => InvokeAsync<bool>("CreateInvite", ct, inviteId);
+
+    public async Task<IReadOnlyList<EnrollmentView>> EnrollmentsAsync(CancellationToken ct)
+        => await InvokeAsync<IReadOnlyList<EnrollmentView>>("Enrollments", ct) ?? [];
+
+    public Task AnsweredInviteAsync(string inviteId, CancellationToken ct)
+        => InvokeAsync<bool>("AnsweredInvite", ct, inviteId);
 
     public async ValueTask DisposeAsync() => await _connection.DisposeAsync();
 

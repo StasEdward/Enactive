@@ -3,6 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.VisualTree;
 using Enactive.App.Ui.ViewModels;
+using Enactive.Remote.Contracts.Crypto;
 using Enactive.Settings;
 
 namespace Enactive.App.Ui;
@@ -16,18 +17,24 @@ namespace Enactive.App.Ui;
 internal sealed partial class SettingsWindow : Window
 {
     /// <param name="remoteCheck">
-    /// Tries a gateway address and token and says what happened. Supplied by the main window rather
-    /// than done here, because the check publishes this computer's workspaces and the workspace
-    /// list belongs to the registry.
+    /// Tries the stored remote connection and says what happened. Supplied by the main window rather
+    /// than done here, because the check publishes this computer's workspaces, sealed with keys the
+    /// running service holds, and the workspace list belongs to the registry.
+    /// </param>
+    /// <param name="remoteConnect">
+    /// Applies a connection code. Supplied by the main window, because the code changes the keys the
+    /// running service holds - it has to be stopped first - and the settings it saves are the live ones.
     /// </param>
     public SettingsWindow(
         AppSettings settings, Action<AppSettings> onSaved,
         string? workspaceRoot = null, IReadOnlyList<string>? toolNames = null,
-        Func<string, string, CancellationToken, Task<string>>? remoteCheck = null)
+        Func<CancellationToken, Task<string>>? remoteCheck = null,
+        Func<ConnectionCode, Func<Task<bool>>, Task<(bool Connected, string Detail)>>? remoteConnect = null)
     {
         var viewModel = new SettingsViewModel(settings, onSaved, workspaceRoot, toolNames)
         {
-            RemoteCheck = remoteCheck
+            RemoteCheck = remoteCheck,
+            RemoteConnect = remoteConnect
         };
         viewModel.CloseRequested += () => Close();
         viewModel.ProviderEditRequested += (config, saved) =>
@@ -36,6 +43,10 @@ internal sealed partial class SettingsWindow : Window
             new WorkerEditWindow(config, catalog, viewModel.ToolNames, saved).Show(this);
         viewModel.ConfirmRequested += (headline, detail) =>
             ConfirmWindow.AskAsync(this, headline, detail, "Remove", "Keep");
+        viewModel.RemoteReplaceRequested += question =>
+            ConfirmWindow.AskAsync(this, question,
+                "The keys this computer has now are deleted, and the code's browser becomes the only device it trusts.",
+                "Replace", "Keep");
 
         viewModel.McpEditRequested += (config, saved) => new McpEditWindow(config, saved).ShowDialog(this);
         viewModel.TemplateEditRequested += (draft, idEditable, scopes, saved) =>

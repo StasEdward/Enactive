@@ -1,34 +1,27 @@
 namespace Enactive.App.Ui.ViewModels;
 
 using Enactive.App.Ui.Mvvm;
+using Enactive.Remote.Contracts.Crypto;
+using Enactive.Remote.Host;
 
 /// <summary>
-/// The Remote access pane: whether this computer answers a phone, which gateway it reaches, and the
-/// token that says it is this computer.
+/// The Remote access pane: whether this computer answers a phone, and the connection code that says
+/// which gateway it reaches, which computer it is there, and which browser it trusts first.
 ///
-/// <para>Three things, and it used to ask for five. A computer id and a display name were on it and
-/// neither was ever read - the hub takes the Host from the authenticated identity, so the token
-/// alone says which computer this is. A required box that changes nothing is worse than a missing
-/// one: the first person to fill this in put the computer's NAME in the id box, was told nothing
-/// was wrong, and got a panel that said Offline.</para>
+/// <para>One box, where there used to be an address box and a token box. The code carries both and
+/// more - the computer's id, the first browser's key and the pairing secret that lets that browser
+/// trust the first key it is granted - and copying five values across by hand is five chances to get
+/// one wrong. The first person to fill in an earlier version of this pane put the computer's NAME in
+/// its id box, was told nothing was wrong, and got a panel that said Offline.</para>
 ///
-/// <para>The token is shown masked and is never read back out of the box once saved - what the box
-/// shows after a reopen is a placeholder, and leaving it alone keeps the stored token. That is the
-/// only way to have a token box that can be left alone: a box pre-filled with the real token puts a
-/// bearer credential on screen for anyone standing behind you, and a box that empties itself on
-/// every open would silently clear the token of anyone who opened the pane to change the address.
-/// </para>
+/// <para>Connect applies the code at once rather than on Save: it changes this computer's keys, and
+/// a key store changed by a code whose settings were then cancelled would hold a trusted device and a
+/// grant for a computer the settings do not name. What was stored is shown read only afterwards; the
+/// token itself never is, and neither is the code, which holds the token and the pairing secret.</para>
 /// </summary>
 internal sealed partial class SettingsViewModel
 {
     private const int SectionRemote = 9;
-
-    /// <summary>
-    /// What the token box shows for a token that is already stored. Not a value anybody can type by
-    /// accident, and checked on save rather than compared loosely: a token of exactly these
-    /// characters would be indistinguishable from "unchanged", so it is refused as a token.
-    /// </summary>
-    private const string TokenUnchanged = "········ (stored)";
 
     public bool IsRemote => Section == SectionRemote;
 
@@ -36,53 +29,95 @@ internal sealed partial class SettingsViewModel
 
     public RelayCommand TestRemoteCommand { get; private set; } = null!;
 
+    public RelayCommand ConnectRemoteCommand { get; private set; } = null!;
+
     /// <summary>
-    /// Asks the window to try these settings against the real gateway and say what happened. Set by
-    /// the window, because the check needs the workspace list and that lives in the registry, not
-    /// here.
+    /// Asks the window to try the stored connection against the real gateway and say what happened.
+    /// Set by the window, because the check seals the workspace list with this computer's keys, and
+    /// both belong to the running service, not to this pane.
     /// </summary>
-    public Func<string, string, CancellationToken, Task<string>>? RemoteCheck { get; set; }
+    public Func<CancellationToken, Task<string>>? RemoteCheck { get; set; }
+
+    /// <summary>
+    /// Asks the window to apply a connection code: the keys, then the settings, saved. The second
+    /// argument asks the person before keys are replaced. Answers whether the code was applied and a
+    /// sentence saying what happened.
+    /// </summary>
+    public Func<ConnectionCode, Func<Task<bool>>, Task<(bool Connected, string Detail)>>? RemoteConnect { get; set; }
+
+    /// <summary>Asks the person whether to replace this computer's remote identity. No handler means no.</summary>
+    public event Func<string, Task<bool>>? RemoteReplaceRequested;
 
     private bool _remoteEnabled;
-    private string _remoteGatewayUrl = string.Empty;
-    private string _remoteToken = string.Empty;
+    private string _remoteCode = string.Empty;
+    private string _remoteCodeProblem = string.Empty;
     private string _remoteProblem = string.Empty;
     private string _remoteResult = string.Empty;
-    private bool _remoteTesting;
+    private bool _remoteBusy;
 
-    /// <summary>
-    /// There is a token on disk that this Windows account cannot decrypt. Remembered because the
-    /// box is then empty and looks exactly like "no token was ever set", which would send the user
-    /// looking for the wrong problem.
-    /// </summary>
-    private bool _remoteTokenUnreadable;
-
-    /// <summary>The token as it stood when the pane opened, for a check that ran before Save.</summary>
-    private string _remoteStoredToken = string.Empty;
-
-    /// <summary>Whether to connect at all. Everything else stays filled in when this is off.</summary>
+    /// <summary>Whether to connect at all. What the code stored stays when this is off.</summary>
     public bool RemoteEnabled
     {
         get => _remoteEnabled;
         set { if (Set(ref _remoteEnabled, value)) Revalidate(); }
     }
 
-    public string RemoteGatewayUrl
+    /// <summary>
+    /// The connection code as pasted. Held only until Connect: it carries the token and the pairing
+    /// secret, so it is never written to the settings and is emptied once it has been applied.
+    /// </summary>
+    public string RemoteCode
     {
-        get => _remoteGatewayUrl;
-        set { if (Set(ref _remoteGatewayUrl, value)) Revalidate(); }
+        get => _remoteCode;
+        set
+        {
+            if (Set(ref _remoteCode, value))
+                RemoteCodeProblem = string.Empty;
+        }
     }
 
-    public string RemoteToken
+    /// <summary>What is wrong with the code, in the parser's own words: what is wrong and what to do.</summary>
+    public string RemoteCodeProblem
     {
-        get => _remoteToken;
-        set { if (Set(ref _remoteToken, value)) Revalidate(); }
+        get => _remoteCodeProblem;
+        private set
+        {
+            if (Set(ref _remoteCodeProblem, value))
+                OnPropertyChanged(nameof(HasRemoteCodeProblem));
+        }
+    }
+
+    public bool HasRemoteCodeProblem => !string.IsNullOrEmpty(RemoteCodeProblem);
+
+    /// <summary>The stored gateway address, read only.</summary>
+    public string RemoteStoredGateway => Shown(_working.RemoteAccess.GatewayUrl);
+
+    /// <summary>The stored computer id, read only.</summary>
+    public string RemoteStoredHostId => Shown(_working.RemoteAccess.HostId);
+
+    /// <summary>Whether a token is stored - never the token. A bearer credential on screen is one anyone behind you can copy.</summary>
+    public string RemoteTokenState
+    {
+        get
+        {
+            var remote = _working.RemoteAccess;
+
+            if (!string.IsNullOrEmpty(remote.Token))
+                return "token stored";
+
+            // Encrypted on disk and unreadable here: the settings were copied from another computer
+            // or the Windows account was rebuilt. Said, because "no token" would send the person
+            // looking for the wrong problem.
+            return string.IsNullOrEmpty(remote.TokenProtected)
+                ? "no token"
+                : "a token is stored that this Windows account cannot decrypt - connect again with a new code";
+        }
     }
 
     /// <summary>
-    /// What is missing or wrong, in the pane, as it is typed. Shown rather than enforced by
-    /// disabling Save: this window saves every section at once, and a disabled Save button would
-    /// mean an unfinished remote pane blocking a change to the log retention.
+    /// What would stop this from connecting, in the pane. Shown rather than enforced by disabling
+    /// Save: this window saves every section at once, and a disabled Save button would mean an
+    /// unfinished remote pane blocking a change to the log retention.
     /// </summary>
     public string RemoteProblem
     {
@@ -92,7 +127,7 @@ internal sealed partial class SettingsViewModel
 
     public bool HasRemoteProblem => !string.IsNullOrEmpty(RemoteProblem);
 
-    /// <summary>What the last check found, in a person's words.</summary>
+    /// <summary>What the last check or connect found, in a person's words.</summary>
     public string RemoteResult
     {
         get => _remoteResult;
@@ -105,63 +140,100 @@ internal sealed partial class SettingsViewModel
 
     public bool HasRemoteResult => !string.IsNullOrEmpty(RemoteResult);
 
-    /// <summary>A check is running. The button says so rather than looking like it did nothing.</summary>
-    public bool RemoteTesting
+    /// <summary>A check or a connect is running. The buttons say so rather than looking like they did nothing.</summary>
+    public bool RemoteBusy
     {
-        get => _remoteTesting;
+        get => _remoteBusy;
         private set
         {
-            if (Set(ref _remoteTesting, value))
-                OnPropertyChanged(nameof(CanTestRemote));
+            if (Set(ref _remoteBusy, value))
+                OnPropertyChanged(nameof(CanUseRemote));
         }
     }
 
-    public bool CanTestRemote => !RemoteTesting;
+    public bool CanUseRemote => !RemoteBusy;
 
     private void InitializeRemote()
     {
         ShowRemoteCommand = new(() => Section = SectionRemote);
         TestRemoteCommand = new(() => _ = TestRemoteAsync());
+        ConnectRemoteCommand = new(() => _ = ConnectRemoteAsync());
 
-        var remote = _working.RemoteAccess;
-        _remoteEnabled = remote.Enabled;
-        _remoteGatewayUrl = remote.GatewayUrl;
-        _remoteStoredToken = remote.Token;
-        _remoteToken = string.IsNullOrEmpty(remote.Token) ? string.Empty : TokenUnchanged;
-        _remoteTokenUnreadable =
-            string.IsNullOrEmpty(remote.Token) && !string.IsNullOrEmpty(remote.TokenProtected);
+        _remoteEnabled = _working.RemoteAccess.Enabled;
 
         Revalidate();
     }
 
     /// <summary>
-    /// Tries the settings AS TYPED, without saving them first.
+    /// Reads the pasted code and has the window apply it.
     ///
-    /// <para>Without saving on purpose. Somebody checking a token they have just pasted has not
-    /// decided to keep it yet, and a check that wrote it down first would make "does this work" and
-    /// "use this from now on" the same button.</para>
+    /// <para>On success the working copy takes what was stored, so a Save pressed afterwards writes the
+    /// same values back instead of the ones this pane opened with - which would quietly undo the
+    /// connection the person just made.</para>
     /// </summary>
+    private async Task ConnectRemoteAsync()
+    {
+        if (Pairing.TryRead(RemoteCode, out var problem) is not { } code)
+        {
+            RemoteCodeProblem = problem;
+            return;
+        }
+
+        if (RemoteConnect is not { } connect)
+            return;
+
+        RemoteBusy = true;
+        RemoteResult = "Connecting…";
+
+        try
+        {
+            var (connected, detail) = await connect(code, AskToReplaceAsync);
+            RemoteResult = detail;
+
+            if (!connected)
+                return;
+
+            RemoteAccessService.Remember(code, _working.RemoteAccess);
+
+            RemoteCode = string.Empty;
+            _remoteEnabled = true;
+            OnPropertyChanged(nameof(RemoteEnabled));
+            OnPropertyChanged(nameof(RemoteStoredGateway));
+            OnPropertyChanged(nameof(RemoteStoredHostId));
+            OnPropertyChanged(nameof(RemoteTokenState));
+            Revalidate();
+        }
+        catch (Exception failure)
+        {
+            RemoteResult = "The code could not be applied: " + failure.Message;
+        }
+        finally
+        {
+            RemoteBusy = false;
+        }
+    }
+
+    private async Task<bool> AskToReplaceAsync()
+        => RemoteReplaceRequested is { } ask && await ask(Pairing.ReplaceQuestion);
+
+    /// <summary>Tries the stored connection: hello, and one sync with the sealed workspace list.</summary>
     private async Task TestRemoteAsync()
     {
         if (RemoteCheck is not { } check)
             return;
 
-        RemoteTesting = true;
+        RemoteBusy = true;
         RemoteResult = "Connecting…";
 
         try
         {
-            // The placeholder means the stored token, which is the one a check should use: the
-            // common case is somebody who changed only the address.
-            var token = RemoteToken == TokenUnchanged ? _remoteStoredToken : RemoteToken.Trim();
-
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
 
-            RemoteResult = await check(RemoteGatewayUrl.Trim(), token, timeout.Token);
+            RemoteResult = await check(timeout.Token);
         }
         catch (OperationCanceledException)
         {
-            RemoteResult = "The gateway did not answer within thirty seconds. Check the address.";
+            RemoteResult = "The gateway did not answer within thirty seconds. Check that it is up and reachable.";
         }
         catch (Exception failure)
         {
@@ -169,7 +241,7 @@ internal sealed partial class SettingsViewModel
         }
         finally
         {
-            RemoteTesting = false;
+            RemoteBusy = false;
         }
     }
 
@@ -187,51 +259,30 @@ internal sealed partial class SettingsViewModel
     }
 
     /// <summary>
-    /// The first thing that would stop this from connecting, in the order somebody fills the pane
-    /// in. Only checked when it is turned on - half-filled settings that are switched off are
-    /// somebody part-way through, not a mistake to complain about.
+    /// What would stop this from connecting. Only said when it is turned on - settings that are
+    /// switched off are somebody part-way through, not a mistake to complain about.
     /// </summary>
     private string? RemoteFault()
     {
         if (!RemoteEnabled)
             return null;
 
-        if (string.IsNullOrWhiteSpace(RemoteGatewayUrl))
-            return "Enter the gateway address, e.g. https://remote.enactive.dev";
+        var remote = _working.RemoteAccess;
 
-        if (!Uri.TryCreate(RemoteGatewayUrl.Trim(), UriKind.Absolute, out var address)
-            || (address.Scheme != Uri.UriSchemeHttp && address.Scheme != Uri.UriSchemeHttps))
-            return "The gateway address must be a full http:// or https:// URL.";
+        if (string.IsNullOrEmpty(remote.HostId) || string.IsNullOrEmpty(remote.GatewayUrl))
+            return "Paste the connection code the browser shows when you register this computer, and press Connect.";
 
-        // Said rather than refused. A gateway on localhost over http is how this is developed, and
-        // over the internet it means the token is on the wire in the clear.
-        if (address.Scheme == Uri.UriSchemeHttp && !address.IsLoopback)
-            return "This address is http, so the device token travels unencrypted. Use https unless "
-                 + "the gateway is on this machine.";
-
-        if (string.IsNullOrEmpty(RemoteToken))
-            return _remoteTokenUnreadable
-                ? "There is a token stored, but this Windows account cannot decrypt it - these "
-                + "settings were most likely copied from another computer. Issue a new token and "
-                + "paste it here."
-                : "Paste the device token the gateway issued.";
+        if (string.IsNullOrEmpty(remote.Token))
+            return "This computer's token cannot be read here. Make a new connection code in the browser and connect with it.";
 
         return null;
     }
 
     /// <summary>
-    /// Writes the pane back. Called from <see cref="Save"/>, before the settings are handed over.
+    /// Writes the pane back. Called from <see cref="Save"/>, before the settings are handed over. Only
+    /// the switch: the address, the computer id and the token are written by Connect, from a code.
     /// </summary>
-    private void SaveRemote()
-    {
-        var remote = _working.RemoteAccess;
+    private void SaveRemote() => _working.RemoteAccess.Enabled = RemoteEnabled;
 
-        remote.Enabled = RemoteEnabled;
-        remote.GatewayUrl = RemoteGatewayUrl.Trim();
-
-        // The placeholder means "leave the stored token alone". Anything else - including an empty
-        // box - is what the user meant to have, so clearing the box clears the token.
-        if (RemoteToken != TokenUnchanged)
-            remote.Token = RemoteToken.Trim();
-    }
+    private static string Shown(string value) => string.IsNullOrEmpty(value) ? "not connected" : value;
 }
