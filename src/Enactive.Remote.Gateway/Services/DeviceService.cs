@@ -22,8 +22,10 @@ using MySqlConnector;
 /// deleting its grants, so the two wait for each other but never in a cycle.</para>
 ///
 /// <para><b>Lock order for an invitation.</b> The account (for update when an invitation is made, shared on a
-/// computer's other calls), then the computer that made it, shared; then the invitation; then its
-/// enrollment. Answering an invitation locks only the invitation, so it waits on nothing above it.</para>
+/// computer's other calls), then the computer or the browser making the call, shared; then the invitation;
+/// then the device answering it, shared; then its enrollment. Answering an invitation locks no account and no
+/// computer, and the device locks it takes are shared ones, which only a revocation - locking nothing but the
+/// device - waits on.</para>
 /// </summary>
 public sealed class DeviceService(Database db, Limits limits, TimeProvider clock)
 {
@@ -677,6 +679,8 @@ public sealed class DeviceService(Database db, Limits limits, TimeProvider clock
                 throw GatewayFault.Unauthenticated();
             }
 
+            await RequireLiveDeviceAsync(connection, transaction, device.OwnerId, device.DeviceId);
+
             return await InsertInviteAsync(
                 connection, transaction, device.OwnerId, inviteId, null, device.DeviceId, "user:" + device.OwnerId);
         }, ct);
@@ -732,9 +736,10 @@ public sealed class DeviceService(Database db, Limits limits, TimeProvider clock
         }
         catch (MySqlException error) when (error.ErrorCode == MySqlErrorCode.DuplicateKeyEntry)
         {
-            // The caller makes the id, and one id names one invitation: replacing the one there would hand its
-            // answer to another inviter. The same words whoever holds it, so the refusal tells nobody whose it is.
-            throw GatewayFault.Conflict("An invitation with that id exists already; make another id.");
+            // The caller makes the id, and within one account it names one invitation: replacing the one there
+            // would hand its answer to another inviter. The key starts with the owner, so this is only ever the
+            // person's own invitation - another person's under the same id is not in the way and not touched.
+            throw GatewayFault.Conflict("You already have an invitation with that id; make another id.");
         }
 
         await AuditAsync(connection, transaction, ownerId, actor, "invite-created", inviteId, now);
@@ -769,16 +774,16 @@ public sealed class DeviceService(Database db, Limits limits, TimeProvider clock
             throw GatewayFault.BadRequest($"'mac' must be {HmacLength} bytes, as base64url text.");
         }
 
-        // The answering device is the person's own and not removed - whichever device makes the call.
+        // The answering device is the person's own and not removed - whichever device makes the call. Checked
+        // again inside the transaction below; this one records the visit and refuses early, without a lock.
         await RequireAsync(user, deviceId, ct);
 
         await db.InTransactionAsync(async (connection, transaction) =>
         {
-            // FORCE INDEX, as in RevokeAsync: through the primary key Bob naming Alice's invitation would
-            // lock her row before the owner filter refused it.
+            // The primary key starts with the owner, so this lock cannot reach another person's invitation.
             var row = await connection.ReadOneAsync(transaction,
                 """
-                SELECT consumed_at IS NOT NULL AS used, expires_at FROM invites FORCE INDEX (ux_invites_owner)
+                SELECT consumed_at IS NOT NULL AS used, expires_at FROM invites
                 WHERE owner_id = @owner AND id = @id
                 FOR UPDATE
                 """,
@@ -801,6 +806,8 @@ public sealed class DeviceService(Database db, Limits limits, TimeProvider clock
             {
                 throw GatewayFault.InviteExpired();
             }
+
+            await RequireLiveDeviceAsync(connection, transaction, user.UserId, deviceId);
 
             await connection.ExecuteAsync(transaction,
                 """
@@ -890,12 +897,12 @@ public sealed class DeviceService(Database db, Limits limits, TimeProvider clock
         {
             await AuthorizeComputerAsync(connection, transaction, host, lockAccount: false);
 
-            // Two statements, not one join: in a join the optimiser may read the enrollment first, through its
-            // primary key, and lock another person's row before any owner filter applies. Once the invitation
-            // is known to be this computer's, its enrollment is the same person's.
+            // Both keys start with the owner, so neither read can reach another person's row. The enrollment is
+            // locked only once the invitation is known to be this computer's: another computer of the same
+            // person's naming it would otherwise hold it while being refused.
             var own = await connection.ExistsAsync(transaction,
                 """
-                SELECT 1 FROM invites FORCE INDEX (ux_invites_owner)
+                SELECT 1 FROM invites
                 WHERE owner_id = @owner AND id = @id AND created_by_host = @host
                 """,
                 ("@owner", host.OwnerId), ("@id", inviteId), ("@host", host.HostId));
@@ -918,6 +925,35 @@ public sealed class DeviceService(Database db, Limits limits, TimeProvider clock
                     ("@now", clock.GetUtcNow()), ("@owner", host.OwnerId), ("@id", inviteId));
             }
         }, ct);
+    }
+
+    /// <summary>
+    /// The device an invitation call is made for is the person's own and not removed, read under a shared
+    /// lock in the call's transaction. A revocation holds the device's row until it commits, so a call that
+    /// arrives meanwhile waits and then finds it removed. Checked only before the transaction, a device revoked
+    /// in between was enrolled - or made an invitation - after it had been cut off.
+    /// </summary>
+    private static async Task RequireLiveDeviceAsync(
+        MySqlConnection connection, MySqlTransaction transaction, string ownerId, string deviceId)
+    {
+        // FORCE INDEX, as in RevokeAsync: through the primary key another person's row would be locked first.
+        var revoked = await connection.ReadOneAsync(transaction,
+            """
+            SELECT revoked_at IS NOT NULL FROM devices FORCE INDEX (ux_devices_owner)
+            WHERE owner_id = @owner AND id = @device
+            FOR SHARE
+            """,
+            reader => (bool?)reader.GetBoolean(0), ("@owner", ownerId), ("@device", deviceId));
+
+        if (revoked is null)
+        {
+            throw NoSuchDevice();
+        }
+
+        if (revoked.Value)
+        {
+            throw GatewayFault.DeviceRevoked();
+        }
     }
 
     private static EnrollmentView Enrollment(MySqlDataReader reader, string inviteId) => new(

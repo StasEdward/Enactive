@@ -128,8 +128,10 @@ CREATE TABLE IF NOT EXISTS invites (
   created_at        DATETIME(3) NOT NULL,
   expires_at        DATETIME(3) NOT NULL,
   consumed_at       DATETIME(3) NULL,
-  PRIMARY KEY (id),
-  UNIQUE KEY ux_invites_owner (owner_id, id),
+  -- The owner leads the key, as for tasks and commands: the id is the caller's own making, and with a
+  -- key on the id alone Bob making an invitation under an id of Alice's was refused as taken - an answer
+  -- that told him the id was somebody's - and his insert waited on her row while it found that out.
+  PRIMARY KEY (owner_id, id),
   CONSTRAINT fk_invites_user FOREIGN KEY (owner_id) REFERENCES users (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
@@ -140,7 +142,7 @@ CREATE TABLE IF NOT EXISTS enrollments (
   mac        VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   created_at DATETIME(3) NOT NULL,
   answered_at DATETIME(3) NULL,                                           -- the inviting computer has handled it
-  PRIMARY KEY (invite_id),
+  PRIMARY KEY (owner_id, invite_id),
   CONSTRAINT fk_enrollments_invite FOREIGN KEY (owner_id, invite_id) REFERENCES invites (owner_id, id) ON DELETE CASCADE,
   CONSTRAINT fk_enrollments_device FOREIGN KEY (owner_id, device_id) REFERENCES devices (owner_id, id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;

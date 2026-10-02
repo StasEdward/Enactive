@@ -1191,25 +1191,27 @@ public sealed class DeviceServiceTests(TestDatabase database) : IClassFixture<Te
     }
 
     /// <summary>
-    /// An invitation's id is the caller's to make, and it names one invitation. Used again - by the same
-    /// person or anyone else - it is refused rather than made to name a second invitation.
+    /// An invitation's id is the caller's to make, and within one account it names one invitation: used again
+    /// by the same person it is refused rather than made to name a second one. Another person's ids are
+    /// another space altogether. Bob using an id of Alice's makes an invitation of his own, as if hers did
+    /// not exist - refused, it told him the id was somebody's, and his insert waited on her row to find out.
     /// </summary>
     [Fact]
-    public async Task An_invite_id_names_one_invitation()
+    public async Task An_invite_id_names_one_invitation_of_one_person()
     {
         var alice = await PersonAsync("alice");
         var bob = await PersonAsync("bob");
         var laptop = new DeviceAccess((await DeviceAsync(alice, "laptop")).Id, alice.UserId);
         var computer = await ComputerAsync(alice);
-        var bobs = new DeviceAccess((await DeviceAsync(bob, "bobs")).Id, bob.UserId);
+        var bobs = await DeviceAsync(bob, "bobs");
         var id = Ids.New();
         await Devices.CreateInviteAsync(laptop, id, default);
+        var hers = await InviteRowAsync(alice.UserId, id);
 
         foreach (var attempt in new Func<Task>[]
                  {
                      () => Devices.CreateInviteAsync(laptop, id, default),
-                     () => Devices.CreateInviteAsync(computer, id, default),
-                     () => Devices.CreateInviteAsync(bobs, id, default)
+                     () => Devices.CreateInviteAsync(computer, id, default)
                  })
         {
             var refused = await Assert.ThrowsAsync<GatewayFault>(attempt);
@@ -1217,9 +1219,33 @@ public sealed class DeviceServiceTests(TestDatabase database) : IClassFixture<Te
             Assert.Equal(409, refused.Status);
         }
 
-        Assert.Equal(1, await database.ScalarLongAsync($"SELECT COUNT(*) FROM invites WHERE id = '{id}'"));
+        // Bob's, made while Alice's row is held by a transaction of hers: it neither waits on her row nor
+        // changes it.
+        await using var holder = await database.OpenAsync();
+        await using var held = await holder.BeginTransactionAsync();
+        await using (var hold = new MySqlCommand(
+            "SELECT 1 FROM invites WHERE owner_id = @owner AND id = @id FOR UPDATE", holder, held))
+        {
+            hold.Parameters.AddWithValue("@owner", alice.UserId);
+            hold.Parameters.AddWithValue("@id", id);
+            await hold.ExecuteScalarAsync();
+        }
+
+        var creating = Devices.CreateInviteAsync(new DeviceAccess(bobs.Id, bob.UserId), id, default);
+        Assert.Same(creating, await Task.WhenAny(creating, Task.Delay(TimeSpan.FromSeconds(5))));
+        await creating;
+        await held.RollbackAsync();
+
+        await Devices.EnrollAsync(bob, id, bobs.Id, MacOf(id, bobs), default);
+
+        Assert.Equal(hers, await InviteRowAsync(alice.UserId, id));
+        Assert.NotEqual(hers, await InviteRowAsync(bob.UserId, id));
+        Assert.Equal(0, await database.ScalarLongAsync(
+            $"SELECT COUNT(*) FROM enrollments WHERE owner_id = '{alice.UserId}' AND invite_id = '{id}'"));
         Assert.Equal(1, await database.ScalarLongAsync(
-            $"SELECT COUNT(*) FROM audit WHERE owner_id = '{alice.UserId}' AND actor = 'user:{alice.UserId}' "
+            $"SELECT COUNT(*) FROM audit WHERE owner_id = '{alice.UserId}' AND action = 'invite-created' AND target = '{id}'"));
+        Assert.Equal(1, await database.ScalarLongAsync(
+            $"SELECT COUNT(*) FROM audit WHERE owner_id = '{bob.UserId}' AND actor = 'user:{bob.UserId}' "
             + $"AND action = 'invite-created' AND target = '{id}'"));
     }
 
@@ -1292,6 +1318,109 @@ public sealed class DeviceServiceTests(TestDatabase database) : IClassFixture<Te
         Assert.Equal(HttpStatusCode.Forbidden, revoked.StatusCode);
     }
 
+    /// <summary>
+    /// A revocation that has locked the device and not yet committed, and an enrollment of that device - or an
+    /// invitation made from it - arriving meanwhile. Each must wait for the revocation and then be refused:
+    /// checked only before the transaction, the device still looked live and the call went through for a
+    /// device being removed.
+    /// </summary>
+    [Theory]
+    [InlineData("enroll")]
+    [InlineData("invite")]
+    public async Task A_call_racing_the_revocation_of_its_device_does_not_survive_it(string call)
+    {
+        var owner = await PersonAsync("alice");
+        var laptop = await DeviceAsync(owner, "laptop");
+        var phone = await DeviceAsync(owner, "phone");
+        var invite = Ids.New();
+        await Devices.CreateInviteAsync(new DeviceAccess(laptop.Id, owner.UserId), invite, default);
+        var revoked = call == "enroll" ? phone : laptop;
+
+        await using var revoker = await database.OpenAsync();
+        await using var revocation = await revoker.BeginTransactionAsync();
+        await using (var revoke = new MySqlCommand(
+            "UPDATE devices SET revoked_at = UTC_TIMESTAMP(3) WHERE owner_id = @owner AND id = @device",
+            revoker, revocation))
+        {
+            revoke.Parameters.AddWithValue("@owner", owner.UserId);
+            revoke.Parameters.AddWithValue("@device", revoked.Id);
+            await revoke.ExecuteNonQueryAsync();
+        }
+
+        var racing = call == "enroll"
+            ? Devices.EnrollAsync(owner, invite, phone.Id, MacOf(invite, phone), default)
+            : Devices.CreateInviteAsync(new DeviceAccess(laptop.Id, owner.UserId), Ids.New(), default);
+        await Task.Delay(TimeSpan.FromMilliseconds(500));
+        Assert.False(racing.IsCompleted);
+
+        await revocation.CommitAsync();
+
+        var refused = await Assert.ThrowsAsync<GatewayFault>(() => racing);
+        Assert.Equal("device-revoked", refused.Code);
+        Assert.Equal(0, await database.ScalarLongAsync($"SELECT COUNT(*) FROM enrollments WHERE owner_id = '{owner.UserId}'"));
+        Assert.Equal(1, await database.ScalarLongAsync($"SELECT COUNT(*) FROM invites WHERE owner_id = '{owner.UserId}'"));
+    }
+
+    /// <summary>
+    /// An answer from a device removed after it answered is not handed to the inviter, browser or computer:
+    /// the inviter would grant its keys to a browser the person has already cut off.
+    /// </summary>
+    [Fact]
+    public async Task An_enrollment_of_a_device_removed_since_is_not_handed_over()
+    {
+        using var alice = await PanelClient.SignedInAsync(_gateway, Name("alice"));
+        var owner = new UserAccess(alice.UserId, "unused");
+        var laptop = await DeviceAsync(owner, "laptop");
+        var phone = await DeviceAsync(owner, "phone");
+        var tablet = await DeviceAsync(owner, "tablet");
+        var computer = await ComputerAsync(owner);
+        using var limit = new HostCallLimit();
+        var hub = Hub(computer, limit);
+        var fromBrowser = Ids.New();
+        var fromComputer = Ids.New();
+        await Devices.CreateInviteAsync(new DeviceAccess(laptop.Id, owner.UserId), fromBrowser, default);
+        Assert.Null((await hub.CreateInvite(fromComputer)).Fault);
+        await Devices.EnrollAsync(owner, fromBrowser, phone.Id, MacOf(fromBrowser, phone), default);
+        await Devices.EnrollAsync(owner, fromComputer, tablet.Id, MacOf(fromComputer, tablet), default);
+
+        using (var before = await ReadEnrollmentAsync(alice, laptop.Id, fromBrowser))
+        {
+            Assert.Equal(HttpStatusCode.OK, before.StatusCode);
+        }
+
+        Assert.Single((await hub.Enrollments()).Value!);
+
+        await Devices.RevokeAsync(owner, phone.Id, default);
+        await Devices.RevokeAsync(owner, tablet.Id, default);
+
+        using var after = await ReadEnrollmentAsync(alice, laptop.Id, fromBrowser);
+        Assert.Equal(HttpStatusCode.NoContent, after.StatusCode);
+        Assert.Empty((await hub.Enrollments()).Value!);
+    }
+
+    /// <summary>
+    /// An invitation a computer made is the computer's to read. A browser asking for its answer is refused
+    /// exactly like one asking for an invitation that does not exist.
+    /// </summary>
+    [Fact]
+    public async Task A_browser_cannot_read_the_answer_to_a_computers_invitation()
+    {
+        using var alice = await PanelClient.SignedInAsync(_gateway, Name("alice"));
+        var owner = new UserAccess(alice.UserId, "unused");
+        var laptop = await DeviceAsync(owner, "laptop");
+        var phone = await DeviceAsync(owner, "phone");
+        var computer = await ComputerAsync(owner);
+        var invite = Ids.New();
+        await Devices.CreateInviteAsync(computer, invite, default);
+        await Devices.EnrollAsync(owner, invite, phone.Id, MacOf(invite, phone), default);
+
+        using var computers = await ReadEnrollmentAsync(alice, laptop.Id, invite);
+        using var missing = await ReadEnrollmentAsync(alice, laptop.Id, Ids.New());
+
+        Assert.Equal(HttpStatusCode.NotFound, computers.StatusCode);
+        Assert.Equal(await missing.Content.ReadAsStringAsync(), await computers.Content.ReadAsStringAsync());
+    }
+
     // ── helpers ─────────────────────────────────────────────────────────────
 
     /// <summary>An enrollment MAC, made the way a new device makes it, under a pair key nobody else holds.</summary>
@@ -1301,6 +1430,14 @@ public sealed class DeviceServiceTests(TestDatabase database) : IClassFixture<Te
     // One key for the MACs these tests make, so a test can make the same MAC twice and compare it with the
     // stored one. The gateway never checks it: it has no pair key.
     private static readonly byte[] PairKeyOfTests = RandomNumberGenerator.GetBytes(32);
+
+    /// <summary>Every column of one person's invitation, as one string a test can compare before and after.</summary>
+    private async Task<string?> InviteRowAsync(string ownerId, string inviteId)
+        => (string?)await database.ScalarAsync(
+            $"""
+            SELECT CONCAT_WS('|', created_by_host, created_by_device, created_at, expires_at, IFNULL(consumed_at, '-'))
+            FROM invites WHERE owner_id = '{ownerId}' AND id = '{inviteId}'
+            """);
 
     private static Task<HttpResponseMessage> PostInviteAsync(PanelClient browser, string deviceId, string inviteId)
         => browser.SendAsync(HttpMethod.Post, "/api/invites", new { id = inviteId },
