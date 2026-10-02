@@ -344,6 +344,63 @@ public sealed class DeviceServiceTests(TestDatabase database) : IClassFixture<Te
         Assert.Null(context.DeviceIdOrNull());
     }
 
+    [Fact]
+    public void A_device_bound_call_without_the_header_is_refused_with_one_code()
+    {
+        var context = new Microsoft.AspNetCore.Http.DefaultHttpContext();
+
+        var refused = Assert.Throws<GatewayFault>(() => context.RequireDeviceId());
+        Assert.Equal("device-header", refused.Code);
+        Assert.Equal(400, refused.Status);
+
+        context.Request.Headers["X-Enactive-Device"] = " abc123 ";
+        Assert.Equal("abc123", context.RequireDeviceId());
+    }
+
+    /// <summary>
+    /// A grant written by a request that was already past its own check when the device was revoked can
+    /// land after the revoke. Revoking again must sweep it rather than return early.
+    /// </summary>
+    [Fact]
+    public async Task Revoking_an_already_revoked_device_still_deletes_a_grant_left_behind()
+    {
+        var alice = await PersonAsync("alice");
+        var id = await Devices.RegisterAsync(alice, NewPublicKey(), "laptop", default);
+        var (hostId, _, _) = await new UserService(Db, Limits.Unlimited, TimeProvider.System)
+            .RegisterHostAsync(alice, "Studio PC", default);
+        await Devices.RevokeAsync(alice, id, default);
+
+        await database.ExecuteAsync(
+            """
+            INSERT INTO grants (owner_id, host_id, device_id, epoch, grant_json, created_at)
+            VALUES (@owner, @host, @device, 1, '{}', UTC_TIMESTAMP(3))
+            """,
+            ("@owner", alice.UserId), ("@host", hostId), ("@device", id));
+
+        await Devices.RevokeAsync(alice, id, default);
+
+        Assert.Equal(0, await database.ScalarLongAsync($"SELECT COUNT(*) FROM grants WHERE device_id = '{id}'"));
+        Assert.Equal(1, await database.ScalarLongAsync(
+            $"SELECT COUNT(*) FROM audit WHERE action = 'device-revoked' AND target = '{id}'"));
+    }
+
+    /// <summary>An account deleted since its session was checked is refused cleanly, not with a foreign-key 500.</summary>
+    [Fact]
+    public async Task Registering_for_an_account_that_is_gone_is_refused_cleanly()
+    {
+        var refused = await Assert.ThrowsAsync<GatewayFault>(
+            () => Devices.RegisterAsync(new UserAccess(Ids.New(), "gone"), NewPublicKey(), "laptop", default));
+
+        Assert.Equal("unauthenticated", refused.Code);
+        Assert.Equal(401, refused.Status);
+    }
+
+    [Theory]
+    [InlineData(1, "already has 1 device.")]
+    [InlineData(2, "already has 2 devices.")]
+    public void The_limit_message_counts_in_the_right_number(int max, string expected)
+        => Assert.Contains(expected, GatewayFault.DeviceLimit(max).Message);
+
     // ── helpers ─────────────────────────────────────────────────────────────
 
     private static async Task AssertRefusedAsync(PanelClient browser, string publicKey, string code)

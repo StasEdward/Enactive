@@ -43,9 +43,19 @@ public sealed class DeviceService(Database db, Limits limits, TimeProvider clock
             // The account's row is the lock the count is taken under. Counting alone does not stop two
             // registrations that both read "one place left" and both insert; and the insert itself takes a
             // shared lock on this row for its foreign key, so two of them taking that first and wanting it
-            // exclusive afterwards would deadlock instead of queueing. Locked first, they queue.
-            await connection.ExistsAsync(transaction,
+            // exclusive afterwards would deadlock instead of queueing. Locked first, they queue. The COUNT
+            // below must stay AFTER this lock: the first consistent read of a REPEATABLE READ transaction
+            // fixes its snapshot, so a count taken before the lock would not see a registration that
+            // committed while this one waited.
+            var accountExists = await connection.ExistsAsync(transaction,
                 "SELECT 1 FROM users WHERE id = @owner FOR UPDATE", ("@owner", user.UserId));
+
+            // The session check is made at the door, so the account can only be gone if it was deleted
+            // since; a clean refusal, where the insert would have failed on its foreign key as a 500.
+            if (!accountExists)
+            {
+                throw GatewayFault.Unauthenticated();
+            }
 
             // Removed devices do not count: removing one is how a person makes room for another.
             var held = await connection.ReadOneAsync(transaction,
@@ -95,7 +105,8 @@ public sealed class DeviceService(Database db, Limits limits, TimeProvider clock
     /// Removes a browser from the account and deletes the grants made to it, in one transaction. The
     /// schema deletes grants when a device row is deleted, but a revoked device keeps its row (so the
     /// panel can still say it was removed), and without this its keys would outlive its removal.
-    /// Removing one that is already removed succeeds and changes nothing, so a retried tap is harmless.
+    /// Removing one that is already removed succeeds, writes no second audit row, and sweeps any grant left
+    /// behind, so a retried tap is harmless.
     /// </summary>
     public Task RevokeAsync(UserAccess user, string deviceId, CancellationToken ct)
         => db.InTransactionAsync(async (connection, transaction) =>
@@ -116,21 +127,23 @@ public sealed class DeviceService(Database db, Limits limits, TimeProvider clock
                 throw NoSuchDevice();
             }
 
-            if (already.Value)
+            var now = clock.GetUtcNow();
+
+            if (!already.Value)
             {
-                return;
+                await connection.ExecuteAsync(transaction,
+                    "UPDATE devices SET revoked_at = @now WHERE owner_id = @owner AND id = @device",
+                    ("@now", now), ("@owner", user.UserId), ("@device", deviceId));
+
+                await AuditAsync(connection, transaction, user, "device-revoked", deviceId, now);
             }
 
-            var now = clock.GetUtcNow();
-            await connection.ExecuteAsync(transaction,
-                "UPDATE devices SET revoked_at = @now WHERE owner_id = @owner AND id = @device",
-                ("@now", now), ("@owner", user.UserId), ("@device", deviceId));
-
+            // Deleted on a repeated revoke too. A grant written by a request that was already past its
+            // own check when the device was revoked can land after the first revoke's delete; returning
+            // early here would leave that grant for a removed device for ever. The delete is idempotent.
             await connection.ExecuteAsync(transaction,
                 "DELETE FROM grants WHERE owner_id = @owner AND device_id = @device",
                 ("@owner", user.UserId), ("@device", deviceId));
-
-            await AuditAsync(connection, transaction, user, "device-revoked", deviceId, now);
         }, ct);
 
     /// <summary>
@@ -229,4 +242,11 @@ public static class DeviceHeader
         var value = context.Request.Headers[Name].ToString().Trim();
         return value.Length == 0 ? null : value;
     }
+
+    /// <summary>
+    /// The device id the request names, or the one refusal every device-bound endpoint gives when it
+    /// names none.
+    /// </summary>
+    public static string RequireDeviceId(this HttpContext context)
+        => context.DeviceIdOrNull() ?? throw GatewayFault.DeviceHeaderMissing();
 }

@@ -146,7 +146,16 @@ public sealed class GatewayFault(string code, int status, string message) : Exce
 
     public static GatewayFault DeviceLimit(int max) => new(
         "device-limit", 409,
-        $"This account already has {max:N0} devices. Remove one that is no longer used to add another.");
+        $"This account already has {max:N0} {(max == 1 ? "device" : "devices")}. "
+        + "Remove one that is no longer used to add another.");
+
+    /// <summary>
+    /// A device-bound call that does not say which device it is made from. One code here so every such
+    /// endpoint answers it the same way, and the panel can tell it from an unknown device.
+    /// </summary>
+    public static GatewayFault DeviceHeaderMissing() => new(
+        "device-header", 400,
+        "This call must name the browser it is made from in the X-Enactive-Device header.");
 
     public static GatewayFault Conflict(string message) => new("conflict", 409, message);
 
