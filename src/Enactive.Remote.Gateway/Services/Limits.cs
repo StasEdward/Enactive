@@ -28,6 +28,21 @@ public sealed record Limits(
         int.MaxValue, int.MaxValue, int.MaxValue, int.MaxValue, int.MaxValue, int.MaxValue, long.MaxValue);
 
     /// <summary>
+    /// What ending a run may store: its last event, the copy kept as the run's summary, and the copy a notice
+    /// carries - three envelopes, each at most <see cref="HostService.MaxSealedDetail"/>.
+    /// </summary>
+    internal const long EndingBytes = 3L * HostService.MaxSealedDetail;
+
+    /// <summary>
+    /// The room kept past <see cref="SealedBytesPerUser"/> for ending the runs that can be in progress at
+    /// once. Only a run's end may use it, so a full account's runs still end, and the account is bounded all
+    /// the same: no more than the limit and this.
+    /// </summary>
+    public long EndingReserve => ActiveRunsPerUser >= long.MaxValue / EndingBytes
+        ? long.MaxValue
+        : ActiveRunsPerUser * EndingBytes;
+
+    /// <summary>
     /// The starting values. Guesses at what one person uses, generous enough not to be met by ordinary
     /// use, to be revised from measurement once people use the service; each can be set without a build.
     /// </summary>
@@ -145,12 +160,53 @@ internal static class Quota
     }
 
     /// <summary>
-    /// Adds what a COMPUTER stores about a run to the account's total, and never refuses it (controller ruling
-    /// I2 of Task 8.1). Refused, a run's events - its end among them - reached the computer as the code it
-    /// waits out, so the whole outbox stopped, the run stayed "running" on the panel and kept its active-run
-    /// place. A run in progress may take the account past its limit by its own output; the person's next
-    /// start is what is refused, and retention gives the bytes back with the run.
+    /// Adds what a COMPUTER stores about a run to the account's total, or refuses it when the account is full.
+    ///
+    /// <para>Two earlier rules each failed one way. Refusing every report at the limit, with the code a
+    /// computer waits out, stopped its whole outbox: the run's end waited behind a progress line, the run
+    /// stayed "running" on the panel and kept its active-run place. Never refusing any (ruling I2 of Task
+    /// 8.1) let one registered computer with one run write without end - over 2 MB into an account limited
+    /// to 4 KB in the review of 2026-10-03, by sending progress; the rate limit only set how fast the shared
+    /// disk filled.</para>
+    ///
+    /// <para>So: a report of a run IN PROGRESS - progress, a permission request, the notice either raises -
+    /// is refused once it would pass the limit, with <see cref="FaultCode.StorageFull"/>, which the computer
+    /// drops and goes on from. What ENDS a run is admitted while it fits <see cref="Limits.EndingReserve"/>
+    /// past the limit, room no other report can use; so a full account's runs still end, and the account
+    /// never holds more than its limit and that reserve. Retention gives the bytes back with the run.</para>
     /// </summary>
+    /// <param name="ending">Whether this is stored for the event that ends the run.</param>
+    public static async Task AdmitFromComputerAsync(
+        MySqlConnection connection, MySqlTransaction transaction, string ownerId, long bytes, Limits limits,
+        bool ending)
+    {
+        if (bytes <= 0)
+        {
+            return;
+        }
+
+        // No limit, no question - and no arithmetic on long.MaxValue.
+        if (limits.SealedBytesPerUser != long.MaxValue)
+        {
+            var held = await connection.ReadOneAsync(transaction,
+                "SELECT sealed_bytes FROM users WHERE id = @owner FOR UPDATE",
+                reader => reader.GetInt64(0), ("@owner", ownerId));
+
+            var reserve = ending ? limits.EndingReserve : 0;
+            var room = reserve >= long.MaxValue - limits.SealedBytesPerUser
+                ? long.MaxValue
+                : limits.SealedBytesPerUser + reserve;
+
+            if (bytes > room - held)
+            {
+                throw GatewayFault.HistoryFull();
+            }
+        }
+
+        await AddSealedAsync(connection, transaction, ownerId, bytes);
+    }
+
+    /// <summary>Adds to the account's total what has already been admitted, or is the person's own and checked.</summary>
     public static Task AddSealedAsync(
         MySqlConnection connection, MySqlTransaction transaction, string ownerId, long bytes)
         => bytes <= 0
