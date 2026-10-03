@@ -3820,7 +3820,7 @@ public sealed partial class Orchestrator : IOrchestrator
                     yield return Invoked(handOnCall);
                     var handOnVerdict = StepOutputContract.Check(outputSchema, handOnCall.ArgumentsJson,
                         path => OutputPathExists(path, store), id => id >= 1 && id <= journal.Actions.Count,
-                        boundary is { ForItem: true } ? boundary.Items : null);
+                        boundary is { ForItem: true } ? boundary.Items : null, offered: submitTool);
                     if (handOnVerdict.Accepted)
                     {
                         outputSlot.Accept(handOnVerdict);
@@ -4646,7 +4646,7 @@ public sealed partial class Orchestrator : IOrchestrator
                     var sameAgain = outputSlot.LastRefused == TaskProgress.Canonical(call.ArgumentsJson);
                     var verdict = StepOutputContract.Check(outputSchema, call.ArgumentsJson,
                         path => OutputPathExists(path, store), id => id >= 1 && id <= journal.Actions.Count,
-                        boundary is { ForItem: true } ? boundary.Items : null);
+                        boundary is { ForItem: true } ? boundary.Items : null, offered: submitTool);
                     string handed;
                     if (verdict.Accepted)
                     {

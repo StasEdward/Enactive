@@ -199,8 +199,9 @@ internal static class StepOutputContract
     /// <param name="callExists">Whether a call number exists in this step's evidence.</param>
     /// <param name="items">For a step done for particular items: those items. A result per item is then keyed by
     /// them and nothing else.</param>
+    /// <param name="offered">The hand-over tool the model was shown, when it is the run's and lists other steps' fields.</param>
     internal static Verdict Check(StepOutputSchema schema, string argumentsJson, Func<string, bool> exists, Func<int, bool> callExists,
-        IReadOnlyList<string>? items = null)
+        IReadOnlyList<string>? items = null, ToolDefinition? offered = null)
     {
         var errors = new List<string>();
         var notes = new List<string>();
@@ -216,6 +217,21 @@ internal static class StepOutputContract
         }
 
         var known = schema.Fields.Select(f => f.Name).Append("evidence").ToHashSet(StringComparer.Ordinal);
+
+        // A field of ANOTHER step of this run is left out and said, not refused. The run offers one tool to
+        // every step, with the fields of all of them (RunTool), and a model given a schema tends to fill what
+        // the schema lists: twice on 2026-10-03 a step sent the fields of the steps after it beside its own,
+        // the whole submission was refused, and it was sent again without them - a model turn spent on values
+        // nobody asked this step for. Nothing is lost by leaving them out: they are that other step's to send.
+        // What this step must send is still required below, so a result sent under another step's name is not
+        // taken for its own. A name no step of the run hands on is still refused: that is a misnamed field.
+        var elsewhere = FieldsOffered(offered);
+        foreach (var name in submitted.Select(p => p.Key).Where(k => !known.Contains(k) && elsewhere.Contains(k)).ToArray())
+        {
+            submitted.Remove(name);
+            notes.Add($"'{name}' is another step's field and was left out; this step hands on {string.Join(", ", schema.Fields.Select(f => f.Name))}.");
+        }
+
         foreach (var name in submitted.Select(p => p.Key).Where(k => !known.Contains(k)))
             errors.Add($"'{name}' is not a field of this step's output (its fields: {string.Join(", ", schema.Fields.Select(f => f.Name))}).");
 
@@ -240,6 +256,21 @@ internal static class StepOutputContract
         }
 
         return errors.Count > 0 ? new(null, [], errors, notes) : new(values, evidence, [], notes);
+    }
+
+    /// <summary>The fields the run-wide tool lists - every step's - read from the tool the model was shown.</summary>
+    private static HashSet<string> FieldsOffered(ToolDefinition? offered)
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        if (offered is null) return names;
+        try
+        {
+            if (JsonNode.Parse(offered.JsonSchema)?["properties"] is JsonObject properties)
+                foreach (var property in properties)
+                    if (property.Key != "evidence") names.Add(property.Key);
+        }
+        catch (JsonException) { }
+        return names;
     }
 
     private static JsonNode? Field(StepOutputField field, JsonNode value, Func<string, bool> exists,
