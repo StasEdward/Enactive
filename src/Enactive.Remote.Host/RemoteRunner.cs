@@ -90,7 +90,8 @@ public sealed class RemoteRunner(
     /// <param name="failed">
     /// Told of a command that failed on this computer's side - not a refusal, which is said where refusals
     /// are. Without it one failure ended the batch, and the commands after it, already acknowledged, were
-    /// never carried out.
+    /// never carried out. The failed command itself is not marked carried out, so the next turn tries it
+    /// again.
     /// </param>
     public async Task ApplyAllAsync(
         IReadOnlyList<HostCommand> commands,
@@ -131,10 +132,14 @@ public sealed class RemoteRunner(
     /// <summary>
     /// Carries out one accepted command.
     ///
-    /// <para>The caller has already written it down and acknowledged it; by the time this is
-    /// reached, the only question left is what the command means - and whether the owner sent it.
-    /// Every kind is opened before anything is done, and a command that does not open does nothing
-    /// at all.</para>
+    /// <para>The caller has already written it down; by the time this is reached, the only question
+    /// left is what the command means - and whether the owner sent it. Every kind is opened before
+    /// anything is done, and a command that does not open does nothing at all.</para>
+    ///
+    /// <para>Once carried out, or refused, it is marked so in the inbox, which hands back every command
+    /// not marked on every turn. Not before: a command that failed on this computer's side, or whose
+    /// carrying out the application closing cut short, is tried again on the next turn instead of lost.
+    /// A start is marked by the claim that opens its run, before it runs (<see cref="StartAsync"/>).</para>
     /// </summary>
     public async Task ApplyAsync(HostCommand command, CancellationToken ct = default)
     {
@@ -149,27 +154,35 @@ public sealed class RemoteRunner(
 
                 case CommandKind.CancelRun:
                     Cancel(sealer.OpenCancel(command).RunId);
-                    return;
+                    break;
 
                 case CommandKind.ResolveApproval:
                     Answer(sealer.OpenDecision(command));
-                    return;
+                    break;
 
                 // The browser removed the device at the gateway before it sent this, so the gateway is not
-                // asked again: this computer distrusts it and gives everyone else a new key.
+                // asked again: this computer distrusts it and gives everyone else a new key. The key store
+                // marks the command carried out in the step that replaces the key: marked after it, a crash
+                // between the two had the removal carried out again under the key it had itself replaced,
+                // and refused as stale - said to the person as a refused command, though it had happened.
                 case CommandKind.RevokeDevice:
                     var revocation = sealer.OpenRevocation(command);
-                    await Administration().RevokeAsync(revocation.DeviceId, KeyAdministration.RemovedFromBrowser, ct);
-                    return;
+                    await Administration().RevokeAsync(
+                        revocation.DeviceId, KeyAdministration.RemovedFromBrowser, command.Id, ct);
+                    break;
 
+                // Marked after, not in the same step: an endorsement changes no key, so carried out again
+                // after a crash it opens as before and finds the device already trusted with that key.
                 case CommandKind.EndorseDevice:
                     var endorsement = sealer.OpenEndorsement(command);
                     await Administration().EndorseAsync(endorsement, ct);
-                    return;
+                    break;
 
                 default:
                     throw new NotSupportedException($"Command kind {command.Kind} is not one this build carries out.");
             }
+
+            store.MarkApplied(command.Id);
         }
         catch (CommandRefusedException refused)
         {
@@ -196,6 +209,10 @@ public sealed class RemoteRunner(
     /// happen. So the run is opened and at once ended Failed with the reason, and nothing runs. Opening
     /// it also claims the command, so a redelivery of the same forgery is not even looked at again.
     /// Every other kind has nothing to report on, and is a notice on this computer.</para>
+    ///
+    /// <para>A refusal is a final answer, so the command is marked carried out: left unmarked, the inbox
+    /// would hand it back on every turn and the person would hear the same refusal every fifteen
+    /// seconds for as long as the command lived.</para>
     /// </summary>
     private void Refuse(HostCommand command, CommandRefusedException refused)
     {
@@ -217,6 +234,8 @@ public sealed class RemoteRunner(
 
             return;
         }
+
+        store.MarkApplied(command.Id);
 
         var notice = new DeliveryNotice("Refused", $"{command.Kind} {command.Id}: {reason}");
         _notices.Enqueue(notice);

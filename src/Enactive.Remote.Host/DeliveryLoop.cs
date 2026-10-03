@@ -70,13 +70,23 @@ public sealed class DeliveryLoop(HostStore store, IGatewayConnection gateway, Se
     }
 
     /// <summary>
-    /// One turn: publish what is owed - grants, then events - then ask for work.
+    /// One turn: publish what is owed - grants, then events - then ask for work, and hand back every
+    /// command received and not yet carried out, in <see cref="CommandOrder"/>.
     ///
     /// <para>Publishing comes first so that a command accepted in this same turn is never reported
     /// about before earlier events have gone - and so that a Host with a backlog spends its
     /// connection on clearing it rather than on taking more on. Grants go before events because a
     /// device reads an event only with the key a grant gives it: an event that arrived first would
     /// sit on the phone as something it cannot open.</para>
+    ///
+    /// <para><b>What is handed back is read from the inbox, not from what this Sync brought.</b> Only
+    /// a command new to this Sync used to be handed back, so one that was written down and then not
+    /// carried out - its acknowledgement failed, a later one in its batch failed, the application
+    /// closed - was met again as "not new" and dropped, or never met again at all once acknowledged.
+    /// The inbox keeps it until the runner marks it carried out (<see cref="HostStore.MarkApplied"/>),
+    /// so the first turn after a start brings back what the last process left, and every turn brings
+    /// back what an earlier one could not finish. A start handed back twice still runs once: the
+    /// runner claims it before it runs (<see cref="HostStore.BeginRun"/>).</para>
     /// </summary>
     public async Task<IReadOnlyList<HostCommand>> TurnAsync(
         IReadOnlyList<WorkspaceRef> workspaces, CancellationToken ct = default)
@@ -108,8 +118,10 @@ public sealed class DeliveryLoop(HostStore store, IGatewayConnection gateway, Se
         catch (GatewayRefusedException refused) when (refused.Code == FaultCode.QuotaExceeded)
         {
             // A wait, not a lost connection. Escaping as an exception, it sent the service round
-            // its reconnect loop - more calls against the very limit that refused this one.
-            return [];
+            // its reconnect loop - more calls against the very limit that refused this one. What
+            // the inbox holds needs nothing from the gateway to be carried out, so it is not kept
+            // waiting with it.
+            return Owed([]);
         }
         catch (GatewayRefusedException refused) when (refused.Disposition == FaultDisposition.Fatal)
         {
@@ -119,7 +131,7 @@ public sealed class DeliveryLoop(HostStore store, IGatewayConnection gateway, Se
             return [];
         }
 
-        var accepted = new List<HostCommand>();
+        var acknowledging = true;
 
         foreach (var command in commands)
         {
@@ -130,21 +142,49 @@ public sealed class DeliveryLoop(HostStore store, IGatewayConnection gateway, Se
 
             // Written down first. Acknowledging before this and then crashing loses the command for
             // good: the gateway stops re-delivering what has been accepted, and this machine would
-            // have no record that it ever existed.
-            var isNew = store.Accept(command);
+            // have no record that it ever existed. A redelivery is written down as nothing new.
+            store.Accept(command);
 
-            await gateway.AcknowledgeAsync(command.Id, ct);
-            store.MarkAcknowledged(command.Id);
-
-            // A redelivery of something already carried out is not work. It is the gateway doing
-            // exactly what at-least-once delivery means.
-            if (isNew && !store.WasApplied(command.Id))
+            if (!acknowledging)
             {
-                accepted.Add(command);
+                continue;
+            }
+
+            try
+            {
+                await gateway.AcknowledgeAsync(command.Id, ct);
+                store.MarkAcknowledged(command.Id);
+            }
+            catch (Exception failure) when (failure is not OperationCanceledException)
+            {
+                // Not a reason to leave the batch behind. Thrown out of the turn, it took every command
+                // already written down with it - acknowledged ones the gateway would not hand over again
+                // among them. The rest of the batch is still written down but not acknowledged: on a
+                // connection that has just failed each call would only wait out its own failure, and the
+                // gateway hands them over again, to be acknowledged then. The next Sync finds out whether
+                // the connection is gone, or the credential - and stops the loop if so.
+                acknowledging = false;
             }
         }
 
-        return accepted;
+        return Owed(commands);
+    }
+
+    /// <summary>
+    /// Every command written down and not yet carried out, in <see cref="CommandOrder"/>.
+    ///
+    /// <para>As the inbox has it, never as the gateway just sent it: a redelivery under the same id is
+    /// written down as nothing new, and acting on its text instead would let the gateway change a
+    /// command after this computer received it. The gateway's own record is handed on only when it is
+    /// that same command, so its routing fields are kept where they can be.</para>
+    /// </summary>
+    private IReadOnlyList<HostCommand> Owed(IReadOnlyList<HostCommand> synced)
+    {
+        var owed = store.Unapplied(DateTimeOffset.UtcNow).Select(stored =>
+            synced.FirstOrDefault(c => c.Id == stored.Id && c.Kind == stored.Kind && c.Payload == stored.Payload)
+                ?? stored);
+
+        return CommandOrder.Arrange(owed);
     }
 
     /// <summary>

@@ -183,6 +183,97 @@ public sealed class HostStore : IDisposable
         => Scalar("SELECT applied_at FROM inbox WHERE command_id = $id", ("$id", commandId)) is not null;
 
     /// <summary>
+    /// Records that a command has been carried out - or refused for good, which is as final an answer.
+    /// Written only once it has been, never when it is handed over: the inbox is what brings back a
+    /// command whose carrying out a crash or a dropped connection cut short, and it can bring back only
+    /// what is not marked. Marking a command already marked changes nothing, so the first time stands.
+    /// </summary>
+    public void MarkApplied(string commandId)
+    {
+        using var guard = _gate.EnterScope();
+        MarkApplied(_connection, null, commandId);
+    }
+
+    /// <summary>
+    /// The same, inside a transaction of the caller's: the key store marks a removal carried out in the
+    /// step that makes it (<see cref="HostKeyStore.RevokeAndRotate"/>). The caller holds this store's lock.
+    /// </summary>
+    internal static void MarkApplied(SqliteConnection connection, SqliteTransaction? transaction, string commandId)
+    {
+        using var statement = connection.CreateCommand();
+        statement.Transaction = transaction;
+        statement.CommandText = "UPDATE inbox SET applied_at = $now WHERE command_id = $id AND applied_at IS NULL";
+        Bind(statement, "$now", Now());
+        Bind(statement, "$id", commandId);
+        statement.ExecuteNonQuery();
+    }
+
+    /// <summary>
+    /// Every command written down and not yet carried out, in the order it was received, but for one
+    /// older than a command of its kind may wait.
+    ///
+    /// <para>This is what makes receiving a command and carrying it out two things a crash can come
+    /// between without losing it. The gateway hands a command over until it is acknowledged, and an
+    /// acknowledged one never again - so a command that was acknowledged and then not carried out, because
+    /// the process ended, the connection dropped or its batch failed after it, was gone for good when only
+    /// a redelivery could bring it back. A removal of a device lost so was refused by the gateway and
+    /// still trusted here, and its key never replaced.</para>
+    ///
+    /// <para>How old is measured from when this computer received it, by the lifetime of its kind
+    /// (<see cref="RemoteProtocol.LifetimeOf"/>), since the inbox does not keep the gateway's own expiry:
+    /// the gateway made the command before it was received, so this errs on keeping one a little longer.
+    /// What is kept a little longer is still not believed - the sealer refuses anything sealed longer ago
+    /// than its kind may wait.</para>
+    ///
+    /// <para>The command is as it was written down. Its routing fields the inbox does not keep - nothing
+    /// on this computer reads them, the sealer opens every command against this computer's own id - so
+    /// the host id is empty, and the time it was made and the time it expires are counted from receipt.</para>
+    /// </summary>
+    public IReadOnlyList<HostCommand> Unapplied(DateTimeOffset now)
+    {
+        var commands = new List<HostCommand>();
+
+        using var guard = _gate.EnterScope();
+        using var statement = _connection.CreateCommand();
+
+        // Nothing received longer ago than the longest lifetime there is can still be owed: kept out
+        // here, so the rows a long-running computer piles up are not read on every turn.
+        statement.CommandText = """
+            SELECT command_id, kind, payload, received_at FROM inbox
+            WHERE applied_at IS NULL AND received_at > $oldest
+            ORDER BY received_at, rowid
+            """;
+        Bind(statement, "$oldest", (now - RemoteProtocol.DeviceCommandLifetime).ToUniversalTime().ToString("O"));
+
+        using var reader = statement.ExecuteReader();
+        while (reader.Read())
+        {
+            // A kind this build does not know was written by another build of it. Nothing here could
+            // carry it out, so it is not handed on.
+            if (!Enum.TryParse<CommandKind>(reader.GetString(1), out var kind))
+            {
+                continue;
+            }
+
+            var received = DateTimeOffset.Parse(
+                reader.GetString(3), System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.RoundtripKind);
+            var expires = received + RemoteProtocol.LifetimeOf(kind);
+
+            if (expires <= now)
+            {
+                continue;
+            }
+
+            commands.Add(new HostCommand(
+                reader.GetString(0), string.Empty, kind, reader.GetString(2),
+                CommandStatus.AcceptedByHost, received, expires));
+        }
+
+        return commands;
+    }
+
+    /// <summary>
     /// Claims a start command and opens the run, in one transaction.
     ///
     /// <para><b><c>applied_at</c> is written before the run begins, not after.</b> A crash between

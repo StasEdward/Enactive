@@ -263,8 +263,18 @@ public sealed partial class KeyAdministration(HostKeyStore keys, IGatewayConnect
     /// part of the way changes nothing, and the removal can be made again.</para>
     /// </summary>
     public Task RevokeAsync(string deviceId, string reason, CancellationToken ct)
+        => RevokeAsync(deviceId, reason, command: null, ct);
+
+    /// <summary>
+    /// The removal above, carrying out a browser's command: when it replaces the key, the command is marked
+    /// carried out in that same step (<see cref="HostKeyStore.RevokeAndRotate"/>). Marked after it, a crash
+    /// between the two left the command to be carried out again under the key it had itself replaced, where
+    /// it was refused as stale. A removal that changes no key - the device already removed, or never trusted -
+    /// is left for the caller to mark: carried out again, it changes nothing.
+    /// </summary>
+    public Task RevokeAsync(string deviceId, string reason, string? command, CancellationToken ct)
     {
-        Revoke(deviceId, reason, tellGateway: false);
+        Revoke(deviceId, reason, tellGateway: false, command);
         return Task.CompletedTask;
     }
 
@@ -320,7 +330,7 @@ public sealed partial class KeyAdministration(HostKeyStore keys, IGatewayConnect
         return settled;
     }
 
-    private void Revoke(string deviceId, string reason, bool tellGateway)
+    private void Revoke(string deviceId, string reason, bool tellGateway, string? command = null)
     {
         KeyRotated rotated;
         lock (TrustedListGate)
@@ -336,7 +346,7 @@ public sealed partial class KeyAdministration(HostKeyStore keys, IGatewayConnect
             if (device.RevokedAt is not null)
                 return;
 
-            var (next, _) = keys.RevokeAndRotate(deviceId, tellGateway);
+            var (next, _) = keys.RevokeAndRotate(deviceId, tellGateway, command);
             rotated = new KeyRotated(deviceId, device.Label, next.Epoch, reason);
         }
 

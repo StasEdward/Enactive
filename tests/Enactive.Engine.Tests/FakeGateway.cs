@@ -101,9 +101,14 @@ internal sealed class FakeGateway : IGatewayConnection
             : Task.FromException<IReadOnlyList<HostCommand>>(SyncRefusal);
     }
 
+    /// <summary>Decides, per command id, whether its Acknowledge fails, and how - a dropped socket, say.</summary>
+    public Func<string, Exception?>? AcknowledgeFailure { get; set; }
+
     public Task AcknowledgeAsync(string commandId, CancellationToken ct)
     {
         Record("Acknowledge");
+        if (AcknowledgeFailure?.Invoke(commandId) is { } failure) return Task.FromException(failure);
+
         Acknowledged.Add(commandId);
         return Task.CompletedTask;
     }
