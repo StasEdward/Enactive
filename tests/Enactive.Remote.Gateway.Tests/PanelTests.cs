@@ -468,21 +468,24 @@ public sealed class PanelTests(TestDatabase database) : IClassFixture<TestDataba
     }
 
     /// <summary>
-    /// Both texts are drafts until the operator approves them, and say so at the top: they are legal
-    /// documents, and a page that read as final before anyone had agreed to it would be promising what
-    /// nobody had decided. Removing the banner is part of approving the text, and so is changing this
-    /// test. Neither page runs a script - a page about what the service can see should not itself be
-    /// code - and each leads back to the panel.
+    /// Both texts were approved by the operator on 2026-10-03 and no longer call themselves drafts: they are
+    /// legal documents, and a page still marked as a draft after it was agreed would leave a person unsure
+    /// which text binds. Each names where the operator can be reached. Neither page runs a script - a page
+    /// about what the service can see should not itself be code - and each leads back to the panel.
     /// </summary>
     [Theory]
     [InlineData("/privacy.html", "Enactive · Privacy")]
     [InlineData("/terms.html", "Enactive · Terms")]
-    public async Task The_policy_pages_are_drafts_without_scripts(string path, string title)
+    public async Task The_policy_pages_are_approved_texts_without_scripts(string path, string title)
     {
         var page = await _stranger.Http.GetStringAsync(path);
 
         Assert.Contains($"<title>{title}</title>", page, StringComparison.Ordinal);
-        Assert.Contains("DRAFT — not yet approved by the operator", page, StringComparison.Ordinal);
+        // Approved by the operator on 2026-10-03: no page may still call itself a draft, and each says
+        // where the operator can be reached - a policy nobody can ask about is not one.
+        Assert.DoesNotContain("DRAFT", page, StringComparison.Ordinal);
+        Assert.DoesNotContain("Contact details will be published here", page, StringComparison.Ordinal);
+        Assert.Contains("href=\"https://github.com/StasEdward/Enactive/issues\"", page, StringComparison.Ordinal);
         Assert.Contains("href=\"/\"", page, StringComparison.Ordinal);
         Assert.DoesNotContain("<script", page, StringComparison.OrdinalIgnoreCase);
     }

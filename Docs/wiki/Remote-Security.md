@@ -15,8 +15,7 @@ visible, and a device that was compromised when it invited another can mislead t
 ([the invitation limit](#the-invitation-limit)).
 
 How to pair, add and remove devices is in [Remote access](Remote-Access.md). The service's privacy
-page, `/privacy.html` on the gateway, covers the same ground; it is marked as a draft until the
-operator approves it.
+page, `/privacy.html` on the gateway, covers the same ground.
 
 ## What the service cannot read
 
