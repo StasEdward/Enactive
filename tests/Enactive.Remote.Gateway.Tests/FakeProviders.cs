@@ -74,6 +74,8 @@ internal sealed partial class FakeProviders : IAsyncDisposable
 
     /// <summary>What the next id token gets wrong.</summary>
     public IdTokenFault Fault { get; set; }
+    public string? AuthenticationContext { get; set; }
+    public long? AuthenticationTime { get; set; }
 
     /// <summary>How many requests reached either token endpoint, redeemed or refused.</summary>
     public int TokenRequests => Volatile.Read(ref _tokenRequests);
@@ -249,6 +251,13 @@ internal sealed partial class FakeProviders : IAsyncDisposable
         var now = DateTime.UtcNow;
         var expired = Fault == IdTokenFault.Expired;
         var account = grant.Google!;
+        var claims = new Dictionary<string, object>
+        {
+            ["sub"] = account.Sub, ["name"] = account.Name, ["email"] = account.Email,
+            ["nonce"] = Fault == IdTokenFault.WrongNonce ? "a-nonce-of-another-sign-in" : grant.Nonce!
+        };
+        if (AuthenticationContext is not null) claims["acr"] = AuthenticationContext;
+        if (AuthenticationTime is not null) claims["auth_time"] = AuthenticationTime.Value;
 
         return new JsonWebTokenHandler().CreateToken(new SecurityTokenDescriptor
         {
@@ -257,13 +266,7 @@ internal sealed partial class FakeProviders : IAsyncDisposable
             IssuedAt = expired ? now.AddHours(-2) : now,
             NotBefore = expired ? now.AddHours(-2) : now,
             Expires = expired ? now.AddHours(-1) : now.AddMinutes(10),
-            Claims = new Dictionary<string, object>
-            {
-                ["sub"] = account.Sub,
-                ["name"] = account.Name,
-                ["email"] = account.Email,
-                ["nonce"] = Fault == IdTokenFault.WrongNonce ? "a-nonce-of-another-sign-in" : grant.Nonce!
-            },
+            Claims = claims,
             SigningCredentials = new SigningCredentials(
                 new RsaSecurityKey(Fault == IdTokenFault.WrongSignature ? _forger : _key) { KeyId = KeyId },
                 SecurityAlgorithms.RsaSha256)

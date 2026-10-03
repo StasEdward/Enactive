@@ -323,9 +323,10 @@ public static class ExternalSignIn
                 })
             : RateLimitPartition.GetNoLimiter(""));
 
-    /// <summary><c>/auth/{provider}/callback</c>, for any provider name, configured or not.</summary>
+    /// <summary>Ordinary provider callbacks and the separate administrator callback, before authentication.</summary>
     private static bool IsCallback(PathString path)
-        => path.Value is { } value
+        => path.Equals(new PathString(Administration.AdminAuthentication.CallbackPath), StringComparison.OrdinalIgnoreCase)
+           || path.Value is { } value
            && value.StartsWith("/auth/", StringComparison.OrdinalIgnoreCase)
            && value.EndsWith("/callback", StringComparison.OrdinalIgnoreCase);
 

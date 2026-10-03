@@ -79,6 +79,11 @@ expected="admissions approvals audit commands devices enrollments events externa
 if [ "$version" -ge 3 ]; then
   expected="$expected signin_redemptions"
 fi
+# Administrative credentials and their revocations must be backed up too; otherwise a
+# truncated schema-10 dump could pass while silently losing the separate security domain.
+if [ "$version" -ge 10 ]; then
+  expected="$expected administrators administrator_sessions administrator_audit"
+fi
 actual=$(ask "SELECT table_name FROM information_schema.tables
               WHERE table_schema = '$scratch' ORDER BY table_name" | tr '\n' ' ')
 
@@ -94,6 +99,21 @@ done
 if [ "$version" -lt 1 ]; then
   complain "the restored database records no applied migration"
 fi
+# Access management depends on revisions and independent audit detail. A dump with the
+# version row but missing these columns must not be accepted as a usable schema-11 backup.
+if [ "$version" -ge 11 ]; then
+  columns=$(ask "SELECT CONCAT(table_name, '.', column_name) FROM information_schema.columns
+                  WHERE table_schema = '$scratch' AND
+                    ((table_name = 'admissions' AND column_name = 'revision') OR
+                     (table_name = 'administrator_audit' AND column_name = 'detail'))" | tr '\n' ' ')
+  for column in admissions.revision administrator_audit.detail; do
+    case " $columns " in
+      *" $column "*) ;;
+      *) complain "the restored database has no '$column' column" ;;
+    esac
+  done
+fi
+
 echo "Schema version $version, $(echo "$actual" | wc -w) tables."
 
 # 3. Each account's line is ahead of the rows numbered from it. Every account has its own counter in

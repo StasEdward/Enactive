@@ -3,6 +3,7 @@ using Enactive.Remote.Contracts;
 using Enactive.Remote.Contracts.Crypto;
 using Enactive.Remote.Gateway;
 using Enactive.Remote.Gateway.Accounts;
+using Enactive.Remote.Gateway.Administration;
 using Enactive.Remote.Gateway.Services;
 using Enactive.Remote.Gateway.Storage;
 using Microsoft.AspNetCore.Antiforgery;
@@ -75,6 +76,7 @@ var developmentSignIn = DevelopmentSignIn.Enabled(builder.Configuration, builder
 // Read now for the same reason: a provider with half its settings, or no public origin to send people back
 // to, stops the start rather than offering a sign-in that fails for everybody.
 var externalProviders = ExternalProviders.FromConfiguration(builder.Configuration, builder.Environment);
+var adminSettings = AdminSettings.Read(builder.Configuration, externalProviders.PublicOrigin);
 
 // The providers' callbacks carry the authorization code in their query string, and two framework logs
 // print it. The request log writes every request's full URL at Information - the DEFAULT level, so with no
@@ -225,6 +227,7 @@ builder.Services.AddAuthentication(UserCookie.SchemeName)
     .AddExternalSignIn(externalProviders, cookieSecurity);
 
 builder.Services.AddAuthorization();
+builder.Services.AddAdministration(adminSettings);
 
 builder.Services.AddAntiforgery(o =>
 {
@@ -354,6 +357,7 @@ if (!app.Environment.IsDevelopment())
 // index.html is never served raw. See PanelAssets: no-cache asks a client to revalidate, and a tab
 // restored from a phone's back-forward cache never asks at all, so the release that reached the
 // server was invisible on the device the panel exists for.
+app.UseAdministrativeOrigin(adminSettings);
 var panel = PanelAssets.Load(app.Environment.WebRootPath!);
 
 app.Use(async (context, next) =>
@@ -409,7 +413,8 @@ app.UseDefaultFiles();
 // panel is worth fingerprinting, fingerprint it; until then it revalidates.
 app.UseStaticFiles(new StaticFileOptions
 {
-    OnPrepareResponse = served => served.Context.Response.Headers.CacheControl = "no-cache"
+    OnPrepareResponse = served => served.Context.Response.Headers.CacheControl =
+        served.Context.Request.Path.StartsWithSegments("/admin", StringComparison.OrdinalIgnoreCase) ? "no-store" : "no-cache"
 });
 // Before authentication, for two reasons. The providers' callbacks are answered inside authentication,
 // and their limit has to refuse a replay before the handler redeems its code. And authentication reads
@@ -461,6 +466,7 @@ if (developmentSignIn)
 }
 
 app.MapExternalSignIn(externalProviders, RequestLimits.Auth);
+app.MapAdministration(adminSettings);
 
 // The person's API: their cookie, and nothing else. A computer's bearer token is a credential for the
 // hub only - one that could call this could register computers and start work on its own say-so.

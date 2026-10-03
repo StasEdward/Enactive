@@ -159,7 +159,7 @@ public sealed class TestDatabase : IAsyncLifetime
     /// server's default is NOT the one the other tests happen to run under.
     /// </summary>
     public async Task WithScratchDatabaseAsync(
-        string charset, string collation, Func<string, Task> inspect)
+        string charset, string collation, Func<string, Task> inspect, bool migrate = true)
     {
         var name = Prefix + Guid.NewGuid().ToString("N");
         var connectionString = new Database(
@@ -169,7 +169,10 @@ public sealed class TestDatabase : IAsyncLifetime
 
         try
         {
-            await Migrator.ApplyAsync(connectionString);
+            if (migrate)
+            {
+                await Migrator.ApplyAsync(connectionString);
+            }
             await inspect(connectionString);
         }
         finally

@@ -26,6 +26,8 @@ public static class RequestLimits
 {
     /// <summary>The sign-in endpoints' policy, per caller address.</summary>
     public const string Auth = "auth";
+    public const string AdminRead = "admin-read";
+    public const int AdminReadsPerMinute = 60;
 
     /// <summary>The person's API's policy, per account.</summary>
     public const string Api = "api";
@@ -122,6 +124,11 @@ public static class RequestLimits
             // count. Protects the sign-in from being used to guess or to load the database; it decides
             // nothing about who may sign in, which the provider and the admission list do.
             o.AddPolicy(Auth, context => PerMinute(ClientAddress(context), AuthPerMinute));
+            // Browsing must not consume the small sign-in/sign-out budget. Authorization runs
+            // first and cookie validation installs this session; no anonymous shared bucket exists.
+            o.AddPolicy(AdminRead, context => PerMinute(
+                ((Administration.AdminSession)context.Items[typeof(Administration.AdminSession)]!).AdministratorId,
+                AdminReadsPerMinute));
 
             // Per account, which is why this runs after authentication: before it there is no account to
             // count, and every person would share one bucket. Protects the database's time; whether the

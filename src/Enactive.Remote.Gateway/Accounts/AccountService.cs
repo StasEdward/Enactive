@@ -261,7 +261,7 @@ public sealed class AccountService(Database db, TimeProvider clock, AdmissionMod
             {
                 await connection.ExecuteAsync(transaction,
                     """
-                    UPDATE admissions SET state = 'Approved', decided_at = @now
+                    UPDATE admissions SET state = 'Approved', decided_at = @now, revision = revision + 1
                     WHERE provider = @provider AND subject = @subject
                     """,
                     ("@now", now), ("@provider", provider), ("@subject", subject));

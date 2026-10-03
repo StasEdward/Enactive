@@ -92,6 +92,7 @@ public sealed class Retention(Database database, int days)
     /// </summary>
     public async Task<int> TrimAsync(CancellationToken ct = default)
     {
+        await new Administration.AdminStore(database, TimeProvider.System).PruneAsync(ct);
         var cutoff = DateTimeOffset.UtcNow.AddDays(-Days);
         var auditCutoff = DateTimeOffset.UtcNow.AddDays(-AuditDays);
         await using var connection = await database.OpenAsync(ct);
