@@ -45,11 +45,38 @@ public sealed record TaskActionPolicy(
     public bool AllowsCommand(string command)
     {
         // No shell chaining/interpolation. Allowed executables can still have arbitrary effects.
-        if (command.IndexOfAny(['\r', '\n', '&', '|', ';', (char)96, '$', '>', '<', '%', '!', '^', '(', ')', '\0']) >= 0)
+        if (command.IndexOfAny(['\r', '\n', '&', '|', (char)96, '$', '>', '<', '%', '!', '^', '(', ')', '\0']) >= 0)
+            return false;
+        if (command.Contains(';') && !EverySemicolonIsQuoted(command))
             return false;
         var text = command.Trim();
         return CommandPrefixes.Any(prefix => text.Equals(prefix, StringComparison.Ordinal)
             || text.StartsWith(prefix + " ", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// Whether every semicolon of a command line lies inside plain double quotes, where it is the text of one
+    /// argument to cmd, to PowerShell and to a POSIX shell alike.
+    ///
+    /// <para>A semicolon anywhere used to refuse the line. The engine's own measurement of a workspace's tests
+    /// passes an argument written "console;verbosity=normal": under a policy that allowed that very command family
+    /// it was refused, on 2026-10-04, and the run had nothing to compare its tests against afterwards.</para>
+    ///
+    /// <para>Only the semicolon, and only where the three shells agree on what is quoted: a line with a single
+    /// quote (to a POSIX shell it makes a double quote an ordinary character) or a backslash before a double quote
+    /// (an escaped quote opens nothing) is read as having no quoted part at all, and its semicolon refuses it.
+    /// Quotes that do not pair leave the last part unquoted to nobody's certain reading: refused too.</para>
+    /// </summary>
+    private static bool EverySemicolonIsQuoted(string command)
+    {
+        if (command.Contains('\'') || command.Contains("\\\"", StringComparison.Ordinal)) return false;
+        var quoted = false;
+        foreach (var c in command)
+        {
+            if (c == '"') quoted = !quoted;
+            else if (c == ';' && !quoted) return false;
+        }
+        return !quoted;
     }
 
     public bool SameAs(TaskActionPolicy other) => SourceQuote == other.SourceQuote
