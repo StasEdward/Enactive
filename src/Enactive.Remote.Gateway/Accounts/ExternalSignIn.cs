@@ -393,7 +393,7 @@ public static class ExternalSignIn
         // Deleted in every outcome, before anything else can fail, because the browser has no further use for
         // it. That is all this does: the cookie is a protected ticket and holds no state of ours, so a copy kept
         // elsewhere stays acceptable for the rest of its ten minutes. What makes the answer good for one sign-in
-        // is its id, redeemed in the database with the session it opens (SessionStore.RedeemAsync).
+        // is its id, redeemed in the database before anything it leads to (AccountService.SignInAsync).
         await context.SignOutAsync(SchemeName);
 
         var principal = external.Succeeded ? external.Principal : null;

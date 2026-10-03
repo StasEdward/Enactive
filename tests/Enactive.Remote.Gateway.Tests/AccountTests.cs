@@ -33,6 +33,18 @@ public sealed class AccountTests(TestDatabase database) : IClassFixture<TestData
     /// <summary>A provider's answer never redeemed, issued now: what each sign-in through a provider carries.</summary>
     private static SignInTicket Fresh() => new(Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(32)), DateTimeOffset.UtcNow);
 
+    /// <summary>
+    /// A fresh answer issued a millisecond after the account's sessions were last ended, as stored. One issued
+    /// "now" right after a revocation can fall in the revocation's own millisecond, and is then refused as
+    /// issued before it - a test that failed now and then for no reason it was about.
+    /// </summary>
+    private async Task<SignInTicket> AfterRevocationAsync(string userId)
+    {
+        var revoked = (DateTime)(await database.ScalarAsync(
+            $"SELECT sessions_revoked_at FROM users WHERE id = '{userId}'"))!;
+        return Fresh() with { Issued = new DateTimeOffset(DateTime.SpecifyKind(revoked, DateTimeKind.Utc)).AddMilliseconds(1) };
+    }
+
     private static string Subject(string stem = "u") => stem + "-" + Guid.NewGuid().ToString("N")[..12];
 
     /// <summary>Runs one operator command; returns its exit code and what it printed.</summary>
@@ -284,7 +296,7 @@ public sealed class AccountTests(TestDatabase database) : IClassFixture<TestData
 
         Assert.Equal(0, (await OperatorAsync("enable", account.Access.UserId)).Exit);
         var back = Assert.IsType<SignInOutcome.SignedIn>(
-            await Accounts().SignInAsync("github", subject, "Person", Fresh(), default));
+            await Accounts().SignInAsync("github", subject, "Person", await AfterRevocationAsync(account.Access.UserId), default));
         Assert.Equal(account.Access.UserId, back.Access.UserId);
     }
 
@@ -409,7 +421,8 @@ public sealed class AccountTests(TestDatabase database) : IClassFixture<TestData
         Assert.Equal(0, revoked.Exit);
         Assert.False(await Sessions.ValidAsync(
             account.Access.UserId, account.Access.SessionId, account.SecurityVersion, default));
-        Assert.IsType<SignInOutcome.SignedIn>(await Accounts().SignInAsync("github", subject, "Person", Fresh(), default));
+        Assert.IsType<SignInOutcome.SignedIn>(await Accounts().SignInAsync(
+            "github", subject, "Person", await AfterRevocationAsync(account.Access.UserId), default));
     }
 
     /// <summary>An id that is not an account is an error to the operator, and writes nothing.</summary>

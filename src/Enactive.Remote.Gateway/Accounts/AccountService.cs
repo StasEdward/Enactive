@@ -127,13 +127,21 @@ public sealed class AccountService(Database db, TimeProvider clock, AdmissionMod
     /// <c>sub</c>. The display name is only what the person is called: it is kept up to date when the
     /// provider reports a new one and is never what finds the account, and an email never does.</para>
     ///
-    /// <para>The <paramref name="ticket"/> is redeemed with the session it opens, and only then: an answer that
-    /// ended waiting or refused opened nothing, and saying so again is all a second redemption of it can do
-    /// (<see cref="SessionStore.RedeemAsync"/>).</para>
+    /// <para>The <paramref name="ticket"/> is redeemed before anything else, whatever the sign-in then comes
+    /// to (<see cref="RedeemAsync"/>). Redeemed only with the session it opened, an answer that ended waiting,
+    /// or met a disabled account, was not spent: a copy kept until the operator approved the identity, or
+    /// enabled the account, opened a session then without the provider being asked again. And redeemed after
+    /// the lookup, a spent answer replayed after the account was deleted put the identity back on the waiting
+    /// list. A person loses nothing by it: after "waiting" they go through the provider again anyway.</para>
     /// </summary>
     public async Task<SignInOutcome> SignInAsync(
         string provider, string subject, string display, SignInTicket ticket, CancellationToken ct)
     {
+        if (!await RedeemAsync(ticket, ct))
+        {
+            return new SignInOutcome.Spent();
+        }
+
         var userId = await IdentityUserAsync(provider, subject, display, ct);
 
         if (userId is null)
@@ -151,7 +159,7 @@ public sealed class AccountService(Database db, TimeProvider clock, AdmissionMod
 
         try
         {
-            return await _sessions.RedeemAsync(userId, provider, ticket, ct) is { } opened
+            return await _sessions.OpenIssuedAsync(userId, provider, ticket.Issued, ct) is { } opened
                 ? new SignInOutcome.SignedIn(opened.Access, opened.SecurityVersion)
                 : new SignInOutcome.Spent();
         }
@@ -160,6 +168,35 @@ public sealed class AccountService(Database db, TimeProvider clock, AdmissionMod
             // The status is read where the session is made, under a lock, so a disablement that
             // commits between this person being found and their session opening is still seen.
             return new SignInOutcome.Disabled();
+        }
+    }
+
+    /// <summary>
+    /// Records the answer as redeemed: true the first time, false for every presentation after it.
+    ///
+    /// <para>One insert on the answer's id, committed on its own before anything the answer leads to, so that
+    /// of any number of presentations - one after another, or at the same moment - exactly one gets past
+    /// here: the others' inserts wait on its row and fail on the key. That is also what makes concurrent
+    /// redemptions open one session at most: only the presentation that redeemed goes on to open one. A
+    /// check made first and an insert after would let them all through. Its own statement rather than part
+    /// of the session's transaction, because most outcomes open no session and are spent all the same; a
+    /// sign-in that fails after this costs the person a fresh round through the provider, and nothing
+    /// else.</para>
+    /// </summary>
+    private async Task<bool> RedeemAsync(SignInTicket ticket, CancellationToken ct)
+    {
+        await using var connection = await db.OpenAsync(ct);
+
+        try
+        {
+            await connection.ExecuteAsync(null,
+                "INSERT INTO signin_redemptions (id, redeemed_at) VALUES (@ticket, @now)",
+                ("@ticket", ticket.Id), ("@now", clock.GetUtcNow()));
+            return true;
+        }
+        catch (MySqlException exception) when (exception.ErrorCode == MySqlErrorCode.DuplicateKeyEntry)
+        {
+            return false;
         }
     }
 

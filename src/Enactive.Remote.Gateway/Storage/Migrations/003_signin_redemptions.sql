@@ -11,8 +11,8 @@
 -- half-way is re-run from the top.
 
 -- One row per answer redeemed, keyed by the random id the answer was issued with. The key is what makes a
--- second redemption fail, sequential or at once: the insert is in the transaction that opens the session, and
--- the loser's insert waits on the winner's row and fails on the duplicate. Owned by nobody - the id is random
+-- second redemption fail, sequential or at once: the insert is the first thing a redemption does, whatever it
+-- then comes to, and the loser's insert waits on the winner's row and fails on the duplicate. Owned by nobody - the id is random
 -- and names no person - and removed a day after it was written (Retention), long after its answer expired.
 CREATE TABLE IF NOT EXISTS signin_redemptions (
   id          CHAR(64)    CHARACTER SET ascii COLLATE ascii_bin NOT NULL,

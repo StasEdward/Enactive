@@ -41,28 +41,26 @@ public sealed class SessionStore(Database db, TimeProvider clock)
     /// </summary>
     internal async Task<(UserAccess Access, int SecurityVersion)> OpenWithVersionAsync(
         string userId, string provider, CancellationToken ct)
-        => await OpenSessionAsync(userId, provider, ticket: null, ct)
-           ?? throw new InvalidOperationException("A session opened without a ticket was refused as a spent one.");
+        => await OpenSessionAsync(userId, provider, issued: null, ct)
+           ?? throw new InvalidOperationException("A session opened with no answer to compare was refused as a stale one.");
 
     /// <summary>
-    /// As <see cref="OpenWithVersionAsync"/>, for a sign-in that redeems a provider's answer: null, and no
-    /// session, when that answer was redeemed before or was issued at or before the account's sessions were
-    /// last ended (<see cref="RevokeAllAsync(string, CancellationToken)"/>).
+    /// As <see cref="OpenWithVersionAsync"/>, for a sign-in with a provider's answer issued at
+    /// <paramref name="issued"/>, already redeemed (<see cref="AccountService.SignInAsync"/>): null, and no
+    /// session, when the account's sessions were last ended at or after that moment
+    /// (<see cref="RevokeAllAsync(string, CancellationToken)"/>).
     ///
-    /// <para>The answer is a protected ticket good for ten minutes, and deleting the browser's copy does not
-    /// end it: whoever kept a copy could redeem it again, and after "Sign out everywhere" too - the session it
-    /// opened was stamped with the account's new version, so the version could not tell. Both rules are kept
-    /// in the transaction that opens the session. The redemption is one insert keyed by the answer's id, so of
-    /// two redemptions at once the second waits on the first's row and fails on the key; a read made first
-    /// would let both through. The revocation time is read under the same shared lock as the status, so a
-    /// revocation committing now either comes first and is seen, or ends this session after it.</para>
+    /// <para>The answer is a protected ticket good for ten minutes. A copy kept from before "Sign out
+    /// everywhere" opened a session after it, stamped with the account's new version, so the version could not
+    /// tell. The revocation time is read under the same shared lock as the status, so a revocation committing
+    /// now either comes first and is seen, or waits and ends this session after it.</para>
     /// </summary>
-    internal Task<(UserAccess Access, int SecurityVersion)?> RedeemAsync(
-        string userId, string provider, SignInTicket ticket, CancellationToken ct)
-        => OpenSessionAsync(userId, provider, ticket, ct);
+    internal Task<(UserAccess Access, int SecurityVersion)?> OpenIssuedAsync(
+        string userId, string provider, DateTimeOffset issued, CancellationToken ct)
+        => OpenSessionAsync(userId, provider, issued, ct);
 
     private async Task<(UserAccess Access, int SecurityVersion)?> OpenSessionAsync(
-        string userId, string provider, SignInTicket? ticket, CancellationToken ct)
+        string userId, string provider, DateTimeOffset? issued, CancellationToken ct)
     {
         await using var connection = await db.OpenAsync(ct);
         await using var transaction = await connection.BeginAsync(ct);
@@ -90,25 +88,11 @@ public sealed class SessionStore(Database db, TimeProvider clock)
         var sessionId = Ids.New();
         var now = clock.GetUtcNow();
 
-        if (ticket is not null)
+        // "At or after": both are kept to the millisecond, and an answer made in the same millisecond as the
+        // revocation cannot be shown to have come after it.
+        if (issued is { } answered && account.RevokedAt is { } revoked && revoked >= answered)
         {
-            // "At or after": both are kept to the millisecond, and an answer made in the same millisecond as the
-            // revocation cannot be shown to have come after it.
-            if (account.RevokedAt is { } revoked && revoked >= ticket.Issued)
-            {
-                return null;
-            }
-
-            try
-            {
-                await connection.ExecuteAsync(transaction,
-                    "INSERT INTO signin_redemptions (id, redeemed_at) VALUES (@ticket, @now)",
-                    ("@ticket", ticket.Id), ("@now", now));
-            }
-            catch (MySqlException exception) when (exception.ErrorCode == MySqlErrorCode.DuplicateKeyEntry)
-            {
-                return null;
-            }
+            return null;
         }
 
         await connection.ExecuteAsync(transaction,
@@ -182,13 +166,19 @@ public sealed class SessionStore(Database db, TimeProvider clock)
     /// security version on. The version is what makes this complete: a session opened by a sign-in racing
     /// this one is stamped with the old version whichever way the race goes, and no longer matches. And it
     /// records when, so a provider's answer issued before it opens no session after it
-    /// (<see cref="RedeemAsync"/>). Written to the account's security log as the person's own act; the
+    /// (<see cref="OpenIssuedAsync"/>). Written to the account's security log as the person's own act; the
     /// operator's revocation is written as the operator's (<see cref="AdminCommands"/>).
     /// </summary>
     public async Task RevokeAllAsync(string userId, CancellationToken ct)
     {
         await using var connection = await db.OpenAsync(ct);
         await using var transaction = await connection.BeginAsync(ct);
+
+        // The account locked before the time is read, as the operator's commands do. Read first, the time was
+        // that of the start of a wait behind any sign-in holding the account, and an answer issued during the
+        // wait counted as issued after the revocation it was older than in effect, and opened a session.
+        await connection.ExecuteAsync(transaction,
+            "SELECT 1 FROM users WHERE id = @user FOR UPDATE", ("@user", userId));
         var now = clock.GetUtcNow();
 
         await RevokeAllAsync(connection, transaction, userId, now);
@@ -203,6 +193,8 @@ public sealed class SessionStore(Database db, TimeProvider clock)
     /// Disabling an account has to end its sessions in the same transaction that sets its status: done
     /// as a second step, a failure between the two left a disabled account whose sessions were still
     /// being refused only by the status check, and an account enabled again would have woken them up.
+    /// The caller has locked the account before reading <paramref name="now"/>, for the reason given in
+    /// <see cref="RevokeAllAsync(string, CancellationToken)"/>.
     /// </summary>
     internal static async Task RevokeAllAsync(
         MySqlConnection connection, MySqlTransaction transaction, string userId, DateTimeOffset now)

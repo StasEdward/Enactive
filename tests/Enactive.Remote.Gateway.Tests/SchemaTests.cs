@@ -149,31 +149,30 @@ public sealed class SchemaTests(TestDatabase database) : IClassFixture<TestDatab
     }
 
     /// <summary>
-    /// A database that records a schema version this build has no migration for was written by another protocol
-    /// of the gateway - protocol 1's database records version 2, which this build does not ship. Started on it,
-    /// the gateway passed over the versions it did not know, started, and answered its health check while every
-    /// call failed on tables of another shape: the install was reported a success and the service was down for
-    /// everyone. It refuses to start instead, with what to do, and changes nothing.
+    /// A database that records a version above every one this build ships was migrated by a newer build - the
+    /// state a rollback of the code leaves after a migration (this build at 1 and 3, the database at 4 too). It
+    /// refuses to start, as for another protocol's database, and changes nothing; but it says what happened. It
+    /// used to send the operator to the cutover, a procedure for another protocol that has nothing to do with it.
     /// </summary>
     [Fact]
-    public async Task A_database_of_another_protocol_stops_the_start_with_the_cutovers_instructions()
+    public async Task A_database_migrated_by_a_newer_build_says_so()
     {
         await database.WithScratchDatabaseAsync("utf8mb4", "utf8mb4_0900_ai_ci", async connectionString =>
         {
-            var unknown = Migrator.KnownVersions().Max() + 1;
+            var newer = Migrator.KnownVersions().Max() + 1;
             await using (var connection = new MySqlConnection(connectionString))
             {
                 await connection.OpenAsync();
                 await using var command = new MySqlCommand(
-                    $"INSERT INTO schema_version (version, applied_at) VALUES ({unknown}, UTC_TIMESTAMP(3))", connection);
+                    $"INSERT INTO schema_version (version, applied_at) VALUES ({newer}, UTC_TIMESTAMP(3))", connection);
                 await command.ExecuteNonQueryAsync();
             }
 
             var refused = await Assert.ThrowsAsync<InvalidOperationException>(() => Migrator.ApplyAsync(connectionString));
 
             Assert.Equal(
-                $"This database was written by another protocol of Enactive Remote (schema version {unknown}). "
-                + "Install by hand: Docs/REMOTE_OPERATIONS.md §cutover.",
+                $"This database was migrated by a newer build of Enactive Remote (schema version {newer}). "
+                + "Install that build, or see Docs/REMOTE_OPERATIONS.md §4.2 before running an older one.",
                 refused.Message);
         });
     }
@@ -181,9 +180,11 @@ public sealed class SchemaTests(TestDatabase database) : IClassFixture<TestDatab
     /// <summary>
     /// The protocol-1 database exactly: it records versions 1 and 2, and nothing else. It is still on the server,
     /// kept read-only as the rollback, so a gateway pointed at it by a mistyped connection string must still refuse
-    /// it. A migration of this protocol numbered 2 would make that database read as current: nothing would be
-    /// applied, nothing refused, and the gateway would answer its health check on tables of another shape. So
-    /// version 2 is never shipped, and this fails the day one is.
+    /// it. Started on it, the gateway once passed over the versions it did not know and answered its health check
+    /// while every call failed on tables of another shape: the install was reported a success and the service was
+    /// down for everyone. A migration of this protocol numbered 2 would bring that back - the database would read
+    /// as current - so version 2 is never shipped, and this fails the day one is. Version 2 is below this build's
+    /// newest, so it is another protocol's and not a newer build's, and the operator is sent to the cutover.
     /// </summary>
     [Fact]
     public async Task The_protocol_1_database_is_refused_whatever_this_protocol_has_added_since()
