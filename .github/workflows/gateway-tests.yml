@@ -47,6 +47,8 @@ jobs:
           node-version: "22"
       - name: Test the panel's cryptography
         run: node --test "tests/panel/*.test.mjs"
+      - name: Test backup completeness across schema versions
+        run: bash deploy/verify-restore.test.sh
       - name: Test with an isolated MySQL service
         run: dotnet test tests/Enactive.Remote.Gateway.Tests/Enactive.Remote.Gateway.Tests.csproj --configuration Release --logger "trx;LogFileName=gateway.trx"
       - uses: actions/upload-artifact@v4

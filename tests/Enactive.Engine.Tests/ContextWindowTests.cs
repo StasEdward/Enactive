@@ -151,12 +151,44 @@ public sealed class ContextWindowTests
         Assert.StartsWith("[earlier tool result:", messages[3].Content, StringComparison.Ordinal);
     }
 
-    // The stub replaces arguments, which are still sent as arguments — so it has to be valid JSON.
-    [Fact]
-    public void The_elided_arguments_stub_is_valid_json()
+    // What replaces arguments is still sent as arguments, so it has to be a JSON object whatever the call was and
+    // however it went. This goes through Elide, which is what a model's transcript goes through: a test of a literal
+    // that nothing sends (there was one) passes while a provider rejects the real request. The path is the part taken
+    // from the model's own text, so it is one that has to be escaped.
+    [Theory]
+    [InlineData("Created new file (5000 bytes).")]
+    [InlineData("ERROR: the tool 'write_file' is not permitted for this run.")]
+    [InlineData(null)] // calls nothing answered: the turn was cut before their results
+    public void What_replaces_elided_arguments_is_valid_json_however_the_call_went(string? reply)
     {
-        using var doc = System.Text.Json.JsonDocument.Parse(Transcript.ElidedArguments);
-        Assert.Equal(System.Text.Json.JsonValueKind.Object, doc.RootElement.ValueKind);
+        const string path = """C:\notes\"final" draft.md""";
+        var messages = new List<ChatMessage>
+        {
+            ChatMessage.System("You are a developer agent."), ChatMessage.User("write the notes"),
+            AssistantCall("write_file",
+                System.Text.Json.JsonSerializer.Serialize(new { path, content = new string('p', 5_000) }), "w1"),
+            AssistantCall("run_command",
+                System.Text.Json.JsonSerializer.Serialize(new { command = new string('c', 5_000) }), "c1"),
+        };
+        if (reply is not null)
+        {
+            messages.Insert(3, ToolResult("w1", reply));
+            messages.Add(ToolResult("c1", reply));
+        }
+
+        Transcript.Elide(messages, targetChars: 500, keepRecent: 0);
+
+        var calls = messages.Where(m => m.ToolCalls is { Count: > 0 }).Select(m => m.ToolCalls![0].ArgumentsJson).ToArray();
+        Assert.Equal(2, calls.Length);
+        Assert.All(calls, call =>
+        {
+            Assert.True(call.Length < 500, "the arguments were not elided, so nothing was tested");
+            using var doc = System.Text.Json.JsonDocument.Parse(call);
+            Assert.Equal(System.Text.Json.JsonValueKind.Object, doc.RootElement.ValueKind);
+            Assert.Equal(System.Text.Json.JsonValueKind.String, doc.RootElement.GetProperty("_elided").ValueKind);
+        });
+        using var written = System.Text.Json.JsonDocument.Parse(calls[0]);
+        Assert.Equal(path, written.RootElement.GetProperty("path").GetString());
     }
 
     [Fact]

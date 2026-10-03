@@ -80,13 +80,15 @@ measurement. A refusal names the limit to the person who met it.
 
 | Variable | Default | What it limits |
 |---|---|---|
-| `ENACTIVE_LIMIT_HOSTS_PER_USER` | 5 | Computers connected to one account. |
+| `ENACTIVE_LIMIT_HOSTS_PER_USER` | 5 | Computers connected to one account — and twice this in open connections of its computers (10 by default), past which a new connection is closed. |
 | `ENACTIVE_LIMIT_DEVICES_PER_USER` | 10 | Browsers and phones holding the account's keys. |
 | `ENACTIVE_LIMIT_ACTIVE_RUNS_PER_USER` | 3 | Runs started and not yet ended, across the account's computers. |
 | `ENACTIVE_LIMIT_QUEUED_COMMANDS_PER_HOST` | 50 | Commands waiting for one computer to collect them. Removals and endorsements of devices are counted apart, up to twice the devices limit, so a full queue never refuses a removal. |
 | `ENACTIVE_LIMIT_TASKS_PER_DAY` | 200 | Tasks one account makes in the last 24 hours. |
 | `ENACTIVE_LIMIT_OPEN_INVITES_PER_USER` | 5 | Invitations to add a device that are not yet used or expired. |
-| `ENACTIVE_LIMIT_SEALED_BYTES_PER_USER` | 209715200 | Bytes of sealed content one account keeps (200 MiB). Retention gives them back. |
+| `ENACTIVE_LIMIT_SEALED_BYTES_PER_USER` | 209715200 | Bytes of sealed content one account keeps (200 MiB). Retention gives them back. Past it a computer's reports of a run in progress are refused (`storage-full`, which the computer drops); a run's end is still stored, out of a reserve of 66 KB for each run that may be in progress, so an account never holds more than this limit and that reserve. |
+
+Fixed in the build rather than set: a computer holds at most 2 open connections (a newer one closes its oldest, also when its account or the gateway is full), starts at most 10 a minute (counted on its negotiations, and answered `429` with `Retry-After` past that), and the whole gateway holds at most 2000 computers' connections (and 2200 WebSockets); a connection refused by the account or gateway limit is closed, and the gateway's log names the computer and the limit, never its token.
 
 **The Data Protection keys are the session.** Lose them and every browser is signed out; copy them
 and whoever has the copy can mint a session cookie. They are protected by the directory's mode and
@@ -272,6 +274,40 @@ sudo -u enactive /opt/enactive-remote/deploy/verify-restore.sh     # the backup 
 sudo -u enactive /opt/enactive-remote/deploy/pull-release.sh --allow-migration
 ```
 
+**Migration 3 (`003_signin_redemptions.sql`)** is the first since the cutover, and the timer parks the
+release that carries it (*schema version 3 and this database is at 1*). It adds the table
+`signin_redemptions` — the random id of each provider sign-in redeemed and when, so a kept copy of the
+sign-in cannot be redeemed again; the hourly retention pass removes rows older than a day — and the
+column `users.sessions_revoked_at`, set by **Sign out everywhere**, `admin sessions revoke` and `admin
+disable`, so a sign-in begun before it opens no session after it. A sign-in in flight at the moment of
+the deploy fails once (`/#failed`) and works on the next try: the cookie the older build wrote carries no
+ticket, and the new one refuses an answer without one.
+
+**Rolling the code back past migration 3 needs one statement first.** An older build refuses to start on
+a database that records a version it does not ship, so the symlink and restart of §4.3 alone leave the
+gateway down. The build before migration 3 says so in words meant for protocol 1's database — *This
+database was written by another protocol of Enactive Remote (schema version 3). Install by hand: …
+§cutover* — and it is **not** a protocol change: §8 is not the procedure. (Builds from migration 3 on say
+*This database was migrated by a newer build of Enactive Remote (schema version N)* for this case.) The
+table and the column are additions the older build never reads, so it is safe to forget the version and
+then switch:
+
+```bash
+sudo mysql -e "DELETE FROM enactive_remote_v2.schema_version WHERE version = 3"
+sudo -u enactive ln -sfn /opt/enactive-remote/releases/<older> /opt/enactive-remote/current
+sudo systemctl restart enactive-remote
+```
+
+The rolled-back gateway gives up both protections until the newer release is back. Installing that release
+again runs 003 again, which finds the table and the column there and only records the version. The timer
+parks it as a migration again, since the database reads 1: install it with `--allow-migration` as above.
+
+Copy the new `verify-restore.sh` first (§4.5): it asks for `signin_redemptions` only of a dump at version
+3 or later, so it passes on the backup taken before the install and on every one after. There is no
+version 2, on purpose: protocol 1's database records it, and a migration 2 of this protocol would make
+that database read as current to a gateway pointed at it by mistake, which would start on it instead of
+refusing (§8).
+
 **A protocol change is parked too, and `--allow-migration` does not install it.** The journal says
 *protocol change - install by hand (REMOTE_OPERATIONS §cutover)*: such a release needs a new database
 and a new environment, which no flag provides, and installing it onto the running one would leave
@@ -291,7 +327,8 @@ reads as a rollback. The procedure is §8.
   top of the first. Read `journalctl -u enactive-remote -n 100 --no-pager` and decide.
 
 Rolling back by hand at any time is a symlink and a restart, and it is only ever a rollback of the
-**code**:
+**code** — to a build older than the database's newest migration, only after the step §4.2 gives for that
+migration, or the older build refuses to start:
 
 ```bash
 sudo -u enactive ln -sfn /opt/enactive-remote/releases/<older> /opt/enactive-remote/current

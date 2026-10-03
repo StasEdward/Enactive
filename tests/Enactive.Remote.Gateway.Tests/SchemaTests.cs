@@ -71,6 +71,55 @@ public sealed class SchemaTests(TestDatabase database) : IClassFixture<TestDatab
     // ── migrations ──────────────────────────────────────────────────────────
 
     [Fact]
+    public async Task Administration_upgrades_schema_3_without_losing_accounts_or_replay_protection()
+    {
+        // Build the deployed schema from its actual SQL, not by undoing the new migration.
+        // Otherwise this test could miss a dependency on something only a fresh install creates.
+        await database.WithScratchDatabaseAsync("utf8mb4", "utf8mb4_0900_ai_ci", async connectionString =>
+        {
+            var migrationConnection = new MySqlConnectionStringBuilder(connectionString)
+            {
+                AllowUserVariables = true
+            }.ConnectionString;
+            await using var connection = new MySqlConnection(migrationConnection);
+            await connection.OpenAsync();
+            async Task Execute(string sql)
+            {
+                await using var command = new MySqlCommand(sql, connection);
+                await command.ExecuteNonQueryAsync();
+            }
+
+            var assembly = typeof(Migrator).Assembly;
+            foreach (var file in new[] { "001_initial.sql", "003_signin_redemptions.sql" })
+            {
+                var name = Assert.Single(assembly.GetManifestResourceNames(), n => n.EndsWith(file, StringComparison.Ordinal));
+                using var reader = new StreamReader(assembly.GetManifestResourceStream(name)!);
+                await Execute(await reader.ReadToEndAsync());
+            }
+            await Execute("""
+                CREATE TABLE schema_version (version INT NOT NULL PRIMARY KEY, applied_at DATETIME(3) NOT NULL);
+                INSERT INTO schema_version VALUES (1, UTC_TIMESTAMP(3)), (3, UTC_TIMESTAMP(3));
+                INSERT INTO users (id, display_name, status, security_version, sealed_bytes, created_at, sessions_revoked_at)
+                VALUES (REPEAT('a', 32), 'Existing user', 'Disabled', 7, 12345, UTC_TIMESTAMP(3), '2026-10-03 12:00:00');
+                INSERT INTO signin_redemptions VALUES (REPEAT('b', 64), UTC_TIMESTAMP(3));
+                """);
+
+            Assert.Equal([10], await Migrator.ApplyAsync(connectionString));
+            Assert.Empty(await Migrator.ApplyAsync(connectionString));
+            await using var account = new MySqlCommand("""
+                SELECT CONCAT(display_name, '|', status, '|', security_version, '|', sealed_bytes, '|',
+                    DATE_FORMAT(sessions_revoked_at, '%Y-%m-%d %H:%i:%s')) FROM users WHERE id = REPEAT('a', 32)
+                """, connection);
+            Assert.Equal("Existing user|Disabled|7|12345|2026-10-03 12:00:00", await account.ExecuteScalarAsync());
+            var duplicate = await Assert.ThrowsAsync<MySqlException>(() => Execute(
+                "INSERT INTO signin_redemptions VALUES (REPEAT('b', 64), UTC_TIMESTAMP(3))"));
+            Assert.Equal(1062, duplicate.Number);
+            await using var admins = new MySqlCommand("SELECT COUNT(*) FROM administrators", connection);
+            Assert.Equal(0L, await admins.ExecuteScalarAsync());
+        }, migrate: false);
+    }
+
+    [Fact]
     public async Task Every_table_this_build_expects_exists()
     {
         var tables = await database.StringsAsync(
@@ -82,10 +131,25 @@ public sealed class SchemaTests(TestDatabase database) : IClassFixture<TestDatab
                 "administrator_audit", "administrator_sessions", "administrators",
                 "admissions", "approvals", "audit", "commands", "devices", "enrollments", "events",
                 "external_identities", "grants", "host_workspaces", "hosts", "invites", "notices", "runs",
-                "schema_version", "tasks", "user_retention", "user_sessions", "user_streams", "users"
+                "schema_version", "signin_redemptions", "tasks", "user_retention", "user_sessions",
+                "user_streams", "users"
             }.Order(StringComparer.Ordinal),
             tables.Order(StringComparer.Ordinal));
     }
+
+    /// <summary>
+    /// The column a revocation stamps, which a provider's answer from before it is compared with. Without it a
+    /// copy of the answer kept from before "Sign out everywhere" opened a session after it.
+    /// </summary>
+    [Fact]
+    public async Task An_account_records_when_its_sessions_were_last_revoked()
+        => Assert.Equal(
+            ["datetime(3)|YES"],
+            await database.StringsAsync(
+                $"""
+                SELECT CONCAT(column_type, '|', is_nullable) FROM information_schema.columns
+                WHERE table_schema = '{database.Name}' AND table_name = 'users' AND column_name = 'sessions_revoked_at'
+                """));
 
     /// <summary>
     /// The rule <see cref="Migrator"/> depends on and cannot enforce by itself.
@@ -106,7 +170,7 @@ public sealed class SchemaTests(TestDatabase database) : IClassFixture<TestDatab
 
         var reapplied = await Migrator.ApplyAsync(database.ConnectionString);
 
-        Assert.Equal([1, 10], Migrator.KnownVersions());
+        Assert.Equal([1, 3, 10], Migrator.KnownVersions());
         Assert.Equal(Migrator.KnownVersions(), reapplied);
         Assert.Equal(
             Migrator.KnownVersions(),
@@ -135,16 +199,45 @@ public sealed class SchemaTests(TestDatabase database) : IClassFixture<TestDatab
     }
 
     /// <summary>
-    /// A database that records a schema version this build has no migration for was written by another protocol
-    /// of the gateway - protocol 1's database records version 2, which this build does not ship. Started on it,
-    /// the gateway passed over the versions it did not know, started, and answered its health check while every
-    /// call failed on tables of another shape: the install was reported a success and the service was down for
-    /// everyone. It refuses to start instead, with what to do, and changes nothing.
+    /// A database that records a version above every one this build ships was migrated by a newer build - the
+    /// state a rollback of the code leaves after a migration (this build at 1 and 3, the database at 4 too). It
+    /// refuses to start, as for another protocol's database, and changes nothing; but it says what happened. It
+    /// used to send the operator to the cutover, a procedure for another protocol that has nothing to do with it.
     /// </summary>
-    [Theory]
-    [InlineData(2)] // Protocol 1's version must stay unknown even as this protocol adds migrations.
-    [InlineData(int.MaxValue)]
-    public async Task A_database_of_another_protocol_stops_the_start_with_the_cutovers_instructions(int unknown)
+    [Fact]
+    public async Task A_database_migrated_by_a_newer_build_says_so()
+    {
+        await database.WithScratchDatabaseAsync("utf8mb4", "utf8mb4_0900_ai_ci", async connectionString =>
+        {
+            var newer = Migrator.KnownVersions().Max() + 1;
+            await using (var connection = new MySqlConnection(connectionString))
+            {
+                await connection.OpenAsync();
+                await using var command = new MySqlCommand(
+                    $"INSERT INTO schema_version (version, applied_at) VALUES ({newer}, UTC_TIMESTAMP(3))", connection);
+                await command.ExecuteNonQueryAsync();
+            }
+
+            var refused = await Assert.ThrowsAsync<InvalidOperationException>(() => Migrator.ApplyAsync(connectionString));
+
+            Assert.Equal(
+                $"This database was migrated by a newer build of Enactive Remote (schema version {newer}). "
+                + "Install that build, or see Docs/REMOTE_OPERATIONS.md §4.2 before running an older one.",
+                refused.Message);
+        });
+    }
+
+    /// <summary>
+    /// The protocol-1 database exactly: it records versions 1 and 2, and nothing else. It is still on the server,
+    /// kept read-only as the rollback, so a gateway pointed at it by a mistyped connection string must still refuse
+    /// it. Started on it, the gateway once passed over the versions it did not know and answered its health check
+    /// while every call failed on tables of another shape: the install was reported a success and the service was
+    /// down for everyone. A migration of this protocol numbered 2 would bring that back - the database would read
+    /// as current - so version 2 is never shipped, and this fails the day one is. Version 2 is below this build's
+    /// newest, so it is another protocol's and not a newer build's, and the operator is sent to the cutover.
+    /// </summary>
+    [Fact]
+    public async Task The_protocol_1_database_is_refused_whatever_this_protocol_has_added_since()
     {
         await database.WithScratchDatabaseAsync("utf8mb4", "utf8mb4_0900_ai_ci", async connectionString =>
         {
@@ -152,14 +245,17 @@ public sealed class SchemaTests(TestDatabase database) : IClassFixture<TestDatab
             {
                 await connection.OpenAsync();
                 await using var command = new MySqlCommand(
-                    $"INSERT INTO schema_version (version, applied_at) VALUES ({unknown}, UTC_TIMESTAMP(3))", connection);
+                    """
+                    DELETE FROM schema_version;
+                    INSERT INTO schema_version (version, applied_at) VALUES (1, UTC_TIMESTAMP(3)), (2, UTC_TIMESTAMP(3));
+                    """, connection);
                 await command.ExecuteNonQueryAsync();
             }
 
             var refused = await Assert.ThrowsAsync<InvalidOperationException>(() => Migrator.ApplyAsync(connectionString));
 
             Assert.Equal(
-                $"This database was written by another protocol of Enactive Remote (schema version {unknown}). "
+                "This database was written by another protocol of Enactive Remote (schema version 2). "
                 + "Install by hand: Docs/REMOTE_OPERATIONS.md §cutover.",
                 refused.Message);
         });

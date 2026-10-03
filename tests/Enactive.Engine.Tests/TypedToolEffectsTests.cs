@@ -10,9 +10,9 @@ public sealed class TypedToolEffectsTests
 {
 
     [Theory]
-    [InlineData(".enactive/scratch/helper.txt", false)]
-    [InlineData("project.txt", true)]
-    public async Task Declared_destination_paths_drive_scope_independently_of_name(string destination, bool projectChanged)
+    [InlineData(".enactive/scratch/helper.txt")]
+    [InlineData("project.txt")]
+    public async Task Declared_destination_paths_are_reported_independently_of_name(string destination)
     {
         using var fx = new EngineFixture();
         var tool = new EffectTool("custom_copy", WorkspaceEffect.Changed);
@@ -20,7 +20,7 @@ public sealed class TypedToolEffectsTests
         var args = System.Text.Json.JsonSerializer.Serialize(new { from = "unrelated.txt", to = destination });
         var result = await registry.InvokeAsync(new("id", "custom_copy", args), fx.ContextFor(), default);
         Assert.Equal(new[] { destination }, result.ChangedPaths);
-        Assert.Equal(projectChanged, ToolEffects.ChangesProject(result.WorkspaceEffect!.Value, result.ChangedPaths, fx.Root));
+        Assert.Equal(WorkspaceEffect.Changed, result.WorkspaceEffect);
         Assert.Equal(ProgressIdentity.Observation, tool.Definition.ProgressIdentity);
         Assert.False(tool.Definition.RepairsFileFailures);
     }

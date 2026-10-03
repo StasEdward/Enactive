@@ -115,20 +115,15 @@ internal sealed class RunListItemViewModel
     }
 
     /// <summary>
-    /// What came of it, in two or three words. A failure says so; otherwise what it produced is
-    /// more use than how long it took, and the duration is in the run's own header anyway.
+    /// What came of it, in two or three words. A run that did not complete says how - failed,
+    /// blocked, waiting, not finished (RunStanding, in Core, where the words are tested); otherwise
+    /// what it produced is more use than how long it took, and the duration is in the run's own
+    /// header anyway.
     /// </summary>
     private static string Outcome(RunSummary record)
     {
-        switch (record.Status.ToLowerInvariant())
-        {
-            case "failed":
-            case "error":
-                return "failed";
-            case "cancelled":
-            case "canceled":
-                return "cancelled";
-        }
+        if (RunStanding.Word(record.Status) is { } word)
+            return word;
 
         if (record.Artifacts.Count > 0)
             return $"{record.Artifacts.Count} artifact{(record.Artifacts.Count == 1 ? "" : "s")}";

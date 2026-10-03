@@ -115,7 +115,7 @@ builder.Services.AddSingleton(TimeProvider.System);
 var admission = Admission.FromConfiguration(builder.Configuration);
 
 builder.Services.AddSingleton(services => new AccountService(
-    services.GetRequiredService<Database>(), TimeProvider.System, admission));
+    services.GetRequiredService<Database>(), services.GetRequiredService<TimeProvider>(), admission));
 builder.Services.AddSingleton<SessionStore>();
 builder.Services.AddSingleton(services => new Retention(services.GetRequiredService<Database>(), retentionDays));
 // Read now, like the settings above: a limit that is not a whole number of at least one stops the start
@@ -128,7 +128,9 @@ builder.Services.AddSingleton(services => new UserService(
 builder.Services.AddSingleton(services => new DeviceService(
     services.GetRequiredService<Database>(), services.GetRequiredService<Limits>(), TimeProvider.System));
 builder.Services.AddSingleton<Projection>();
-builder.Services.AddSingleton<HostConnections>();
+// The computers' connections, counted per computer, per account and overall (HostConnections): an account holds
+// twice the computers the limits allow it.
+builder.Services.AddSingleton(services => new HostConnections(services.GetRequiredService<Limits>()));
 builder.Services.AddSingleton<AccountDeletion>();
 builder.Services.AddSingleton<Export>();
 builder.Services.AddSingleton(new ExportLimit(TimeProvider.System));
@@ -156,7 +158,14 @@ builder.Services.ConfigureHttpJsonOptions(o =>
     o.SerializerOptions.UnmappedMemberHandling = RemoteJson.Options.UnmappedMemberHandling;
 });
 
-builder.WebHost.ConfigureKestrel(o => o.Limits.MaxRequestBodySize = 65536);
+builder.WebHost.ConfigureKestrel(o =>
+{
+    o.Limits.MaxRequestBodySize = 65536;
+
+    // Unlimited unless set, and every WebSocket here is a computer's: a coarse backstop under the hub's own
+    // counts, which see a socket only once its handshake is done. See RequestLimits.UpgradedConnections.
+    o.Limits.MaxConcurrentUpgradedConnections = RequestLimits.UpgradedConnections;
+});
 builder.Services.AddSignalR(o => o.MaximumReceiveMessageSize = 65536)
     .AddJsonProtocol(o =>
     {
@@ -420,7 +429,8 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 // A computer's connection is let out from under the ceiling once the hub has accepted it, and not
-// before: it lasts as long as the computer is online. See RequestLimits.UseComputerRelease.
+// before: it lasts as long as the computer is online. A request that starts one is counted per computer first,
+// while a refusal can still be answered. See RequestLimits.UseComputerRelease.
 app.UseComputerRelease();
 
 // The endpoints' policies, AFTER authentication: the API is counted per account, and before

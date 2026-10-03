@@ -236,6 +236,15 @@ public sealed class WorkerConfig
     /// <summary>Optional fallback model as "providerId/model", or null.</summary>
     public string? Fallback { get; set; }
 
+    /// <summary>What a list shows where a worker has no model: the word its editor offers for the same thing.</summary>
+    public const string NoModel = "(none)";
+
+    /// <summary>
+    /// The worker in one line of a list: its model, and how much it may do without asking. No model is
+    /// said in a word - printed as stored it is an empty string, and the line began with the separator.
+    /// </summary>
+    public string Summary() => $"{(string.IsNullOrWhiteSpace(Model) ? NoModel : Model)}  ·  {Level}";
+
     public WorkerConfig Clone() => new()
     {
         Id = Id,
@@ -522,6 +531,23 @@ public sealed partial class AppSettings
     public int WindowWidth { get; set; }
     public int WindowHeight { get; set; }
 
+    /// <summary>
+    /// Takes from the live settings what the app itself wrote there while this copy was being edited.
+    ///
+    /// <para>The Settings window edits a copy made when it opened, and its Save puts the copy in place of the
+    /// live settings - all of it, not only what the window shows. Where the main window is and how large it is
+    /// has no control there: the app writes it into the live settings whenever the window is hidden or closed.
+    /// Written while Settings was open, it was replaced by the copy's older numbers on Save. Anything else the
+    /// app comes to write on its own, outside the editor, belongs in this method for the same reason.</para>
+    /// </summary>
+    public void KeepWhatTheAppWrote(AppSettings live)
+    {
+        WindowX = live.WindowX;
+        WindowY = live.WindowY;
+        WindowWidth = live.WindowWidth;
+        WindowHeight = live.WindowHeight;
+    }
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
@@ -795,13 +821,36 @@ public sealed partial class AppSettings
 
     /// <summary>
     /// First load of a file that predates the team schema: synthesize Providers / Workers / Bindings from the
-    /// legacy fields. Runs only while <see cref="Providers"/> is empty, so it never clobbers a migrated file.
+    /// legacy fields. Runs only while <see cref="Providers"/> is empty, so it never clobbers a migrated file -
+    /// and only for a file that states no schema version, so it never undoes what a person removed.
     /// </summary>
     private void MigrateIfNeeded()
     {
+        // As the file had it: MigrateSchemaVersion overwrites it with the current number.
+        var versionOnFile = SchemaVersion;
+
         MigrateSchemaVersion();
 
         if (Providers.Count > 0)
+            return;
+
+        // An empty provider list used to be the only test, and it cannot tell "never migrated" from
+        // "the person removed them all": every provider was removed in Settings, the file validated
+        // and was saved, and the next start put an Ollama endpoint back - and the whole default
+        // team with it when the workers had been removed too.
+        //
+        // What does tell them apart is the version the file carries. The team schema is OLDER than
+        // the SchemaVersion field (the field arrived with version 2, on 2026-09-06, in a build that
+        // already had providers), so every build that writes a version has also run this migration
+        // on load: a file stating 2 or more can have an empty list only because it was saved that
+        // way. A file from before the team schema states none and reads as 1 - as does no file at
+        // all, which is how a first run still gets its endpoint and its team here.
+        //
+        // The legacy fields are no use for this: they are ordinary properties, written into every
+        // saved file, so they are present in exactly the file that must be left alone. Nor is a
+        // file with no "Providers" key told from one with "[]" - a versioned file without the key
+        // was written by hand, and is read as it stands rather than filled in with a guess.
+        if (versionOnFile >= 2)
             return;
 
         // The endpoint, with whatever model the legacy file named - and NO model when it named

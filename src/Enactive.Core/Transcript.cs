@@ -22,10 +22,6 @@ using Enactive.Core.Tools;
 /// </summary>
 public static class Transcript
 {
-    /// <summary>What is left where a tool call's arguments were, when nothing is known of how the call went. Valid JSON,
-    /// because it is still sent as arguments.</summary>
-    public const string ElidedArguments = """{"_elided":"arguments dropped to fit the context window"}""";
-
     /// <summary>The key every elided argument set carries, whatever else it says.</summary>
     private const string ElidedKey = "_elided";
 

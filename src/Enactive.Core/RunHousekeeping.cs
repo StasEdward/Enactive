@@ -1,5 +1,6 @@
 namespace Enactive.Core.History;
 
+using Enactive.Core.Events;
 using Enactive.Core.Templates;
 
 /// <summary>Which runs a person is looking at. The order is the order they are offered in.</summary>
@@ -8,10 +9,13 @@ public enum RunFilter
     /// <summary>Everything this workspace has recorded.</summary>
     All,
 
-    /// <summary>The ones that did not finish their work: failed, incomplete, cancelled, interrupted.</summary>
+    /// <summary>
+    /// The ones that did not finish their work: failed, incomplete, cancelled, interrupted - and the
+    /// ones kept to be carried on, waiting for an answer or blocked.
+    /// </summary>
     Unfinished,
 
-    /// <summary>The ones that did.</summary>
+    /// <summary>The ones that did - and any whose status this build cannot read.</summary>
     Completed,
 
     /// <summary>Started more than seven days ago, whatever happened to them.</summary>
@@ -39,11 +43,30 @@ public static class RunHousekeeping
     /// <para>Matched on the status STRING because that is what a stored run carries, and history
     /// written by an older build has to keep meaning what it meant. Unknown statuses are treated as
     /// finished — the safe direction, since this list is the one a bulk delete acts on and a status
-    /// nobody recognises must not be swept up by a filter named "unfinished".</para>
+    /// nobody recognises must not be swept up by a filter named "unfinished". That is why Completed
+    /// is "not in this list" and not a list of its own: a second list would leave an unrecognised
+    /// status in neither filter, visible only under All.</para>
+    ///
+    /// <para><b>The other side of that rule.</b> "Not in this list" also takes in every outcome the
+    /// engine gains later, and that is not the safe direction for one the engine does know. NeedsUser
+    /// and Blocked were added to <see cref="RunOutcomeKind"/> and not here: a run waiting for an
+    /// answer, or for its cause to be removed, was shown under Completed - where "Delete these N"
+    /// takes it with the runs that are really over - and was missing from Unfinished, where somebody
+    /// looks for what still needs them. So every outcome that is not Completed is named here, by the
+    /// enum member the recorder writes the status from, and a test walks the enum so the next one
+    /// added has to be placed on purpose.</para>
+    ///
+    /// <para>"Interrupted" is not a member of that enum - no recorded outcome has that name - so it
+    /// stays a word, kept for the history that carries it.</para>
     /// </summary>
     private static readonly HashSet<string> DidNotFinish = new(StringComparer.OrdinalIgnoreCase)
     {
-        "Failed", "Incomplete", "Cancelled", "Interrupted"
+        nameof(RunOutcomeKind.Failed),
+        nameof(RunOutcomeKind.Incomplete),
+        nameof(RunOutcomeKind.Cancelled),
+        nameof(RunOutcomeKind.NeedsUser),
+        nameof(RunOutcomeKind.Blocked),
+        "Interrupted"
     };
 
     public static readonly TimeSpan AWeek = TimeSpan.FromDays(7);

@@ -62,6 +62,14 @@ public sealed class RemoteRunner(
         Task<RemotePreparation>> prepare,
     Func<KeyAdministration?>? administration = null)
 {
+    /// <summary>
+    /// How often a command that fails on this computer's side - not one refused - is tried before it is given
+    /// up on. Retried for its whole lifetime, a start that could never be carried out - a forged one naming a
+    /// run another start had opened, which fails on the run's key - failed every fifteen seconds for a day,
+    /// and put the same failure in the status line each time.
+    /// </summary>
+    public const int MaxAttempts = 5;
+
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _running = new();
     private readonly ConcurrentQueue<DeliveryNotice> _notices = new();
 
@@ -90,7 +98,9 @@ public sealed class RemoteRunner(
     /// <param name="failed">
     /// Told of a command that failed on this computer's side - not a refusal, which is said where refusals
     /// are. Without it one failure ended the batch, and the commands after it, already acknowledged, were
-    /// never carried out.
+    /// never carried out. The failed command itself is not marked carried out, so the next turn tries it
+    /// again, up to <see cref="MaxAttempts"/> times; it is told only when a failure says something the last
+    /// one did not, and giving up is said once, as a notice.
     /// </param>
     public async Task ApplyAllAsync(
         IReadOnlyList<HostCommand> commands,
@@ -119,22 +129,63 @@ public sealed class RemoteRunner(
                     continue;
                 }
 
-                runInBackground(token => StartAsync(start, command.Id, token));
+                // Claimed here, before the run is handed on, and not on the run's own task. Claimed there, a
+                // cancel of it in the same batch - the person pressed Cancel while this computer was off -
+                // was carried out first, found no run to stop and was used up, and the task ran when the
+                // run's task got going.
+                if (Claim(start, command.Id) is { } cancellation)
+                {
+                    runInBackground(token => RunAsync(start, cancellation, token));
+                }
             }
             catch (Exception failure) when (failure is not OperationCanceledException || !ct.IsCancellationRequested)
             {
-                failed(command, failure);
+                Failure(command, failure, failed);
             }
+        }
+    }
+
+    /// <summary>
+    /// A command that failed on this computer's side: counted, said when the failure is new, and given up on
+    /// - marked carried out, and said once - at the <see cref="MaxAttempts"/>th. A command the inbox does not
+    /// hold, handed in directly, is only said.
+    ///
+    /// <para>A removal or an endorsement is never given up on: it is tried for as long as it may wait, and the
+    /// inbox says so when that runs out. Given up after five failures - a minute of a disk that would not
+    /// write - a removal was dropped, and the device the person removed stayed trusted here with the key
+    /// unchanged. Both are safe to try again: a removal already made, or an endorsement already trusted,
+    /// changes nothing.</para>
+    /// </summary>
+    private void Failure(HostCommand command, Exception failure, Action<HostCommand, Exception> failed)
+    {
+        var attempt = store.RecordFailure(command.Id, failure.Message);
+        var mayGiveUp = command.Kind is not (CommandKind.RevokeDevice or CommandKind.EndorseDevice);
+
+        if (mayGiveUp && attempt is { Attempts: >= MaxAttempts })
+        {
+            store.MarkApplied(command.Id);
+            Notice(new DeliveryNotice("GaveUp",
+                $"A remote {command.Kind} command could not be carried out after {MaxAttempts} attempts: {failure.Message}"));
+            return;
+        }
+
+        if (attempt is not { NewReason: false })
+        {
+            failed(command, failure);
         }
     }
 
     /// <summary>
     /// Carries out one accepted command.
     ///
-    /// <para>The caller has already written it down and acknowledged it; by the time this is
-    /// reached, the only question left is what the command means - and whether the owner sent it.
-    /// Every kind is opened before anything is done, and a command that does not open does nothing
-    /// at all.</para>
+    /// <para>The caller has already written it down; by the time this is reached, the only question
+    /// left is what the command means - and whether the owner sent it. Every kind is opened before
+    /// anything is done, and a command that does not open does nothing at all.</para>
+    ///
+    /// <para>Once carried out, or refused, it is marked so in the inbox, which hands back every command
+    /// not marked on every turn. Not before: a command that failed on this computer's side, or whose
+    /// carrying out the application closing cut short, is tried again on the next turn instead of lost.
+    /// A start is marked by the claim that opens its run, before it runs (<see cref="Claim"/>).</para>
     /// </summary>
     public async Task ApplyAsync(HostCommand command, CancellationToken ct = default)
     {
@@ -144,36 +195,53 @@ public sealed class RemoteRunner(
             {
                 case CommandKind.StartTask:
                     var start = sealer.OpenStart(command);
-                    await StartAsync(start, command.Id, ct);
+                    if (Claim(start, command.Id) is { } cancellation)
+                    {
+                        await RunAsync(start, cancellation, ct);
+                    }
+
                     return;
 
                 case CommandKind.CancelRun:
-                    Cancel(sealer.OpenCancel(command).RunId);
-                    return;
+                    var runId = sealer.OpenCancel(command).RunId;
+                    if (!TryCancel(runId))
+                    {
+                        EndBeforeItBegan(runId);
+                    }
+
+                    break;
 
                 case CommandKind.ResolveApproval:
                     Answer(sealer.OpenDecision(command));
-                    return;
+                    break;
 
                 // The browser removed the device at the gateway before it sent this, so the gateway is not
-                // asked again: this computer distrusts it and gives everyone else a new key.
+                // asked again: this computer distrusts it and gives everyone else a new key. The key store
+                // marks the command carried out in the step that replaces the key: marked after it, a crash
+                // between the two had the removal carried out again under the key it had itself replaced,
+                // and refused as stale - said to the person as a refused command, though it had happened.
                 case CommandKind.RevokeDevice:
                     var revocation = sealer.OpenRevocation(command);
-                    await Administration().RevokeAsync(revocation.DeviceId, KeyAdministration.RemovedFromBrowser, ct);
-                    return;
+                    await Administration().RevokeAsync(
+                        revocation.DeviceId, KeyAdministration.RemovedFromBrowser, command.Id, ct);
+                    break;
 
+                // Marked after, not in the same step: an endorsement changes no key, so carried out again
+                // after a crash it opens as before and finds the device already trusted with that key.
                 case CommandKind.EndorseDevice:
                     var endorsement = sealer.OpenEndorsement(command);
                     await Administration().EndorseAsync(endorsement, ct);
-                    return;
+                    break;
 
                 default:
                     throw new NotSupportedException($"Command kind {command.Kind} is not one this build carries out.");
             }
+
+            store.MarkApplied(command.Id);
         }
         catch (CommandRefusedException refused)
         {
-            // The opening throws this, and a device command the trusted list will not take: StartAsync
+            // The opening throws this, and a device command the trusted list will not take: RunAsync
             // catches everything a run can throw and reports it as the run's ending, so nothing that began
             // running is ever reported as refused.
             Refuse(command, refused);
@@ -196,6 +264,10 @@ public sealed class RemoteRunner(
     /// happen. So the run is opened and at once ended Failed with the reason, and nothing runs. Opening
     /// it also claims the command, so a redelivery of the same forgery is not even looked at again.
     /// Every other kind has nothing to report on, and is a notice on this computer.</para>
+    ///
+    /// <para>A refusal is a final answer, so the command is marked carried out: left unmarked, the inbox
+    /// would hand it back on every turn and the person would hear the same refusal every fifteen
+    /// seconds for as long as the command lived.</para>
     /// </summary>
     private void Refuse(HostCommand command, CommandRefusedException refused)
     {
@@ -218,7 +290,12 @@ public sealed class RemoteRunner(
             return;
         }
 
-        var notice = new DeliveryNotice("Refused", $"{command.Kind} {command.Id}: {reason}");
+        store.MarkApplied(command.Id);
+        Notice(new DeliveryNotice("Refused", $"{command.Kind} {command.Id}: {reason}"));
+    }
+
+    private void Notice(DeliveryNotice notice)
+    {
         _notices.Enqueue(notice);
         Noticed?.Invoke(notice);
     }
@@ -241,13 +318,51 @@ public sealed class RemoteRunner(
     /// actually stopped, because external effects may already have happened and a timeline that
     /// said "cancelled" at the moment of the request would be making that up.
     /// </summary>
-    public void Cancel(string runId)
+    public void Cancel(string runId) => TryCancel(runId);
+
+    /// <summary>Whether there was a run by this id on this computer to ask.</summary>
+    private bool TryCancel(string runId)
     {
-        if (_running.TryGetValue(runId, out var cancellation))
+        if (!_running.TryGetValue(runId, out var cancellation))
+        {
+            return false;
+        }
+
+        try
         {
             cancellation.Cancel();
         }
+        catch (ObjectDisposedException)
+        {
+            // The run ended between being found and being asked; there is nothing left to stop.
+        }
+
+        return true;
     }
+
+    /// <summary>
+    /// A cancel for a run not going on this computer, whose start is still in the inbox, not carried out:
+    /// the start is claimed and its run ended Cancelled there and then, so it never runs. Left alone, the
+    /// cancel was used up on nothing, and the start ran when its turn came - after the person had cancelled
+    /// it. Ending it Cancelled at once is no guess about what happened, as it would be for a run going on:
+    /// nothing of it has run.
+    ///
+    /// <para>The start is found by the run its plaintext names, which the gateway writes: one that pointed
+    /// a cancel at another start could only stop a task, which a gateway can do by dropping it anyway.</para>
+    /// </summary>
+    private void EndBeforeItBegan(string runId)
+    {
+        foreach (var start in store.Unapplied(DateTimeOffset.UtcNow))
+        {
+            if (start.Kind == CommandKind.StartTask && RunOf(start) == runId && store.BeginRun(start.Id, runId))
+            {
+                Report(runId, RemoteEventKind.Cancelled, CancelledBeforeItBegan);
+                return;
+            }
+        }
+    }
+
+    private const string CancelledBeforeItBegan = "Cancelled at the owner's request before it began.";
 
     /// <summary>
     /// Hands a queued remote answer to whoever is waiting for it, if anyone still is.
@@ -262,26 +377,42 @@ public sealed class RemoteRunner(
     private void Answer(DecisionAuthorization answer)
         => approvals.TryAnswer(answer.ApprovalId, answer.ActionHash, answer.Decision);
 
-    private async Task StartAsync(OpenedStart task, string commandId, CancellationToken ct)
+    /// <summary>
+    /// Claims a start and opens its run, and makes it cancellable, BEFORE anything executes - and before
+    /// its run is handed to a task of its own, so a cancel carried out next finds it. Null means a
+    /// redelivery of a command this machine already carried out, and the correct response to that is to
+    /// do nothing at all.
+    /// </summary>
+    private CancellationTokenSource? Claim(OpenedStart task, string commandId)
     {
-        // The claim and the run record, in one transaction, BEFORE anything executes. False means a
-        // redelivery of a command this machine already carried out, and the correct response to that
-        // is to do nothing at all.
         if (!store.BeginRun(commandId, task.RunId))
         {
-            return;
+            return null;
         }
 
-        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var cancellation = new CancellationTokenSource();
         _running[task.RunId] = cancellation;
+        return cancellation;
+    }
+
+    /// <summary>Runs a claimed start, unless it was cancelled before it began.</summary>
+    private async Task RunAsync(OpenedStart task, CancellationTokenSource cancellation, CancellationToken ct)
+    {
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellation.Token, ct);
 
         try
         {
+            if (cancellation.IsCancellationRequested)
+            {
+                EndOnce(task.RunId, RemoteEventKind.Cancelled, CancelledBeforeItBegan);
+                return;
+            }
+
             var prepared = await prepare(
                 task,
                 desktop => new RemoteDecisionHandler(
                     desktop, store, approvals, sealer, task.RunId, RemoteDecisionHandler.DefaultTimeout),
-                cancellation.Token);
+                linked.Token);
 
             // Whatever the preparation opened is closed here, however this ends - cancelled,
             // failed, or finished. `await using` on a null is a no-op, so a preparation with
@@ -291,7 +422,7 @@ public sealed class RemoteRunner(
                 Report(task.RunId, RemoteEventKind.Running, $"Started: {task.Title}");
                 store.MarkRunState(task.RunId, LocalRunState.Running);
 
-                await ConsumeAsync(task.RunId, prepared.Engine, prepared.Intent, cancellation.Token);
+                await ConsumeAsync(task.RunId, prepared.Engine, prepared.Intent, linked.Token);
             }
         }
         catch (OperationCanceledException)
@@ -309,6 +440,7 @@ public sealed class RemoteRunner(
         finally
         {
             _running.TryRemove(task.RunId, out _);
+            cancellation.Dispose();
         }
     }
 

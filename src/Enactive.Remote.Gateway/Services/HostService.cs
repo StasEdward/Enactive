@@ -49,9 +49,12 @@ using MySqlConnector;
 /// Read from the system directly, expiry could be tested only by writing rows by hand, and the lifetime a
 /// removal was given went untested until it lapsed.
 /// </param>
-public sealed class HostService(Database database, TimeProvider? clock = null)
+public sealed class HostService(Database database, TimeProvider? clock = null, Limits? limits = null)
 {
     private readonly TimeProvider _clock = clock ?? TimeProvider.System;
+
+    // Unlimited where none are given: a test about something else builds this without any.
+    private readonly Limits _limits = limits ?? Limits.Unlimited;
 
     private const int MaxWorkspaces = 100;
 
@@ -63,7 +66,7 @@ public sealed class HostService(Database database, TimeProvider? clock = null)
     private const int MaxSealedName = 500;
 
     // An event's sentence: up to 16 000 bytes of text, which sealed is about 21 400 characters.
-    private const int MaxSealedDetail = 22_000;
+    internal const int MaxSealedDetail = 22_000;
 
     // A permission request carries what the card shows and the arguments the hash covers, often
     // both long. Together with a detail at its maximum and the ids around them, 40 000 still fits the
@@ -307,8 +310,10 @@ public sealed class HostService(Database database, TimeProvider? clock = null)
             var now = _clock.GetUtcNow();
             var status = await ApplyAsync(connection, transaction, run, published, now);
 
-            // Counted, never refused: a run must always be able to report, and to end (see Quota.AddSealedAsync).
-            await Quota.AddSealedAsync(connection, transaction, run.OwnerId, Quota.SizeOf(published.SealedDetail));
+            // Counted, and refused once the account is full - unless it ends the run (see Quota.AdmitFromComputerAsync).
+            var ending = RunLifecycle.IsTerminal(published.Kind);
+            await Quota.AdmitFromComputerAsync(connection, transaction, run.OwnerId,
+                Quota.SizeOf(published.SealedDetail), _limits, ending);
 
             await connection.ExecuteAsync(transaction,
                 """
@@ -331,7 +336,8 @@ public sealed class HostService(Database database, TimeProvider? clock = null)
             // The summary is a second copy and is counted as one; retention gives it back with the run.
             if (ended)
             {
-                await Quota.AddSealedAsync(connection, transaction, run.OwnerId, Quota.SizeOf(published.SealedDetail));
+                await Quota.AdmitFromComputerAsync(connection, transaction, run.OwnerId,
+                    Quota.SizeOf(published.SealedDetail), _limits, ending: true);
             }
 
             await connection.ExecuteAsync(transaction,
@@ -354,7 +360,7 @@ public sealed class HostService(Database database, TimeProvider? clock = null)
     /// The transition itself: what this kind of event does to a run in this state, and to the
     /// approvals hanging off it. Returns the status the run is left in.
     /// </summary>
-    private static async Task<RemoteRunStatus> ApplyAsync(
+    private async Task<RemoteRunStatus> ApplyAsync(
         MySqlConnection connection, MySqlTransaction transaction,
         RunRow run, HostEvent published, DateTimeOffset now)
     {
@@ -416,7 +422,7 @@ public sealed class HostService(Database database, TimeProvider? clock = null)
         }
     }
 
-    private static async Task<RemoteRunStatus> RequestApprovalAsync(
+    private async Task<RemoteRunStatus> RequestApprovalAsync(
         MySqlConnection connection, MySqlTransaction transaction,
         RunRow run, HostEvent published, DateTimeOffset now)
     {
@@ -436,7 +442,10 @@ public sealed class HostService(Database database, TimeProvider? clock = null)
             throw GatewayFault.Conflict($"Approval {request.ApprovalId} already exists.");
         }
 
-        await Quota.AddSealedAsync(connection, transaction, run.OwnerId, Quota.SizeOf(request.SealedAction));
+        // A permission request is a report of a run in progress: refused when the account is full. The computer
+        // still asks at its own screen, which is where a full account's person has to answer it.
+        await Quota.AdmitFromComputerAsync(connection, transaction, run.OwnerId,
+            Quota.SizeOf(request.SealedAction), _limits, ending: false);
 
         // What the request is about stays sealed. The tool call, the hash an answer must carry and
         // whether it may be answered from the web are in the clear because the gateway enforces them.
@@ -696,12 +705,14 @@ public sealed class HostService(Database database, TimeProvider? clock = null)
     /// envelope copied as it came, with the event's sequence and kind, which are what the panel
     /// rebuilds the associated data from - without them the copy could never be opened.
     /// </summary>
-    private static async Task NoticeAsync(
+    private async Task NoticeAsync(
         MySqlConnection connection, MySqlTransaction transaction,
         RunRow run, string kind, HostEvent published, DateTimeOffset at)
     {
         // A copy is stored bytes like the original, and retention gives it back when it deletes the notice.
-        await Quota.AddSealedAsync(connection, transaction, run.OwnerId, Quota.SizeOf(published.SealedDetail));
+        // It is admitted as the event it copies is: out of the reserve when that event ends the run.
+        await Quota.AdmitFromComputerAsync(connection, transaction, run.OwnerId,
+            Quota.SizeOf(published.SealedDetail), _limits, RunLifecycle.IsTerminal(published.Kind));
 
         await connection.ExecuteAsync(transaction,
             """

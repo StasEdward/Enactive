@@ -31,6 +31,9 @@ public sealed partial class Orchestrator
     /// <summary>The name the engine's own measurement before the work is recorded under - no tool the model can call.</summary>
     internal const string MeasuredBeforeTool = "engine_measured_before_the_work";
 
+    /// <summary>The engine's record, for the review, of the tools this run kept back from the step.</summary>
+    internal const string KeptBackTool = "engine_kept_back_tools";
+
     private sealed record AttemptReview(ReviewResult Review, string? BudgetExhausted = null);
 
     /// <summary>
@@ -45,7 +48,7 @@ public sealed partial class Orchestrator
         RequestObligations? obligations = null, string? handedOn = null,
         IReadOnlyList<SuccessCriterionDefinition>? stepCriteria = null, System.Text.Json.Nodes.JsonObject? handedValues = null,
         IReadOnlyList<BuildBaseline>? measuredBefore = null, ReadLedger? reads = null,
-        IReadOnlyList<TaskRestriction>? restrictions = null)
+        IReadOnlyList<TaskRestriction>? restrictions = null, string? keptBack = null)
     {
         var prefix = stepNumber is { } number ? $"[{number}] " : "";
         ValueTask Emit(EventKind kind, string summary) => publish(scope.Ev(kind, prefix + summary, stepNumber));
@@ -85,6 +88,15 @@ public sealed partial class Orchestrator
             journal.Record(stepNumber, MeasuredBeforeTool, "{}", ActionOutcome.Succeeded,
                 "Measured by the engine itself before any work in this run - its own runs, not the step's claims. They say where "
                 + "things stood BEFORE the work, not after it:\n" + string.Join("\n", taken.Select(b => "- " + b.Describe())),
+                WorkspaceEffect.None, origin: ToolCallOrigin.Engine);
+        // What the ENGINE kept back from the step: a fact for the reviewer, once per step. The step cannot call a
+        // tool it was never shown, so no call shows it trying - and a review never told that read "I could not run
+        // it" as a claim nothing supports and failed an honest report twice (run 9384e2, 2026-10-03).
+        if (keptBack is not null && !journal.Actions.Skip(evidenceStart).Any(a => a.Tool == KeptBackTool))
+            journal.Record(stepNumber, KeptBackTool, "{}", ActionOutcome.Succeeded,
+                $"Kept back from this step by the engine, before any work: {keptBack}. The step could not have called them: "
+                + "where it says it could not use one, that is so, and no call would show an attempt. Whether what it did "
+                + "without them is what the step is for is yours to judge.",
                 WorkspaceEffect.None, origin: ToolCallOrigin.Engine);
         // What the plan checks this step on, decided by the engine now - a fact for the reviewer, not a judgement.
         if (stepCriteria is { Count: > 0 } && stepNumber is { } planNo

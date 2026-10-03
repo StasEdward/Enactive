@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
 using Avalonia.Media.Immutable;
+using Enactive.Core.History;
 
 namespace Enactive.App.Ui;
 
@@ -196,10 +197,10 @@ internal static class Brand
     /// <summary>The tint behind a phase or a stored status.</summary>
     public static IBrush PhaseFill(string phase) => Phase(phase) switch
     {
-        PhaseKind.Done => PillDoneFill,
-        PhaseKind.Failed => PillFailedFill,
-        PhaseKind.Open => PillOpenFill,
-        PhaseKind.Idle => PillIdleFill,
+        RunStandingKind.Done => PillDoneFill,
+        RunStandingKind.Failed => PillFailedFill,
+        RunStandingKind.Open => PillOpenFill,
+        RunStandingKind.Idle => PillIdleFill,
         _ => PillRunningFill
     };
 
@@ -207,26 +208,16 @@ internal static class Brand
     /// takes <see cref="InfoLight"/> - the info blue made for text on dark.</summary>
     public static IBrush PhaseText(string phase) => Phase(phase) switch
     {
-        PhaseKind.Done => Success,
-        PhaseKind.Failed => Danger,
-        PhaseKind.Open => Amber,
-        PhaseKind.Idle => TextMuted,
+        RunStandingKind.Done => Success,
+        RunStandingKind.Failed => Danger,
+        RunStandingKind.Open => Amber,
+        RunStandingKind.Idle => TextMuted,
         _ => InfoSoft
     };
 
-    private enum PhaseKind { Running, Done, Failed, Open, Idle }
-
-    private static PhaseKind Phase(string phase) => phase.ToLowerInvariant() switch
-    {
-        "completed" or "succeeded" or "ok" => PhaseKind.Done,
-        "failed" or "error" => PhaseKind.Failed,
-        // Never wrote a final status: the run stopped somewhere nobody watched.
-        "incomplete" => PhaseKind.Open,
-        // Waiting for its cause to be put right, then resumed (Phase 7).
-        "blocked" => PhaseKind.Open,
-        "cancelled" or "canceled" or "idle" or "" => PhaseKind.Idle,
-        _ => PhaseKind.Running
-    };
+    // Which pill a word gets is decided in Core (RunStanding), where it is tested against every
+    // outcome the engine records; only the colours are here.
+    private static RunStandingKind Phase(string phase) => RunStanding.Of(phase);
 
     public static readonly IBrush PillCoder = Of(SuccessDeep);
     public static readonly IBrush PillReasoner = Of(InfoDeep);

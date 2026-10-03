@@ -292,10 +292,16 @@ public sealed class HostKeyStore : IHostKeys, IGrantOutbox, IDisposable
     ///
     /// <para><paramref name="tellGateway"/> is for a removal made on this computer. A browser that sends
     /// one has removed the device at the gateway already.</para>
+    ///
+    /// <para><paramref name="command"/> is the browser's command this removal carries out, marked carried
+    /// out in the inbox in this same transaction: the inbox brings back every command not marked, and one
+    /// marked after the commit was, after a crash in between, carried out again under the key it had
+    /// replaced - and refused as stale, though it had happened.</para>
     /// </summary>
     /// <returns>The new epoch, and the devices it was granted to.</returns>
     /// <exception cref="InvalidOperationException">The device is not trusted now.</exception>
-    public (HostKey Next, IReadOnlyList<TrustedDevice> Remaining) RevokeAndRotate(string deviceId, bool tellGateway)
+    public (HostKey Next, IReadOnlyList<TrustedDevice> Remaining) RevokeAndRotate(
+        string deviceId, bool tellGateway, string? command = null)
         => _store.Locked(connection =>
         {
             var now = Format(_clock.GetUtcNow());
@@ -327,6 +333,11 @@ public sealed class HostKeyStore : IHostKeys, IGrantOutbox, IDisposable
             {
                 InsertGrant(connection, transaction,
                     Grants.CreateSigned(HostId, device.DeviceId, device.PublicKey, next, _signer), now);
+            }
+
+            if (command is not null)
+            {
+                HostStore.MarkApplied(connection, transaction, command);
             }
 
             transaction.Commit();

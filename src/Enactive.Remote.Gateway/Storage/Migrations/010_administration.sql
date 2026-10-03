@@ -1,4 +1,4 @@
--- Versions 2-9 are deliberately unused: protocol 1 used schema version 2, which must remain
+-- Version 2 stays unused: protocol 1 used schema version 2, which must remain
 -- foreign to this gateway. Recognising it as our next migration would accept an incompatible DB.
 CREATE TABLE IF NOT EXISTS administrators (
   id CHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,

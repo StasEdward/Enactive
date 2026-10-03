@@ -1,6 +1,5 @@
 namespace Enactive.Remote.Gateway;
 
-using System.Collections.Concurrent;
 using System.Security.Claims;
 using Enactive.Remote.Contracts;
 using Enactive.Remote.Contracts.Crypto;
@@ -9,38 +8,47 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
 
 /// <summary>
-/// The open connections, so revoking a credential can close them rather than waiting for the Host
-/// to notice at its next call.
-/// </summary>
-public sealed class HostConnections
-{
-    private readonly ConcurrentDictionary<string, (string HostId, Action Abort)> _open = new();
-
-    public void Add(string connectionId, string hostId, Action abort) => _open[connectionId] = (hostId, abort);
-
-    public void Remove(string connectionId) => _open.TryRemove(connectionId, out _);
-
-    public void CloseAll(string hostId)
-    {
-        foreach (var entry in _open.Where(e => e.Value.HostId == hostId))
-        {
-            entry.Value.Abort();
-        }
-    }
-}
-
-/// <summary>
 /// The methods a Host calls. Every one of them takes its Host and that Host's owner from the
 /// authenticated identity and never from an argument, so "act as another Host", or "act in another
 /// person's account", is not a request that can be made rather than one that is refused.
 /// </summary>
 [Authorize(AuthenticationSchemes = HostAuthentication.SchemeName)]
 public sealed class HostHub(
-    HostService hosts, DeviceService devices, HostConnections connections, HostCallLimit limit) : Hub
+    HostService hosts, DeviceService devices, HostConnections connections, HostCallLimit limit,
+    ILogger<HostHub> log) : Hub
 {
+    /// <summary>
+    /// Takes the connection's place among its computer's, its account's and the gateway's
+    /// (<see cref="HostConnections"/>), or closes it.
+    ///
+    /// <para>Closed, not answered: the handshake was answered before this runs, so there is no status
+    /// left to send, and the Host treats a closed connection as one to dial again after its wait. How
+    /// often a computer may start one is counted earlier, at the door, where a refusal can still be
+    /// said (<see cref="RequestLimits.UseComputerRelease"/>). The log says which limit and which
+    /// computer - an id, never its token - so an operator can tell a flood from a full gateway.</para>
+    ///
+    /// <para>An older connection closed for this one is logged too. An honest reconnect makes one such
+    /// line now and then; a token used from two places, or a flood, makes a run of them, and without the
+    /// line nothing on the operator's side showed it.</para>
+    /// </summary>
     public override Task OnConnectedAsync()
     {
-        connections.Add(Context.ConnectionId, HostId, Context.Abort);
+        var access = Access;
+        var refusal = connections.TryAdd(
+            Context.ConnectionId, access.HostId, access.OwnerId, Context.Abort, out var replaced);
+
+        if (refusal != HostConnections.Refusal.None)
+        {
+            log.LogWarning("A connection of computer {HostId} was refused: {Refusal}.", access.HostId, refusal);
+            Context.Abort();
+            return Task.CompletedTask;
+        }
+
+        for (var i = 0; i < replaced; i++)
+        {
+            log.LogInformation("Computer {HostId}: its oldest connection was closed for a newer one.", access.HostId);
+        }
+
         return base.OnConnectedAsync();
     }
 

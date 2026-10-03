@@ -135,6 +135,14 @@ Stages 1 and 2 establish the shared behavior and security boundary before admini
 
 Next: stage 3, the read-only registration/user interface with bounded queries, search, filters, pagination, and metadata-only responses. The current shared waiting-list query preserves the CLI's full listing; add bounded pagination before exposing the web list. Stage 4 mutations must require the administrator/fresh policies themselves and carry the authenticated actor through their transactional audit.
 
+### Compatibility with the deployed schema 3 (2026-10-03)
+
+- Merged current master `f81ccee6142d`, preserving sign-in redemption, host connection, and storage quota fixes.
+- Added an upgrade regression using the actual schema 1/3 SQL and existing account/revocation/redemption records. Only migration 10 is applied; a repeated migration changes nothing.
+- Updated backup verification to require administrator tables only for schema 10 or later. Added seven checks covering valid older backups and missing administrator tables, wired into the reusable Gateway CI workflow.
+- Validation: 644 Gateway integration tests, 277 panel tests, and seven restore completeness checks passed. Tests used disposable local MySQL databases; production was not changed.
+- The Linux package is a stage-2 preview. Real Keycloak login and tunnel routing still require verification on the deployment. Stages 3–6 remain pending.
+
 ## Test and release criteria
 
 Each behavior change needs a regression test that fails without it. Explain non-obvious limits and rules in the code, following the repository's agent instructions.

@@ -492,6 +492,10 @@ internal sealed class RemoteAccessService : IAsyncDisposable
     {
         var backoff = _firstRetry;
 
+        // Before the first connection: what the last process received and did not carry out is this
+        // computer's to do, and the gateway has no part in it.
+        await CarryOutOwedAsync(ct);
+
         while (!ct.IsCancellationRequested)
         {
             try
@@ -515,6 +519,11 @@ internal sealed class RemoteAccessService : IAsyncDisposable
                 }
 
                 Status = $"Not connected: {failure.Message} Trying again in {backoff.TotalSeconds:0}s.";
+
+                // The gateway failing - a Sync that broke off, no connection at all - is no reason for
+                // what was already received to wait for it. A removal received just before is the case:
+                // waiting, the device stayed trusted here for as long as the gateway was gone.
+                await CarryOutOwedAsync(ct);
             }
 
             try
@@ -535,17 +544,104 @@ internal sealed class RemoteAccessService : IAsyncDisposable
         }
     }
 
-    private async Task ConnectAndServeAsync(CancellationToken ct)
+    /// <summary>
+    /// The runner, made once and kept across connections (see <see cref="_approvals"/>).
+    ///
+    /// <para>A browser's removal or endorsement is carried out with the last connection's administration,
+    /// or, before any connection, one over the key store with no gateway behind it: neither kind asks the
+    /// gateway anything, and refused for want of a connection, a removal recovered at start was given up
+    /// on as if this computer could not manage devices.</para>
+    /// </summary>
+    private RemoteRunner Runner(HostStore store)
+    {
+        lock (_lifecycle)
+        {
+            if (_runner is null)
+            {
+                _runner = new RemoteRunner(store, _approvals, _sealer!, PrepareAsync,
+                    () => _lastAdministration ?? (_keys is HostKeyStore hostKeys ? Offline(hostKeys) : null));
+
+                // A refused command with no run to report on is said here, the same way a command that
+                // failed is: otherwise the only trace of a forged command would be a list nobody reads.
+                // A command given up on after failing says so in its own sentence.
+                _runner.Noticed += notice => Status = notice.Kind == "Refused"
+                    ? $"A remote command was refused: {notice.Detail}"
+                    : notice.Detail;
+            }
+
+            return _runner;
+        }
+    }
+
+    /// <summary>
+    /// Carries out what the inbox owes, with no gateway: at start and after the gateway failed. A delivery
+    /// loop over a gateway that is not there serves for it, since asking what is owed sends nothing.
+    /// </summary>
+    private async Task CarryOutOwedAsync(CancellationToken ct)
+    {
+        try
+        {
+            var store = Recovered();
+            var loop = _offlineLoop ??= Watched(new DeliveryLoop(store, new NoGateway(), _sealer!));
+
+            await Runner(store).ApplyAllAsync(loop.Owed(), Begin, Failed, ct);
+        }
+        catch (Exception failure) when (failure is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            Status = $"Remote commands already received could not be read: {failure.Message}";
+        }
+    }
+
+    private DeliveryLoop? _offlineLoop;
+
+    /// <summary>
+    /// The store, with the runs a previous process left open reported Interrupted - once per PROCESS, at the
+    /// first point either path reaches the store: the pass made without the gateway, or a connection.
+    ///
+    /// <para>"In flight" means a run with no ending written, and a run going right now is one of those - so
+    /// reporting after this process had begun a run would tell the phone that a task still working had been
+    /// interrupted, while it carried on working. Both paths come here before they carry anything out, and the
+    /// flag is set only once the report is made, so no run of this process can have begun before it. Made in
+    /// the offline pass alone, it was skipped when the store could not be opened there but the connection then
+    /// opened it - and made by a later failed connection, while this process's runs were going.</para>
+    /// </summary>
+    private HostStore Recovered()
     {
         var store = Store();
-        if (_runner is null)
-        {
-            _runner = new RemoteRunner(store, _approvals, _sealer!, PrepareAsync, () => _lastAdministration);
 
-            // A refused command with no run to report on is said here, the same way a command that
-            // failed is: otherwise the only trace of a forged command would be a list nobody reads.
-            _runner.Noticed += notice => Status = $"A remote command was refused: {notice.Detail}";
+        lock (_lifecycle)
+        {
+            if (!_recovered)
+            {
+                new DeliveryLoop(store, new NoGateway(), _sealer!).RecoverInterruptedRuns();
+                _recovered = true;
+            }
         }
+
+        return store;
+    }
+
+    /// <summary>
+    /// A delivery loop whose notices a person must hear said as they happen: a device whose grant was refused
+    /// for good will never be able to read this computer, and a device command that outlived its lifetime
+    /// unapplied leaves a device the person removed still trusted here. The only other trace of either is a
+    /// list nobody reads.
+    /// </summary>
+    private DeliveryLoop Watched(DeliveryLoop loop)
+    {
+        loop.Noticed += notice =>
+        {
+            if (notice.Kind is "GrantDropped" or "Expired")
+                Status = notice.Detail;
+        };
+
+        return loop;
+    }
+
+    private async Task ConnectAndServeAsync(CancellationToken ct)
+    {
+        var store = Recovered();
+        Runner(store);
 
         IGatewayConnection connection;
         try
@@ -594,26 +690,7 @@ internal sealed class RemoteAccessService : IAsyncDisposable
             return;
         }
 
-        var loop = new DeliveryLoop(store, connection, _sealer!, _keys as IGrantOutbox);
-
-        // Said as it happens: a device whose grant was refused for good will never be able to read
-        // this computer, and the only other trace of that is a list nobody reads.
-        loop.Noticed += notice =>
-        {
-            if (notice.Kind == "GrantDropped")
-                Status = notice.Detail;
-        };
-
-        // Once per PROCESS, not once per connection. "In flight" means a run with no ending
-        // written, and a run going right now is one of those - so doing this after a dropped socket
-        // came back would tell the phone that a task still working had been interrupted, while it
-        // carried on working. The first connection is the only one where every such run really is
-        // the wreckage of a previous process.
-        if (!_recovered)
-        {
-            _recovered = true;
-            loop.RecoverInterruptedRuns();
-        }
+        var loop = Watched(new DeliveryLoop(store, connection, _sealer!, _keys as IGrantOutbox));
 
         // Only over keys read from remote.db: invitations and the devices they admit live in that store.
         var hostKeys = _keys as HostKeyStore;

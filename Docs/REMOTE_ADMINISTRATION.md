@@ -65,8 +65,8 @@ debug logging or override the existing request/authentication logging filters.
 
 ## Bootstrap and recovery
 
-1. Back up the database and install the new Gateway. Its startup applies migration 010. Versions 2–9
-   remain unused so the incompatible protocol-1 schema version 2 stays rejected. Reapplying migration
+1. Back up the database and install the new Gateway. Its startup applies migration 010. Version 3 and its sign-in replay protection are preserved. Version 2
+   remains unused so the incompatible protocol-1 schema version 2 stays rejected. Reapplying migration
    010 after a partial migration is safe. Older binaries do not recognize version 10; rollback requires
    the corresponding database backup, not just swapping binaries.
 2. Obtain the intended administrator's **exact signed `iss` and `sub`** for this OIDC client from the

@@ -76,8 +76,11 @@
                     <local:HintView Text="{x:Static core:RoleAdvice.Model}"
                                     VerticalAlignment="Center" />
                 </StackPanel>
+                <!-- "(none)" is the first item of Models, so "no model chosen" is something that
+                     can be seen and picked again. The placeholder is what an EMPTY box shows, and
+                     an empty box could not be returned to once a model had been selected. -->
                 <ComboBox ItemsSource="{Binding Models}" SelectedItem="{Binding Model}"
-                          PlaceholderText="pick a model…" />
+                          PlaceholderText="(none)" />
 
                 <StackPanel Orientation="Horizontal" Spacing="6">
                     <TextBlock Classes="label" Text="Fallback model" />

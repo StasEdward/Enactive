@@ -18,20 +18,20 @@ public sealed class AdministrationServiceTests(TestDatabase database) : IClassFi
         var accounts = new AccountService(Db, TimeProvider.System, AdmissionMode.List);
         const string display = "A name with <markup> and a newline\n";
         Assert.IsType<SignInOutcome.Waiting>(
-            await accounts.SignInAsync(identity.Provider, identity.Subject, display, default));
+            await accounts.SignInAsync(identity.Provider, identity.Subject, display, new SignInTicket(Ids.New() + Ids.New(), DateTimeOffset.UtcNow), default));
 
         var request = Assert.Single(await Administration.ListWaitingAsync(default), r => r.Identity == identity);
         Assert.Equal(display, request.Display);
         Assert.False((await Administration.DecideAdmissionAsync(identity, AdmissionState.Approved, default)).HasAccount);
         Assert.DoesNotContain(await Administration.ListWaitingAsync(default), r => r.Identity == identity);
         var signedIn = Assert.IsType<SignInOutcome.SignedIn>(
-            await accounts.SignInAsync(identity.Provider, identity.Subject, display, default));
+            await accounts.SignInAsync(identity.Provider, identity.Subject, display, new SignInTicket(Ids.New() + Ids.New(), DateTimeOffset.UtcNow), default));
 
         // Refusing registration after provisioning is not disabling an existing account. The web
         // adapter needs this flag to explain that distinction rather than invent its own query.
         Assert.True((await Administration.DecideAdmissionAsync(identity, AdmissionState.Refused, default)).HasAccount);
         var again = Assert.IsType<SignInOutcome.SignedIn>(
-            await accounts.SignInAsync(identity.Provider, identity.Subject, display, default));
+            await accounts.SignInAsync(identity.Provider, identity.Subject, display, new SignInTicket(Ids.New() + Ids.New(), DateTimeOffset.UtcNow), default));
         Assert.Equal(signedIn.Access.UserId, again.Access.UserId);
     }
 
