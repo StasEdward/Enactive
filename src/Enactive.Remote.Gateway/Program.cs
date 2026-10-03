@@ -126,7 +126,9 @@ builder.Services.AddSingleton(services => new UserService(
 builder.Services.AddSingleton(services => new DeviceService(
     services.GetRequiredService<Database>(), services.GetRequiredService<Limits>(), TimeProvider.System));
 builder.Services.AddSingleton<Projection>();
-builder.Services.AddSingleton<HostConnections>();
+// The computers' connections, counted per computer, per account and overall (HostConnections): an account holds
+// twice the computers the limits allow it.
+builder.Services.AddSingleton(services => new HostConnections(services.GetRequiredService<Limits>()));
 builder.Services.AddSingleton<AccountDeletion>();
 builder.Services.AddSingleton<Export>();
 builder.Services.AddSingleton(new ExportLimit(TimeProvider.System));

@@ -60,6 +60,35 @@ public static class RequestLimits
     /// </summary>
     public const int ConcurrentRequests = 200;
 
+    /// <summary>
+    /// Connections one computer may hold open at once (see <see cref="HostConnections"/>). A computer's
+    /// connection is let out from under <see cref="ConcurrentRequests"/> once it has authenticated, and nothing
+    /// counted it after that: one token opened two hundred and one connections and every one stayed open, each
+    /// holding memory, a socket and a long poll. Two, not one: a Host whose connection dropped without either end
+    /// noticing reconnects while the gateway still holds the dead one, and that reconnect must get in. A third
+    /// closes the oldest instead of being refused, so an honest reconnect always wins and a flood with one token
+    /// holds two places.
+    /// </summary>
+    public const int ConnectionsPerComputer = 2;
+
+    /// <summary>
+    /// New connections per computer and minute, on average. A computer under <see cref="ConnectionsPerComputer"/>
+    /// could still open one after another, each closing the one before: every one costs a credential lookup in
+    /// the database and a connection set up and torn down, so churn is a flood as well. A Host reconnects with
+    /// a growing wait, and ten in a minute is more than a bad network makes it do.
+    /// </summary>
+    public const int ConnectionsPerMinute = 10;
+
+    /// <summary>
+    /// Computers' connections open at once, for the whole gateway. The per-computer and per-account limits can
+    /// each be met by many accounts at once, and the connections they add up to are what the process holds in
+    /// memory and sockets - outside <see cref="ConcurrentRequests"/>, which they are let out of. A constant and
+    /// not a setting, like that ceiling: it is about what one gateway's machine can hold, not about what one
+    /// person may use, and a deployment that needs more needs a larger machine. Ten times the requests' ceiling,
+    /// four hundred accounts at their default of five computers online once each.
+    /// </summary>
+    public const int ComputerConnections = 2000;
+
     /// <summary>The policies, the hub's limit and the front door's, and the coded refusal.</summary>
     public static IServiceCollection AddRequestLimits(this IServiceCollection services)
     {
@@ -140,7 +169,8 @@ public static class RequestLimits
     ///
     /// <para>A computer's connection lasts as long as it is online - a WebSocket, or a long poll answered
     /// only when there is something to say - so held, two hundred computers online would leave no place
-    /// for anybody's panel. Its calls are limited per computer (<see cref="HostCallLimit"/>) instead.</para>
+    /// for anybody's panel. Its calls are limited per computer (<see cref="HostCallLimit"/>) instead, and its
+    /// connections have a budget of their own (<see cref="Gateway.HostConnections"/>).</para>
     ///
     /// <para>Not by its path. The hub's path was exempt from the ceiling once, and the path is the
     /// caller's to write: anybody could send requests there without end, each with a made-up token

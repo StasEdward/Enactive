@@ -923,7 +923,8 @@ public sealed class HostServiceTests(TestDatabase database) : IClassFixture<Test
     {
         using var limit = new HostCallLimit();
         var hub = new HostHub(
-            Service, new DeviceService(Db, Limits.Unlimited, TimeProvider.System), new HostConnections(), limit)
+            Service, new DeviceService(Db, Limits.Unlimited, TimeProvider.System), new HostConnections(Limits.Unlimited),
+            limit, NullLogger<HostHub>.Instance)
         {
             Context = new CallerOf("host-1")
         };

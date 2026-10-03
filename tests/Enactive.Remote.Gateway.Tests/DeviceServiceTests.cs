@@ -14,6 +14,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.Extensions.Logging.Abstractions;
 using MySqlConnector;
 using Xunit;
 
@@ -1863,7 +1864,8 @@ public sealed class DeviceServiceTests(TestDatabase database) : IClassFixture<Te
     };
 
     private HostHub Hub(HostAccess host, HostCallLimit limit)
-        => new(new HostService(Db), Devices, new HostConnections(), limit) { Context = new ComputerCaller(host) };
+        => new(new HostService(Db), Devices, new HostConnections(Limits.Unlimited), limit,
+            NullLogger<HostHub>.Instance) { Context = new ComputerCaller(host) };
 
     private Task<long> GrantCountAsync(string hostId)
         => database.ScalarLongAsync($"SELECT COUNT(*) FROM grants WHERE host_id = '{hostId}'");
