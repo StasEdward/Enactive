@@ -4,6 +4,8 @@ using System.Collections.Concurrent;
 using System.Globalization;
 using System.Net;
 using System.Net.Http.Json;
+using System.Security.Claims;
+using System.Security.Cryptography;
 using Enactive.Remote.Contracts;
 using Enactive.Remote.Gateway.Accounts;
 using Enactive.Remote.Gateway.Storage;
@@ -306,13 +308,8 @@ public sealed class SignInTests(TestDatabase database) : IClassFixture<TestDatab
 
         if (cookie != "none")
         {
-            var format = gateway.Services.GetRequiredService<IOptionsMonitor<CookieAuthenticationOptions>>()
-                .Get(ExternalSignIn.SchemeName).TicketDataFormat;
             var expires = DateTimeOffset.UtcNow.AddMinutes(cookie == "expired" ? -1 : 10);
-            var value = format.Protect(new AuthenticationTicket(
-                ExternalSignIn.Answer(ExternalSignIn.GitHub, id, "octocat"),
-                new AuthenticationProperties { ExpiresUtc = expires },
-                ExternalSignIn.SchemeName));
+            var value = Ticket(gateway, AnswerFor(id), expires);
 
             browser.SetCookie(ExternalSignIn.CookieName, cookie == "tampered" ? Tamper(value) : value, "/auth");
         }
@@ -323,6 +320,183 @@ public sealed class SignInTests(TestDatabase database) : IClassFixture<TestDatab
         Assert.Equal(expected, response.Headers.Location!.OriginalString);
         Assert.Equal(expected == "/", (await browser.SessionAsync()).Authenticated);
         Assert.Equal(expected == "/" ? 1 : 0, await IdentitiesAsync("github", id));
+    }
+
+    // ── one sign-in per answer ──────────────────────────────────────────────
+
+    /// <summary>
+    /// The answer is good for one sign-in. Deleting the browser's External cookie does not end it: the ticket is
+    /// stateless and stays acceptable for its ten minutes, so a copy kept by anybody - a second browser here -
+    /// was redeemed into a second session without the provider being asked again. The redemption is recorded,
+    /// and the second one finds it.
+    /// </summary>
+    [Fact]
+    public async Task A_redeemed_sign_in_ticket_cannot_be_redeemed_again()
+    {
+        await using var gateway = Gateway();
+        var id = NewGitHubId().ToString(CultureInfo.InvariantCulture);
+        await ApproveAsync($"github:{id}");
+        var kept = Ticket(gateway, AnswerFor(id));
+
+        using var first = new Browser(gateway);
+        Assert.Equal("/", await RedeemAsync(first, kept));
+        Assert.False(first.Has(ExternalSignIn.CookieName));
+
+        using var replayer = new Browser(gateway);
+        Assert.Equal("/#failed", await RedeemAsync(replayer, kept));
+
+        Assert.False((await replayer.SessionAsync()).Authenticated);
+        Assert.Equal(1, await SessionsAsync(id));
+    }
+
+    /// <summary>
+    /// Redeemed by several browsers at the same moment - a double-click, or a replay racing the real one - the
+    /// answer still makes one session. A check made first and a write after it would let every one of them
+    /// through; the database's key on the answer's id, written in the transaction that opens the session, is
+    /// what decides. A first sign-in, so the account is being made by the same racing requests.
+    /// </summary>
+    [Fact]
+    public async Task Two_redemptions_of_one_ticket_at_once_make_one_session()
+    {
+        await using var gateway = Gateway();
+        var id = NewGitHubId().ToString(CultureInfo.InvariantCulture);
+        await ApproveAsync($"github:{id}");
+        var kept = Ticket(gateway, AnswerFor(id));
+
+        var browsers = Enumerable.Range(0, 5).Select(_ => new Browser(gateway)).ToArray();
+        try
+        {
+            var landed = await Task.WhenAll(browsers.Select(browser => RedeemAsync(browser, kept)));
+
+            Assert.Single(landed, place => place == "/");
+            Assert.All(landed.Where(place => place != "/"), place => Assert.Equal("/#failed", place));
+            Assert.Equal(1, await SessionsAsync(id));
+        }
+        finally
+        {
+            foreach (var browser in browsers)
+            {
+                browser.Dispose();
+            }
+        }
+    }
+
+    /// <summary>
+    /// The issue's reproduction. An answer issued before the account's sessions were all ended - by the person
+    /// signing out everywhere, by the operator's revoke, by a disablement since lifted - opens no session after
+    /// it. Signing out everywhere is what a person does when a copy of their sign-in may be in somebody else's
+    /// hands, and the version it moves on cannot catch this: the answer names no account and no version, and
+    /// the session it opened was stamped with the new one. An answer issued after the revocation still signs in.
+    /// </summary>
+    [Theory]
+    [InlineData("everywhere")]
+    [InlineData("operator")]
+    [InlineData("disabled")]
+    public async Task A_ticket_from_before_sign_out_everywhere_makes_no_session_after_it(string revocation)
+    {
+        await using var gateway = Gateway();
+        var id = NewGitHubId().ToString(CultureInfo.InvariantCulture);
+        await ApproveAsync($"github:{id}");
+
+        using var first = new Browser(gateway);
+        Assert.Equal("/", await RedeemAsync(first, Ticket(gateway, AnswerFor(id))));
+        var userId = (await first.SessionAsync()).User!.Id;
+        var kept = Ticket(gateway, AnswerFor(id));
+
+        switch (revocation)
+        {
+            case "everywhere":
+                // What POST /api/logout-all calls for the signed-in person.
+                await new SessionStore(Db, TimeProvider.System).RevokeAllAsync(userId, default);
+                break;
+            case "operator":
+                Assert.Equal(0, await AdminCommands.RunAsync(["sessions", "revoke", userId], Db, TextWriter.Null));
+                break;
+            default:
+                Assert.Equal(0, await AdminCommands.RunAsync(["disable", userId], Db, TextWriter.Null));
+                Assert.Equal(0, await AdminCommands.RunAsync(["enable", userId], Db, TextWriter.Null));
+                break;
+        }
+
+        using var replayer = new Browser(gateway);
+        Assert.Equal("/#failed", await RedeemAsync(replayer, kept));
+        Assert.False((await replayer.SessionAsync()).Authenticated);
+        Assert.Equal(0, await SessionsAsync(id, open: true));
+
+        // Issued a moment after the revocation, as the person's own sign-in after it is.
+        var revokedAt = new DateTimeOffset(DateTime.SpecifyKind(
+            (DateTime)(await database.ScalarAsync($"SELECT sessions_revoked_at FROM users WHERE id = '{userId}'"))!,
+            DateTimeKind.Utc));
+        using var later = new Browser(gateway);
+        Assert.Equal("/", await RedeemAsync(later, Ticket(gateway, AnswerFor(id, issued: revokedAt.AddMilliseconds(1)))));
+        Assert.Equal(userId, (await later.SessionAsync()).User!.Id);
+    }
+
+    /// <summary>
+    /// An answer without its id cannot be recorded as redeemed, and one without the moment it was made cannot be
+    /// compared with a revocation; either would be good for any number of sign-ins at any time. Refused, though
+    /// the identity it names is admitted. Only the gateway can make such a cookie, so this is the check that
+    /// none it ever made is believed.
+    /// </summary>
+    [Theory]
+    [InlineData(ExternalSignIn.TicketClaim)]
+    [InlineData(ExternalSignIn.IssuedClaim)]
+    public async Task A_ticket_without_an_id_is_refused(string missing)
+    {
+        await using var gateway = Gateway();
+        var id = NewGitHubId().ToString(CultureInfo.InvariantCulture);
+        await ApproveAsync($"github:{id}");
+        var answer = AnswerFor(id);
+        var without = new ClaimsPrincipal(new ClaimsIdentity(
+            answer.Claims.Where(claim => claim.Type != missing), ExternalSignIn.GitHub));
+
+        using var browser = new Browser(gateway);
+        Assert.Equal("/#failed", await RedeemAsync(browser, Ticket(gateway, without)));
+
+        Assert.False((await browser.SessionAsync()).Authenticated);
+        Assert.Equal(0, await IdentitiesAsync("github", id));
+    }
+
+    /// <summary>
+    /// The control for the tests above: a first sign-in with a fresh answer makes the account and its session,
+    /// and records the answer as redeemed under its id.
+    /// </summary>
+    [Fact]
+    public async Task A_normal_first_redemption_still_signs_in()
+    {
+        await using var gateway = Gateway();
+        var id = NewGitHubId().ToString(CultureInfo.InvariantCulture);
+        await ApproveAsync($"github:{id}");
+        var ticket = NewTicketId();
+
+        using var browser = new Browser(gateway);
+        Assert.Equal("/", await RedeemAsync(browser, Ticket(gateway, AnswerFor(id, ticket))));
+
+        Assert.Equal("octocat", (await browser.SessionAsync()).User!.DisplayName);
+        Assert.Equal(1, await SessionsAsync(id));
+        Assert.Equal(1, await database.ScalarLongAsync($"SELECT COUNT(*) FROM signin_redemptions WHERE id = '{ticket}'"));
+    }
+
+    /// <summary>
+    /// A record of a redemption is needed only while its answer could still be presented, ten minutes; every
+    /// sign-in writes one, so kept for good the table would grow with every sign-in there ever was. The hourly
+    /// pass removes those older than a day, and leaves a recent one alone.
+    /// </summary>
+    [Fact]
+    public async Task Old_redemption_records_are_removed()
+    {
+        var old = NewTicketId();
+        var recent = NewTicketId();
+        await database.ExecuteAsync(
+            $"""
+            INSERT INTO signin_redemptions (id, redeemed_at)
+            VALUES ('{old}', UTC_TIMESTAMP(3) - INTERVAL 25 HOUR), ('{recent}', UTC_TIMESTAMP(3) - INTERVAL 1 HOUR)
+            """);
+
+        await new Services.Retention(Db, Services.Retention.DefaultDays).TrimAsync();
+
+        Assert.Equal(0, await database.ScalarLongAsync($"SELECT COUNT(*) FROM signin_redemptions WHERE id = '{old}'"));
+        Assert.Equal(1, await database.ScalarLongAsync($"SELECT COUNT(*) FROM signin_redemptions WHERE id = '{recent}'"));
     }
 
     // ── configuration ───────────────────────────────────────────────────────
@@ -568,6 +742,44 @@ public sealed class SignInTests(TestDatabase database) : IClassFixture<TestDatab
     private Task<long> IdentitiesAsync(string provider, string subject)
         => database.ScalarLongAsync(
             $"SELECT COUNT(*) FROM external_identities WHERE provider = '{provider}' AND subject = '{subject}'");
+
+    /// <summary>The sessions of the account of GitHub identity <paramref name="id"/>; only unrevoked ones if <paramref name="open"/>.</summary>
+    private Task<long> SessionsAsync(string id, bool open = false)
+        => database.ScalarLongAsync(
+            $"""
+            SELECT COUNT(*) FROM user_sessions s JOIN external_identities i ON i.user_id = s.user_id
+            WHERE i.provider = 'github' AND i.subject = '{id}' {(open ? "AND s.revoked_at IS NULL" : "")}
+            """);
+
+    private static string NewTicketId() => Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(32));
+
+    /// <summary>GitHub's answer for <paramref name="id"/>, as its handler makes it: a fresh id, issued now.</summary>
+    private static ClaimsPrincipal AnswerFor(string id, string? ticket = null, DateTimeOffset? issued = null)
+        => ExternalSignIn.Answer(
+            ExternalSignIn.GitHub, id, "octocat", ticket ?? NewTicketId(), issued ?? DateTimeOffset.UtcNow);
+
+    /// <summary>
+    /// The External cookie's value for <paramref name="answer"/>, protected with the gateway's own ticket format:
+    /// what the cookie handler writes at the end of a provider's callback, and what a person who kept a copy of
+    /// that cookie holds.
+    /// </summary>
+    private static string Ticket(
+        WebApplicationFactory<Program> gateway, ClaimsPrincipal answer, DateTimeOffset? expires = null)
+        => gateway.Services.GetRequiredService<IOptionsMonitor<CookieAuthenticationOptions>>()
+            .Get(ExternalSignIn.SchemeName).TicketDataFormat
+            .Protect(new AuthenticationTicket(
+                answer,
+                new AuthenticationProperties { ExpiresUtc = expires ?? DateTimeOffset.UtcNow.AddMinutes(10) },
+                ExternalSignIn.SchemeName));
+
+    /// <summary>The cookie value delivered to <c>/auth/complete</c> by <paramref name="browser"/>; where it was sent.</summary>
+    private static async Task<string> RedeemAsync(Browser browser, string ticket)
+    {
+        browser.SetCookie(ExternalSignIn.CookieName, ticket, "/auth");
+        using var response = await browser.Http.GetAsync("/auth/complete");
+        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+        return response.Headers.Location!.OriginalString;
+    }
 
     private static long NewGitHubId() => Random.Shared.NextInt64(1, long.MaxValue);
 

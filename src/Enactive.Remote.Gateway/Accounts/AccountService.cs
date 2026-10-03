@@ -92,7 +92,19 @@ public abstract record SignInOutcome
 
     /// <summary>The account exists and has been disabled. No session.</summary>
     public sealed record Disabled : SignInOutcome;
+
+    /// <summary>
+    /// The provider's answer was redeemed already, or was issued before the account's sessions were last
+    /// ended. No session: either is what a kept copy of somebody's answer looks like.
+    /// </summary>
+    public sealed record Spent : SignInOutcome;
 }
+
+/// <summary>
+/// The provider's answer being redeemed: the random id it was issued with (64 hex characters) and when it was
+/// issued. What makes it good for one sign-in, and for none after the account signed out everywhere.
+/// </summary>
+public sealed record SignInTicket(string Id, DateTimeOffset Issued);
 
 /// <summary>People of the gateway: how an account comes to exist.</summary>
 public sealed class AccountService(Database db, TimeProvider clock, AdmissionMode admission = AdmissionMode.List)
@@ -114,9 +126,13 @@ public sealed class AccountService(Database db, TimeProvider clock, AdmissionMod
     /// <para>The identity is the provider and its subject, the numeric GitHub id or the Google
     /// <c>sub</c>. The display name is only what the person is called: it is kept up to date when the
     /// provider reports a new one and is never what finds the account, and an email never does.</para>
+    ///
+    /// <para>The <paramref name="ticket"/> is redeemed with the session it opens, and only then: an answer that
+    /// ended waiting or refused opened nothing, and saying so again is all a second redemption of it can do
+    /// (<see cref="SessionStore.RedeemAsync"/>).</para>
     /// </summary>
     public async Task<SignInOutcome> SignInAsync(
-        string provider, string subject, string display, CancellationToken ct)
+        string provider, string subject, string display, SignInTicket ticket, CancellationToken ct)
     {
         var userId = await IdentityUserAsync(provider, subject, display, ct);
 
@@ -135,8 +151,9 @@ public sealed class AccountService(Database db, TimeProvider clock, AdmissionMod
 
         try
         {
-            var (access, version) = await _sessions.OpenWithVersionAsync(userId, provider, ct);
-            return new SignInOutcome.SignedIn(access, version);
+            return await _sessions.RedeemAsync(userId, provider, ticket, ct) is { } opened
+                ? new SignInOutcome.SignedIn(opened.Access, opened.SecurityVersion)
+                : new SignInOutcome.Spent();
         }
         catch (GatewayFault fault) when (fault.Code == FaultCode.AccountDisabled)
         {

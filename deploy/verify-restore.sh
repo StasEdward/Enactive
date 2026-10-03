@@ -63,12 +63,22 @@ ask() { mysql --defaults-file="$DEFAULTS_FILE" -N -B -D "$scratch" -e "$1"; }
 failed=0
 complain() { echo "FAILED: $1" >&2; failed=1; }
 
-# 1. The tables this build expects: protocol 2's (001_initial.sql), and the Migrator's schema_version.
-#    A dump that ended early restores without error and simply has fewer tables in it, which is the
-#    exact shape of a truncated backup.
+# The schema version the dump records, or 0 when it has no schema_version to ask - which check 1 then
+# names as a missing table, rather than this stopping the run on the error.
+version=$(ask "SELECT COALESCE(MAX(version), 0) FROM schema_version" 2>/dev/null) || version=0
+
+# 1. The tables this build expects: protocol 2's (001_initial.sql), the Migrator's schema_version, and from
+#    schema version 3 the sign-in redemptions (003_signin_redemptions.sql). A dump that ended early
+#    restores without error and simply has fewer tables in it, which is the exact shape of a truncated
+#    backup. By version, because this is run on the backup taken just BEFORE a parked migration is
+#    installed (REMOTE_OPERATIONS §4.2): asking that dump for the migration's table would fail the check
+#    that clears the way for the migration.
 expected="admissions approvals audit commands devices enrollments events external_identities grants
           host_workspaces hosts invites notices runs schema_version tasks user_retention user_sessions
           user_streams users"
+if [ "$version" -ge 3 ]; then
+  expected="$expected signin_redemptions"
+fi
 actual=$(ask "SELECT table_name FROM information_schema.tables
               WHERE table_schema = '$scratch' ORDER BY table_name" | tr '\n' ' ')
 
@@ -80,8 +90,7 @@ for table in $expected; do
 done
 
 # 2. The schema version. A restore of a database that a newer build has since migrated is not a
-#    restore this build can run against, and it is better to learn that here.
-version=$(ask "SELECT COALESCE(MAX(version), 0) FROM schema_version")
+#    restore this build can run against, and it is better to learn that here. Read above, before check 1.
 if [ "$version" -lt 1 ]; then
   complain "the restored database records no applied migration"
 fi

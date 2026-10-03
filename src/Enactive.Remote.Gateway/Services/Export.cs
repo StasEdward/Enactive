@@ -49,11 +49,19 @@ public sealed class Export(Database database, TimeProvider clock)
     /// names are the database's, in camelCase like every key of the API, so the panel finds a task's
     /// <c>hostId</c> and <c>workspaceId</c> where it finds them in a snapshot. The order is the order a reader
     /// would want: the account, its access, its computers and devices, then the work.
+    ///
+    /// <para><c>signin_redemptions</c> is not here, and not by oversight: a row is the random id of a provider's
+    /// answer and when it was redeemed, written to refuse a second redemption, naming no account and gone in a
+    /// day. Nothing in it is the person's, and what it records - that they signed in - is in their sessions and
+    /// their audit rows, which are.</para>
     /// </summary>
     private static readonly (string Table, string Sql)[] Tables =
     [
         ("users",
-            "SELECT id, display_name, status, security_version, sealed_bytes, created_at FROM users WHERE id = @owner"),
+            """
+            SELECT id, display_name, status, security_version, sessions_revoked_at, sealed_bytes, created_at
+            FROM users WHERE id = @owner
+            """),
         ("external_identities",
             """
             SELECT provider, subject, display, created_at FROM external_identities

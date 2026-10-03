@@ -41,6 +41,28 @@ public sealed class SessionStore(Database db, TimeProvider clock)
     /// </summary>
     internal async Task<(UserAccess Access, int SecurityVersion)> OpenWithVersionAsync(
         string userId, string provider, CancellationToken ct)
+        => await OpenSessionAsync(userId, provider, ticket: null, ct)
+           ?? throw new InvalidOperationException("A session opened without a ticket was refused as a spent one.");
+
+    /// <summary>
+    /// As <see cref="OpenWithVersionAsync"/>, for a sign-in that redeems a provider's answer: null, and no
+    /// session, when that answer was redeemed before or was issued at or before the account's sessions were
+    /// last ended (<see cref="RevokeAllAsync(string, CancellationToken)"/>).
+    ///
+    /// <para>The answer is a protected ticket good for ten minutes, and deleting the browser's copy does not
+    /// end it: whoever kept a copy could redeem it again, and after "Sign out everywhere" too - the session it
+    /// opened was stamped with the account's new version, so the version could not tell. Both rules are kept
+    /// in the transaction that opens the session. The redemption is one insert keyed by the answer's id, so of
+    /// two redemptions at once the second waits on the first's row and fails on the key; a read made first
+    /// would let both through. The revocation time is read under the same shared lock as the status, so a
+    /// revocation committing now either comes first and is seen, or ends this session after it.</para>
+    /// </summary>
+    internal Task<(UserAccess Access, int SecurityVersion)?> RedeemAsync(
+        string userId, string provider, SignInTicket ticket, CancellationToken ct)
+        => OpenSessionAsync(userId, provider, ticket, ct);
+
+    private async Task<(UserAccess Access, int SecurityVersion)?> OpenSessionAsync(
+        string userId, string provider, SignInTicket? ticket, CancellationToken ct)
     {
         await using var connection = await db.OpenAsync(ct);
         await using var transaction = await connection.BeginAsync(ct);
@@ -48,8 +70,11 @@ public sealed class SessionStore(Database db, TimeProvider clock)
         // Shared, so a disablement or a revoke-all committing now is ordered with this: it either comes
         // first and this sees it, or waits for this session to exist and then ends it too.
         var account = await connection.ReadOneAsync(transaction,
-            "SELECT status, security_version FROM users WHERE id = @id FOR SHARE",
-            reader => (Status: reader.GetString("status"), Version: reader.GetInt32("security_version")),
+            "SELECT status, security_version, sessions_revoked_at FROM users WHERE id = @id FOR SHARE",
+            reader => (
+                Status: reader.GetString("status"),
+                Version: reader.GetInt32("security_version"),
+                RevokedAt: reader.UtcOrNull("sessions_revoked_at")),
             ("@id", userId));
 
         if (account.Status is null)
@@ -64,6 +89,27 @@ public sealed class SessionStore(Database db, TimeProvider clock)
 
         var sessionId = Ids.New();
         var now = clock.GetUtcNow();
+
+        if (ticket is not null)
+        {
+            // "At or after": both are kept to the millisecond, and an answer made in the same millisecond as the
+            // revocation cannot be shown to have come after it.
+            if (account.RevokedAt is { } revoked && revoked >= ticket.Issued)
+            {
+                return null;
+            }
+
+            try
+            {
+                await connection.ExecuteAsync(transaction,
+                    "INSERT INTO signin_redemptions (id, redeemed_at) VALUES (@ticket, @now)",
+                    ("@ticket", ticket.Id), ("@now", now));
+            }
+            catch (MySqlException exception) when (exception.ErrorCode == MySqlErrorCode.DuplicateKeyEntry)
+            {
+                return null;
+            }
+        }
 
         await connection.ExecuteAsync(transaction,
             """
@@ -134,9 +180,10 @@ public sealed class SessionStore(Database db, TimeProvider clock)
     /// <summary>
     /// The person signing themselves out everywhere: ends every session of the account, and moves its
     /// security version on. The version is what makes this complete: a session opened by a sign-in racing
-    /// this one is stamped with the old version whichever way the race goes, and no longer matches. Written
-    /// to the account's security log as the person's own act; the operator's revocation is written as the
-    /// operator's (<see cref="AdminCommands"/>).
+    /// this one is stamped with the old version whichever way the race goes, and no longer matches. And it
+    /// records when, so a provider's answer issued before it opens no session after it
+    /// (<see cref="RedeemAsync"/>). Written to the account's security log as the person's own act; the
+    /// operator's revocation is written as the operator's (<see cref="AdminCommands"/>).
     /// </summary>
     public async Task RevokeAllAsync(string userId, CancellationToken ct)
     {
@@ -160,10 +207,12 @@ public sealed class SessionStore(Database db, TimeProvider clock)
     internal static async Task RevokeAllAsync(
         MySqlConnection connection, MySqlTransaction transaction, string userId, DateTimeOffset now)
     {
-        // The account first, which is the order a sign-in takes them in.
+        // The account first, which is the order a sign-in takes them in. The time in the same statement as the
+        // version: a provider's answer from before this would otherwise still open a session after it, stamped
+        // with the new version, and signing out everywhere would not have signed out the copy somebody kept.
         await connection.ExecuteAsync(transaction,
-            "UPDATE users SET security_version = security_version + 1 WHERE id = @user",
-            ("@user", userId));
+            "UPDATE users SET security_version = security_version + 1, sessions_revoked_at = @now WHERE id = @user",
+            ("@now", now), ("@user", userId));
 
         await connection.ExecuteAsync(transaction,
             "UPDATE user_sessions SET revoked_at = @now WHERE user_id = @user AND revoked_at IS NULL",

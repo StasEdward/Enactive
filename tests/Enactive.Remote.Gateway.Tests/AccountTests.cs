@@ -30,6 +30,9 @@ public sealed class AccountTests(TestDatabase database) : IClassFixture<TestData
 
     private SessionStore Sessions => new(Db, TimeProvider.System);
 
+    /// <summary>A provider's answer never redeemed, issued now: what each sign-in through a provider carries.</summary>
+    private static SignInTicket Fresh() => new(Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(32)), DateTimeOffset.UtcNow);
+
     private static string Subject(string stem = "u") => stem + "-" + Guid.NewGuid().ToString("N")[..12];
 
     /// <summary>Runs one operator command; returns its exit code and what it printed.</summary>
@@ -48,7 +51,7 @@ public sealed class AccountTests(TestDatabase database) : IClassFixture<TestData
     {
         await ApproveAsync(provider, subject);
         return Assert.IsType<SignInOutcome.SignedIn>(
-            await Accounts().SignInAsync(provider, subject, display, default));
+            await Accounts().SignInAsync(provider, subject, display, Fresh(), default));
     }
 
     private Task<long> CountAsync(string sql) => database.ScalarLongAsync(sql);
@@ -64,8 +67,8 @@ public sealed class AccountTests(TestDatabase database) : IClassFixture<TestData
     {
         var subject = Subject();
 
-        Assert.IsType<SignInOutcome.Waiting>(await Accounts().SignInAsync("github", subject, "octocat", default));
-        Assert.IsType<SignInOutcome.Waiting>(await Accounts().SignInAsync("github", subject, "octocat-renamed", default));
+        Assert.IsType<SignInOutcome.Waiting>(await Accounts().SignInAsync("github", subject, "octocat", Fresh(), default));
+        Assert.IsType<SignInOutcome.Waiting>(await Accounts().SignInAsync("github", subject, "octocat-renamed", Fresh(), default));
 
         Assert.Equal(0, await CountAsync(
             $"SELECT COUNT(*) FROM external_identities WHERE subject = '{subject}'"));
@@ -87,7 +90,7 @@ public sealed class AccountTests(TestDatabase database) : IClassFixture<TestData
         var subject = Subject();
         var first = await AdmittedAsync("github", subject, "octocat");
         var second = Assert.IsType<SignInOutcome.SignedIn>(
-            await Accounts().SignInAsync("github", subject, "octocat", default));
+            await Accounts().SignInAsync("github", subject, "octocat", Fresh(), default));
 
         Assert.Equal(first.Access.UserId, second.Access.UserId);
         Assert.NotEqual(first.Access.SessionId, second.Access.SessionId);
@@ -109,7 +112,7 @@ public sealed class AccountTests(TestDatabase database) : IClassFixture<TestData
         var subject = Subject();
         var before = await AdmittedAsync("github", subject, "old-login");
         var after = Assert.IsType<SignInOutcome.SignedIn>(
-            await Accounts().SignInAsync("github", subject, "new-login", default));
+            await Accounts().SignInAsync("github", subject, "new-login", Fresh(), default));
 
         Assert.Equal(before.Access.UserId, after.Access.UserId);
         Assert.Equal("new-login", Assert.Single(await database.StringsAsync(
@@ -141,9 +144,9 @@ public sealed class AccountTests(TestDatabase database) : IClassFixture<TestData
         var subject = Subject();
         Assert.Equal(0, (await OperatorAsync("refuse", $"github:{subject}")).Exit);
 
-        Assert.IsType<SignInOutcome.Refused>(await Accounts().SignInAsync("github", subject, "x", default));
+        Assert.IsType<SignInOutcome.Refused>(await Accounts().SignInAsync("github", subject, "x", Fresh(), default));
         Assert.IsType<SignInOutcome.Refused>(
-            await Accounts(AdmissionMode.Open).SignInAsync("github", subject, "x", default));
+            await Accounts(AdmissionMode.Open).SignInAsync("github", subject, "x", Fresh(), default));
         Assert.Equal(0, await CountAsync(
             $"SELECT COUNT(*) FROM external_identities WHERE subject = '{subject}'"));
     }
@@ -163,7 +166,7 @@ public sealed class AccountTests(TestDatabase database) : IClassFixture<TestData
         Assert.Contains("already has an account", refused.Output, StringComparison.Ordinal);
 
         var again = Assert.IsType<SignInOutcome.SignedIn>(
-            await Accounts().SignInAsync("github", subject, "Person", default));
+            await Accounts().SignInAsync("github", subject, "Person", Fresh(), default));
         Assert.Equal(first.Access.UserId, again.Access.UserId);
     }
 
@@ -178,7 +181,7 @@ public sealed class AccountTests(TestDatabase database) : IClassFixture<TestData
         Assert.Equal("Approved", Assert.Single(await database.StringsAsync(
             $"SELECT state FROM admissions WHERE provider = 'google' AND subject = '{subject}'")));
         Assert.IsType<SignInOutcome.SignedIn>(
-            await Accounts().SignInAsync("google", subject, "Newcomer", default));
+            await Accounts().SignInAsync("google", subject, "Newcomer", Fresh(), default));
         Assert.Equal("Newcomer", Assert.Single(await database.StringsAsync(
             $"SELECT display FROM admissions WHERE provider = 'google' AND subject = '{subject}'")));
     }
@@ -192,12 +195,12 @@ public sealed class AccountTests(TestDatabase database) : IClassFixture<TestData
     {
         var waiting = Subject("waiting");
         var fresh = Subject("fresh");
-        Assert.IsType<SignInOutcome.Waiting>(await Accounts().SignInAsync("github", waiting, "w", default));
+        Assert.IsType<SignInOutcome.Waiting>(await Accounts().SignInAsync("github", waiting, "w", Fresh(), default));
 
         Assert.IsType<SignInOutcome.SignedIn>(
-            await Accounts(AdmissionMode.Open).SignInAsync("github", fresh, "f", default));
+            await Accounts(AdmissionMode.Open).SignInAsync("github", fresh, "f", Fresh(), default));
         Assert.IsType<SignInOutcome.SignedIn>(
-            await Accounts(AdmissionMode.Open).SignInAsync("github", waiting, "w", default));
+            await Accounts(AdmissionMode.Open).SignInAsync("github", waiting, "w", Fresh(), default));
     }
 
     /// <summary>
@@ -277,11 +280,11 @@ public sealed class AccountTests(TestDatabase database) : IClassFixture<TestData
         var account = await AdmittedAsync("github", subject);
 
         Assert.Equal(0, (await OperatorAsync("disable", account.Access.UserId)).Exit);
-        Assert.IsType<SignInOutcome.Disabled>(await Accounts().SignInAsync("github", subject, "Person", default));
+        Assert.IsType<SignInOutcome.Disabled>(await Accounts().SignInAsync("github", subject, "Person", Fresh(), default));
 
         Assert.Equal(0, (await OperatorAsync("enable", account.Access.UserId)).Exit);
         var back = Assert.IsType<SignInOutcome.SignedIn>(
-            await Accounts().SignInAsync("github", subject, "Person", default));
+            await Accounts().SignInAsync("github", subject, "Person", Fresh(), default));
         Assert.Equal(account.Access.UserId, back.Access.UserId);
     }
 
@@ -296,7 +299,7 @@ public sealed class AccountTests(TestDatabase database) : IClassFixture<TestData
         var mine = await AdmittedAsync("github", subject);
         var other = await AdmittedAsync("github", Subject());
         var second = Assert.IsType<SignInOutcome.SignedIn>(
-            await Accounts().SignInAsync("github", subject, "Person", default));
+            await Accounts().SignInAsync("github", subject, "Person", Fresh(), default));
 
         await OperatorAsync("disable", mine.Access.UserId);
         await OperatorAsync("enable", mine.Access.UserId);
@@ -406,7 +409,7 @@ public sealed class AccountTests(TestDatabase database) : IClassFixture<TestData
         Assert.Equal(0, revoked.Exit);
         Assert.False(await Sessions.ValidAsync(
             account.Access.UserId, account.Access.SessionId, account.SecurityVersion, default));
-        Assert.IsType<SignInOutcome.SignedIn>(await Accounts().SignInAsync("github", subject, "Person", default));
+        Assert.IsType<SignInOutcome.SignedIn>(await Accounts().SignInAsync("github", subject, "Person", Fresh(), default));
     }
 
     /// <summary>An id that is not an account is an error to the operator, and writes nothing.</summary>
@@ -460,7 +463,7 @@ public sealed class AccountTests(TestDatabase database) : IClassFixture<TestData
     public async Task The_waiting_list_does_not_pass_control_characters_to_the_terminal()
     {
         var subject = Subject();
-        await Accounts().SignInAsync("github", subject, "Eve\u001b[2J\u0007\nFAKE", default);
+        await Accounts().SignInAsync("github", subject, "Eve\u001b[2J\u0007\nFAKE", Fresh(), default);
 
         var (exit, output) = await OperatorAsync("admissions");
 
@@ -479,7 +482,7 @@ public sealed class AccountTests(TestDatabase database) : IClassFixture<TestData
     public async Task The_admin_argument_runs_the_command_line_and_exits()
     {
         var subject = Subject();
-        await Accounts().SignInAsync("github", subject, "Waiting Person", default);
+        await Accounts().SignInAsync("github", subject, "Waiting Person", Fresh(), default);
 
         var (exit, output) = await RunBinaryAsync(["admin", "admissions"], database.ConnectionString);
         Assert.Equal(0, exit);

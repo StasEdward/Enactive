@@ -895,8 +895,9 @@ public sealed class IsolationTests(TestDatabase database) : IClassFixture<TestDa
         var all = await database.StringsAsync(
             "SELECT table_name FROM information_schema.tables WHERE table_schema = DATABASE()");
 
-        // Nobody's: the allow-list of who may sign up, and the migrator's own bookkeeping.
-        var ownedByNobody = new HashSet<string> { "admissions", "schema_version" };
+        // Nobody's: the allow-list of who may sign up, the migrator's own bookkeeping, and the provider answers
+        // already redeemed - a random id and a time each, which name no person and are gone in a day.
+        var ownedByNobody = new HashSet<string> { "admissions", "schema_version", "signin_redemptions" };
 
         Assert.DoesNotContain(all, t => !owned.Contains(t) && !ownedByNobody.Contains(t));
         Assert.Contains("tasks", owned);

@@ -272,6 +272,19 @@ sudo -u enactive /opt/enactive-remote/deploy/verify-restore.sh     # the backup 
 sudo -u enactive /opt/enactive-remote/deploy/pull-release.sh --allow-migration
 ```
 
+**Migration 3 (`003_signin_redemptions.sql`)** is the first since the cutover, and the timer parks the
+release that carries it (*schema version 3 and this database is at 1*). It adds the table
+`signin_redemptions` — the random id of each provider sign-in redeemed and when, so a kept copy of the
+sign-in cannot be redeemed again; the hourly retention pass removes rows older than a day — and the
+column `users.sessions_revoked_at`, set by **Sign out everywhere**, `admin sessions revoke` and `admin
+disable`, so a sign-in begun before it opens no session after it. Both are additions: the release before
+it runs on the migrated schema unchanged, so a rollback of the code (§4.3) still works — and gives up
+both protections until the newer release is back. Copy the new `verify-restore.sh` first (§4.5): it asks
+for `signin_redemptions` only of a dump at version 3 or later, so it passes on the backup taken before the
+install and on every one after. There is no version 2, on purpose: protocol 1's database records it, and
+a migration 2 of this protocol would make that database read as current to a gateway pointed at it by
+mistake, which would start on it instead of refusing (§8).
+
 **A protocol change is parked too, and `--allow-migration` does not install it.** The journal says
 *protocol change - install by hand (REMOTE_OPERATIONS §cutover)*: such a release needs a new database
 and a new environment, which no flag provides, and installing it onto the running one would leave

@@ -81,10 +81,25 @@ public sealed class SchemaTests(TestDatabase database) : IClassFixture<TestDatab
             {
                 "admissions", "approvals", "audit", "commands", "devices", "enrollments", "events",
                 "external_identities", "grants", "host_workspaces", "hosts", "invites", "notices", "runs",
-                "schema_version", "tasks", "user_retention", "user_sessions", "user_streams", "users"
+                "schema_version", "signin_redemptions", "tasks", "user_retention", "user_sessions",
+                "user_streams", "users"
             }.Order(StringComparer.Ordinal),
             tables.Order(StringComparer.Ordinal));
     }
+
+    /// <summary>
+    /// The column a revocation stamps, which a provider's answer from before it is compared with. Without it a
+    /// copy of the answer kept from before "Sign out everywhere" opened a session after it.
+    /// </summary>
+    [Fact]
+    public async Task An_account_records_when_its_sessions_were_last_revoked()
+        => Assert.Equal(
+            ["datetime(3)|YES"],
+            await database.StringsAsync(
+                $"""
+                SELECT CONCAT(column_type, '|', is_nullable) FROM information_schema.columns
+                WHERE table_schema = '{database.Name}' AND table_name = 'users' AND column_name = 'sessions_revoked_at'
+                """));
 
     /// <summary>
     /// The rule <see cref="Migrator"/> depends on and cannot enforce by itself.
@@ -105,7 +120,7 @@ public sealed class SchemaTests(TestDatabase database) : IClassFixture<TestDatab
 
         var reapplied = await Migrator.ApplyAsync(database.ConnectionString);
 
-        Assert.Equal([1], Migrator.KnownVersions());
+        Assert.Equal([1, 3], Migrator.KnownVersions());
         Assert.Equal(Migrator.KnownVersions(), reapplied);
         Assert.Equal(
             Migrator.KnownVersions(),
@@ -158,6 +173,38 @@ public sealed class SchemaTests(TestDatabase database) : IClassFixture<TestDatab
 
             Assert.Equal(
                 $"This database was written by another protocol of Enactive Remote (schema version {unknown}). "
+                + "Install by hand: Docs/REMOTE_OPERATIONS.md §cutover.",
+                refused.Message);
+        });
+    }
+
+    /// <summary>
+    /// The protocol-1 database exactly: it records versions 1 and 2, and nothing else. It is still on the server,
+    /// kept read-only as the rollback, so a gateway pointed at it by a mistyped connection string must still refuse
+    /// it. A migration of this protocol numbered 2 would make that database read as current: nothing would be
+    /// applied, nothing refused, and the gateway would answer its health check on tables of another shape. So
+    /// version 2 is never shipped, and this fails the day one is.
+    /// </summary>
+    [Fact]
+    public async Task The_protocol_1_database_is_refused_whatever_this_protocol_has_added_since()
+    {
+        await database.WithScratchDatabaseAsync("utf8mb4", "utf8mb4_0900_ai_ci", async connectionString =>
+        {
+            await using (var connection = new MySqlConnection(connectionString))
+            {
+                await connection.OpenAsync();
+                await using var command = new MySqlCommand(
+                    """
+                    DELETE FROM schema_version;
+                    INSERT INTO schema_version (version, applied_at) VALUES (1, UTC_TIMESTAMP(3)), (2, UTC_TIMESTAMP(3));
+                    """, connection);
+                await command.ExecuteNonQueryAsync();
+            }
+
+            var refused = await Assert.ThrowsAsync<InvalidOperationException>(() => Migrator.ApplyAsync(connectionString));
+
+            Assert.Equal(
+                "This database was written by another protocol of Enactive Remote (schema version 2). "
                 + "Install by hand: Docs/REMOTE_OPERATIONS.md §cutover.",
                 refused.Message);
         });

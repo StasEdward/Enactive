@@ -113,7 +113,7 @@ builder.Services.AddSingleton(TimeProvider.System);
 var admission = Admission.FromConfiguration(builder.Configuration);
 
 builder.Services.AddSingleton(services => new AccountService(
-    services.GetRequiredService<Database>(), TimeProvider.System, admission));
+    services.GetRequiredService<Database>(), services.GetRequiredService<TimeProvider>(), admission));
 builder.Services.AddSingleton<SessionStore>();
 builder.Services.AddSingleton(services => new Retention(services.GetRequiredService<Database>(), retentionDays));
 // Read now, like the settings above: a limit that is not a whole number of at least one stops the start
