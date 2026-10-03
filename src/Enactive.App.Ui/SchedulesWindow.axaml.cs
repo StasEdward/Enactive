@@ -16,7 +16,7 @@ internal sealed partial class SchedulesWindow : Window
 {
     private readonly SchedulesViewModel _viewModel;
 
-    public SchedulesWindow(string workspaceRoot, AppSettings settings)
+    public SchedulesWindow(string workspaceRoot, Func<AppSettings> settings)
     {
         _viewModel = new SchedulesViewModel(workspaceRoot, settings);
         DataContext = _viewModel;

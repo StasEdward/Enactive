@@ -113,7 +113,7 @@ internal sealed class SchedulesViewModel : ObservableObject
     /// and it has to, because a schedule saved with the tier alone would run commands on a machine
     /// whose settings say never to.
     /// </summary>
-    private readonly AppSettings _settings;
+    private readonly SchedulePolicy _policy;
 
     private WorkspaceInfo _workspace;
     private TemplateStore _templates;
@@ -151,13 +151,13 @@ internal sealed class SchedulesViewModel : ObservableObject
 
     public SchedulesViewModel(
         string workspaceRoot,
-        AppSettings settings,
+        Func<AppSettings> settings,
         ScheduleStore? store = null,
         Func<DateTimeOffset>? now = null)
     {
         _store = store ?? ScheduleStore.Default;
         _now = now ?? (() => DateTimeOffset.Now);
-        _settings = settings;
+        _policy = new SchedulePolicy(settings);
 
         _workspace = WorkspaceInfo.For(workspaceRoot);
         _templates = new TemplateStore(workspaceRoot);
@@ -470,12 +470,11 @@ internal sealed class SchedulesViewModel : ObservableObject
             return;
         }
 
-        var tier = AutonomyTiers.Parse(DraftTier) ?? 2;
         var draft = new ScheduleDraft(
             DraftName, _workspace.RootPath,
             DraftWork.ToWork(),
             BuildTiming(),
-            EngineComposition.PolicyFor(_settings, tier),
+            _policy.For(DraftTier),
             DraftRunLate ? MissedRun.RunLate : MissedRun.Skip,
             Enabled: true,
             Id: _draftId);
