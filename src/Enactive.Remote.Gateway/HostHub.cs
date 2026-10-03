@@ -22,20 +22,31 @@ public sealed class HostHub(
     /// (<see cref="HostConnections"/>), or closes it.
     ///
     /// <para>Closed, not answered: the handshake was answered before this runs, so there is no status
-    /// left to send, and the Host treats a closed connection as one to dial again after its wait. The
-    /// log says which limit and which computer - an id, never its token - so an operator can tell a
-    /// flood from a full gateway.</para>
+    /// left to send, and the Host treats a closed connection as one to dial again after its wait. How
+    /// often a computer may start one is counted earlier, at the door, where a refusal can still be
+    /// said (<see cref="RequestLimits.UseComputerRelease"/>). The log says which limit and which
+    /// computer - an id, never its token - so an operator can tell a flood from a full gateway.</para>
+    ///
+    /// <para>An older connection closed for this one is logged too. An honest reconnect makes one such
+    /// line now and then; a token used from two places, or a flood, makes a run of them, and without the
+    /// line nothing on the operator's side showed it.</para>
     /// </summary>
     public override Task OnConnectedAsync()
     {
         var access = Access;
-        var refusal = connections.TryAdd(Context.ConnectionId, access.HostId, access.OwnerId, Context.Abort);
+        var refusal = connections.TryAdd(
+            Context.ConnectionId, access.HostId, access.OwnerId, Context.Abort, out var replaced);
 
         if (refusal != HostConnections.Refusal.None)
         {
             log.LogWarning("A connection of computer {HostId} was refused: {Refusal}.", access.HostId, refusal);
             Context.Abort();
             return Task.CompletedTask;
+        }
+
+        for (var i = 0; i < replaced; i++)
+        {
+            log.LogInformation("Computer {HostId}: its oldest connection was closed for a newer one.", access.HostId);
         }
 
         return base.OnConnectedAsync();

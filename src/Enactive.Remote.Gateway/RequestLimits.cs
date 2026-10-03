@@ -1,9 +1,12 @@
 namespace Enactive.Remote.Gateway;
 
 using System.Globalization;
+using System.Security.Claims;
 using System.Threading.RateLimiting;
 using Enactive.Remote.Gateway.Accounts;
+using Microsoft.AspNetCore.Http.Connections;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.AspNetCore.SignalR;
 
 /// <summary>
 /// How much of the gateway one caller may use: each person's API, each address's sign-ins, each
@@ -66,16 +69,19 @@ public static class RequestLimits
     /// counted it after that: one token opened two hundred and one connections and every one stayed open, each
     /// holding memory, a socket and a long poll. Two, not one: a Host whose connection dropped without either end
     /// noticing reconnects while the gateway still holds the dead one, and that reconnect must get in. A third
-    /// closes the oldest instead of being refused, so an honest reconnect always wins and a flood with one token
-    /// holds two places.
+    /// closes the oldest instead of being refused - and so does a second when the account or the gateway is
+    /// full - so a reconnect within <see cref="ConnectionsPerMinute"/> gets in, and a flood with one token holds
+    /// two places.
     /// </summary>
     public const int ConnectionsPerComputer = 2;
 
     /// <summary>
-    /// New connections per computer and minute, on average. A computer under <see cref="ConnectionsPerComputer"/>
-    /// could still open one after another, each closing the one before: every one costs a credential lookup in
-    /// the database and a connection set up and torn down, so churn is a flood as well. A Host reconnects with
-    /// a growing wait, and ten in a minute is more than a bad network makes it do.
+    /// Connections a computer may START per minute, on average: negotiations, and connections opened without
+    /// one (see <see cref="ComputerOpeningLimit"/>). A computer under <see cref="ConnectionsPerComputer"/> could
+    /// still open one after another, each closing the one before, and a negotiation it never follows up is
+    /// counted by no connection at all - yet each costs a credential lookup in the database and a connection the
+    /// server sets up and keeps for a while, so churn is a flood as well. Ten is room for a Host reconnecting
+    /// over a bad network with its growing wait; a computer past it is told to wait, not dropped.
     /// </summary>
     public const int ConnectionsPerMinute = 10;
 
@@ -89,10 +95,21 @@ public static class RequestLimits
     /// </summary>
     public const int ComputerConnections = 2000;
 
+    /// <summary>
+    /// WebSockets the server itself holds at once (Kestrel's <c>MaxConcurrentUpgradedConnections</c>, which
+    /// is unlimited unless set). The panel opens none, so every one is a computer's, and the counts above bound
+    /// those - but only once the hub has seen them. A coarse backstop under them: a socket opened and never sent
+    /// a handshake is held until the handshake times out, and one the hub has closed may still be finishing its
+    /// close, so the counts alone let the server hold more sockets than they show. A tenth over the ceiling is
+    /// room for those, and no more.
+    /// </summary>
+    public const long UpgradedConnections = ComputerConnections + ComputerConnections / 10;
+
     /// <summary>The policies, the hub's limit and the front door's, and the coded refusal.</summary>
     public static IServiceCollection AddRequestLimits(this IServiceCollection services)
     {
         services.AddSingleton<HostCallLimit>();
+        services.AddSingleton<ComputerOpeningLimit>();
         services.AddSingleton<FrontDoorLimit>();
 
         return services.AddRateLimiter(o =>
@@ -176,17 +193,59 @@ public static class RequestLimits
     /// caller's to write: anybody could send requests there without end, each with a made-up token
     /// costing a database lookup, and nothing counted them. Every request is counted until it is
     /// answered or has authenticated as a computer.</para>
+    ///
+    /// <para><b>But a computer's request that STARTS a connection is counted first</b>, per computer
+    /// (<see cref="ComputerOpeningLimit"/>), and one past the rate is answered with the coded 429 and when to
+    /// try again - here, because the hub sees a connection only after its handshake has been answered, when
+    /// there is no status left to send. Let out uncounted, one token could negotiate without end, each
+    /// negotiation a connection the server kept for a while that no connection count ever saw, or open
+    /// transports that never sent a handshake. Only a request that passes is let out from under the
+    /// ceiling; a refused one is answered at once and gives its place back then.</para>
     /// </summary>
     public static IApplicationBuilder UseComputerRelease(this IApplicationBuilder app)
-        => app.Use((context, next) =>
+    {
+        var opening = app.ApplicationServices.GetRequiredService<ComputerOpeningLimit>();
+
+        return app.Use(async (context, next) =>
         {
             if (context.User.Identity is { IsAuthenticated: true, AuthenticationType: HostAuthentication.SchemeName })
             {
+                if (StartsConnection(context))
+                {
+                    using var lease = opening.Take(context.User.FindFirstValue(ClaimTypes.NameIdentifier)
+                        ?? throw new InvalidOperationException("A computer's identity carries no computer."));
+
+                    if (!lease.IsAcquired)
+                    {
+                        await RefuseAsync(context, lease);
+                        return;
+                    }
+                }
+
                 context.Features.Get<FrontDoorPermit>()?.Release();
             }
 
-            return next(context);
+            await next(context);
         });
+    }
+
+    /// <summary>
+    /// Whether the request starts a hub connection: the negotiation, or a request to the hub that names no
+    /// connection - a WebSocket opened without negotiating. Known by the endpoint's metadata rather than its
+    /// path. Every later request of a connection - a poll, a send, the WebSocket after a negotiation - names
+    /// the connection it belongs to and is not counted, or a computer's long polling would use up its rate.
+    /// </summary>
+    private static bool StartsConnection(HttpContext context)
+    {
+        var metadata = context.GetEndpoint()?.Metadata;
+
+        if (metadata?.GetMetadata<HubMetadata>() is null)
+        {
+            return false;
+        }
+
+        return metadata.GetMetadata<NegotiateMetadata>() is not null || !context.Request.Query.ContainsKey("id");
+    }
 
     /// <summary>
     /// The caller's address. Behind the tunnel the forwarded-headers step has already set it from the
@@ -307,6 +366,41 @@ public sealed class HostCallLimit : IDisposable
             throw GatewayFault.TooManyCalls();
         }
     }
+
+    public void Dispose() => _limiter.Dispose();
+}
+
+/// <summary>
+/// How often one computer may start a connection: <see cref="RequestLimits.ConnectionsPerMinute"/>, counted on
+/// its negotiations and on connections opened without one (<see cref="RequestLimits.UseComputerRelease"/>). Not
+/// authorization: a start it lets through is still a connection the hub counts and may refuse
+/// (<see cref="HostConnections"/>).
+///
+/// <para>It was counted in the hub once, and saw too little, too late: only connections that had finished
+/// their handshake, so a negotiation never followed up and a transport that never sent a handshake were
+/// counted nowhere; and a refusal there was a connection closed without a word, which the Host could not
+/// tell from a network fault. At the door both are counted, and a refusal is the coded 429 the Host's start
+/// fails with. The hub keeps no rate of its own: every connection it sees began with a request counted here,
+/// one negotiation for one connection at most.</para>
+///
+/// <para>A bucket rather than a minute's window, like <see cref="HostCallLimit"/>: a Host reconnects with a
+/// growing wait, and under a window one that spent its starts early would be shut out to the minute's end
+/// however long it then waited. Refilled steadily, its next attempt after a pause finds room.</para>
+/// </summary>
+public sealed class ComputerOpeningLimit : IDisposable
+{
+    private readonly PartitionedRateLimiter<string> _limiter = PartitionedRateLimiter.Create<string, string>(
+        hostId => RateLimitPartition.GetTokenBucketLimiter(hostId, _ => new TokenBucketRateLimiterOptions
+        {
+            TokenLimit = RequestLimits.ConnectionsPerMinute,
+            TokensPerPeriod = 1,
+            ReplenishmentPeriod = TimeSpan.FromMinutes(1) / RequestLimits.ConnectionsPerMinute,
+            AutoReplenishment = true,
+            QueueLimit = 0
+        }));
+
+    /// <summary>Counts one start of <paramref name="hostId"/>; a lease not acquired says when to try again.</summary>
+    public RateLimitLease Take(string hostId) => _limiter.AttemptAcquire(hostId);
 
     public void Dispose() => _limiter.Dispose();
 }

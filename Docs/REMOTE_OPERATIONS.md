@@ -88,7 +88,7 @@ measurement. A refusal names the limit to the person who met it.
 | `ENACTIVE_LIMIT_OPEN_INVITES_PER_USER` | 5 | Invitations to add a device that are not yet used or expired. |
 | `ENACTIVE_LIMIT_SEALED_BYTES_PER_USER` | 209715200 | Bytes of sealed content one account keeps (200 MiB). Retention gives them back. |
 
-Fixed in the build rather than set: a computer holds at most 2 open connections (a third closes its oldest, so a reconnect always gets in), opens at most 10 a minute, and the whole gateway holds at most 2000 computers' connections; a connection refused by any of these is closed, and the gateway's log names the computer and the limit, never its token.
+Fixed in the build rather than set: a computer holds at most 2 open connections (a newer one closes its oldest, also when its account or the gateway is full), starts at most 10 a minute (counted on its negotiations, and answered `429` with `Retry-After` past that), and the whole gateway holds at most 2000 computers' connections (and 2200 WebSockets); a connection refused by the account or gateway limit is closed, and the gateway's log names the computer and the limit, never its token.
 
 **The Data Protection keys are the session.** Lose them and every browser is signed out; copy them
 and whoever has the copy can mint a session cookie. They are protected by the directory's mode and

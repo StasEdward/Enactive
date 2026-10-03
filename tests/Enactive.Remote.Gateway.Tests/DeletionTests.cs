@@ -262,12 +262,12 @@ public sealed class DeletionTests(TestDatabase database) : IClassFixture<TestDat
         var (bobs, _, _) = await users.RegisterHostAsync(bob, "Bob's PC", default);
 
         var closed = new List<string>();
-        using var connections = new HostConnections(Limits.Unlimited);
+        var connections = new HostConnections(Limits.Unlimited);
         foreach (var (host, owner) in new[] { (studio, alice.UserId), (laptop, alice.UserId), (bobs, bob.UserId) })
         {
             Assert.Equal(
                 HostConnections.Refusal.None,
-                connections.TryAdd("connection-" + host, host, owner, () => closed.Add(host)));
+                connections.TryAdd("connection-" + host, host, owner, () => closed.Add(host), out _));
         }
 
         var log = new RecordingLog();

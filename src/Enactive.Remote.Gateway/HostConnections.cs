@@ -1,6 +1,5 @@
 namespace Enactive.Remote.Gateway;
 
-using System.Threading.RateLimiting;
 using Enactive.Remote.Gateway.Services;
 
 /// <summary>
@@ -15,23 +14,25 @@ using Enactive.Remote.Gateway.Services;
 /// <list type="bullet">
 /// <item><see cref="RequestLimits.ConnectionsPerComputer"/> per computer, the OLDEST closed for a newer one;</item>
 /// <item>twice <see cref="Limits.HostsPerUser"/> per account, past which a new connection is refused;</item>
-/// <item>a ceiling for the whole gateway, past which a new connection is refused;</item>
-/// <item><see cref="RequestLimits.ConnectionsPerMinute"/> new connections per computer, past which a new one is
-/// refused.</item>
+/// <item>a ceiling for the whole gateway, past which a new connection is refused.</item>
 /// </list>
+/// <para>A computer that already holds a connection is never refused by the last two: its new one closes its
+/// oldest and takes no new place.</para>
 ///
-/// <para><b>Why in the hub and not at the door.</b> A connection is not a request: over long polling it is a
-/// negotiation and then a poll after a poll, and over a WebSocket it may skip the negotiation. The hub's
+/// <para><b>Places in the hub, openings at the door.</b> A connection is not a request: over long polling it is
+/// a negotiation and then a poll after a poll, and over a WebSocket it may skip the negotiation. The hub's
 /// <c>OnConnectedAsync</c> is the one place every connection passes once, whatever its transport, with the
-/// computer and its account known. A connection that never gets there - a handshake that failed, a negotiation
-/// never followed up - was never counted, so it has nothing to give back.</para>
+/// computer and its account known, so the places are taken there. What it cannot see is the work done before:
+/// a negotiation never followed up, or a transport opened and never sent a handshake. Those are counted where
+/// they start, per computer, by <see cref="ComputerOpeningLimit"/> in
+/// <see cref="RequestLimits.UseComputerRelease"/> - where a refusal can still be answered with a status.</para>
 ///
 /// <para><b>The count is the set of connections.</b> Each one is held under its id; taking a place adds it and
 /// giving one back removes it, and removing an id that is not there does nothing. So a connection closed here -
 /// for a newer one, or by <see cref="CloseAll"/> - gives its place back at once, and its own disconnect later
 /// gives back nothing a second time.</para>
 /// </summary>
-public sealed class HostConnections : IDisposable
+public sealed class HostConnections
 {
     private readonly long _perAccount;
     private readonly int _ceiling;
@@ -43,21 +44,6 @@ public sealed class HostConnections : IDisposable
     private readonly Dictionary<string, List<Open>> _byHost = new(StringComparer.Ordinal);
 
     private readonly Dictionary<string, int> _byOwner = new(StringComparer.Ordinal);
-
-    /// <summary>
-    /// A bucket rather than a minute's window, like <see cref="HostCallLimit"/>: a Host reconnects with a growing
-    /// wait, and under a window one that spent its connections early would be shut out to the minute's end
-    /// however long it then waited. Refilled steadily, its next attempt after a pause finds room.
-    /// </summary>
-    private readonly PartitionedRateLimiter<string> _opening = PartitionedRateLimiter.Create<string, string>(
-        hostId => RateLimitPartition.GetTokenBucketLimiter(hostId, _ => new TokenBucketRateLimiterOptions
-        {
-            TokenLimit = RequestLimits.ConnectionsPerMinute,
-            TokensPerPeriod = 1,
-            ReplenishmentPeriod = TimeSpan.FromMinutes(1) / RequestLimits.ConnectionsPerMinute,
-            AutoReplenishment = true,
-            QueueLimit = 0
-        }));
 
     /// <param name="limits">The account limits; an account holds twice its computers in connections.</param>
     /// <param name="ceiling">The whole gateway's; another only for a test that cannot open two thousand.</param>
@@ -73,9 +59,6 @@ public sealed class HostConnections : IDisposable
     public enum Refusal
     {
         None,
-
-        /// <summary>The computer opened <see cref="RequestLimits.ConnectionsPerMinute"/> lately.</summary>
-        TooOften,
 
         /// <summary>The account holds twice its computers in connections already.</summary>
         AccountFull,
@@ -117,22 +100,14 @@ public sealed class HostConnections : IDisposable
     /// <summary>
     /// Takes a place for a connection the hub has just accepted, or answers why not; a refused connection holds
     /// nothing and is the caller's to close. A computer at <see cref="RequestLimits.ConnectionsPerComputer"/>
-    /// has its oldest connection closed to make room, which neither its account nor the gateway notices: one
-    /// place is given back for the one taken.
+    /// has its oldest connection closed to make room, and so does one holding any connection when its account or
+    /// the gateway is full; neither its account nor the gateway notices, as one place is given back for the one
+    /// taken.
     /// </summary>
     /// <param name="abort">Closes this connection, when a newer one or a revocation needs it closed.</param>
-    public Refusal TryAdd(string connectionId, string hostId, string ownerId, Action abort)
+    /// <param name="replaced">How many of the computer's older connections were closed for this one.</param>
+    public Refusal TryAdd(string connectionId, string hostId, string ownerId, Action abort, out int replaced)
     {
-        // Counted before anything else, refused ones too: what the rate protects is the work of a connection
-        // being made, and a refused one has cost that already.
-        using (var lease = _opening.AttemptAcquire(hostId))
-        {
-            if (!lease.IsAcquired)
-            {
-                return Refusal.TooOften;
-            }
-        }
-
         var closing = new List<Action>();
 
         lock (_lock)
@@ -145,21 +120,25 @@ public sealed class HostConnections : IDisposable
             }
 
             var mine = _byHost.GetValueOrDefault(hostId);
+            var held = mine?.Count ?? 0;
 
-            if (mine is null || mine.Count < RequestLimits.ConnectionsPerComputer)
+            var full = _byOwner.GetValueOrDefault(ownerId) >= _perAccount ? Refusal.AccountFull
+                : _byId.Count >= _ceiling ? Refusal.GatewayFull
+                : Refusal.None;
+
+            if (full != Refusal.None && held == 0)
             {
-                if (_byOwner.GetValueOrDefault(ownerId) >= _perAccount)
-                {
-                    return Refusal.AccountFull;
-                }
-
-                if (_byId.Count >= _ceiling)
-                {
-                    return Refusal.GatewayFull;
-                }
+                replaced = 0;
+                return full;
             }
 
-            while (mine is not null && mine.Count >= RequestLimits.ConnectionsPerComputer)
+            // At its own limit the oldest goes; with the account or the gateway full, so does the oldest of
+            // one or more. Refused instead, a computer whose only connection had died unnoticed could not come
+            // back until the gateway timed the dead one out - and a full account or gateway stayed full of the
+            // dead, which is exactly when it matters that an honest reconnect gets in.
+            var keep = full == Refusal.None ? RequestLimits.ConnectionsPerComputer - 1 : held - 1;
+
+            while (mine is not null && mine.Count > keep)
             {
                 var oldest = mine[0];
                 Forget(oldest);
@@ -178,13 +157,8 @@ public sealed class HostConnections : IDisposable
             mine.Add(added);
         }
 
-        // Outside the lock: closing a connection is the transport's business and may take its time, and nothing
-        // it does should wait on, or for, every other connection's count.
-        foreach (var close in closing)
-        {
-            close();
-        }
-
+        CloseEach(closing);
+        replaced = closing.Count;
         return Refusal.None;
     }
 
@@ -222,13 +196,33 @@ public sealed class HostConnections : IDisposable
             }
         }
 
-        foreach (var open in closing)
-        {
-            open.Abort();
-        }
+        CloseEach(closing.Select(open => open.Abort));
     }
 
-    public void Dispose() => _opening.Dispose();
+    /// <summary>
+    /// Closes connections whose places have already been given back, outside the lock: closing is the
+    /// transport's business and may take its time, and nothing it does should wait on, or for, every other
+    /// connection's count.
+    ///
+    /// <para>Each on its own. A close that throws - the connection already on its way out - is a connection
+    /// that is going anyway, and its place was given back before it was asked; let through, the exception left
+    /// <see cref="CloseAll"/> with a revoked computer's other connections still open, and failed the start of
+    /// the newer connection a close was made for.</para>
+    /// </summary>
+    private static void CloseEach(IEnumerable<Action> closing)
+    {
+        foreach (var close in closing)
+        {
+            try
+            {
+                close();
+            }
+            catch (Exception)
+            {
+                // Going anyway; see above.
+            }
+        }
+    }
 
     /// <summary>
     /// Takes one connection out of every count, under the lock. An entry that falls to nothing is removed, so a

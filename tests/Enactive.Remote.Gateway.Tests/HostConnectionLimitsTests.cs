@@ -1,12 +1,18 @@
 namespace Enactive.Remote.Gateway.Tests;
 
 using System.Net;
+using System.Net.Http.Json;
 using Enactive.Remote.Contracts;
 using Enactive.Remote.Gateway.Services;
+using Enactive.Remote.Host;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http.Connections;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Xunit;
 
 /// <summary>
@@ -23,12 +29,15 @@ public sealed class HostConnectionLimitsTests(TestDatabase database) : IClassFix
     /// <summary>
     /// One token holds two connections: the one it works on and a reconnect that arrived before the old one
     /// was noticed dead. A third closes the OLDEST rather than being refused, so an honest computer that
-    /// reconnects always gets in, and a flood with a stolen token holds two places and no more.
+    /// reconnects always gets in, and a flood with a stolen token holds two places and no more. Each one closed
+    /// for a newer one is written to the operator's log under the computer's id - a flood shows there as a run
+    /// of them - and never with the token.
     /// </summary>
     [Fact]
     public async Task One_token_holds_at_most_two_connections_and_the_newest_wins()
     {
-        await using var gateway = Gateway();
+        var log = new RecordingLog();
+        await using var gateway = Gateway(log: log);
         using var owner = await SignedInAsync(gateway);
         var computer = await RegisterAsync(owner, "Studio PC");
 
@@ -50,6 +59,11 @@ public sealed class HostConnectionLimitsTests(TestDatabase database) : IClassFix
                 Assert.Equal(HubConnectionState.Connected, newest.State);
                 Assert.Null((await HelloAsync(newest)).Fault);
             }
+
+            Assert.Equal(3, log.Lines.Count(line =>
+                line.Level == LogLevel.Information
+                && line.Text == $"Computer {computer.Id}: its oldest connection was closed for a newer one."));
+            Assert.DoesNotContain(log.Lines, line => line.Text.Contains(computer.Token, StringComparison.Ordinal));
         }
         finally
         {
@@ -68,14 +82,18 @@ public sealed class HostConnectionLimitsTests(TestDatabase database) : IClassFix
     public async Task An_account_holds_at_most_twice_its_computers_in_connections()
     {
         DeviceView first, second;
+        string aliceId;
         await using (var registering = Gateway())
         {
             using var alice = await SignedInAsync(registering);
+            aliceId = alice.UserId;
             first = await RegisterAsync(alice, "Studio PC");
             second = await RegisterAsync(alice, "Laptop");
         }
 
-        await using var gateway = Gateway(hostsPerUser: 1);
+        var log = new RecordingLog();
+        await using var gateway = Gateway(hostsPerUser: 1, log: log);
+        var counts = gateway.Services.GetRequiredService<HostConnections>();
         using var bob = await SignedInAsync(gateway);
         var bobs = await RegisterAsync(bob, "Bob's PC");
 
@@ -93,6 +111,14 @@ public sealed class HostConnectionLimitsTests(TestDatabase database) : IClassFix
             Assert.True(await ClosesAsync(refused), "The connection past the account's limit was left open.");
             Assert.All(opened.Take(2), hub => Assert.Equal(HubConnectionState.Connected, hub.State));
             Assert.Null((await HelloAsync(neighbour)).Fault);
+
+            // The refused one took nothing, and its close gave nothing back that it did not hold.
+            Assert.Equal(2, counts.CountInAccount(aliceId));
+            Assert.Equal(0, counts.CountOf(second.Id));
+            Assert.Equal(3, counts.Count);
+            Assert.Contains(log.Lines, line =>
+                line.Level == LogLevel.Warning && line.Text.Contains(second.Id, StringComparison.Ordinal));
+            Assert.DoesNotContain(log.Lines, line => line.Text.Contains(second.Token, StringComparison.Ordinal));
         }
         finally
         {
@@ -142,9 +168,10 @@ public sealed class HostConnectionLimitsTests(TestDatabase database) : IClassFix
 
     /// <summary>
     /// A computer opening connections over and over is refused for a while, even though each new one would
-    /// only have closed an older one: every connection costs a credential lookup and a place being made, so
-    /// churn is a flood too. Its connection already open is not closed for it, and the person's other computer
-    /// still gets in.
+    /// only have closed an older one: every one costs a credential lookup and a connection being set up, so
+    /// churn is a flood too. The Host is TOLD - its start fails with the 429 - rather than let in and then
+    /// dropped without a word, which it could not tell from a network fault. Its connection already open is not
+    /// closed for it, and the person's other computer still gets in.
     /// </summary>
     [Fact]
     public async Task A_computer_opening_connections_too_often_is_refused_and_another_is_not()
@@ -154,40 +181,144 @@ public sealed class HostConnectionLimitsTests(TestDatabase database) : IClassFix
         var busy = await RegisterAsync(owner, "Busy");
         var quiet = await RegisterAsync(owner, "Quiet");
 
-        var opened = new List<HubConnection>();
+        var computers = new List<SignalRGatewayConnection>();
         try
         {
             // The bucket refills while the connections are made, so it may take a few more than its size.
-            HubConnection? refused = null;
+            HttpRequestException? refused = null;
+            var droppedSilently = false;
             var admitted = 0;
-            while (refused is null && admitted < 2 * RequestLimits.ConnectionsPerMinute)
+            while (refused is null && !droppedSilently && admitted < 2 * RequestLimits.ConnectionsPerMinute)
             {
-                var hub = await TryOpenAsync(gateway, busy.Token);
-                opened.Add(hub);
+                var computer = Computer(gateway, busy.Token);
+                computers.Add(computer);
 
-                if (await HelloOrClosedAsync(hub))
+                try
                 {
+                    await computer.StartAsync();
+                }
+                catch (HttpRequestException refusal)
+                {
+                    refused = refusal;
+                    break;
+                }
+
+                try
+                {
+                    await computer.HelloAsync(RemoteProtocol.Version, CancellationToken.None);
                     admitted++;
                 }
-                else
+                catch (Exception)
                 {
-                    refused = hub;
+                    droppedSilently = true;
                 }
             }
 
-            var lastAdmitted = opened[^2];
-            var other = await OpenAsync(gateway, quiet.Token);
-            opened.Add(other);
+            var other = Computer(gateway, quiet.Token);
+            computers.Add(other);
+            await other.StartAsync();
 
-            Assert.NotNull(refused);
+            Assert.False(droppedSilently, "A connection was let in and then dropped without a word.");
+            Assert.Equal(HttpStatusCode.TooManyRequests, refused?.StatusCode);
             Assert.True(admitted >= RequestLimits.ConnectionsPerMinute, $"Refused after {admitted} connections.");
-            Assert.Equal(HubConnectionState.Connected, lastAdmitted.State);
-            Assert.Null((await HelloAsync(other)).Fault);
+            Assert.True(computers[^3].IsOpen, "The computer's last connection was closed by its refused one.");
+            await other.HelloAsync(RemoteProtocol.Version, CancellationToken.None);
         }
         finally
         {
-            await DisposeAllAsync(opened);
+            foreach (var computer in computers)
+            {
+                await computer.DisposeAsync();
+            }
         }
+    }
+
+    /// <summary>
+    /// The negotiation is where a connection starts, and where it is counted: a negotiation never followed by a
+    /// connection still costs a credential lookup and a connection the server keeps for a while, so one token
+    /// asking again and again is refused - with the coded 429 and when to try again, which a response can still
+    /// carry there. The calls and polls of a connection already open name it and are not counted; another
+    /// computer's negotiation and a person's request are answered as before.
+    /// </summary>
+    [Fact]
+    public async Task A_computer_negotiating_too_often_is_refused_with_a_code_and_others_are_not()
+    {
+        await using var gateway = Gateway();
+        using var owner = await SignedInAsync(gateway);
+        var busy = await RegisterAsync(owner, "Busy");
+        var quiet = await RegisterAsync(owner, "Quiet");
+        using var http = gateway.CreateClient();
+
+        var working = await OpenAsync(gateway, busy.Token);
+        try
+        {
+            var (answered, refused) = await UntilRefusedAsync(() => NegotiateAsync(http, busy.Token));
+            using (refused)
+            {
+                using var other = await NegotiateAsync(http, quiet.Token);
+                using var session = await http.GetAsync("/api/session");
+
+                Assert.NotNull(refused);
+                Assert.True(answered + 1 >= RequestLimits.ConnectionsPerMinute, $"Refused after {answered + 1}.");
+                Assert.Equal(HttpStatusCode.TooManyRequests, refused.StatusCode);
+                Assert.NotNull(refused.Headers.RetryAfter);
+                Assert.Equal("rate-limited", (await refused.Content.ReadFromJsonAsync<ErrorView>(RemoteJson.Options))!.Code);
+                Assert.Equal(HttpStatusCode.OK, other.StatusCode);
+                Assert.Equal(HttpStatusCode.OK, session.StatusCode);
+                Assert.Null((await HelloAsync(working)).Fault);
+            }
+        }
+        finally
+        {
+            await working.DisposeAsync();
+        }
+    }
+
+    /// <summary>
+    /// A connection can skip the negotiation - a WebSocket opened straight at the hub, with no connection id -
+    /// and is counted the same way: left out, it was the way round the count, a transport held open until the
+    /// handshake's timeout with nothing counting it. Asked as a plain request with no id, which the hub refuses
+    /// for not being a WebSocket once the count has let it through.
+    /// </summary>
+    [Fact]
+    public async Task A_connection_opened_without_negotiating_is_counted_too()
+    {
+        await using var gateway = Gateway();
+        using var owner = await SignedInAsync(gateway);
+        var computer = await RegisterAsync(owner, "Studio PC");
+        using var http = gateway.CreateClient();
+
+        var (answered, refused) = await UntilRefusedAsync(async () =>
+        {
+            var request = new HttpRequestMessage(HttpMethod.Get, "/hubs/host");
+            request.Headers.Authorization = new("Bearer", computer.Token);
+            return await http.SendAsync(request);
+        });
+
+        using (refused)
+        {
+            Assert.NotNull(refused);
+            Assert.True(answered >= RequestLimits.ConnectionsPerMinute, $"Refused after {answered}.");
+            Assert.Equal(HttpStatusCode.TooManyRequests, refused.StatusCode);
+            Assert.Equal("rate-limited", (await refused.Content.ReadFromJsonAsync<ErrorView>(RemoteJson.Options))!.Code);
+        }
+    }
+
+    /// <summary>
+    /// The server itself holds no more WebSockets than computers may have connections, and a margin. A coarse
+    /// backstop under the counts: a socket the hub has closed may still be finishing its close, and one opened
+    /// without a negotiation is the server's before the hub has seen it.
+    /// </summary>
+    [Fact]
+    public async Task The_server_holds_no_more_websockets_than_computers_may_have_connections()
+    {
+        await using var gateway = Gateway();
+        using var health = await gateway.CreateClient().GetAsync("/health");
+
+        var kestrel = gateway.Services.GetRequiredService<IOptions<KestrelServerOptions>>().Value;
+
+        Assert.Equal(RequestLimits.UpgradedConnections, kestrel.Limits.MaxConcurrentUpgradedConnections);
+        Assert.InRange(RequestLimits.UpgradedConnections, RequestLimits.ComputerConnections + 1, 2L * RequestLimits.ComputerConnections);
     }
 
     /// <summary>
@@ -286,41 +417,178 @@ public sealed class HostConnectionLimitsTests(TestDatabase database) : IClassFix
     /// <summary>
     /// The whole gateway holds at most its ceiling of computers' connections, whoever they belong to: past it a
     /// new connection is refused, and a place given back is taken again. A computer at its own limit still
-    /// replaces its oldest connection with a full gateway, since that takes no new place. Asked of the counts
-    /// directly, with a ceiling of three: the gateway's own is two thousand connections.
+    /// replaces its oldest connection with a full gateway, since that takes no new place - and says it did, for
+    /// the log. Asked of the counts directly, with a ceiling of three: the gateway's own is two thousand.
     /// </summary>
     [Fact]
     public void The_gateway_holds_at_most_its_ceiling_of_computer_connections()
     {
-        using var counts = new HostConnections(Limits.Unlimited, ceiling: 3);
+        var counts = new HostConnections(Limits.Unlimited, ceiling: 3);
         var closed = new List<string>();
 
-        Assert.Equal(HostConnections.Refusal.None, counts.TryAdd("a1", "host-a", "alice", () => closed.Add("a1")));
-        Assert.Equal(HostConnections.Refusal.None, counts.TryAdd("a2", "host-a", "alice", () => closed.Add("a2")));
-        Assert.Equal(HostConnections.Refusal.None, counts.TryAdd("b1", "host-b", "bob", () => closed.Add("b1")));
+        Assert.Equal(HostConnections.Refusal.None, counts.TryAdd("a1", "host-a", "alice", () => closed.Add("a1"), out _));
+        Assert.Equal(HostConnections.Refusal.None, counts.TryAdd("a2", "host-a", "alice", () => closed.Add("a2"), out _));
+        Assert.Equal(HostConnections.Refusal.None, counts.TryAdd("b1", "host-b", "bob", () => closed.Add("b1"), out _));
 
-        Assert.Equal(HostConnections.Refusal.GatewayFull, counts.TryAdd("c1", "host-c", "carol", () => { }));
-        Assert.Equal(HostConnections.Refusal.GatewayFull, counts.TryAdd("b2", "host-b", "bob", () => { }));
-        Assert.Equal(HostConnections.Refusal.None, counts.TryAdd("a3", "host-a", "alice", () => closed.Add("a3")));
+        Assert.Equal(HostConnections.Refusal.GatewayFull, counts.TryAdd("c1", "host-c", "carol", () => { }, out var none));
+        Assert.Equal(0, none);
+        Assert.Equal(HostConnections.Refusal.None, counts.TryAdd("a3", "host-a", "alice", () => closed.Add("a3"), out var replaced));
+        Assert.Equal(1, replaced);
         Assert.Equal(["a1"], closed);
         Assert.Equal(3, counts.Count);
 
         counts.Remove("b1");
 
-        Assert.Equal(HostConnections.Refusal.None, counts.TryAdd("c1", "host-c", "carol", () => { }));
+        Assert.Equal(HostConnections.Refusal.None, counts.TryAdd("c1", "host-c", "carol", () => { }, out _));
         Assert.Equal(3, counts.Count);
+    }
+
+    /// <summary>
+    /// An honest reconnect gets in even when the gateway, or the account, is full and the computer holds only the
+    /// connection it is replacing - the one that dropped without the gateway noticing. Refused there, a computer
+    /// whose single connection had died could not come back until the dead one timed out, while a full account
+    /// or gateway would be kept full by the dead. Its oldest is closed instead: the new one takes no new place.
+    /// </summary>
+    [Fact]
+    public void A_computer_holding_one_connection_replaces_it_when_the_gateway_or_account_is_full()
+    {
+        var gatewayFull = new HostConnections(Limits.Unlimited, ceiling: 3);
+        var closed = new List<string>();
+
+        gatewayFull.TryAdd("a1", "host-a", "alice", () => closed.Add("a1"), out _);
+        gatewayFull.TryAdd("b1", "host-b", "bob", () => closed.Add("b1"), out _);
+        gatewayFull.TryAdd("b2", "host-b", "bob", () => closed.Add("b2"), out _);
+
+        Assert.Equal(HostConnections.Refusal.None, gatewayFull.TryAdd("a2", "host-a", "alice", () => { }, out var replaced));
+        Assert.Equal(1, replaced);
+        Assert.Equal(["a1"], closed);
+        Assert.Equal(1, gatewayFull.CountOf("host-a"));
+        Assert.Equal(3, gatewayFull.Count);
+
+        // An account of one computer holds two connections; here its two computers hold one each.
+        var accountFull = new HostConnections(Limits.Unlimited with { HostsPerUser = 1 });
+        closed.Clear();
+
+        accountFull.TryAdd("a1", "host-a", "alice", () => closed.Add("a1"), out _);
+        accountFull.TryAdd("c1", "host-c", "alice", () => closed.Add("c1"), out _);
+
+        Assert.Equal(HostConnections.Refusal.None, accountFull.TryAdd("a2", "host-a", "alice", () => { }, out _));
+        Assert.Equal(["a1"], closed);
+        Assert.Equal(2, accountFull.CountInAccount("alice"));
+        Assert.Equal(HostConnections.Refusal.AccountFull, accountFull.TryAdd("d1", "host-d", "alice", () => { }, out _));
+    }
+
+    /// <summary>
+    /// A close that throws - the connection was already on its way out - neither keeps its place nor stops the
+    /// others from being closed. It did both: the exception left <see cref="HostConnections.CloseAll"/> before the
+    /// rest of a revoked computer's connections were closed, and left a newer connection's start with an error.
+    /// </summary>
+    [Fact]
+    public void A_close_that_throws_gives_its_place_back_and_the_others_are_still_closed()
+    {
+        var counts = new HostConnections(Limits.Unlimited);
+        var closed = new List<string>();
+
+        counts.TryAdd("a1", "host-a", "alice", () => throw new ObjectDisposedException("connection"), out _);
+        counts.TryAdd("a2", "host-a", "alice", () => closed.Add("a2"), out _);
+
+        counts.CloseAll("host-a");
+
+        Assert.Equal(["a2"], closed);
+        Assert.Equal(0, counts.Count);
+        Assert.Equal(0, counts.CountInAccount("alice"));
+
+        counts.TryAdd("b1", "host-b", "bob", () => throw new ObjectDisposedException("connection"), out _);
+        counts.TryAdd("b2", "host-b", "bob", () => closed.Add("b2"), out _);
+
+        Assert.Equal(HostConnections.Refusal.None, counts.TryAdd("b3", "host-b", "bob", () => { }, out var replaced));
+        Assert.Equal(1, replaced);
+        Assert.Equal(2, counts.CountOf("host-b"));
+        Assert.Equal(2, counts.Count);
+    }
+
+    /// <summary>
+    /// Connections of one computer arriving at once - a flood does not wait its turn - leave two open and close
+    /// every other one, and the counts agree with what is open.
+    /// </summary>
+    [Fact]
+    public void Connections_of_one_computer_arriving_at_once_leave_two_and_close_the_rest()
+    {
+        const int arriving = 50;
+        var counts = new HostConnections(Limits.Unlimited);
+        var aborted = 0;
+        var replaced = 0;
+
+        Parallel.For(0, arriving, i =>
+        {
+            Assert.Equal(
+                HostConnections.Refusal.None,
+                counts.TryAdd("c" + i, "host-a", "alice", () => Interlocked.Increment(ref aborted), out var closedHere));
+            Interlocked.Add(ref replaced, closedHere);
+        });
+
+        Assert.Equal(2, counts.CountOf("host-a"));
+        Assert.Equal(2, counts.CountInAccount("alice"));
+        Assert.Equal(2, counts.Count);
+        Assert.Equal(arriving - 2, aborted);
+        Assert.Equal(arriving - 2, replaced);
     }
 
     // ── plumbing ────────────────────────────────────────────────────────────
 
-    private WebApplicationFactory<Program> Gateway(int? hostsPerUser = null)
+    private WebApplicationFactory<Program> Gateway(int? hostsPerUser = null, RecordingLog? log = null)
         => TestGateway.Create(database, configure: builder =>
         {
             if (hostsPerUser is { } limit)
             {
                 builder.UseSetting(Limits.HostsSetting, limit.ToString(System.Globalization.CultureInfo.InvariantCulture));
             }
+
+            if (log is not null)
+            {
+                builder.ConfigureLogging(logging => logging.AddProvider(log));
+            }
         });
+
+    /// <summary>The Host's own client, as the desktop opens it.</summary>
+    private static SignalRGatewayConnection Computer(WebApplicationFactory<Program> gateway, string token)
+        => new(new Uri(gateway.Server.BaseAddress, "hubs/host"), token, options =>
+        {
+            options.HttpMessageHandlerFactory = _ => gateway.Server.CreateHandler();
+            options.Transports = HttpTransportType.LongPolling;
+        });
+
+    /// <summary>A negotiation, as a computer's client starts one, and nothing after it.</summary>
+    private static Task<HttpResponseMessage> NegotiateAsync(HttpClient http, string token)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Post, "/hubs/host/negotiate?negotiateVersion=1");
+        request.Headers.Authorization = new("Bearer", token);
+        return http.SendAsync(request);
+    }
+
+    /// <summary>
+    /// Sends until one is refused with 429, or twice the rate's worth were not; the bucket refills while they
+    /// are sent, so it may take a few more than its size. Answers how many were not refused, and the refusal.
+    /// </summary>
+    private static async Task<(int Answered, HttpResponseMessage? Refused)> UntilRefusedAsync(
+        Func<Task<HttpResponseMessage>> send)
+    {
+        var answered = 0;
+        while (answered < 2 * RequestLimits.ConnectionsPerMinute)
+        {
+            var response = await send();
+
+            if (response.StatusCode == HttpStatusCode.TooManyRequests)
+            {
+                return (answered, response);
+            }
+
+            response.Dispose();
+            answered++;
+        }
+
+        return (answered, null);
+    }
 
     private static Task<PanelClient> SignedInAsync(WebApplicationFactory<Program> gateway)
         => PanelClient.SignedInAsync(gateway, "owner-" + Guid.NewGuid().ToString("N")[..8]);
@@ -381,24 +649,6 @@ public sealed class HostConnectionLimitsTests(TestDatabase database) : IClassFix
         return hub;
     }
 
-    /// <summary>True when the connection answers a call, false when it was closed instead.</summary>
-    private static async Task<bool> HelloOrClosedAsync(HubConnection hub)
-    {
-        if (hub.State != HubConnectionState.Connected)
-        {
-            return false;
-        }
-
-        try
-        {
-            return (await HelloAsync(hub)).Fault is null;
-        }
-        catch (Exception)
-        {
-            return false;
-        }
-    }
-
     private static Task<HostReply<bool>> HelloAsync(HubConnection hub)
         => hub.InvokeAsync<HostReply<bool>>("Hello", RemoteProtocol.Version);
 
@@ -428,4 +678,32 @@ public sealed class HostConnectionLimitsTests(TestDatabase database) : IClassFix
     }
 
     private sealed record DeviceView(string Id, string Name, string Token);
+
+    private sealed record ErrorView(string Code, string Error);
+
+    /// <summary>Every line the gateway wrote to its log, as it reads.</summary>
+    private sealed class RecordingLog : ILoggerProvider
+    {
+        private readonly System.Collections.Concurrent.ConcurrentQueue<(LogLevel Level, string Text)> _lines = new();
+
+        public IReadOnlyList<(LogLevel Level, string Text)> Lines => [.. _lines];
+
+        public ILogger CreateLogger(string categoryName) => new Writer(_lines);
+
+        public void Dispose()
+        {
+        }
+
+        private sealed class Writer(System.Collections.Concurrent.ConcurrentQueue<(LogLevel, string)> lines) : ILogger
+        {
+            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+            public bool IsEnabled(LogLevel logLevel) => true;
+
+            public void Log<TState>(
+                LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+                Func<TState, Exception?, string> formatter)
+                => lines.Enqueue((logLevel, formatter(state, exception)));
+        }
+    }
 }
