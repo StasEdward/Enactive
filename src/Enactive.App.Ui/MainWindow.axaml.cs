@@ -665,6 +665,10 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     /// <summary>Writes what the Settings window hands back, and puts it in place of the live settings.</summary>
     private void SaveSettings(AppSettings saved)
     {
+        // Before it is written: the copy is from when the window opened, and the app has gone on
+        // writing its own values into the live settings since (see KeepWhatTheAppWrote).
+        saved.KeepWhatTheAppWrote(_settings);
+
         if (!saved.Save(replaceUnreadable: true))
             throw new InvalidOperationException(
                 saved.LastSaveError is { Length: > 0 } why
@@ -732,7 +736,9 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             return;
         }
 
-        _schedulesWindow = new SchedulesWindow(root, _settings);
+        // The way to ask, not the object: a Settings save replaces _settings, and this window is
+        // kept and shown again (see SchedulePolicy).
+        _schedulesWindow = new SchedulesWindow(root, () => _settings);
         _schedulesWindow.Closed += (_, _) =>
         {
             _schedulesWindow = null;

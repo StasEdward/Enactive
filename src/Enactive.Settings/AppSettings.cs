@@ -531,6 +531,23 @@ public sealed partial class AppSettings
     public int WindowWidth { get; set; }
     public int WindowHeight { get; set; }
 
+    /// <summary>
+    /// Takes from the live settings what the app itself wrote there while this copy was being edited.
+    ///
+    /// <para>The Settings window edits a copy made when it opened, and its Save puts the copy in place of the
+    /// live settings - all of it, not only what the window shows. Where the main window is and how large it is
+    /// has no control there: the app writes it into the live settings whenever the window is hidden or closed.
+    /// Written while Settings was open, it was replaced by the copy's older numbers on Save. Anything else the
+    /// app comes to write on its own, outside the editor, belongs in this method for the same reason.</para>
+    /// </summary>
+    public void KeepWhatTheAppWrote(AppSettings live)
+    {
+        WindowX = live.WindowX;
+        WindowY = live.WindowY;
+        WindowWidth = live.WindowWidth;
+        WindowHeight = live.WindowHeight;
+    }
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
