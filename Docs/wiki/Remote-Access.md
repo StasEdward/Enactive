@@ -259,8 +259,10 @@ A refusal names the limit and what frees it, in the shape *"This account already
 progress, the most it may; wait for one to end, or stop one, to start another."* Devices and
 invitations have their own sentences of the same kind. Storage says *"This would take this account
 past its 200 MB of stored tasks and history, the most it may; older runs are removed after 30
-days."* What a computer reports about a run already started is always stored, even past the storage
-limit, so that a run can always report its end; the next start is what is refused.
+days."* Once the account is full, what a computer reports about a run in progress - progress
+messages, permission requests - is no longer stored, and that run's timeline stops growing; a
+permission is then answered at the computer. A run's end is still stored, out of room kept for
+exactly that, so a full account's runs always end; the next start is what is refused.
 
 ## What a remote run may and may not do
 

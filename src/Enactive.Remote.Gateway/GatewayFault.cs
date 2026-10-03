@@ -220,6 +220,16 @@ public sealed class GatewayFault(string code, int status, string message) : Exce
         + $"history, the most it may; older runs are removed after {retentionDays} days.");
 
     /// <summary>
+    /// A computer's report of a run in progress, refused because the account's stored history is full. Its own
+    /// code, which the computer drops: the person's refusal above is <see cref="FaultCode.QuotaExceeded"/>,
+    /// and a computer waits that one out - for days here, with the run's end held behind it.
+    /// </summary>
+    public static GatewayFault HistoryFull() => new(
+        FaultCode.StorageFull, 409,
+        "This account's stored history is full, so this report of a run in progress was not kept. "
+        + "The run's end still is; older runs are removed by retention.");
+
+    /// <summary>
     /// A device-bound call that does not say which device it is made from. One code here so every such
     /// endpoint answers it the same way, and the panel can tell it from an unknown device.
     /// </summary>

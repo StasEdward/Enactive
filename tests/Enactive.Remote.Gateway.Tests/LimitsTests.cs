@@ -367,33 +367,113 @@ public sealed class LimitsTests(TestDatabase database) : IClassFixture<TestDatab
     }
 
     /// <summary>
-    /// What a computer reports about a run is always taken, and counted, even past the limit: the run must be
-    /// able to end. The person's next start is what is refused. Shown red by refusing the computer's writes at
-    /// the limit: its events - the run's end among them - are then refused with the code a computer waits out,
-    /// and the run stays "running" for good.
+    /// A computer cannot fill the account past its limit. What it reports while a run is going - progress, a
+    /// permission request, the notices they raise - is refused once the account is full, with a code the computer
+    /// drops rather than waits out; what ENDS a run is still taken, out of a reserve kept for exactly that, so a
+    /// full account's runs can always end. Review of 2026-10-03: with every report "counted, never refused", one
+    /// registered computer and one run wrote more than 2 MB into an account whose limit was 4 KB, by sending
+    /// progress for as long as it liked - the rate limit only set how fast the shared disk filled.
+    /// </summary>
+    [Fact]
+    public async Task A_computer_cannot_fill_the_account_past_its_limit_with_progress()
+    {
+        var alice = await PersonAsync("alice");
+        var setup = new UserService(Db, Limits.Unlimited, TimeProvider.System);
+        var host = await ComputerAsync(setup, new HostService(Db), alice);
+        var taskId = Uuid();
+        await setup.CreateTaskAsync(alice, taskId, host.HostId, "workspace-1", Sealed("Run the tests"), default);
+        var runId = RunOf(await setup.StartAsync(alice, taskId, Uuid(), Sealed("start"), default));
+
+        var limits = Limits.Unlimited with { SealedBytesPerUser = await SealedBytesAsync(alice) + 4096, ActiveRunsPerUser = 3 };
+        var hosts = new HostService(Db, limits: limits);
+        await hosts.PublishAsync(host, new HostEvent(Uuid(), runId, 1, RemoteEventKind.Running));
+
+        GatewayFault? refused = null;
+        var kept = 0;
+        for (var sequence = 2; sequence < 200 && refused is null; sequence++)
+        {
+            try
+            {
+                await hosts.PublishAsync(host, new HostEvent(Uuid(), runId, sequence, RemoteEventKind.Progress, Sealed(new string('x', 600))));
+                kept++;
+            }
+            catch (GatewayFault fault)
+            {
+                refused = fault;
+            }
+        }
+
+        Assert.NotNull(refused);
+        Assert.InRange(kept, 1, 10);                                      // some fitted; then no more
+        Assert.Equal(FaultCode.StorageFull, refused.Code);
+        // Dropped by the computer, not waited out: waited out, its whole outbox would stop behind this report.
+        Assert.Equal(FaultDisposition.Drop, RemoteFaults.DispositionOf(refused.Code));
+        Assert.True(await SealedBytesAsync(alice) <= limits.SealedBytesPerUser);
+
+        // A permission request is a report of a run in progress too - one too large for whatever room is left.
+        var asked = await Assert.ThrowsAsync<GatewayFault>(() => hosts.PublishAsync(host, new HostEvent(Uuid(), runId, 500,
+            RemoteEventKind.ApprovalRequested, Sealed("May I?"), new ApprovalRequest("approval-1", "call-1", new string('a', 64), true, Sealed(new string('y', 5000))))));
+        Assert.Equal(FaultCode.StorageFull, asked.Code);
+
+        // The end is still taken, and the account never holds more than its limit and the reserve for endings.
+        await hosts.PublishAsync(host, new HostEvent(Uuid(), runId, 1000, RemoteEventKind.Completed, Sealed("Done")));
+        Assert.Equal("Completed", Assert.Single(await database.StringsAsync($"SELECT status FROM runs WHERE id = '{runId}'")));
+        Assert.True(await SealedBytesAsync(alice) <= limits.SealedBytesPerUser + limits.EndingReserve);
+        Assert.Equal(await StoredAsync(alice), await SealedBytesAsync(alice));
+    }
+
+    /// <summary>
+    /// The gateway's own computer service is the one given the configured limit. Built without it, the service
+    /// has no limit at all - which is what a test about something else wants, and what a deployed gateway must
+    /// never be: the cap above would pass every test and stop nothing.
+    /// </summary>
+    [Fact]
+    public async Task The_gateway_gives_its_computer_service_the_configured_limit()
+    {
+        var alice = await PersonAsync("alice");
+        var setup = new UserService(Db, Limits.Unlimited, TimeProvider.System);
+        var host = await ComputerAsync(setup, new HostService(Db), alice);
+        var taskId = Uuid();
+        await setup.CreateTaskAsync(alice, taskId, host.HostId, "workspace-1", Sealed("Run the tests"), default);
+        var runId = RunOf(await setup.StartAsync(alice, taskId, Uuid(), Sealed("start"), default));
+
+        await using var gateway = Gateway(Limits.Defaults with { SealedBytesPerUser = await SealedBytesAsync(alice) });
+        var hosts = gateway.Services.GetRequiredService<HostService>();
+
+        await hosts.PublishAsync(host, new HostEvent(Uuid(), runId, 1, RemoteEventKind.Running));
+        var refused = await Assert.ThrowsAsync<GatewayFault>(() =>
+            hosts.PublishAsync(host, new HostEvent(Uuid(), runId, 2, RemoteEventKind.Progress, Sealed("Built"))));
+        Assert.Equal(FaultCode.StorageFull, refused.Code);
+    }
+
+    /// <summary>
+    /// A full account's runs still end, and the person's next start is what is refused. Shown red by refusing the
+    /// run's end like any other report: the run then stays "running" for good, and keeps its active-run place.
     /// </summary>
     [Fact]
     public async Task A_full_account_still_hears_its_runs_end()
     {
         var alice = await PersonAsync("alice");
         var setup = new UserService(Db, Limits.Unlimited, TimeProvider.System);
-        var hosts = new HostService(Db);
-        var host = await ComputerAsync(setup, hosts, alice);
+        var host = await ComputerAsync(setup, new HostService(Db), alice);
         var taskId = Uuid();
         await setup.CreateTaskAsync(alice, taskId, host.HostId, "workspace-1", Sealed("Run the tests"), default);
         var runId = RunOf(await setup.StartAsync(alice, taskId, Uuid(), Sealed("start"), default));
 
         // Full: the limit is exactly what it holds.
-        var full = Limits.Unlimited with { SealedBytesPerUser = await SealedBytesAsync(alice) };
+        var full = Limits.Unlimited with { SealedBytesPerUser = await SealedBytesAsync(alice), ActiveRunsPerUser = 3 };
+        var hosts = new HostService(Db, limits: full);
 
         await hosts.PublishAsync(host, new HostEvent(Uuid(), runId, 1, RemoteEventKind.Running));
-        await hosts.PublishAsync(host, new HostEvent(Uuid(), runId, 2, RemoteEventKind.Progress, Sealed("Built")));
+        var progress = await Assert.ThrowsAsync<GatewayFault>(() =>
+            hosts.PublishAsync(host, new HostEvent(Uuid(), runId, 2, RemoteEventKind.Progress, Sealed("Built"))));
+        Assert.Equal(FaultCode.StorageFull, progress.Code);
         await hosts.PublishAsync(host, new HostEvent(Uuid(), runId, 3, RemoteEventKind.Completed, Sealed("Done")));
 
         Assert.Equal("Completed", Assert.Single(
             await database.StringsAsync($"SELECT status FROM runs WHERE id = '{runId}'")));
-        Assert.Equal(3, await CountAsync($"SELECT COUNT(*) FROM events WHERE run_id = '{runId}'"));
-        Assert.True(await SealedBytesAsync(alice) > full.SealedBytesPerUser);
+        Assert.Equal(2, await CountAsync($"SELECT COUNT(*) FROM events WHERE run_id = '{runId}'"));
+        Assert.True(await SealedBytesAsync(alice) > full.SealedBytesPerUser);           // the end, out of the reserve
         Assert.Equal(await StoredAsync(alice), await SealedBytesAsync(alice));
 
         var refused = await Assert.ThrowsAsync<GatewayFault>(() =>

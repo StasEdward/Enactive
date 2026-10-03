@@ -43,6 +43,7 @@ public static class FaultCode
     public const string EnvelopeMalformed = "envelope-malformed";
     public const string ProtocolMismatch = "protocol-mismatch";
     public const string QuotaExceeded = "quota-exceeded";
+    public const string StorageFull = "storage-full";
     public const string AccountDisabled = "account-disabled";
     public const string BadGrant = "bad-grant";
     public const string UnknownInvite = "unknown-invite";
@@ -115,9 +116,15 @@ public static class RemoteFaults
         [FaultCode.InviteUsed] = FaultDisposition.Drop,
         [FaultCode.InviteExpired] = FaultDisposition.Drop,
 
-        // The account is over its storage or rate for now. That passes - retention frees space, the
-        // window moves on - so the event is kept and sent again rather than lost.
+        // The computer is calling too often for now. That passes - the window moves on - so the event is
+        // kept and sent again rather than lost.
         [FaultCode.QuotaExceeded] = FaultDisposition.Retry,
+
+        // The account's stored history is full, and this was a report of a run in progress. Dropped, not
+        // waited out: space comes back only when retention removes old runs, days later, and an outbox
+        // waiting that long holds the run's END behind it - which the gateway would have taken (it keeps
+        // room for endings), so the run would stay "running" on the panel for as long as the wait.
+        [FaultCode.StorageFull] = FaultDisposition.Drop,
 
         // The credential is gone. Reconnecting with it is the definition of pointless.
         [FaultCode.UnknownHost] = FaultDisposition.Fatal,

@@ -122,6 +122,8 @@ public sealed class RemoteContractsTests
     [InlineData(FaultCode.InviteLimit)]
     [InlineData(FaultCode.InviteUsed)]
     [InlineData(FaultCode.InviteExpired)]
+    // A full account: space comes back in days, and the run's end waits behind whatever is retried.
+    [InlineData(FaultCode.StorageFull)]
     public void A_settled_condition_is_dropped(string code)
         => Assert.Equal(FaultDisposition.Drop, RemoteFaults.DispositionOf(code));
 
