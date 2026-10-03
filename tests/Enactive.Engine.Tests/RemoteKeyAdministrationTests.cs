@@ -793,6 +793,110 @@ public sealed class RemoteKeyAdministrationTests
     }
 
     /// <summary>
+    /// A removal this computer received - written down and acknowledged - and had not yet carried out when the
+    /// application closed is carried out when it starts again, whatever the gateway does meanwhile: Sync failing
+    /// on every connection, or no connection at all. Handed back only after a Sync that worked, the removal
+    /// waited for the gateway, and the device stayed trusted here exactly while the gateway was not there. It
+    /// rotates once, however many times the service goes round.
+    /// </summary>
+    [WindowsTheory]
+    [InlineData("sync fails")]
+    [InlineData("unreachable")]
+    public async Task A_removal_already_received_is_carried_out_without_the_gateway(string gatewayIs)
+    {
+        using var fx = new EngineFixture();
+        var database = fx.PathOf("remote.db");
+        var settings = new RemoteAccessSettings();
+        var (code, device) = NewCode();
+        using var _ = device;
+        await RemoteAccessService.ConnectWithCodeAsync(code, settings, database, NeverAsked);
+        using var phone = P256.Generate();
+        using (var store = new HostStore(database))
+        using (var keys = new HostKeyStore(store, code.HostId))
+        {
+            TrustDevice(keys, "phone", phone, "Phone");
+            var removal = new FixedHostKeys(code.HostId, keys.Current).Revoke("phone");
+            store.Accept(removal);
+            store.MarkAcknowledged(removal.Id);
+        }
+
+        var gateway = new FakeGateway { SyncRefusal = new IOException("The connection to the gateway closed.") };
+        var attempts = 0;
+        Func<CancellationToken, Task<IGatewayConnection>> connect = gatewayIs == "unreachable"
+            ? _ => { Interlocked.Increment(ref attempts); return Task.FromException<IGatewayConnection>(new IOException("The gateway is down.")); }
+            : _ => { Interlocked.Increment(ref attempts); return Task.FromResult<IGatewayConnection>(gateway); };
+
+        var said = new ConcurrentQueue<string>();
+        await using (var service = new RemoteAccessService(settings, keys: null,
+            _ => throw new InvalidOperationException("No composition expected"), () => [], fx.Decisions, database,
+            connect, firstRetry: TimeSpan.FromMilliseconds(20)))
+        {
+            service.Changed += () => said.Enqueue(service.Status);
+            service.Start();
+            await Until(() => Volatile.Read(ref attempts) >= 3);
+        }
+
+        Assert.Single(said, status => status.StartsWith("Phone was removed from the browser", StringComparison.Ordinal));
+        using (var store = new HostStore(database))
+        using (var keys = new HostKeyStore(store, code.HostId))
+        {
+            Assert.Equal([code.DeviceId], keys.Live.Select(d => d.DeviceId));
+            Assert.Equal(2u, keys.Current.Epoch);
+        }
+    }
+
+    /// <summary>
+    /// The runs a previous process left open are reported Interrupted once, at the first point this process
+    /// reaches its records - whichever path gets there. Done only in the pass made without the gateway, and
+    /// only once that pass had read the records: when they could not be read at start but the connection then
+    /// opened them, the report was skipped, and a LATER failed connection made it - while this process's own
+    /// runs were going, telling the phone they had been interrupted.
+    /// </summary>
+    [Fact]
+    public async Task Runs_left_open_by_the_last_process_are_reported_on_the_first_connection_when_the_records_could_not_be_read_at_start()
+    {
+        using var fx = new EngineFixture();
+        var database = fx.PathOf("remote.db");
+        var keys = new FixedHostKeys();
+        using (var store = new HostStore(database))
+        {
+            store.Accept(keys.Start("command-1", "run-1"));
+            store.BeginRun("command-1", "run-1");
+        }
+
+        // The records cannot be opened at start: a folder stands where the file is.
+        var aside = database + ".aside";
+        File.Move(database, aside);
+        Directory.CreateDirectory(database);
+
+        var first = new FakeGateway();
+        var connections = 0;
+        await using (var service = new RemoteAccessService(
+            new RemoteAccessSettings { Enabled = true, GatewayUrl = Gateway.ToString(), HostId = keys.HostId, Token = "token" },
+            keys, _ => throw new InvalidOperationException("No composition expected"), () => [], fx.Decisions, database,
+            _ => Task.FromResult<IGatewayConnection>(Interlocked.Increment(ref connections) == 1 ? first : new FakeGateway()),
+            firstRetry: TimeSpan.FromMilliseconds(20)))
+        {
+            var restored = 0;
+            service.Changed += () =>
+            {
+                // Said on the loop's own thread, before it goes on to connect: the records are back by then.
+                if (service.Status.StartsWith("Remote commands already received could not be read", StringComparison.Ordinal)
+                    && Interlocked.Exchange(ref restored, 1) == 0)
+                {
+                    Directory.Delete(database);
+                    File.Move(aside, database);
+                }
+            };
+
+            service.Start();
+            await Until(() => first.Calls.Contains("Sync"));
+        }
+
+        Assert.Equal([RemoteEventKind.Interrupted], first.Published.Where(e => e.RunId == "run-1").Select(e => e.Kind));
+    }
+
+    /// <summary>
     /// A computer that was asleep while a phone was lost and removed hears of the removal in the same Sync as
     /// whatever was queued under the old key - by the thief, or by the phone before it was lost: a start, and an
     /// endorsement of a stand-in device. The removal is carried out first, whatever order the gateway listed

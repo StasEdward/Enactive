@@ -343,6 +343,630 @@ public sealed class RemoteDeliveryTests : IDisposable
         Assert.Empty(accepted);
     }
 
+    // ── a command received is carried out, whatever interrupted it ─────────
+
+    // Receiving a command and carrying it out are two moments, and a failed acknowledgement, a dropped
+    // connection or the application closing can come between them. The gateway hands a command over
+    // until it is acknowledged and never after, so a command that only a redelivery could bring back was
+    // lost: acknowledged and then dropped, or written down and then met again as "not new" and thrown
+    // away. A removal of a device lost so left the device trusted here, and its key never replaced.
+
+    /// <summary>The acknowledgement failed after the command was written down; it is still carried out.</summary>
+    [Fact]
+    public async Task An_acknowledgement_that_fails_does_not_lose_the_command()
+    {
+        using var store = Open();
+        var failures = 0;
+        var gateway = new FakeGateway
+        {
+            Pending = [Start("command-1", "run-1")],
+            AcknowledgeFailure = _ => failures++ == 0 ? new IOException("socket closed") : null
+        };
+        var started = new List<string>();
+        var loop = Loop(store, gateway);
+        var runner = Runner(store, started);
+
+        await ServeAsync(loop, runner);
+        await ServeAsync(loop, runner);
+
+        Assert.Equal(["run-1"], started);
+        Assert.Contains("command-1", gateway.Acknowledged);
+    }
+
+    /// <summary>
+    /// Written down and acknowledged, and then the application closed. The gateway will not hand it over
+    /// again, so the inbox is the only thing that still knows of it.
+    /// </summary>
+    [Fact]
+    public async Task A_command_accepted_before_a_restart_is_applied_after_it()
+    {
+        using (var store = Open())
+        {
+            store.Accept(Start("command-1", "run-1"));
+            store.MarkAcknowledged("command-1");
+        }
+
+        using (var store = Open())
+        {
+            var started = new List<string>();
+            var loop = Loop(store, new FakeGateway());
+            loop.RecoverInterruptedRuns();
+
+            await ServeAsync(loop, Runner(store, started));
+
+            Assert.Equal(["run-1"], started);
+            Assert.True(store.WasApplied("command-1"));
+        }
+    }
+
+    /// <summary>
+    /// The acknowledgement of the last command of a batch fails. The ones before it were written down and
+    /// acknowledged - the gateway will not hand them over again - and the one that failed was written down
+    /// too; none of them is left behind.
+    /// </summary>
+    [Fact]
+    public async Task A_failure_late_in_a_batch_does_not_lose_the_earlier_commands()
+    {
+        using var store = Open();
+        var failed = false;
+        var gateway = new FakeGateway
+        {
+            Pending = [Start("command-1", "run-1"), Start("command-2", "run-2"), Start("command-3", "run-3")],
+            AcknowledgeFailure = id =>
+            {
+                if (id != "command-3" || failed) return null;
+                failed = true;
+                return new IOException("socket closed");
+            }
+        };
+        var started = new List<string>();
+        var loop = Loop(store, gateway);
+        var runner = Runner(store, started);
+
+        await ServeAsync(loop, runner);
+
+        Assert.Contains("run-1", started);
+        Assert.Contains("run-2", started);
+
+        await ServeAsync(loop, runner);
+
+        Assert.Equal(["run-1", "run-2", "run-3"], started);
+    }
+
+    /// <summary>
+    /// What the inbox hands back comes in the order a Sync's commands are carried out in - a removal before
+    /// a start, which would otherwise open under the key the removal replaces - and only for as long as a
+    /// command of its kind may wait: a day for a start, thirty days for a removal, which waits for a computer
+    /// that was off. Past that the sealer would refuse it anyway, as sealed too long ago.
+    /// </summary>
+    [Fact]
+    public async Task What_the_inbox_owes_comes_back_removals_first_and_only_while_its_kind_may_wait()
+    {
+        using var store = Open();
+        store.Accept(Start("command-1", "run-1"));
+        store.Accept(Keys.Revoke("phone"));
+
+        Assert.Equal(["command-r", "command-1"], (await Loop(store, new FakeGateway()).TurnAsync([])).Select(c => c.Id));
+
+        var afterADay = DateTimeOffset.UtcNow + RemoteProtocol.CommandLifetime + TimeSpan.FromMinutes(1);
+        var afterAMonth = DateTimeOffset.UtcNow + RemoteProtocol.DeviceCommandLifetime + TimeSpan.FromMinutes(1);
+        Assert.Equal(["command-r"], store.Unapplied(afterADay).Select(c => c.Id));
+        Assert.Empty(store.Unapplied(afterAMonth));
+    }
+
+    /// <summary>
+    /// A command is carried out as it was written down. A redelivery under the same id with other text in it
+    /// is the gateway changing a command after this computer received it, and what it hands back is the
+    /// first.
+    /// </summary>
+    [Fact]
+    public async Task A_redelivery_with_other_text_is_carried_out_as_first_received()
+    {
+        using var store = Open();
+        var original = Start("command-1", "run-1");
+        store.Accept(original);
+        var altered = original with { Payload = Start("command-1", "run-other").Payload };
+
+        var handed = Assert.Single(await Loop(store, new FakeGateway { Pending = [altered] }).TurnAsync([]));
+
+        Assert.Equal(original.Payload, handed.Payload);
+    }
+
+    /// <summary>
+    /// The other half: what the inbox hands back stops once it has been carried out - or refused, which is
+    /// as final. A command left unmarked would be carried out on every turn, and a refused one said to the
+    /// person again every fifteen seconds for as long as it lived.
+    /// </summary>
+    [Fact]
+    public async Task A_command_carried_out_or_refused_is_not_handed_back_again()
+    {
+        using var store = Open();
+        var forged = Keys.Command("command-f", CommandKind.CancelRun,
+            RemoteJson.Serialize(new CancelRunPayload("run-1", "not sealed")));
+        var loop = Loop(store, new FakeGateway { Pending = [Keys.Cancel("command-2", "run-1"), forged] });
+        var runner = Runner(store, []);
+
+        await ServeAsync(loop, runner);
+
+        Assert.Empty(await loop.TurnAsync([]));
+        Assert.Equal("Refused", Assert.Single(runner.Notices).Kind);
+    }
+
+    /// <summary>
+    /// The protection the inbox exists for still holds when it hands commands back. A start that was claimed
+    /// before the application closed is the business of <see cref="DeliveryLoop.RecoverInterruptedRuns"/> -
+    /// reported Interrupted, never begun again - and a start handed back on two turns before its run began,
+    /// the run being on a task of its own, begins once.
+    /// </summary>
+    [Fact]
+    public async Task A_start_is_never_run_twice()
+    {
+        var claimed = Start("command-1", "run-1");
+        var waiting = Start("command-2", "run-2");
+
+        using (var store = Open())
+        {
+            store.Accept(claimed);
+            store.BeginRun(claimed.Id, "run-1");
+        }
+
+        using (var store = Open())
+        {
+            var started = new List<string>();
+            var gateway = new FakeGateway { Pending = [claimed, waiting] };
+            var loop = Loop(store, gateway);
+            var runner = Runner(store, started);
+            loop.RecoverInterruptedRuns();
+
+            var first = await loop.TurnAsync([]);
+            var second = await loop.TurnAsync([]);
+            await ApplyAsync(runner, first);
+            await ApplyAsync(runner, second);
+            await ServeAsync(loop, runner);
+
+            Assert.Equal(["run-2"], started);
+            Assert.Equal([RemoteEventKind.Interrupted], gateway.Published.Where(e => e.RunId == "run-1").Select(e => e.Kind));
+        }
+    }
+
+    /// <summary>
+    /// A removal sent from a browser is received and acknowledged, and the application closes before carrying
+    /// it out. After the restart it is carried out - the device distrusted, the key replaced - and only once,
+    /// however many turns follow and though the gateway hands it over again: a second rotation would send
+    /// every device a key for nothing, and a second carrying out of a removal, under the key it replaced, is
+    /// refused as stale and said to the person as a refusal.
+    /// </summary>
+    [WindowsFact]
+    public async Task A_revocation_interrupted_between_receipt_and_application_rotates_exactly_once()
+    {
+        using var phone = P256.Generate();
+        using var laptop = P256.Generate();
+        HostCommand revocation;
+
+        using (var store = Open())
+        using (var keys = new HostKeyStore(store, "host-1"))
+        {
+            TrustDevice(keys, "phone", phone);
+            TrustDevice(keys, "laptop", laptop);
+            revocation = new FixedHostKeys(keys.HostId, keys.Current).Revoke("laptop");
+
+            await DeviceLoop(store, keys, new FakeGateway { Pending = [revocation] }).TurnAsync([]);
+        }
+
+        using (var store = Open())
+        using (var keys = new HostKeyStore(store, "host-1"))
+        {
+            var administration = new KeyAdministration(keys, new FakeGateway(), TimeProvider.System);
+            var rotations = new List<KeyRotated>();
+            administration.Rotated += rotations.Add;
+            var loop = DeviceLoop(store, keys, new FakeGateway { Pending = [revocation] });
+            var runner = DeviceRunner(store, keys, () => administration);
+
+            for (var turn = 0; turn < 3; turn++)
+            {
+                await ServeAsync(loop, runner);
+            }
+
+            Assert.Equal(2u, keys.Current.Epoch);
+            Assert.Equal(["phone"], keys.Live.Select(d => d.DeviceId));
+            Assert.Single(rotations);
+            Assert.Empty(runner.Notices);
+            Assert.True(store.WasApplied(revocation.Id));
+        }
+    }
+
+    /// <summary>
+    /// A removal is recorded carried out in the very step that replaces the key. Recorded after it, a crash
+    /// between the two left the removal to be carried out again - under a key it had itself replaced, so it
+    /// was refused as stale and said to the person as a refused command, though it had been carried out.
+    /// </summary>
+    [WindowsFact]
+    public async Task A_revocation_is_recorded_carried_out_in_the_step_that_rotates()
+    {
+        using var store = Open();
+        using var keys = new HostKeyStore(store, "host-1");
+        using var phone = P256.Generate();
+        using var laptop = P256.Generate();
+        TrustDevice(keys, "phone", phone);
+        TrustDevice(keys, "laptop", laptop);
+        var revocation = new FixedHostKeys(keys.HostId, keys.Current).Revoke("laptop");
+
+        // Nothing after the key store's own step runs: the application closes the moment it commits.
+        var closing = new KeyAdministration(keys, new FakeGateway(), TimeProvider.System);
+        closing.Rotated += _ => throw new InvalidOperationException("The application closed here.");
+        var administration = closing;
+
+        var loop = DeviceLoop(store, keys, new FakeGateway { Pending = [revocation] });
+        var runner = DeviceRunner(store, keys, () => administration);
+
+        await ServeAsync(loop, runner);
+
+        Assert.True(store.WasApplied(revocation.Id));
+
+        administration = new KeyAdministration(keys, new FakeGateway(), TimeProvider.System);
+        await ServeAsync(loop, runner);
+        await ServeAsync(loop, runner);
+
+        Assert.Equal(2u, keys.Current.Epoch);
+        Assert.Empty(runner.Notices);
+    }
+
+    // ── a start cancelled before it began, and a command that keeps failing ──
+
+    /// <summary>
+    /// The application closed with a start and the person's cancel of it both in the inbox. A start's run
+    /// begins on a task of its own, and the cancel, carried out at once beside it, found no run to stop, was
+    /// used up - and the task ran when the application came back, up to a day after the person cancelled it.
+    /// </summary>
+    [Fact]
+    public async Task A_start_cancelled_before_it_began_does_not_run_after_a_restart()
+    {
+        using (var store = Open())
+        {
+            store.Accept(Start("command-1", "run-1"));
+            store.Accept(Keys.Cancel("command-2", "run-1"));
+        }
+
+        using (var store = Open())
+        {
+            var started = new List<string>();
+            var gateway = new FakeGateway();
+            var loop = Loop(store, gateway);
+            loop.RecoverInterruptedRuns();
+
+            await ServeAsync(loop, Runner(store, started));
+            await loop.FlushAsync();
+
+            Assert.Empty(started);
+            Assert.Equal([RemoteEventKind.Cancelled], gateway.Published.Where(e => e.RunId == "run-1").Select(e => e.Kind));
+            Assert.True(store.WasApplied("command-1"));
+            Assert.True(store.WasApplied("command-2"));
+        }
+    }
+
+    /// <summary>
+    /// The same pair in one Sync, in either order: a cancel listed after its start finds the run claimed and
+    /// stops it before it begins; one listed before finds the start still in the inbox, and ends its run
+    /// there and then.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_start_and_its_cancel_in_one_sync_run_nothing(bool cancelListedFirst)
+    {
+        using var store = Open();
+        var start = Start("command-1", "run-1");
+        var cancel = Keys.Cancel("command-2", "run-1");
+        var started = new List<string>();
+        var gateway = new FakeGateway { Pending = cancelListedFirst ? [cancel, start] : [start, cancel] };
+        var loop = Loop(store, gateway);
+
+        await ServeAsync(loop, Runner(store, started));
+        await loop.FlushAsync();
+
+        Assert.Empty(started);
+        Assert.Equal([RemoteEventKind.Cancelled], gateway.Published.Where(e => e.RunId == "run-1").Select(e => e.Kind));
+        Assert.True(store.WasApplied("command-1"));
+        Assert.True(store.WasApplied("command-2"));
+    }
+
+    /// <summary>
+    /// A command whose carrying out fails on this computer's side every time - here a start naming a run
+    /// another start already opened, which fails on the run's key. Tried on every turn for its whole day, it
+    /// put the same failure in the status line every fifteen seconds. It is tried <see
+    /// cref="RemoteRunner.MaxAttempts"/> times, a failure is said only when it says something new, and giving
+    /// up is said once.
+    /// </summary>
+    [Fact]
+    public async Task A_command_that_keeps_failing_is_given_up_on_once()
+    {
+        using var store = Open();
+        store.Accept(Start("command-1", "run-1"));
+        store.BeginRun("command-1", "run-1");
+        var loop = Loop(store, new FakeGateway { Pending = [Start("command-2", "run-1")] });
+        var runner = Runner(store, []);
+        var said = new List<string>();
+
+        for (var turn = 1; turn < RemoteRunner.MaxAttempts; turn++)
+        {
+            await ServeAsync(loop, runner, said);
+        }
+
+        Assert.False(store.WasApplied("command-2"));
+        Assert.Single(said);
+        Assert.Empty(runner.Notices);
+
+        for (var turn = 0; turn < 3; turn++)
+        {
+            await ServeAsync(loop, runner, said);
+        }
+
+        Assert.True(store.WasApplied("command-2"));
+        Assert.Single(said);
+        var gaveUp = Assert.Single(runner.Notices);
+        Assert.Equal("GaveUp", gaveUp.Kind);
+        Assert.Contains($"could not be carried out after {RemoteRunner.MaxAttempts} attempts", gaveUp.Detail, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A failure on this computer's side is not a refusal: the command is tried again on the next turn, and
+    /// carried out once whatever was in the way has passed.
+    /// </summary>
+    [WindowsFact]
+    public async Task A_command_that_failed_once_is_carried_out_on_the_next_turn()
+    {
+        using var store = Open();
+        using var keys = new HostKeyStore(store, "host-1");
+        using var phone = P256.Generate();
+        using var laptop = P256.Generate();
+        TrustDevice(keys, "phone", phone);
+        TrustDevice(keys, "laptop", laptop);
+        var administration = new KeyAdministration(keys, new FakeGateway(), TimeProvider.System);
+        var asked = 0;
+        var loop = DeviceLoop(store, keys, new FakeGateway { Pending = [new FixedHostKeys(keys.HostId, keys.Current).Revoke("laptop")] });
+        var runner = DeviceRunner(store, keys,
+            () => asked++ == 0 ? throw new InvalidOperationException("The key store was busy.") : administration);
+        var said = new List<string>();
+
+        await ServeAsync(loop, runner, said);
+
+        Assert.Equal(1u, keys.Current.Epoch);
+        Assert.Equal(["The key store was busy."], said);
+
+        await ServeAsync(loop, runner, said);
+
+        Assert.Equal(2u, keys.Current.Epoch);
+        Assert.True(store.WasApplied("command-r"));
+        Assert.Empty(runner.Notices);
+    }
+
+    /// <summary>
+    /// A removal is never given up on. Given up after <see cref="RemoteRunner.MaxAttempts"/> failures - about a
+    /// minute of a disk that would not write - it was marked carried out and dropped, and the device the person
+    /// removed stayed trusted here with the key unchanged. It is tried for as long as it may wait, and each
+    /// failure is said once.
+    /// </summary>
+    [WindowsFact]
+    public async Task A_removal_that_keeps_failing_is_tried_until_it_succeeds()
+    {
+        using var store = Open();
+        using var keys = new HostKeyStore(store, "host-1");
+        using var phone = P256.Generate();
+        using var laptop = P256.Generate();
+        TrustDevice(keys, "phone", phone);
+        TrustDevice(keys, "laptop", laptop);
+        var administration = new KeyAdministration(keys, new FakeGateway(), TimeProvider.System);
+        var asked = 0;
+        var loop = DeviceLoop(store, keys, new FakeGateway { Pending = [new FixedHostKeys(keys.HostId, keys.Current).Revoke("laptop")] });
+        var runner = DeviceRunner(store, keys,
+            () => ++asked <= RemoteRunner.MaxAttempts ? throw new IOException("disk") : administration);
+        var said = new List<string>();
+
+        for (var turn = 0; turn <= RemoteRunner.MaxAttempts; turn++)
+        {
+            await ServeAsync(loop, runner, said);
+        }
+
+        Assert.Equal(2u, keys.Current.Epoch);
+        Assert.Equal(["phone"], keys.Live.Select(d => d.DeviceId));
+        Assert.True(store.WasApplied("command-r"));
+        Assert.Equal(["disk"], said);
+        Assert.Empty(runner.Notices);
+    }
+
+    /// <summary>
+    /// An endorsement is marked carried out after it, not in the same step, because carried out again it
+    /// changes nothing: the application closing between the two leaves a device already trusted with that
+    /// key, which the endorsement, met again, leaves as it is - and it is marked then.
+    /// </summary>
+    [WindowsFact]
+    public async Task An_endorsement_carried_out_again_after_a_crash_changes_nothing_and_is_marked()
+    {
+        using var store = Open();
+        using var keys = new HostKeyStore(store, "host-1");
+        using var tablet = P256.Generate();
+        var endorsement = new FixedHostKeys(keys.HostId, keys.Current)
+            .Endorse("tablet", B64.Url(P256.PublicRaw(tablet)), "Tablet");
+        store.Accept(endorsement);
+        var administration = new KeyAdministration(keys, new FakeGateway(), TimeProvider.System);
+        await administration.EndorseAsync(new Sealer(keys, TimeProvider.System).OpenEndorsement(endorsement), CancellationToken.None);
+        var before = Assert.Single(keys.Trusted);
+
+        var runner = DeviceRunner(store, keys, () => administration);
+        await ServeAsync(DeviceLoop(store, keys, new FakeGateway()), runner);
+
+        Assert.Equal(before, Assert.Single(keys.Trusted), TrustedDeviceComparer.Instance);
+        Assert.Empty(runner.Notices);
+        Assert.True(store.WasApplied(endorsement.Id));
+    }
+
+    // ── what the inbox owes, without the gateway ───────────────────────────
+
+    /// <summary>
+    /// What the inbox owes is this computer's to carry out, and the gateway has no part in it. Handed back
+    /// only after a Sync that worked, a removal already received waited for the gateway - and stayed
+    /// undone exactly while the gateway could not be reached, or had refused this computer.
+    /// </summary>
+    [Fact]
+    public async Task What_the_inbox_owes_is_handed_back_whatever_the_gateway_answers()
+    {
+        using var store = Open();
+        store.Accept(Keys.Revoke("phone"));
+
+        var unreachable = Loop(store, new FakeGateway { SyncRefusal = new IOException("socket closed") });
+        Assert.Equal(["command-r"], unreachable.Owed().Select(c => c.Id));
+
+        var refused = Loop(store, new FakeGateway { SyncRefusal = new GatewayRefusedException(FaultCode.HostRevoked, "revoked") });
+        Assert.Equal(["command-r"], (await refused.TurnAsync([])).Select(c => c.Id));
+        Assert.True(refused.Stopped);
+    }
+
+    /// <summary>
+    /// A removal or an endorsement that waited out its lifetime here without being carried out - every try
+    /// failed, or the computer was off for a month - can no longer be: the sealer would refuse it as too old.
+    /// Dropped without a word, the person believed a device removed that this computer still trusts. It is
+    /// said once, with what to do, and not looked at again.
+    /// </summary>
+    [Fact]
+    public async Task A_device_command_that_outlived_its_lifetime_unapplied_is_said_once()
+    {
+        using var store = Open();
+        store.Accept(Keys.Revoke("phone"));
+        Backdate("command-r", RemoteProtocol.DeviceCommandLifetime + TimeSpan.FromDays(1));
+        var loop = Loop(store, new FakeGateway());
+
+        Assert.Empty(await loop.TurnAsync([]));
+        Assert.Empty(await loop.TurnAsync([]));
+
+        var notice = Assert.Single(loop.Notices);
+        Assert.Equal("Expired", notice.Kind);
+        Assert.Contains("was never carried out on this computer; remove the device again", notice.Detail, StringComparison.Ordinal);
+        Assert.True(store.WasApplied("command-r"));
+    }
+
+    /// <summary>
+    /// A database from before attempts were counted is upgraded in place, and what it holds past its lifetime
+    /// is set aside without a word: that build marked nothing but a start carried out, so its old removals
+    /// cannot be told from lost ones, and saying each would tell the person a device they removed was never
+    /// removed here. What is still within its lifetime is handed back as anything else is.
+    /// </summary>
+    [Fact]
+    public async Task A_database_from_before_attempts_were_counted_is_upgraded_and_its_old_rows_are_not_said()
+    {
+        Directory.CreateDirectory(_folder);
+        using (var old = new Microsoft.Data.Sqlite.SqliteConnection(
+            new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder { DataSource = DatabasePath, Pooling = false }.ConnectionString))
+        {
+            old.Open();
+            using var create = old.CreateCommand();
+            create.CommandText = """
+                CREATE TABLE inbox (
+                  command_id TEXT PRIMARY KEY, kind TEXT NOT NULL, payload TEXT NOT NULL,
+                  received_at TEXT NOT NULL, acknowledged_at TEXT NULL, applied_at TEXT NULL);
+                INSERT INTO inbox (command_id, kind, payload, received_at) VALUES ('old', 'RevokeDevice', '{}', $old);
+                INSERT INTO inbox (command_id, kind, payload, received_at) VALUES ('new', 'RevokeDevice', '{}', $new);
+                """;
+            create.Parameters.AddWithValue("$old", (DateTimeOffset.UtcNow - TimeSpan.FromDays(40)).ToString("O"));
+            create.Parameters.AddWithValue("$new", (DateTimeOffset.UtcNow - TimeSpan.FromDays(2)).ToString("O"));
+            create.ExecuteNonQuery();
+        }
+
+        using var store = Open();
+        var loop = Loop(store, new FakeGateway());
+
+        Assert.Equal(["new"], (await loop.TurnAsync([])).Select(c => c.Id));
+        Assert.Empty(loop.Notices);
+        Assert.Equal((1, true), store.RecordFailure("new", "busy"));
+    }
+
+    /// <summary>Moves a command's receipt into the past, as a computer that was off for that long would have it.</summary>
+    private void Backdate(string commandId, TimeSpan by)
+    {
+        using var connection = new Microsoft.Data.Sqlite.SqliteConnection(
+            new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder { DataSource = DatabasePath, Pooling = false }.ConnectionString);
+        connection.Open();
+        using var statement = connection.CreateCommand();
+        statement.CommandText = "UPDATE inbox SET received_at = $at WHERE command_id = $id";
+        statement.Parameters.AddWithValue("$at", (DateTimeOffset.UtcNow - by).ToString("O"));
+        statement.Parameters.AddWithValue("$id", commandId);
+        Assert.Equal(1, statement.ExecuteNonQuery());
+    }
+
+    /// <summary>Trusted devices compared by what is recorded about them; the key is an array, so the record's own equality will not do.</summary>
+    private sealed class TrustedDeviceComparer : IEqualityComparer<TrustedDevice>
+    {
+        public static readonly TrustedDeviceComparer Instance = new();
+
+        public bool Equals(TrustedDevice? x, TrustedDevice? y)
+            => x is not null && y is not null && x.DeviceId == y.DeviceId && x.PublicKey.AsSpan().SequenceEqual(y.PublicKey)
+               && x.Label == y.Label && x.AddedBy == y.AddedBy && x.AddedAt == y.AddedAt && x.RevokedAt == y.RevokedAt;
+
+        public int GetHashCode(TrustedDevice obj) => obj.DeviceId.GetHashCode(StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// One turn as the service takes it: a turn of the loop, and what it handed back carried out as the
+    /// service carries it out. A turn the connection dropped in is over, as it is for the service, which
+    /// dials again and turns again.
+    /// </summary>
+    private static async Task ServeAsync(DeliveryLoop loop, RemoteRunner runner, List<string>? said = null)
+    {
+        IReadOnlyList<HostCommand> commands;
+        try
+        {
+            commands = await loop.TurnAsync([]);
+        }
+        catch (IOException)
+        {
+            return;
+        }
+
+        await ApplyAsync(runner, commands, said);
+    }
+
+    /// <summary>
+    /// Carries out what a turn handed back, as the service does. Each start's run is begun only once the
+    /// whole batch has been gone through - a task of its own begins when it begins, and this is the latest -
+    /// and waited for, so the test sees what it did. What failed is said into <paramref name="said"/>, the
+    /// way the service puts it in the status line.
+    /// </summary>
+    private static async Task ApplyAsync(RemoteRunner runner, IReadOnlyList<HostCommand> commands, List<string>? said = null)
+    {
+        var runs = new List<Func<CancellationToken, Task>>();
+        await runner.ApplyAllAsync(commands, runs.Add, (_, failure) => said?.Add(failure.Message));
+
+        foreach (var run in runs)
+        {
+            try
+            {
+                await run(CancellationToken.None);
+            }
+            catch (Exception failure)
+            {
+                said?.Add(failure.Message);
+            }
+        }
+    }
+
+    /// <summary>A runner whose starts only say that they began: whether a run began, and how often, is what is under test.</summary>
+    private static RemoteRunner Runner(HostStore store, List<string> started)
+        => new(store, new RemoteApprovals(), Keys.Sealer(), (task, _, _) =>
+        {
+            started.Add(task.RunId);
+            return Task.FromException<RemotePreparation>(new InvalidOperationException("Only the beginning is under test."));
+        });
+
+    private static DeliveryLoop DeviceLoop(HostStore store, HostKeyStore keys, IGatewayConnection gateway)
+        => new(store, gateway, new Sealer(keys, TimeProvider.System), keys);
+
+    /// <summary>A runner over the key store, as the service makes one: device commands go to the administration.</summary>
+    private static RemoteRunner DeviceRunner(HostStore store, HostKeyStore keys, Func<KeyAdministration?> administration)
+        => new(store, new RemoteApprovals(), new Sealer(keys, TimeProvider.System),
+            (_, _, _) => throw new InvalidOperationException("No run expected"), administration);
+
+    private static void TrustDevice(HostKeyStore keys, string deviceId, System.Security.Cryptography.ECDiffieHellman device)
+        => keys.Trust(new TrustedDevice(deviceId, P256.PublicRaw(device), deviceId, "test", DateTimeOffset.UtcNow, null));
+
     // ── a busy account ──────────────────────────────────────────────────────
 
     /// <summary>
@@ -372,17 +996,21 @@ public sealed class RemoteDeliveryTests : IDisposable
     /// The same for Sync. A refused Sync used to escape the turn as an exception, which the service
     /// treats as a dropped connection: it tore the connection down and dialled again, which is more
     /// calls against the very limit that refused it.
+    ///
+    /// <para>What the inbox still owes is handed back all the same: carrying it out needs nothing from
+    /// the gateway, so it does not wait with the gateway's next answer.</para>
     /// </summary>
     [Fact]
     public async Task A_sync_refused_for_quota_is_a_wait_not_a_dropped_connection()
     {
         using var store = Open();
+        store.Accept(Start("command-1", "run-1"));
         var loop = Loop(store, new FakeGateway
         {
             SyncRefusal = new GatewayRefusedException(FaultCode.QuotaExceeded, "slow down")
         });
 
-        Assert.Empty(await loop.TurnAsync([]));
+        Assert.Equal(["command-1"], (await loop.TurnAsync([])).Select(c => c.Id));
         Assert.False(loop.Stopped);
     }
 
