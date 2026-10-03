@@ -81,6 +81,36 @@ public sealed class ShorteningTests
     /// End to end, through the thing the model actually calls. The journal had this and the tool
     /// did not, which is the defect: the two audiences were shown different halves of the truth.
     /// </summary>
+    /// <summary>
+    /// Run 63e3cb, 2026-10-04: a command printed two lines and ran nothing - 115 characters against a budget of
+    /// 100. It was shown to the review as a start, "(15 characters not shown here; the end follows)", and an end:
+    /// the same shape as the 8,800-character result beside it, and longer than the text it stood for. The review
+    /// read the short one as a long one cut, and passed a report that said the command had run 87 checks. A cut
+    /// that hides no more than its own notice takes up saves nothing and says something false - that there was
+    /// more to see.
+    /// </summary>
+    [Fact]
+    public void A_result_barely_over_its_budget_is_shown_whole()
+    {
+        var text = "----- output -----\n" + new string('a', 80) + "\nNothing was run.";
+
+        var shown = Shortening.HeadAndTail(text, text.Length - 15);
+
+        Assert.Equal(text, shown);
+    }
+
+    [Fact]
+    public void One_that_hides_more_than_its_notice_is_still_cut()
+    {
+        var text = new string('a', 400) + "\nverdict: 3 failed";
+
+        var shown = Shortening.HeadAndTail(text, 200);
+
+        Assert.Contains("characters not shown here", shown, StringComparison.Ordinal);
+        Assert.True(shown.Length < text.Length);
+        Assert.EndsWith("verdict: 3 failed", shown, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void A_command_result_shows_the_model_the_end_as_well()
     {
