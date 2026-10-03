@@ -100,7 +100,7 @@ Fallback addresses supported execution-provider failures. It does not automatica
 | Setting | When selected | When blank |
 | --- | --- | --- |
 | Plan model | Uses that model for request classification/planning | Uses the worker's base model |
-| Review model | Enables model review of execution/content | Skips model review |
+| Review model | Gives every step a short verdict from that model | Skips model review |
 | Execute light | Uses that model for trivial DAG steps | Uses the worker model for those steps |
 | Execute heavy | Uses that model for complex DAG steps | Uses the worker model for those steps |
 
@@ -116,13 +116,12 @@ Normal execution is configured in **Team → worker model**, not in a separate n
 | Global instructions | Empty | Added to every worker's instructions; use for stable cross-project conventions |
 | Disable local reasoning | On | Native Ollama execution requests use `think:false`; useful when thinking consumes turns without useful output |
 | Verify writes | On | Adds instructions to read written real data back; useful for unreliable writers, costs extra work |
-| Review content | On | Reviews written text for writing-only steps when Review is bound |
 | Revert rejected steps | On | Attempts to restore tracked writes after final rejection, preserving newer conflicting edits |
 | Review retries | 1 | One extra attempt after rejection; allowed range 0–5 |
 | Allow implicit tool calls | Off | Can execute tool calls inferred from assistant text; leave off for normal structured-tool models |
 | Parallel steps | 1 | Number of independent plan steps that may overlap |
 
-Verify writes is an instruction to the worker, not an unconditional host read-back after every write. Review content requires a bound Review model; enabling the toggle alone does not create an evaluator.
+Verify writes is an instruction to the worker, not an unconditional host read-back after every write.
 
 `NumCtx` and Disable local reasoning are passed through the execution loop. Separate Plan/Review requests do not expose equivalent per-phase context/thinking configuration in the current UI. These settings do not configure OpenAI reasoning effort or Anthropic extended/adaptive thinking.
 

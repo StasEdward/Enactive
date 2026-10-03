@@ -22,13 +22,10 @@ public sealed class AStepIsGivenOneShortVerdictTests
 
     private static Turn Fail(string reason) => Turn.Says($$"""{"verdict":"fail","reason":"{{reason}}","calls":[],"files":[]}""");
 
-    private static Task<(List<WorkEvent> Events, FakeChatProvider Worker, FakeChatProvider Reviewer)> Run(Turn[] reviews,
-        params Turn[] more) => Run(false, reviews, more);
-
     private static async Task<(List<WorkEvent> Events, FakeChatProvider Worker, FakeChatProvider Reviewer)> Run(
-        bool derivedFigures, Turn[] reviews, params Turn[] more)
+        Turn[] reviews, params Turn[] more)
     {
-        using var fx = new EngineFixture { CheckDerivedFigures = derivedFigures };
+        using var fx = new EngineFixture();
         fx.Write("disks.txt", "C: 120 GB free of 500 GB");
         var worker = new FakeChatProvider(
             [Turn.Says(Plan),
@@ -141,18 +138,17 @@ public sealed class AStepIsGivenOneShortVerdictTests
 
     /// <summary>
     /// Run 1ec9e8: a total the worker added in its head was 70 GB short, and the step reviews passed it with every row in
-    /// front of them. Switched on, the review is told to work such a figure out itself; off, it is not.
+    /// front of them. The review is told to work such a figure out itself - always: it was a setting, on in the
+    /// application's settings and off in an engine built without them, so the two were reviewed differently.
     /// </summary>
-    [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public async Task A_derived_figure_is_worked_out_by_the_review_when_switched_on(bool on)
+    [Fact]
+    public async Task A_derived_figure_is_worked_out_by_the_review()
     {
-        var (_, _, reviewer) = await Run(on, [Pass(), Pass("the report matches the listing", 3)]);
+        var (_, _, reviewer) = await Run([Pass(), Pass("the report matches the listing", 3)]);
 
         var instruction = reviewer.Requests[0].Messages[0].Content!;
-        Assert.Equal(on, instruction.Contains("a total, a difference, a percentage, an average - is a claim too", StringComparison.Ordinal));
-        Assert.Equal(on, instruction.Contains("work it out from the values the calls show, and fail it if it is wrong", StringComparison.Ordinal));
+        Assert.Contains("a total, a difference, a percentage, an average - is a claim too", instruction, StringComparison.Ordinal);
+        Assert.Contains("work it out from the values the calls show, and fail it if it is wrong", instruction, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -180,15 +176,21 @@ public sealed class AStepIsGivenOneShortVerdictTests
         Assert.Contains("it is no error", instruction, StringComparison.Ordinal);
     }
 
-    /// <summary>The earlier review believed "nothing needed doing" only with the calls that looked; so is this one told.</summary>
+    /// <summary>
+    /// What a step reports done or so - by itself or by a step before it - stands only on a call made after the work it
+    /// rests on; what would follow from the work, and the values a step handed on, are not shown. Told instead that a step
+    /// reporting nothing to do needs "a call it made", one reviewer passed a step whose tests nobody ran after the fix, and
+    /// another failed steps whose tests the step before had run (2026-10-01).
+    /// </summary>
     [Fact]
-    public async Task The_review_is_told_nothing_to_do_rests_on_a_call_that_looked()
+    public async Task The_review_is_told_a_result_stands_on_a_call_made_after_the_work()
     {
         var (_, _, reviewer) = await Run([Pass(), Pass("the report matches the listing", 3)]);
 
-        var instruction = reviewer.Requests[0].Messages[0].Content!;
-        Assert.Contains("A step that reports nothing needed doing", instruction, StringComparison.Ordinal);
-        Assert.Contains("call it made shows it looked and found so; with no such call, it fails.", instruction, StringComparison.Ordinal);
+        var instruction = reviewer.Requests[0].Messages[0].Content!.Replace("\r\n", " ").Replace("\n", " ");
+        Assert.Contains("A step that reports something done or so - by itself, or by a step before it - has it only where a call shows it, made after the work it rests on", instruction, StringComparison.Ordinal);
+        Assert.Contains("what would follow from the work is not shown, and neither are the values a step handed on", instruction, StringComparison.Ordinal);
+        Assert.DoesNotContain("A step that reports nothing needed doing", instruction, StringComparison.Ordinal);
     }
 
 }

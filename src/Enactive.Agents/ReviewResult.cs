@@ -34,17 +34,21 @@ public sealed record ReviewResult(
     public string? RepairAdvice { get; init; }
 
     /// <summary>
-    /// The reviewer judged what the step PRODUCED to be right - implementation: pass - and named no
-    /// file of it to correct; the failure it found is somewhere else: the report, the process, a
-    /// command run the wrong way. A step rejected on such a review keeps its files.
+    /// The files of the step the reviewer found right as they are - asked for, nothing wrong in them - on a fail that is
+    /// somewhere else: the report, the process, another file. A step rejected on such a review keeps these and has the
+    /// rest of what it changed put back. Empty by default, so every review that names none keeps the revert it always had.
     ///
     /// <para><b>Measured 2026-09-28, run 3fe4f8.</b> The final review of step 1 said of the seven
     /// tests it wrote "implementation: pass ... 7/7 pass", and failed the step for how it had run its
     /// commands and what its report left out. The step was rejected, and the engine put the test file
-    /// back: the only thing the review had found right was the thing that was thrown away. False by
-    /// default, so every review that does not say this keeps the revert it always had.</para>
+    /// back: the only thing the review had found right was the thing that was thrown away.</para>
+    ///
+    /// <para><b>A list, not "the work stands", since 2026-10-01.</b> One flag for the whole step was the wrong shape:
+    /// benchmark build-error added Median rightly and changed another file the request said to leave alone, and the
+    /// review said the work stood in 12 of 12 answers, because Median was right - so the forbidden change would have been
+    /// kept. Asked to name the files, it named Stats.cs alone, 12 of 12.</para>
     /// </summary>
-    public bool WorkStands { get; init; }
+    public IReadOnlyList<string> Keep { get; init; } = [];
     /// <summary>
     /// The cached share of <see cref="PromptTokens"/>, or null where nobody counted. This is the
     /// phase most likely to have one on a real machine: review is bound to a cloud model, and a

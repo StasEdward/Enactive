@@ -210,7 +210,6 @@ public sealed partial class Orchestrator : IOrchestrator
     private readonly bool _validateWaves;
     private readonly bool _reportBlocked;
     private readonly bool _semanticCriteria;
-    private readonly bool _checkDerivedFigures;
 
     /// <summary>One per conversation, kept with the conversation itself: steps that share one, and a hand-over that
     /// refills it, are compared with the request before them (PrefixCacheWatch).</summary>
@@ -299,12 +298,8 @@ public sealed partial class Orchestrator : IOrchestrator
         bool reportBlocked = false,
         // Phase 1.4: the planner may set a step semantic criteria, and a step that has them is judged against those only.
         // Off by default: it changes what a step's review is.
-        bool semanticCriteria = false,
-        // The short step review works out a total, a difference, a percentage the work derived, and fails a wrong one
-        // (StepVerdictReview.DerivedFigures). Off here, on in the application's settings.
-        bool checkDerivedFigures = false)
+        bool semanticCriteria = false)
     {
-        _checkDerivedFigures = checkDerivedFigures;
         _semanticCriteria = semanticCriteria;
         _validateWaves = validateWaves;
         _reportBlocked = reportBlocked;
@@ -1624,13 +1619,17 @@ public sealed partial class Orchestrator : IOrchestrator
             // A step planned to change nothing is judged as one: what it changed is outside its plan.
             if (step.ReadOnly)
                 session.ScopeNotes[stepNumber] = (session.ScopeNotes.GetValueOrDefault(stepNumber) is { } before ? before + " " : "")
-                    + "It was planned as READ-ONLY: it looks and reports, and changes no file (scratch excepted). A change it "
-                    + "made anyway - by a command, since its file tools refuse - its report must say. A change the request asks "
-                    + "for, made here instead of in a later step, does not fail this step; a change the request does not ask for "
+                    + "It was planned as READ-ONLY: it looks and reports, and changes no file (scratch excepted); its file tools "
+                    + "refuse. A change it made anyway, by a command, is judged by the request, not by the plan: one the request "
+                    + "asks for, made here instead of in a later step, does not fail this step; one the request does not ask for "
                     + "fails it, as it would any step.";
             // Benchmark setup-step, 2026-09-30: step 1 of "run the tests, fix the setup, run them again" ran the setup
             // script itself; told only that the change was "outside its plan", the review failed it twice, the steps
-            // after it were skipped and the run failed - with the work done and the tests green.
+            // after it were skipped and the run failed - with the work done and the tests green. Told next that "its report
+            // must say" such a change, it failed right steps whose reports said it, for not flagging it as outside the
+            // plan: on five recorded reviews of that step, asked again (2026-10-01), 15 right of 24; and a worker failed
+            // so tried to delete the file the request needed. Judged by the request, 28 of 28 - and the same steps under a
+            // request for a diagnosis only, where the change was not asked for, failed 12 of 12 with either wording.
             // The files the run's criteria are about: its result, which no single item's step makes.
             var deliverables = CriteriaFor(plan).Select(c => c.Typed?.Path).OfType<string>().Select(ShellLookup.Normal).ToArray();
             var boundary = reserved.Length == 0 && step.ExpandedFrom is null && !step.ReadOnly ? null
@@ -2773,8 +2772,8 @@ public sealed partial class Orchestrator : IOrchestrator
 
         public bool Succeeded => Kind == StepOutcomeKind.Succeeded;
 
-        /// <summary>Rejected on a review that found the work itself right. See <see cref="ReviewResult.WorkStands"/>.</summary>
-        public bool WorkStands { get; set; }
+        /// <summary>Rejected on a review that found these files right. See <see cref="ReviewResult.Keep"/>.</summary>
+        public IReadOnlyList<string> Keep { get; set; } = [];
 
         /// <summary>Why, as a code: what was recorded, or what the outcome implies.</summary>
         public OutcomeCause Cause => _cause ?? StepRecord.CauseOf(Kind);
@@ -5351,11 +5350,13 @@ public sealed partial class Orchestrator : IOrchestrator
     /// summary does not go on claiming files that are no longer there.
     /// </summary>
     private static async Task<RevertReport> RevertAsync(
-        IArtifactScope store, List<ArtifactRef> artifacts, CancellationToken ct)
+        IArtifactScope store, List<ArtifactRef> artifacts, CancellationToken ct, IReadOnlyCollection<string>? except = null)
     {
         // What this step touched, from the store's own record - not from the conversation, which
         // knew only about write_file and lost even that when the transcript had to be shortened.
-        var written = store.TouchedPaths;
+        var written = except is { Count: > 0 }
+            ? store.TouchedPaths.Except(except, StringComparer.OrdinalIgnoreCase).ToArray()
+            : store.TouchedPaths;
         if (written.Count == 0)
             return RevertReport.Empty;
 

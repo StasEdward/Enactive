@@ -191,7 +191,7 @@
 </tr>
 <tr>
 <td>Review model</td>
-<td>Enables model review of execution/content</td>
+<td>Gives every step a short verdict from that model</td>
 <td>Skips model review</td>
 </tr>
 <tr>
@@ -237,11 +237,6 @@
 <td>Adds instructions to read written real data back; useful for unreliable writers, costs extra work</td>
 </tr>
 <tr>
-<td>Review content</td>
-<td>On</td>
-<td>Reviews written text for writing-only steps when Review is bound</td>
-</tr>
-<tr>
 <td>Revert rejected steps</td>
 <td>On</td>
 <td>Attempts to restore tracked writes after final rejection, preserving newer conflicting edits</td>
@@ -262,7 +257,7 @@
 <td>Number of independent plan steps that may overlap</td>
 </tr>
 </tbody></table>
-</div><p>Verify writes is an instruction to the worker, not an unconditional host read-back after every write. Review content requires a bound Review model; enabling the toggle alone does not create an evaluator.</p>
+</div><p>Verify writes is an instruction to the worker, not an unconditional host read-back after every write.</p>
 <p><code>NumCtx</code> and Disable local reasoning are passed through the execution loop. Separate Plan/Review requests do not expose equivalent per-phase context/thinking configuration in the current UI. These settings do not configure OpenAI reasoning effort or Anthropic extended/adaptive thinking.</p>
 <p>Parallelism helps when branches are independent and provider capacity permits overlap. Multiple steps on one constrained local endpoint may queue or compete for memory. Keep 1 until you have a representative task that benefits.</p>
 <h2 id="ai--mcp">AI → MCP<a class="heading-anchor" href="#ai--mcp" aria-label="Link to AI → MCP">#</a></h2>

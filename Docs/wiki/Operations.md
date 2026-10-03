@@ -142,7 +142,6 @@ The historical AIClient → Enactive rename changed names, environment-variable 
 | Local model is very slow | Memory pressure, context size, queued requests | Reduce context/concurrency and inspect local provider utilization |
 | Review does not run | Review binding is blank | AI → Phases; `ReviewRequired` alone does not enable it |
 | Review rejects apparently correct work repeatedly | Reviewer misreads evidence or task/check mismatch | Read journal and feedback; qualify a stronger reviewer |
-| Content review toggle has no effect | No reviewer, or the step uses execution-evidence review | Review binding and the actual step's operations |
 | Template vanished | Malformed/unreadable JSON or unsafe ID | File syntax, ID, scope folder, and reload |
 | Global edit has no effect | Workspace definition shadows it | Origin metadata and matching IDs |
 | Workspace edit seems unchanged | Editor saved to Global | Explicit Scope selection; remaining local override |

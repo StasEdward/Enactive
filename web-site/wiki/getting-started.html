@@ -80,7 +80,7 @@ you can inspect. Identify any build instructions that still need verification.
 Do not modify existing files.</code></pre></div>
 <p>Open Artifacts after the run. With staging enabled, inspect the diff and choose Apply or Reject. With staging disabled, tracked writes go directly to disk.</p>
 <h2 id="add-review-after-connectivity-works">Add review after connectivity works<a class="heading-anchor" href="#add-review-after-connectivity-works" aria-label="Link to Add review after connectivity works">#</a></h2>
-<p>Configure a second, stronger model under Providers, then bind it under <strong>AI → Phases → Review model</strong>. Keep <strong>AI → General → Review content</strong> enabled for documentation work. Repeat a small task and inspect the recorded review verdict.</p>
+<p>Configure a second, stronger model under Providers, then bind it under <strong>AI → Phases → Review model</strong>. Every step then gets a verdict from it, documentation steps included. Repeat a small task and inspect the recorded review verdict.</p>
 <p>Choose the <a href="models-and-phases.html#recommended-configurations">balanced setup</a> as a starting point for ongoing development.</p>
 <h2 id="run-from-the-console">Run from the console<a class="heading-anchor" href="#run-from-the-console" aria-label="Link to Run from the console">#</a></h2>
 <div class="code-block"><div class="code-toolbar"><span>powershell</span><button class="copy-button" type="button" aria-label="Copy powershell example">Copy</button></div><pre tabindex="0"><code class="language-powershell">dotnet run --project src/Enactive.App.Console -- &quot;Explain the top-level project structure without modifying files.&quot; &quot;C:\work\sample&quot;</code></pre></div>
