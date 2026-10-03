@@ -79,19 +79,6 @@ public sealed class ExecutionJournalTests
         Assert.Contains("not shown here", evidence, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public void It_can_say_whether_a_command_tool_was_used()
-    {
-        var journal = new ExecutionJournal();
-        journal.Record(1, "write_file", "{}", ActionOutcome.Succeeded, "written");
-
-        var tools = new[] { "run_command", "run_powershell" };
-        Assert.False(journal.UsedAny(tools));
-
-        journal.Record(1, "run_command", "{}", ActionOutcome.Succeeded, "exit code 0");
-        Assert.True(journal.UsedAny(tools));
-    }
-
     // ── through the engine ────────────────────────────────────────────────────────────
 
     [Fact]

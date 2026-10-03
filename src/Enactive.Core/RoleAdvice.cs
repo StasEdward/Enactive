@@ -29,7 +29,14 @@ public static class RoleAdvice
         + "this field is the whole answer.\n\n"
         + "The Execute bindings are also GLOBAL: they override every role, not just this one. So a "
         + "light model bound there will take the trivial steps of this role as well, whatever is "
-        + "chosen here.";
+        + "chosen here.\n\n"
+        // Said here because (none) on this field reads as "this role will not run", and the role
+        // runs all the same: EngineComposition gives a role without a model the first one it
+        // finds (FallbackModel). Nothing on the screen said so, and a person who left the field
+        // on (none) to keep a role idle found it working on a model they had not picked.
+        + "(none) here means no model has been chosen for this role. It still runs — on the first "
+        + "model of the first provider that has one, whichever that is on the day — so pick one "
+        + "here if it matters which.";
 
     public const string Fallback =
         "Where this role goes when its own model cannot be reached.\n\n"
