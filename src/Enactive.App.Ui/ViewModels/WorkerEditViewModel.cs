@@ -62,7 +62,7 @@ internal sealed class WorkerEditViewModel : ObservableObject
         foreach (var tool in WorkerTools.Offerable(toolCatalog, config.Tools))
         {
             var toggle = new ToolToggle(tool, config.Tools.Contains(tool));
-            // An empty selection now means NO tools, which is invisible in a list of unticked boxes —
+            // An empty selection now means NO tools, which is invisible in a list of unticked boxes ï¿½
             // so the hint under the list has to react to every toggle, not just to Save.
             toggle.PropertyChanged += (_, _) => OnPropertyChanged(nameof(ToolsHint));
             Tools.Add(toggle);
@@ -70,13 +70,19 @@ internal sealed class WorkerEditViewModel : ObservableObject
 
         // A saved model that is no longer in the catalog is kept as an item, so opening the dialog
         // and pressing Save does not quietly retarget the worker.
+        //
+        // "No model chosen" is an item of its own, and it is what a worker without a model opens on.
+        // It is saved as an empty reference, never as the label. The first model of the catalog used to be selected instead, and Apply wrote the selection
+        // back: changing only the role or the instructions assigned a provider and a model nobody
+        // had picked - the first in the list, which may be a hosted, paid one - and once something
+        // was selected there was no way back to "not chosen". The same holds for a worker being
+        // added: its model is the one a person picks, not the one the list starts with.
+        Models.Add(NoneItem);
         foreach (var m in modelCatalog)
             Models.Add(m);
         if (!string.IsNullOrWhiteSpace(config.Model) && !Models.Contains(config.Model))
             Models.Add(config.Model);
-        _model = !string.IsNullOrWhiteSpace(config.Model) ? config.Model
-               : Models.Count > 0 ? Models[0]
-               : null;
+        _model = string.IsNullOrWhiteSpace(config.Model) ? NoneItem : config.Model;
 
         Fallbacks.Add(NoneItem);
         foreach (var m in modelCatalog)
@@ -111,9 +117,9 @@ internal sealed class WorkerEditViewModel : ObservableObject
         {
             var selected = Tools.Where(t => t.IsSelected).Select(t => t.Name).ToList();
             if (selected.Contains("*"))
-                return "\"*\" is selected — this worker may call EVERY tool, including shell commands.";
+                return "\"*\" is selected ï¿½ this worker may call EVERY tool, including shell commands.";
             return selected.Count == 0
-                ? "Nothing selected — this worker cannot call any tool. Tick \"*\" for unrestricted access."
+                ? "Nothing selected ï¿½ this worker cannot call any tool. Tick \"*\" for unrestricted access."
                 : $"{selected.Count} tool(s): {string.Join(", ", selected)}.";
         }
     }
@@ -132,7 +138,7 @@ internal sealed class WorkerEditViewModel : ObservableObject
         _config.Instructions = Instructions;
         _config.Tools = Tools.Where(t => t.IsSelected).Select(t => t.Name).ToList();
         _config.Level = Level;
-        _config.Model = Model ?? string.Empty;
+        _config.Model = string.IsNullOrEmpty(Model) || Model == NoneItem ? string.Empty : Model;
         _config.Fallback = string.IsNullOrEmpty(Fallback) || Fallback == NoneItem ? null : Fallback;
         _onSaved();
         CloseRequested?.Invoke();
