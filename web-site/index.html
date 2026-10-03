@@ -289,9 +289,16 @@ mysql --host ate-db-02 -e "SHOW REPLICA STATUS\G"</pre>
         <p class="eyebrow">From anywhere</p>
         <h2>Start it from your phone.<br />It runs on your machine.</h2>
         <p class="section-lead">
-          A gateway you deploy holds the queue and the history and serves a browser panel. The desktop
-          application connects outward to it — nothing listens on your computer, and no port is opened.
-          The task runs through the same engine as one typed into the app.
+          Sign in to the gateway — <a href="https://remote.enactive.dev">remote.enactive.dev</a>, or one you
+          deploy — from any browser. The desktop application connects outward to it: nothing listens on your
+          computer, and no port is opened. The task runs through the same engine as one typed into the app.
+        </p>
+        <p class="section-lead">
+          <strong>End-to-end encrypted.</strong> What you write and what your computer reports back is
+          encrypted on your own devices and on your computer; the gateway stores and forwards ciphertext it
+          cannot read. A computer is paired with a code you carry to it yourself, a phone is added with a
+          one-time link or QR, and every command is sealed with a key the service never holds — so the
+          service cannot start a task, answer a permission or read a result.
         </p>
         <p class="section-lead">
           A permission appears on the task's own card, so you answer it next to what you asked for.
@@ -299,11 +306,13 @@ mysql --host ate-db-02 -e "SHOW REPLICA STATUS\G"</pre>
           works, whatever the phone is doing.
         </p>
         <ul class="hero__facts">
+          <li>Sign in with GitHub or Google; the keys stay on your computer and your devices</li>
+          <li>Remove a device and the computer changes its key: that device reads nothing new</li>
           <li>No shell from the web, at any tier</li>
-          <li>Sign in with GitHub or Google; what you write is encrypted on your own devices, so the service carries only ciphertext and metadata</li>
           <li>The whole action, before you allow it</li>
         </ul>
         <p class="section-lead"><a class="btn btn--ghost" href="wiki/remote-access.html">How remote access works ↗</a>
+        <a class="btn btn--ghost" href="wiki/remote-security.html">What the service can and cannot see ↗</a>
         <a class="btn" href="https://remote.enactive.dev">Connect to gateway ↗</a></p>
       </div>
 
@@ -316,7 +325,7 @@ mysql --host ate-db-02 -e "SHOW REPLICA STATUS\G"</pre>
           <span class="panel__live">Live</span>
         </div>
         <div class="panel__tabs">
-          <span class="tab on">Tasks <b>1</b></span><span class="tab">Permissions <b>1</b></span><span class="tab">Inbox <b>3</b></span><span class="tab">Computers</span>
+          <span class="tab on">Tasks <b>1</b></span><span class="tab">Permissions <b>1</b></span><span class="tab">Inbox <b>3</b></span><span class="tab">Computers</span><span class="tab">Devices</span>
         </div>
         <div class="panel__body">
           <div class="panel__card">

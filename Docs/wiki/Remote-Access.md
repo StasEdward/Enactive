@@ -20,11 +20,27 @@ The host **dials out**. Nothing listens on the computer running Enactive, and no
 opened on it. A computer that is switched off is simply not available; the task waits in the queue
 or its start command expires.
 
+Remote access is **end-to-end encrypted**: the next section says what that covers.
+
+## End-to-end encryption
+
 What you write and what your computer reports back is encrypted on your computer and on your
 devices before it reaches the gateway, which stores it and passes it on but cannot read it. Signing
 in proves who the account is; reading and commanding a computer needs a key that only that computer
-and the devices it trusts hold. What the gateway can and cannot see, and where that protection
-stops, is in [Remote security](Remote-Security.md).
+and the devices it trusts hold.
+
+| Question | How it is here |
+| --- | --- |
+| **What is encrypted** | Task titles and prompts, progress messages, run summaries, permission requests with the whole action, notifications, and the names of workspaces. |
+| **Where the keys are** | Each computer makes its own key and keeps it on that computer, protected by your Windows account. Each browser makes a device key that page scripts cannot read out. A computer's key reaches a device wrapped for that device's key alone. |
+| **How trust starts** | With something you carry yourself: the connection code you paste into the desktop app, or the one-time link or QR you open on a new device. Their secrets never reach the gateway. |
+| **Commands** | Starting a task, stopping a run, answering a permission and removing a device are each sealed for one computer and one command. The computer acts only on what opens under its current key, so the gateway cannot write a command, point one at something else, or replay an old one. |
+| **Removing a device** | The computer changes its key and gives the new one to the devices that remain. The removed device keeps what it had already opened and reads nothing new. |
+| **What the service still sees** | Who uses it and when, how many computers, runs and permission requests there are, their statuses and the size of the encrypted content, the name you give a computer, and an automatic label for each browser. |
+| **Where it stops** | The panel is code the service sends to your browser; altered code could take keys out of it. The service publishes the fingerprints of the panel's files so they can be compared. |
+
+What the gateway can and cannot see in full, how to compare the panel with its build, and the
+limits of trusting a device that invited another, are in [Remote security](Remote-Security.md).
 
 ## Signing in
 
