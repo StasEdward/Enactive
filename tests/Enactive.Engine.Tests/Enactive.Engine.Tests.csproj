@@ -41,6 +41,7 @@
     <Compile Include="../../src/Enactive.App.Ui/ViewModels/RemoteDevicesViewModel.cs" Link="Ui/RemoteDevicesViewModel.cs" />
     <Compile Include="../../src/Enactive.App.Ui/IStartupEntry.cs" Link="Ui/IStartupEntry.cs" />
     <Compile Include="../../src/Enactive.App.Ui/SettingsSave.cs" Link="Ui/SettingsSave.cs" />
+    <Compile Include="../../src/Enactive.App.Ui/OneAtATime.cs" Link="Ui/OneAtATime.cs" />
     <Using Include="Xunit" />
   </ItemGroup>
 

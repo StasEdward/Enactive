@@ -214,35 +214,7 @@ public sealed partial class MainWindow : Window, IDecisionHandler
         _vm.WorkspaceForgetRequested += path => _ = ForgetWorkspaceAsync(path);
         _vm.RunSettingsChanged += SaveRunSettings;
         _vm.AddWorkspaceRequested += () => _ = AddWorkspaceAsync();
-        _vm.SettingsRequested += () =>
-            // SettingsWindow gets the live settings and CLONES them, so Cancel/close leave these
-            // untouched and Save hands back the clone, which is then written and put in place of
-            // this one. That makes AppSettings.Clone the whole of what survives a visit to this
-            // window: a property missing there is a setting the next Save resets, whether or not
-            // the window has a control for it. Pinned by SettingsSurviveTheEditorTests.
-            new SettingsWindow(_settings, workspaceRoot: WorkspaceRootOrNull(),
-                toolNames: _toolRegistry.Definitions.Select(d => d.Name).ToArray(),
-                remoteCheck: CheckRemoteAsync,
-                remoteConnect: ConnectRemoteAsync,
-                remoteDevices: RemoteDeviceAccess,
-                onSaved: saved =>
-            {
-                if (!saved.Save(replaceUnreadable: true))
-                    throw new InvalidOperationException(
-                        saved.LastSaveError is { Length: > 0 } why
-                            ? "Settings were not saved. " + why
-                            : "Settings could not be saved. Check disk access and Windows credential encryption.");
-
-                // Read BEFORE _settings is replaced: the comparison is the only thing that decides
-                // whether to disturb a connection that may have a run on it.
-                var wasRemote = Describe(_settings.RemoteAccess);
-
-                _settings = saved;
-                ApplySettings();
-
-                if (Describe(_settings.RemoteAccess) != wasRemote)
-                    _ = RestartRemoteAccessAsync();
-            }).Show(this);
+        _vm.SettingsRequested += ShowSettings;
         _vm.InputFocusRequested += () =>
         {
             InputBox.Focus();
@@ -648,6 +620,66 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     {
         var root = _vm.WorkspacePath.Trim();
         return string.IsNullOrWhiteSpace(root) ? null : Path.GetFullPath(root);
+    }
+
+    /// <summary>The Settings window, when one is open. See <see cref="ShowSettings"/>.</summary>
+    private readonly OneAtATime<SettingsWindow> _settingsWindow = new();
+
+    /// <summary>
+    /// Opens Settings, or brings forward the one already open.
+    ///
+    /// <para>One at a time, because of what Save does. The window gets the live settings and CLONES
+    /// them, so Cancel/close leave these untouched and Save hands back the clone, which is then
+    /// written and put in place of this one. Every press used to open another window with another
+    /// clone, and a window left open behind the others saved its old copy over what a newer one had
+    /// just saved - all of it, not only the fields it showed. Unlike the library and the schedules
+    /// the window is not kept and re-shown: it is closed for good and the next one is built from
+    /// the settings as they are then, which is what makes its copy current.</para>
+    ///
+    /// <para>The same cloning makes AppSettings.Clone the whole of what survives a visit to this
+    /// window: a property missing there is a setting the next Save resets, whether or not the
+    /// window has a control for it. Pinned by SettingsSurviveTheEditorTests.</para>
+    /// </summary>
+    private void ShowSettings()
+        => _settingsWindow.Request(
+            open: () =>
+            {
+                var window = new SettingsWindow(_settings, workspaceRoot: WorkspaceRootOrNull(),
+                    toolNames: _toolRegistry.Definitions.Select(d => d.Name).ToArray(),
+                    remoteCheck: CheckRemoteAsync,
+                    remoteConnect: ConnectRemoteAsync,
+                    remoteDevices: RemoteDeviceAccess,
+                    onSaved: SaveSettings);
+                window.Closed += (_, _) => _settingsWindow.Closed(window);
+                window.Show(this);
+                return window;
+            },
+            bringForward: window =>
+            {
+                // Minimised, Activate alone lights the taskbar button and shows nothing.
+                if (window.WindowState == WindowState.Minimized)
+                    window.WindowState = WindowState.Normal;
+                window.Activate();
+            });
+
+    /// <summary>Writes what the Settings window hands back, and puts it in place of the live settings.</summary>
+    private void SaveSettings(AppSettings saved)
+    {
+        if (!saved.Save(replaceUnreadable: true))
+            throw new InvalidOperationException(
+                saved.LastSaveError is { Length: > 0 } why
+                    ? "Settings were not saved. " + why
+                    : "Settings could not be saved. Check disk access and Windows credential encryption.");
+
+        // Read BEFORE _settings is replaced: the comparison is the only thing that decides
+        // whether to disturb a connection that may have a run on it.
+        var wasRemote = Describe(_settings.RemoteAccess);
+
+        _settings = saved;
+        ApplySettings();
+
+        if (Describe(_settings.RemoteAccess) != wasRemote)
+            _ = RestartRemoteAccessAsync();
     }
 
     private TemplatesWindow? _templatesWindow;
