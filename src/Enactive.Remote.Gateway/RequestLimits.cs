@@ -7,6 +7,7 @@ using Enactive.Remote.Gateway.Accounts;
 using Microsoft.AspNetCore.Http.Connections;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.Extensions.Primitives;
 
 /// <summary>
 /// How much of the gateway one caller may use: each person's API, each address's sign-ins, each
@@ -244,7 +245,12 @@ public static class RequestLimits
             return false;
         }
 
-        return metadata.GetMetadata<NegotiateMetadata>() is not null || !context.Request.Query.ContainsKey("id");
+        // The test SignalR itself makes to decide that a request starts a new connection. Not ContainsKey: it is
+        // true for "?id=" and a bare "?id", which SignalR takes as no id and starts a connection for - and the
+        // lookup ignores case, so "?ID=" is the same key. Asked by key, one token opened WebSockets through
+        // "?id=" at any rate, each held until the handshake timed out, and none was counted.
+        return metadata.GetMetadata<NegotiateMetadata>() is not null
+            || StringValues.IsNullOrEmpty(context.Request.Query["id"]);
     }
 
     /// <summary>

@@ -275,32 +275,56 @@ public sealed class HostConnectionLimitsTests(TestDatabase database) : IClassFix
     }
 
     /// <summary>
-    /// A connection can skip the negotiation - a WebSocket opened straight at the hub, with no connection id -
-    /// and is counted the same way: left out, it was the way round the count, a transport held open until the
-    /// handshake's timeout with nothing counting it. Asked as a plain request with no id, which the hub refuses
-    /// for not being a WebSocket once the count has let it through.
+    /// A connection can skip the negotiation - a WebSocket opened straight at the hub - and is counted the same
+    /// way: left out, it was the way round the count, a socket held open until the handshake's timeout with
+    /// nothing counting it. However the missing id is written: SignalR takes an EMPTY id, and a key with no
+    /// value, as no id at all and starts a new connection, and the first version of the count asked only
+    /// whether the key was there - fifteen of fifteen sockets opened with one token through <c>?id=</c>.
+    ///
+    /// <para>Real WebSockets. A plain request to the hub is answered 400 whatever its id says, once the count
+    /// has let it through, and never shows which ones started a connection.</para>
     /// </summary>
-    [Fact]
-    public async Task A_connection_opened_without_negotiating_is_counted_too()
+    [Theory]
+    [InlineData("hubs/host")]
+    [InlineData("hubs/host?id=")]
+    [InlineData("hubs/host?id")]
+    [InlineData("hubs/host?ID=")]
+    public async Task A_connection_opened_without_negotiating_is_counted_too(string address)
     {
         await using var gateway = Gateway();
         using var owner = await SignedInAsync(gateway);
         var computer = await RegisterAsync(owner, "Studio PC");
-        using var http = gateway.CreateClient();
 
-        var (answered, refused) = await UntilRefusedAsync(async () =>
+        var sockets = new List<System.Net.WebSockets.WebSocket>();
+        try
         {
-            var request = new HttpRequestMessage(HttpMethod.Get, "/hubs/host");
-            request.Headers.Authorization = new("Bearer", computer.Token);
-            return await http.SendAsync(request);
-        });
+            string? refused = null;
+            while (refused is null && sockets.Count < 2 * RequestLimits.ConnectionsPerMinute)
+            {
+                var client = gateway.Server.CreateWebSocketClient();
+                client.ConfigureRequest = request => request.Headers.Authorization = $"Bearer {computer.Token}";
 
-        using (refused)
-        {
+                try
+                {
+                    sockets.Add(await client.ConnectAsync(new Uri(gateway.Server.BaseAddress, address), default));
+                }
+                catch (InvalidOperationException notOpened)
+                {
+                    refused = notOpened.Message;
+                }
+            }
+
             Assert.NotNull(refused);
-            Assert.True(answered >= RequestLimits.ConnectionsPerMinute, $"Refused after {answered}.");
-            Assert.Equal(HttpStatusCode.TooManyRequests, refused.StatusCode);
-            Assert.Equal("rate-limited", (await refused.Content.ReadFromJsonAsync<ErrorView>(RemoteJson.Options))!.Code);
+            Assert.Contains("429", refused, StringComparison.Ordinal);
+            Assert.InRange(sockets.Count, RequestLimits.ConnectionsPerMinute, RequestLimits.ConnectionsPerMinute + 1);
+        }
+        finally
+        {
+            foreach (var socket in sockets)
+            {
+                socket.Abort();
+                socket.Dispose();
+            }
         }
     }
 
