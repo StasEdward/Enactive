@@ -218,10 +218,14 @@ public sealed class DeletionTests(TestDatabase database) : IClassFixture<TestDat
         using var deleted = await alice.SendAsync(HttpMethod.Delete, "/api/account");
         Assert.Equal(HttpStatusCode.OK, deleted.StatusCode);
 
-        // The connection is no longer open, so the call is never sent: the client refuses it itself. A coded
-        // refusal here would be a connection still being served (that the deletion closes it is asserted at the
+        // The connection is cut, so the call ends inside the client: never sent ("not active") when the close
+        // has already been noticed, or cancelled when it is noticed while the call is on its way - which of the
+        // two is a race with the close, and pinning one made this test fail on a slower machine. A coded refusal
+        // here would be a connection still being served (that the deletion closes it is asserted at the
         // service, below - over long polling each poll is refused at authentication on its own).
-        await Assert.ThrowsAsync<InvalidOperationException>(() => connected.SyncAsync([], CancellationToken.None));
+        var cut = await Assert.ThrowsAnyAsync<Exception>(() => connected.SyncAsync([], CancellationToken.None));
+        Assert.True(cut is InvalidOperationException or OperationCanceledException, cut.ToString());
+        Assert.IsNotType<GatewayRefusedException>(cut);
 
         // What the desktop then does is dial again, and what it shows is this refusal's sentence: it has to
         // name a deleted account among its causes, or the person is told their credential was revoked.
