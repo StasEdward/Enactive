@@ -16,6 +16,7 @@ while [ "$#" -gt 0 ]; do
 done
 case "$query" in
   *'MAX(version)'*) echo "$TEST_VERSION" ;;
+  *"column_name = 'revision'"*) printf '%s\n' ${TEST_COLUMNS:-} ;;
   *'SELECT table_name FROM information_schema.tables'*) printf '%s\n' $TEST_TABLES ;;
   '') cat >/dev/null ;;
 esac
@@ -41,4 +42,12 @@ for missing in $admins; do
   check 10 "$base signin_redemptions $remaining" 1
   grep -q "no '$missing' table" "$scratch/out"
 done
-echo '7 restore completeness checks passed'
+export TEST_COLUMNS='admissions.revision administrator_audit.detail'
+check 11 "$base signin_redemptions $admins" 0
+for missing in admissions.revision administrator_audit.detail; do
+  TEST_COLUMNS=${TEST_COLUMNS//$missing/}
+  check 11 "$base signin_redemptions $admins" 1
+  grep -q "no '$missing' column" "$scratch/out"
+  TEST_COLUMNS='admissions.revision administrator_audit.detail'
+done
+echo '10 restore completeness checks passed'

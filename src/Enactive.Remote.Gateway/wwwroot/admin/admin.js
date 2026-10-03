@@ -12,7 +12,7 @@ async function loadSession() {
     if (!response.ok) throw new Error('Session check failed. Refresh the page to try again.');
     const session = await response.json();
     csrfToken = session.csrfToken;
-    globalThis.adminDirectory?.setAuthenticated(session.authenticated);
+    globalThis.adminDirectory?.setAuthenticated(session.authenticated, session.csrfToken);
     statusText.textContent = session.authenticated ? 'You are signed in as an administrator.' : 'Sign in to continue.';
     document.getElementById('signin').hidden = session.authenticated;
     document.getElementById('session').hidden = !session.authenticated;

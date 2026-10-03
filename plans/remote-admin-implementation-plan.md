@@ -2,7 +2,7 @@
 
 Date: 2026-10-03
 
-Status: stages 1–3 are implemented. Administrative login is deployed; the read-only directory is tested locally and awaiting deployment. Stages 4–6 remain pending.
+Status: stages 1–4 are implemented. Login and the directory are deployed; access management is awaiting operator deployment. Quotas and final release validation (stages 5–6) remain pending.
 
 ## Objective
 
@@ -141,7 +141,17 @@ Stages 1 and 2 establish the shared behavior and security boundary before admini
 - Added a separate administrator read budget so browsing does not consume the authentication/logout budget.
 - Validation: full Gateway suite passed 657 tests before the final rate-limit change; the final targeted directory/authentication suite passed 37 tests. All 284 JavaScript tests passed. Both Chromium browser tests passed at 1280px and 390px with mocked API responses; directory deployment is pending.
 
-Next: stage 4, approval/refusal, disable/enable and session revocation. Mutations must require the administrator/fresh policies and carry the authenticated actor through their transactional audit.
+### Stage 4 — completed on 2026-10-04
+
+- Added web approval/refusal, account disable/enable and browser-session revocation through the shared administration service.
+- Required administrator authorization, fresh MFA, CSRF and an expected record version. Rechecked session/administrator authority under locks inside the mutation transaction.
+- Added migration 011 for registration revisions, complete provider-subject audit targets and JSON transition details. Both account and independent administrator audits commit with the action; independent history survives user deletion.
+- Added explicit confirmation, reauthentication guidance, conflict handling and no automatic retry after uncertain outcomes. Explained existing-account refusal, withdrawn commands and work already running locally.
+- Added regression coverage for migration from schema 10, preserved administrator sessions, audit failure rollback, concurrent decisions, stale retries and before/after audit attribution. Browser tests cover desktop/mobile confirmations and successful changes; JavaScript tests cover cancellation, CSRF, conflicts, freshness and network failures.
+- Validation: the final full Gateway run passed 669 tests with one test-only SQL collation failure. After changing that assertion to decode JSON in C#, all six access-service tests passed. Earlier full and targeted runs covered all mutation and migration paths; all 288 JavaScript tests, two Chromium desktop/mobile scenarios and ten restore-verification checks passed.
+- Production remains on the directory build until the operator installs the separate access-management package with a verified backup. Keycloak settings remain unchanged.
+
+Next: stage 5, persisted quota defaults/overrides and enforcement across every relevant write path.
 
 ### Compatibility with the deployed schema 3 (2026-10-03)
 

@@ -248,7 +248,7 @@ public sealed class AdminAuthenticationTests(TestDatabase database) : IClassFixt
         using var callback = await LoginAsync(client);
         var json = await client.GetFromJsonAsync<System.Text.Json.JsonElement>("/admin/api/users?search=" + user.UserId);
         var item = Assert.Single(json.GetProperty("items").EnumerateArray());
-        Assert.Equal(new[] { "createdAt", "displayName", "id", "sealedBytes", "status" },
+        Assert.Equal(new[] { "createdAt", "displayName", "id", "sealedBytes", "status", "version" },
             item.EnumerateObject().Select(p => p.Name).Order(StringComparer.Ordinal));
         var detail = await client.GetFromJsonAsync<System.Text.Json.JsonElement>("/admin/api/users/" + user.UserId);
         Assert.Equal(new[] { "devices", "hosts", "lastHostSeenAt", "runs", "tasks", "user" },
@@ -270,6 +270,52 @@ public sealed class AdminAuthenticationTests(TestDatabase database) : IClassFixt
         Assert.Equal(HttpStatusCode.TooManyRequests, (await client.GetAsync("/admin/api/users")).StatusCode);
         client.DefaultRequestHeaders.Add("X-CSRF-TOKEN", session.CsrfToken);
         Assert.Equal(HttpStatusCode.NoContent, (await client.PostAsync("/admin/api/signout", null)).StatusCode);
+    }
+
+    [Theory]
+    [InlineData("disable")]
+    [InlineData("enable")]
+    [InlineData("revoke-sessions")]
+    [InlineData("approve")]
+    [InlineData("refuse")]
+    public async Task Access_changes_require_admin_csrf_fresh_mfa_and_a_current_record_version(string action)
+    {
+        await using var gateway = Gateway();
+        using var client = Browser(gateway, out _);
+        var user = await TestAccounts.CreateAsync(database, Ids.New());
+        if (action == "enable") await database.ExecuteAsync($"UPDATE users SET status = 'Disabled' WHERE id = '{user.UserId}'");
+        var registration = action is "approve" or "refuse";
+        var subject = Ids.New();
+        await database.ExecuteAsync($"INSERT INTO admissions (provider, subject, display, state, requested_at) VALUES ('github', '{subject}', 'Test', 'Waiting', UTC_TIMESTAMP(3))");
+        var path = registration ? "/admin/api/registrations/decision" : $"/admin/api/users/{user.UserId}/access";
+        object body = registration ? new { provider = "github", subject, decision = action, expectedVersion = 0 }
+            : new { action, expectedVersion = 1 };
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.PostAsJsonAsync(path, body)).StatusCode);
+        using var panel = await PanelClient.SignedInAsync(gateway, Ids.New());
+        client.DefaultRequestHeaders.Add("Cookie", panel.Cookies.GetCookieHeader(panel.Http.BaseAddress!));
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.PostAsJsonAsync(path, body)).StatusCode);
+        client.DefaultRequestHeaders.Remove("Cookie");
+        using var publicClient = gateway.CreateDefaultClient(new Uri("https://panel.example.test"));
+        Assert.Equal(HttpStatusCode.NotFound, (await publicClient.PostAsJsonAsync(path, body)).StatusCode);
+        await Store.GrantAsync(Identity, default);
+        using var callback = await LoginAsync(client);
+        Assert.Equal(HttpStatusCode.BadRequest, (await client.PostAsJsonAsync(path, body)).StatusCode);
+        var session = await SessionAsync(client);
+        client.DefaultRequestHeaders.Add("X-CSRF-TOKEN", "incorrect");
+        Assert.Equal(HttpStatusCode.BadRequest, (await client.PostAsJsonAsync(path, body)).StatusCode);
+        client.DefaultRequestHeaders.Remove("X-CSRF-TOKEN");
+        client.DefaultRequestHeaders.Add("X-CSRF-TOKEN", session.CsrfToken);
+        _clock.Advance(TimeSpan.FromMinutes(6));
+        Assert.Equal(HttpStatusCode.Forbidden, (await client.PostAsJsonAsync(path, body)).StatusCode);
+        _fake.AuthenticationTime = _clock.GetUtcNow().ToUnixTimeSeconds();
+        using var again = await LoginAsync(client);
+        session = await SessionAsync(client);
+        client.DefaultRequestHeaders.Remove("X-CSRF-TOKEN");
+        client.DefaultRequestHeaders.Add("X-CSRF-TOKEN", session.CsrfToken);
+        Assert.Equal(HttpStatusCode.OK, (await client.PostAsJsonAsync(path, body)).StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, (await client.PostAsJsonAsync(path, body)).StatusCode);
+        var target = registration ? "github:" + subject : user.UserId;
+        Assert.Equal(1, await database.ScalarLongAsync($"SELECT COUNT(*) FROM administrator_audit WHERE actor = 'admin:{session.AdministratorId}' AND target = '{target}'"));
     }
 
     private async Task AssertNoSessionAsync() => Assert.Equal(0, await database.ScalarLongAsync(

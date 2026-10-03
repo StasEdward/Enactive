@@ -20,7 +20,7 @@ function setup(fetch) {
 }
 const response = data => ({ ok: true, json: async () => data });
 const totals = { users: 2, disabledUsers: 1, waitingRegistrations: 3 };
-const row = name => ({ id: 'a'.repeat(32), displayName: name, status: 'Active', sealedBytes: 10, createdAt: '2026-10-04T00:00:00Z' });
+const row = name => ({ id: 'a'.repeat(32), displayName: name, status: 'Active', version: 3, sealedBytes: 10, createdAt: '2026-10-04T00:00:00Z' });
 const submit = ui => ui.get('directory-filter').submit({ preventDefault() {} });
 
 test('metadata is rendered as text and search is encoded; details use an explicit projection', async () => {
@@ -120,4 +120,78 @@ test('expired sessions remove private metadata and offer sign-in', async () => {
   assert.equal(ui.get('session').hidden, true);
   assert.equal(ui.get('signin').hidden, false);
   assert.equal(ui.get('directory-rows').children.length, 0);
+});
+
+function accessFixture(post) {
+  return setup(async (url, options) => {
+    if (options?.method === 'POST') return post(url, options);
+    if (url.endsWith('/overview')) return response(totals);
+    if (url.includes('/users/')) return response({ user: row('Owner'), hosts: 0, devices: 0, tasks: 0, runs: 0 });
+    return response({ items: [row('Owner')], next: null });
+  });
+}
+async function openDisable(ui) {
+  await ui.directory.setAuthenticated(true, 'real-csrf');
+  await ui.get('directory-rows').children[0].children[4].children[0].click();
+  ui.get('user-actions').children[0].click();
+}
+
+test('access changes require explicit confirmation and send the viewed version with CSRF', async () => {
+  let calls = 0, complete;
+  const ui = accessFixture((url, options) => {
+    calls++;
+    assert.match(url, /users\/a+\/access$/);
+    assert.equal(options.headers['X-CSRF-TOKEN'], 'real-csrf');
+    assert.deepEqual(JSON.parse(options.body), { action: 'disable', expectedVersion: 3 });
+    return new Promise(resolve => { complete = resolve; });
+  });
+  await openDisable(ui);
+  assert.equal(calls, 0);
+  assert.equal(ui.get('access-confirmation').hidden, false);
+  const saving = ui.get('access-confirm').click();
+  await ui.get('access-confirm').click();
+  assert.equal(calls, 1);
+  assert.equal(ui.get('access-status').textContent, 'Saving…');
+  complete(response({ action: 'disable', withdrawnCommands: 2 }));
+  await saving;
+  assert.match(ui.get('access-status').textContent, /Account disabled.*2 queued/);
+  assert.equal(ui.get('access-confirmation').hidden, true);
+});
+
+test('canceling confirmation sends no mutation', async () => {
+  let calls = 0;
+  const ui = accessFixture(() => { calls++; return response({}); });
+  await openDisable(ui);
+  ui.get('access-cancel').click();
+  await ui.get('access-confirm').click();
+  assert.equal(calls, 0);
+});
+
+test('stale MFA offers reauthentication without replaying the change or hiding the session', async () => {
+  let calls = 0;
+  const ui = accessFixture(() => { calls++; return { ok: false, status: 403 }; });
+  await openDisable(ui);
+  await ui.get('access-confirm').click();
+  assert.equal(ui.get('access-reauth').hidden, false);
+  assert.match(ui.get('access-status').textContent, /recent MFA/);
+  assert.equal(ui.get('session').hidden, false);
+  await ui.get('access-confirm').click();
+  assert.equal(calls, 1);
+});
+
+test('conflicts and uncertain outcomes never display success or automatically retry', async () => {
+  for (const failure of [409, 500, 'network']) {
+    let calls = 0;
+    const ui = accessFixture(() => {
+      calls++;
+      if (failure === 'network') throw new Error('Failed to fetch');
+      return { ok: false, status: failure };
+    });
+    await openDisable(ui);
+    await ui.get('access-confirm').click();
+    assert.match(ui.get('access-status').textContent, /[Rr]efresh/);
+    assert.doesNotMatch(ui.get('access-status').textContent, /Change saved|Account disabled/);
+    await ui.get('access-confirm').click();
+    assert.equal(calls, 1);
+  }
 });

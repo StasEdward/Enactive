@@ -23,3 +23,6 @@ dl { display: grid; grid-template-columns: minmax(8rem, 1fr) 3fr; gap: .7rem; }
 dt { font-weight: 600; } dd { margin: 0; overflow-wrap: anywhere; }
 #user-details { border: 1px solid #70809066; border-radius: .5rem; padding: 1rem; margin-top: 1rem; }
 @media (max-width: 600px) { main { padding: 1rem; } form, label { width: 100%; } }
+
+#access-confirmation { border: 1px solid currentColor; padding: 1rem; margin-top: 1rem; border-radius: .5rem; }
+#access-status { font-weight: 600; }

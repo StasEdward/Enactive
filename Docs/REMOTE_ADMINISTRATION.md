@@ -1,8 +1,7 @@
 # Remote Gateway administration
 
-Stages 2–3 provide administrator bootstrap, authentication, sessions, revocation, and a read-only
-directory with user details, registrations and overview counts. Web registration decisions and quota
-editing are later implementation stages.
+Stages 2–4 provide administrator bootstrap, authentication, sessions, a directory with user details,
+registration decisions, account enable/disable and session revocation. Quota editing is a later stage.
 Existing account-management CLI commands remain available. Administration is disabled when all
 `ENACTIVE_ADMIN_*` settings below are absent. Partial configuration stops startup.
 
@@ -66,9 +65,9 @@ debug logging or override the existing request/authentication logging filters.
 
 ## Bootstrap and recovery
 
-1. Back up the database and install the new Gateway. Its startup applies migration 010. Version 3 and its sign-in replay protection are preserved. Version 2
+1. Back up the database and install the new Gateway. Its startup applies migrations through 011. Version 3 and its sign-in replay protection are preserved. Version 2
    remains unused so the incompatible protocol-1 schema version 2 stays rejected. Reapplying migration
-   010 after a partial migration is safe. Older binaries do not recognize version 10; rollback requires
+   010 after a partial migration is safe. Older binaries do not recognize the newer schema; rollback requires
    the corresponding database backup, not just swapping binaries.
 2. Obtain the intended administrator's **exact signed `iss` and `sub`** for this OIDC client from the
    provider's trusted administration tools. These are case-sensitive. Pairwise subjects can change when
@@ -98,14 +97,14 @@ available identity provider. No deployment settings or actual administrator gran
 
 Grants, revocations, session creation, and sign-out write `administrator_audit` in the same transaction
 as their database changes. CLI actor is `operator`; browser actor is `admin:<administrator-id>`.
-The security log contains action names and internal IDs, not tokens, provider claims, IP addresses,
-encrypted task bodies, or keys. It is independent of ordinary user deletion.
+The security log contains action names, internal IDs, registration provider/subject targets and bounded
+state-transition details, never tokens, IP addresses, encrypted task bodies or keys. It is independent of ordinary user deletion.
 
 The existing hourly retention job removes expired administrative sessions and audit older than 90 days,
 including while the web interface is disabled. Expired or revoked sessions are denied immediately on
 their next request; cleanup timing does not determine access. Requests already authorized before a
-revocation commits may finish. Later web mutations must preserve transactional audit and their own
-authorization checks.
+revocation commits may finish. Web mutations lock and recheck administrator/session authority inside their transaction before
+changing the target record, using the same lock order as administrator revocation.
 
 ## Read-only directory (stage 3)
 
@@ -127,7 +126,7 @@ not chronological ordering or offsets. Refresh starts again; pages are live view
 Maximum page size and search length are both 100. Literal substring search and aggregate overview
 counts may scan metadata; neither reads encrypted bodies. Last contact is not a live connectivity claim.
 Read endpoints share a separate 60-requests/minute budget per administrator so browsing cannot exhaust
-the sign-in/sign-out budget. The schema remains 10: this stage needs no migration or new settings.
+the sign-in/sign-out budget. Stage 3 itself used schema 10 without new settings; stage 4 adds migration 11.
 
 Responses deliberately omit credentials, session identifiers, tasks' encrypted content and keys.
 Stored bytes describe sealed-content accounting rather than total database disk usage. Resource counts
@@ -137,3 +136,39 @@ Validation commands: the Gateway test project; `node --test "tests/panel/*.test.
 `tests/panel-e2e`, `npx playwright test --config admin.config.mjs`. The latter uses the shipped UI
 with mocked API responses at desktop and mobile widths; signed OIDC and real database authorization
 are covered by the Gateway suite.
+
+## Access management (stage 4)
+
+The user card offers Disable account / Enable account and Revoke sessions. Registration rows offer
+Approve and Refuse. Each action opens a confirmation naming the target and its consequences.
+Success is shown only after the server confirms the change; the directory is then refreshed.
+
+- `POST /admin/api/users/{id}/access`: JSON `{ "action": "disable|enable|revoke-sessions", "expectedVersion": 1 }`.
+- `POST /admin/api/registrations/decision`: JSON `{ "provider": "github", "subject": "123", "decision": "approve|refuse", "expectedVersion": 0 }`.
+
+Supply `expectedVersion` from the latest directory record's `version`, and the session's CSRF token
+in `X-CSRF-TOKEN`. The server derives the actor from its authenticated administrator session, never
+from request JSON. Each endpoint requires fresh MFA (five minutes); the transaction rechecks the
+persisted session, administrator access and freshness while holding locks. A 403 asks the operator
+to authenticate again and review the action. Authentication never automatically replays a mutation.
+
+A stale record returns 409 without effects or audit. Refresh and review it before another attempt.
+This also prevents a retried session revocation from ending new sessions opened after its first
+successful execution. Enabling an already active account or disabling an already disabled one at
+its current version is a no-op. Conflicting decisions serialize on the target row; only one request
+with a given revision succeeds. CLI and open-admission decisions update registration revisions too.
+After a network failure, the outcome may be unknown: refresh rather than automatically retrying.
+
+Disable revokes browser sessions and withdraws pending-delivery commands. It does not promise to
+stop work already running locally. Enable does not revive revoked sessions or withdrawn commands.
+Session revocation does not revoke computer credentials. Refusing registration does not disable an
+existing account. These controls affect ordinary users, not Keycloak or administrator assignments.
+
+The shared CLI/web service writes the ordinary audit and independent administrator audit in the same
+transaction as the change. Independent history records the actual actor, full target, before/after
+states and withdrawn-command count where applicable; it survives ordinary account deletion and follows
+the existing 90-day retention policy. A failed audit aborts the entire transaction.
+
+Migration 011 adds admission revisions, widens the administrator audit target for provider subjects,
+and adds JSON audit detail. It can be reapplied after partial execution. Existing accounts, administrator
+sessions and audit rows are retained. See `REMOTE_ADMIN_ACCESS_UPGRADE.md` before installation.

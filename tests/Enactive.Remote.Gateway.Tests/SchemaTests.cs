@@ -70,8 +70,10 @@ public sealed class SchemaTests(TestDatabase database) : IClassFixture<TestDatab
 
     // ── migrations ──────────────────────────────────────────────────────────
 
-    [Fact]
-    public async Task Administration_upgrades_schema_3_without_losing_accounts_or_replay_protection()
+    [Theory]
+    [InlineData(3)]
+    [InlineData(10)]
+    public async Task Administration_upgrades_deployed_schemas_without_losing_accounts_or_replay_protection(int oldVersion)
     {
         // Build the deployed schema from its actual SQL, not by undoing the new migration.
         // Otherwise this test could miss a dependency on something only a fresh install creates.
@@ -104,7 +106,19 @@ public sealed class SchemaTests(TestDatabase database) : IClassFixture<TestDatab
                 INSERT INTO signin_redemptions VALUES (REPEAT('b', 64), UTC_TIMESTAMP(3));
                 """);
 
-            Assert.Equal([10], await Migrator.ApplyAsync(connectionString));
+            if (oldVersion == 10)
+            {
+                var name = Assert.Single(assembly.GetManifestResourceNames(), n => n.EndsWith("010_administration.sql", StringComparison.Ordinal));
+                using var reader = new StreamReader(assembly.GetManifestResourceStream(name)!);
+                await Execute(await reader.ReadToEndAsync());
+                await Execute("""
+                    INSERT INTO schema_version VALUES (10, UTC_TIMESTAMP(3));
+                    INSERT INTO administrators VALUES (REPEAT('c', 32), 'https://issuer.test', 'existing', 1, 1, UTC_TIMESTAMP(3), UTC_TIMESTAMP(3));
+                    INSERT INTO administrator_sessions VALUES (REPEAT('d', 32), REPEAT('c', 32), 1, UTC_TIMESTAMP(3), UTC_TIMESTAMP(3) + INTERVAL 30 MINUTE, NULL);
+                    INSERT INTO administrator_audit (at, actor, action, target) VALUES (UTC_TIMESTAMP(3), 'operator', 'administrator.granted', REPEAT('c', 32));
+                    """);
+            }
+            Assert.Equal(oldVersion == 10 ? new[] { 11 } : new[] { 10, 11 }, await Migrator.ApplyAsync(connectionString));
             Assert.Empty(await Migrator.ApplyAsync(connectionString));
             await using var account = new MySqlCommand("""
                 SELECT CONCAT(display_name, '|', status, '|', security_version, '|', sealed_bytes, '|',
@@ -115,7 +129,14 @@ public sealed class SchemaTests(TestDatabase database) : IClassFixture<TestDatab
                 "INSERT INTO signin_redemptions VALUES (REPEAT('b', 64), UTC_TIMESTAMP(3))"));
             Assert.Equal(1062, duplicate.Number);
             await using var admins = new MySqlCommand("SELECT COUNT(*) FROM administrators", connection);
-            Assert.Equal(0L, await admins.ExecuteScalarAsync());
+            Assert.Equal(oldVersion == 10 ? 1L : 0L, await admins.ExecuteScalarAsync());
+            if (oldVersion == 10)
+            {
+                await using var sessions = new MySqlCommand("SELECT COUNT(*) FROM administrator_sessions WHERE revoked_at IS NULL", connection);
+                Assert.Equal(1L, await sessions.ExecuteScalarAsync());
+                await using var audit = new MySqlCommand("SELECT COUNT(*) FROM administrator_audit WHERE detail IS NULL", connection);
+                Assert.Equal(1L, await audit.ExecuteScalarAsync());
+            }
         }, migrate: false);
     }
 
@@ -170,7 +191,7 @@ public sealed class SchemaTests(TestDatabase database) : IClassFixture<TestDatab
 
         var reapplied = await Migrator.ApplyAsync(database.ConnectionString);
 
-        Assert.Equal([1, 3, 10], Migrator.KnownVersions());
+        Assert.Equal([1, 3, 10, 11], Migrator.KnownVersions());
         Assert.Equal(Migrator.KnownVersions(), reapplied);
         Assert.Equal(
             Migrator.KnownVersions(),

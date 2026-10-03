@@ -29,8 +29,16 @@
         <p id="directory-status" role="status" aria-live="polite"></p>
         <div class="table-scroll"><table><thead id="directory-head"></thead><tbody id="directory-rows"></tbody></table></div>
         <div class="pagination"><button id="directory-previous" type="button" disabled>Previous</button><button id="directory-next" type="button" disabled>Next</button></div>
-        <section id="user-details" hidden aria-live="polite"><h3>User details</h3><dl id="user-fields"></dl></section>
-        <p class="note">Read-only preview. Registration decisions and quota editing are coming next. Stored bytes cover encrypted content, not database indexes, logs or backups.</p>
+        <section id="user-details" hidden aria-live="polite"><h3>User details</h3><dl id="user-fields"></dl><div id="user-actions"></div></section>
+        <section id="access-confirmation" hidden aria-labelledby="access-confirm-title">
+          <h3 id="access-confirm-title">Confirm access change</h3>
+          <p id="access-description"></p>
+          <button id="access-confirm" type="button">Confirm</button>
+          <button id="access-cancel" type="button">Cancel</button>
+        </section>
+        <p id="access-status" role="status" aria-live="polite"></p>
+        <a id="access-reauth" href="/admin/auth/start" hidden>Authenticate again to make changes</a>
+        <p class="note">Quota editing is coming next. Stored bytes cover encrypted content, not database indexes, logs or backups.</p>
       </section>
       <a href="/admin/auth/start">Authenticate again</a>
       <button id="signout" type="button">Sign out</button>
