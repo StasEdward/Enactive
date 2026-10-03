@@ -26,7 +26,11 @@ internal sealed record PlanContract(
     IReadOnlyList<SuccessCriterionDefinition> Checks,
     IReadOnlyList<TaskRestriction> Restrictions,
     TaskActionPolicy? ActionPolicy,
-    string? Unresolved);
+    string? Unresolved)
+{
+    /// <summary>What was accepted with a remark, for the run to say.</summary>
+    public IReadOnlyList<string> Notes { get; init; } = [];
+}
 
 /// <summary>
 /// The validation of the planner's verification contract. ONE definition, used by
@@ -65,7 +69,7 @@ internal static class PlanCheckContract
         using var doc = JsonDocument.Parse(ModelText.ExtractJsonObject(ModelText.StripThink(answer)) ?? "{}");
         var root = doc.RootElement;
         var seen = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var source in root.GetProperty("sources").EnumerateArray())
+        foreach (var source in Part(root, "sources", "The contract").EnumerateArray())
         {
             var id = Required(source, "id");
             if (!sources.Any(s => s.Id == id) || !seen.Add(id)) throw new JsonException("Unknown or duplicate source ID: " + id);
@@ -73,22 +77,34 @@ internal static class PlanCheckContract
         }
         if (seen.Count != sources.Count) throw new JsonException("Every original source ID needs an assessment.");
         var restrictions = new List<TaskRestriction>();
-        foreach (var item in root.GetProperty("forbidden_effects").EnumerateArray())
+        var notes = new List<string>();
+        foreach (var item in Part(root, "forbidden_effects", "The contract").EnumerateArray())
         {
             var effect = Required(item, "effect");
             var quote = Required(item, "source_quote");
-            if (effect != "file-deletion" || !request.Contains(quote, StringComparison.Ordinal))
+            if (!request.Contains(quote, StringComparison.Ordinal))
                 throw new JsonException("Unknown task restriction or source quote absent from request.");
+            // A ban the request really makes, of a kind the engine has no typed effect for: said, and not a reason
+            // to refuse the contract. It was one - on 2026-10-04 a review listed "do not change a source file to make
+            // a test pass", quoted word for word, beside a contract otherwise in order, and the run ended there
+            // before any work. Nothing is weakened by leaving it out of this list: the engine never enforced it, the
+            // request the worker and every review read still says it, and the list goes on holding only what the
+            // engine does enforce. A quote the request does not contain is still refused, above.
+            if (effect != "file-deletion")
+            {
+                notes.Add($"A restriction the engine does not enforce by itself, left to the reviews: {effect} (\"{quote}\").");
+                continue;
+            }
             restrictions.Add(new(ForbiddenTaskEffect.FileDeletion, quote));
         }
         if (inputs.Restrictions.Any(r => !restrictions.Any(n => n.Effect == r.Effect)))
             throw new JsonException("Previously established task restrictions cannot be removed.");
         TaskActionPolicy? actionPolicy = null;
-        var policy = root.GetProperty("action_policy");
+        var policy = Part(root, "action_policy", "The contract");
         if (policy.ValueKind != JsonValueKind.Null)
         {
-            var names = policy.GetProperty("allowed_tools").EnumerateArray().Select(x => x.GetString()!).ToArray();
-            var prefixes = policy.GetProperty("command_prefixes").EnumerateArray().Select(x => x.GetString()!).ToArray();
+            var names = Part(policy, "allowed_tools", "action_policy").EnumerateArray().Select(x => x.GetString()!).ToArray();
+            var prefixes = Part(policy, "command_prefixes", "action_policy").EnumerateArray().Select(x => x.GetString()!).ToArray();
             var quote = Required(policy, "source_quote");
             var reason = Required(policy, "reason");
             if (!request.Contains(quote, StringComparison.Ordinal)
@@ -106,18 +122,18 @@ internal static class PlanCheckContract
         }
         if (inputs.ActionPolicy is not null && (actionPolicy is null || !inputs.ActionPolicy.SameAs(actionPolicy)))
             throw new JsonException("Previously established action policy cannot be removed or changed.");
-        var unresolved = root.GetProperty("unresolved");
+        var unresolved = Part(root, "unresolved", "The contract");
         if (unresolved.ValueKind != JsonValueKind.Null)
-            return new([], restrictions, actionPolicy, Required(root, "unresolved"));
+            return new([], restrictions, actionPolicy, Required(root, "unresolved")) { Notes = notes };
         var checks = new List<SuccessCriterionDefinition>();
-        var items = root.GetProperty("checks");
+        var items = Part(root, "checks", "The contract");
         if (!preserveCriteria && items.GetArrayLength() > MaxFinalChecks) throw new JsonException("Too many final checks; resolve the contract without dropping requirements.");
         foreach (var item in items.EnumerateArray())
         {
             var name = Required(item, "name"); var command = Required(item, "command");
             var origin = Required(item, "origin"); var reason = Required(item, "reason");
-            var exit = item.GetProperty("expectedExitCode").GetInt32();
-            var quote = item.GetProperty("request_quote");
+            var exit = Part(item, "expectedExitCode", "A check").GetInt32();
+            var quote = Part(item, "request_quote", "A check");
             string? text = null;
             if (preserveCriteria)
             {
@@ -159,12 +175,23 @@ internal static class PlanCheckContract
         if (actionPolicy is not null && checks.Any(c => !actionPolicy.AllowedTools.Contains("run_command")
             || !actionPolicy.AllowsCommand(c.Command)))
             throw new JsonException("Final criterion conflicts with the task action policy; revise proposed checks or report unresolved.");
-        return new(checks, restrictions, actionPolicy, null);
+        return new(checks, restrictions, actionPolicy, null) { Notes = notes };
     }
+
+    /// <summary>
+    /// A part of the answer, or a refusal that NAMES it. Read with the runtime's own lookup, a part that was not
+    /// there came back to the planner as "The given key was not present in the dictionary" (2026-10-04): the one
+    /// further answer it had was spent guessing what that meant.
+    /// </summary>
+    private static JsonElement Part(JsonElement item, string name, string where)
+        => item.ValueKind == JsonValueKind.Object && item.TryGetProperty(name, out var value) ? value
+            : throw new JsonException($"{where} has no \"{name}\": every part of the contract is given, null or [] when it is empty.");
 
     private static string Required(JsonElement item, string name)
     {
-        var value = item.GetProperty(name).GetString();
+        var part = Part(item, name, "An entry of the contract");
+        var value = part.ValueKind == JsonValueKind.String ? part.GetString()
+            : throw new JsonException($"\"{name}\" must be text.");
         return !string.IsNullOrWhiteSpace(value) ? value : throw new JsonException(name + " must not be blank.");
     }
 }

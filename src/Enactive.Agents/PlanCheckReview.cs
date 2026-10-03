@@ -145,7 +145,7 @@ internal static class PlanCheckReview
                 return Result(budget.TurnExhaustedAfter(prompt, output)) with {
                     Checks = [.. contract.Checks, .. engineCriteria], Restrictions = contract.Restrictions, ActionPolicy = contract.ActionPolicy,
                     // With what the plan itself had to say (a check it kept as a proposal), which this result replaces.
-                    ContractNotes = [.. plan.ContractNotes, .. notes] };
+                    ContractNotes = [.. plan.ContractNotes, .. contract.Notes, .. notes] };
             }
             catch (Exception ex) when (PlanCheckContract.IsRefusal(ex))
             {
