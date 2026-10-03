@@ -103,7 +103,7 @@ internal sealed class WorkerRow : ObservableObject
     public WorkerConfig Config { get; }
 
     public string Name => Config.Role;
-    public string Meta => $"{Config.Model}  ·  {Config.Level}";
+    public string Meta => Config.Summary();
 
     /// <summary>
     /// The worker's permission level on the same green-blue-yellow-red scale the autonomy slider

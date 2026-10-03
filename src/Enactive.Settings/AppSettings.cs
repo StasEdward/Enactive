@@ -236,6 +236,15 @@ public sealed class WorkerConfig
     /// <summary>Optional fallback model as "providerId/model", or null.</summary>
     public string? Fallback { get; set; }
 
+    /// <summary>What a list shows where a worker has no model: the word its editor offers for the same thing.</summary>
+    public const string NoModel = "(none)";
+
+    /// <summary>
+    /// The worker in one line of a list: its model, and how much it may do without asking. No model is
+    /// said in a word - printed as stored it is an empty string, and the line began with the separator.
+    /// </summary>
+    public string Summary() => $"{(string.IsNullOrWhiteSpace(Model) ? NoModel : Model)}  ·  {Level}";
+
     public WorkerConfig Clone() => new()
     {
         Id = Id,
