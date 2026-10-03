@@ -13,6 +13,16 @@ using Enactive.Core.Tools;
 internal static class PlanCheckReview
 {
     internal const int MaxFinalChecks = PlanCheckContract.MaxFinalChecks;
+
+    /// <summary>
+    /// How much of a tool's description the review is shown. A description is whatever the tool's author wrote -
+    /// an external server's may run to pages - and the review reads every tool's on every run; the state a tool
+    /// reports about itself is said at the start.
+    /// </summary>
+    internal const int MaxToolDescription = 600;
+
+    private static string Shown(string description)
+        => description.Length <= MaxToolDescription ? description : description[..MaxToolDescription] + "…";
     internal static async Task<PlanResult> RunAsync(PlanResult plan, string request, WorkContext context,
         IChatProvider provider, string model, RunBudget budget, int outputBudget, CancellationToken ct,
         bool preserveCriteria = false, IReadOnlyList<ToolDefinition>? tools = null, string? workspaceRoot = null,
@@ -41,7 +51,8 @@ internal static class PlanCheckReview
                 + "Return ONLY JSON {sources:[{id,assessment}],checks:[{name,command,origin,request_quote,expectedExitCode,reason}],forbidden_effects:[{effect,source_quote}],action_policy:null,unresolved:null}. "
                 + "action_policy is null when there is no explicit tool/command allowlist. Otherwise return "
                 + "{allowed_tools:[exact tool names],command_prefixes:[executable and allowed subcommand],source_quote,reason}. "
-                + "Use the supplied tool inventory. Interpret words such as only explicitly; explain the boundary in reason. "
+                + "Use the supplied tool inventory. A tool's description says what is already configured for it outside the request "
+                + "(an account, a destination, a default argument): that is not missing from the request, and is no reason for unresolved. Interpret words such as only explicitly; explain the boundary in reason. "
                 + "A local-files-only restriction excludes external integrations. Commands outside allowed families must not "
                 + "be proposed as checks. Prefixes contain simple space-separated executable/subcommand tokens only, no shell syntax. "
                 + "Use commandPolicy from the tool inventory: SimpleCommand supports a single literal command; PowerShell supports static commands, sequences and pipelines with literal arguments, with EVERY command checked against command_prefixes. Dynamic expressions, script blocks, redirection and aliases are not supported under this policy. Omit command tools with commandPolicy=None. Use [] to forbid all commands. "
@@ -69,7 +80,12 @@ internal static class PlanCheckReview
                         origin = c.Origin.ToString().ToLowerInvariant(), c.AlreadyPassing, c.RequestQuote, c.PlanningReason }),
                     engineCriteria = reviewsEngineCriteria ? EngineCriteriaReview.Show(decidedByTheEngine, request, workspaceRoot, plan.Plan) : null,
                     existingRestrictions = plan.Restrictions, actionPolicy = plan.ActionPolicy,
-                    tools = tools?.Select(t => new { t.Name, kind = t.Kind.ToString(), commandPolicy = t.CommandPolicy.ToString() })
+                    // With what each tool says of itself. By name, kind and policy alone the review took what a
+                    // tool already has set up for something the request forgot: on 2026-10-03 a request to mail a
+                    // report was stopped at "lacks an e-mail recipient/SMTP details", with both in Settings and the
+                    // sending tool's description saying so - to the worker, who was never reached.
+                    tools = tools?.Select(t => new { t.Name, kind = t.Kind.ToString(), commandPolicy = t.CommandPolicy.ToString(),
+                        description = Shown(t.Description) })
                 }))
         };
         if (reviewsEngineCriteria)
