@@ -51,6 +51,8 @@ internal static class PlanCheckReview
                 + "Return ONLY JSON {sources:[{id,assessment}],checks:[{name,command,origin,request_quote,expectedExitCode,reason}],forbidden_effects:[{effect,source_quote}],action_policy:null,unresolved:null}. "
                 + "action_policy is null when there is no explicit tool/command allowlist. Otherwise return "
                 + "{allowed_tools:[exact tool names],command_prefixes:[executable and allowed subcommand],source_quote,reason}. "
+                + "allowed_tools that names only command tools restricts COMMANDS: the tools that read and change files in the workspace "
+                + "stay available, and every other tool is refused. To restrict the file tools as well, name every tool that may be used. "
                 + "Use the supplied tool inventory. A tool's description says what is already configured for it outside the request "
                 + "(an account, a destination, a default argument): that is not missing from the request, and is no reason for unresolved. Interpret words such as only explicitly; explain the boundary in reason. "
                 + "A local-files-only restriction excludes external integrations. Commands outside allowed families must not "

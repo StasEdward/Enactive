@@ -50,7 +50,7 @@ public sealed class ToolRegistry : IToolRegistry
         string? policyError = null;
         if (ctx.Context?.ActionPolicy is { } policy)
         {
-            if (!policy.AllowedTools.Contains(tool.Definition.Name, StringComparer.Ordinal))
+            if (!policy.Names(tool.Definition))
                 policyError = "Tool is not in allowed_tools.";
             else if (tool.Definition.Kind == ToolKind.Command
                 && tool.Definition.CommandPolicy == CommandPolicySyntax.PowerShell
