@@ -82,8 +82,16 @@ public static class Shortening
         if (tail < SmallestTail)
             return text[..budget] + $"… ({budget:N0} of {text.Length:N0})";
 
-        return text[..head]
-             + $"\n… ({text.Length - budget:N0} characters not shown here; the end follows) …\n"
-             + text[^tail..];
+        var notice = $"\n… ({text.Length - budget:N0} characters not shown here; the end follows) …\n";
+
+        // A cut that hides no more than its own notice takes up is not made: it would be longer than
+        // the text it stands for, and it would say there was more to see. On 2026-10-04 a command
+        // that printed two lines and ran nothing reached a review as a start, "(15 characters not
+        // shown here…)" and an end - the shape of the long result beside it - and the review took it
+        // for a long result cut, and passed a report that said the command had done the work.
+        if (text.Length - budget <= notice.Length)
+            return text;
+
+        return text[..head] + notice + text[^tail..];
     }
 }
