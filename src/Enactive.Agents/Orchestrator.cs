@@ -2706,6 +2706,18 @@ public sealed partial class Orchestrator : IOrchestrator
                 ? (OutcomeCause.BlockedInput, "none of what the step looked for is there: " + open.Describe())
                 : null;
 
+    /// <summary>
+    /// The tools the run kept back that the step's report names, with why each was kept back - or null when it
+    /// names none. By whole word and whatever the case: "write_file" in a sentence, not "file" inside it.
+    /// </summary>
+    private static string? KeptBackAndNamed(ToolOffer offer, string report)
+    {
+        var named = offer.Withheld.Where(held => System.Text.RegularExpressions.Regex.IsMatch(report,
+            $@"(?<![A-Za-z0-9_]){System.Text.RegularExpressions.Regex.Escape(held.Name)}(?![A-Za-z0-9_])",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant)).ToArray();
+        return named.Length == 0 ? null : new ToolOffer([], named).Because;
+    }
+
     private static string Word(StepOutcomeKind kind) => kind switch
     {
         StepOutcomeKind.Succeeded => "done",
@@ -2774,6 +2786,12 @@ public sealed partial class Orchestrator : IOrchestrator
 
         /// <summary>Rejected on a review that found these files right. See <see cref="ReviewResult.Keep"/>.</summary>
         public IReadOnlyList<string> Keep { get; set; } = [];
+
+        /// <summary>
+        /// The tools this run kept back from the step and why, as <see cref="ToolOffer.Because"/> words it; null
+        /// when none were. Carried out of the loop for the review, which judges what the step says it could not do.
+        /// </summary>
+        public string? KeptBack { get; set; }
 
         /// <summary>Why, as a code: what was recorded, or what the outcome implies.</summary>
         public OutcomeCause Cause => _cause ?? StepRecord.CauseOf(Kind);
@@ -3444,7 +3462,15 @@ public sealed partial class Orchestrator : IOrchestrator
         // belongs to this step, and is made from the schema it will be checked against.
         if (submitTool is not null) toolDefs = [.. toolDefs, submitTool];
         else if (outputSchema is not null) toolDefs = [.. toolDefs, StepOutputContract.Tool(outputSchema)];
-        if (_reportBlocked) toolDefs = [.. toolDefs, AgentBlocked.Tool];
+        // The report is offered wherever this run kept a tool back, whatever the switch says. A step that cannot be
+        // done without a tool it was never shown cannot be refused that tool - there is no call to refuse - so the
+        // engine saw no block, the step could only say so in prose, and the review failed it for a claim no call
+        // supported: two attempts and two reviews to "review rejected" (run 9384e2, 2026-10-03, a task started
+        // from the web that needed a shell). The switch still decides for a run that kept nothing back.
+        var mayReportBlocked = _reportBlocked || offer.Withheld.Count > 0;
+        if (mayReportBlocked) toolDefs = [.. toolDefs, AgentBlocked.Tool];
+        // For the review, which is otherwise never told: what was kept back is the engine's fact, not the step's claim.
+        loopResult.KeptBack = offer.Because;
 
         // Withheld VISIBLY. A run that quietly cannot use git and does not say so is a worse
         // failure than the one above: the report would name a plan that could never have worked,
@@ -3457,7 +3483,10 @@ public sealed partial class Orchestrator : IOrchestrator
         // did not carry). Once per conversation: a step that shares it has been told already.
         string? notOffered = offer.Because is { } withheldBecause
             ? $"Not available in this run: {withheldBecause}. Where your instructions mention "
-              + "these tools, do the work with the tools you have, or say what could not be done without them."
+              + "these tools, do the work with the tools you have, or say what could not be done without them. "
+              // Which tool, by name: the engine records the block as its own only for a tool it did keep back.
+              + $"If this step cannot be done without them, call {AgentBlocked.ToolName} and name the tool it needs - "
+              + "that ends the step as blocked, which is not a failure."
             : null;
         // Said again whenever the conversation is started over: a restart is rebuilt from the run's
         // preamble and the step's instruction, and this was in neither (run 16d57849's fresh start lacked it).
@@ -4571,7 +4600,7 @@ public sealed partial class Orchestrator : IOrchestrator
                 }
 
                 // The step's word that it cannot go on (Phase 7.2): recorded as its word. The step ends when the turn does.
-                if (_reportBlocked && call.Name == AgentBlocked.ToolName)
+                if (mayReportBlocked && call.Name == AgentBlocked.ToolName)
                 {
                     yield return Invoked(call);
                     var (blockReason, blockNeeds, notAReport) = AgentBlocked.Read(call.ArgumentsJson);
@@ -5019,9 +5048,14 @@ public sealed partial class Orchestrator : IOrchestrator
             // only where the engine sees nothing is the step's word the cause - and recorded as its word.
             if (reportedBlocked is not null)
             {
+                // A tool the engine kept back, named by the step, is the engine's finding too: it is the engine
+                // that kept it back, and why is its own fact. Only the tools the report names - a step in a run
+                // without git that waits on a person's answer is not blocked by git.
                 var (blockCause, blockWhy) = EngineBlock(openFailures) is { } found
                     ? (found.Cause, found.Reason + "; " + reportedBlocked)
-                    : (OutcomeCause.BlockedReported, reportedBlocked);
+                    : KeptBackAndNamed(offer, reportedBlocked) is { } keptBack
+                        ? (OutcomeCause.BlockedPermission, $"needs a tool this run does not offer: {keptBack}; {reportedBlocked}")
+                        : (OutcomeCause.BlockedReported, reportedBlocked);
                 yield return Ev(EventKind.ErrorObserved, "Blocked: " + blockWhy);
                 loopResult.Set(StepOutcomeKind.Blocked, blockWhy, blockCause);
                 yield break;

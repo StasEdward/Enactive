@@ -347,7 +347,8 @@ These are current, deliberate, and worth knowing before relying on the feature.
 - **Metadata is visible to the gateway**: computer names, how many runs, when, their statuses and
   sizes. See [Remote security](Remote-Security.md).
 - **No shells from the web**, as above. A task that genuinely needs a command line has to be run at
-  the computer.
+  the computer. A step that cannot be done without one says so and ends as *blocked*, naming the tool
+  the run did not offer - the run stops there rather than handing in work it could not do.
 - **No staging from the web.**
 - **One person per account.** There are no teams or sharing, and GitHub and Google sign-ins are not
   joined into one account.
