@@ -135,6 +135,7 @@ internal sealed partial class SettingsViewModel : ObservableObject
 
     private readonly AppSettings _working;
     private readonly Action<AppSettings> _onSaved;
+    private readonly IStartupEntry _startup;
 
     private string _numCtxText;
     private string _globalInstructions;
@@ -154,7 +155,7 @@ internal sealed partial class SettingsViewModel : ObservableObject
     private bool _startupLoaded;
     private async Task LoadStartupAsync()
     {
-        RunAtStartup = await Task.Run(StartupEntry.IsEnabled);
+        RunAtStartup = await Task.Run(_startup.IsEnabled);
         _startupLoaded = true;
         OnPropertyChanged(nameof(StartupSupported));
     }
@@ -276,12 +277,19 @@ internal sealed partial class SettingsViewModel : ObservableObject
     /// what exists instead of typed - three built-ins once denied "create_dir" while the tool is
     /// called "create_directory", which restricted nothing at all.
     /// </param>
+    /// <param name="startup">
+    /// Where "start with Windows" is read and changed. Null means the real Run key; anything that
+    /// builds this view model outside the app passes its own, so the registry of the machine it runs
+    /// on is left alone.
+    /// </param>
     public SettingsViewModel(
         AppSettings settings, Action<AppSettings> onSaved,
-        string? workspaceRoot = null, IReadOnlyList<string>? toolNames = null)
+        string? workspaceRoot = null, IReadOnlyList<string>? toolNames = null,
+        IStartupEntry? startup = null)
     {
         _working = settings.Clone();
         _onSaved = onSaved;
+        _startup = startup ?? StartupEntry.System;
         ToolNames = toolNames ?? Array.Empty<string>();
         InitializeMcp();
         InitializeTemplates(workspaceRoot);
@@ -314,7 +322,7 @@ internal sealed partial class SettingsViewModel : ObservableObject
         // Read from the system, not from settings.json: the Run key is the truth, and a copy would
         // drift the first time the user removed it in Task Manager.
         _startupLoad = LoadStartupAsync();
-        _startupNote = StartupEntry.Supported
+        _startupNote = _startup.Supported
             ? string.Empty
             : "Only Windows starts programs this way; this desktop does not.";
 
@@ -403,13 +411,13 @@ internal sealed partial class SettingsViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Whether the computer starts Enactive at login. Applied on Save with the rest, and re-read
-    /// from the system afterwards - if the registry refused, the box goes back to the truth rather
-    /// than claiming something that did not happen.
+    /// Whether the computer starts Enactive at login. Applied on Save after the rest is written, and
+    /// re-read from the system afterwards - if the registry refused, the box goes back to the truth
+    /// rather than claiming something that did not happen.
     /// </summary>
     public bool RunAtStartup { get => _runAtStartup; set => Set(ref _runAtStartup, value); }
 
-    public bool StartupSupported => StartupEntry.Supported && _startupLoaded;
+    public bool StartupSupported => _startup.Supported && _startupLoaded;
 
     /// <summary>Empty when there is nothing to say - a note that is always there is not read.</summary>
     public string StartupNote
@@ -593,18 +601,6 @@ internal sealed partial class SettingsViewModel : ObservableObject
             : ShellCommandPolicy.Follow;
         _working.CloseToTray = CloseToTray;
 
-        var requestedStartup = RunAtStartup;
-        var startupRefused = await Task.Run(() => StartupEntry.Supported
-            && requestedStartup != StartupEntry.IsEnabled()
-            && !StartupEntry.Set(requestedStartup));
-
-        if (startupRefused)
-        {
-            // Show what actually happened rather than a tick that means nothing.
-            RunAtStartup = await Task.Run(StartupEntry.IsEnabled);
-            StartupNote = "Windows would not let that be changed. Start-up is left as it was.";
-        }
-
         SaveRemote();
         SaveSmtp();
 
@@ -613,24 +609,25 @@ internal sealed partial class SettingsViewModel : ObservableObject
         _working.Bindings.ExecuteLight = FromSelection(ExecuteLight);
         _working.Bindings.ExecuteHeavy = FromSelection(ExecuteHeavy);
 
-        // Validate BEFORE handing this over to be written. A configuration that cannot be built —
-        // two providers with the same id, say — used to be saved anyway, and then took the app down
-        // on every launch afterwards, because startup reads the same file and fails the same way.
-        var problems = _working.Validate();
-        if (problems.Count > 0)
-        {
-            StartupNote = "Not saved — " + string.Join(" ", problems);
+        // Validate, write, and only then change start-up: the order is SettingsSave's, where it is
+        // tested. This view model cannot be built without Avalonia, so the steps live apart from it.
+        var result = await SettingsSave.RunAsync(_working, _onSaved, _startup, RunAtStartup);
+
+        if (result.Note.Length > 0)
+            StartupNote = result.Note;
+
+        if (!result.Saved)
             return;
-        }
 
-        try { _onSaved(_working); }
-        catch (Exception ex) { StartupNote = "Not saved — " + ex.Message; return; }
-
-        // Everything else is saved either way. The window stays open only when there is something
+        // The settings are saved either way. The window stays open only when there is something
         // the user has not seen yet - a note nobody reads because the window closed on top of it is
         // the same as no note at all.
-        if (startupRefused)
+        if (result.StartupRefused)
+        {
+            // Show what actually happened rather than a tick that means nothing.
+            RunAtStartup = result.StartupEnabled;
             return;
+        }
 
         CloseRequested?.Invoke();
     }
