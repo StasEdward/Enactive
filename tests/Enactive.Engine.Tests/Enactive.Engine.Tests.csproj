@@ -39,6 +39,8 @@
     <Compile Include="../../src/Enactive.App.Ui/Mvvm/RelayCommand.cs" Link="Ui/RelayCommand.cs" />
     <Compile Include="../../src/Enactive.App.Ui/ViewModels/AddDeviceViewModel.cs" Link="Ui/AddDeviceViewModel.cs" />
     <Compile Include="../../src/Enactive.App.Ui/ViewModels/RemoteDevicesViewModel.cs" Link="Ui/RemoteDevicesViewModel.cs" />
+    <Compile Include="../../src/Enactive.App.Ui/IStartupEntry.cs" Link="Ui/IStartupEntry.cs" />
+    <Compile Include="../../src/Enactive.App.Ui/SettingsSave.cs" Link="Ui/SettingsSave.cs" />
     <Using Include="Xunit" />
   </ItemGroup>
 

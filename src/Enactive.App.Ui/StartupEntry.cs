@@ -9,6 +9,16 @@ internal static class StartupEntry
     private const string ValueName = "Enactive";
     public static bool Supported => OperatingSystem.IsWindows();
 
+    /// <summary>The Run key as an <see cref="IStartupEntry"/>: what the settings window uses unless handed another.</summary>
+    public static IStartupEntry System { get; } = new RunKey();
+
+    private sealed class RunKey : IStartupEntry
+    {
+        public bool Supported => StartupEntry.Supported;
+        public bool IsEnabled() => StartupEntry.IsEnabled();
+        public bool Set(bool enabled) => StartupEntry.Set(enabled);
+    }
+
     public static bool IsEnabled()
     {
         if (!OperatingSystem.IsWindows()) return false;
