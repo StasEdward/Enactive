@@ -11,7 +11,7 @@
 <a class="skip-link" href="#main">Skip to content</a>
 <header class="wiki-header"><a class="brand" href="../index.html" aria-label="Enactive home"><img class="brand-mark" src="assets/mark-loop.svg" alt="" width="32" height="32"><img class="wordmark dark-mark" src="assets/wordmark.svg" alt="Enactive" width="144" height="18"><img class="wordmark light-mark" src="assets/wordmark-light.svg" alt="Enactive" width="144" height="18"></a><a class="wiki-label" href="index.html">Wiki</a><div class="header-actions"><button type="button" class="search-trigger" aria-haspopup="dialog">Search wiki <kbd>Ctrl K</kbd></button><button type="button" id="theme-toggle" aria-label="Switch to light theme">Light theme</button><button type="button" id="menu-toggle" aria-expanded="false" aria-controls="sidebar">Menu</button></div></header>
 <div class="wiki-layout"><aside id="sidebar" class="sidebar"><nav aria-label="Wiki chapters"><p class="nav-group">Start here</p><a href="index.html">Wiki home</a><a href="overview.html">Application overview</a><a href="getting-started.html">Getting started</a><p class="nav-group">Workflows</p><a href="running-tasks.html">Running tasks</a><a href="console.html">Console & automation</a><a href="templates.html">Templates</a><a href="remote-access.html" aria-current="page">Remote access</a><a href="remote-security.html">Remote security</a><p class="nav-group">Configuration</p><a href="settings.html">Settings</a><a href="models-and-phases.html">Models & Phases</a><p class="nav-group">Reference</p><a href="architecture.html">Architecture</a><a href="operations.html">Operations & troubleshooting</a></nav><div class="sidebar-footer"><a href="../index.html">← Back to Enactive</a><span>Product & engineering handbook</span></div></aside>
-<main id="main" class="" tabindex="-1"><div class="page-heading"><div class="breadcrumb"><a href="index.html">Documentation</a><span aria-hidden="true">/</span><span>Remote access</span></div><p class="eyebrow">Workflows · Enactive</p><h1>Remote Access</h1><div class="page-meta"><span>17 min read</span><span>English</span><a href="https://github.com/StasEdward/Enactive/blob/master/Docs/wiki/Remote-Access.md">Markdown source ↗</a></div></div><details class="mobile-toc"><summary>On this page</summary><nav aria-label="On this page"><a href="#what-this-is">What this is</a><a href="#signing-in">Signing in</a><a href="#pairing-a-computer">Pairing a computer</a><a href="#adding-a-phone-or-another-browser">Adding a phone or another browser</a><a href="#removing-a-device">Removing a device</a><a href="#when-devices-are-lost">When devices are lost</a><a href="#deleting-the-account">Deleting the account</a><a href="#taking-your-data-out">Taking your data out</a><a href="#the-security-log">The security log</a><a href="#limits">Limits</a><a href="#what-a-remote-run-may-and-may-not-do">What a remote run may and may not do</a><a href="#permissions">Permissions</a><a href="#what-the-panel-shows">What the panel shows</a><a href="#connection-behaviour">Connection behaviour</a><a href="#limitations">Limitations</a><a href="#setting-up-your-own-gateway">Setting up your own gateway</a><a href="#implementation-references">Implementation references</a></nav></details><article><h2 id="what-this-is">What this is<a class="heading-anchor" href="#what-this-is" aria-label="Link to What this is">#</a></h2>
+<main id="main" class="" tabindex="-1"><div class="page-heading"><div class="breadcrumb"><a href="index.html">Documentation</a><span aria-hidden="true">/</span><span>Remote access</span></div><p class="eyebrow">Workflows · Enactive</p><h1>Remote Access</h1><div class="page-meta"><span>18 min read</span><span>English</span><a href="https://github.com/StasEdward/Enactive/blob/master/Docs/wiki/Remote-Access.md">Markdown source ↗</a></div></div><details class="mobile-toc"><summary>On this page</summary><nav aria-label="On this page"><a href="#what-this-is">What this is</a><a href="#signing-in">Signing in</a><a href="#pairing-a-computer">Pairing a computer</a><a href="#adding-a-phone-or-another-browser">Adding a phone or another browser</a><a href="#removing-a-device">Removing a device</a><a href="#when-devices-are-lost">When devices are lost</a><a href="#deleting-the-account">Deleting the account</a><a href="#taking-your-data-out">Taking your data out</a><a href="#the-security-log">The security log</a><a href="#limits">Limits</a><a href="#what-a-remote-run-may-and-may-not-do">What a remote run may and may not do</a><a href="#permissions">Permissions</a><a href="#what-the-panel-shows">What the panel shows</a><a href="#connection-behaviour">Connection behaviour</a><a href="#limitations">Limitations</a><a href="#setting-up-your-own-gateway">Setting up your own gateway</a><a href="#implementation-references">Implementation references</a></nav></details><article><h2 id="what-this-is">What this is<a class="heading-anchor" href="#what-this-is" aria-label="Link to What this is">#</a></h2>
 <p>Remote access lets a task be started from a browser and run on a computer where Enactive is
 installed. The browser does not execute anything: it queues a request, the desktop application
 picks it up, runs it through the same engine as a task typed into the app, and reports back.</p>
@@ -130,9 +130,10 @@ account you are adding this device to.&quot;</em></li>
 removes it from the address bar once read. If anybody but your new device answers the invitation,
 the trusted device says <em>&quot;Someone other than your new device answered this invitation. Nothing was
 shared.&quot;</em></p>
-<p>A trusted device that is behind on a computer&#39;s newest key says so before showing the link, and
-does not share that computer&#39;s keys. Add the new device from that computer instead, or try again
-once this device has caught up.</p>
+<p>A trusted device that is behind on a computer&#39;s newest key says so before showing the link: it
+shares the older keys it holds of that computer, but not the current one, and does not ask that
+computer to trust the new device. Add the new device from that computer instead, or try again once
+this device has caught up.</p>
 <h3 id="from-the-computer">From the computer<a class="heading-anchor" href="#from-the-computer" aria-label="Link to From the computer">#</a></h3>
 <p>In the desktop application, <strong>Settings → Remote access → Trusted devices → Add a device</strong> opens a
 window with the link and its QR code, for another browser signed in to the same account. It works
@@ -140,13 +141,18 @@ once, for ten minutes, and only while the computer is connected.</p>
 <p>This way does not depend on any other browser&#39;s word, which is why it is the one to use when
 something looks wrong, and the only one when no browser holds the computer&#39;s key any more.</p>
 <h2 id="removing-a-device">Removing a device<a class="heading-anchor" href="#removing-a-device" aria-label="Link to Removing a device">#</a></h2>
+<p>An account holds up to 10 browsers (the operator can change it). A browser new to a full account
+shows only <strong>Devices</strong>, saying <em>&quot;This account has as many browsers as it may; remove one to use this
+browser.&quot;</em> Remove one there - an old browser, or one whose site data was cleared - and this browser
+is added at once. <strong>Delete account</strong> stays in the account menu.</p>
 <p>A removed device can still read what it has already opened. It reads nothing new once each
 computer has moved to a new key.</p>
 <p><strong>From the panel.</strong> <strong>Devices</strong> → <strong>Remove</strong> on the device&#39;s card. The question is <em>&quot;&lt;label&gt;
 can still read what it has already opened. It will not read anything new. Continue?&quot;</em> The gateway
-stops serving that device at once, and every computer this browser holds the current key of is sent
-a sealed removal. The computer distrusts the device, makes a new key and gives it to every device
-still trusted.</p>
+refuses every call from that device at once - every call names the browser it comes from - and
+every computer this browser holds the current key of is sent a sealed removal. The computer
+distrusts the device, makes a new key and gives it to every device still trusted. The removed
+browser is signed out too: every session it was used through ends with it.</p>
 <p>The card then has one line per computer, saying only what the panel can see:</p>
 <div class="table-wrap" tabindex="0" role="region" aria-label="Line / Meaning"><table>
 <thead>
@@ -184,6 +190,10 @@ still trusted.</p>
 is refused there; this is why the panel tells it again rather than assuming it worked. A removed
 device keeps a <strong>Tell the computers again</strong> button, on every device and after a reload. Pressing it
 sends the same removal again; a computer that already acted takes it as nothing new.</p>
+<p>A removal waits up to 30 days for a computer that is off, and a full queue of other requests never
+turns it away. If a computer has not collected it after 30 days, the inbox says <em>Removal not
+delivered</em>: <em>&quot;Your computer &lt;label&gt; never received the removal of a device - remove it again
+when the computer is back.&quot;</em> Until then that computer still trusts the device.</p>
 <p><strong>From the computer.</strong> <strong>Settings → Remote access → Trusted devices → Remove</strong>. It asks <em>&quot;&lt;label&gt;
 will not read anything new. Every other device gets a new key. Continue?&quot;</em> The gateway is told at
 once, or when the computer next connects.</p>
@@ -213,6 +223,10 @@ is not enough: remove it too.</p>
 </tr>
 </thead>
 <tbody><tr>
+<td>One browser</td>
+<td>From another browser, <strong>Devices → Remove</strong> on its card. The gateway refuses every call that names the removed browser and ends its sessions. If the provider account may be in other hands too, secure it, then use <strong>Sign out everywhere</strong> and sign in again.</td>
+</tr>
+<tr>
 <td>Every browser</td>
 <td>First, on the computer, <strong>Add a device</strong> (above): the computer still holds its keys and admits a new browser itself. Then remove each lost browser — on the computer under <strong>Settings → Remote access → Trusted devices → Remove</strong>, or under <strong>Devices → Remove</strong> on the new browser — and use <strong>Sign out everywhere</strong> to end their sessions.</td>
 </tr>

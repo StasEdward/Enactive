@@ -105,7 +105,8 @@ end.</p>
 <strong>commands</strong> to a computer. Each is sealed by the device that sends it with the computer&#39;s current
 key, which the gateway does not have, and bound to the computer, the command&#39;s id and its kind. The
 computer acts only on a command that opens under its current key, and refuses one sealed more than 24
-hours (plus 10 minutes of clock difference) ago — so the gateway can neither make a command up nor
+hours (plus 10 minutes of clock difference) ago, or 30 days for removing or endorsing a device, which
+must still reach a computer that was off for a weekend — so the gateway can neither make a command up nor
 replay an old one.</p>
 <p>The keys themselves reach a device as <strong>grants</strong>, each wrapped for one device&#39;s public key and
 authenticated in one of two ways: with the pairing secret, which travels only inside the connection
@@ -121,7 +122,12 @@ provider account first, then sign in and use <strong>Sign out everywhere</strong
 <p>Each computer has a key per <strong>epoch</strong>, numbered from 1. Removing a device moves every computer to the
 next epoch:</p>
 <ol>
-<li>The gateway marks the device removed: it refuses the device&#39;s calls and stops serving it keys.</li>
+<li>The gateway marks the device removed: it refuses every call that names the device and stops
+serving it keys. Every call of the panel names the browser it comes from, and one that names none
+is refused, so leaving the name off is no way round it. Every session the device was used through
+ends with it, so it cannot register itself as a new device either. Whoever can still sign in to
+the account at the provider can sign in again, from any browser - secure the provider account
+first.</li>
 <li>Each computer receives the sealed removal, distrusts the device, makes a new key, and sends it to
 every device still trusted, signed with its signing key.</li>
 <li>From then on the computer seals with the new key.</li>
