@@ -301,6 +301,15 @@ section { padding: 84px 0; border-top: 1px solid var(--ink-800); }
 .panel__tabs .tab { font-size: 0.78rem; color: var(--ink-400); padding: 11px 0; border-bottom: 2px solid transparent; display: flex; align-items: center; gap: 6px; }
 .panel__tabs .tab.on { color: var(--ink-50); border-bottom-color: var(--ember-500); }
 .panel__tabs b { font-size: 0.64rem; font-weight: 600; background: var(--ember-500); color: #FFFFFF; border-radius: 999px; padding: 1px 6px; }
+/* Five tabs, as the panel has. On a phone the row was 57px wider than the window drawn around it and the
+   last tab was cut off: tighter there, and never past the edge. */
+.panel__tabs { overflow-x: auto; scrollbar-width: none; }
+.panel__tabs::-webkit-scrollbar { display: none; }
+@media (max-width: 480px) {
+  .panel__tabs { gap: 9px; padding: 0 12px; }
+  .panel__tabs .tab { font-size: 0.69rem; gap: 4px; }
+  .panel__tabs b { padding: 1px 5px; }
+}
 .panel__body { padding: 16px; }
 .panel__card { border: 1px solid var(--ink-700); border-radius: var(--radius); background: var(--ink-900); padding: 14px; }
 .panel__head { display: flex; align-items: center; gap: 10px; }
