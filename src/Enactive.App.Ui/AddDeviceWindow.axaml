@@ -1,0 +1,49 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="using:Enactive.App.Ui"
+        xmlns:vm="using:Enactive.App.Ui.ViewModels"
+        x:Class="Enactive.App.Ui.AddDeviceWindow"
+        x:DataType="vm:AddDeviceViewModel"
+        Title="Add a device"
+        SizeToContent="Height" Width="460"
+        CanResize="False"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False"
+        Background="{DynamicResource Brand.Bg}"
+        WindowDecorations="BorderOnly"
+        ExtendClientAreaToDecorationsHint="True">
+
+    <Grid RowDefinitions="Auto,Auto" Margin="{Binding $parent[Window].OffScreenMargin}">
+
+        <local:TitleBarView Grid.Row="0" />
+
+        <StackPanel Grid.Row="1" Margin="20" Spacing="10">
+            <TextBlock FontSize="15" FontWeight="SemiBold" Text="Add a device" />
+            <TextBlock FontSize="12" TextWrapping="Wrap" Foreground="{DynamicResource Brand.TextBody}"
+                       Text="Open this link on the device you want to add, signed in to the same account - scan the code with its camera, or send the link to yourself in a way only you can read. It works once, for ten minutes." />
+
+            <!-- Dark on white whatever the theme, with a quiet zone of four modules: a camera reads a
+                 QR code by its contrast and its margin, and a dark theme's light-on-dark is neither. -->
+            <Border Background="White" Padding="16" HorizontalAlignment="Center"
+                    IsVisible="{Binding IsLinkShown}">
+                <Path x:Name="QrPath" Fill="Black" Width="208" Height="208" Stretch="Uniform" />
+            </Border>
+
+            <Grid ColumnDefinitions="*,Auto" IsVisible="{Binding IsLinkShown}">
+                <TextBox Grid.Column="0" Text="{Binding Link}" IsReadOnly="True" TextWrapping="NoWrap"
+                         FontFamily="Consolas, Menlo, monospace" FontSize="11" />
+                <Button Grid.Column="1" x:Name="CopyButton" Content="Copy" Margin="6,0,0,0" Padding="12,4" />
+            </Grid>
+
+            <TextBlock Text="{Binding Countdown}" FontSize="12" Foreground="{DynamicResource Brand.TextFaint}" />
+            <TextBlock Text="{Binding Status}" FontSize="12" TextWrapping="Wrap" />
+            <TextBlock Text="{Binding Problem}" FontSize="12" TextWrapping="Wrap"
+                       Foreground="{DynamicResource Brand.Danger}" />
+
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <Button x:Name="CancelButton" Content="{Binding CloseLabel}" Padding="14,4" IsCancel="True" />
+            </StackPanel>
+        </StackPanel>
+    </Grid>
+
+</Window>

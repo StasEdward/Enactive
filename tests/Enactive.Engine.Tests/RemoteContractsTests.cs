@@ -116,6 +116,12 @@ public sealed class RemoteContractsTests
     [InlineData(FaultCode.ApprovalNotRemotelyDecidable)]
     [InlineData(FaultCode.ActionHashMismatch)]
     [InlineData(FaultCode.MalformedEvent)]
+    [InlineData(FaultCode.EnvelopeMalformed)]
+    [InlineData(FaultCode.BadGrant)]
+    [InlineData(FaultCode.UnknownInvite)]
+    [InlineData(FaultCode.InviteLimit)]
+    [InlineData(FaultCode.InviteUsed)]
+    [InlineData(FaultCode.InviteExpired)]
     public void A_settled_condition_is_dropped(string code)
         => Assert.Equal(FaultDisposition.Drop, RemoteFaults.DispositionOf(code));
 
@@ -123,8 +129,22 @@ public sealed class RemoteContractsTests
     [Theory]
     [InlineData(FaultCode.HostRevoked)]
     [InlineData(FaultCode.UnknownHost)]
+    [InlineData(FaultCode.ProtocolMismatch)]
+    [InlineData(FaultCode.AccountDisabled)]
     public void A_gone_credential_is_fatal(string code)
         => Assert.Equal(FaultDisposition.Fatal, RemoteFaults.DispositionOf(code));
+
+    /// <summary>
+    /// A quota is a condition that passes - storage is freed, the hour turns over - so the event is
+    /// kept and sent again. Dropping it would lose a run's ending because the account was briefly
+    /// full.
+    /// </summary>
+    [Fact]
+    public void A_full_quota_is_retried()
+    {
+        Assert.Equal(FaultDisposition.Retry, RemoteFaults.DispositionOf(FaultCode.QuotaExceeded));
+        Assert.Contains(FaultCode.QuotaExceeded, RemoteFaults.KnownCodes);
+    }
 
     /// <summary>
     /// Every code this build defines is in the table. A constant added to <see cref="FaultCode"/>
@@ -231,7 +251,7 @@ public sealed class RemoteContractsTests
     public void Enums_travel_as_names_and_come_back_unchanged()
     {
         var sent = new HostEvent("e1", "r1", 7, RemoteEventKind.ApprovalResolved,
-            Detail: "the owner allowed it",
+            SealedDetail: "e1:AAAA",
             Resolution: new ApprovalResolution("a1", "hash", ApprovalOutcome.Allowed));
 
         var json = RemoteJson.Serialize(sent);
@@ -251,18 +271,52 @@ public sealed class RemoteContractsTests
             """{"runId":"r1","alsoDeleteEverything":true}"""));
 
     /// <summary>
-    /// A start command names a workspace the Host already has. There is no path field, and adding
-    /// one is what would turn "run a task remotely" into "read any folder on that machine
-    /// remotely" - so its absence is asserted rather than assumed.
+    /// A start command names a workspace the Host already has, and carries nothing a person wrote in
+    /// the clear. There is no path field, and adding one is what would turn "run a task remotely" into
+    /// "read any folder on that machine remotely"; the title and prompt travel only inside the sealed
+    /// task, so a gateway that stores this row holds ids and ciphertext. Asserted as the exact list,
+    /// because a field added here is either routing the gateway needs or content it must not read,
+    /// and that is a decision to make on purpose.
     /// </summary>
     [Fact]
-    public void A_start_command_cannot_name_a_folder()
+    public void A_start_command_carries_no_path_and_no_plaintext()
     {
-        var names = typeof(StartTaskPayload).GetProperties().Select(p => p.Name).ToArray();
+        var names = typeof(StartTaskPayload).GetProperties().Select(p => p.Name).Order().ToArray();
 
-        Assert.DoesNotContain(names, n => n.Contains("Path", StringComparison.OrdinalIgnoreCase));
-        Assert.DoesNotContain(names, n => n.Contains("Root", StringComparison.OrdinalIgnoreCase));
-        Assert.DoesNotContain(names, n => n.Contains("Directory", StringComparison.OrdinalIgnoreCase));
-        Assert.Contains("WorkspaceId", names);
+        Assert.Equal(
+            new[] { "RunId", "SealedStart", "SealedTask", "TaskId", "WorkspaceId" },
+            names);
     }
+
+    /// <summary>
+    /// Every field a person wrote or a run produced is sealed, on every contract the gateway sees
+    /// (spec section 6). A plaintext Title or Detail added back to a message would be stored and
+    /// forwarded by a gateway that is meant to hold only ciphertext, and nothing else would fail:
+    /// both ends would happily fill it in. Checked by name across the namespace so a new record is
+    /// covered without anyone remembering to list it. The sealed shapes themselves live in the Crypto
+    /// namespace, which is the point: they exist only inside an envelope.
+    /// </summary>
+    [Fact]
+    public void Every_content_field_is_sealed()
+    {
+        string[] content = ["Title", "Prompt", "Detail", "Arguments", "WorkingDirectory", "Name", "Tool"];
+
+        var leaks = typeof(StartTaskPayload).Assembly.GetTypes()
+            .Where(t => t.Namespace == typeof(StartTaskPayload).Namespace)
+            .SelectMany(t => t.GetProperties().Select(p => (Type: t, Property: p)))
+            .Where(x => x.Property.PropertyType == typeof(string) && content.Contains(x.Property.Name))
+            .Select(x => $"{x.Type.Name}.{x.Property.Name}")
+            .ToArray();
+
+        Assert.Empty(leaks);
+    }
+
+    /// <summary>
+    /// The version a pairing code and an invitation link carry is the protocol's own. Two constants
+    /// for one number is how a code made by one build gets refused by another for no reason anybody
+    /// can see.
+    /// </summary>
+    [Fact]
+    public void The_protocol_is_version_2()
+        => Assert.Equal(2, RemoteProtocol.Version);
 }

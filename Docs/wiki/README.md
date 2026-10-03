@@ -18,7 +18,8 @@ This wiki covers the desktop application, its shared execution engine, the conso
 | [Templates](Templates.md) | Library, built-ins, parameters, editing, JSON, success criteria, and Global versus Workspace |
 | [Settings](Settings.md) | Providers, Team, Phases, behavior toggles, persistence, and configuration scope |
 | [Choosing models by phase and role](Models-and-Phases.md) | Model responsibilities, selection guidance, routing, recommended setups, and evaluation |
-| [Remote access](Remote-Access.md) | Starting tasks from a browser: the gateway, the panel, permissions, and what a remote run may not do |
+| [Remote access](Remote-Access.md) | Starting tasks from a browser: signing in, pairing a computer, adding and removing devices, and what a remote run may not do |
+| [Remote security](Remote-Security.md) | What the remote service can and cannot see, the limits of its encryption, and how to compare the panel with its release |
 | [Operations and troubleshooting](Operations.md) | History, logs, storage, MCP, recovery, and common problems |
 
 ## Recommended reading paths
@@ -46,7 +47,7 @@ This wiki covers the desktop application, its shared execution engine, the conso
 
 The desktop and console share engine code but have different configuration roots. Desktop Providers, Team, Phases, and MCP settings do **not** configure the current console executable.
 
-Remote access is a working connection in this checkout, with its own limits: it needs a gateway you deploy, it is authorized by a single owner key, and a task started from a browser may not run a shell or stage its changes. See [Remote access](Remote-Access.md).
+Remote access is a working connection in this checkout, with its own limits: you sign in with GitHub or Google, a computer is read and commanded only from the devices it trusts, and a task started from a browser may not run a shell or stage its changes. See [Remote access](Remote-Access.md) and [Remote security](Remote-Security.md).
 
 Older design documents remain under [`Docs`](../Docs/README.md). Some describe historical states or intended behavior. When those documents disagree with current composition code, this wiki follows the code. Each detailed page includes implementation links for maintenance.
 

@@ -12,8 +12,16 @@ public sealed record DeliveryNotice(string Kind, string Detail);
 /// the right order. It does not carry any of them out - at stage 3 it cannot, since this assembly
 /// has no reference to the engine. What a StartTask actually does arrives in stage 4 as a callback;
 /// everything here is what has to be true whatever that callback turns out to be.</para>
+///
+/// <para>It takes the <see cref="Sealer"/> for the one event it writes itself, the Interrupted report
+/// on startup: every event detail travels sealed, and one written in the clear would be stored by the
+/// gateway and fail to open in the browser.</para>
+///
+/// <para>It delivers the key store's grants too, when it is given the outbox they wait in: a device is
+/// trusted on this computer before the gateway has its grant, and only this loop talks to the gateway.
+/// </para>
 /// </summary>
-public sealed class DeliveryLoop(HostStore store, IGatewayConnection gateway)
+public sealed class DeliveryLoop(HostStore store, IGatewayConnection gateway, Sealer sealer, IGrantOutbox? grants = null)
 {
     /// <summary>
     /// How often an event may be refused for a reason we do not understand before it is parked.
@@ -24,12 +32,21 @@ public sealed class DeliveryLoop(HostStore store, IGatewayConnection gateway)
     /// </summary>
     public const int MaxAttempts = 10;
 
+    /// <summary>
+    /// The most grants one PublishGrants call carries. The gateway refuses a larger call whole, so a
+    /// computer owing more - a rotation to many devices - would otherwise never deliver any of them.
+    /// </summary>
+    public const int MaxGrantsPerCall = 50;
+
     private readonly List<DeliveryNotice> _notices = [];
 
     /// <summary>Set when the gateway said something no reconnection will fix.</summary>
     public bool Stopped { get; private set; }
 
     public IReadOnlyList<DeliveryNotice> Notices => _notices;
+
+    /// <summary>Raised for every notice as it is added, so a person can be told now rather than when someone reads the list.</summary>
+    public event Action<DeliveryNotice>? Noticed;
 
     /// <summary>
     /// Called once at startup, before anything else.
@@ -44,23 +61,33 @@ public sealed class DeliveryLoop(HostStore store, IGatewayConnection gateway)
     {
         foreach (var runId in store.RunsLeftInFlight())
         {
-            store.Enqueue(runId, RemoteEventKind.Interrupted,
-                "The application stopped while this run was in progress, so how it ended is unknown.");
+            store.Enqueue(runId, RemoteEventKind.Interrupted, sequence => sealer.Detail(
+                runId, sequence, RemoteEventKind.Interrupted,
+                "The application stopped while this run was in progress, so how it ended is unknown."));
 
-            _notices.Add(new DeliveryNotice("Interrupted", runId));
+            Notice(new DeliveryNotice("Interrupted", runId));
         }
     }
 
     /// <summary>
-    /// One turn: publish what is owed, then ask for work.
+    /// One turn: publish what is owed - grants, then events - then ask for work.
     ///
     /// <para>Publishing comes first so that a command accepted in this same turn is never reported
     /// about before earlier events have gone - and so that a Host with a backlog spends its
-    /// connection on clearing it rather than on taking more on.</para>
+    /// connection on clearing it rather than on taking more on. Grants go before events because a
+    /// device reads an event only with the key a grant gives it: an event that arrived first would
+    /// sit on the phone as something it cannot open.</para>
     /// </summary>
     public async Task<IReadOnlyList<HostCommand>> TurnAsync(
         IReadOnlyList<WorkspaceRef> workspaces, CancellationToken ct = default)
     {
+        if (Stopped)
+        {
+            return [];
+        }
+
+        await FlushGrantsAsync(ct);
+
         if (Stopped)
         {
             return [];
@@ -73,7 +100,25 @@ public sealed class DeliveryLoop(HostStore store, IGatewayConnection gateway)
             return [];
         }
 
-        var commands = await gateway.SyncAsync(workspaces, ct);
+        IReadOnlyList<HostCommand> commands;
+        try
+        {
+            commands = await gateway.SyncAsync(workspaces, ct);
+        }
+        catch (GatewayRefusedException refused) when (refused.Code == FaultCode.QuotaExceeded)
+        {
+            // A wait, not a lost connection. Escaping as an exception, it sent the service round
+            // its reconnect loop - more calls against the very limit that refused this one.
+            return [];
+        }
+        catch (GatewayRefusedException refused) when (refused.Disposition == FaultDisposition.Fatal)
+        {
+            // The credential is gone or the protocols differ. Reconnecting hears the same answer.
+            Stopped = true;
+            Notice(new DeliveryNotice("Stopped", $"{refused.Code} - {refused.Message}"));
+            return [];
+        }
+
         var accepted = new List<HostCommand>();
 
         foreach (var command in commands)
@@ -141,6 +186,14 @@ public sealed class DeliveryLoop(HostStore store, IGatewayConnection gateway)
                     store.Discard(owed.EventId);
                     moved = true;
                 }
+                catch (GatewayRefusedException refused) when (refused.Code == FaultCode.QuotaExceeded)
+                {
+                    // The account is over its rate: the gateway is saying "later", not "never". Counted
+                    // toward parking, ten refusals in one busy minute parked a good event and sent the
+                    // rest of its run out with a hole in front of it. Nothing more goes this pass,
+                    // because every further call would be refused the same way.
+                    return;
+                }
                 catch (GatewayRefusedException refused)
                 {
                     moved |= Handle(owed, refused.Disposition, refused.Code, refused.Message);
@@ -160,6 +213,102 @@ public sealed class DeliveryLoop(HostStore store, IGatewayConnection gateway)
         }
     }
 
+    /// <summary>
+    /// Sends the grants this computer owes, <see cref="MaxGrantsPerCall"/> at a time.
+    ///
+    /// <para>A grant refused as malformed, or for a device or computer the gateway no longer has, is
+    /// discarded and said: sending it again cannot make it acceptable, and kept it would be refused on
+    /// every turn for as long as the application ran. Because the gateway refuses a call whole, a
+    /// refused call of several grants is sent again one grant at a time, so the good ones in it are
+    /// not discarded with the bad one. A grant refused for the account's rate, or that did not reach
+    /// the gateway at all, is kept for the next turn.</para>
+    /// </summary>
+    public async Task FlushGrantsAsync(CancellationToken ct = default)
+    {
+        if (grants is null)
+        {
+            return;
+        }
+
+        foreach (var call in grants.PendingGrants().Chunk(MaxGrantsPerCall))
+        {
+            if (Stopped || ct.IsCancellationRequested || !await PublishGrantsAsync(grants, call, ct))
+            {
+                return;
+            }
+        }
+    }
+
+    /// <summary>Returns whether to go on with the next call; false when the gateway said to wait or stop.</summary>
+    private async Task<bool> PublishGrantsAsync(IGrantOutbox outbox, PendingGrant[] call, CancellationToken ct)
+    {
+        try
+        {
+            await gateway.PublishGrantsAsync([.. call.Select(p => p.Grant)], ct);
+        }
+        catch (GatewayRefusedException refused) when (refused.Disposition == FaultDisposition.Fatal)
+        {
+            Stopped = true;
+            Notice(new DeliveryNotice("Stopped", $"{refused.Code} - {refused.Message}"));
+            return false;
+        }
+        catch (GatewayRefusedException refused) when (SettlesAGrant(refused.Code))
+        {
+            if (call.Length > 1)
+            {
+                foreach (var single in call)
+                {
+                    if (Stopped || ct.IsCancellationRequested || !await PublishGrantsAsync(outbox, [single], ct))
+                    {
+                        return false;
+                    }
+                }
+
+                return true;
+            }
+
+            outbox.DiscardGrant(call[0].Id);
+            Notice(new DeliveryNotice("GrantDropped",
+                $"The key grant for device {call[0].Grant.DeviceId} (epoch {call[0].Grant.Epoch}) was refused "
+                + $"and will not be sent again: {refused.Code} - {refused.Message}"));
+            return true;
+        }
+        catch (GatewayRefusedException)
+        {
+            // Quota, or a code this build does not know: kept, for the next turn.
+            return false;
+        }
+        catch (Exception failure) when (failure is not OperationCanceledException)
+        {
+            // Not a verdict about the grants - the socket closed. The Sync after this finds out.
+            return false;
+        }
+
+        foreach (var delivered in call)
+        {
+            outbox.DiscardGrant(delivered.Id);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// The gateway's answer for a device or computer it does not have. It has no code in the table,
+    /// because nothing on an event's path can meet it - so a grant refused with it would be classed
+    /// as an unknown code and sent again on every turn, for ever.
+    /// </summary>
+    private const string NotFound = "not-found";
+
+    /// <summary>The refusals that settle a grant: the Drop codes, and <see cref="NotFound"/>.</summary>
+    private static bool SettlesAGrant(string code)
+        => code == NotFound || RemoteFaults.DispositionOf(code) == FaultDisposition.Drop;
+
+    private void Notice(DeliveryNotice notice)
+    {
+        _notices.Add(notice);
+        Noticed?.Invoke(notice);
+    }
+
     /// <summary>Returns whether the queue changed, which is how <see cref="FlushAsync"/> knows to look again.</summary>
     private bool Handle(OutboxItem owed, FaultDisposition disposition, string? code, string message)
     {
@@ -170,12 +319,12 @@ public sealed class DeliveryLoop(HostStore store, IGatewayConnection gateway)
 
                 // Said out loud rather than swallowed. Dropping is correct and it is still an event
                 // that will never reach the timeline, so somebody gets to know which one.
-                _notices.Add(new DeliveryNotice("Dropped", $"{owed.RunId} #{owed.Sequence}: {code} - {message}"));
+                Notice(new DeliveryNotice("Dropped", $"{owed.RunId} #{owed.Sequence}: {code} - {message}"));
                 return true;
 
             case FaultDisposition.Fatal:
                 Stopped = true;
-                _notices.Add(new DeliveryNotice("Stopped", $"{code} - {message}"));
+                Notice(new DeliveryNotice("Stopped", $"{code} - {message}"));
                 return false;
 
             default:
@@ -187,7 +336,7 @@ public sealed class DeliveryLoop(HostStore store, IGatewayConnection gateway)
                 }
 
                 store.Park(owed.EventId);
-                _notices.Add(new DeliveryNotice("Parked",
+                Notice(new DeliveryNotice("Parked",
                     $"{owed.RunId} #{owed.Sequence} was refused {MaxAttempts} times and is kept "
                     + $"but no longer sent, so this run's later events can go. Last: {code ?? "no code"} - {message}"));
 

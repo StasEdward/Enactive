@@ -1,6 +1,5 @@
 namespace Enactive.Remote.Contracts;
 
-using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -51,30 +50,8 @@ public static class ActionIdentity
     public static string Hash(
         string runId, string toolCallId, string tool, string workingDirectory, string argumentsJson)
     {
-        var canonical = new StringBuilder();
-        canonical.Append(Version).Append('\n');
-        Append(canonical, runId);
-        Append(canonical, toolCallId);
-        Append(canonical, tool);
-        Append(canonical, NormaliseDirectory(workingDirectory));
-        Append(canonical, argumentsJson);
-
-        return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(canonical.ToString())));
-    }
-
-    /// <summary>
-    /// One field: its length in UTF-8 bytes, a colon, the field, a newline. The count is in bytes
-    /// and not characters because the hash is taken over bytes, and the two differ the moment
-    /// anybody writes a path or a commit message that is not ASCII.
-    /// </summary>
-    private static void Append(StringBuilder canonical, string? field)
-    {
-        field ??= "";
-        canonical
-            .Append(Encoding.UTF8.GetByteCount(field).ToString(CultureInfo.InvariantCulture))
-            .Append(':')
-            .Append(field)
-            .Append('\n');
+        var canonical = Canonical.Text(Version, runId, toolCallId, tool, NormaliseDirectory(workingDirectory), argumentsJson);
+        return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)));
     }
 
     /// <summary>

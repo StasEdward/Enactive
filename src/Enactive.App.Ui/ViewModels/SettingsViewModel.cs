@@ -344,7 +344,7 @@ internal sealed partial class SettingsViewModel : ObservableObject
 
         AddWorkerCommand = new RelayCommand(AddWorker);
 
-        SaveCommand = new AsyncRelayCommand(SaveAsync);
+        SaveCommand = new AsyncRelayCommand(SaveAsync, () => !RemoteBusy);
         CancelCommand = new RelayCommand(() => CloseRequested?.Invoke());
     }
 
@@ -547,6 +547,11 @@ internal sealed partial class SettingsViewModel : ObservableObject
 
     private async Task SaveAsync()
     {
+        // Disabled while a connection code is applied; checked here too, because a disabled button is
+        // a promise the window keeps, and a key press or a second binding is not bound by it.
+        if (RemoteBusy)
+            return;
+
         await _startupLoad;
         _working.NumCtx = int.TryParse(NumCtxText.Trim(), out var n) ? n : null;
         var repairParts = RepairModelText.Trim().Split('/', 2);

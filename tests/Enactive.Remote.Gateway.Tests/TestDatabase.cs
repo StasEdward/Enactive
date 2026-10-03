@@ -62,7 +62,15 @@ public sealed class TestDatabase : IAsyncLifetime
         await Migrator.ApplyAsync(ConnectionString);
     }
 
-    public async Task DisposeAsync() => await ExecuteOnServerAsync($"DROP DATABASE IF EXISTS `{Name}`");
+    public async Task DisposeAsync()
+    {
+        // The class's pooled connections are closed with its database. Left to the pool's idle timeout they
+        // stayed open for minutes after their database was dropped, every finished class's on top of every
+        // running one's, and the suite reached the server's 151 connections and failed with "Too many
+        // connections" in whichever classes happened to be opening one at the time.
+        await MySqlConnection.ClearPoolAsync(new MySqlConnection(ConnectionString));
+        await ExecuteOnServerAsync($"DROP DATABASE IF EXISTS `{Name}`");
+    }
 
     /// <summary>An open connection to this test's own database.</summary>
     public async Task<MySqlConnection> OpenAsync()
@@ -142,6 +150,31 @@ public sealed class TestDatabase : IAsyncLifetime
         catch (MySqlException exception)
         {
             return exception;
+        }
+    }
+
+    /// <summary>
+    /// Migrates a throw-away database whose DEFAULT charset is the one given, hands its connection
+    /// string to <paramref name="inspect"/>, and drops it. For asking what the schema does when the
+    /// server's default is NOT the one the other tests happen to run under.
+    /// </summary>
+    public async Task WithScratchDatabaseAsync(
+        string charset, string collation, Func<string, Task> inspect)
+    {
+        var name = Prefix + Guid.NewGuid().ToString("N");
+        var connectionString = new Database(
+            new MySqlConnectionStringBuilder(ConnectionString) { Database = name }.ConnectionString).ConnectionString;
+
+        await ExecuteOnServerAsync($"CREATE DATABASE `{name}` CHARACTER SET {charset} COLLATE {collation}");
+
+        try
+        {
+            await Migrator.ApplyAsync(connectionString);
+            await inspect(connectionString);
+        }
+        finally
+        {
+            await ExecuteOnServerAsync($"DROP DATABASE IF EXISTS `{name}`");
         }
     }
 

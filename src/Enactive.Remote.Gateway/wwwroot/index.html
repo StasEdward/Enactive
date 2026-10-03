@@ -21,13 +21,33 @@
     <img class="mark" src="/brand/mark-loop.svg" alt="" width="40" height="40">
     <h1>Enactive Remote</h1>
     <p class="muted">Your computer does the work. This is the window onto it.</p>
-    <form id="login-form">
-      <label for="owner-key">Owner access key</label>
-      <input id="owner-key" type="password" autocomplete="current-password" required
-             placeholder="The key configured on the gateway">
-      <button class="primary" type="submit">Sign in</button>
-      <p id="login-error" class="error" role="alert"></p>
+    <p id="login-outcome" class="outcome" role="status" hidden></p>
+    <!-- Empty on purpose: the script draws one link per provider the gateway lists, so the page
+         cannot offer a sign-in the gateway does not have. -->
+    <div id="providers" class="providers"></div>
+    <p id="providers-note" class="note" hidden></p>
+    <form id="dev-sign-in" class="dev-sign-in" hidden>
+      <p class="note">Development sign-in. It exists only on a development gateway, and signs in
+        as whatever name is typed - no provider is asked.</p>
+      <label for="dev-name">Name</label>
+      <input id="dev-name" required maxlength="64" autocomplete="off" spellcheck="false">
+      <button class="secondary" type="submit">Sign in for development</button>
+      <p id="dev-error" class="error" role="alert"></p>
     </form>
+    <p class="legal"><a href="/privacy.html">Privacy</a> · <a href="/terms.html">Terms</a></p>
+  </div>
+</section>
+
+<!-- ── this browser removed ────────────────────────────────────────────── -->
+<section id="device-removed" class="login" hidden>
+  <div class="login-card">
+    <img class="mark" src="/brand/mark-loop.svg" alt="" width="40" height="40">
+    <h1 id="removed-title">This device was removed</h1>
+    <p id="removed-text">This browser was removed from your account. Sign in again on a device you trust, or add this
+      one again from the computer.</p>
+    <button id="removed-forget" class="secondary" type="button">Delete this device's keys</button>
+    <button id="removed-sign-out" class="secondary" type="button">Sign out</button>
+    <p id="removed-status" class="note" role="status"></p>
   </div>
 </section>
 
@@ -41,7 +61,18 @@
     <span class="spacer"></span>
     <span id="link" class="link-state" title="Gateway connection"><span class="dot"></span><span id="link-label">…</span></span>
     <button id="theme" class="icon-button" type="button" title="Switch theme" aria-label="Switch theme">◐</button>
-    <button id="logout" class="icon-button" type="button" title="Sign out" aria-label="Sign out">⏻</button>
+    <!-- A disclosure rather than a script-built menu: it opens and closes, by pointer or keyboard,
+         with no code of its own. -->
+    <details id="account" class="account">
+      <summary id="account-name" class="account-name" title="Account"></summary>
+      <div class="account-menu">
+        <button id="security-log" class="secondary" type="button">Security log</button>
+        <button id="download-data" class="secondary" type="button">Download my data</button>
+        <button id="sign-out" class="secondary" type="button">Sign out</button>
+        <button id="sign-out-all" class="secondary" type="button">Sign out everywhere</button>
+        <button id="delete-account" class="danger" type="button">Delete account…</button>
+      </div>
+    </details>
   </header>
 
   <p id="stale" class="banner" role="status" hidden>
@@ -56,6 +87,7 @@
     <button class="tab" type="button" data-view="approvals">Permissions<span id="count-approvals" class="count"></span></button>
     <button class="tab" type="button" data-view="inbox">Inbox<span id="count-inbox" class="count"></span></button>
     <button class="tab" type="button" data-view="hosts">Computers</button>
+    <button class="tab" type="button" data-view="devices">Devices</button>
   </nav>
 
   <main>
@@ -98,6 +130,18 @@
         never learns where any of them are on disk.</p>
       <div id="host-list" class="list"></div>
     </section>
+
+    <!-- Devices ------------------------------------------------------------->
+    <section id="view-devices" class="view" hidden>
+      <div class="view-head">
+        <h2>Devices</h2>
+        <button id="add-device" class="secondary" type="button">Add a device</button>
+      </div>
+      <p class="note">The browsers that can read what your computers send. A device you remove can still read
+        what it has already opened; it will not read anything new, once each computer has changed its key.</p>
+      <p id="device-limit" class="error" hidden></p>
+      <div id="device-list" class="list"></div>
+    </section>
   </main>
 </div>
 
@@ -125,18 +169,56 @@
     <h2>Register a computer</h2>
     <label for="host-name">Name</label>
     <input id="host-name" required maxlength="80" placeholder="Studio PC">
+    <p class="note">The computer's name is not encrypted - the service sees it.</p>
     <div id="host-secret" hidden>
-      <p class="note">Put this in the computer's Enactive settings. It is shown once and is not
-        stored anywhere it can be read back.</p>
-      <label for="host-id">Host id</label>
-      <input id="host-id" readonly spellcheck="false">
-      <label for="host-token">Device token</label>
-      <textarea id="host-token" readonly rows="3" spellcheck="false"></textarea>
+      <p class="note">Paste this code into the computer: Desktop app → Settings → Remote access → paste.
+        It lets whoever holds it connect the computer to this device, so give it to nobody else. It is
+        shown once and works for 24 hours; keep this open until the computer answers.</p>
+      <label for="host-code">Connection code</label>
+      <textarea id="host-code" readonly rows="5" spellcheck="false"></textarea>
+      <div class="actions">
+        <button id="host-copy" type="button" class="secondary">Copy</button>
+      </div>
+      <p id="host-status" class="note" role="status"></p>
     </div>
     <p id="host-error" class="error" role="alert"></p>
     <div class="actions">
       <button type="button" class="secondary" data-close>Close</button>
-      <button id="host-submit" type="button" class="primary">Create credential</button>
+      <button id="host-submit" type="button" class="primary">Create connection code</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="invite-dialog">
+  <form id="invite-form" method="dialog">
+    <h2>Add a device</h2>
+    <p class="note">Open this link on the new device, signed in to this same account, or scan the code with its
+      camera. It works once, for 10 minutes, and gives the device that opens it every computer's key this one
+      holds - give it to nobody else. Keep this open until the device answers.</p>
+    <p id="invite-warning" class="note" role="status"></p>
+    <div id="invite-secret" hidden>
+      <div id="invite-qr" class="qr"></div>
+      <label for="invite-link">Invitation link</label>
+      <input id="invite-link" readonly spellcheck="false" autocomplete="off">
+      <div class="actions">
+        <button id="invite-copy" type="button" class="secondary">Copy</button>
+      </div>
+    </div>
+    <p id="invite-status" class="note" role="status"></p>
+    <p id="invite-error" class="error" role="alert"></p>
+    <div class="actions">
+      <button type="button" class="secondary" data-close>Close</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="join-dialog">
+  <form id="join-form" method="dialog">
+    <h2>Adding this device</h2>
+    <p id="join-status" class="note" role="status"></p>
+    <p id="join-error" class="error" role="alert"></p>
+    <div class="actions">
+      <button type="button" class="secondary" data-close>Close</button>
     </div>
   </form>
 </dialog>
@@ -147,6 +229,33 @@
     <button type="button" class="icon-button" data-close aria-label="Close">×</button>
   </div>
   <div id="run-detail"></div>
+</dialog>
+
+<!-- The account's security log. Its rows are drawn with textContent, like everything else from the wire. -->
+<dialog id="audit-dialog" class="wide">
+  <div class="dialog-head">
+    <h2>Security log</h2>
+    <button type="button" class="icon-button" data-close aria-label="Close">×</button>
+  </div>
+  <p class="note">Sign-ins, devices and computers added or removed, and what the operator did to this account -
+    the newest first. Where you signed in from is not recorded.</p>
+  <p id="audit-error" class="error" role="alert"></p>
+  <ol id="audit-list" class="audit-list"></ol>
+  <p id="audit-empty" class="empty" hidden>Nothing recorded yet.</p>
+</dialog>
+
+<!-- Deleting the account. The question is put in with textContent from js/account.js, the one place its words are
+     kept, so the test that pins them pins what the person reads. -->
+<dialog id="delete-dialog">
+  <form method="dialog">
+    <h2>Delete account</h2>
+    <p id="delete-question"></p>
+    <p id="delete-error" class="error" role="alert"></p>
+    <div class="actions">
+      <button type="button" class="secondary" data-close>Cancel</button>
+      <button id="delete-confirm" type="button" class="danger">Delete account</button>
+    </div>
+  </form>
 </dialog>
 
 <div id="toast" class="toast" role="status" hidden></div>

@@ -3,15 +3,47 @@ namespace Enactive.Remote.Contracts;
 /// <summary>The protocol these contracts describe. Reported by the gateway's health endpoint.</summary>
 public static class RemoteProtocol
 {
-    public const int Version = 1;
+    /// <summary>
+    /// 2 is the end-to-end sealed protocol. Pairing codes and invitation links carry this number too,
+    /// so a build that speaks another protocol refuses them by version instead of misreading them.
+    /// </summary>
+    public const int Version = 2;
+
+    /// <summary>
+    /// How long a command waits for its computer before the gateway writes it off. Here rather than in
+    /// the gateway because the Host needs it too: it refuses a sealed command issued longer ago than
+    /// this (plus clock skew), which is what stops a gateway that kept an old command from replaying it.
+    /// </summary>
+    public static readonly TimeSpan CommandLifetime = TimeSpan.FromHours(24);
+
+    /// <summary>
+    /// How long a removal or an endorsement of a browser waits for its computer. Longer than any other command
+    /// because what it carries does not go stale: a removal is as wanted after a week as after a minute. Given
+    /// the day a start has, a removal made while a laptop was closed over a weekend - which is when phones are
+    /// lost - was written off before the laptop came back, and the laptop went on trusting the lost phone with
+    /// nobody told. Thirty days covers a holiday; the gateway tells the person of one that waited even longer.
+    /// The Host refuses a device command sealed longer ago than this, as it refuses any command older than its
+    /// lifetime, so a gateway cannot keep one and replay it later.
+    /// </summary>
+    public static readonly TimeSpan DeviceCommandLifetime = TimeSpan.FromDays(30);
+
+    /// <summary>How long a command of this kind waits for its computer, and may be acted on after it was sealed.</summary>
+    public static TimeSpan LifetimeOf(CommandKind kind)
+        => kind is CommandKind.RevokeDevice or CommandKind.EndorseDevice ? DeviceCommandLifetime : CommandLifetime;
 }
 
-/// <summary>What the owner asked the Host to do. The payload is read according to this.</summary>
+/// <summary>
+/// What the owner asked the Host to do. The payload is read according to this. The names are
+/// protocol constants: they are part of the associated data a command is sealed under, so renaming
+/// one makes every command of that kind fail to open.
+/// </summary>
 public enum CommandKind
 {
     StartTask,
     CancelRun,
-    ResolveApproval
+    ResolveApproval,
+    RevokeDevice,
+    EndorseDevice
 }
 
 /// <summary>

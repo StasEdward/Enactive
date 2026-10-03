@@ -1,7 +1,9 @@
 namespace Enactive.Remote.Gateway;
 
 using System.Collections.Concurrent;
+using System.Security.Claims;
 using Enactive.Remote.Contracts;
+using Enactive.Remote.Contracts.Crypto;
 using Enactive.Remote.Gateway.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
@@ -28,12 +30,13 @@ public sealed class HostConnections
 }
 
 /// <summary>
-/// The three methods a Host calls. Every one of them takes its Host from the authenticated
-/// identity and never from an argument, so "act as another Host" is not a request that can be
-/// made rather than one that is refused.
+/// The methods a Host calls. Every one of them takes its Host and that Host's owner from the
+/// authenticated identity and never from an argument, so "act as another Host", or "act in another
+/// person's account", is not a request that can be made rather than one that is refused.
 /// </summary>
 [Authorize(AuthenticationSchemes = HostAuthentication.SchemeName)]
-public sealed class HostHub(HostService hosts, HostConnections connections) : Hub
+public sealed class HostHub(
+    HostService hosts, DeviceService devices, HostConnections connections, HostCallLimit limit) : Hub
 {
     public override Task OnConnectedAsync()
     {
@@ -47,25 +50,94 @@ public sealed class HostHub(HostService hosts, HostConnections connections) : Hu
         return base.OnDisconnectedAsync(exception);
     }
 
+    /// <summary>
+    /// The first thing a Host says: which protocol it speaks. Another version is refused with a code
+    /// the Host treats as final and words a person can act on; without this, a Host of another version
+    /// would see each of its calls refused for a different-looking reason and keep trying.
+    ///
+    /// <para>A check the Host asks for, not a gate in front of the other calls: a connection that
+    /// never says hello is still served, so a Host that does not call it yet keeps working.</para>
+    /// </summary>
+    public Task<HostReply<bool>> Hello(int protocolVersion)
+        => Guard(() => protocolVersion == RemoteProtocol.Version
+            ? Task.FromResult(true)
+            : throw GatewayFault.ProtocolMismatch());
+
     public Task<HostReply<IReadOnlyList<HostCommand>>> Sync(List<WorkspaceRef> workspaces)
-        => Guard(() => hosts.SyncAsync(HostId, workspaces, Context.ConnectionAborted));
+        => Guard(() => hosts.SyncAsync(Access, workspaces, Context.ConnectionAborted));
 
     public Task<HostReply<bool>> Acknowledge(string commandId)
         => Guard(async () =>
         {
-            await hosts.AcknowledgeAsync(HostId, commandId, Context.ConnectionAborted);
+            await hosts.AcknowledgeAsync(Access, commandId, Context.ConnectionAborted);
             return true;
         });
 
     public Task<HostReply<bool>> Publish(HostEvent published)
         => Guard(async () =>
         {
-            await hosts.PublishAsync(HostId, published, Context.ConnectionAborted);
+            await hosts.PublishAsync(Access, published, Context.ConnectionAborted);
+            return true;
+        });
+
+    /// <summary>
+    /// Grants of this computer's own keys to its owner's devices: answering a pairing or an invitation, or
+    /// a rotation. All of them are stored or none is.
+    /// </summary>
+    public Task<HostReply<bool>> PublishGrants(List<KeyGrant> grants)
+        => Guard(async () =>
+        {
+            await devices.PublishGrantsAsync(Access, grants, Context.ConnectionAborted);
+            return true;
+        });
+
+    /// <summary>
+    /// An invitation for another device of this computer's owner, under an id the computer made. Its link,
+    /// with the pairing secret, is the computer's to show; the gateway only keeps the id, for ten minutes.
+    /// </summary>
+    public Task<HostReply<bool>> CreateInvite(string id)
+        => Guard(async () =>
+        {
+            await devices.CreateInviteAsync(Access, id, Context.ConnectionAborted);
+            return true;
+        });
+
+    /// <summary>The answers to this computer's invitations that it has not said it handled.</summary>
+    public Task<HostReply<IReadOnlyList<EnrollmentView>>> Enrollments()
+        => Guard(() => devices.EnrollmentsAsync(Access, Context.ConnectionAborted));
+
+    /// <summary>The computer has handled the answer to its invitation; it is not handed over again.</summary>
+    public Task<HostReply<bool>> AnsweredInvite(string id)
+        => Guard(async () =>
+        {
+            await devices.AnsweredInviteAsync(Access, id, Context.ConnectionAborted);
+            return true;
+        });
+
+    /// <summary>
+    /// The person removed a device of theirs on this computer: the gateway stops serving it, as when they
+    /// remove it in a browser. Only a device of this computer's own owner; any other is refused like a
+    /// missing one.
+    /// </summary>
+    public Task<HostReply<bool>> RevokeDevice(string deviceId)
+        => Guard(async () =>
+        {
+            await devices.RevokeByComputerAsync(Access, deviceId, Context.ConnectionAborted);
             return true;
         });
 
     private string HostId => Context.UserIdentifier
         ?? throw new HubException("This connection has no identity.");
+
+    /// <summary>
+    /// Built afresh for each call from the connection's claims. The service re-reads the account and
+    /// the computer inside every call's transaction, so what the claims said when the connection
+    /// opened only names whose rows to look at; it never vouches that they are still allowed.
+    /// </summary>
+    private HostAccess Access => new(
+        HostId,
+        Context.User?.FindFirstValue(HostAuthentication.OwnerClaim)
+            ?? throw new HubException("This connection has no owner."));
 
     /// <summary>
     /// Turns a refusal into an ANSWER rather than an exception.
@@ -79,11 +151,15 @@ public sealed class HostHub(HostService hosts, HostConnections connections) : Hu
     ///
     /// <para>An unexpected exception still escapes as one. It is not a refusal, nothing about it is
     /// classifiable, and dressing it up as a coded answer would tell the Host something false.</para>
+    ///
+    /// <para>Every call is counted against this computer's limit here, first, so a refused one costs no
+    /// database work and comes back coded like any other refusal.</para>
     /// </summary>
-    private static async Task<HostReply<T>> Guard<T>(Func<Task<T>> action)
+    private async Task<HostReply<T>> Guard<T>(Func<Task<T>> action)
     {
         try
         {
+            limit.Take(HostId);
             return HostReply<T>.Ok(await action());
         }
         catch (GatewayFault fault)

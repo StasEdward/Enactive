@@ -71,9 +71,9 @@ The desktop and console share the same execution libraries. The codebase is C# o
 - Keep execution on the computer that has your project and tools. The desktop connects outward to the gateway—no inbound port needs to be opened on your computer.
 - Receive queued events after a connection interruption through the host's local outbox.
 
-The current gateway uses an owner key and revocable device tokens. Remote tasks inherit the workspace's saved policy, with shell commands disabled and staged runs unavailable. The gateway handles task text and results; model providers receive the context needed for their calls.
+You sign in with GitHub or Google, and what you write and what your computer reports is encrypted end to end between your computer and the browsers you add as devices, so the gateway stores and forwards it without being able to read it. Remote tasks inherit the workspace's saved policy, with shell commands disabled and staged runs unavailable. Model providers receive the context needed for their calls.
 
-See the [remote access guide](Docs/wiki/Remote-Access.md) for pairing and permissions, and the [deployment runbook](Docs/REMOTE_OPERATIONS.md) to host your own gateway.
+See the [remote access guide](Docs/wiki/Remote-Access.md) for pairing, devices and permissions, [remote security](Docs/wiki/Remote-Security.md) for what the gateway can and cannot see, and the [deployment runbook](Docs/REMOTE_OPERATIONS.md) to host your own gateway.
 
 ## Get started
 

@@ -86,7 +86,65 @@ public sealed class HostStore : IDisposable
               started_at    TEXT NOT NULL,
               ended_at      TEXT NULL
             );
+
+            -- The computer's keys and whom it trusts, kept by HostKeyStore. In this file rather than
+            -- one of their own so there is one place that says what this machine knows about remote
+            -- access, and one lock in front of it. Every secret below is DPAPI-protected text.
+            CREATE TABLE IF NOT EXISTS host_keys (
+              epoch  INTEGER PRIMARY KEY,
+              secret TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS host_signing (
+              id          INTEGER PRIMARY KEY CHECK (id = 1),
+              private_key TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS trusted_devices (
+              device_id  TEXT PRIMARY KEY,
+              public_key BLOB NOT NULL,
+              label      TEXT NOT NULL,
+              added_by   TEXT NOT NULL,
+              added_at   TEXT NOT NULL,
+              revoked_at TEXT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS pending_invites (
+              id         TEXT PRIMARY KEY,
+              secret     TEXT NOT NULL,
+              expires_at TEXT NOT NULL
+            );
+
+            -- device_id is its own column, not only part of the id, so revoking a device can drop
+            -- exactly its queued grants without matching on the text of an id.
+            CREATE TABLE IF NOT EXISTS pending_grants (
+              id         TEXT PRIMARY KEY,
+              device_id  TEXT NOT NULL,
+              json       TEXT NOT NULL,
+              created_at TEXT NOT NULL
+            );
+
+            -- Devices removed on this computer that the gateway has not yet been told of. Written with
+            -- the removal itself, so a removal made offline, or on a connection that dropped, is passed
+            -- on at the next connection instead of being lost.
+            CREATE TABLE IF NOT EXISTS owed_revocations (
+              device_id TEXT PRIMARY KEY,
+              since     TEXT NOT NULL
+            );
             """);
+    }
+
+    /// <summary>
+    /// The connection, for the key store, while this store's lock is held.
+    ///
+    /// <para>The key store keeps its tables in this file, and a second connection to it would be a
+    /// second writer that this lock knows nothing about. Handing out the connection only inside the
+    /// lock keeps every statement against remote.db behind the same gate.</para>
+    /// </summary>
+    internal T Locked<T>(Func<SqliteConnection, T> work)
+    {
+        using var guard = _gate.EnterScope();
+        return work(_connection);
     }
 
     // ── commands coming in ──────────────────────────────────────────────────
@@ -215,9 +273,14 @@ public sealed class HostStore : IDisposable
     /// <para>The number is allocated here rather than by the caller so it cannot be skipped, reused
     /// or handed out twice by two threads - the gateway refuses anything not ahead of what it has
     /// applied, and a duplicated number would mean an event that can never be delivered.</para>
+    ///
+    /// <para><paramref name="sealedDetail"/> is handed the sequence and returns the sealed sentence,
+    /// rather than being a sealed string already: the detail is sealed under its event's sequence
+    /// number, and that number exists only inside this transaction. A caller that guessed it would
+    /// seal a sentence no browser could open whenever another thread queued first.</para>
     /// </summary>
     public HostEvent Enqueue(
-        string runId, RemoteEventKind kind, string? detail = null,
+        string runId, RemoteEventKind kind, Func<long, string>? sealedDetail = null,
         ApprovalRequest? approval = null, ApprovalResolution? resolution = null)
     {
         using var guard = _gate.EnterScope();
@@ -231,7 +294,7 @@ public sealed class HostStore : IDisposable
             ("$next", sequence + 1), ("$run", runId));
 
         var published = new HostEvent(
-            Guid.NewGuid().ToString("N"), runId, sequence, kind, detail, approval, resolution);
+            Guid.NewGuid().ToString("N"), runId, sequence, kind, sealedDetail?.Invoke(sequence), approval, resolution);
 
         Execute(transaction,
             """

@@ -10,8 +10,8 @@
 </head><body>
 <a class="skip-link" href="#main">Skip to content</a>
 <header class="wiki-header"><a class="brand" href="../index.html" aria-label="Enactive home"><img class="brand-mark" src="assets/mark-loop.svg" alt="" width="32" height="32"><img class="wordmark dark-mark" src="assets/wordmark.svg" alt="Enactive" width="144" height="18"><img class="wordmark light-mark" src="assets/wordmark-light.svg" alt="Enactive" width="144" height="18"></a><a class="wiki-label" href="index.html">Wiki</a><div class="header-actions"><button type="button" class="search-trigger" aria-haspopup="dialog">Search wiki <kbd>Ctrl K</kbd></button><button type="button" id="theme-toggle" aria-label="Switch to light theme">Light theme</button><button type="button" id="menu-toggle" aria-expanded="false" aria-controls="sidebar">Menu</button></div></header>
-<div class="wiki-layout"><aside id="sidebar" class="sidebar"><nav aria-label="Wiki chapters"><p class="nav-group">Start here</p><a href="index.html">Wiki home</a><a href="overview.html">Application overview</a><a href="getting-started.html">Getting started</a><p class="nav-group">Workflows</p><a href="running-tasks.html">Running tasks</a><a href="console.html">Console & automation</a><a href="templates.html">Templates</a><a href="remote-access.html">Remote access</a><p class="nav-group">Configuration</p><a href="settings.html">Settings</a><a href="models-and-phases.html">Models & Phases</a><p class="nav-group">Reference</p><a href="architecture.html">Architecture</a><a href="operations.html" aria-current="page">Operations & troubleshooting</a></nav><div class="sidebar-footer"><a href="../index.html">← Back to Enactive</a><span>Product & engineering handbook</span></div></aside>
-<main id="main" class="" tabindex="-1"><div class="page-heading"><div class="breadcrumb"><a href="index.html">Documentation</a><span aria-hidden="true">/</span><span>Operations &amp; troubleshooting</span></div><p class="eyebrow">Reference · Enactive</p><h1>Operations and Troubleshooting</h1><div class="page-meta"><span>11 min read</span><span>English</span><a href="https://github.com/StasEdward/Enactive/blob/master/Docs/wiki/Operations.md">Markdown source ↗</a></div></div><details class="mobile-toc"><summary>On this page</summary><nav aria-label="On this page"><a href="#run-history-and-project-memory">Run history and project memory</a><a href="#storage-layout">Storage layout</a><a href="#logs-and-diagnosis">Logs and diagnosis</a><a href="#mcp-external-tools">MCP external tools</a><a href="#filesystem-and-recovery-boundaries">Filesystem and recovery boundaries</a><a href="#backup-and-moving-installations">Backup and moving installations</a><a href="#troubleshooting-reference">Troubleshooting reference</a><a href="#remote-access">Remote access</a><a href="#maintaining-this-wiki">Maintaining this wiki</a><a href="#implementation-references">Implementation references</a></nav></details><article><h2 id="run-history-and-project-memory">Run history and project memory<a class="heading-anchor" href="#run-history-and-project-memory" aria-label="Link to Run history and project memory">#</a></h2>
+<div class="wiki-layout"><aside id="sidebar" class="sidebar"><nav aria-label="Wiki chapters"><p class="nav-group">Start here</p><a href="index.html">Wiki home</a><a href="overview.html">Application overview</a><a href="getting-started.html">Getting started</a><p class="nav-group">Workflows</p><a href="running-tasks.html">Running tasks</a><a href="console.html">Console & automation</a><a href="templates.html">Templates</a><a href="remote-access.html">Remote access</a><a href="remote-security.html">Remote security</a><p class="nav-group">Configuration</p><a href="settings.html">Settings</a><a href="models-and-phases.html">Models & Phases</a><p class="nav-group">Reference</p><a href="architecture.html">Architecture</a><a href="operations.html" aria-current="page">Operations & troubleshooting</a></nav><div class="sidebar-footer"><a href="../index.html">← Back to Enactive</a><span>Product & engineering handbook</span></div></aside>
+<main id="main" class="" tabindex="-1"><div class="page-heading"><div class="breadcrumb"><a href="index.html">Documentation</a><span aria-hidden="true">/</span><span>Operations &amp; troubleshooting</span></div><p class="eyebrow">Reference · Enactive</p><h1>Operations and Troubleshooting</h1><div class="page-meta"><span>13 min read</span><span>English</span><a href="https://github.com/StasEdward/Enactive/blob/master/Docs/wiki/Operations.md">Markdown source ↗</a></div></div><details class="mobile-toc"><summary>On this page</summary><nav aria-label="On this page"><a href="#run-history-and-project-memory">Run history and project memory</a><a href="#storage-layout">Storage layout</a><a href="#logs-and-diagnosis">Logs and diagnosis</a><a href="#mcp-external-tools">MCP external tools</a><a href="#filesystem-and-recovery-boundaries">Filesystem and recovery boundaries</a><a href="#backup-and-moving-installations">Backup and moving installations</a><a href="#troubleshooting-reference">Troubleshooting reference</a><a href="#remote-access">Remote access</a><a href="#maintaining-this-wiki">Maintaining this wiki</a><a href="#implementation-references">Implementation references</a></nav></details><article><h2 id="run-history-and-project-memory">Run history and project memory<a class="heading-anchor" href="#run-history-and-project-memory" aria-label="Link to Run history and project memory">#</a></h2>
 <p>The desktop records run requests, events, decisions, artifacts, outcomes, usage, and available settings/specification snapshots. Open a historical run to inspect its execution cards and timeline. Retry and Run again create additional attempts; see <a href="running-tasks.html#retry-versus-run-again">Running tasks</a>.</p>
 <p>Project memory stores durable entries such as decisions and contributes to the project timeline. It is not a full source index or a guarantee that every entry is inserted into every future model prompt.</p>
 <p>Historical artifact actions operate on current files. Opening a path shows what is there now; a Delete action on an old artifact is not equivalent to reverting the exact historical write. Inspect the current content and action label.</p>
@@ -295,20 +295,137 @@ mcp__example__*</code></pre></div>
 </tr>
 </tbody></table>
 </div><h2 id="remote-access">Remote access<a class="heading-anchor" href="#remote-access" aria-label="Link to Remote access">#</a></h2>
-<p>Starting tasks from a browser has its own chapter: <a href="remote-access.html">Remote access</a>. Server-side
-installation, the systemd units, database accounts, backups and the automatic deploy are in
-<a href="https://github.com/StasEdward/Enactive/blob/master/Docs/REMOTE_OPERATIONS.md">REMOTE_OPERATIONS</a>.</p>
+<p>Starting tasks from a browser has its own chapter: <a href="remote-access.html">Remote access</a>, and what the
+service can and cannot see is in <a href="remote-security.html">Remote security</a>. The full server runbook is
+<a href="https://github.com/StasEdward/Enactive/blob/master/Docs/REMOTE_OPERATIONS.md">REMOTE_OPERATIONS</a>; the parts below are the ones an operator reaches for
+most.</p>
 <p>Two things belong here because they are troubleshooting rather than setup.</p>
 <p><strong>The panel shows an old build after a deploy.</strong> It should not: the page&#39;s stylesheets and scripts
 are addressed by a fingerprint of their own contents, so a new build is a new URL that no cache has
 an answer for. If it happens anyway, the deploy has not run or has not succeeded — check
 <code>journalctl -u enactive-deploy</code>, and remember that the deploy only installs a build that is green
 in CI for the branch named in <code>/etc/enactive-remote/deploy.env</code>.</p>
-<p><strong>A computer shows as Offline.</strong> The host connects outward every 15 seconds and backs off up to two
-minutes when the gateway is unreachable. Offline means the desktop application is not running, the
-remote setting is off, the token has been revoked, or the address is wrong. Settings → Remote
-access → <strong>Test connection</strong> reports which of those it is; it connects and publishes this
-computer&#39;s workspaces, so a success there is also what makes the workspaces selectable.</p>
+<p><strong>A computer shows as Offline.</strong> The host syncs every 15 seconds, is shown offline after 45 without
+one, and backs off up to two minutes when the gateway is unreachable. Offline means the desktop
+application is not running, remote access is off in its settings, the computer was revoked under
+<strong>Computers</strong>, the account was disabled, or the computer is on a different gateway. Settings → Remote
+access → <strong>Test connection</strong> says which; it connects and publishes this computer&#39;s workspaces, so a
+success there is also what makes the workspaces selectable.</p>
+<h3 id="running-the-remote-gateway">Running the remote gateway<a class="heading-anchor" href="#running-the-remote-gateway" aria-label="Link to Running the remote gateway">#</a></h3>
+<p><strong>Settings.</strong> All are environment variables in <code>/etc/enactive-remote/gateway.env</code> (mode <code>0600</code>),
+which <code>deploy/gateway.env.example</code> lays out with every one named. Every value is checked at start, and
+a bad one stops the gateway with a sentence naming it.</p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Variable / Default / One line"><table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Default</th>
+<th>One line</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>ENACTIVE_REMOTE_DB</code></td>
+<td>required</td>
+<td>MySQL connection string for the protocol-2 database, <code>enactive_remote_v2</code></td>
+</tr>
+<tr>
+<td><code>ENACTIVE_PUBLIC_ORIGIN</code></td>
+<td>—</td>
+<td>The address people use, scheme and host only; the providers send people back to it</td>
+</tr>
+<tr>
+<td><code>ENACTIVE_GITHUB_CLIENT_ID</code>, <code>ENACTIVE_GITHUB_CLIENT_SECRET</code></td>
+<td>—</td>
+<td>A GitHub OAuth app, callback <code>&lt;origin&gt;/auth/github/callback</code>; both or neither</td>
+</tr>
+<tr>
+<td><code>ENACTIVE_GOOGLE_CLIENT_ID</code>, <code>ENACTIVE_GOOGLE_CLIENT_SECRET</code></td>
+<td>—</td>
+<td>A Google OAuth client, redirect <code>&lt;origin&gt;/auth/google/callback</code>; both or neither</td>
+</tr>
+<tr>
+<td><code>ENACTIVE_ADMISSION</code></td>
+<td><code>list</code></td>
+<td><code>list</code>: only approved identities may create an account; <code>open</code>: anyone who signs in</td>
+</tr>
+<tr>
+<td><code>ENACTIVE_LIMIT_HOSTS_PER_USER</code></td>
+<td>5</td>
+<td>Computers per account</td>
+</tr>
+<tr>
+<td><code>ENACTIVE_LIMIT_DEVICES_PER_USER</code></td>
+<td>10</td>
+<td>Devices per account</td>
+</tr>
+<tr>
+<td><code>ENACTIVE_LIMIT_ACTIVE_RUNS_PER_USER</code></td>
+<td>3</td>
+<td>Runs in progress per account</td>
+</tr>
+<tr>
+<td><code>ENACTIVE_LIMIT_QUEUED_COMMANDS_PER_HOST</code></td>
+<td>50</td>
+<td>Commands waiting for one computer; device removals and endorsements are counted apart, up to twice the devices limit</td>
+</tr>
+<tr>
+<td><code>ENACTIVE_LIMIT_TASKS_PER_DAY</code></td>
+<td>200</td>
+<td>Tasks per account in the last 24 hours</td>
+</tr>
+<tr>
+<td><code>ENACTIVE_LIMIT_OPEN_INVITES_PER_USER</code></td>
+<td>5</td>
+<td>Unused, unexpired invitations per account</td>
+</tr>
+<tr>
+<td><code>ENACTIVE_LIMIT_SEALED_BYTES_PER_USER</code></td>
+<td>209715200</td>
+<td>Bytes of encrypted content per account (200 MiB)</td>
+</tr>
+<tr>
+<td><code>ENACTIVE_RETENTION_DAYS</code></td>
+<td>30</td>
+<td>Days of history kept; older events, notices and ended runs are deleted hourly</td>
+</tr>
+<tr>
+<td><code>ENACTIVE_DEV_SIGNIN</code></td>
+<td>never set</td>
+<td>A sign-in without a provider, for tests; refused outside Development</td>
+</tr>
+<tr>
+<td><code>ENACTIVE_GITHUB_BASE</code>, <code>ENACTIVE_GITHUB_API</code>, <code>ENACTIVE_GOOGLE_AUTHORITY</code></td>
+<td>never set</td>
+<td>Move the providers to another host, for tests against a fake; outside Development they stop the start</td>
+</tr>
+</tbody></table>
+</div><p><code>ENACTIVE_DATA</code> (the Data Protection keys), <code>ENACTIVE_BEHIND_TUNNEL</code> and <code>ASPNETCORE_URLS</code> are set in
+the systemd unit, and the backup&#39;s <code>ENACTIVE_BACKUP_*</code> settings on its cron line.</p>
+<p><strong>Admitting people.</strong> A command on the gateway&#39;s own binary, run on the server with the gateway&#39;s
+environment (<a href="https://github.com/StasEdward/Enactive/blob/master/Docs/REMOTE_OPERATIONS.md#31-admitting-people-the-admission-cli">how</a>):</p>
+<div class="code-block"><div class="code-toolbar"><span>text</span><button class="copy-button" type="button" aria-label="Copy text example">Copy</button></div><pre tabindex="0"><code class="language-text">admin admissions                 the identities waiting for approval
+admin approve &lt;provider&gt;:&lt;id&gt;    let this identity create an account (e.g. github:12345)
+admin refuse &lt;provider&gt;:&lt;id&gt;     turn this identity away
+admin disable &lt;userId&gt;           stop an account: sign-ins, sessions and queued commands
+admin enable &lt;userId&gt;            let a disabled account sign in again
+admin sessions revoke &lt;userId&gt;   sign the account out everywhere</code></pre></div>
+<p>Every change is written to the audit trail as the operator. <code>refuse</code> does not stop an account that
+already exists; <code>disable</code> does.</p>
+<p><strong>The cutover from protocol 1</strong> is done by hand onto a new database, and the deploy timer refuses to
+do it: <a href="https://github.com/StasEdward/Enactive/blob/master/Docs/REMOTE_OPERATIONS.md#8-the-cutover-from-protocol-1-cutover">REMOTE_OPERATIONS, the cutover</a>.</p>
+<p><strong>Restore.</strong> <code>deploy/backup.sh</code> keeps each night&#39;s dump with an archive of the Data Protection keys
+beside it, and <code>deploy/verify-restore.sh</code> restores the newest dump into a scratch database and checks
+it. A restore without the keys signs everyone out, and nothing else is lost. The procedure is in
+<a href="https://github.com/StasEdward/Enactive/blob/master/Docs/REMOTE_OPERATIONS.md#5-backups-and-the-half-that-is-usually-missing">REMOTE_OPERATIONS, backups</a>.</p>
+<p><strong>Not automated, on purpose.</strong></p>
+<ul>
+<li>Approving sign-ups and every other admission decision: a person runs <code>admin</code>.</li>
+<li>Installing a release that changes the schema or the protocol: the timer parks it.</li>
+<li>Comparing the served panel with the published fingerprints: the pipeline publishes them; nothing
+compares them unless a person does
+(<a href="https://github.com/StasEdward/Enactive/blob/master/Docs/REMOTE_OPERATIONS.md#9-comparing-the-panel-with-its-build">how</a>).</li>
+<li>Copying backups off the machine.</li>
+</ul>
 <h2 id="maintaining-this-wiki">Maintaining this wiki<a class="heading-anchor" href="#maintaining-this-wiki" aria-label="Link to Maintaining this wiki">#</a></h2>
 <p>Update the relevant page whenever a behavior changes in host composition, template resolution, permission matching, settings persistence, or model adapters. In particular, recheck the documented limitations before removing them: many of these behaviors cannot be inferred from UI labels or schema fields alone.</p>
 <p>For documentation-only changes, validate relative links, headings/anchors, and executable example syntax. Use the engine&#39;s template validator/resolver for changed template examples. A full model-backed run is unnecessary unless the documentation claims live provider compatibility.</p>

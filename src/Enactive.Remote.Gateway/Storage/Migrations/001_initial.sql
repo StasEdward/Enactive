@@ -1,151 +1,288 @@
--- Enactive Remote gateway, initial schema.
---
--- Every statement is written to be safe to run twice. MySQL commits DDL implicitly, so a migration
--- CANNOT be rolled back half-way: if one of these fails, the ones before it have already happened
--- and the version row was never written. Re-running is then the recovery, which only works if
--- re-running is harmless - hence IF NOT EXISTS on everything.
---
--- Identifiers and hashes are `ascii` + `_bin`: they are byte strings, not language. A case- and
--- accent-insensitive comparison on a token hash is a comparison that says two different hashes are
--- equal, and `WHERE token_hash = ?` is the check that authenticates a device.
---
--- Text the model or the owner writes is `utf8mb4`. Where the protocol caps a field, the column is
--- MEDIUMTEXT rather than TEXT: 16 000 characters of utf8mb4 is up to 64 000 bytes and TEXT holds
--- 65 535, which is a margin too thin to rely on.
+-- Protocol 2 (Plans/remote-e2e-design.md, D2): a fresh schema, no data carried over. Every private row
+-- names its owner, and composite foreign keys make a child agree with its parent's owner, so a bug that
+-- forgets a filter on a WRITE is refused by the database. They do not protect a SELECT that forgets one:
+-- the isolation tests do. Each statement is safe to run twice: MySQL commits DDL implicitly, so a
+-- migration stopped half-way is re-run from the top by the Migrator.
 
-CREATE TABLE IF NOT EXISTS schema_version (
-  version     INT          NOT NULL PRIMARY KEY,
-  applied_at  DATETIME(3)  NOT NULL
+-- Every table names its charset and collation. A column that does not name one (display_name, label)
+-- takes the DATABASE default, and a database created with another default (latin1 is still the default
+-- of some servers) would turn a person's non-ASCII name into question marks without an error.
+
+CREATE TABLE IF NOT EXISTS users (
+  id               CHAR(32)    CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  display_name     VARCHAR(100) NOT NULL,
+  status           VARCHAR(20) CHARACTER SET ascii NOT NULL,          -- Active | Disabled
+  security_version INT         NOT NULL DEFAULT 1,
+  sealed_bytes     BIGINT      NOT NULL DEFAULT 0,                     -- storage limit (Task 8.1)
+  created_at       DATETIME(3) NOT NULL,
+  PRIMARY KEY (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE IF NOT EXISTS external_identities (
+  provider   VARCHAR(20)  CHARACTER SET ascii NOT NULL,                 -- github | google
+  subject    VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  user_id    CHAR(32)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  display    VARCHAR(200) NOT NULL,
+  created_at DATETIME(3)  NOT NULL,
+  PRIMARY KEY (provider, subject),
+  KEY ix_identities_user (user_id),
+  CONSTRAINT fk_identities_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE IF NOT EXISTS admissions (
+  provider     VARCHAR(20)  CHARACTER SET ascii NOT NULL,
+  subject      VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  state        VARCHAR(20)  CHARACTER SET ascii NOT NULL,               -- Waiting | Approved | Refused
+  display      VARCHAR(200) NOT NULL,
+  requested_at DATETIME(3)  NOT NULL,
+  decided_at   DATETIME(3)  NULL,
+  PRIMARY KEY (provider, subject)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE IF NOT EXISTS user_sessions (
+  id               CHAR(32)    CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  user_id          CHAR(32)    CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  security_version INT         NOT NULL,
+  created_at       DATETIME(3) NOT NULL,
+  expires_at       DATETIME(3) NOT NULL,
+  revoked_at       DATETIME(3) NULL,
+  -- The browser device the session first named, which it names for as long as it lasts: removing the device
+  -- ends the session. Null until the session's first call that names one.
+  device_id        CHAR(32)    CHARACTER SET ascii COLLATE ascii_bin NULL,
+  PRIMARY KEY (id),
+  KEY ix_sessions_user (user_id, revoked_at),
+  -- What a removal ends a device's sessions through, the owner first like every other lookup by a caller's id.
+  KEY ix_sessions_user_device (user_id, device_id),
+  CONSTRAINT fk_sessions_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE IF NOT EXISTS user_streams (
+  owner_id CHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  value    BIGINT   NOT NULL DEFAULT 0,
+  epoch    INT      NOT NULL DEFAULT 1,
+  PRIMARY KEY (owner_id),
+  CONSTRAINT fk_streams_user FOREIGN KEY (owner_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE IF NOT EXISTS user_retention (
+  owner_id       CHAR(32)    CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  trimmed_before DATETIME(3) NULL,
+  trimmed_at     DATETIME(3) NULL,
+  PRIMARY KEY (owner_id),
+  CONSTRAINT fk_retention_user FOREIGN KEY (owner_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE IF NOT EXISTS devices (
+  id           CHAR(32)      CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  owner_id     CHAR(32)      CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  public_key   VARBINARY(65) NOT NULL,
+  label        VARCHAR(80)   NOT NULL,
+  created_at   DATETIME(3)   NOT NULL,
+  last_seen_at DATETIME(3)   NULL,
+  revoked_at   DATETIME(3)   NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY ux_devices_owner (owner_id, id),
+  CONSTRAINT fk_devices_user FOREIGN KEY (owner_id) REFERENCES users (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE IF NOT EXISTS hosts (
-  id            CHAR(32)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL PRIMARY KEY,
-  name          VARCHAR(80)  NOT NULL,
-  token_hash    CHAR(64)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
-  revoked       TINYINT(1)   NOT NULL DEFAULT 0,
-  last_seen_at  DATETIME(3)  NULL,
-  created_at    DATETIME(3)  NOT NULL,
-  -- Authentication is one indexed lookup on this. The preview deserialised the entire application
-  -- state on every authenticated request instead, including every SignalR negotiate.
-  UNIQUE KEY ux_hosts_token (token_hash)
+  id             CHAR(32)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  owner_id       CHAR(32)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  label          VARCHAR(80)  NOT NULL,                                   -- plaintext by design (spec §6)
+  token_hash     CHAR(64)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  key_epoch      INT UNSIGNED NOT NULL DEFAULT 0,
+  signing_public VARBINARY(65) NULL,                                      -- the computer's signing key, pinned by its first grant
+  revoked        TINYINT(1)   NOT NULL DEFAULT 0,
+  last_seen_at   DATETIME(3)  NULL,
+  created_at     DATETIME(3)  NOT NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY ux_hosts_token (token_hash),
+  UNIQUE KEY ux_hosts_owner (owner_id, id),
+  KEY ix_hosts_owner_created (owner_id, created_at),
+  CONSTRAINT fk_hosts_user FOREIGN KEY (owner_id) REFERENCES users (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
--- Workspaces are published by the Host and replaced wholesale on every Sync. There is no path
--- column and there is not going to be one: the remote side names a workspace the Host already has,
--- and cannot name a folder.
 CREATE TABLE IF NOT EXISTS host_workspaces (
-  host_id       CHAR(32)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
-  workspace_id  VARCHAR(100) NOT NULL,
-  name          VARCHAR(100) NOT NULL,
+  owner_id     CHAR(32)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  host_id      CHAR(32)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  workspace_id VARCHAR(100) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  sealed_name  TEXT         CHARACTER SET ascii NOT NULL,
   PRIMARY KEY (host_id, workspace_id),
-  CONSTRAINT fk_workspaces_host FOREIGN KEY (host_id) REFERENCES hosts (id) ON DELETE CASCADE
+  KEY ix_workspaces_owner (owner_id, host_id),
+  CONSTRAINT fk_workspaces_host FOREIGN KEY (owner_id, host_id) REFERENCES hosts (owner_id, id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE IF NOT EXISTS grants (
+  owner_id   CHAR(32)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  host_id    CHAR(32)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  device_id  CHAR(32)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  epoch      INT UNSIGNED NOT NULL,
+  grant_json TEXT         CHARACTER SET ascii NOT NULL,
+  created_at DATETIME(3)  NOT NULL,
+  PRIMARY KEY (host_id, device_id, epoch),
+  KEY ix_grants_device (owner_id, device_id),
+  CONSTRAINT fk_grants_host   FOREIGN KEY (owner_id, host_id)   REFERENCES hosts (owner_id, id)   ON DELETE CASCADE,
+  CONSTRAINT fk_grants_device FOREIGN KEY (owner_id, device_id) REFERENCES devices (owner_id, id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE IF NOT EXISTS invites (
+  id                CHAR(32)    CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  owner_id          CHAR(32)    CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  created_by_host   CHAR(32)    CHARACTER SET ascii COLLATE ascii_bin NULL,
+  created_by_device CHAR(32)    CHARACTER SET ascii COLLATE ascii_bin NULL,
+  created_at        DATETIME(3) NOT NULL,
+  expires_at        DATETIME(3) NOT NULL,
+  consumed_at       DATETIME(3) NULL,
+  -- The owner leads the key, as for tasks and commands: the id is the caller's own making, and with a
+  -- key on the id alone Bob making an invitation under an id of Alice's was refused as taken - an answer
+  -- that told him the id was somebody's - and his insert waited on her row while it found that out.
+  PRIMARY KEY (owner_id, id),
+  CONSTRAINT fk_invites_user FOREIGN KEY (owner_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE IF NOT EXISTS enrollments (
+  invite_id  CHAR(32)    CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  owner_id   CHAR(32)    CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  device_id  CHAR(32)    CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  mac        VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  created_at DATETIME(3) NOT NULL,
+  answered_at DATETIME(3) NULL,                                           -- the inviting computer has handled it
+  PRIMARY KEY (owner_id, invite_id),
+  CONSTRAINT fk_enrollments_invite FOREIGN KEY (owner_id, invite_id) REFERENCES invites (owner_id, id) ON DELETE CASCADE,
+  CONSTRAINT fk_enrollments_device FOREIGN KEY (owner_id, device_id) REFERENCES devices (owner_id, id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE IF NOT EXISTS tasks (
-  id            CHAR(32)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL PRIMARY KEY,
-  host_id       CHAR(32)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
-  workspace_id  VARCHAR(100) NOT NULL,
-  title         VARCHAR(140) NOT NULL,
-  prompt        MEDIUMTEXT   NOT NULL,
-  created_at    DATETIME(3)  NOT NULL,
-  KEY ix_tasks_host (host_id, created_at),
-  CONSTRAINT fk_tasks_host FOREIGN KEY (host_id) REFERENCES hosts (id)
+  owner_id     CHAR(32)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  id           CHAR(36)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL,  -- browser-made UUID: it is in the AD
+  host_id      CHAR(32)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  workspace_id VARCHAR(100) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  sealed       MEDIUMTEXT   CHARACTER SET ascii NOT NULL,
+  fingerprint  CHAR(64)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  created_at   DATETIME(3)  NOT NULL,
+  PRIMARY KEY (owner_id, id),
+  UNIQUE KEY ux_tasks_owner_host (owner_id, host_id, id),
+  KEY ix_tasks_owner_created (owner_id, created_at),
+  CONSTRAINT fk_tasks_host FOREIGN KEY (owner_id, host_id) REFERENCES hosts (owner_id, id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE IF NOT EXISTS runs (
-  id                CHAR(32)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL PRIMARY KEY,
-  task_id           CHAR(32)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
-  host_id           CHAR(32)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
-  status            VARCHAR(20)  CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
-  -- The highest event sequence applied to this run. Read and written under SELECT ... FOR UPDATE,
-  -- which is what serialises two events arriving at once.
-  applied_sequence  BIGINT       NOT NULL DEFAULT 0,
-  created_at        DATETIME(3)  NOT NULL,
-  ended_at          DATETIME(3)  NULL,
-  summary           MEDIUMTEXT   NULL,
-  KEY ix_runs_host_status (host_id, status),
-  KEY ix_runs_task (task_id, created_at),
-  CONSTRAINT fk_runs_task FOREIGN KEY (task_id) REFERENCES tasks (id),
-  CONSTRAINT fk_runs_host FOREIGN KEY (host_id) REFERENCES hosts (id)
+  id               CHAR(32)    CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  owner_id         CHAR(32)    CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  task_id          CHAR(36)    CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  host_id          CHAR(32)    CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  status           VARCHAR(20) CHARACTER SET ascii NOT NULL,
+  applied_sequence BIGINT      NOT NULL DEFAULT 0,
+  created_at       DATETIME(3) NOT NULL,
+  ended_at         DATETIME(3) NULL,
+  sealed_summary   MEDIUMTEXT  CHARACTER SET ascii NULL,                 -- the terminal event's envelope, copied
+  summary_sequence BIGINT      NULL,                                     -- that event's sequence: the panel rebuilds its AD
+  PRIMARY KEY (id),
+  UNIQUE KEY ux_runs_owner (owner_id, id),
+  UNIQUE KEY ux_runs_owner_host (owner_id, host_id, id),
+  KEY ix_runs_owner_task (owner_id, task_id, created_at),
+  KEY ix_runs_owner_created (owner_id, created_at),
+  -- What a start counts its account's active runs through, under the account's lock. Without it the count
+  -- read every run the account ever had, on every start, while the account's other calls waited.
+  KEY ix_runs_owner_status (owner_id, status),
+  -- What retention removes ended runs through, the longest-ended first.
+  KEY ix_runs_owner_ended (owner_id, ended_at),
+  CONSTRAINT fk_runs_task FOREIGN KEY (owner_id, host_id, task_id) REFERENCES tasks (owner_id, host_id, id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
--- One instruction from the owner. `id` is supplied by the caller so a retried POST cannot queue the
--- same action twice; `fingerprint` is what the id was first used for, so re-using an id for a
--- DIFFERENT action is a conflict rather than a silent no-op.
 CREATE TABLE IF NOT EXISTS commands (
-  -- VARCHAR and not CHAR(36), which is the shape of a UUID: MySqlConnector treats a CHAR(36)
-  -- column as a Guid unless told otherwise, and this id is a string the owner supplied and that we
-  -- only ever compare as text. The driver is also told GuidFormat=None - see Database - so neither
-  -- half of this depends on the other being remembered.
-  id           VARCHAR(36)  CHARACTER SET ascii COLLATE ascii_bin NOT NULL PRIMARY KEY,
-  host_id      CHAR(32)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
-  kind         VARCHAR(20)  CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
-  payload      MEDIUMTEXT   NOT NULL,
-  fingerprint  CHAR(64)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
-  status       VARCHAR(20)  CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
-  created_at   DATETIME(3)  NOT NULL,
-  expires_at   DATETIME(3)  NOT NULL,
+  owner_id    CHAR(32)    CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  id          VARCHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  host_id     CHAR(32)    CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  run_id      CHAR(32)    CHARACTER SET ascii COLLATE ascii_bin NULL,      -- the run it is about; retention removes it with the run
+  kind        VARCHAR(20) CHARACTER SET ascii NOT NULL,
+  payload     MEDIUMTEXT  CHARACTER SET ascii NOT NULL,
+  fingerprint CHAR(64)    CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  status      VARCHAR(20) CHARACTER SET ascii NOT NULL,
+  created_at  DATETIME(3) NOT NULL,
+  expires_at  DATETIME(3) NOT NULL,
+  PRIMARY KEY (owner_id, id),
   KEY ix_commands_delivery (host_id, status, created_at),
   KEY ix_commands_expiry (status, expires_at),
-  CONSTRAINT fk_commands_host FOREIGN KEY (host_id) REFERENCES hosts (id)
+  KEY ix_commands_owner_run (owner_id, run_id),
+  CONSTRAINT fk_commands_host FOREIGN KEY (owner_id, host_id) REFERENCES hosts (owner_id, id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
--- A permission request, as the owner will see it. `arguments` is the complete action and not a
--- summary: a person cannot approve what they were not shown.
---
--- `remote_decidable` is 0 for a shell. The request is still stored and still displayed, but the
--- resolve endpoint refuses it - the boundary is here, on the server, not in whether the panel drew
--- a button.
 CREATE TABLE IF NOT EXISTS approvals (
-  id                 VARCHAR(100) CHARACTER SET ascii COLLATE ascii_bin NOT NULL PRIMARY KEY,
+  owner_id           CHAR(32)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   host_id            CHAR(32)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  id                 VARCHAR(100) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   run_id             CHAR(32)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
-  tool_call_id       VARCHAR(100) NOT NULL,
-  tool               VARCHAR(200) NOT NULL,
-  arguments          MEDIUMTEXT   NOT NULL,
-  working_directory  VARCHAR(1000) NOT NULL,
-  reason             MEDIUMTEXT   NOT NULL,
+  tool_call_id       VARCHAR(100) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   action_hash        CHAR(64)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   remote_decidable   TINYINT(1)   NOT NULL,
-  status             VARCHAR(20)  CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
-  requested_decision VARCHAR(10)  CHARACTER SET ascii COLLATE ascii_bin NULL,
+  sealed_action      MEDIUMTEXT   CHARACTER SET ascii NOT NULL,
+  status             VARCHAR(20)  CHARACTER SET ascii NOT NULL,
+  requested_decision VARCHAR(10)  CHARACTER SET ascii NULL,
   created_at         DATETIME(3)  NOT NULL,
   expires_at         DATETIME(3)  NOT NULL,
+  PRIMARY KEY (host_id, id),
+  -- What a person's locking lookup goes through. Through the primary key, Bob asking for Alice's request
+  -- locked Alice's row before the owner filter refused it: he waited on her, and the wait told him it exists.
+  UNIQUE KEY ux_approvals_owner_host (owner_id, host_id, id),
+  KEY ix_approvals_owner (owner_id, status, created_at),
   KEY ix_approvals_run (run_id, status),
   KEY ix_approvals_expiry (status, expires_at),
-  CONSTRAINT fk_approvals_run FOREIGN KEY (run_id) REFERENCES runs (id),
-  CONSTRAINT fk_approvals_host FOREIGN KEY (host_id) REFERENCES hosts (id)
+  CONSTRAINT fk_approvals_run FOREIGN KEY (owner_id, host_id, run_id) REFERENCES runs (owner_id, host_id, id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
--- What the Host has told us. Two keys here do work the code would otherwise have to remember:
---
---   PRIMARY KEY (host_id, id) - a Host cannot collide with another Host's event id, and isolation
---   is structural rather than a WHERE clause somebody must not forget.
---
---   UNIQUE (run_id, sequence) - an event applied twice, or out of order, is refused by the database
---   itself. Deduplication by id alone stops the first and does nothing about the second: a retried
---   event landing after a later one would drive the run's state backwards.
 CREATE TABLE IF NOT EXISTS events (
-  id        VARCHAR(100) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
-  host_id   CHAR(32)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
-  run_id    CHAR(32)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
-  sequence  BIGINT       NOT NULL,
-  kind      VARCHAR(20)  CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
-  detail    MEDIUMTEXT   NULL,
-  at        DATETIME(3)  NOT NULL,
+  owner_id      CHAR(32)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  host_id       CHAR(32)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  id            VARCHAR(100) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  run_id        CHAR(32)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  sequence      BIGINT       NOT NULL,
+  kind          VARCHAR(20)  CHARACTER SET ascii NOT NULL,
+  sealed_detail MEDIUMTEXT   CHARACTER SET ascii NULL,
+  at            DATETIME(3)  NOT NULL,
+  ordinal       BIGINT       NOT NULL,
   PRIMARY KEY (host_id, id),
   UNIQUE KEY ux_events_run_sequence (run_id, sequence),
-  KEY ix_events_run_at (run_id, at),
-  CONSTRAINT fk_events_run FOREIGN KEY (run_id) REFERENCES runs (id)
+  UNIQUE KEY ux_events_owner_ordinal (owner_id, ordinal),
+  KEY ix_events_owner_at (owner_id, at),
+  CONSTRAINT fk_events_run FOREIGN KEY (owner_id, host_id, run_id) REFERENCES runs (owner_id, host_id, id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE IF NOT EXISTS notices (
-  id       CHAR(32)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL PRIMARY KEY,
-  run_id   CHAR(32)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
-  title    VARCHAR(120) NOT NULL,
-  detail   MEDIUMTEXT   NOT NULL,
-  at       DATETIME(3)  NOT NULL,
-  is_read  TINYINT(1)   NOT NULL DEFAULT 0,
-  KEY ix_notices_unread (is_read, at),
-  CONSTRAINT fk_notices_run FOREIGN KEY (run_id) REFERENCES runs (id)
+  id            CHAR(32)    CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  owner_id      CHAR(32)    CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  -- The run it is about, or - for a removal or an endorsement that never reached its computer, which is about
+  -- no run - the computer. One of the two is set; each takes the notice with it when it is deleted.
+  run_id        CHAR(32)    CHARACTER SET ascii COLLATE ascii_bin NULL,
+  host_id       CHAR(32)    CHARACTER SET ascii COLLATE ascii_bin NULL,
+  kind          VARCHAR(40) CHARACTER SET ascii NOT NULL,              -- metadata: the gateway's own words
+  sealed_detail MEDIUMTEXT  CHARACTER SET ascii NULL,                  -- the event's envelope, copied
+  event_sequence BIGINT     NULL,                                      -- with what the panel needs to rebuild
+  event_kind    VARCHAR(20) CHARACTER SET ascii NULL,                  -- that event's associated data
+  at            DATETIME(3) NOT NULL,
+  is_read       TINYINT(1)  NOT NULL DEFAULT 0,
+  ordinal       BIGINT      NOT NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY ux_notices_owner_ordinal (owner_id, ordinal),
+  KEY ix_notices_owner_unread (owner_id, is_read, at),
+  -- What retention deletes through, a person's oldest first. Without it the per-owner DELETE read and
+  -- locked all of that person's notices to find the oldest thousand.
+  KEY ix_notices_owner_at (owner_id, at),
+  KEY ix_notices_owner_host (owner_id, host_id),
+  CONSTRAINT fk_notices_run FOREIGN KEY (owner_id, run_id) REFERENCES runs (owner_id, id) ON DELETE CASCADE,
+  CONSTRAINT fk_notices_host FOREIGN KEY (owner_id, host_id) REFERENCES hosts (owner_id, id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE IF NOT EXISTS audit (
+  id       BIGINT      NOT NULL AUTO_INCREMENT,
+  owner_id CHAR(32)    CHARACTER SET ascii COLLATE ascii_bin NULL,
+  at       DATETIME(3) NOT NULL,
+  actor    VARCHAR(80) CHARACTER SET ascii NOT NULL,                  -- user:<id> | host:<id> | device:<id> | operator
+  action   VARCHAR(40) CHARACTER SET ascii NOT NULL,
+  -- Binary, like the subjects it names: deleting an account removes the operator's rows by their target, and
+  -- compared without regard to case, deleting dev:bob-x also removed the record about dev:Bob-x, someone else.
+  target   VARCHAR(100) CHARACTER SET ascii COLLATE ascii_bin NULL,
+  PRIMARY KEY (id),
+  KEY ix_audit_owner (owner_id, at),
+  CONSTRAINT fk_audit_user FOREIGN KEY (owner_id) REFERENCES users (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;

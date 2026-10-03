@@ -1,6 +1,7 @@
 namespace Enactive.Remote.Gateway;
 
 using System.Security.Cryptography;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 
 /// <summary>
@@ -28,6 +29,9 @@ using System.Text.RegularExpressions;
 /// revalidation. Rewriting those means parsing CSS, and a stale font is a different kind of wrong
 /// from a stale script: it looks wrong rather than behaves wrong, and it cannot hide a release.
 /// When a font changes it changes under a new name anyway.</para>
+///
+/// <para><b>The published list.</b> The same load also hashes every script and stylesheet in the
+/// web root, for <c>/.well-known/enactive-panel.json</c>. See <see cref="Manifest"/>.</para>
 /// </summary>
 public sealed class PanelAssets
 {
@@ -36,10 +40,50 @@ public sealed class PanelAssets
         "(?<attribute>href|src)=\"(?<path>/[^\"?#]+\\.(?:css|js))\"",
         RegexOptions.Compiled);
 
-    private PanelAssets(string page) => Page = page;
+    /// <summary>
+    /// What the published list covers: the code a browser runs and the styles it applies. Images and
+    /// fonts are left out - they cannot read a key - and so are the HTML pages: the panel's page is
+    /// rewritten with fingerprints that name these files, and the policy pages run no script.
+    /// </summary>
+    private static readonly string[] Listed = [".js", ".mjs", ".css"];
+
+    private PanelAssets(string page, IReadOnlyDictionary<string, string> files)
+    {
+        Page = page;
+        Files = files;
+
+        // "\n" whatever the platform: indented JSON otherwise ends its lines with the server's own
+        // newline, and the same release was published with "\r\n" from a Windows server and "\n" from
+        // Linux - two different lists, byte for byte, for the same files.
+        Manifest = JsonSerializer.Serialize(
+            new { algorithm = "sha256", files },
+            new JsonSerializerOptions { WriteIndented = true, NewLine = "\n" });
+    }
 
     /// <summary>The page as it is served: identical to index.html but for the fingerprints.</summary>
     public string Page { get; }
+
+    /// <summary>
+    /// Every script and stylesheet in the web root, by the path it is served at, with the full SHA-256
+    /// of its contents in lower-case hex. Ordered by path, so the same release always produces the same
+    /// list, byte for byte.
+    /// </summary>
+    public IReadOnlyDictionary<string, string> Files { get; }
+
+    /// <summary>
+    /// <see cref="Files"/> as the JSON served at <c>/.well-known/enactive-panel.json</c>.
+    ///
+    /// <para><b>Why.</b> The panel holds the keys that open a person's content, and it is code this
+    /// server sends. An operator - or whoever has taken the server - who sends altered code can read
+    /// those keys, and nothing inside a web page can prevent it. What can be done is to make the
+    /// alteration visible: the hashes of what is served, published where anyone can fetch them and
+    /// compare with the hashes a release lists.</para>
+    ///
+    /// <para><b>Every file, not the ones the page names.</b> The page names <c>app.js</c> and the
+    /// stylesheets; the modules in <c>js/</c> and <c>vendor/</c> are reached by <c>import</c>. A list
+    /// of what the page names would leave out most of the code that handles keys.</para>
+    /// </summary>
+    public string Manifest { get; }
 
     /// <summary>
     /// Reads index.html from the web root and fingerprints what it references.
@@ -74,7 +118,30 @@ public sealed class PanelAssets
                 : match.Value;
         });
 
-        return new PanelAssets(page);
+        return new PanelAssets(page, Hashes(webRoot));
+    }
+
+    /// <summary>The full SHA-256 of every listed file under the web root, keyed by its served path.</summary>
+    private static SortedDictionary<string, string> Hashes(string webRoot)
+    {
+        // Ordinal, so the order does not depend on the culture of the machine the gateway runs on: two
+        // servers of the same release must publish the same bytes, or comparing them means nothing.
+        var hashes = new SortedDictionary<string, string>(StringComparer.Ordinal);
+
+        foreach (var file in Directory.EnumerateFiles(webRoot, "*", SearchOption.AllDirectories))
+        {
+            if (!Listed.Contains(Path.GetExtension(file), StringComparer.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            using var stream = File.OpenRead(file);
+            var path = "/" + Path.GetRelativePath(webRoot, file).Replace(Path.DirectorySeparatorChar, '/');
+
+            hashes[path] = Convert.ToHexStringLower(SHA256.HashData(stream));
+        }
+
+        return hashes;
     }
 
     /// <summary>

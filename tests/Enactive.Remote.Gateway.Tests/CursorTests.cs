@@ -1,239 +1,214 @@
 namespace Enactive.Remote.Gateway.Tests;
 
+using System.Security.Cryptography;
+using System.Text;
 using Enactive.Remote.Contracts;
+using Enactive.Remote.Contracts.Crypto;
+using Enactive.Remote.Gateway.Accounts;
 using Enactive.Remote.Gateway.Services;
 using Enactive.Remote.Gateway.Storage;
-using MySqlConnector;
 using Xunit;
 
 /// <summary>
-/// The panel's poll. Stage 6b of the remote-access design.
+/// The line of numbers a panel's poll is ordered by, one line per person.
 ///
-/// <para>All of these are about one question: can the panel trust that "everything since 41" means
-/// everything. A poll that loses a row loses it once, silently, for ever - the panel simply never
-/// asks that low again - and for an ApprovalRequested notice that is a permission nobody is asked
-/// for. So the tests here are mostly about what is NOT delivered by the cursor, and when.</para>
+/// <para>The questions here are about what the line promises. A number must never be visible before
+/// everything below it is, because a poll that has seen 42 never asks for 41 again; and one person's
+/// writes must neither move nor wait on another's, because the gateway serves many.</para>
 /// </summary>
 public sealed class CursorTests(TestDatabase database) : IClassFixture<TestDatabase>
 {
-    private const string HostId = "3333333333333333333333333333cccc";
+    private static readonly TimeSpan Generously = TimeSpan.FromSeconds(2);
 
     private Database Db => new(database.ConnectionString);
 
-    private HostService Host => new(Db);
+    private static string NewName(string stem) => stem + Guid.NewGuid().ToString("N")[..8];
 
-    private Retention Trimmer => new(Db, days: 30);
-
-    private Projection Panel => new(Db, Trimmer);
-
-    private static string NewId() => Guid.NewGuid().ToString("N");
-
-    private async Task<string> RunningRunAsync()
+    /// <summary>One whole allocation as a writer does it: a number, taken and committed.</summary>
+    private async Task<long> AllocateAsync(string ownerId)
     {
-        await database.ExecuteAsync($"""
-            INSERT IGNORE INTO hosts (id, name, token_hash, revoked, created_at)
-            VALUES ('{HostId}', 'Host', SHA2('{HostId}', 256), 0, UTC_TIMESTAMP(3))
-            """);
-
-        var taskId = NewId();
-        var runId = NewId();
-
-        await database.ExecuteAsync($"""
-            INSERT INTO tasks (id, host_id, workspace_id, title, prompt, created_at)
-              VALUES ('{taskId}', '{HostId}', 'workspace-1', 'Test', 'Do it.', UTC_TIMESTAMP(3));
-            INSERT INTO runs (id, task_id, host_id, status, created_at)
-              VALUES ('{runId}', '{taskId}', '{HostId}', 'Queued', UTC_TIMESTAMP(3));
-            """);
-
-        await Host.PublishAsync(HostId, Event(runId, 1, RemoteEventKind.Running));
-        return runId;
+        await using var connection = await Db.OpenAsync();
+        await using var transaction = await connection.BeginAsync(default);
+        var ordinal = await StreamCursor.NextAsync(connection, transaction, ownerId);
+        await transaction.CommitAsync();
+        return ordinal;
     }
 
-    private static HostEvent Event(string runId, long sequence, RemoteEventKind kind, string? detail = null)
-        => new(NewId(), runId, sequence, kind, detail, null, null);
+    private Task<long> CommittedValueAsync(string ownerId)
+        => database.ScalarLongAsync($"SELECT value FROM user_streams WHERE owner_id = '{ownerId}'");
 
-    // ── the cursor ──────────────────────────────────────────────────────────
+    private HostService Host => new(Db);
+
+    private static string Sealed(string text)
+        => Envelope.Seal(RandomNumberGenerator.GetBytes(32), 1, Encoding.UTF8.GetBytes(text), []);
+
+    private static HostEvent Event(string runId, long sequence, RemoteEventKind kind, string? text = null)
+        => new(Guid.NewGuid().ToString("N"), runId, sequence, kind, text is null ? null : Sealed(text));
+
+    /// <summary>A computer of a fresh person's, with a run it has reported started: one ordinal taken.</summary>
+    private async Task<(HostAccess Host, string RunId)> RunningRunAsync(string stem)
+    {
+        var person = await TestAccounts.CreateAsync(database, NewName(stem));
+        var (hostId, _, _) = await new UserService(Db, Limits.Unlimited, TimeProvider.System)
+            .RegisterHostAsync(person, "Studio PC", default);
+        var host = new HostAccess(hostId, person.UserId);
+        var taskId = Guid.NewGuid().ToString();
+        var runId = Ids.New();
+
+        await database.ExecuteAsync(
+            """
+            INSERT INTO tasks (owner_id, id, host_id, workspace_id, sealed, fingerprint, created_at)
+              VALUES (@owner, @task, @host, 'workspace-1', @sealed, SHA2(@task, 256), UTC_TIMESTAMP(3));
+            INSERT INTO runs (id, owner_id, task_id, host_id, status, applied_sequence, created_at)
+              VALUES (@run, @owner, @task, @host, 'Queued', 0, UTC_TIMESTAMP(3));
+            """,
+            ("@owner", person.UserId), ("@task", taskId), ("@host", hostId),
+            ("@sealed", Sealed("Run the tests")), ("@run", runId));
+
+        await Host.PublishAsync(host, Event(runId, 1, RemoteEventKind.Running));
+        return (host, runId);
+    }
+
+    /// <summary>Every number on a person's line that a row holds, events and notices together.</summary>
+    private async Task<List<int>> TakenAsync(string ownerId)
+        => (await database.IntsAsync(
+            $"""
+            SELECT ordinal FROM events WHERE owner_id = '{ownerId}'
+            UNION ALL
+            SELECT ordinal FROM notices WHERE owner_id = '{ownerId}'
+            """)).Order().ToList();
 
     /// <summary>
-    /// The one this whole design exists for.
+    /// The one this design exists for. A writer has taken a number and not committed. What a poll
+    /// can read is the last COMMITTED value, strictly below it; and the next writer for the same
+    /// person cannot take a number until the first has committed, so allocation order is commit
+    /// order and a poll that sees N sees everything below N.
     ///
-    /// <para>A publish is in flight - its ordinal is allocated and its row written, and it has not
-    /// committed. The panel polls in that moment. If the cursor it is given covers that row, the
-    /// row is lost: when the transaction commits the panel is already asking for something higher.
-    /// </para>
-    ///
-    /// <para>Shown red by putting the cursor back to what it was first written as, the server's
-    /// wall clock: the delta then asks for ordinals above a millisecond timestamp and the committed
-    /// event never arrives.</para>
+    /// <para>Shown red by an allocator that does not hold the row until commit: the second writer
+    /// then gets a number while the first is in flight, and can commit first.</para>
     /// </summary>
     [Fact]
-    public async Task A_cursor_never_covers_a_row_that_has_not_committed()
+    public async Task A_cursor_never_covers_a_number_that_has_not_committed()
     {
-        var runId = await RunningRunAsync();
+        var alice = await TestAccounts.CreateAsync(database, NewName("alice"));
 
-        await using var connection = new MySqlConnection(database.ConnectionString);
-        await connection.OpenAsync();
+        await using var connection = await database.OpenAsync();
         await using var inFlight = await connection.BeginAsync(default);
+        var ordinal = await StreamCursor.NextAsync(connection, inFlight, alice.UserId);
 
-        // What PublishAsync does, held open: a number taken, a row written, nothing committed.
-        var ordinal = await StreamCursor.NextAsync(connection, inFlight);
-        await connection.ExecuteAsync(inFlight,
-            """
-            INSERT INTO events (id, host_id, run_id, sequence, kind, detail, at, ordinal)
-            VALUES (@id, @host, @run, 2, 'Progress', 'in flight', UTC_TIMESTAMP(3), @ordinal)
-            """,
-            ("@id", NewId()), ("@host", HostId), ("@run", runId), ("@ordinal", ordinal));
+        // What a poll sees now: the committed line, which has not reached the in-flight number.
+        Assert.Equal(ordinal - 1, await CommittedValueAsync(alice.UserId));
 
-        var duringFlight = await Panel.ReadAsync();
-        Assert.True(duringFlight.Cursor < ordinal,
-            $"The cursor was {duringFlight.Cursor} while ordinal {ordinal} was still uncommitted.");
+        // A second writer for the same person has to wait for the first to finish.
+        var second = AllocateAsync(alice.UserId);
+        await Assert.ThrowsAsync<TimeoutException>(() => second.WaitAsync(TimeSpan.FromMilliseconds(500)));
 
         await inFlight.CommitAsync();
 
-        var afterwards = await Panel.ReadAsync(duringFlight.Cursor);
-        Assert.Contains(afterwards.Events, e => e.Detail == "in flight");
+        Assert.Equal(ordinal + 1, await second.WaitAsync(Generously));
+        Assert.Equal(ordinal + 1, await CommittedValueAsync(alice.UserId));
     }
 
     /// <summary>
-    /// Events and notices are one stream stored in two tables, so one number line covers both.
-    /// A second counter would let an event and the notice it raised share an ordinal, and a panel
-    /// polling above it would then be one row behind on whichever table it read second.
+    /// The reason the counter is per owner. With one row for the gateway, Bob's write waited for
+    /// every open transaction of Alice's, and one slow writer stalled everybody.
     ///
-    /// <para>Shown red by giving <c>notices</c> a counter of its own.</para>
+    /// <para>Shown red by pointing every owner at one counter row: Bob's allocation then blocks on
+    /// Alice's transaction and the 2-second wait times out.</para>
     /// </summary>
     [Fact]
-    public async Task An_event_and_the_notice_it_raised_do_not_share_a_number()
+    public async Task Bobs_writes_do_not_wait_on_alices_stream()
     {
-        var runId = await RunningRunAsync();
-        var before = await Panel.ReadAsync();
+        var alice = await TestAccounts.CreateAsync(database, NewName("alice"));
+        var bob = await TestAccounts.CreateAsync(database, NewName("bob"));
 
-        // A terminal event writes both an event row and a notice, in one transaction.
-        await Host.PublishAsync(HostId, Event(runId, 2, RemoteEventKind.Completed, "done"));
+        await using var connection = await database.OpenAsync();
+        await using var alicesTransaction = await connection.BeginAsync(default);
+        await StreamCursor.NextAsync(connection, alicesTransaction, alice.UserId);
 
-        var after = await Panel.ReadAsync(before.Cursor);
-        var ordinals = after.Events.Select(e => e.Ordinal).Concat(after.Notices.Select(n => n.Ordinal)).ToArray();
+        var bobs = await AllocateAsync(bob.UserId).WaitAsync(Generously);
 
-        Assert.Equal(2, ordinals.Length);
-        Assert.Equal(ordinals.Length, ordinals.Distinct().Count());
-        Assert.All(ordinals, ordinal => Assert.True(ordinal <= after.Cursor));
+        Assert.Equal(1, bobs);
+        await alicesTransaction.CommitAsync();
     }
 
     /// <summary>
-    /// A poll that catches up returns nothing the next time. The cheap half, and it is here because
-    /// a delta that re-sent the last row on every poll would still look correct to every other test
-    /// in this file while costing exactly what the delta was written to stop costing.
+    /// A person's numbers are their own. If Bob's events moved Alice's line, her panel's cursor
+    /// would jump past rows that exist only for her, or her line would show gaps that tell her
+    /// something about how much somebody else is doing.
     /// </summary>
     [Fact]
-    public async Task A_second_poll_with_the_returned_cursor_carries_nothing()
+    public async Task Bobs_events_do_not_move_alices_cursor()
     {
-        var runId = await RunningRunAsync();
-        await Host.PublishAsync(HostId, Event(runId, 2, RemoteEventKind.Progress, "reading"));
+        var alice = await TestAccounts.CreateAsync(database, NewName("alice"));
+        var bob = await TestAccounts.CreateAsync(database, NewName("bob"));
 
-        var first = await Panel.ReadAsync();
-        var second = await Panel.ReadAsync(first.Cursor);
+        Assert.Equal(1, await AllocateAsync(alice.UserId));
+        Assert.Equal(1, await AllocateAsync(bob.UserId));
+        Assert.Equal(2, await AllocateAsync(bob.UserId));
+        Assert.Equal(3, await AllocateAsync(bob.UserId));
 
-        Assert.True(second.Delta);
-        Assert.Empty(second.Events);
-        Assert.Empty(second.Notices);
+        Assert.Equal(1, await CommittedValueAsync(alice.UserId));
+        Assert.Equal(2, await AllocateAsync(alice.UserId));
+        Assert.Equal(3, await CommittedValueAsync(bob.UserId));
     }
 
     /// <summary>
-    /// A panel that has been closed for a while asks for more than a poll may carry. Truncating the
-    /// answer is the tempting thing and the wrong one: the cursor that comes back with it would
-    /// cover rows that were never sent, and the panel would never ask for them again.
-    ///
-    /// <para>So the reply is a full snapshot, and says so. Shown red by capping the delta with a
-    /// LIMIT and returning it as a delta anyway - the newest event is then missing from a reply
-    /// whose cursor claims to have passed it.</para>
+    /// A refused write gives its number back: the increment rolls back with the rest of the
+    /// transaction, so a rejection leaves no hole in the person's line.
     /// </summary>
     [Fact]
-    public async Task A_delta_too_large_to_carry_comes_back_as_a_whole_snapshot()
+    public async Task A_rolled_back_allocation_leaves_no_hole()
     {
-        var runId = await RunningRunAsync();
-        var start = (await Panel.ReadAsync()).Cursor;
+        var alice = await TestAccounts.CreateAsync(database, NewName("alice"));
 
-        await BackfillEventsAsync(runId, count: 250, detail: "bulk");
+        await using (var connection = await database.OpenAsync())
+        await using (var refused = await connection.BeginAsync(default))
+        {
+            Assert.Equal(1, await StreamCursor.NextAsync(connection, refused, alice.UserId));
+            await refused.RollbackAsync();
+        }
 
-        var reply = await Panel.ReadAsync(start);
-
-        Assert.False(reply.Delta);
-        Assert.Contains(reply.Events, e => e.Sequence == 251);
-        Assert.True(reply.Cursor >= reply.Events.Max(e => e.Ordinal));
+        Assert.Equal(1, await AllocateAsync(alice.UserId));
     }
 
     /// <summary>
-    /// Events written straight to the table, taking a block of ordinals in one go. This is a
-    /// fixture and not the write path: <see cref="HostService"/> takes them one at a time under the
-    /// lock, which is the property <see cref="A_cursor_never_covers_a_row_that_has_not_committed"/>
-    /// is about. What matters here is only that the rows exist and the counter is not left behind
-    /// them, because a counter behind a row would re-deliver it for ever.
+    /// An owner without a stream row is a broken account. Handing out a guessed number would write
+    /// an event the owner's delta could never return.
     /// </summary>
-    private async Task BackfillEventsAsync(string runId, int count, string detail)
+    [Fact]
+    public async Task An_owner_with_no_stream_row_gets_no_number()
     {
-        await using var connection = new MySqlConnection(database.ConnectionString);
-        await connection.OpenAsync();
+        await using var connection = await database.OpenAsync();
         await using var transaction = await connection.BeginAsync(default);
 
-        await connection.ExecuteAsync(transaction,
-            "UPDATE counters SET value = value + @count WHERE name = 'stream'", ("@count", count));
-
-        var last = await connection.ReadOneAsync(transaction,
-            "SELECT value FROM counters WHERE name = 'stream'", reader => reader.GetInt64("value"));
-
-        var rows = Enumerable.Range(0, count).Select(i =>
-            $"('{NewId()}', '{HostId}', '{runId}', {i + 2}, 'Progress', '{detail}', "
-            + $"UTC_TIMESTAMP(3), {last - count + 1 + i})");
-
-        await connection.ExecuteAsync(transaction,
-            "INSERT INTO events (id, host_id, run_id, sequence, kind, detail, at, ordinal) VALUES "
-            + string.Join(",", rows));
-
-        await transaction.CommitAsync();
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => StreamCursor.NextAsync(connection, transaction, Ids.New()));
     }
 
-    // ── retention ───────────────────────────────────────────────────────────
-
     /// <summary>
-    /// Nothing was old enough, so nothing is announced. A gateway three days old that told the
-    /// panel history before last month had been trimmed would be describing data that never
-    /// existed, and the notice would stop meaning anything on the day it did.
+    /// Events and notices are one stream stored in two tables, so one number line covers both - and
+    /// the line is the owner's. A second counter would let an event and the notice it raised share a
+    /// number, and a panel polling above it would be one row behind on whichever table it read
+    /// second; a line shared with Bob would leave holes in Alice's that tell her how busy he is.
     ///
-    /// <para>Shown red by stamping the cutoff on every pass instead of only on one that deleted.
-    /// </para>
+    /// <para>Shown red by giving the notice the event's ordinal (Alice's line then holds a number
+    /// twice), or by allocating everyone's numbers from one line (Bob's events then push Alice's
+    /// past 3).</para>
     /// </summary>
     [Fact]
-    public async Task A_pass_that_deletes_nothing_says_nothing_was_trimmed()
+    public async Task An_event_and_the_notice_it_raised_take_distinct_numbers_on_their_owners_line()
     {
-        await RunningRunAsync();
+        var (alices, alicesRun) = await RunningRunAsync("alice");
+        var (bobs, bobsRun) = await RunningRunAsync("bob");
+        await Host.PublishAsync(bobs, Event(bobsRun, 2, RemoteEventKind.Progress, "reading"));
 
-        // Read before rather than asserting null: the tests in this class share one database and
-        // its neighbours trim on purpose. What is being asserted is that THIS pass changed nothing,
-        // not that nothing in the world has ever been trimmed.
-        var before = (await Panel.ReadAsync()).Retention.TrimmedBefore;
+        // A terminal event writes an event row and a notice, in one transaction.
+        await Host.PublishAsync(alices, Event(alicesRun, 2, RemoteEventKind.Completed, "done"));
 
-        Assert.Equal(0, await Trimmer.TrimAsync());
-        Assert.Equal(before, (await Panel.ReadAsync()).Retention.TrimmedBefore);
-    }
-
-    /// <summary>
-    /// And when history IS discarded the panel is told, so a short list reads as a trimmed history
-    /// rather than as a quiet fortnight.
-    /// </summary>
-    [Fact]
-    public async Task History_past_the_window_is_deleted_and_the_panel_is_told()
-    {
-        var runId = await RunningRunAsync();
-        await Host.PublishAsync(HostId, Event(runId, 2, RemoteEventKind.Progress, "long ago"));
-
-        await database.ExecuteAsync(
-            $"UPDATE events SET at = UTC_TIMESTAMP(3) - INTERVAL 400 DAY WHERE run_id = '{runId}'");
-
-        Assert.Equal(2, await Trimmer.TrimAsync());
-
-        var state = await Panel.ReadAsync();
-        Assert.DoesNotContain(state.Events, e => e.RunId == runId);
-        Assert.NotNull(state.Retention.TrimmedBefore);
-        Assert.Equal(30, state.Retention.Days);
+        Assert.Equal([1, 2, 3], await TakenAsync(alices.OwnerId));
+        Assert.Equal([1, 2], await TakenAsync(bobs.OwnerId));
+        Assert.Equal(3, await CommittedValueAsync(alices.OwnerId));
     }
 
     /// <summary>
@@ -244,23 +219,22 @@ public sealed class CursorTests(TestDatabase database) : IClassFixture<TestDatab
     /// trimmed, and refuses anything at or below the high-water mark - so the replay is dropped
     /// rather than applied a second time.</para>
     ///
-    /// <para>Shown red by removing that sequence check: the trimmed event is then accepted again
-    /// and the run's history grows a duplicate of something that happened a year ago. The check is
-    /// tested elsewhere for its own sake; this is the test that stops it being deleted as redundant
-    /// once trimming exists.</para>
+    /// <para>The row is deleted here as a trim would delete it; the trim itself is tested with the
+    /// retention it belongs to. Shown red by removing the sequence check: the trimmed event is then
+    /// accepted again and the run's history grows a duplicate of something that happened a year ago.
+    /// </para>
     /// </summary>
     [Fact]
     public async Task A_trimmed_event_replayed_is_dropped_and_not_applied_twice()
     {
-        var runId = await RunningRunAsync();
+        var (host, runId) = await RunningRunAsync("alice");
         var progress = Event(runId, 2, RemoteEventKind.Progress, "trimmed");
-        await Host.PublishAsync(HostId, progress);
+        await Host.PublishAsync(host, progress);
 
         await database.ExecuteAsync(
-            $"UPDATE events SET at = UTC_TIMESTAMP(3) - INTERVAL 400 DAY WHERE id = '{progress.EventId}'");
-        Assert.Equal(1, await Trimmer.TrimAsync());
+            $"DELETE FROM events WHERE owner_id = '{host.OwnerId}' AND id = '{progress.EventId}'");
 
-        var fault = await Assert.ThrowsAsync<GatewayFault>(() => Host.PublishAsync(HostId, progress));
+        var fault = await Assert.ThrowsAsync<GatewayFault>(() => Host.PublishAsync(host, progress));
 
         Assert.Equal(FaultCode.SequenceAlreadyApplied, fault.Code);
         Assert.Equal(FaultDisposition.Drop, RemoteFaults.DispositionOf(fault.Code));
@@ -269,34 +243,49 @@ public sealed class CursorTests(TestDatabase database) : IClassFixture<TestDatab
     }
 
     /// <summary>
-    /// Read state is not in the stream. Marking notices read UPDATES rows the panel already has,
-    /// and an append-only delta cannot carry an update - so the count comes back whole every time.
+    /// Two tabs signing in as one new person at once must make one account. The identity's key is
+    /// what decides; a "look first, then create" would give both callers a user, and the person's
+    /// data would end up split between two accounts that only one sign-in can reach.
     ///
-    /// <para>Shown red by counting the unread notices in the delta instead of in the table. The
-    /// middle poll is what does it: it carries no notices at all, and an unread count taken from
-    /// what it carries would say zero while a permission sits unanswered on the previous screen.
-    /// A test that only checked the count after marking them read would pass either way, because
-    /// both answers are zero - which is what the first draft of this test did.</para>
+    /// <para>Shown red by not catching the duplicate-key error (ten calls, nine exceptions) or by
+    /// dropping the identity's primary key (ten users).</para>
     /// </summary>
     [Fact]
-    public async Task An_empty_delta_still_reports_the_notices_that_are_unread()
+    public async Task Concurrent_provisioning_of_one_identity_makes_one_account()
     {
-        var runId = await RunningRunAsync();
-        await Host.PublishAsync(HostId, Event(runId, 2, RemoteEventKind.Completed, "done"));
+        var subject = NewName("carol");
+        var accounts = new AccountService(Db, TimeProvider.System);
+        var before = await database.ScalarLongAsync("SELECT COUNT(*) FROM users");
 
-        var first = await Panel.ReadAsync();
-        Assert.True(first.UnreadNotices > 0);
+        var ids = await Task.WhenAll(Enumerable.Range(0, 10)
+            .Select(_ => Task.Run(() => accounts.ProvisionWithoutAdmissionAsync("test", subject, "Carol", default))));
 
-        // Nothing has happened since. The delta is empty and the count must not be.
-        var quiet = await Panel.ReadAsync(first.Cursor);
-        Assert.True(quiet.Delta);
-        Assert.Empty(quiet.Notices);
-        Assert.Equal(first.UnreadNotices, quiet.UnreadNotices);
+        var userId = Assert.Single(ids.Distinct());
+        Assert.Equal(before + 1, await database.ScalarLongAsync("SELECT COUNT(*) FROM users"));
+        Assert.Equal(1, await database.ScalarLongAsync(
+            $"SELECT COUNT(*) FROM external_identities WHERE provider = 'test' AND subject = '{subject}'"));
+        Assert.Equal(1, await database.ScalarLongAsync(
+            $"SELECT COUNT(*) FROM user_streams WHERE owner_id = '{userId}'"));
+        Assert.Equal(1, await database.ScalarLongAsync(
+            $"SELECT COUNT(*) FROM user_retention WHERE owner_id = '{userId}'"));
+        Assert.Equal("Active", (await database.StringsAsync(
+            $"SELECT status FROM users WHERE id = '{userId}'")).Single());
+    }
 
-        await new OwnerService(Db).MarkNoticesReadAsync();
+    /// <summary>
+    /// A provider's display name longer than the column is cut, not refused: refusing would lock a
+    /// person with a long name out of the service for good.
+    /// </summary>
+    [Fact]
+    public async Task A_display_name_longer_than_the_column_is_cut_and_the_account_is_made()
+    {
+        var accounts = new AccountService(Db, TimeProvider.System);
+        // A surrogate pair straddles the cut, and must not be split.
+        var longName = new string('a', 99) + "\U0001F600" + new string('b', 300);
 
-        var afterReading = await Panel.ReadAsync(quiet.Cursor);
-        Assert.Empty(afterReading.Notices);
-        Assert.Equal(0, afterReading.UnreadNotices);
+        var userId = await accounts.ProvisionWithoutAdmissionAsync("test", NewName("dave"), longName, default);
+
+        var stored = (await database.StringsAsync($"SELECT display_name FROM users WHERE id = '{userId}'")).Single();
+        Assert.Equal(new string('a', 99), stored);
     }
 }

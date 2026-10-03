@@ -46,8 +46,8 @@ The console host executes one task and exits, or prints timeline/Inbox data. It 
 ### Remote access
 
 A task can be started from a browser and run on a computer where the desktop application is
-installed. A gateway you deploy holds the queue and the history and serves the panel; the desktop
-application connects outward to it and runs the work. A task started this way runs through the same
+installed. A gateway — the public service or one you deploy — holds the queue and the encrypted
+history and serves the panel; the desktop application connects outward to it and runs the work. A task started this way runs through the same
 engine as one typed into the app, under that workspace's own saved autonomy and role, and with two
 additional rules: no shell at any tier, and no staged changes. See [Remote access](Remote-Access.md).
 

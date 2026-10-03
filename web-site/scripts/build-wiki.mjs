@@ -18,6 +18,7 @@ const pages = [
   ['Console', 'console', 'Console & automation', 'Workflows'],
   ['Templates', 'templates', 'Templates', 'Workflows'],
   ['Remote-Access', 'remote-access', 'Remote access', 'Workflows'],
+  ['Remote-Security', 'remote-security', 'Remote security', 'Workflows'],
   ['Settings', 'settings', 'Settings', 'Configuration'],
   ['Models-and-Phases', 'models-and-phases', 'Models & Phases', 'Configuration'],
   ['Architecture', 'architecture', 'Architecture', 'Reference'],

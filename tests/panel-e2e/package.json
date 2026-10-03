@@ -1,0 +1,12 @@
+{
+  "name": "enactive-panel-e2e",
+  "private": true,
+  "type": "module",
+  "description": "The panel in a real browser, against a real gateway (MySQL) and a real computer (tests/RemoteHostHarness).",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0"
+  }
+}

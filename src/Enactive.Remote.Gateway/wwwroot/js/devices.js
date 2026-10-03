@@ -1,0 +1,344 @@
+// Removing a browser from the account (spec §5.4), from this one: the gateway is told to refuse it and delete its
+// grants, and every computer is sent a sealed RevokeDevice, on which it distrusts the device and moves to a new
+// key that it grants to every device still trusted. The gateway alone cannot do it: it holds no key, so a device
+// it refuses still opens whatever it is shown of the old key, and only the computer's rotation makes what it
+// sends afterwards unreadable to the device removed. No DOM here, so `node --test` runs it; app.js draws the list.
+import { keyStanding } from './trust.js';
+import { KeystoreClosedError } from './keystore.js';
+
+/** What a removal does and does not do, said before it is made. */
+export const revocationWarning = (label) =>
+  `${label} can still read what it has already opened. It will not read anything new.`;
+
+/**
+ * Why a computer was not told of a removal from here. A computer acts only on what is sealed under its current
+ * key, so this device - not paired with it, or not yet given its newest key - cannot tell it, and the removed
+ * device stays trusted there until a device that can, or the computer itself, removes it.
+ */
+export const cannotTell = (hostLabel) =>
+  `Cannot tell ${hostLabel} from this device - do it from a device that holds its key, or from the computer.`;
+
+/** What a removal's line says of a computer: only what the panel can see (createRemovalWatch). */
+export const toldUnder = (epoch) => `told under key ${epoch}`;
+export const toldAgainUnder = (epoch) => `key changed - told again under key ${epoch}`;
+export const waitingForKey = (epoch) => `key changed - waiting for key ${epoch} to tell it again`;
+export const NOT_CONFIRMED = 'not confirmed - tell the computers again';
+export const KEY_NEVER_RECEIVED = "not confirmed - this device never received the computer's new key; do it from a "
+  + 'device that holds its key, or from the computer';
+export const GATEWAY_UNREACHED = 'could not reach the gateway - will try again';
+
+// How long a removal waits for a computer's new key before it says what to do instead. A grant that never comes -
+// this device not trusted there any more, or the computer gone - left "waiting for key" on the line for good.
+export const KEY_WAIT_MS = 10 * 60 * 1000;
+
+// How many key changes a removal is told again after before it is called not confirmed. A computer that goes on
+// changing keys - removals from other tabs and devices, one after another - is not told for ever; three covers
+// removals made one after another, which is how they come.
+export const MAX_RESENDS = 3;
+
+/**
+ * What the inbox says of a removal or an endorsement the gateway wrote off after it waited thirty days for its
+ * computer, or null for any other notice. The line "told under key N" lives only in the tab that made the removal,
+ * so without this a removal that lapsed was said nowhere while the computer went on trusting the removed browser.
+ * Which device it named is inside the seal, so the gateway cannot say, and neither does this.
+ */
+export function undeliveredSentence(notice, hosts) {
+  const computer = hosts.find((one) => one.id === notice.hostId)?.label ?? '(no longer listed)';
+  if (notice.kind === 'RemovalNotDelivered') {
+    return `Your computer ${computer} never received the removal of a device - remove it again when the computer is back.`;
+  }
+  if (notice.kind === 'EndorsementNotDelivered') {
+    return `Your computer ${computer} never received the request to trust a new device, so it will not share new `
+      + 'keys with it - add the device again when the computer is back.';
+  }
+  return null;
+}
+
+/** What a browser whose keys were cleared under a session it kept is told (removedView). */
+export const KEYS_CLEARED = "This browser's keys were cleared; sign out and sign in again to use it.";
+
+/**
+ * What the page says when the gateway refuses this browser's device as removed (403 `device-revoked`):
+ * `{title, text, offerForget}`. `registeredHere` is the device this page registered in this session, if it did, and
+ * `named` the one the refused call named.
+ *
+ * A refusal of the device registered in this very session is not a removal. The browser lost its site data - its
+ * keys and device id - but kept its cookie, registered a new device, and the gateway, which binds a session to the
+ * first device it names, refused the new one. Said as "This device was removed", it was untrue, and "Delete this
+ * device's keys" only went round again; a new session is what it needs.
+ */
+export function removedView({ registeredHere, named }) {
+  if (registeredHere !== null && registeredHere === named) {
+    return { title: "This browser's keys were cleared", text: KEYS_CLEARED, offerForget: false };
+  }
+
+  return {
+    title: 'This device was removed',
+    text: 'This browser was removed from your account. Sign in again on a device you trust, or add this one again '
+      + 'from the computer.',
+    offerForget: true
+  };
+}
+
+/** The send-cache key of one removal to one computer (writer.js createSendCache). */
+export const revokeKey = (deviceId, hostId) => `revoke:${deviceId}:${hostId}`;
+
+/**
+ * Removes `deviceId`: at the gateway, then on every computer of `hosts` (the snapshot's) that is not revoked
+ * and whose current key this device holds. Resolves to `{sentTo, skipped, failed}`: `sentTo` the computers
+ * whose command the gateway took, each `{hostId, commandId, epoch}` with the epoch it was sealed under;
+ * `skipped` those this device cannot tell (cannotTell); `failed` those whose command did not reach the gateway,
+ * each with the reason. Pressed again, it sends each computer the command and envelope it sent before (`sends`,
+ * keyed by revokeKey): the gateway takes the same id with the same envelope as the same command, refuses the
+ * same id with another envelope, and would queue a new id as a second removal. A refusal of the gateway's own
+ * revocation throws, and no computer is told: a computer told first would rotate while the gateway went on
+ * serving the device.
+ *
+ * `self` is this browser removing its own device (forgetThisDevice), and then the computers are told first: the
+ * gateway refuses every call of a removed device, the computers' commands included, so told after the gateway they
+ * were all refused and the device stayed trusted on every computer. Nor is it removed at the gateway while a
+ * computer was not reached: removed, the next press would be refused there too. A gateway that then refuses the
+ * revocation leaves a device the computers no longer trust and that is about to delete its keys; pressed again,
+ * the same is sent.
+ */
+export async function revokeDevice({ api, writer, sends, hosts, keystore, deviceId, self = false }) {
+  const skipped = [];
+  const failed = [];
+  const sealed = [];
+
+  // Every envelope is sealed before the gateway is told. Removing this very device, the gateway refuses its
+  // calls from then on, and the first call this page makes as the device puts up "This device was removed"
+  // and closes the key store - the computers not yet sealed for would never have been told.
+  for (const host of hosts.filter((one) => !one.revoked)) {
+    if (await keyStanding(keystore, host) !== null) {
+      skipped.push({ hostId: host.id, reason: cannotTell(host.label) });
+      continue;
+    }
+
+    try {
+      const newest = await keystore.newestEpoch(host.id);
+      const command = await sends.once(revokeKey(deviceId, host.id), newest,
+        (commandId) => writer.sealRevocation(host.id, commandId, deviceId));
+      sealed.push({ host, command });
+    } catch (error) {
+      failed.push({ hostId: host.id, reason: `${host.label}: ${error.message}` });
+    }
+  }
+
+  const revokeAtGateway = () => api.post(`/api/devices/${encodeURIComponent(deviceId)}/revoke`, {});
+  if (!self) await revokeAtGateway();
+
+  const sentTo = [];
+  for (const { host, command } of sealed) {
+    try {
+      await api.post(`/api/hosts/${encodeURIComponent(host.id)}/device-commands`,
+        { commandId: command.id, kind: 'RevokeDevice', sealed: command.sealed });
+      sentTo.push({ hostId: host.id, commandId: command.id, epoch: command.epoch });
+    } catch (error) {
+      // One computer out of reach does not keep the others from being told; pressed again, it is sent the same.
+      failed.push({ hostId: host.id, reason: `${host.label}: ${error.message}` });
+    }
+  }
+
+  if (self && failed.length === 0) await revokeAtGateway();
+
+  return { sentTo, skipped, failed };
+}
+
+/**
+ * "Forget this device": removed like any other device (revokeDevice), then its key store deleted, then signed
+ * out (`signOut`, given revokeDevice's answer to say on the sign-in page - forgottenSentence).
+ *
+ * A computer it could not reach keeps the store and throws: the keys deleted, nothing in this browser could seal
+ * that computer's command any more, and the device would stay trusted there - pressed again, the same commands
+ * are sent. A computer this device cannot tell at all does not hold it back; nothing here could change that.
+ *
+ * A store that cannot be deleted - the browser's storage failing, or another tab keeping it open (BlockedError) -
+ * still signs out, with `keysKept` set on the answer. The device is removed by then, and a page left signed in
+ * with its store closed drew everything unreadable and could not be forgotten from again; the person is told to
+ * clear the site's data instead (KEYS_KEPT), and the removed page can delete the keys later (deleteDeviceKeys).
+ * Resolves to revokeDevice's answer.
+ */
+export async function forgetThisDevice({ api, writer, sends, keystore, hosts, signOut }) {
+  const deviceId = (await keystore.device())?.id ?? null;
+  // Never registered with the gateway: no computer was ever told of it either, and there is nothing to remove.
+  const result = deviceId === null
+    ? { sentTo: [], skipped: [], failed: [] }
+    : await revokeDevice({ api, writer, sends, hosts, keystore, deviceId, self: true });
+
+  if (result.failed.length > 0) {
+    throw new Error(`${result.failed.map(({ reason }) => reason).join(' ')} This browser's keys were kept, so `
+      + 'Forget this device can be pressed again.');
+  }
+
+  try {
+    await keystore.forget();
+  } catch {
+    result.keysKept = true;
+  }
+
+  await signOut(result);
+  return result;
+}
+
+/** What is said when this device's keys could not be deleted from the browser. */
+export const KEYS_KEPT =
+  "The keys could not be deleted from this browser; clear this site's data in the browser settings.";
+
+/** What the sign-in page says after "Forget this device", with every computer that could not be told from here. */
+export function forgottenSentence(result) {
+  const first = result.keysKept
+    ? `This device was removed from your account. ${KEYS_KEPT}`
+    : 'This device was forgotten: its keys are deleted from this browser, and it will not read anything new.';
+  return [first, ...result.skipped.map(({ reason }) => reason)].join(' ');
+}
+
+/**
+ * Deletes the key store of the account `view` (an /api/session answer) names: "Delete this device's keys" on the
+ * page shown to a removed device. A Forget that stopped short - a computer out of reach, then a reload - left the
+ * device removed at the gateway, and the removed page offered only Sign out: the keys stayed on disk for good.
+ * `open` opens a store by account id (keystore.js openKeystore). Rejects with BlockedError while another tab
+ * keeps the store open.
+ *
+ * `removedFor` is the account the page was put up for. Another account signing in, in this browser, makes the
+ * session name that one instead, and its keys are not the removed device's: the button deleted them. Refused
+ * unless the session names `removedFor`.
+ */
+export async function deleteDeviceKeys(view, open, removedFor) {
+  if (!view?.authenticated) throw new Error('Sign in again to delete this device\'s keys.');
+  if (!removedFor || view.user.id !== removedFor) {
+    throw new Error('Another account is signed in in this browser. Sign out and sign in as the account this device was removed from to delete its keys.');
+  }
+  const store = await open(view.user.id);
+  await store.forget();
+}
+
+/**
+ * The buttons a device's card offers, `[{kind, busy}]`: `forget` on this device (`ownId`), `remove` on another,
+ * and `tell-again` on a removed one - always, not only in the tab that removed it: after a reload, or from
+ * another device, a computer the removal missed was otherwise never told, and the gateway and every computer take
+ * the removal again as nothing new. `busy` while a removal of that device is under way (`removing`, a Set of
+ * device ids): the poll redraws the cards every few seconds, and a redraw put back a live button that `act` had
+ * disabled, so a second press ran a second removal over the first.
+ */
+export function cardActions(device, ownId, removing) {
+  const busy = removing.has(device.id);
+  if (device.id === ownId) return device.revoked ? [] : [{ kind: 'forget', busy }];
+  return [{ kind: device.revoked ? 'tell-again' : 'remove', busy }];
+}
+
+/**
+ * Watches the removals this tab sent, and tells a computer again under its new key each time it changes keys.
+ *
+ * A computer acts on a command sealed under its current key only, and refuses one sealed under the key before a
+ * device was removed - rightly: a removed device must not be able to remove others. So a removal sealed under
+ * epoch e that meets a key change before the computer runs it is refused, and the device it names is granted the
+ * new key with everyone else. That happens to two removals sealed under one key (the computer runs one and refuses
+ * the other), and to a removal overtaken by a key change from the desktop or another tab.
+ *
+ * Ruling: the panel cannot tell which removal a key change was for - the snapshot carries only the computer's key
+ * epoch, a rotation grant names no device, and the computer's refusal is shown on the computer only - so it never
+ * says a computer "rotated" for a removal. It says only what it can see: that the computer was told under the key
+ * it uses now (toldUnder). Whenever the key epoch rises above the one the latest command was sealed under, the
+ * removal is sealed again under the new key, with a new command id, once this device holds that key - whatever
+ * else was sent under the old one; a computer returns without a key change for a device it has removed already,
+ * so telling it twice is harmless (toldAgainUnder). At most MAX_RESENDS times, then NOT_CONFIRMED. A new key
+ * not received within KEY_WAIT_MS is KEY_NEVER_RECEIVED; a new command the gateway was not reached with is
+ * GATEWAY_UNREACHED, and the next poll sends it.
+ *
+ * `record(deviceId, sentTo)` takes revokeDevice's `sentTo`; `step(...)` runs on every poll and resolves to
+ * whether anything changed; `lines(deviceId, hosts, now)` is `[{hostId, status}]` against the snapshot's
+ * computers.
+ */
+export function createRemovalWatch() {
+  let watches = [];
+
+  return {
+    record(deviceId, sentTo) {
+      for (const { hostId, commandId, epoch } of sentTo) {
+        const kept = watches.find((one) => one.deviceId === deviceId && one.hostId === hostId);
+        // The same command sent again - "Tell the computers again" before any key change - is the one watched.
+        if (kept?.commandId === commandId) continue;
+        watches = watches.filter((one) => one !== kept);
+        watches.push({
+          deviceId, hostId, commandId, epoch, resends: 0, confirmed: true, waitingSince: null, unreached: false
+        });
+      }
+    },
+
+    async step({ hosts, keystore, api, writer, sends, now = () => Date.now() }) {
+      let changed = false;
+
+      for (const watch of watches) {
+        if (!watch.confirmed) continue;
+        const host = hosts.find((one) => one.id === watch.hostId);
+        if (!Number.isInteger(host?.keyEpoch) || host.keyEpoch <= watch.epoch) continue;
+
+        if (watch.resends >= MAX_RESENDS) {
+          watch.confirmed = false;
+          changed = true;
+          continue;
+        }
+
+        // Sealed under the key before, it would be refused again: wait for the grant of the new one.
+        const newest = keystore ? await keystore.newestEpoch(watch.hostId) : null;
+        if (newest === null || newest < host.keyEpoch) {
+          if (watch.waitingSince === null) watch.waitingSince = now();
+          continue;
+        }
+        watch.waitingSince = null;
+
+        try {
+          const command = await sends.once(revokeKey(watch.deviceId, watch.hostId), newest,
+            (commandId) => writer.sealRevocation(watch.hostId, commandId, watch.deviceId));
+          await api.post(`/api/hosts/${encodeURIComponent(watch.hostId)}/device-commands`,
+            { commandId: command.id, kind: 'RevokeDevice', sealed: command.sealed });
+          Object.assign(watch, { commandId: command.id, epoch: command.epoch, resends: watch.resends + 1 });
+          watch.unreached = false;
+          changed = true;
+        } catch {
+          // Out of reach: said, and the next poll tries again.
+          changed ||= !watch.unreached;
+          watch.unreached = true;
+        }
+      }
+
+      return changed;
+    },
+
+    lines(deviceId, hosts, now = Date.now()) {
+      return watches.filter((one) => one.deviceId === deviceId).map((watch) => {
+        const { hostId, epoch, resends } = watch;
+        const keyEpoch = hosts.find((one) => one.id === hostId)?.keyEpoch;
+        if (!watch.confirmed) return { hostId, status: NOT_CONFIRMED };
+        if (Number.isInteger(keyEpoch) && keyEpoch > epoch) {
+          if (watch.unreached) return { hostId, status: GATEWAY_UNREACHED };
+          const waited = watch.waitingSince !== null && now - watch.waitingSince >= KEY_WAIT_MS;
+          return { hostId, status: waited ? KEY_NEVER_RECEIVED : waitingForKey(keyEpoch) };
+        }
+        return { hostId, status: resends > 0 ? toldAgainUnder(epoch) : toldUnder(epoch) };
+      });
+    },
+
+    clear() {
+      watches = [];
+    }
+  };
+}
+
+/**
+ * Whether `keystore` can no longer be read: closed, or deleted by "Forget this device" in another tab. That tab's
+ * forget() closes this tab's connection to the database, and every call after it rejects with the browser's own
+ * InvalidStateError - which, caught as a failure to reach the gateway, left this tab polling with every record
+ * drawn unreadable and no word of why. Only those two errors: any other failure to read is not a store that is
+ * gone, and the page would have said this device was removed when it was not.
+ */
+export async function storeGone(keystore) {
+  if (!keystore) return true;
+  try {
+    await keystore.device();
+    return false;
+  } catch (error) {
+    return error instanceof KeystoreClosedError || error?.name === 'InvalidStateError';
+  }
+}

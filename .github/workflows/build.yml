@@ -131,6 +131,24 @@ jobs:
         with:
           dotnet-version: "10.0.x"
 
+      # The panel's cryptography is JavaScript (WebCrypto) and pinned to the C# side by shared test
+      # vectors; ubuntu-latest ships a Node, but not one this repository chose, so the version is
+      # stated here instead of being whatever the image happens to carry.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # The panel is the half of the end-to-end encryption that the gateway cannot check: it never
+      # opens an envelope. If the JS and the C# drift apart, the panel and the Host would seal what
+      # the other cannot open, and the first sign would be a phone that pairs and then shows nothing.
+      #
+      # The glob is quoted so that node expands it, not the shell, and it is a glob because Node 22
+      # does not accept a directory argument. The panel's .js files are read as ES modules because
+      # src/Enactive.Remote.Gateway/package.json says so; without it the run depends on whatever
+      # package.json sits above the checkout on the runner.
+      - name: Test the panel's cryptography
+        run: node --test "tests/panel/*.test.mjs"
+
       # Whether the server is the one the schema was written for is checked by the suite itself
       # (SchemaTests.The_server_is_the_series_this_schema_was_written_for) rather than by a step
       # here: a check in the pipeline only ever runs in the pipeline, and it would depend on a
@@ -149,6 +167,48 @@ jobs:
           path: TestResults/*.trx
           retention-days: 7
 
+      # The panel in a real browser, against this gateway on the job's MySQL and a computer
+      # (tests/RemoteHostHarness: the real Enactive.Remote.Host over a scripted engine). Every test above
+      # proves one half against a stand-in for the other; the panel's own wiring - app.js, which pairs,
+      # admits and removes devices, seals and opens - ran nowhere until this did. Here, before the publish,
+      # because what it checks is what the deploy would ship: a pairing that verifies, a tampered grant
+      # refused, a removed device that reads nothing new, two accounts kept apart in one browser. On the Node set up
+      # at the top of this job (22), not whatever the runner image carries.
+      - name: Install the browser tests
+        working-directory: tests/panel-e2e
+        run: npm ci
+
+      - name: Install Chromium for the browser tests
+        working-directory: tests/panel-e2e
+        run: npx playwright install --with-deps chromium
+
+      - name: Build the browser tests' gateway and computer
+        run: |
+          dotnet build src/Enactive.Remote.Gateway/Enactive.Remote.Gateway.csproj --configuration Release
+          dotnet build tests/RemoteHostHarness/RemoteHostHarness.csproj --configuration Release
+
+      # The suite makes its own database on the service (enactive_test_e2e_*) and drops it afterwards; the
+      # gateway it starts runs in Development with the development sign-in, which is refused anywhere else.
+      - name: Test the panel in a browser
+        working-directory: tests/panel-e2e
+        run: npx playwright test
+        env:
+          E2E_CONFIGURATION: Release
+          E2E_NO_BUILD: "1"
+          ENACTIVE_E2E_MYSQL: "Server=127.0.0.1;Port=3306;User ID=root;Password=enactive-dev;"
+
+      # Only on a failure, and only for a week: the report, the traces and what the gateway and the computers
+      # wrote are what a red run needs read, and nothing a green one does (see "Keep it" on storage).
+      - name: Keep the browser tests' report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: panel-e2e-report-${{ github.sha }}
+          path: |
+            tests/panel-e2e/playwright-report
+            tests/panel-e2e/test-results
+          retention-days: 7
+
       # Built here and PULLED from here: the server is on a private address, so nothing in this
       # pipeline can reach it. enactive-deploy.timer asks the API for the newest run of this
       # workflow with status=success and installs its artifact - unless that build carries a
@@ -165,6 +225,33 @@ jobs:
       - name: Publish the gateway
         if: success()
         run: dotnet publish src/Enactive.Remote.Gateway/Enactive.Remote.Gateway.csproj --configuration Release --runtime linux-x64 --no-self-contained --output publish
+
+      # The panel's fingerprints, made from the files this build SHIPS - publish/wwwroot, not the
+      # checkout - because they are compared with what a server sends, and a server sends what was
+      # published. A server's own /.well-known/enactive-panel.json proves nothing alone: a server that
+      # sends altered code can list it too. This list is made where the server cannot reach.
+      #
+      # Into the artifact, so the server holds the list of its own release beside it; and into the
+      # run's summary, which anyone can read on a public repository, where the artifact needs a token.
+      #
+      # Here and not in a Windows job: a Windows checkout gives the panel's text files CRLF endings, so
+      # the same commit hashes differently there and the list would match no server. It can fail - a
+      # file name it cannot write as the gateway does - and then the build is not green and is not
+      # deployed, which is right for a release whose list cannot be published.
+      - name: Fingerprint the panel
+        if: success()
+        run: |
+          bash deploy/panel-manifest.sh publish/wwwroot > publish/panel-manifest.json
+          {
+            echo "### Panel fingerprints"
+            echo
+            echo "What a gateway built from ${GITHUB_SHA} publishes at \`/.well-known/enactive-panel.json\`, byte for byte."
+            echo
+            echo '```json'
+            cat publish/panel-manifest.json
+            echo
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       # Only on a PUSH, and only for a week.
       #

@@ -8,6 +8,9 @@
 -- Passwords are not in this file and must not be added to it. Set them when creating the accounts,
 -- from a shell that is not logging history, and put the gateway's into
 -- /etc/enactive-remote/gateway.env - which is the only place it belongs.
+--
+-- The schema is enactive_remote_v2, protocol 2's. The protocol-1 schema, enactive_remote, keeps the
+-- grants it was given when it was made: it is the rollback, and this file does not touch it.
 
 -- ── the gateway ─────────────────────────────────────────────────────────────
 --
@@ -23,7 +26,7 @@ CREATE USER IF NOT EXISTS 'enactive_gateway'@'localhost' IDENTIFIED BY 'set-me';
 
 GRANT SELECT, INSERT, UPDATE, DELETE,
       CREATE, ALTER, INDEX, DROP, REFERENCES
-  ON `enactive_remote`.*
+  ON `enactive_remote_v2`.*
   TO 'enactive_gateway'@'localhost';
 
 -- ── backups ─────────────────────────────────────────────────────────────────
@@ -39,7 +42,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE,
 CREATE USER IF NOT EXISTS 'enactive_backup'@'localhost' IDENTIFIED BY 'set-me';
 
 GRANT SELECT, LOCK TABLES, SHOW VIEW, EVENT, TRIGGER
-  ON `enactive_remote`.*
+  ON `enactive_remote_v2`.*
   TO 'enactive_backup'@'localhost';
 
 -- Everything a restore of THIS dump can need, on scratch schemas this account creates and drops.
@@ -57,7 +60,7 @@ GRANT SELECT, LOCK TABLES, SHOW VIEW, EVENT, TRIGGER
 GRANT SELECT, INSERT, CREATE, ALTER, INDEX, DROP, REFERENCES,
       LOCK TABLES, CREATE VIEW, SHOW VIEW, CREATE ROUTINE, ALTER ROUTINE, EXECUTE,
       TRIGGER, EVENT
-  ON `enactive\_remote\_verify\_%`.*
+  ON `enactive\_remote\_v2\_verify\_%`.*
   TO 'enactive_backup'@'localhost';
 
 -- No RELOAD and no PROCESS, on purpose. Both are server-wide: RELOAD is not needed by

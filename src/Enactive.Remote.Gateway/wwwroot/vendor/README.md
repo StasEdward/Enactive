@@ -1,0 +1,1 @@
+qrcode.mjs is qrcode-generator 2.0.4 by Kazuhiko Arase (dist/qrcode.mjs of https://registry.npmjs.org/qrcode-generator/-/qrcode-generator-2.0.4.tgz, sha512-mZSiP6RnbHl4xL2Ap5HfkjLnmxfKcPWpWe/c+5XxCuetEenqmNFf1FH/ftXPCtFG5/TDobjsjz6sSNL0Sr8Z9g==), MIT (qrcode.LICENSE.txt); do not edit - replace it whole with a newer release.

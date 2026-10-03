@@ -247,7 +247,9 @@
                                Text="" />
                 </StackPanel>
 
-                <StackPanel IsVisible="{Binding IsRemote}" Margin="12" Spacing="6">
+                <!-- Scrolls: the trusted list grows with every device added. -->
+                <ScrollViewer IsVisible="{Binding IsRemote}">
+                <StackPanel Margin="12" Spacing="6">
                     <TextBlock Classes="label" Text="Remote access" />
                     <TextBlock Classes="hint" TextWrapping="Wrap"
                                Text="Lets you start tasks on this computer from a phone. This computer connects out to the gateway and holds the connection open; nothing listens for incoming connections here, and no port needs opening." />
@@ -255,29 +257,76 @@
                     <CheckBox Content="Answer this computer's remote gateway"
                               IsChecked="{Binding RemoteEnabled}" Margin="0,6,0,0" />
 
-                    <TextBlock Classes="label" Text="Gateway address" Margin="0,8,0,0" />
-                    <TextBox Text="{Binding RemoteGatewayUrl}" PlaceholderText="https://remote.enactive.dev" />
-
-                    <TextBlock Classes="label" Text="Device token" Margin="0,8,0,0" />
-                    <TextBox Text="{Binding RemoteToken}" PasswordChar="•" />
-                    <TextBlock Classes="hint" TextWrapping="Wrap"
-                               Text="Register this computer on the gateway's Computers page; it shows a token once. The token alone says which computer this is, so there is nothing else to copy across. Stored encrypted with your Windows account, the same as an API key. Leave the box as it is to keep the stored token; empty it to remove it." />
-
+                    <TextBlock Classes="label" Text="Connection code" Margin="0,8,0,0" />
+                    <TextBox Text="{Binding RemoteCode}" PasswordChar="•"
+                             PlaceholderText="enactive-connect:…" />
                     <TextBlock Classes="hint" TextWrapping="Wrap" Foreground="{DynamicResource Brand.Danger}"
-                               IsVisible="{Binding HasRemoteProblem}" Text="{Binding RemoteProblem}" />
+                               IsVisible="{Binding HasRemoteCodeProblem}" Text="{Binding RemoteCodeProblem}" />
+                    <TextBlock Classes="hint" TextWrapping="Wrap"
+                               Text="Register this computer on the gateway's Computers page and copy the code it shows. The code says which gateway and computer this is and which browser to trust first; Connect applies it at once. The token in it is stored encrypted with your Windows account, and the code itself is not kept." />
 
-                    <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,10,0,0">
+                    <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,6,0,0">
+                        <Button Content="Connect" Command="{Binding ConnectRemoteCommand}"
+                                IsEnabled="{Binding CanUseRemote}" />
                         <Button Content="Test connection" Command="{Binding TestRemoteCommand}"
-                                IsEnabled="{Binding CanTestRemote}" />
+                                IsEnabled="{Binding CanUseRemote}" />
                     </StackPanel>
                     <TextBlock Classes="hint" TextWrapping="Wrap"
                                IsVisible="{Binding HasRemoteResult}" Text="{Binding RemoteResult}" />
+
+                    <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto" Margin="0,10,0,0">
+                        <TextBlock Grid.Row="0" Grid.Column="0" Classes="hint" Text="Gateway" Margin="0,0,12,2" />
+                        <SelectableTextBlock Grid.Row="0" Grid.Column="1" Text="{Binding RemoteStoredGateway}" />
+                        <TextBlock Grid.Row="1" Grid.Column="0" Classes="hint" Text="Computer id" Margin="0,0,12,2" />
+                        <SelectableTextBlock Grid.Row="1" Grid.Column="1" Text="{Binding RemoteStoredHostId}" />
+                        <TextBlock Grid.Row="2" Grid.Column="0" Classes="hint" Text="Token" Margin="0,0,12,2" />
+                        <TextBlock Grid.Row="2" Grid.Column="1" TextWrapping="Wrap" Text="{Binding RemoteTokenState}" />
+                    </Grid>
+
+                    <TextBlock Classes="hint" TextWrapping="Wrap" Foreground="{DynamicResource Brand.Danger}"
+                               IsVisible="{Binding HasRemoteProblem}" Text="{Binding RemoteProblem}" />
                     <TextBlock Classes="hint" TextWrapping="Wrap"
-                               Text="Tries the settings as typed, without saving them. A successful check also makes this computer show as online on the phone." />
+                               Text="Test connection tries what is stored: it says hello to the gateway and offers this computer's workspaces, which also makes it show as online on the phone." />
+
+                    <!-- Remove asks first: taking a device's trust away means a new key for every other
+                         device, and a button pressed by accident must not do that unasked. -->
+                    <TextBlock Classes="label" Text="Trusted devices" Margin="0,10,0,0" />
+                    <TextBlock Classes="hint" TextWrapping="Wrap"
+                               Text="The browsers that hold this computer's keys and can read what it sends. Add a device makes a one-time link for another browser signed in to the same account, while this computer is connected. Remove stops a device reading anything new and gives every other device a new key; the gateway is told at once, or when this computer next connects." />
+                    <TextBlock Classes="hint" IsVisible="{Binding !RemoteDeviceList.HasDevices}"
+                               Text="No device is trusted yet." />
+                    <TextBlock Classes="hint" TextWrapping="Wrap" Foreground="{DynamicResource Brand.Danger}"
+                               IsVisible="{Binding RemoteDeviceList.HasProblem}" Text="{Binding RemoteDeviceList.Problem}" />
+                    <TextBlock Classes="hint" TextWrapping="Wrap"
+                               IsVisible="{Binding RemoteDeviceList.HasNote}" Text="{Binding RemoteDeviceList.Note}" />
+                    <ItemsControl ItemsSource="{Binding RemoteDeviceList.Devices}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:TrustedDeviceRow">
+                                <Border Classes="card" Margin="0,0,0,4" Padding="8">
+                                    <Grid ColumnDefinitions="*,Auto">
+                                        <StackPanel Spacing="2">
+                                            <TextBlock Text="{Binding Label}" FontWeight="SemiBold"
+                                                       TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Classes="hint" Text="{Binding Added}" />
+                                            <TextBlock Classes="hint" Text="{Binding State}"
+                                                       Foreground="{DynamicResource Brand.Danger}"
+                                                       IsVisible="{Binding IsRevoked}" />
+                                        </StackPanel>
+                                        <Button Grid.Column="1" Classes="danger" VerticalAlignment="Center"
+                                                Content="Remove" Command="{Binding RemoveCommand}"
+                                                IsVisible="{Binding CanRemove}" />
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <Button Content="Add a device" Command="{Binding RemoteDeviceList.AddDeviceCommand}"
+                            IsEnabled="{Binding RemoteDeviceList.CanAddDevice}" HorizontalAlignment="Left" />
 
                     <TextBlock Classes="hint" TextWrapping="Wrap" Margin="0,10,0,0"
                                Text="A task started from the phone runs at the autonomy level set on the main window and never runs shell commands, whatever that level says. Permission questions it does raise can be answered from either the phone or here - whichever answers first decides." />
                 </StackPanel>
+                </ScrollViewer>
 
                 <DockPanel IsVisible="{Binding IsAbout}" Margin="12" LastChildFill="True">
 

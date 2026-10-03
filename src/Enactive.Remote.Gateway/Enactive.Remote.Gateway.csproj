@@ -6,14 +6,19 @@
 
   <ItemGroup>
     <!--
-      Contracts and a MySQL driver. That is the whole list, and the absence of the rest is the
-      point: no reference to Core, Agents, Tools or Workspace, so the gateway CANNOT reach the
-      engine, run a tool or resolve a path even by mistake. A missing project reference enforces
-      that; a note asking people not to do it would not.
+      Contracts, a MySQL driver and Microsoft's OpenID Connect handler. That is the whole list, and
+      the absence of the rest is the point: no reference to Core, Agents, Tools or Workspace, so the
+      gateway CANNOT reach the engine, run a tool or resolve a path even by mistake. A missing
+      project reference enforces that; a note asking people not to do it would not.
 
       MySqlConnector rather than Oracle's MySql.Data: genuinely async rather than sync-over-async,
       and MIT rather than GPL with a linking exception.
+
+      The OpenID Connect handler for Google sign-in, at the framework's version: it checks the id
+      token's signature, issuer, audience, expiry and nonce, which is exactly the code not to write
+      by hand. GitHub is plain OAuth and needs nothing beyond the framework.
     -->
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" Version="10.0.12" />
     <PackageReference Include="MySqlConnector" Version="2.6.2" />
     <ProjectReference Include="..\Enactive.Remote.Contracts\Enactive.Remote.Contracts.csproj" />
   </ItemGroup>
@@ -22,6 +27,13 @@
     <!-- Migrations ship inside the assembly, so a deployed gateway cannot be running one schema
          while a stray .sql file beside it describes another. -->
     <EmbeddedResource Include="Storage\Migrations\*.sql" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- package.json only tells Node that the panel's .js files are ES modules, so the panel's
+         tests can run. Without this line the Web SDK treats it as content and puts it in the
+         published gateway, where nothing reads it. -->
+    <Content Update="package.json" CopyToPublishDirectory="Never" />
   </ItemGroup>
 
   <ItemGroup>

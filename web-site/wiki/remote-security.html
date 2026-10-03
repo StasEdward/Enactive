@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Remote Security · Enactive Wiki</title><meta name="description" content="Enactive Wiki: Remote Security. Practical workflows, configuration details, and implementation references.">
+<link rel="canonical" href="https://enactive.dev/wiki/remote-security.html">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/brand.css"><link rel="stylesheet" href="assets/fonts.css"><link rel="stylesheet" href="wiki.css">
+<script src="theme.js"></script><script src="search-index.js" defer></script><script src="wiki.js" defer></script>
+</head><body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="wiki-header"><a class="brand" href="../index.html" aria-label="Enactive home"><img class="brand-mark" src="assets/mark-loop.svg" alt="" width="32" height="32"><img class="wordmark dark-mark" src="assets/wordmark.svg" alt="Enactive" width="144" height="18"><img class="wordmark light-mark" src="assets/wordmark-light.svg" alt="Enactive" width="144" height="18"></a><a class="wiki-label" href="index.html">Wiki</a><div class="header-actions"><button type="button" class="search-trigger" aria-haspopup="dialog">Search wiki <kbd>Ctrl K</kbd></button><button type="button" id="theme-toggle" aria-label="Switch to light theme">Light theme</button><button type="button" id="menu-toggle" aria-expanded="false" aria-controls="sidebar">Menu</button></div></header>
+<div class="wiki-layout"><aside id="sidebar" class="sidebar"><nav aria-label="Wiki chapters"><p class="nav-group">Start here</p><a href="index.html">Wiki home</a><a href="overview.html">Application overview</a><a href="getting-started.html">Getting started</a><p class="nav-group">Workflows</p><a href="running-tasks.html">Running tasks</a><a href="console.html">Console & automation</a><a href="templates.html">Templates</a><a href="remote-access.html">Remote access</a><a href="remote-security.html" aria-current="page">Remote security</a><p class="nav-group">Configuration</p><a href="settings.html">Settings</a><a href="models-and-phases.html">Models & Phases</a><p class="nav-group">Reference</p><a href="architecture.html">Architecture</a><a href="operations.html">Operations & troubleshooting</a></nav><div class="sidebar-footer"><a href="../index.html">← Back to Enactive</a><span>Product & engineering handbook</span></div></aside>
+<main id="main" class="" tabindex="-1"><div class="page-heading"><div class="breadcrumb"><a href="index.html">Documentation</a><span aria-hidden="true">/</span><span>Remote security</span></div><p class="eyebrow">Workflows · Enactive</p><h1>Remote Security</h1><div class="page-meta"><span>9 min read</span><span>English</span><a href="https://github.com/StasEdward/Enactive/blob/master/Docs/wiki/Remote-Security.md">Markdown source ↗</a></div></div><details class="mobile-toc"><summary>On this page</summary><nav aria-label="On this page"><a href="#in-short">In short</a><a href="#what-the-service-cannot-read">What the service cannot read</a><a href="#what-the-service-can-see">What the service can see</a><a href="#commands-the-service-cannot-forge">Commands the service cannot forge</a><a href="#key-rotation-and-what-a-removed-device-keeps">Key rotation and what a removed device keeps</a><a href="#the-invitation-limit">The invitation limit</a><a href="#the-javascript-limit">The JavaScript limit</a><a href="#implementation-references">Implementation references</a></nav></details><article><h2 id="in-short">In short<a class="heading-anchor" href="#in-short" aria-label="Link to In short">#</a></h2>
+<p>Remote access is end-to-end encrypted between the desktop application and the browsers you add as
+devices. The gateway stores and forwards what they send without being able to read it, and it
+cannot command a computer. It does see who uses it, when, and how much — the metadata it needs to
+deliver anything at all.</p>
+<p>Three things are outside that protection, and they are stated here rather than discovered later:
+the panel is code the gateway sends (<a href="#the-javascript-limit">the JavaScript limit</a>), the metadata is
+visible, and a device that was compromised when it invited another can mislead that one
+(<a href="#the-invitation-limit">the invitation limit</a>).</p>
+<p>How to pair, add and remove devices is in <a href="remote-access.html">Remote access</a>. The service&#39;s privacy
+page, <code>/privacy.html</code> on the gateway, covers the same ground.</p>
+<h2 id="what-the-service-cannot-read">What the service cannot read<a class="heading-anchor" href="#what-the-service-cannot-read" aria-label="Link to What the service cannot read">#</a></h2>
+<ul>
+<li>The titles and the text of your tasks.</li>
+<li>What a run reports while it works, and its summary when it ends.</li>
+<li>The permission requests your computer sends you: which tool, with what arguments, in which
+folder, and the full text of the question.</li>
+<li>The details of your notifications.</li>
+<li>The names of your workspaces.</li>
+</ul>
+<p>All of this is stored only as encrypted data (AES-256-GCM). The keys that open it are made on your
+computer and on the devices you have added, and they never reach the service. A leak of the
+database, of a backup or of the server&#39;s disk shows the encrypted data and nothing more; the same
+holds for anyone who runs the service.</p>
+<p>Each encrypted value is bound to the record around it — the computer, the run, the step, the kind of
+record — so moving it to another record makes it fail to open rather than show up somewhere else.
+The panel then says <em>&quot;this does not open - it may have been altered&quot;</em>.</p>
+<p><strong>One exception</strong>, which makes answering a permission request safe: next to each request the service
+keeps a SHA-256 fingerprint of the exact action (the run, the tool call, the tool, the folder and the
+arguments), so that your browser can check that the action it shows you is the one your computer
+asked about. The fingerprint cannot be turned back into the action, but someone who guesses the
+action exactly could confirm the guess.</p>
+<h2 id="what-the-service-can-see">What the service can see<a class="heading-anchor" href="#what-the-service-can-see" aria-label="Link to What the service can see">#</a></h2>
+<p>To deliver anything, the service has to know who you are, which devices are yours, and what goes
+where. It keeps:</p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Record / What is in it"><table>
+<thead>
+<tr>
+<th>Record</th>
+<th>What is in it</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Account and sign-in</td>
+<td>The name shown for the account; for each way you sign in, the provider, the provider&#39;s id for you, and the display name the provider gives it</td>
+</tr>
+<tr>
+<td>Sessions</td>
+<td>When each began, when it ends, whether it was ended early</td>
+</tr>
+<tr>
+<td>Devices</td>
+<td>Each one&#39;s public key; a label made from the browser&#39;s and operating system&#39;s names (such as &quot;Firefox on Windows&quot;); when it was added, last seen and removed</td>
+</tr>
+<tr>
+<td>Computers</td>
+<td>The name you give each one (not encrypted, and the panel says so where you type it); a fingerprint of its connection token, not the token; when it was last seen; which generation of its keys it is on</td>
+</tr>
+<tr>
+<td>Workspaces</td>
+<td>Their ids, not their names</td>
+</tr>
+<tr>
+<td>Tasks, runs, commands, permission requests, progress messages, notifications</td>
+<td>Ids, kinds, statuses and times, and the size of their encrypted contents</td>
+</tr>
+<tr>
+<td>Invitations</td>
+<td>When each was made, when it expires, whether it was used</td>
+</tr>
+<tr>
+<td>Keys sent to devices</td>
+<td>Encrypted, so that only the device they are for can open them</td>
+</tr>
+<tr>
+<td>Security log</td>
+<td>Sign-ins, devices and computers added and removed, operator actions; kept 90 days</td>
+</tr>
+</tbody></table>
+</div><p>Put plainly: the service knows that you use it, how many computers and devices you have and which
+browsers and operating systems they are, when you run tasks and how many, how they ended, how many
+permission requests they raised, how much encrypted data they produced, and the names you give your
+computers.</p>
+<p>It does not store an IP address with the account or in the security log (rate limits hold an address
+in memory for a few minutes), asks the providers for no email address, has no password of its own, and
+keeps no GitHub or Google token. The service is reached through Cloudflare, which ends the HTTPS
+connection and so sees what the service sees on the way through — but not what is encrypted end to
+end.</p>
+<h2 id="commands-the-service-cannot-forge">Commands the service cannot forge<a class="heading-anchor" href="#commands-the-service-cannot-forge" aria-label="Link to Commands the service cannot forge">#</a></h2>
+<p>Starting a task, cancelling a run, answering a permission, and removing or endorsing a device are
+<strong>commands</strong> to a computer. Each is sealed by the device that sends it with the computer&#39;s current
+key, which the gateway does not have, and bound to the computer, the command&#39;s id and its kind. The
+computer acts only on a command that opens under its current key, and refuses one sealed more than 24
+hours (plus 10 minutes of clock difference) ago, or 30 days for removing or endorsing a device, which
+must still reach a computer that was off for a weekend — so the gateway can neither make a command up nor
+replay an old one.</p>
+<p>The keys themselves reach a device as <strong>grants</strong>, each wrapped for one device&#39;s public key and
+authenticated in one of two ways: with the pairing secret, which travels only inside the connection
+code or after the <code>#</code> of an invitation link and is never sent to the gateway; or with the computer&#39;s
+own <strong>signing key</strong>, whose private half never leaves the computer. A device remembers a computer&#39;s
+signing key at the first grant it accepts from it, and refuses any later grant that names another. The
+gateway can wrap a key of its own for any device; it cannot make one that verifies.</p>
+<p><strong>If someone takes over your GitHub or Google account</strong>, they can sign in and see what the service
+sees. They cannot read your tasks or send anything to your computer: that needs a device key. They
+can remove your computers and devices, sign out every session, and delete the account. Secure the
+provider account first, then sign in and use <strong>Sign out everywhere</strong>, and add back what was removed.</p>
+<h2 id="key-rotation-and-what-a-removed-device-keeps">Key rotation and what a removed device keeps<a class="heading-anchor" href="#key-rotation-and-what-a-removed-device-keeps" aria-label="Link to Key rotation and what a removed device keeps">#</a></h2>
+<p>Each computer has a key per <strong>epoch</strong>, numbered from 1. Removing a device moves every computer to the
+next epoch:</p>
+<ol>
+<li>The gateway marks the device removed: it refuses every call that names the device and stops
+serving it keys. Every call of the panel names the browser it comes from, and one that names none
+is refused, so leaving the name off is no way round it. Every session the device was used through
+ends with it, so it cannot register itself as a new device either. Whoever can still sign in to
+the account at the provider can sign in again, from any browser - secure the provider account
+first.</li>
+<li>Each computer receives the sealed removal, distrusts the device, makes a new key, and sends it to
+every device still trusted, signed with its signing key.</li>
+<li>From then on the computer seals with the new key.</li>
+</ol>
+<p>A removed device <strong>keeps</strong> what it already opened and the keys of the epochs before its removal. It
+cannot read anything sealed under a later key, and it cannot make a grant that other devices accept:
+no epoch key signs a grant. Between the removal and the computer acting on it — while the computer is
+switched off, say — what keeps the device out is only the gateway refusing it. That is why the panel
+reports, for each computer, whether it was told under its current key, and why <strong>Tell the computers
+again</strong> exists (<a href="remote-access.html#removing-a-device">Removing a device</a>).</p>
+<p>The signing key is made once per computer and never rotated: a key derived from an epoch key could
+not do its job, because the device being removed holds that epoch key.</p>
+<h2 id="the-invitation-limit">The invitation limit<a class="heading-anchor" href="#the-invitation-limit" aria-label="Link to The invitation limit">#</a></h2>
+<p>A device that admits another by invitation also tells it which signing key the computer has. So a
+device that was already compromised when it invited can make the device it admitted trust a key it
+controls, and go on reading what that device sends even after it is itself removed.</p>
+<p>Two things limit this. A device admitted that way sees the computer&#39;s real key change arrive under
+another signing key and says so: <em>&quot;&lt;computer&gt; is presenting a different identity than the one
+this device trusts. Remove this device and add it again from the computer (desktop: Add a
+device).&quot;</em> And adding a device <strong>from the computer</strong> never depends on another browser&#39;s word. If you
+have reason to doubt one of your devices, add new ones from the computer.</p>
+<p>The invitation itself is protected against the gateway: the new device proves it holds the
+invitation&#39;s secret when it answers, so the gateway cannot swap in a public key of its own. If the
+answer does not verify, the inviting device shares nothing and says <em>&quot;Someone other than your new
+device answered this invitation. Nothing was shared.&quot;</em></p>
+<h2 id="the-javascript-limit">The JavaScript limit<a class="heading-anchor" href="#the-javascript-limit" aria-label="Link to The JavaScript limit">#</a></h2>
+<p>The panel holds the keys in the browser, and the panel is code the gateway sends. An operator who
+sent altered code — or someone who had taken over the server, or Cloudflare — could take the keys
+from the browser. No web page can prevent this; it is the limit of any end-to-end encryption
+delivered over the web. A compromised computer or browser is outside the protection for the same
+reason: whatever can read your screen or the browser&#39;s storage can read what you read there.</p>
+<p>What the service does is make an alteration visible.</p>
+<ul>
+<li>It publishes the SHA-256 of every script and stylesheet it serves at
+<code>/.well-known/enactive-panel.json</code>.</li>
+<li>The build pipeline makes the same list from the files a build ships, where the server cannot
+reach it, and publishes it in the summary of every build run (<strong>Panel fingerprints</strong>), in the notes
+of every tagged release, and as <code>panel-manifest.json</code> attached to the release.</li>
+<li>The two lists are byte for byte the same format, so comparing them is a file comparison.</li>
+</ul>
+<h3 id="comparing-the-panel-with-a-release">Comparing the panel with a release<a class="heading-anchor" href="#comparing-the-panel-with-a-release" aria-label="Link to Comparing the panel with a release">#</a></h3>
+<p>Compare against the release the operator says is running, and use the <code>panel-manifest.json</code>
+attached to that release rather than a copy pasted from a page: the list has no newline after its
+closing <code>}</code>, and a pasted copy usually gains one, which makes <code>cmp</code> report a difference that is not
+there.</p>
+<div class="code-block"><div class="code-toolbar"><span>bash</span><button class="copy-button" type="button" aria-label="Copy bash example">Copy</button></div><pre tabindex="0"><code class="language-bash"># What the server says it sends, against the panel-manifest.json attached to the release it runs.
+curl -s https://remote.enactive.dev/.well-known/enactive-panel.json &gt; served.json
+cmp served.json panel-manifest.json &amp;&amp; echo &quot;the panel is the build&quot;
+
+# What a file actually is, against the server&#39;s own list: hash what you were sent.
+curl -s https://remote.enactive.dev/js/keystore.js | sha256sum
+grep &#39;&quot;/js/keystore.js&quot;&#39; served.json</code></pre></div>
+<p><code>deploy/panel-manifest.sh &lt;wwwroot&gt;</code> prints the list for a directory of panel files, so anyone with a
+published build can reproduce it themselves. A difference names a file that is not what the build
+shipped. A cached file is a difference too, so reload and check again before treating it as an
+alteration.</p>
+<p>This is a check, not a guarantee. It shows what the server sends to whoever asks, and a server that
+sent altered code only to some people would pass a check made from somewhere else. The desktop
+application does not yet check the panel for you.</p>
+<h2 id="implementation-references">Implementation references<a class="heading-anchor" href="#implementation-references" aria-label="Link to Implementation references">#</a></h2>
+<ul>
+<li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.Remote.Gateway/PanelAssets.cs">Panel fingerprints</a></li>
+<li><a href="https://github.com/StasEdward/Enactive/blob/master/deploy/panel-manifest.sh">The manifest script</a></li>
+<li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.Remote.Gateway/wwwroot/js/grants.js">Grants and their verification</a></li>
+<li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.Remote.Gateway/wwwroot/js/keystore.js">The panel&#39;s key store</a></li>
+<li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.Remote.Host/Sealer.cs">Sealing and command freshness on the computer</a></li>
+<li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.Remote.Gateway/wwwroot/privacy.html">The service&#39;s privacy page</a></li>
+<li><a href="https://github.com/StasEdward/Enactive/blob/master/Docs/REMOTE_OPERATIONS.md#9-comparing-the-panel-with-its-build">Operating the panel comparison</a></li>
+</ul>
+</article><nav class="pagination" aria-label="Adjacent chapters"><a href="remote-access.html"><small>← Previous</small><strong>Remote access</strong></a><a href="settings.html"><small>Next →</small><strong>Settings</strong></a></nav><footer class="page-footer"><span>Enactive · Real, reviewable, recorded action.</span><a href="#main">Back to top ↑</a></footer></main>
+<aside class="page-toc"><p class="nav-group">On this page</p><nav aria-label="Page sections"><a href="#in-short">In short</a><a href="#what-the-service-cannot-read">What the service cannot read</a><a href="#what-the-service-can-see">What the service can see</a><a href="#commands-the-service-cannot-forge">Commands the service cannot forge</a><a href="#key-rotation-and-what-a-removed-device-keeps">Key rotation and what a removed device keeps</a><a href="#the-invitation-limit">The invitation limit</a><a href="#the-javascript-limit">The JavaScript limit</a><a href="#implementation-references">Implementation references</a></nav><a class="source-link" href="https://github.com/StasEdward/Enactive/blob/master/Docs/wiki/Remote-Security.md">View Markdown source ↗</a></aside></div>
+<dialog id="search-dialog" aria-labelledby="search-title"><div class="search-heading"><h2 id="search-title">Search the wiki</h2><button id="close-search" type="button" aria-label="Close search">Close <kbd>Esc</kbd></button></div><label for="search-input">Find a topic, setting, or command</label><input id="search-input" type="search" placeholder="Try templates, Review, or --workspace" autocomplete="off"><p id="search-status" role="status" aria-live="polite">Search across all chapters.</p><div id="search-results"></div></dialog><div id="copy-status" class="sr-only" role="status" aria-live="polite"></div>
+</body></html>

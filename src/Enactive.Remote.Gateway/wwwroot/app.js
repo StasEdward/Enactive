@@ -13,6 +13,37 @@
 // sends is a second line, not the first one.
 // =============================================================================
 
+import {
+  get, post, remove, session, Refused, Stale, endSession, abandonRequests, generation, isCurrent,
+  onUnauthenticated, onDeviceRevoked, useDevice
+} from "./js/api.js";
+import { emptyState, resetState, forgetScreen, pollOnce } from "./js/session-guard.js";
+import { providerLinks, outcomeOf, createDevelopmentProbe } from "./js/signin.js";
+import { singleFlight } from "./js/single-flight.js";
+import { openSessionChannel, onSessionSignal, removedViewAction } from "./js/session-channel.js";
+import { openKeystore } from "./js/keystore.js";
+import {
+  ensureDevice, collectGrants, troubleFor, worthSaying, connectPendingId, keyStanding, createGrantSchedule, epochsChanged,
+  DEVICE_HEADER, DEVICE_LIMIT
+} from "./js/trust.js";
+import { createReader, answerable, NOT_GIVEN } from "./js/reader.js";
+import {
+  createWriter, createSendCache, sendRefusal, draftKey, draftAlreadyRan, NOT_YET_GIVEN
+} from "./js/writer.js";
+import { formatConnectionCode, formatInviteLink, newPairingSecret, derivePairKey } from "./js/pairing.js";
+import {
+  openInviteLink, keepInvite, takeKeptInvite, newInviteId, enrollThisDevice, inviteJoinStep, countInviteGrants,
+  readableHosts, behindHosts, behindWarning, answerEnrollment, newAnswerProgress, createInviteWatch, inviteQrSvg,
+  INVITE_LIFETIME_MS, SWAPPED_KEY
+} from "./js/invite.js";
+import {
+  revokeDevice, forgetThisDevice, forgottenSentence, createRemovalWatch, cardActions, deleteDeviceKeys, storeGone,
+  revocationWarning, undeliveredSentence, removedView, NOT_CONFIRMED, KEY_NEVER_RECEIVED
+} from "./js/devices.js";
+import { describe, newestFirst } from "./js/audit.js";
+import { deleteAccount, DELETE_QUESTION } from "./js/account.js";
+import { downloadMyData, exportRefusal } from "./js/export.js";
+
 const POLL_MS = 3000;
 
 // How much of the two streams a long-lived tab keeps. The gateway stops the
@@ -21,90 +52,27 @@ const POLL_MS = 3000;
 const KEEP_EVENTS = 500;
 const KEEP_NOTICES = 200;
 
-const state = {
-  cursor: null,
-  hosts: [],
-  tasks: [],
-  runs: [],
-  approvals: [],
-  notices: [],
-  events: [],
-  unread: 0,
-  retention: null,
-  live: false,
-  // The run whose timeline is open, so the poll can redraw it. Null when the dialog is closed.
-  openRun: null
-};
+// `openRun` is the run whose timeline is open, so the poll can redraw it; null when the dialog is closed.
+const state = emptyState();
 
-// One command id per logical action, kept across retries.
+// One id and one sealed envelope per logical action, kept across retries
+// (writer.js createSendCache).
 //
-// The gateway treats a repeated id as the SAME instruction and returns the
-// command it already queued. That is what makes a tapped button on a flaky
-// phone connection safe: a new id each time would queue a second run of the
-// same task, and the owner would find out by reading the timeline.
-const commandIds = new Map();
-
-function commandId(key) {
-  if (!commandIds.has(key)) {
-    commandIds.set(key, crypto.randomUUID());
-  }
-
-  return commandIds.get(key);
-}
+// The gateway treats a repeated id with the same envelope as the SAME
+// instruction and returns the command it already queued. That is what makes a
+// tapped button on a flaky phone connection safe: a new id each time would
+// queue a second run of the same task, and the owner would find out by reading
+// the timeline.
+//
+// Kept across a sign-out and every other reset, on purpose. Each key names the
+// resource it acts on - a task, a run, an approval - which another account
+// cannot act on, so nothing of one account's is reused for another's. Clearing
+// it would give the same person's retry after signing in again a new id, and a
+// command the gateway had already queued before the reset would be queued twice.
+// Drafts of tasks not yet started are the exception (resetSession).
+const sends = createSendCache();
 
 const $ = (id) => document.getElementById(id);
-
-// ── talking to the gateway ───────────────────────────────────────────────
-
-let csrf = "";
-
-/** A refusal the gateway coded, kept apart from a network failure. */
-class Refused extends Error {
-  constructor(code, message) {
-    super(message);
-    this.code = code;
-  }
-}
-
-async function get(path) {
-  const response = await fetch(path, { headers: { accept: "application/json" } });
-  return await unwrap(response);
-}
-
-async function post(path, body) {
-  const response = await fetch(path, {
-    method: "POST",
-    headers: { "content-type": "application/json", "X-CSRF-TOKEN": csrf },
-    body: JSON.stringify(body ?? {})
-  });
-
-  return await unwrap(response);
-}
-
-async function unwrap(response) {
-  if (response.status === 401) {
-    showLogin();
-    throw new Refused("unauthenticated", "Sign in again.");
-  }
-
-  const text = await response.text();
-  const body = text ? JSON.parse(text) : null;
-
-  if (!response.ok) {
-    // The gateway's faults carry a code, and the page says what the code means
-    // rather than repeating a sentence written for a log.
-    throw new Refused(body?.code ?? "unknown", body?.error ?? "That did not work.");
-  }
-
-  return body;
-}
-
-/** Refreshes the CSRF token, which is also how the page learns whether it is signed in. */
-async function session() {
-  const view = await get("/api/session");
-  csrf = view.csrfToken;
-  return view.authenticated;
-}
 
 // ── the poll ─────────────────────────────────────────────────────────────
 
@@ -139,12 +107,43 @@ function apply(snapshot) {
   state.cursor = snapshot.cursor;
 }
 
-async function poll() {
+// One poll at a time (see single-flight.js): two at once carry the same cursor and get the same delta,
+// and apply() appends it twice. Keyed by the session generation, so the first poll of a new session
+// never waits on one of the session before it.
+const poll = singleFlight(pollNow, generation);
+
+async function pollNow() {
+  // Nobody signed in: there is nothing of anybody's to ask for, and the answer would be a 401. At the device limit
+  // the gateway answers this browser nothing it could poll (showDeviceLimit).
+  if (!account || deviceLimited) {
+    return;
+  }
+
+  const started = generation();
+  let drawn = false;
+
   try {
-    apply(await get(state.cursor === null ? "/api/state" : `/api/state?since=${state.cursor}`));
+    drawn = await pollOnce({
+      read: () => get(state.cursor === null ? "/api/state" : `/api/state?since=${state.cursor}`),
+      accountId: account.id,
+      apply,
+      // Another account's state: none of it is drawn. The page forgets this account and asks the
+      // gateway afresh who is signed in.
+      otherAccount: () => {
+        resetSession();
+        bootAfterMismatch();
+      }
+    });
+
+    if (!drawn) {
+      return;
+    }
+
     setLive(true);
   } catch (error) {
-    if (error instanceof Refused && error.code === "unauthenticated") {
+    // The session ended under it - signed out, a 401 or this browser removed - and the screen that
+    // put up is the right one. Drawing the old state now would draw it over that.
+    if (!isCurrent(started)) {
       return;
     }
 
@@ -154,11 +153,22 @@ async function poll() {
     setLive(false);
   }
 
-  render();
+  await render();
+
+  if (drawn) {
+    // Not awaited: a rotation grant is a round trip of its own, and the next poll does not wait on it.
+    catchUpKeys();
+    // Nor this: a removal told again under a new key is a round trip too (devices.js createRemovalWatch).
+    watchRemovals();
+  }
 }
 
-/** Polls now rather than waiting out the interval - used after every action. */
+/**
+ * Polls now rather than waiting out the interval - used after every action. A poll already running
+ * started before the action and may not show it, so this waits for it to finish and then asks again.
+ */
 async function refresh() {
+  await poll.pending;
   await poll();
 }
 
@@ -226,15 +236,114 @@ function when(iso) {
   return time;
 }
 
+// ── opening ──────────────────────────────────────────────────────────────
+
+/** Opens what the computers sealed with this device's keys (reader.js); a reader over no keys until a store opens. */
+let reader = createReader(null);
+
+/** Seals what the person sends with the same keys (writer.js); over no keys, it seals nothing. */
+let writer = createWriter(null);
+
+/**
+ * What this device opened of the snapshot on screen, looked up by `"<kind>:<id>"`: a task, a run's summary,
+ * an event, a notice, an approval's action, a workspace name, or a computer's key standing. Kept for the
+ * drawing that follows and for a timeline opened by a click between two polls.
+ */
+let content = () => undefined;
+
+/**
+ * Opens everything on screen, all at once. The reader keeps what it opened, so a poll that brings nothing
+ * new costs a lookup per record and not a decryption.
+ */
+async function openContent() {
+  const read = reader;
+  const store = keystore;
+  const opened = new Map();
+
+  const put = (name, promise) => Promise.resolve(promise).then((value) => { opened.set(name, value); }, () => {
+    // The key store could not be read - closed by a sign-out in the meantime, or the browser's storage
+    // failing. Either way this device cannot reach a key for it, and the record says so rather than
+    // taking the whole screen down with it.
+    opened.set(name, { unreadable: NOT_GIVEN });
+  });
+
+  await Promise.all([
+    ...state.tasks.map((task) => put(`task:${task.id}`, read.openTask(task))),
+    ...state.runs.map((run) => put(`summary:${run.id}`, read.openSummary(run))),
+    ...state.events.map((event) => put(`event:${event.id}`, read.openEvent(event))),
+    ...state.notices.map((notice) => put(`notice:${notice.id}`, read.openNotice(notice))),
+    ...state.approvals.map((approval) => put(`approval:${approval.id}`, read.openAction(approval))),
+    ...state.hosts.flatMap((host) => host.workspaces.map((workspace) =>
+      put(`workspace:${host.id}:${workspace.id}`, read.openWorkspaceName(host.id, workspace)))),
+    ...state.hosts.map((host) => put(`host:${host.id}`, host.revoked ? null : keyStanding(store, host)))
+  ]);
+
+  return (name) => opened.get(name);
+}
+
+/** The muted line drawn where content would be, saying why it is not: never an empty space. */
+function unreadable(result, tag = "p") {
+  const reason = result?.unreadable ?? NOT_GIVEN;
+  return node(tag, "muted", reason[0].toUpperCase() + reason.slice(1) + ".");
+}
+
+/** A task's title as this device opened it, or a stand-in for one it cannot read. */
+function taskTitle(task) {
+  const title = task ? content(`task:${task.id}`)?.json?.title : null;
+  return typeof title === "string" && title.length > 0 ? title : "Task";
+}
+
+/**
+ * A workspace's name as its computer sealed it, or its id and why the name cannot be read. Not "unnamed":
+ * the computer did name it, and this device not being able to read the name is a different thing to say.
+ */
+function workspaceName(hostId, workspace) {
+  const opened = content(`workspace:${hostId}:${workspace.id}`);
+
+  if (typeof opened?.text === "string" && opened.text.length > 0) {
+    return opened.text;
+  }
+
+  return opened?.unreadable
+    ? `workspace ${workspace.id} (cannot read its name: ${opened.unreadable})`
+    : `workspace ${workspace.id}`;
+}
+
 // ── rendering ────────────────────────────────────────────────────────────
 
-function render() {
+// Which render is the newest. Opening is asynchronous, so two renders can overlap, and the older one
+// finishing last would draw the snapshot before the one on screen over it.
+let drawing = 0;
+
+/**
+ * The cursor of the snapshot the inbox was last drawn from; null before the first. A poll moves
+ * `state.cursor` on before the drawing that follows it has opened the new notices, and a click in between
+ * marked read notices that were not yet on screen.
+ */
+let drawnCursor = null;
+
+async function render() {
+  const turn = ++drawing;
+  const started = generation();
+  const opened = await openContent();
+
+  // A newer render is under way, or the session this one opened for has ended: drawing would put back
+  // what the newer one, or the reset, has replaced.
+  if (turn !== drawing || !isCurrent(started)) {
+    return;
+  }
+
+  content = opened;
   renderRuns();
   renderApprovals();
   renderInbox();
   renderHosts();
+  renderDevices();
   renderCounts();
   refreshOpenRun();
+  // Taken as the lists are drawn, from the state they were drawn from (see mark-read).
+  drawnCursor = state.cursor;
+  $("mark-read").disabled = drawnCursor === null;
 }
 
 function renderCounts() {
@@ -261,15 +370,26 @@ function renderRuns() {
     const task = tasks.get(run.taskId);
     const card = node("div", "card");
     const head = node("div", "card-head");
-    head.append(node("h3", null, task?.title ?? "Task"));
+    head.append(node("h3", null, taskTitle(task)));
     head.append(node("span", statusClass(run.status), statusText(run.status)));
     card.append(head);
+
+    const opened = task ? content(`task:${task.id}`) : null;
+
+    if (opened?.unreadable) {
+      card.append(unreadable(opened));
+    }
 
     card.append(node("p", "meta", run.endedAt ? `Ended ${new Date(run.endedAt).toLocaleString()}`
       : `Started ${new Date(run.createdAt).toLocaleString()}`));
 
-    if (run.summary) {
-      card.append(node("p", null, run.summary));
+    // Null while the run is going, and for a run the computer never saw: there is no summary to show.
+    const summary = content(`summary:${run.id}`);
+
+    if (summary?.unreadable) {
+      card.append(unreadable(summary));
+    } else if (summary?.text) {
+      card.append(node("p", null, summary.text));
     }
 
     const actions = node("div", "actions");
@@ -283,8 +403,11 @@ function renderRuns() {
     if (RUNNING.includes(run.status) && run.status !== "CancelRequested") {
       const stop = node("button", "danger", "Stop");
       stop.type = "button";
-      stop.addEventListener("click", () => act(stop, () =>
-        post(`/api/runs/${run.id}/cancel`, { commandId: commandId(`cancel:${run.id}`) })));
+      stop.addEventListener("click", () => act(stop, async () => {
+        const cancel = await sealFor(`cancel:${run.id}`, run.hostId,
+          (write, commandId) => write.sealCancel(run.hostId, commandId, run.id));
+        await post(`/api/runs/${run.id}/cancel`, { commandId: cancel.id, sealed: cancel.sealed });
+      }));
       actions.append(stop);
     }
 
@@ -327,23 +450,30 @@ function approvalNodes(approval) {
   // refuse it - the desktop may have answered first, or the run may be over. The panel was told
   // all of that on every poll and drew "Waiting" regardless.
   const queued = approval.status === "DecisionQueued";
+  const opened = content(`approval:${approval.id}`);
+  const action = opened?.json;
+  const canAnswer = answerable(approval, opened);
 
   const head = node("div", "card-head");
   head.append(node("h3", null, "Permission requested"));
   head.append(queued
     ? node("span", "status is-queued", "Sent")
-    : node("span", "status is-waiting", approval.remoteDecidable ? "Waiting" : "At the computer"));
+    : node("span", "status is-waiting", canAnswer ? "Waiting" : "At the computer"));
   parts.push(head);
 
-  if (approval.reason) {
-    parts.push(node("p", null, approval.reason));
+  if (!opened || opened.unreadable) {
+    parts.push(unreadable(opened));
+  } else {
+    if (action?.topic) {
+      parts.push(node("p", null, action.topic));
+    }
+
+    parts.push(node("p", "meta", `${action?.tool ?? "A tool"} · in ${action?.workingDirectory || "no folder"}`));
+
+    // The whole action, never a summary. A person cannot approve what they were
+    // not shown, and a truncated command is one nobody read.
+    parts.push(node("pre", "action", action?.fullText ?? ""));
   }
-
-  parts.push(node("p", "meta", `${approval.tool} · in ${approval.workingDirectory}`));
-
-  // The whole action, never a summary. A person cannot approve what they were
-  // not shown, and a truncated command is one nobody read.
-  parts.push(node("pre", "action", approval.arguments));
 
   if (queued) {
     // No buttons at all rather than disabled ones. The answer has been given; what is left is
@@ -351,11 +481,18 @@ function approvalNodes(approval) {
     parts.push(node("p", "local-only",
       "Your answer is on its way to the computer. If it was already answered there, that answer "
       + "stands - sitting at the machine always wins."));
-  } else if (approval.remoteDecidable) {
+  } else if (canAnswer) {
     const actions = node("div", "actions");
     actions.append(decide(approval, "Allow", "primary"));
     actions.append(decide(approval, "Deny", "secondary"));
     parts.push(actions);
+  } else if (approval.remoteDecidable) {
+    // Not answerable from here although the computer would take an answer: what this device would show
+    // is not what the computer checks an answer against (the action hash), or it cannot be read at all.
+    // An Allow given here would be for a command the person was not shown.
+    parts.push(node("p", "local-only", opened?.unreadable
+      ? "This device cannot read this request; answer it on the computer."
+      : "This request does not match what the computer asked; answer it on the computer."));
   } else {
     // Not a disabled button: the server refuses this whatever the page draws,
     // and the card says why rather than looking broken.
@@ -395,18 +532,26 @@ function decide(approval, decision, className) {
   const button = node("button", className, decision);
   button.type = "button";
 
-  button.addEventListener("click", () => act(button, () =>
-    post(`/api/approvals/${approval.id}/resolve`, {
-      // Keyed by the decision as well as the request. Retrying Allow is the same
-      // instruction and reuses its id; changing your mind to Deny is a different
-      // one, and reusing the id for it would come back as a conflict about ids
-      // instead of the true answer, which is that this was already decided.
-      commandId: commandId(`decide:${approval.id}:${decision}`),
+  button.addEventListener("click", () => act(button, async () => {
+    // Keyed by the decision as well as the request. Retrying Allow is the same
+    // instruction and reuses its id; changing your mind to Deny is a different
+    // one, and reusing the id for it would come back as a conflict about ids
+    // instead of the true answer, which is that this was already decided.
+    //
+    // The action hash is sealed and sent back exactly as it arrived and never
+    // recomputed here: the machine that will carry the action out is the one
+    // that says what the action is.
+    const answer = await sealFor(`decide:${approval.id}:${decision}`, approval.hostId,
+      (write, commandId) => write.sealDecision(approval.hostId, commandId, approval.id, approval.actionHash, decision));
+
+    await post(`/api/approvals/${approval.id}/resolve`, {
+      commandId: answer.id,
+      hostId: approval.hostId,
       decision,
-      // Sent back exactly as it arrived and never recomputed here: the machine
-      // that will carry the action out is the one that says what the action is.
-      actionHash: approval.actionHash
-    })));
+      actionHash: approval.actionHash,
+      sealed: answer.sealed
+    });
+  }));
 
   return button;
 }
@@ -420,12 +565,33 @@ function renderInbox() {
     // is the number this page is allowed to believe.
     const card = node("div", "card");
     const head = node("div", "card-head");
-    head.append(node("h3", null, notice.title));
+    head.append(node("h3", null, noticeTitle(notice.kind)));
     head.append(when(notice.at));
     card.append(head);
 
-    if (notice.detail) {
-      card.append(node("p", "meta", notice.detail));
+    // Which task it is about: the gateway knows only the run, and the title is sealed.
+    const run = state.runs.find((one) => one.id === notice.runId);
+
+    if (run) {
+      const task = state.tasks.find((one) => one.id === run.taskId);
+      const opened = task ? content(`task:${task.id}`) : null;
+      card.append(node("p", "meta", opened?.unreadable
+        ? `task cannot be read: ${opened.unreadable}`
+        : taskTitle(task)));
+    }
+
+    const detail = content(`notice:${notice.id}`);
+
+    if (detail?.unreadable) {
+      card.append(unreadable(detail));
+    } else if (detail?.text) {
+      card.append(node("p", null, detail.text));
+    } else if (notice.kind === "NotStarted") {
+      // The gateway's own notice: the computer never saw the run, so there is no sealed sentence to show.
+      card.append(node("p", null, "Your computer did not pick this task up in time, so it never started."));
+    } else if (undeliveredSentence(notice, state.hosts)) {
+      // The gateway's own notice too, about no run: a removal or an endorsement its computer never collected.
+      card.append(node("p", null, undeliveredSentence(notice, state.hosts)));
     }
 
     return card;
@@ -433,6 +599,20 @@ function renderInbox() {
 
   fill($("notice-list"), cards, $("inbox-empty"));
   renderRetention();
+}
+
+/**
+ * A notice's heading, made from its kind - the one part of a notice the gateway writes, since it can seal
+ * nothing. The terminal kinds are the run statuses' own names; anything else falls through as its name.
+ */
+function noticeTitle(kind) {
+  return {
+    PermissionRequested: "Permission requested",
+    PermissionAtComputer: "Permission asked at the computer",
+    NotStarted: "Not started",
+    RemovalNotDelivered: "Removal not delivered",
+    EndorsementNotDelivered: "New device not trusted"
+  }[kind] ?? statusText(kind);
 }
 
 /**
@@ -464,7 +644,7 @@ function renderHosts() {
     const card = node("div", "card");
 
     const head = node("div", "card-head");
-    head.append(node("h3", null, host.name));
+    head.append(node("h3", null, host.label));
     head.append(node("span", host.online ? "status is-done" : "status",
       host.revoked ? "Revoked" : host.online ? "Online" : "Offline"));
     card.append(head);
@@ -473,11 +653,19 @@ function renderHosts() {
       ? `Last seen ${new Date(host.lastSeenAt).toLocaleString()}`
       : "Has never connected"));
 
+    // Whether this device holds the computer's current key. Without it everything the computer sends is
+    // unreadable here, and this is where the person learns why.
+    const standing = content(`host:${host.id}`);
+
+    if (standing) {
+      card.append(node("p", "muted", standing[0].toUpperCase() + standing.slice(1) + "."));
+    }
+
     // Names, never paths. The gateway is not told where a workspace lives, so
     // this page has no way to name a folder even if someone asked it to.
     if (host.workspaces.length > 0) {
       const chips = node("div", "workspaces");
-      host.workspaces.forEach((workspace) => chips.append(node("span", "chip", workspace.name)));
+      host.workspaces.forEach((workspace) => chips.append(node("span", "chip", workspaceName(host.id, workspace))));
       card.append(chips);
     }
 
@@ -487,7 +675,7 @@ function renderHosts() {
       revoke.type = "button";
 
       revoke.addEventListener("click", () => {
-        if (confirm(`Revoke ${host.name}? Its connection closes and undelivered commands are `
+        if (confirm(`Revoke ${host.label}? Its connection closes and undelivered commands are `
           + "withdrawn. Work already accepted may still be running on the machine.")) {
           act(revoke, () => post(`/api/hosts/${host.id}/revoke`, {}));
         }
@@ -516,7 +704,7 @@ function showRun(run, task) {
   // - once the question moved in here - buttons answering something that might already be settled.
   state.openRun = run.id;
 
-  $("run-title").textContent = task?.title ?? "Task";
+  $("run-title").textContent = taskTitle(task);
 
   const detail = $("run-detail");
   const mine = state.events.filter((event) => event.runId === run.id);
@@ -532,7 +720,14 @@ function showRun(run, task) {
 
     const body = node("div", "body");
     body.append(node("strong", null, statusText(event.kind) + " "));
-    body.append(document.createTextNode(event.detail ?? ""));
+    const detail = content(`event:${event.id}`);
+
+    if (detail?.unreadable) {
+      body.append(unreadable(detail, "span"));
+    } else if (detail?.text) {
+      body.append(document.createTextNode(detail.text));
+    }
+
     entry.append(body);
 
     timeline.append(entry);
@@ -548,9 +743,14 @@ function showRun(run, task) {
   // owner wrote; the prompt is the instruction the computer was given, and
   // judging what a run did against a heading is judging it against the wrong
   // thing. It was stored and sent from the first day and shown nowhere.
-  if (task?.prompt) {
+  const asked = task ? content(`task:${task.id}`) : null;
+
+  if (asked?.unreadable) {
     detail.append(node("p", "meta", "Asked for"));
-    detail.append(node("pre", "action", task.prompt));
+    detail.append(unreadable(asked));
+  } else if (typeof asked?.json?.prompt === "string" && asked.json.prompt.length > 0) {
+    detail.append(node("p", "meta", "Asked for"));
+    detail.append(node("pre", "action", asked.json.prompt));
   }
 
   // Before the steps, not after them. The timeline showed "Permission requested" as history and
@@ -605,11 +805,15 @@ async function act(button, action) {
   // leaving Deny live while Allow is in flight offers an answer that is already being given.
   const group = Array.from(button.parentElement?.querySelectorAll("button") ?? [button]);
   group.forEach((one) => { one.disabled = true; });
+  const started = generation();
 
   try {
     await action();
   } catch (error) {
-    toast(error.message, true);
+    // A refusal from a session that has ended is not news to whoever is looking now.
+    if (isCurrent(started)) {
+      toast(error.message, true);
+    }
   } finally {
     // Refreshed BEFORE the buttons come back. They used to be re-enabled first, so a card whose
     // answer the gateway had already accepted spent a whole round trip looking exactly as it did
@@ -640,13 +844,18 @@ function setLive(live) {
 }
 
 function showView(name) {
-  ["runs", "approvals", "inbox", "hosts"].forEach((view) => {
+  ["runs", "approvals", "inbox", "hosts", "devices"].forEach((view) => {
     $(`view-${view}`).hidden = view !== name;
   });
 
   document.querySelectorAll(".tab").forEach((tab) => {
     tab.classList.toggle("is-current", tab.dataset.view === name);
   });
+
+  // The devices are not in the snapshot, so they are asked for when they are looked at.
+  if (name === "devices") {
+    reloadDevices();
+  }
 }
 
 // ── new task ─────────────────────────────────────────────────────────────
@@ -664,7 +873,7 @@ function openTaskDialog() {
   state.hosts
     .filter((host) => !host.revoked)
     .forEach((host) => host.workspaces.forEach((workspace) => {
-      const option = node("option", null, `${workspace.name} · ${host.name}`);
+      const option = node("option", null, `${workspaceName(host.id, workspace)} · ${host.label}`);
       option.value = `${host.id}|${workspace.id}`;
       options.push(option);
     }));
@@ -684,69 +893,1687 @@ async function createTask() {
   const [hostId, workspaceId] = $("task-workspace").value.split("|");
   const button = $("task-submit");
   button.disabled = true;
+  const started = generation();
 
   try {
-    const task = await post("/api/tasks", {
-      hostId,
-      workspaceId,
-      title: $("task-title").value,
-      prompt: $("task-prompt").value
-    });
+    const title = $("task-title").value;
+    const prompt = $("task-prompt").value;
+
+    // The task's id and envelope are kept per draft - this computer, workspace, title and prompt - until it
+    // is started, so pressing Create again after a failure sends the same task: the gateway takes the same
+    // id with another envelope for a different task, and a new id for a second one.
+    const draft = await draftKey(hostId, workspaceId, title, prompt);
+
+    // A start whose answer was lost may have gone through: then the run is on the screen, and these words
+    // are not sent again (draftAlreadyRan). After a key change they would be sealed under a new task id,
+    // which the gateway takes for another task and runs a second time.
+    if (draftAlreadyRan(state.runs, (await sends.kept(draft))?.id)) {
+      sends.forget(draft);
+      finishTaskDialog("This task was already started.");
+      return;
+    }
+
+    const task = await sealFor(draft, hostId,
+      (write, taskId) => write.sealTask(hostId, taskId, workspaceId, { title, prompt }));
+    await post("/api/tasks", { taskId: task.id, hostId, workspaceId, sealedTask: task.sealed });
 
     // Two calls, and the gap between them is real: a task that was created and
-    // not started is a draft the owner can see, not a lost request.
-    await post(`/api/tasks/${task.id}/start`, { commandId: commandId(`start:${task.id}`) });
+    // not started is kept by the gateway but not shown - the panel draws runs -
+    // and pressing Create again starts the same task rather than a second one.
+    const start = await sealFor(`start:${task.id}`, hostId,
+      (write, commandId) => write.sealStart(hostId, commandId, task.id, workspaceId));
+    await post(`/api/tasks/${task.id}/start`, { commandId: start.id, sealed: start.sealed });
 
-    $("task-dialog").close();
-    $("task-title").value = "";
-    $("task-prompt").value = "";
-    toast("Queued. Your computer picks it up on its next check-in.");
+    // Started: the same words written again are a new task, not this one retried.
+    sends.forget(draft);
+    finishTaskDialog("Queued. Your computer picks it up on its next check-in.");
   } catch (error) {
-    $("task-error").textContent = error.message;
+    if (isCurrent(started)) {
+      $("task-error").textContent = error.message;
+    }
   } finally {
     button.disabled = false;
     await refresh();
   }
 }
 
+/**
+ * The `{id, sealed}` to send for one action to computer `hostId`: kept from an earlier attempt of the same
+ * action under the same key, or sealed now by `seal(writer, id)` under the newest key this device holds.
+ *
+ * Refused, with the sentence to show, when this device holds no key for the computer or the snapshot says it
+ * moved to a key whose grant has not reached this device (writer.js sendRefusal): sealed under the key before,
+ * a cancel or an answer would be refused by the computer and the panel would never hear of it. The grants are
+ * asked for at once, so the person's next click goes through.
+ */
+async function sealFor(key, hostId, seal) {
+  const store = keystore;
+  const write = writer;
+  const newest = store ? await store.newestEpoch(hostId) : null;
+  const refusal = sendRefusal(state.hosts.find((host) => host.id === hostId), newest);
+
+  if (refusal === NOT_YET_GIVEN) {
+    catchUpKeys().catch(() => {});
+  }
+
+  if (refusal) {
+    throw new Error(refusal);
+  }
+
+  return sends.once(key, newest, (id) => seal(write, id));
+}
+
+/** Closes the new-task dialog on a task that is running, empties it and says so. */
+function finishTaskDialog(message) {
+  $("task-dialog").close();
+  $("task-title").value = "";
+  $("task-prompt").value = "";
+  toast(message);
+}
+
+// ── this device's keys ───────────────────────────────────────────────────
+
+// The calls trust.js makes, through the same guard as every other request of the page.
+const api = { get, post };
+
+/**
+ * The signed-in account's key store in this browser, and this browser's device id with the gateway. Null
+ * while nobody is signed in, and closed by resetSession: the next account in this tab opens its own store,
+ * and nothing the page does after a reset can still reach the last one's keys through a store left open.
+ */
+let keystore = null;
+let deviceId = null;
+
+/**
+ * Set while this browser could not register a device because the account has as many as it may. The gateway
+ * answers such a browser only the Devices list, a removal and deleting the account, so that is all the page offers
+ * (showDeviceLimit), and registering is tried again after each removal (leaveDeviceLimit). Before, it got 400 on
+ * every call, and an account whose old browsers were all gone could neither free a place nor be deleted.
+ */
+let deviceLimited = false;
+
+/**
+ * This browser's device for the signed-in account, known from now on - to the page, and to api.js, which names it
+ * on every call: the gateway refuses every private call that names none. Before this only /api/session, the
+ * registration and signing out are asked.
+ */
+function knowDevice(id) {
+  deviceId = id;
+  useDevice(id);
+}
+
+/**
+ * The device this page registered in this session, if it registered one: a refusal of that very device is a
+ * browser whose keys were cleared under a session it kept, not a removal (devices.js removedView).
+ */
+let registeredHere = null;
+
+/** This browser's device for the account (trust.js ensureDevice), noting whether it was registered just now. */
+async function ensureOwnDevice(store) {
+  const had = (await store.device())?.id ?? null;
+  const id = await ensureDevice(store, api);
+  if (had === null) {
+    registeredHere = id;
+  }
+  return id;
+}
+
+/**
+ * Opens the account's key store and registers this browser's key with the gateway, before the first poll.
+ * Neither is needed to see what the gateway itself knows, so a browser that cannot keep keys - or an
+ * account with no room for another device - still gets the panel, and is told why it cannot be paired.
+ */
+async function openTrust(user) {
+  const started = generation();
+  let store;
+
+  try {
+    store = await openKeystore(user.id);
+  } catch (error) {
+    if (isCurrent(started)) {
+      toast(`This browser cannot keep keys for this account: ${error.message}`, true);
+    }
+
+    return;
+  }
+
+  // Signed out, or in as somebody else, while it opened: the store is not this session's.
+  if (!isCurrent(started)) {
+    store.close();
+    return;
+  }
+
+  keystore = store;
+  reader = createReader(store);
+  writer = createWriter(store);
+
+  try {
+    const id = await ensureOwnDevice(store);
+
+    if (isCurrent(started)) {
+      knowDevice(id);
+    }
+  } catch (error) {
+    if (isCurrent(started) && error?.code === "device-limit") {
+      deviceLimited = true;
+    } else if (isCurrent(started) && !(error instanceof Stale)) {
+      toast(error.message, true);
+    }
+  }
+}
+
+/**
+ * The page of a browser at the account's device limit: the Devices list with Remove on each card, the line saying
+ * why, and the account menu - nothing that needs a device, which the gateway would refuse this browser.
+ */
+function showDeviceLimit(limited) {
+  document.querySelectorAll(".tab").forEach((tab) => {
+    tab.hidden = limited && tab.dataset.view !== "devices";
+  });
+  $("add-device").hidden = limited;
+  const line = $("device-limit");
+  line.textContent = limited ? DEVICE_LIMIT : "";
+  line.hidden = !limited;
+
+  if (limited) {
+    showView("devices");
+  }
+}
+
+/**
+ * Registers this browser again once a removal may have made room. Still full - another browser took the place -
+ * it stays as it is; registered, the page becomes the whole panel.
+ */
+async function leaveDeviceLimit() {
+  const started = generation();
+  let id;
+
+  try {
+    id = await ensureOwnDevice(keystore);
+  } catch (error) {
+    if (error?.code === "device-limit") {
+      return;
+    }
+    throw error;
+  }
+
+  if (!isCurrent(started)) {
+    return;
+  }
+
+  knowDevice(id);
+  deviceLimited = false;
+  showDeviceLimit(false);
+  await reloadDevices();
+  await poll();
+
+  if (isCurrent(started) && document.visibilityState === "visible") {
+    startPolling();
+  }
+}
+
+/** Takes the grants waiting for this device. Null when there is no device to take them for, or the session ended. */
+async function takeGrants(started) {
+  const store = keystore;
+
+  if (!store || !deviceId) {
+    return null;
+  }
+
+  const result = await collectGrants(store, api, deviceId);
+
+  if (!isCurrent(started)) {
+    return null;
+  }
+
+  // The reader keeps what it could not open until it is told keys arrived (reader.js).
+  if (result.added.length > 0) {
+    reader.keysChanged();
+  }
+
+  // Counted here, for every delivery of this tab: the page's own poll takes grants too, and the keys of an
+  // invitation it took were the new device's answer as much as those its own wait took.
+  if (joining) {
+    joining.received += countInviteGrants(result, joining.inviteId);
+  }
+
+  return result;
+}
+
+/** When to ask for grants while a computer is not current on this device (trust.js); one per session. */
+let grantSchedule = createGrantSchedule();
+
+/**
+ * Takes the grants waiting for this device when a snapshot shows a computer whose current key it does not
+ * hold. That is how a rotation reaches an open tab: the computer moves to a new key when a device is
+ * removed, and grants were otherwise taken only at a page load and in the register dialog, so a tab left
+ * open went on showing everything the computer sent after the rotation as unreadable until it was
+ * reloaded. Asked at most once per poll, and only while some computer is not current - on every poll for one
+ * that rotated, ever less often for one never paired here (createGrantSchedule); one at a time, so a slow
+ * answer is shared by the poll after it rather than asked again.
+ */
+const catchUpKeys = singleFlight(catchUpKeysNow, generation);
+
+async function catchUpKeysNow() {
+  const started = generation();
+  const store = keystore;
+
+  if (!store || !deviceId) {
+    return;
+  }
+
+  try {
+    // Keys another tab of this browser stored since the last poll (epochsChanged).
+    let changed = await noticeKeys(store, started);
+
+    const hosts = state.hosts.filter((host) => !host.revoked);
+    const standings = await Promise.all(hosts.map(async (host) => [host.id, await keyStanding(store, host)]));
+
+    if (grantSchedule.due(standings)) {
+      const result = await takeGrants(started);
+
+      if (!result) {
+        return;
+      }
+
+      sayTrouble(result);
+      // Read again after the delivery rather than trusting `added`: a grant another tab stored first is
+      // passed over here as skipped, and the key store is what says this tab now holds a newer epoch.
+      changed = (await noticeKeys(store, started)) || changed;
+    }
+
+    if (changed) {
+      await render();
+    }
+  } catch {
+    // Not reaching the gateway is what the poll already shows, and the next poll asks again. A key store that
+    // can no longer be read is something else: "Forget this device" in another tab of this browser deleted it
+    // (devices.js storeGone), and this tab went on polling with everything drawn unreadable and no word of why.
+    if (isCurrent(started) && await storeGone(store) && isCurrent(started)) {
+      const removedId = account?.id;
+      resetSession();
+      showDeviceRemoved(removedId);
+    }
+  }
+}
+
+/** Each listed computer's newest epoch in the key store, as this tab last read it. */
+let seenEpochs = new Map();
+
+/**
+ * Reads the newest epoch of every listed computer and, if any differs from the last read, tells the reader
+ * (keysChanged), so what it remembered as unreadable or not held is tried again. Returns whether it did.
+ */
+async function noticeKeys(store, started) {
+  const current = new Map(await Promise.all(state.hosts.map(async (host) =>
+    [host.id, await store.newestEpoch(host.id)])));
+
+  // The session ended while the store was read: what was read is not the next session's.
+  if (!isCurrent(started)) {
+    return false;
+  }
+
+  const changed = epochsChanged(seenEpochs, current);
+  seenEpochs = current;
+
+  if (changed) {
+    reader.keysChanged();
+  }
+
+  return changed;
+}
+
+/** The last trouble with grants this page told the person of. */
+let lastTrouble = "";
+
+/**
+ * Tells the person of trouble with a delivery (worthSaying), once. Grants are now taken on every poll while
+ * a computer is behind, and the gateway lists a grant that does not verify on every call: said each time,
+ * the same warning would have come back every three seconds for good.
+ */
+function sayTrouble(result) {
+  const trouble = worthSaying(result, hostLabel);
+
+  if (trouble && trouble !== lastTrouble) {
+    toast(trouble, true);
+  }
+
+  lastTrouble = trouble;
+}
+
+function hostLabel(hostId) {
+  return state.hosts.find((host) => host.id === hostId)?.label ?? "A computer";
+}
+
 // ── registering a computer ───────────────────────────────────────────────
+
+// How long a connection code can be answered. The computer may be in another room or another building, so
+// minutes are too few; a secret that waited for ever would stay on this device's disk for ever.
+const PAIRING_LIFETIME_MS = 24 * 60 * 60 * 1000;
+const PAIRING_POLL_MS = 3000;
+
+/** The computer the open dialog is waiting for, and the timer asking for its grant; null when none. */
+let pairing = null;
 
 async function registerHost() {
   const button = $("host-submit");
   button.disabled = true;
   $("host-error").textContent = "";
+  const started = generation();
 
   try {
-    const device = await post("/api/hosts", { name: $("host-name").value });
+    const store = keystore;
 
-    // The one moment this value exists anywhere but the machine it is going to.
-    // It is not stored by this page and cannot be asked for again.
-    $("host-id").value = device.id;
-    $("host-token").value = device.token;
+    if (!store) {
+      throw new Error("This browser cannot keep keys, so it cannot be paired with a computer.");
+    }
+
+    // Asked again here, not only at sign-in: a registration refused then (a full account) may pass now.
+    const id = deviceId ?? await ensureOwnDevice(store);
+    const host = await post("/api/hosts", { name: $("host-name").value });
+
+    // The pairing secret stays on this device; the gateway never sees it. The code carries it to the
+    // computer by hand, and the computer's first grant is checked with it.
+    const secret = newPairingSecret();
+    await store.setPending(connectPendingId(host.id), secret, Date.now() + PAIRING_LIFETIME_MS);
+    const device = await store.device();
+
+    if (!isCurrent(started)) {
+      return;
+    }
+
+    // Closed while the computer was being registered: nobody is looking, so no code is shown and nobody is
+    // waited for. Started anyway, the poll asked for grants every 3 s behind a closed dialog until the next
+    // "Register". The computer stays registered, with no code that could ever reach it; the person sees it in
+    // the list and can revoke it.
+    if (!$("host-dialog").open) {
+      await store.dropPending(connectPendingId(host.id));
+      return;
+    }
+
+    knowDevice(id);
+
+    // The token travels inside the code: the one moment it exists anywhere but the machine it is going
+    // to. It is not stored by this page and cannot be asked for again.
+    $("host-code").value = formatConnectionCode({
+      gateway: location.origin, hostId: host.id, token: host.token, deviceId: id,
+      devicePublicRaw: device.publicRaw, secret
+    });
     $("host-secret").hidden = false;
+    $("host-status").textContent = "Waiting for the computer…";
     button.hidden = true;
+    // `name` is what the registration answers with: the label the person typed, which snapshots call `label`.
+    startPairing(host.id, host.name);
   } catch (error) {
-    $("host-error").textContent = error.message;
+    if (isCurrent(started) && !(error instanceof Stale)) {
+      $("host-error").textContent = error.message;
+    }
   } finally {
     button.disabled = false;
     await refresh();
   }
 }
 
+/** Asks for the computer's grant every few seconds while the dialog is open. */
+function startPairing(hostId, label) {
+  stopPairing();
+  // Waited for by the dialog now; once it closes, the polls ask for this computer's grant again from the start.
+  grantSchedule.reset(hostId);
+  const started = generation();
+  // One check at a time: a slow answer overlapping the next tick would take the same grants twice.
+  const check = singleFlight(() => checkPairing(hostId, label, started));
+  pairing = { hostId, timer: setInterval(check, PAIRING_POLL_MS) };
+}
+
+function stopPairing() {
+  if (pairing) {
+    clearInterval(pairing.timer);
+  }
+
+  pairing = null;
+}
+
+async function checkPairing(hostId, label, started) {
+  const waiting = () => isCurrent(started) && pairing?.hostId === hostId;
+
+  if (!waiting()) {
+    return;
+  }
+
+  try {
+    const result = await takeGrants(started);
+
+    if (!result || !waiting()) {
+      return;
+    }
+
+    $("host-error").textContent = troubleFor(result, hostId, label);
+
+    // Held rather than "added now": another tab of this browser may have taken the grant first.
+    if (await keystore.newestEpoch(hostId) !== null && waiting()) {
+      stopPairing();
+      $("host-dialog").close();
+      toast(`Paired - this device can read and command ${label}`);
+    }
+  } catch (error) {
+    // The gateway out of reach is said, and the next tick asks again. An ended session says nothing.
+    if (waiting() && !(error instanceof Stale)) {
+      $("host-status").textContent = `Waiting for the computer… (${error.message})`;
+    }
+  }
+}
+
+$("host-copy").addEventListener("click", async () => {
+  const code = $("host-code");
+
+  try {
+    await navigator.clipboard.writeText(code.value);
+    $("host-status").textContent = "Copied. Waiting for the computer…";
+  } catch {
+    // No clipboard here (a page not served over https, or permission refused): the code is selected,
+    // for the person's own copy.
+    code.focus();
+    code.select();
+  }
+});
+
+// ── adding a device ──────────────────────────────────────────────────────
+
+const INVITE_POLL_MS = 3000;
+
+/** The invitation the open "Add a device" dialog is waiting on, and its two timers; null when none. */
+let inviting = null;
+
+/**
+ * "Add a device": makes an invitation and shows its link, as text and as a QR code, for its ten minutes, then
+ * answers the device that enrolls (invite.js answerEnrollment). The pairing secret is made here and goes
+ * nowhere but the link; the gateway is told the invitation's id only.
+ */
+async function openInviteDialog() {
+  stopInviting();
+  forgetInviteLink();
+  $("invite-status").textContent = "";
+  $("invite-warning").textContent = "";
+  $("invite-error").textContent = "";
+  $("invite-dialog").showModal();
+  const started = generation();
+
+  try {
+    const store = keystore;
+
+    if (!store) {
+      throw new Error("This browser cannot keep keys, so it has none to share.");
+    }
+
+    // A device added from here would be let in and could read nothing.
+    if ((await store.hosts()).length === 0) {
+      throw new Error("This device holds no computer's key yet, so it has nothing to share. Pair it with a computer first.");
+    }
+
+    const id = deviceId ?? await ensureOwnDevice(store);
+    const inviteId = newInviteId();
+    const secret = newPairingSecret();
+    const pairKey = await derivePairKey(secret);
+    await post("/api/invites", { id: inviteId }, { headers: { [DEVICE_HEADER]: id } });
+
+    // Closed while the invitation was made, or signed out: nobody is looking and nobody is waited for. The
+    // invitation lapses on its own, and its secret was never shown to anyone.
+    if (!isCurrent(started) || !$("invite-dialog").open) {
+      return;
+    }
+
+    knowDevice(id);
+    // Before the link, so the person can let this device catch up first rather than spend the invitation on a
+    // computer whose current key it cannot pass on (invite.js behindReason).
+    $("invite-warning").textContent = behindWarning(await behindHosts(store, state.hosts));
+    const link = formatInviteLink(location.origin, inviteId, secret);
+    $("invite-link").value = link;
+    drawQr(link);
+    $("invite-secret").hidden = false;
+    startInviting({ inviteId, deviceId: id, pairKey, deadline: Date.now() + INVITE_LIFETIME_MS, started });
+  } catch (error) {
+    if (isCurrent(started) && !(error instanceof Stale)) {
+      $("invite-error").textContent = error.message;
+    }
+  }
+}
+
+/**
+ * Draws the link as a QR code. The generator writes SVG text, which is parsed as an SVG document and imported,
+ * never put into the page as markup; and what it encodes is only the link this page made from its own origin,
+ * a random id and a random secret.
+ */
+function drawQr(link) {
+  const svg = new DOMParser().parseFromString(inviteQrSvg(link), "image/svg+xml").documentElement;
+
+  // A parse that failed gives a document describing the error, which is not drawn: the link is there as text.
+  $("invite-qr").replaceChildren(...(svg.localName === "svg" ? [document.importNode(svg, true)] : []));
+}
+
+/** Takes the link and its QR code off the screen: they carry the secret, which nothing needs once it is used. */
+function forgetInviteLink() {
+  $("invite-secret").hidden = true;
+  $("invite-link").value = "";
+  $("invite-qr").replaceChildren();
+}
+
+function startInviting(invite) {
+  stopInviting();
+  const store = keystore;
+  const write = writer;
+  // What this answer has done, across its retries (invite.js newAnswerProgress).
+  const progress = newAnswerProgress();
+
+  const watch = createInviteWatch({
+    read: () => get(`/api/invites/${invite.inviteId}/enrollment`, { headers: { [DEVICE_HEADER]: invite.deviceId } }),
+    // Answered, the invitation is used: the link and its secret come down, whatever the answer comes to.
+    onEnrollment: (enrollment) => {
+      if (inviting?.inviteId === invite.inviteId) {
+        inviting.enrolled = true;
+      }
+
+      forgetInviteLink();
+      $("invite-status").textContent = `Sharing keys with ${enrollment.label}…`;
+    },
+    answer: async (enrollment) => {
+      // This device's keys brought up to date first: a computer refuses an endorsement sealed under a key it has
+      // moved on from, and the new device would be given only the keys this one had.
+      await catchUpKeys();
+
+      return answerEnrollment({
+        keystore: store, api, writer: write, deviceId: invite.deviceId, hosts: state.hosts,
+        pairKey: invite.pairKey, inviteId: invite.inviteId, enrollment, progress
+      });
+    },
+    deadline: invite.deadline,
+    now: () => Date.now()
+  });
+
+  // One check at a time: a slow answer overlapping the next tick would answer the same enrollment twice.
+  const check = singleFlight(() => checkInvite(invite, watch));
+  inviting = {
+    inviteId: invite.inviteId,
+    enrolled: false,
+    countdown: setInterval(() => countDown(invite, check), 1000),
+    poll: setInterval(check, INVITE_POLL_MS)
+  };
+  countDown(invite, check);
+}
+
+function stopInviting() {
+  if (inviting) {
+    clearInterval(inviting.countdown);
+    clearInterval(inviting.poll);
+  }
+
+  inviting = null;
+}
+
+/**
+ * The time the link has left, said every second. At its end the enrollment is asked for once more (the watch
+ * decides): one posted in the last seconds can still be read, and the new device is waiting on it.
+ */
+function countDown(invite, check) {
+  if (inviting?.inviteId !== invite.inviteId || inviting.enrolled) {
+    return;
+  }
+
+  const left = Math.ceil((invite.deadline - Date.now()) / 1000);
+
+  if (left <= 0) {
+    check();
+    return;
+  }
+
+  $("invite-status").textContent =
+    `Waiting for the new device… ${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")} left.`;
+}
+
+async function checkInvite(invite, watch) {
+  const waiting = () => isCurrent(invite.started) && inviting?.inviteId === invite.inviteId;
+
+  if (!waiting()) {
+    return;
+  }
+
+  const outcome = await watch.check();
+
+  if (!waiting() || outcome.error instanceof Stale) {
+    return;
+  }
+
+  if (outcome.state === "waiting") {
+    // The gateway out of reach: said, and the next tick asks again.
+    $("invite-error").textContent = outcome.error ? outcome.error.message : "";
+    return;
+  }
+
+  if (outcome.state === "retrying") {
+    // Picked up where it stopped on the next tick (invite.js newAnswerProgress).
+    $("invite-error").textContent = `${outcome.error.message} Trying again…`;
+    return;
+  }
+
+  stopInviting();
+  forgetInviteLink();
+  $("invite-status").textContent = "";
+
+  if (outcome.state === "expired") {
+    $("invite-error").textContent = "This invitation has expired. Choose Add a device again for a new link.";
+    return;
+  }
+
+  if (outcome.state === "failed") {
+    $("invite-error").textContent = outcome.error.message;
+    return;
+  }
+
+  const { enrollment, result } = outcome;
+
+  if (result.refused) {
+    $("invite-error").textContent = SWAPPED_KEY;
+    return;
+  }
+
+  if (result.granted === 0) {
+    $("invite-error").textContent =
+      `${enrollment.label} was added, but this device holds the key of no computer still on this account to share.`;
+    return;
+  }
+
+  $("invite-status").textContent = `Added ${enrollment.label}.`;
+  $("invite-error").textContent = result.notEndorsed.map(({ reason }) => reason).join(" ");
+  toast(`Added ${enrollment.label}`);
+  reloadDevices();
+}
+
+$("add-device").addEventListener("click", openInviteDialog);
+
+$("invite-copy").addEventListener("click", async () => {
+  const link = $("invite-link");
+
+  try {
+    await navigator.clipboard.writeText(link.value);
+    toast("Copied. Open it on the new device.");
+  } catch {
+    // No clipboard here: the link is selected, for the person's own copy.
+    link.focus();
+    link.select();
+  }
+});
+
+// Closed - by its button, Escape, a reset or the end of the answer - nobody is waiting any more, and the link
+// goes with it: it carries the secret, which would otherwise stay in the page until the next invitation.
+$("invite-dialog").addEventListener("close", () => {
+  stopInviting();
+  forgetInviteLink();
+});
+
+// ── devices ──────────────────────────────────────────────────────────────
+
+/** The account's devices as the gateway last listed them (DeviceInfo); null until the Devices view is opened. */
+let devices = null;
+
+/** This browser's device id, as its key store names it, read with the list: the device called "This device". */
+let ownDevice = null;
+
+/**
+ * The last removal of each device made from this tab, by device id: the computers it could not tell and those it
+ * did not reach (devices.js revokeDevice). Only this tab's: the gateway does not keep which computers were told.
+ */
+const removals = new Map();
+
+/** Each computer told of a removal from this tab, told again under each new key it moves to (devices.js). */
+const removalWatch = createRemovalWatch();
+
+/** The devices whose removal is under way, so a redraw does not offer the button again (devices.js cardActions). */
+const removing = new Set();
+
+const loadDevices = singleFlight(loadDevicesNow, generation);
+
+async function loadDevicesNow() {
+  const started = generation();
+  const store = keystore;
+
+  try {
+    const [list, own] = await Promise.all([
+      get("/api/devices"),
+      // A store that cannot be read names no device as this one; the list is still the account's.
+      store ? store.device().then((device) => device?.id ?? null, () => null) : null
+    ]);
+
+    if (!isCurrent(started)) {
+      return;
+    }
+
+    devices = list;
+    ownDevice = own;
+  } catch (error) {
+    if (isCurrent(started) && !(error instanceof Stale)) {
+      toast(error.message, true);
+    }
+
+    return;
+  }
+
+  renderDevices();
+}
+
+/** Asks for the list again. A load already running started before the change and may not show it. */
+async function reloadDevices() {
+  await loadDevices.pending;
+  await loadDevices();
+}
+
+/**
+ * Moves the removals on after a poll (devices.js createRemovalWatch): a computer that moved to a new key is told
+ * again under it. One at a time, so two polls do not send twice.
+ */
+const watchRemovals = singleFlight(async () => {
+  const started = generation();
+
+  try {
+    const changed = await removalWatch.step({ hosts: state.hosts, keystore, api, writer, sends });
+
+    if (changed && isCurrent(started)) {
+      renderDevices();
+    }
+  } catch {
+    // The key store could not be read: the next poll tries again.
+  }
+}, generation);
+
+const ACTIONS = {
+  forget: { text: "Forget this device", className: "danger", run: (clicked) => forgetDevice(clicked) },
+  remove: { text: "Remove", className: "danger", run: (clicked, device) => removeDevice(clicked, device) },
+  // No confirmation: the device is removed already, and telling the gateway and the computers again changes
+  // nothing for a computer that was told.
+  "tell-again": {
+    text: "Tell the computers again",
+    className: "secondary",
+    run: (clicked, device) => runRemoval(clicked, device.id)
+  }
+};
+
+function renderDevices() {
+  const cards = (devices ?? []).map((device) => {
+    const card = node("div", device.revoked ? "card is-removed" : "card");
+
+    const head = node("div", "card-head");
+    head.append(node("h3", null, device.label));
+
+    if (device.id === ownDevice) {
+      head.append(node("span", "status is-done", "This device"));
+    } else if (device.revoked) {
+      head.append(node("span", "status", "Removed"));
+    }
+
+    card.append(head);
+    card.append(node("p", "meta", `Added ${new Date(device.createdAt).toLocaleDateString()} · `
+      + (device.lastSeenAt ? `last seen ${new Date(device.lastSeenAt).toLocaleString()}` : "not seen yet")));
+    card.append(...removalLines(device.id));
+
+    const offered = cardActions(device, ownDevice, removing);
+
+    if (offered.length > 0) {
+      const actions = node("div", "actions");
+
+      for (const { kind, busy } of offered) {
+        const { text, className, run } = ACTIONS[kind];
+        const made = node("button", className, text);
+        made.type = "button";
+        made.disabled = busy;
+        made.addEventListener("click", () => run(made, device));
+        actions.append(made);
+      }
+
+      card.append(actions);
+    }
+
+    return card;
+  });
+
+  fill($("device-list"), cards, null);
+}
+
+/**
+ * One line per computer told of a device's removal - told under its current key, told again under a new one,
+ * waiting for a new key, or not confirmed (devices.js createRemovalWatch), moved on by every poll - then the
+ * computers this device cannot tell, then those it did not reach.
+ */
+function removalLines(deviceId) {
+  const removal = removals.get(deviceId);
+
+  return [
+    ...removalWatch.lines(deviceId, state.hosts, Date.now()).map(({ hostId, status }) =>
+      node("p", [NOT_CONFIRMED, KEY_NEVER_RECEIVED].includes(status) ? "error" : "meta",
+        `${hostLabel(hostId)}: ${status}`)),
+    ...(removal?.skipped ?? []).map(({ reason }) => node("p", "muted", reason)),
+    ...(removal?.failed ?? []).map(({ reason }) => node("p", "error", reason))
+  ];
+}
+
+/** Removes another device, once the person has read what that does and does not do. */
+function removeDevice(clicked, device) {
+  if (confirm(`${revocationWarning(device.label)} Continue?`)) {
+    runRemoval(clicked, device.id);
+  }
+}
+
+/**
+ * Removes device `removed` at the gateway and tells every computer this device can (devices.js revokeDevice):
+ * the same commands as before for a computer told already, which takes them as nothing new.
+ */
+function runRemoval(clicked, removed) {
+  removing.add(removed);
+  renderDevices();
+
+  act(clicked, async () => {
+    const started = generation();
+
+    try {
+      const result = await revokeDevice({ api, writer, sends, hosts: state.hosts, keystore, deviceId: removed });
+
+      if (!isCurrent(started)) {
+        return;
+      }
+
+      removals.set(removed, { skipped: result.skipped, failed: result.failed });
+      removalWatch.record(removed, result.sentTo);
+      await reloadDevices();
+
+      // A place may have been made for this browser.
+      if (deviceLimited && isCurrent(started)) {
+        await leaveDeviceLimit();
+      }
+    } finally {
+      removing.delete(removed);
+    }
+  });
+}
+
+function forgetDevice(clicked) {
+  if (confirm("Forget this device? It is removed from your account and from every computer it can tell, its keys "
+    + "are deleted from this browser and it is signed out. It will not read anything new. Continue?")) {
+    act(clicked, forgetNow);
+  }
+}
+
+async function forgetNow() {
+  const store = keystore;
+
+  if (!store) {
+    throw new Error("This browser keeps no keys for this account, so it has nothing to forget.");
+  }
+
+  // From here the page makes no call of its own as this device. Once the gateway has removed it, such a call - the
+  // grants a poll takes - is refused, and the page reset and closed the key store under the forgetting: the keys
+  // stayed on disk. Left so if the forgetting stops short: the device is on its way out, and a reload starts
+  // afresh. The forgetting's own calls still name the device (api.js): the gateway refuses a call that names none,
+  // and it tells the computers before the gateway removes the device (devices.js revokeDevice).
+  stopPolling();
+  deviceId = null;
+  await catchUpKeys.pending;
+
+  try {
+    await forgetThisDevice({
+      api, writer, sends, keystore: store, hosts: state.hosts,
+      signOut: (result) => signOut("/api/logout", forgottenSentence(result))
+    });
+  } catch (error) {
+    if (account && document.visibilityState === "visible") {
+      startPolling();
+    }
+
+    throw error;
+  }
+
+  // The device is removed, but the sign-out was refused and said so: nothing here can read or send any more, and
+  // the view put up now signs out - and deletes the keys, if they could not be deleted just now.
+  if (account) {
+    const removedId = account.id;
+    resetSession();
+    showDeviceRemoved(removedId);
+  }
+
+  // Either way the keys of this device are gone from this browser: a tab of the same account that still holds
+  // them open should find out now, not on its next poll.
+  sessionChannel.announce();
+}
+
+// ── the security log ─────────────────────────────────────────────────────
+
+const loadAudit = singleFlight(loadAuditNow, generation);
+
+/**
+ * The account's own security log (`GET /api/audit`), drawn into the open dialog. An answer for a session that
+ * has ended is dropped, like every other: Alice's log arriving after Bob signed in must not be drawn for him.
+ */
+async function loadAuditNow() {
+  const started = generation();
+  $("audit-error").textContent = "";
+
+  try {
+    const rows = await get("/api/audit");
+
+    if (isCurrent(started)) {
+      drawAudit(rows);
+    }
+  } catch (error) {
+    if (isCurrent(started) && !(error instanceof Stale)) {
+      $("audit-error").textContent = error.message;
+    }
+  }
+}
+
+/**
+ * One line per row: what happened, the device or computer it happened to when this page knows its name, and
+ * when. The gateway records ids, never labels, so a name is only ever one this page already shows.
+ */
+function drawAudit(rows) {
+  const names = new Map([
+    ...(devices ?? []).map((device) => [device.id, device.label]),
+    ...state.hosts.map((host) => [host.id, host.label])
+  ]);
+
+  const items = newestFirst(rows).map((row) => {
+    const item = node("li", "audit-row");
+    item.append(node("span", "audit-what", describe(row)));
+
+    const name = row.target ? names.get(row.target) : undefined;
+    if (name) {
+      item.append(node("span", "meta", name));
+    }
+
+    item.append(when(row.at));
+    return item;
+  });
+
+  $("audit-list").replaceChildren(...items);
+  $("audit-empty").hidden = items.length > 0;
+}
+
+/** Opens the log empty and fills it from a fresh answer: a log drawn earlier may be another account's. */
+function openAudit() {
+  $("account").open = false;
+  $("audit-list").replaceChildren();
+  $("audit-empty").hidden = true;
+  $("audit-dialog").showModal();
+  loadAudit();
+}
+
+// ── downloading the account's data ──────────────────────────────────────
+
+// How long the file's address is kept after the click. Revoked at once, some browsers had not yet started reading
+// the file and saved nothing; kept for ever, the opened copy stayed in the page's memory for as long as the tab.
+const DOWNLOAD_KEPT_MS = 60_000;
+
+/**
+ * "Download my data": the gateway's export, opened with this device's keys and saved as a file (export.js). Its
+ * own reader, not the page's: the export is every record the account has, and opened through the page's reader
+ * it would push what is on screen out of that reader's keeping. An answer for a session that has ended is dropped,
+ * like every other: Alice's data must not be offered to Bob, who signed in meanwhile.
+ */
+async function downloadData(clicked) {
+  const button = clicked.currentTarget;
+  const started = generation();
+  $("account").open = false;
+  button.disabled = true;
+  toast("Preparing your data…");
+
+  try {
+    const { name, blob } = await downloadMyData({ api: { get }, reader: createReader(keystore) });
+
+    if (!isCurrent(started)) {
+      return;
+    }
+
+    const address = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = address;
+    link.download = name;
+    link.hidden = true;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(address), DOWNLOAD_KEPT_MS);
+    toast(`Your data is in ${name}. What this device could not open says why, where its text would be.`);
+  } catch (error) {
+    if (isCurrent(started) && !(error instanceof Stale)) {
+      toast(error instanceof Refused ? exportRefusal(error) : "The gateway could not be reached.", true);
+    }
+  } finally {
+    button.disabled = false;
+  }
+}
+
+// ── deleting the account ─────────────────────────────────────────────────
+
+/** Asks first, in a dialog: nothing is sent until the person presses Delete account in it. */
+function openDeleteAccount() {
+  $("account").open = false;
+  $("delete-question").textContent = DELETE_QUESTION;
+  $("delete-error").textContent = "";
+  $("delete-dialog").showModal();
+}
+
+/**
+ * Deletes the account, then this browser's keys of it (account.js), and ends on the sign-in page saying what
+ * happened. A session too old to delete with is signed out, and the sign-in page asks for a fresh sign-in.
+ */
+async function deleteAccountNow(clicked) {
+  const button = clicked.currentTarget;
+  button.disabled = true;
+
+  // As for a sign-out: a poll answered 401 once the account is gone would run the 401's reset, which closes
+  // the key store under the forgetting - the keys stayed on disk - and puts up "You were signed out" instead of
+  // what happened. Abandoned now, its answer is dropped unread.
+  stopPolling();
+  abandonRequests();
+  // Its own failure is what the poll already shows; waited for only so it is not using the store being deleted.
+  await catchUpKeys.pending?.catch(() => {});
+
+  let result;
+
+  try {
+    result = await deleteAccount({ remove, keystore });
+  } catch (error) {
+    // Stale: the page moved on meanwhile. Unauthenticated: the session was over, and the 401 has put the sign-in
+    // page up. Either way there is nobody left to tell here.
+    if (!(error instanceof Stale) && error.code !== "unauthenticated") {
+      $("delete-error").textContent = error instanceof Refused ? error.message : "The gateway could not be reached.";
+
+      // The account is still there, so the panel goes on as it was.
+      if (account && document.visibilityState === "visible") {
+        startPolling();
+      }
+    }
+
+    return;
+  } finally {
+    button.disabled = false;
+  }
+
+  if (!result.deleted) {
+    await signOut("/api/logout", result.sentence);
+    return;
+  }
+
+  resetSession();
+  showSignedOut(result.sentence);
+  // Other tabs of this account must not go on showing what no longer exists until their next poll.
+  sessionChannel.announce();
+}
+
+// ── joining by an invitation ─────────────────────────────────────────────
+
+/**
+ * The invitation this tab was opened with and has not answered yet, `{inviteId, secret}`: read from the link
+ * at load, or from session storage after a sign-in that left the page, and answered once the panel is
+ * entered. Null when there is none.
+ */
+let invitation = null;
+
+/**
+ * The new device's wait for its grants: the invitation, its deadline, and how many of its keys this tab has
+ * taken (`received`, counted by takeGrants). Null when it is not waiting.
+ */
+let joining = null;
+
+/**
+ * Where an invitation is kept across a sign-in (invite.js keepInvite): session storage, or null where the
+ * browser refuses it - reading the property itself throws then.
+ */
+const tabStorage = (() => {
+  try {
+    return sessionStorage;
+  } catch {
+    return null;
+  }
+})();
+
+/**
+ * Answers the invitation this tab was opened with: this device's key registered, the enrollment posted, and
+ * then a wait for the grants the inviting device makes for it.
+ */
+async function joinByInvitation(started) {
+  const { inviteId, secret } = invitation;
+  invitation = null;
+  // Used now: a copy kept for the sign-in would otherwise be answered again on the next sign-in in this tab.
+  takeKeptInvite(tabStorage, Date.now());
+  stopJoining();
+  $("join-error").textContent = "";
+  $("join-status").textContent = "Adding this device to your account…";
+  $("join-dialog").showModal();
+
+  try {
+    const store = keystore;
+
+    if (!store) {
+      throw new Error("This browser cannot keep keys, so it cannot be added.");
+    }
+
+    const id = deviceId ?? await ensureOwnDevice(store);
+
+    if (isCurrent(started)) {
+      knowDevice(id);
+    }
+
+    const deadline = await enrollThisDevice({ keystore: store, api, deviceId: id, inviteId, secret, now: Date.now() });
+
+    // Closed meanwhile: the page's own poll takes the grants when they come, while the secret waits for them.
+    if (!isCurrent(started) || !$("join-dialog").open) {
+      return;
+    }
+
+    $("join-status").textContent = "Waiting for your other device to share its keys…";
+    startJoining({ inviteId, deadline, started });
+  } catch (error) {
+    if (isCurrent(started) && !(error instanceof Stale)) {
+      $("join-status").textContent = "";
+      $("join-error").textContent = error.message;
+    }
+  }
+}
+
+function startJoining(join) {
+  stopJoining();
+  // One check at a time, as for a computer's grant: two overlapping would take the same grants twice.
+  const check = singleFlight(() => checkJoining(join));
+  joining = Object.assign(join, { received: 0, shown: 0, timer: setInterval(check, INVITE_POLL_MS) });
+}
+
+function stopJoining() {
+  if (joining) {
+    clearInterval(joining.timer);
+  }
+
+  joining = null;
+}
+
+/**
+ * One turn of the new device's wait. Asked for until the invitation's secret expires, not until its first keys:
+ * the inviter sends at most 50 a call (ruling R19). What the device can read is said as soon as it holds some
+ * computer's current key, and said again as more arrive.
+ */
+async function checkJoining(join) {
+  const waiting = () => isCurrent(join.started) && joining === join;
+  const store = keystore;
+
+  if (!waiting() || !store) {
+    return;
+  }
+
+  try {
+    const step = await inviteJoinStep({
+      keystore: store, inviteId: join.inviteId, deadline: join.deadline, now: Date.now(),
+      collect: async () => {
+        const result = await takeGrants(join.started);
+
+        if (result) {
+          sayTrouble(result);
+        }
+      }
+    });
+
+    if (!waiting()) {
+      return;
+    }
+
+    if (join.received !== join.shown) {
+      join.shown = join.received;
+      // What was drawn as unreadable opens now.
+      await render();
+      // Only computers whose current key is held: one this device holds older keys of cannot be read now.
+      const readable = await readableHosts(store, state.hosts);
+
+      if (!waiting()) {
+        return;
+      }
+
+      $("join-error").textContent = "";
+      $("join-status").textContent = readable.length > 0
+        ? `This device can now read ${readable.map((host) => host.label).join(", ")}.`
+        : "Keys arrived, but none is a computer's current one yet. Waiting for more…";
+    }
+
+    if (step === "expired") {
+      stopJoining();
+
+      if (join.received === 0) {
+        $("join-status").textContent = "";
+        $("join-error").textContent =
+          "The invitation expired before your other device answered it. Ask it for a new link.";
+      }
+    }
+  } catch (error) {
+    // The gateway out of reach is said, and the next tick asks again. An ended session says nothing.
+    if (waiting() && !(error instanceof Stale)) {
+      $("join-error").textContent = `Still waiting for keys… (${error.message})`;
+    }
+  }
+}
+
+$("join-dialog").addEventListener("close", stopJoining);
+
 // ── signing in and out ───────────────────────────────────────────────────
 
-function showLogin() {
+/** Who the panel is showing, as the last /api/session said; null while nobody is signed in. */
+let account = null;
+
+const SIGNED_OUT = "You were signed out. Sign in again to go on.";
+
+/**
+ * Forgets everything the page holds for whoever was signed in.
+ *
+ * The one mechanism behind sign-out, an expired session, another account and a page restored from the
+ * back-forward cache. Before it, only a sign-out reloaded the page: a 401 put the sign-in form over a
+ * panel still holding the last person's runs and cursor, and the next sign-in in that tab showed those
+ * runs until its first poll replaced them. So: polling stops, requests in flight are aborted and whatever
+ * they bring back is dropped, the arrays, cursor, unread count and open run are emptied, every dialog
+ * closes and every field and line drawn for the person is emptied (FORGOTTEN, in session-guard.js), and
+ * nothing private is drawn again until a fresh /api/session says whose it is.
+ */
+function resetSession() {
   stopPolling();
+  stopPairing();
+  stopInviting();
+  stopJoining();
+  endSession();
+  account = null;
+  // Closed, not only dropped: one database per account, and this one's keys are not the next person's.
+  keystore?.close();
+  keystore = null;
+  deviceId = null;
+  registeredHere = null;
+  deviceLimited = false;
+  showDeviceLimit(false);
+  // Its opened records too: they are the last account's content, in clear.
+  reader = createReader(null);
+  writer = createWriter(null);
+  // Drafts too: a draft is the last person's task, and nothing of it is the next one's to resend. Commands
+  // stay (see `sends`): each names a task, run or approval only its own account can act on.
+  sends.forgetAll("draft:");
+  // The last account's devices and what was told of their removal: labels of theirs, drawn for nobody else.
+  devices = null;
+  ownDevice = null;
+  removals.clear();
+  removalWatch.clear();
+  removing.clear();
+  content = () => undefined;
+  drawnCursor = null;
+  grantSchedule = createGrantSchedule();
+  seenEpochs = new Map();
+  lastTrouble = "";
+  resetState(state);
+  clearTimeout(toastTimer);
+  forgetScreen($, document.querySelectorAll("dialog[open]"));
+  $("account").open = false;
+  $("account-name").textContent = "";
   $("panel").hidden = true;
-  $("login").hidden = false;
+  render();
 }
 
-async function showPanel() {
-  $("login").hidden = true;
-  $("panel").hidden = false;
-  await poll();
-  startPolling();
+/**
+ * Asks the gateway who is signed in and shows that. The only way onto the panel, so what it draws is
+ * always the account a fresh answer named.
+ */
+async function bootNow(outcome) {
+  let view;
+
+  try {
+    view = await session();
+  } catch (error) {
+    if (!(error instanceof Stale)) {
+      showSignedOut("The gateway could not be reached. Reload to try again.");
+    }
+
+    return;
+  }
+
+  if (view.authenticated) {
+    // Said before the panel is entered, which takes a while: whoever else is open can ask the gateway now.
+    sessionChannel.announce();
+    await enterPanel(view.user);
+  } else {
+    showSignedOut(outcome);
+  }
 }
+
+// One at a time within a session: a signal from another tab can arrive while this tab's own first boot is still
+// asking /api/session, and two boots would each enter the panel (two key stores opened, two polls started).
+const boot = singleFlight(bootNow, generation);
+
+async function enterPanel(user) {
+  deviceRemovedShown = false;
+  deviceRemovedFor = null;
+  account = user;
+  $("account-name").textContent = user.displayName;
+  $("login").hidden = true;
+  $("device-removed").hidden = true;
+  $("panel").hidden = false;
+
+  const started = generation();
+  await openTrust(user);
+
+  if (!isCurrent(started)) {
+    return;
+  }
+
+  // At the device limit nothing else is asked: every other call would be refused for naming no device.
+  showDeviceLimit(deviceLimited);
+  if (deviceLimited) {
+    return;
+  }
+
+  await poll();
+
+  // Grants that arrived while no page was open - a connection code pasted after its dialog was closed.
+  // After the poll, so a computer in doubt is named rather than called "A computer".
+  try {
+    const result = await takeGrants(started);
+
+    if (result) {
+      sayTrouble(result);
+    }
+
+    // Keys that arrived while no page was open: what the first poll drew as unreadable opens now.
+    if (result?.added.length > 0) {
+      await render();
+    }
+
+    // A code answered after it expired is listed by the gateway on every call. Said in a toast it was said on
+    // every load, for good; the console keeps it for whoever is looking into why a computer never paired.
+    result?.rejected.filter((one) => one.code === "no-secret").forEach((one) =>
+      console.info(`${hostLabel(one.hostId)}: ${one.reason}`));
+  } catch {
+    // Not reaching the gateway is what the poll already shows.
+  }
+
+  // Not when the first poll ended the session: a timer started now would poll for nobody. Nor while
+  // hidden: a hidden tab does not poll (see visibilitychange), and coming back starts it.
+  if (isCurrent(started) && document.visibilityState === "visible") {
+    startPolling();
+  }
+
+  // Opened by an invitation link: answered now that someone is signed in, after the first poll so the
+  // computers this device comes to read are named.
+  if (invitation && isCurrent(started)) {
+    joinByInvitation(started);
+  }
+}
+
+function showSignedOut(outcome) {
+  deviceRemovedShown = false;
+  deviceRemovedFor = null;
+  $("panel").hidden = true;
+  $("device-removed").hidden = true;
+  $("login").hidden = false;
+
+  // A provider's sign-in leaves this page and comes back to another address, without the link's fragment.
+  if (invitation) {
+    keepInvite(tabStorage, invitation);
+  }
+
+  const said = outcome ?? (invitation ? "Sign in to the account you are adding this device to." : null);
+  const line = $("login-outcome");
+  line.textContent = said ?? "";
+  line.hidden = !said;
+
+  offerProviders();
+  offerDevelopmentSignIn();
+}
+
+/** Whether "this device was removed" is what the tab shows: a signal from another tab treats it differently (sessionChannel). */
+let deviceRemovedShown = false;
+
+/**
+ * The account the "device removed" view was put up for. The reset that precedes the view forgets the account, and
+ * the view's buttons act on whoever is signed in when they are pressed: with Bob signed in, in another tab,
+ * "Delete this device's keys" deleted Bob's keys in this browser, and a signal from that tab left Alice's view up.
+ */
+let deviceRemovedFor = null;
+
+function showDeviceRemoved(accountId, said = removedView({ registeredHere: null, named: null })) {
+  deviceRemovedShown = true;
+  deviceRemovedFor = accountId ?? null;
+  $("removed-title").textContent = said.title;
+  $("removed-text").textContent = said.text;
+  $("removed-forget").hidden = !said.offerForget;
+  $("panel").hidden = true;
+  $("login").hidden = true;
+  $("device-removed").hidden = false;
+}
+
+/** One plain link per provider the gateway lists. A link, not a script: signing in is a navigation. */
+async function offerProviders() {
+  const note = $("providers-note");
+
+  try {
+    const links = providerLinks(await get("/api/providers")).map(({ href, label }) => {
+      const link = node("a", "provider", label);
+      link.href = href;
+      return link;
+    });
+
+    $("providers").replaceChildren(...links);
+    note.textContent = "No way of signing in is configured on this gateway.";
+    note.hidden = links.length > 0;
+  } catch (error) {
+    if (error instanceof Stale) {
+      return;
+    }
+
+    $("providers").replaceChildren();
+    note.textContent = "The gateway could not be reached. Reload to try again.";
+    note.hidden = false;
+  }
+}
+
+const developmentSignIn = createDevelopmentProbe(get);
+
+/**
+ * The development sign-in, offered only on this machine and only by a gateway that has it.
+ *
+ * Asked of the gateway rather than assumed from the address: localhost is also where an operator sees a
+ * production gateway through an SSH tunnel, and a form there would sign nobody in while looking like a
+ * way in. How it is asked is createDevelopmentProbe's: a GET, which no limit counts.
+ */
+async function offerDevelopmentSignIn() {
+  const form = $("dev-sign-in");
+
+  if (!["localhost", "127.0.0.1", "[::1]"].includes(location.hostname)) {
+    form.hidden = true;
+    return;
+  }
+
+  form.hidden = !(await developmentSignIn());
+}
+
+/**
+ * Signs out here, or everywhere, and only then says so - `outcome` on the sign-in page, when there is more to
+ * say. A sign-in page shown while the gateway still holds the session would claim something untrue: the next
+ * reload would open the panel again.
+ */
+async function signOut(path, outcome) {
+  // Before the request, not after it. A poll in flight that is answered 401 once the gateway has ended
+  // the session would run the 401's reset, which aborts this very request - and the sign-out would end
+  // in "Not signed out" over the sign-in page. Abandoned now, its answer is dropped unread.
+  stopPolling();
+  abandonRequests();
+
+  try {
+    await post(path, {});
+  } catch (error) {
+    // Stale: another sign-out got there first.
+    if (error instanceof Stale) {
+      return;
+    }
+
+    // The session was already over, and the 401 has put the sign-in page up. Forgetting this device ends here
+    // every time: the gateway ends a device's sessions when the device is removed, this one's included, so what
+    // the forgetting has to say goes under that page rather than "You were signed out", and the other tabs hear.
+    if (error.code === "unauthenticated") {
+      if (outcome) {
+        showSignedOut(outcome);
+        sessionChannel.announce();
+      }
+      return;
+    }
+
+    toast(`Not signed out. ${error instanceof Refused ? error.message : "The gateway could not be reached."}`, true);
+
+    // Still signed in, so the panel goes on as it was.
+    if (account && document.visibilityState === "visible") {
+      startPolling();
+    }
+
+    return;
+  }
+
+  resetSession();
+  showSignedOut(outcome);
+  // The cookie is gone for the whole browser: tabs that still show this account's runs must not wait for focus or
+  // their next poll to find out, and they would not hear of it from this tab's own reset.
+  sessionChannel.announce();
+}
+
+/**
+ * Checks what is on screen against the gateway's own answer.
+ *
+ * The cookie belongs to the browser, not the tab: in another tab the person may have signed out, or in
+ * as somebody else. Every snapshot names its account (pollOnce), but a session that has ended gives no
+ * snapshot to compare, so the session is asked first, before the poll restarts.
+ *
+ * One at a time, like the poll: coming back to a tab fires visibilitychange and focus together, and two
+ * checks would each start a poll.
+ */
+const revalidate = singleFlight(revalidateNow, generation);
+
+// Other tabs of this browser, told when the session changes here and telling this tab when it changes there.
+// What they say is only "ask the gateway" (session-channel.js): revalidate decides, from /api/session. Never
+// closed by resetSession - the next account signed in in this tab needs it too. A tab with an account revalidates;
+// one left at the sign-in view has none, so it boots - asks /api/session and enters the panel if another tab has
+// signed in since. One at "this device was removed" must not enter the panel for the account it was removed
+// from: the gateway session is still open there on purpose, and booting would use the removed device's keys again,
+// or - after a forget - recreate the deleted store and register this browser as a new device without the person
+// asking. It only checks the session: none moves it to the sign-in view, another account's resets and boots as
+// an account change does, the same account leaves it as it is (removedViewAction).
+const sessionChannel = openSessionChannel({
+  onChanged: () => onSessionSignal({
+    account,
+    view: deviceRemovedShown ? "removed" : "other",
+    boot: () => boot(),
+    revalidate: () => revalidate(),
+    toSignIn: () => leaveRemovedIfSessionChanged()
+  })
+});
+
+const leaveRemovedIfSessionChanged = singleFlight(leaveRemovedIfSessionChangedNow, generation);
+
+async function leaveRemovedIfSessionChangedNow() {
+  const started = generation();
+  let view;
+
+  try {
+    view = await session();
+  } catch {
+    // Unreachable, or this session ended meanwhile: the view stays as it is, and a reload asks again.
+    return;
+  }
+
+  // Not when the tab has moved on (a sign-out or sign-in here) while the answer was on its way.
+  if (!isCurrent(started) || !deviceRemovedShown) {
+    return;
+  }
+
+  const action = removedViewAction(view, deviceRemovedFor);
+
+  if (action === "sign-in") {
+    showSignedOut();
+  } else if (action === "boot") {
+    // Another account is signed in: the normal account change. Nothing of the removed account's is kept.
+    resetSession();
+    await boot();
+  }
+}
+
+async function revalidateNow() {
+  if (!account) {
+    return;
+  }
+
+  const expected = account.id;
+  let view;
+
+  try {
+    view = await session();
+  } catch (error) {
+    // Unreachable: the poll says so on screen, and keeps trying until the gateway answers - each
+    // snapshot is still checked against the account (pollOnce), so nothing unconfirmed is drawn.
+    if (!(error instanceof Stale) && account?.id === expected) {
+      await poll();
+
+      if (account?.id === expected && document.visibilityState === "visible") {
+        startPolling();
+      }
+    }
+
+    return;
+  }
+
+  if (!view.authenticated) {
+    resetSession();
+    showSignedOut(SIGNED_OUT);
+  } else if (view.user.id !== expected) {
+    resetSession();
+    // Said now as well as by boot's own announce, which comes only after /api/session answers again: tabs that
+    // still show the previous account start asking the gateway at once, and what they get from it is the same
+    // single-flight run either way.
+    sessionChannel.announce();
+    await boot();
+  } else if (account?.id === expected) {
+    await poll();
+
+    if (account?.id === expected && document.visibilityState === "visible") {
+      startPolling();
+    }
+  }
+}
+
+// Both ids come from the same place on the gateway today. A gateway that contradicted itself - a snapshot
+// that never matches its own session - would otherwise reset and boot in a loop: the page flickering, and
+// asking for the session and the state as fast as they are answered. At most one such boot per pause.
+const MISMATCH_PAUSE_MS = 5000;
+let lastMismatchBoot = -Infinity;
+
+/** Boots after a snapshot named another account: at once the first time, then at most once per pause. */
+function bootAfterMismatch() {
+  const started = generation();
+  const wait = Math.max(0, lastMismatchBoot + MISMATCH_PAUSE_MS - Date.now());
+
+  setTimeout(() => {
+    // A sign-in or sign-out in the meantime has booted the page already.
+    if (isCurrent(started)) {
+      lastMismatchBoot = Date.now();
+      boot();
+    }
+  }, wait);
+}
+
+onUnauthenticated(() => {
+  const wasSignedIn = account !== null;
+  resetSession();
+  showSignedOut(wasSignedIn ? SIGNED_OUT : null);
+});
+
+onDeviceRevoked(() => {
+  const removedId = account?.id;
+  // Read before the reset forgets them: which device was refused, and whether this page registered it.
+  const said = removedView({ registeredHere, named: deviceId });
+  resetSession();
+  showDeviceRemoved(removedId, said);
+});
 
 let timer = 0;
 
@@ -778,27 +2605,66 @@ document.querySelectorAll(".tab").forEach((tab) =>
 document.querySelectorAll("[data-close]").forEach((button) =>
   button.addEventListener("click", () => button.closest("dialog").close()));
 
-$("login-form").addEventListener("submit", async (submitted) => {
-  submitted.preventDefault();
-  $("login-error").textContent = "";
+$("security-log").addEventListener("click", openAudit);
+$("download-data").addEventListener("click", downloadData);
+$("delete-account").addEventListener("click", openDeleteAccount);
+$("delete-confirm").addEventListener("click", deleteAccountNow);
+$("sign-out").addEventListener("click", () => signOut("/api/logout"));
+$("sign-out-all").addEventListener("click", () => signOut("/api/logout-all"));
+
+// The session is still open on the gateway - only this browser was removed - so signing out needs a
+// token, and the reset that put this view up threw the last one away.
+$("removed-sign-out").addEventListener("click", async () => {
+  try {
+    await session();
+  } catch (error) {
+    if (!(error instanceof Stale)) {
+      toast("The gateway could not be reached.", true);
+    }
+
+    return;
+  }
+
+  await signOut("/api/logout");
+});
+
+// A removed device's keys still open what it had already been given. A "Forget this device" that stopped short - a
+// computer out of reach, then a reload - put this page up with only Sign out, and the keys stayed on disk for good.
+$("removed-forget").addEventListener("click", async (clicked) => {
+  const button = clicked.currentTarget;
+  const status = $("removed-status");
+  button.disabled = true;
+  status.textContent = "";
 
   try {
-    await post("/api/login", { key: $("owner-key").value });
-    $("owner-key").value = "";
-    await session();
-    await showPanel();
+    // Whose keys: the account this page was put up for, and only if it is the one signed in now (asked afresh - the
+    // reset that put this page up forgot it). Another account's keys in this browser are not this device's to delete.
+    await deleteDeviceKeys(await session(), openKeystore, deviceRemovedFor);
+    status.textContent = "This device's keys are deleted from this browser.";
   } catch (error) {
-    // A wrong key and a locked-out gateway are different facts, and the second
-    // one is the difference between "try again" and "wait".
-    $("login-error").textContent = error.code === "locked-out"
-      ? error.message
-      : "That key was not accepted.";
+    if (!(error instanceof Stale)) {
+      status.textContent = error.message;
+    }
+  } finally {
+    button.disabled = false;
   }
 });
 
-$("logout").addEventListener("click", async () => {
-  await post("/api/logout", {});
-  location.reload();
+$("dev-sign-in").addEventListener("submit", async (submitted) => {
+  submitted.preventDefault();
+  $("dev-error").textContent = "";
+
+  try {
+    // A fresh token: the one held may be from before a sign-out, bound to whoever that was.
+    await session();
+    await post("/api/dev/sign-in", { name: $("dev-name").value });
+    $("dev-name").value = "";
+    await boot();
+  } catch (error) {
+    if (!(error instanceof Stale)) {
+      $("dev-error").textContent = error.message;
+    }
+  }
 });
 
 $("theme").addEventListener("click", () => {
@@ -810,29 +2676,109 @@ $("theme").addEventListener("click", () => {
 $("new-task").addEventListener("click", openTaskDialog);
 $("task-submit").addEventListener("click", createTask);
 $("add-host").addEventListener("click", () => {
+  stopPairing();
   $("host-secret").hidden = true;
   $("host-submit").hidden = false;
   $("host-error").textContent = "";
+  $("host-status").textContent = "";
   $("host-name").value = "";
+  $("host-code").value = "";
   $("host-dialog").showModal();
 });
+// Closed - by its button, Escape, a reset or the computer's answer - nobody is waiting for the answer any more,
+// and the code goes with it: it carries the computer's token, which would otherwise stay in the page until the
+// next "Register".
+$("host-dialog").addEventListener("close", () => {
+  stopPairing();
+  $("host-code").value = "";
+});
 $("host-submit").addEventListener("click", registerHost);
-$("mark-read").addEventListener("click", (clicked) =>
-  act(clicked.currentTarget, () => post("/api/notices/read", {})));
+// Through the cursor of the snapshot on screen, and no further: a notice that arrived after it has not been
+// seen, and marking "everything" read would have marked it too. With nothing drawn yet there is no cursor,
+// the gateway refuses the call without one, and the button is disabled (render) rather than sending null.
+$("mark-read").addEventListener("click", (clicked) => {
+  const through = drawnCursor;
+
+  if (through !== null) {
+    act(clicked.currentTarget, () => post("/api/notices/read", { through }));
+  }
+});
 
 // A phone puts the page to sleep rather than closing it. Coming back to a
 // screen that is minutes stale, with no sign that it is, is the failure this
-// avoids: the poll runs at once and the banner says so until it succeeds.
+// avoids: the session is checked and the poll runs at once, and the banner says
+// so until it succeeds.
+//
+// Hidden, the poll stops. A hidden tab went on polling under whatever cookie the
+// browser held by then, so when Bob signed in, in another tab, Alice's hidden tab
+// drew Bob's events onto her list, and they were on screen before anything could
+// check. Back, the session is checked first and the poll restarts only when it
+// is still the same account (revalidate).
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible" && !$("panel").hidden) {
-    poll();
+  if (document.visibilityState === "visible") {
+    revalidate();
+  } else {
+    stopPolling();
+  }
+});
+
+// Focus as well: a window that was never hidden - beside another one, where Bob
+// just signed in - fires no visibilitychange when it is clicked back into.
+window.addEventListener("focus", () => revalidate());
+
+// A page restored from the back-forward cache is the page as it was left: whoever was signed in then,
+// their runs on screen, and a poll timer that may belong to a session ended since. None of it is
+// trusted - it is all forgotten, and the session asked again.
+window.addEventListener("pageshow", (shown) => {
+  if (shown.persisted) {
+    resetSession();
+    boot();
   }
 });
 
 applyTheme(localStorage.getItem(THEME_KEY));
 
-if (await session()) {
-  await showPanel();
-} else {
-  showLogin();
+// An invitation link, /pair#v=2&i=…&p=…: taken out of the address at once (openInviteLink) and held until
+// someone is signed in. Without one, an invitation kept across a sign-in that left the page; taken out of
+// storage either way, so a link opened since replaces it rather than leaving it there to be answered later.
+invitation = takeKeptInvite(tabStorage, Date.now());
+
+if (location.pathname === "/pair" && location.hash) {
+  try {
+    invitation = openInviteLink(location.hash, history);
+  } catch (error) {
+    toast(error.message, true);
+  }
 }
+
+// A link pasted into a tab already at /pair changes only the fragment: the page is not loaded again, so the
+// lines above never ran, and the secret stayed in the address with nothing done about it.
+window.addEventListener("hashchange", () => {
+  if (location.pathname !== "/pair" || !location.hash) {
+    return;
+  }
+
+  try {
+    invitation = openInviteLink(location.hash, history);
+  } catch (error) {
+    toast(error.message, true);
+    return;
+  }
+
+  if (account) {
+    joinByInvitation(generation());
+  } else if (!$("login").hidden) {
+    // Said on the sign-in page, and kept for a sign-in that leaves it.
+    showSignedOut();
+  }
+});
+
+// Where a sign-in that opened no session ended. Read once and taken out of the address, so a reload
+// does not say it again; any other fragment is left alone.
+const outcome = outcomeOf(location.hash);
+
+if (outcome) {
+  history.replaceState(null, "", location.pathname + location.search);
+}
+
+await boot(outcome);

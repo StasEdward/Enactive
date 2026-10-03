@@ -4,6 +4,8 @@ using System.Net;
 using System.Net.Http.Json;
 using Enactive.Remote.Contracts;
 using Enactive.Remote.Gateway;
+using Enactive.Remote.Host;
+using Microsoft.AspNetCore.Http.Connections;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Xunit;
 
@@ -12,10 +14,10 @@ using Xunit;
 ///
 /// <para>`cloudflared` runs on the gateway's own machine and connects OUTWARD, so nothing on the
 /// server listens publicly and every request the gateway sees arrives from 127.0.0.1. That one fact
-/// breaks something quietly: the login rate limiter partitions by remote address, so without the
-/// forwarded header every visitor on earth shares one bucket - and a stranger guessing at the key
-/// would lock the owner out of their own panel. A limiter that cannot tell two people apart is a
-/// denial of service with a schedule.</para>
+/// breaks something quietly: the sign-in rate limiter partitions by remote address, so without the
+/// forwarded header every visitor on earth shares one bucket - and one stranger hammering the sign-in
+/// would lock everybody else out of theirs. A limiter that cannot tell two people apart is a denial
+/// of service with a schedule.</para>
 ///
 /// <para>xUnit builds a fresh instance of this class for each test, so each one gets its own
 /// gateway and its own empty rate limiter. That matters here more than usual: these tests are
@@ -24,18 +26,12 @@ using Xunit;
 /// </summary>
 public sealed class TunnelTests(TestDatabase database) : IClassFixture<TestDatabase>
 {
-    private const string OwnerKey = "a-development-owner-key-for-tests";
-
-    /// <summary>The window is a minute and the limit ten, so eleven is one past it.</summary>
-    private const int PastTheLimit = 11;
+    /// <summary>One sign-in past what one address may make in the limit's minute.</summary>
+    private const int PastTheLimit = RequestLimits.AuthPerMinute + 1;
 
     private WebApplicationFactory<Program> Gateway(bool behindTunnel, string? urls = null)
-        => new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        => TestGateway.Create(database, configure: builder =>
         {
-            builder.UseSetting("ENACTIVE_REMOTE_DB", database.ConnectionString);
-            builder.UseSetting("ENACTIVE_OWNER_KEY", OwnerKey);
-            builder.UseSetting("ENACTIVE_DATA", Path.Combine(Path.GetTempPath(), database.Name));
-            builder.UseSetting("environment", "Development");
             builder.UseSetting(Deployment.BehindTunnelSetting, behindTunnel ? "true" : "false");
 
             if (urls is not null)
@@ -47,8 +43,8 @@ public sealed class TunnelTests(TestDatabase database) : IClassFixture<TestDatab
     /// <summary>
     /// The control, and the reason the next test means anything.
     ///
-    /// <para>Without the forwarded header every caller is 127.0.0.1, so eleven attempts share one
-    /// bucket and the eleventh is refused. This is what the deployment does to the limiter, stated
+    /// <para>Without the forwarded header every caller is 127.0.0.1, so every attempt shares one
+    /// bucket and the one past the limit is refused. This is what the deployment does to the limiter, stated
     /// as a fact rather than a worry - and it is also proof that the limiter is switched on, which
     /// the test below would otherwise be unable to distinguish from a limiter that does nothing.
     /// </para>
@@ -57,22 +53,22 @@ public sealed class TunnelTests(TestDatabase database) : IClassFixture<TestDatab
     public async Task Without_the_header_everybody_shares_one_bucket()
     {
         await using var gateway = Gateway(behindTunnel: true);
-        var statuses = await LoginRepeatedlyAsync(gateway, address: _ => null);
+        var statuses = await SignInRepeatedlyAsync(gateway, address: _ => null);
 
         Assert.Equal(HttpStatusCode.TooManyRequests, statuses[^1]);
     }
 
     /// <summary>
-    /// And with it, eleven people are eleven people.
+    /// And with it, twenty-one people are twenty-one people.
     ///
-    /// <para>Shown red by turning the tunnel setting off, which leaves the header unread: the
-    /// eleventh caller is then refused for what the first ten did.</para>
+    /// <para>Shown red by turning the tunnel setting off, which leaves the header unread: the last
+    /// caller is then refused for what the others did.</para>
     /// </summary>
     [Fact]
     public async Task The_address_cloudflare_reports_is_what_the_limiter_counts()
     {
         await using var gateway = Gateway(behindTunnel: true);
-        var statuses = await LoginRepeatedlyAsync(gateway, address: i => $"203.0.113.{i + 1}");
+        var statuses = await SignInRepeatedlyAsync(gateway, address: i => $"203.0.113.{i + 1}");
 
         Assert.All(statuses, status => Assert.Equal(HttpStatusCode.OK, status));
     }
@@ -87,9 +83,191 @@ public sealed class TunnelTests(TestDatabase database) : IClassFixture<TestDatab
     public async Task One_reported_address_is_still_one_bucket()
     {
         await using var gateway = Gateway(behindTunnel: true);
-        var statuses = await LoginRepeatedlyAsync(gateway, address: _ => "203.0.113.7");
+        var statuses = await SignInRepeatedlyAsync(gateway, address: _ => "203.0.113.7");
 
         Assert.Equal(HttpStatusCode.TooManyRequests, statuses[^1]);
+    }
+
+    /// <summary>
+    /// Every sign-in route under <c>/auth</c> is limited per address, and only per address: one address
+    /// past its limit is refused, in the API's coded shape, and the next address is not. The limit that
+    /// counted everyone together - the old shared lockout - let one stranger keep every account out.
+    /// </summary>
+    [Fact]
+    public async Task Auth_is_limited_per_address()
+    {
+        await using var gateway = Gateway(behindTunnel: true);
+        using var http = gateway.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
+
+        async Task<HttpResponseMessage> CompleteAsync(string address)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, "/auth/complete");
+            request.Headers.Add(Deployment.ClientAddressHeader, address);
+            return await http.SendAsync(request);
+        }
+
+        var statuses = new List<HttpStatusCode>();
+        for (var attempt = 0; attempt < RequestLimits.AuthPerMinute; attempt++)
+        {
+            using var response = await CompleteAsync("203.0.113.7");
+            statuses.Add(response.StatusCode);
+        }
+
+        using var refused = await CompleteAsync("203.0.113.7");
+        using var neighbour = await CompleteAsync("203.0.113.8");
+
+        // A redirect to the panel's "that did not work": there is no sign-in to complete.
+        Assert.All(statuses, status => Assert.Equal(HttpStatusCode.Redirect, status));
+        Assert.Equal(HttpStatusCode.TooManyRequests, refused.StatusCode);
+        Assert.Equal("rate-limited", (await refused.Content.ReadFromJsonAsync<ErrorView>(RemoteJson.Options))!.Code);
+        Assert.Equal(HttpStatusCode.Redirect, neighbour.StatusCode);
+    }
+
+    /// <summary>
+    /// However the per-caller limits divide things up, a flood of requests that are each allowed - a
+    /// different address every time, each slow to finish - is capped as a whole, so it cannot hold every
+    /// connection the gateway has. The cap is load protection and nothing more: once the flood ends, the
+    /// next request is served.
+    ///
+    /// <para>Each held request is a sign-in whose body has not finished arriving, from an address of its
+    /// own, so neither the per-address limit nor the database is what holds it. A held request never
+    /// finishes until it is let go, so whichever arrive first fill the ceiling and exactly the surplus
+    /// is refused, in whatever order they come. The first version probed the ceiling with a request of
+    /// its own while the flood was still arriving, and under a loaded machine the probe and the last
+    /// held request raced for the final place.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_flood_of_open_requests_is_capped_as_a_whole()
+    {
+        const int surplus = 10;
+        await using var gateway = Gateway(behindTunnel: true);
+        using var browser = new PanelClient(gateway);
+        await browser.SessionAsync();
+        var release = new TaskCompletionSource();
+
+        var flood = Flood(browser, RequestLimits.ConcurrentRequests + surplus, release.Task);
+        var refusedWhileFull = await AnsweredOnceAsync(flood, surplus);
+
+        release.SetResult();
+        var answers = await Task.WhenAll(flood);
+        var statuses = answers.Select(response => response.StatusCode).ToList();
+        foreach (var response in answers)
+        {
+            response.Dispose();
+        }
+
+        using var after = await browser.Http.GetAsync("/health");
+
+        Assert.Equal(surplus, refusedWhileFull.Count);
+        Assert.All(refusedWhileFull, status => Assert.Equal(HttpStatusCode.TooManyRequests, status));
+
+        // Let go, every one that got in is refused for its empty name: the endpoint answering.
+        Assert.Equal(RequestLimits.ConcurrentRequests, statuses.Count(status => status == HttpStatusCode.BadRequest));
+        Assert.Equal(surplus, statuses.Count(status => status == HttpStatusCode.TooManyRequests));
+        Assert.Equal(HttpStatusCode.OK, after.StatusCode);
+    }
+
+    /// <summary>
+    /// The hub's address is counted like any other. It was exempt from the ceiling by its path - which
+    /// the caller writes - so anybody could send requests there without end, each one with a made-up
+    /// computer token costing a database lookup, and nothing counted them. With the gateway full, such
+    /// a request is refused at the door like the rest.
+    /// </summary>
+    [Fact]
+    public async Task A_request_to_the_hub_with_a_made_up_token_is_counted_by_the_ceiling()
+    {
+        await using var gateway = Gateway(behindTunnel: true);
+        using var browser = new PanelClient(gateway);
+        await browser.SessionAsync();
+        var release = new TaskCompletionSource();
+
+        var flood = Flood(browser, RequestLimits.ConcurrentRequests + 1, release.Task);
+        await AnsweredOnceAsync(flood, 1);
+
+        using var hub = await browser.SendAsync(HttpMethod.Get, "/hubs/host", csrf: false,
+            configure: request => request.Headers.Authorization = new("Bearer", "made-up"));
+
+        release.SetResult();
+        foreach (var response in await Task.WhenAll(flood))
+        {
+            response.Dispose();
+        }
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, hub.StatusCode);
+    }
+
+    /// <summary>
+    /// A computer's connection, once it has proved which computer it is, does not keep a place under the
+    /// ceiling. It lasts as long as the computer is online - a long poll waits for something to say - so
+    /// kept, a couple of hundred computers online would leave no place for anybody's panel. Here a
+    /// computer is connected and every place is still there for the flood: exactly one of one more than
+    /// the ceiling is refused, not two.
+    /// </summary>
+    [Fact]
+    public async Task A_connected_computer_does_not_keep_a_place_under_the_ceiling()
+    {
+        await using var gateway = Gateway(behindTunnel: true);
+        using var owner = await PanelClient.SignedInAsync(gateway, "owner-" + Guid.NewGuid().ToString("N")[..8]);
+        var device = await owner.PostAsync<DeviceView>("/api/hosts", new { name = "Studio PC" });
+
+        await using var computer = new SignalRGatewayConnection(
+            new Uri(gateway.Server.BaseAddress, "hubs/host"), device.Token, options =>
+            {
+                options.HttpMessageHandlerFactory = _ => gateway.Server.CreateHandler();
+                options.Transports = HttpTransportType.LongPolling;
+            });
+        await computer.StartAsync();
+        await computer.SyncAsync([], CancellationToken.None);
+
+        using var browser = new PanelClient(gateway);
+        await browser.SessionAsync();
+        var release = new TaskCompletionSource();
+
+        var flood = Flood(browser, RequestLimits.ConcurrentRequests + 1, release.Task);
+        await AnsweredOnceAsync(flood, 1);
+
+        // Long enough for every request of the flood to have been let in or turned away.
+        await Task.Delay(TimeSpan.FromSeconds(1));
+        var refused = flood.Count(call => call.IsCompleted);
+
+        release.SetResult();
+        foreach (var response in await Task.WhenAll(flood))
+        {
+            response.Dispose();
+        }
+
+        Assert.Equal(1, refused);
+        await computer.SyncAsync([], CancellationToken.None);
+    }
+
+    /// <summary>
+    /// The session endpoint is anonymous, so it is counted per person when there is one and per address
+    /// when there is not: it answers before anybody signs in, and was the one route under <c>/api</c>
+    /// nothing counted.
+    /// </summary>
+    [Fact]
+    public async Task The_session_is_limited_per_address_before_anybody_signs_in()
+    {
+        await using var gateway = Gateway(behindTunnel: true);
+        using var http = gateway.CreateClient();
+
+        async Task<HttpStatusCode> SessionAsync(string address)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, "/api/session");
+            request.Headers.Add(Deployment.ClientAddressHeader, address);
+            using var response = await http.SendAsync(request);
+            return response.StatusCode;
+        }
+
+        var statuses = new List<HttpStatusCode>();
+        for (var call = 0; call < RequestLimits.ApiPerMinute; call++)
+        {
+            statuses.Add(await SessionAsync("203.0.113.7"));
+        }
+
+        Assert.All(statuses, status => Assert.Equal(HttpStatusCode.OK, status));
+        Assert.Equal(HttpStatusCode.TooManyRequests, await SessionAsync("203.0.113.7"));
+        Assert.Equal(HttpStatusCode.OK, await SessionAsync("203.0.113.8"));
     }
 
     /// <summary>
@@ -149,9 +327,9 @@ public sealed class TunnelTests(TestDatabase database) : IClassFixture<TestDatab
     /// Signs in <see cref="PastTheLimit"/> times, each call reporting whatever
     /// <paramref name="address"/> returns for it, and hands back what the gateway answered.
     ///
-    /// <para>The CORRECT key every time, deliberately. A wrong one would also exercise the global
-    /// consecutive-failure lockout, and a test that trips two mechanisms cannot say which one
-    /// answered. What is under test here is the per-caller limiter and nothing else.</para>
+    /// <para>A valid name every time, deliberately, so every refusal is the limiter's: a test that
+    /// could be refused for two reasons cannot say which one answered. What is under test here is the
+    /// per-caller limiter and nothing else.</para>
     ///
     /// <para>A fresh client per attempt, which is what eleven people actually are: eleven browsers,
     /// eleven cookie jars, eleven antiforgery tokens. The first draft reused one client and got ten
@@ -160,34 +338,88 @@ public sealed class TunnelTests(TestDatabase database) : IClassFixture<TestDatab
     /// limiter partitions by address and never looks at a cookie, so this changes nothing about
     /// what is being measured and everything about whether it can be seen.</para>
     /// </summary>
-    private static async Task<List<HttpStatusCode>> LoginRepeatedlyAsync(
+    private static async Task<List<HttpStatusCode>> SignInRepeatedlyAsync(
         WebApplicationFactory<Program> gateway, Func<int, string?> address)
     {
         var statuses = new List<HttpStatusCode>();
 
         for (var attempt = 0; attempt < PastTheLimit; attempt++)
         {
-            using var client = gateway.CreateClient();
-            var csrf = (await client.GetFromJsonAsync<SessionView>("/api/session", RemoteJson.Options))!.CsrfToken;
+            using var browser = new PanelClient(gateway);
+            await browser.SessionAsync();
 
-            using var request = new HttpRequestMessage(HttpMethod.Post, "/api/login")
-            {
-                Content = JsonContent.Create(new { key = OwnerKey }, options: RemoteJson.Options)
-            };
+            var reported = address(attempt);
+            using var response = await browser.SendAsync(HttpMethod.Post, "/api/dev/sign-in", new { name = "visitor" },
+                configure: request =>
+                {
+                    if (reported is not null)
+                    {
+                        request.Headers.Add(Deployment.ClientAddressHeader, reported);
+                    }
+                });
 
-            request.Headers.Add("X-CSRF-TOKEN", csrf);
-
-            if (address(attempt) is { } reported)
-            {
-                request.Headers.Add(Deployment.ClientAddressHeader, reported);
-            }
-
-            using var response = await client.SendAsync(request);
             statuses.Add(response.StatusCode);
         }
 
         return statuses;
     }
 
-    private sealed record SessionView(bool Authenticated, string CsrfToken);
+    /// <summary>
+    /// <paramref name="count"/> sign-ins whose bodies do not finish arriving until
+    /// <paramref name="release"/> completes, each from an address of its own so the per-address limit
+    /// never refuses one. Only the ceiling answers them early.
+    /// </summary>
+    private static List<Task<HttpResponseMessage>> Flood(PanelClient browser, int count, Task release)
+        => Enumerable.Range(0, count)
+            .Select(i => browser.SendAsync(HttpMethod.Post, "/api/dev/sign-in", configure: request =>
+            {
+                request.Headers.Add(Deployment.ClientAddressHeader, $"198.51.{i / 250}.{i % 250 + 1}");
+                request.Content = new HeldBody(release);
+            }))
+            .ToList();
+
+    /// <summary>
+    /// Waits until <paramref name="answered"/> requests of the flood have been answered - the refused
+    /// ones are answered at once, the rest wait to be let go - and returns what they were answered.
+    /// </summary>
+    private static async Task<List<HttpStatusCode>> AnsweredOnceAsync(
+        List<Task<HttpResponseMessage>> flood, int answered)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(30);
+        while (flood.Count(call => call.IsCompleted) < answered && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(20);
+        }
+
+        return flood.Where(call => call.IsCompleted).Select(call => call.Result.StatusCode).ToList();
+    }
+
+    private sealed record DeviceView(string Id, string Name, string Token);
+
+    private sealed record ErrorView(string Code, string Error);
+
+    /// <summary>A JSON body that does not finish arriving until <paramref name="release"/> completes.</summary>
+    private sealed class HeldBody : HttpContent
+    {
+        private readonly Task _release;
+
+        // JSON, or the endpoint refuses the request for its type without waiting for the body at all.
+        public HeldBody(Task release)
+        {
+            _release = release;
+            Headers.ContentType = new("application/json");
+        }
+
+        protected override async Task SerializeToStreamAsync(Stream stream, TransportContext? context)
+        {
+            await _release;
+            await stream.WriteAsync("{}"u8.ToArray());
+        }
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = 0;
+            return false;
+        }
+    }
 }

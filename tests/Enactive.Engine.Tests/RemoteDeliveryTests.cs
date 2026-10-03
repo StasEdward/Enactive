@@ -1,6 +1,7 @@
 namespace Enactive.Engine.Tests;
 
 using Enactive.Remote.Contracts;
+using Enactive.Remote.Contracts.Crypto;
 using Enactive.Remote.Host;
 using Xunit;
 
@@ -36,35 +37,17 @@ public sealed class RemoteDeliveryTests : IDisposable
         }
     }
 
-    private static HostCommand Start(string commandId, string runId)
-        => new(commandId, "host-1", CommandKind.StartTask,
-            RemoteJson.Serialize(new StartTaskPayload(
-                runId, "task-1", "workspace-1", "Run the tests", "Please.", DateTimeOffset.UtcNow)),
-            CommandStatus.PendingDelivery,
-            DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddHours(24));
+    private static readonly FixedHostKeys Keys = new();
+
+    private static HostCommand Start(string commandId, string runId) => Keys.Start(commandId, runId);
+
+    private static DeliveryLoop Loop(HostStore store, IGatewayConnection gateway) => new(store, gateway, Keys.Sealer());
 
     // ── accepting a command exactly once ────────────────────────────────────
 
-    /// <summary>
-    /// The reported shape of at-least-once delivery: the same command arrives twice because the
-    /// first acknowledgement was lost. It must be recognised across a RESTART, not merely within
-    /// one process - the gap between accepting and acknowledging is exactly where a crash lands.
-    /// </summary>
-    [Fact]
-    public void A_redelivered_command_is_recognised_after_a_restart()
-    {
-        var command = Start("command-1", "run-1");
-
-        using (var store = Open())
-        {
-            Assert.True(store.Accept(command));
-        }
-
-        using (var store = Open())
-        {
-            Assert.False(store.Accept(command));
-        }
-    }
+    // A redelivered command recognised across a restart is RemoteSealingTests'
+    // Review_focus_3_a_replayed_command_id_is_recognised_after_a_restart: it is the replay half of
+    // refusing a forged command, and lives with the other half.
 
     /// <summary>
     /// A start is claimed once. Two attempts to open the same run - a redelivery, or two threads -
@@ -104,12 +87,16 @@ public sealed class RemoteDeliveryTests : IDisposable
         {
             Assert.True(store.WasApplied("command-1"));
 
-            var loop = new DeliveryLoop(store, new FakeGateway());
+            var loop = Loop(store, new FakeGateway());
             loop.RecoverInterruptedRuns();
 
             var owed = Assert.Single(store.NextOwed());
             Assert.Equal(RemoteEventKind.Interrupted, owed.Event.Kind);
             Assert.Equal("run-1", owed.RunId);
+
+            // Sealed like every other detail: written in the clear, it would be the one sentence the
+            // browser could not open.
+            Assert.Contains("stopped while this run was in progress", Keys.OpenDetail(owed.Event), StringComparison.Ordinal);
         }
     }
 
@@ -129,13 +116,13 @@ public sealed class RemoteDeliveryTests : IDisposable
             store.Accept(Start("command-1", "run-1"));
             store.BeginRun("command-1", "run-1");
             store.Enqueue("run-1", RemoteEventKind.Running);
-            store.Enqueue("run-1", RemoteEventKind.Completed, "done");
+            store.Enqueue("run-1", RemoteEventKind.Completed, _ => "done");
         }
 
         using (var store = Open())
         {
             var gateway = new FakeGateway();
-            var loop = new DeliveryLoop(store, gateway);
+            var loop = Loop(store, gateway);
 
             loop.RecoverInterruptedRuns();
             await loop.FlushAsync();
@@ -161,8 +148,8 @@ public sealed class RemoteDeliveryTests : IDisposable
         store.BeginRun("command-1", "run-1");
 
         Assert.Equal(1, store.Enqueue("run-1", RemoteEventKind.Running).Sequence);
-        Assert.Equal(2, store.Enqueue("run-1", RemoteEventKind.Progress, "reading").Sequence);
-        Assert.Equal(3, store.Enqueue("run-1", RemoteEventKind.Completed, "done").Sequence);
+        Assert.Equal(2, store.Enqueue("run-1", RemoteEventKind.Progress, _ => "reading").Sequence);
+        Assert.Equal(3, store.Enqueue("run-1", RemoteEventKind.Completed, _ => "done").Sequence);
     }
 
     /// <summary>
@@ -176,12 +163,12 @@ public sealed class RemoteDeliveryTests : IDisposable
         store.Accept(Start("command-1", "run-1"));
         store.BeginRun("command-1", "run-1");
         store.Enqueue("run-1", RemoteEventKind.Running);
-        store.Enqueue("run-1", RemoteEventKind.Progress, "second");
+        store.Enqueue("run-1", RemoteEventKind.Progress, _ => "second");
 
         Assert.Equal(1, Assert.Single(store.NextOwed()).Sequence);
 
         var gateway = new FakeGateway();
-        await new DeliveryLoop(store, gateway).FlushAsync();
+        await Loop(store, gateway).FlushAsync();
 
         Assert.Equal([1, 2], gateway.Published.Select(e => e.Sequence).ToArray());
     }
@@ -213,7 +200,7 @@ public sealed class RemoteDeliveryTests : IDisposable
         using var store = Open();
         Seed(store);
 
-        await new DeliveryLoop(store, new FakeGateway()).FlushAsync();
+        await Loop(store, new FakeGateway()).FlushAsync();
 
         Assert.Empty(store.NextOwed());
     }
@@ -228,7 +215,7 @@ public sealed class RemoteDeliveryTests : IDisposable
         using var store = Open();
         Seed(store);
 
-        var loop = new DeliveryLoop(store, new FakeGateway { Refuse = FaultCode.RunEnded });
+        var loop = Loop(store, new FakeGateway { Refuse = FaultCode.RunEnded });
         await loop.FlushAsync();
 
         Assert.Empty(store.NextOwed());
@@ -245,7 +232,7 @@ public sealed class RemoteDeliveryTests : IDisposable
         using var store = Open();
         Seed(store);
 
-        await new DeliveryLoop(store, new FakeGateway { Throw = new IOException("socket closed") }).FlushAsync();
+        await Loop(store, new FakeGateway { Throw = new IOException("socket closed") }).FlushAsync();
 
         Assert.Single(store.NextOwed());
     }
@@ -261,7 +248,7 @@ public sealed class RemoteDeliveryTests : IDisposable
         using var store = Open();
         Seed(store);
 
-        await new DeliveryLoop(store, new FakeGateway { Refuse = "something-from-a-newer-gateway" }).FlushAsync();
+        await Loop(store, new FakeGateway { Refuse = "something-from-a-newer-gateway" }).FlushAsync();
 
         Assert.Single(store.NextOwed());
     }
@@ -279,10 +266,10 @@ public sealed class RemoteDeliveryTests : IDisposable
     {
         using var store = Open();
         Seed(store);
-        store.Enqueue("run-1", RemoteEventKind.Completed, "done");
+        store.Enqueue("run-1", RemoteEventKind.Completed, _ => "done");
 
         var gateway = new FakeGateway { Throw = new IOException("still broken") };
-        var loop = new DeliveryLoop(store, gateway);
+        var loop = Loop(store, gateway);
 
         for (var attempt = 0; attempt < DeliveryLoop.MaxAttempts; attempt++)
         {
@@ -309,7 +296,7 @@ public sealed class RemoteDeliveryTests : IDisposable
         using var store = Open();
         Seed(store);
 
-        var loop = new DeliveryLoop(store, new FakeGateway { Refuse = FaultCode.HostRevoked });
+        var loop = Loop(store, new FakeGateway { Refuse = FaultCode.HostRevoked });
         await loop.FlushAsync();
 
         Assert.True(loop.Stopped);
@@ -329,7 +316,7 @@ public sealed class RemoteDeliveryTests : IDisposable
         using var store = Open();
         var command = Start("command-1", "run-1");
         var gateway = new FakeGateway { Pending = [command] };
-        var loop = new DeliveryLoop(store, gateway);
+        var loop = Loop(store, gateway);
 
         var first = await loop.TurnAsync([]);
         Assert.Single(first);
@@ -351,9 +338,173 @@ public sealed class RemoteDeliveryTests : IDisposable
             ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(-1)
         };
 
-        var accepted = await new DeliveryLoop(store, new FakeGateway { Pending = [expired] }).TurnAsync([]);
+        var accepted = await Loop(store, new FakeGateway { Pending = [expired] }).TurnAsync([]);
 
         Assert.Empty(accepted);
+    }
+
+    // ── a busy account ──────────────────────────────────────────────────────
+
+    /// <summary>
+    /// An account over its rate is told to wait, and waiting is what the Host does. Counting the
+    /// refusal toward parking would park a perfectly good event after ten refusals in a busy minute,
+    /// and every later event of its run would go out with a hole in front of it.
+    /// </summary>
+    [Fact]
+    public async Task A_quota_refusal_waits_and_does_not_count_toward_parking()
+    {
+        using var store = Open();
+        Seed(store);
+
+        var loop = Loop(store, new FakeGateway { Refuse = FaultCode.QuotaExceeded });
+
+        for (var attempt = 0; attempt < DeliveryLoop.MaxAttempts + 2; attempt++)
+        {
+            await loop.FlushAsync();
+        }
+
+        Assert.DoesNotContain(loop.Notices, n => n.Kind == "Parked");
+        Assert.Empty(store.ParkedEventIds());
+        Assert.Equal(0, Assert.Single(store.NextOwed()).Attempts);
+    }
+
+    /// <summary>
+    /// The same for Sync. A refused Sync used to escape the turn as an exception, which the service
+    /// treats as a dropped connection: it tore the connection down and dialled again, which is more
+    /// calls against the very limit that refused it.
+    /// </summary>
+    [Fact]
+    public async Task A_sync_refused_for_quota_is_a_wait_not_a_dropped_connection()
+    {
+        using var store = Open();
+        var loop = Loop(store, new FakeGateway
+        {
+            SyncRefusal = new GatewayRefusedException(FaultCode.QuotaExceeded, "slow down")
+        });
+
+        Assert.Empty(await loop.TurnAsync([]));
+        Assert.False(loop.Stopped);
+    }
+
+    /// <summary>
+    /// A Sync refused for good - the credential gone - stops the loop with the reason, rather than
+    /// sending the service round its reconnect loop with a credential that will be refused again.
+    /// </summary>
+    [Fact]
+    public async Task A_sync_refused_for_good_stops_the_loop()
+    {
+        using var store = Open();
+        var loop = Loop(store, new FakeGateway
+        {
+            SyncRefusal = new GatewayRefusedException(FaultCode.HostRevoked, "revoked")
+        });
+
+        Assert.Empty(await loop.TurnAsync([]));
+        Assert.True(loop.Stopped);
+        Assert.Contains(loop.Notices, n => n.Kind == "Stopped" && n.Detail.Contains("revoked", StringComparison.Ordinal));
+    }
+
+    // ── grants owed ─────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Grants go before events. A device can read an event only with the key a grant gives it, so an
+    /// event that arrived first would sit on the phone as something it cannot open.
+    /// </summary>
+    [Fact]
+    public async Task Grants_go_before_events_and_leave_the_outbox()
+    {
+        using var store = Open();
+        Seed(store);
+        var outbox = new GrantOutbox(Grant("phone"));
+        var gateway = new FakeGateway();
+
+        await Loop(store, gateway, outbox).TurnAsync([]);
+
+        Assert.Equal(["PublishGrants", "Publish", "Sync"], gateway.Calls);
+        Assert.Equal("phone", Assert.Single(Assert.Single(gateway.GrantCalls)).DeviceId);
+        Assert.Empty(outbox.PendingGrants());
+    }
+
+    /// <summary>The gateway takes at most fifty grants a call and refuses the whole call past that.</summary>
+    [Fact]
+    public async Task Grants_are_sent_fifty_at_a_time()
+    {
+        using var store = Open();
+        var outbox = new GrantOutbox([.. Enumerable.Range(0, 120).Select(i => Grant("device-" + i))]);
+        var gateway = new FakeGateway();
+
+        await Loop(store, gateway, outbox).TurnAsync([]);
+
+        Assert.Equal([50, 50, 20], gateway.GrantCalls.Select(call => call.Count));
+        Assert.Empty(outbox.PendingGrants());
+    }
+
+    /// <summary>
+    /// A grant the gateway refuses as malformed, or for a device it no longer has, cannot become
+    /// acceptable by being sent again. It is discarded and said, and it does not take the grants
+    /// that were in the same call down with it: the gateway refuses a call whole.
+    /// </summary>
+    [Theory]
+    [InlineData(FaultCode.BadGrant)]
+    [InlineData("not-found")]
+    public async Task A_grant_the_gateway_refuses_is_discarded_and_said(string code)
+    {
+        using var store = Open();
+        var outbox = new GrantOutbox(Grant("phone"), Grant("removed"), Grant("laptop"));
+        var gateway = new FakeGateway
+        {
+            GrantRefusal = grants => grants.Any(g => g.DeviceId == "removed")
+                ? new GatewayRefusedException(code, "That device was removed from the account.")
+                : null
+        };
+        var loop = Loop(store, gateway, outbox);
+
+        await loop.TurnAsync([]);
+
+        Assert.Equal(["laptop", "phone"], gateway.GrantCalls.SelectMany(call => call).Select(g => g.DeviceId).Order());
+        Assert.Empty(outbox.PendingGrants());
+        Assert.Contains(loop.Notices, n => n.Kind == "GrantDropped" && n.Detail.Contains("removed", StringComparison.Ordinal));
+        Assert.False(loop.Stopped);
+    }
+
+    /// <summary>A grant refused for the account's rate is kept, for the next turn.</summary>
+    [Fact]
+    public async Task A_grant_refused_for_quota_is_kept_for_the_next_turn()
+    {
+        using var store = Open();
+        var outbox = new GrantOutbox(Grant("phone"));
+        var gateway = new FakeGateway
+        {
+            GrantRefusal = _ => new GatewayRefusedException(FaultCode.QuotaExceeded, "slow down")
+        };
+        var loop = Loop(store, gateway, outbox);
+
+        await loop.TurnAsync([]);
+
+        Assert.Single(outbox.PendingGrants());
+        Assert.DoesNotContain(loop.Notices, n => n.Kind == "GrantDropped");
+
+        gateway.GrantRefusal = null;
+        await loop.TurnAsync([]);
+
+        Assert.Empty(outbox.PendingGrants());
+    }
+
+    private static DeliveryLoop Loop(HostStore store, IGatewayConnection gateway, IGrantOutbox grants)
+        => new(store, gateway, Keys.Sealer(), grants);
+
+    private static KeyGrant Grant(string deviceId)
+        => new("host-1", deviceId, 1, "ephemeral", "nonce", "ciphertext", "pair:connect", "signing", "mac");
+
+    /// <summary>The key store's outbox of grants, in memory: what is under test is what the loop does with it.</summary>
+    private sealed class GrantOutbox(params KeyGrant[] grants) : IGrantOutbox
+    {
+        private readonly List<PendingGrant> _pending =
+            [.. grants.Select(g => new PendingGrant($"{g.HostId}:{g.DeviceId}:{g.Epoch}", g))];
+
+        public IReadOnlyList<PendingGrant> PendingGrants() => [.. _pending];
+
+        public void DiscardGrant(string id) => _pending.RemoveAll(p => p.Id == id);
     }
 
     private static void Seed(HostStore store)
@@ -361,47 +512,5 @@ public sealed class RemoteDeliveryTests : IDisposable
         store.Accept(Start("command-1", "run-1"));
         store.BeginRun("command-1", "run-1");
         store.Enqueue("run-1", RemoteEventKind.Running);
-    }
-
-    /// <summary>The far end, doing whatever the test needs it to.</summary>
-    private sealed class FakeGateway : IGatewayConnection
-    {
-        public List<HostCommand> Pending { get; init; } = [];
-
-        public List<HostEvent> Published { get; } = [];
-
-        public List<string> Acknowledged { get; } = [];
-
-        /// <summary>A coded refusal, as the gateway would send it.</summary>
-        public string? Refuse { get; set; }
-
-        /// <summary>Something that is not a refusal at all - a closed socket, a timeout.</summary>
-        public Exception? Throw { get; set; }
-
-        public Task<IReadOnlyList<HostCommand>> SyncAsync(
-            IReadOnlyList<WorkspaceRef> workspaces, CancellationToken ct)
-            => Task.FromResult<IReadOnlyList<HostCommand>>(Pending);
-
-        public Task AcknowledgeAsync(string commandId, CancellationToken ct)
-        {
-            Acknowledged.Add(commandId);
-            return Task.CompletedTask;
-        }
-
-        public Task PublishAsync(HostEvent published, CancellationToken ct)
-        {
-            if (Throw is not null)
-            {
-                throw Throw;
-            }
-
-            if (Refuse is not null)
-            {
-                throw new GatewayRefusedException(Refuse, "refused by the fake gateway");
-            }
-
-            Published.Add(published);
-            return Task.CompletedTask;
-        }
     }
 }

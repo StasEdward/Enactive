@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    A computer for the browser tests (tests/panel-e2e): the real Enactive.Remote.Host - pairing, key store,
+    delivery loop, runner, key administration - over a scripted engine instead of a model, driven by a
+    connection code on stdin. The panel's own wiring had never run against a computer at all, only its
+    modules against fakes; this is the other end of the wire it talks to, without the desktop app.
+
+    Also the tests' hands on the database: creating and dropping the per-run database and dumping what it
+    holds, because Node has no MySQL client and the runner image is not promised to have one either.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Enactive.Remote.Host\Enactive.Remote.Host.csproj" />
+    <ProjectReference Include="..\..\src\Enactive.Core\Enactive.Core.csproj" />
+    <!-- The gateway's own driver, at the gateway's version. -->
+    <PackageReference Include="MySqlConnector" Version="2.6.2" />
+  </ItemGroup>
+
+</Project>

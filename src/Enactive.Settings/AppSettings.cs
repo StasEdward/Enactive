@@ -289,15 +289,22 @@ public sealed class RemoteAccessSettings
     /// </summary>
     public bool Enabled { get; set; }
 
-    /// <summary>The gateway's base address, e.g. https://remote.enactive.dev.</summary>
+    /// <summary>The gateway's base address, e.g. https://remote.enactive.dev. Set from a connection code.</summary>
     public string GatewayUrl { get; set; } = string.Empty;
 
-    // There is deliberately no computer id and no display name here. The first version of this pane
-    // asked for both, and neither was ever read: the hub takes the Host from the AUTHENTICATED
-    // identity and never from an argument, so the token alone says which computer this is, and the
-    // name is the one given when it was registered. Asking for them made the pane look like it
-    // needed three things to work when it needed two - and the id box was the one somebody then
-    // filled in with the computer's name.
+    /// <summary>
+    /// This computer's id at the gateway, as the connection code named it. Not a secret, so kept in
+    /// the clear.
+    ///
+    /// <para>The hub still takes the computer from the authenticated token and never from this. It is
+    /// here for the keys: everything this computer seals carries its id in the associated data, and
+    /// remote.db holds the keys without saying whose they are - so without the id, keys made for one
+    /// computer could be used under another's name after a second code.</para>
+    ///
+    /// <para>Never typed. An earlier version of this pane had a computer id box, and the first person
+    /// to fill it in put the computer's NAME there; the id now comes only from the code.</para>
+    /// </summary>
+    public string HostId { get; set; } = string.Empty;
 
     /// <summary>The device token, DPAPI-encrypted. The only form that reaches disk.</summary>
     public string TokenProtected { get; set; } = string.Empty;
@@ -309,6 +316,7 @@ public sealed class RemoteAccessSettings
     {
         Enabled = Enabled,
         GatewayUrl = GatewayUrl,
+        HostId = HostId,
         TokenProtected = TokenProtected,
         Token = Token
     };
@@ -983,8 +991,8 @@ public sealed partial class AppSettings
         if (!string.IsNullOrEmpty(RemoteAccess.TokenProtected) && !Secret.IsProtected(RemoteAccess.TokenProtected))
             yield return "The remote access device token is stored UNENCRYPTED in settings.json. "
                        + "It will be encrypted the next time settings are saved. Anyone who can read "
-                       + "that file can register as this computer, so consider revoking it and "
-                       + "pasting a new one.";
+                       + "that file can connect as this computer, so consider revoking it and "
+                       + "connecting again with a new connection code.";
     }
 
     /// <summary>
@@ -1001,9 +1009,9 @@ public sealed partial class AppSettings
     {
         if (Secret.IsProtected(RemoteAccess.TokenProtected) && string.IsNullOrEmpty(RemoteAccess.Token))
             yield return "The remote access device token cannot be decrypted by this Windows account "
-                       + "- these settings were most likely copied from another computer. Issue a new "
-                       + "token and paste it under Remote access; this computer cannot connect until "
-                       + "you do.";
+                       + "- these settings were most likely copied from another computer. Make a new "
+                       + "connection code in the browser and connect with it under Remote access; this "
+                       + "computer cannot connect until you do.";
     }
 
     private static IEnumerable<string> DropUnnamed<T>(List<T> items, Func<T, string> id, string what)

@@ -18,7 +18,7 @@ public sealed record GatewayCheck(bool Reached, string Detail);
 public static class GatewayProbe
 {
     /// <summary>
-    /// Connects with these settings and syncs once.
+    /// Connects with these settings, says hello and syncs once.
     ///
     /// <para>It syncs rather than merely connecting because connecting proves less than it looks.
     /// The gateway marks a computer online from its last SYNC, so a check that stopped at the
@@ -61,26 +61,44 @@ public static class GatewayProbe
         {
             await connection.StartAsync(ct);
         }
-        catch (Exception failure)
+        catch (GatewayCredentialRefusedException refused)
         {
-            // The overwhelmingly common two are a wrong or revoked token and an address that does
-            // not answer, and SignalR reports both as a failed negotiation. Saying which is which
-            // would mean guessing from a message, so it says what it knows and lists the two.
+            // The one start failure that can be named for certain: the gateway answered, and said no.
+            return new GatewayCheck(false, refused.Message);
+        }
+        catch (Exception failure) when (failure is not OperationCanceledException)
+        {
+            // Anything else is an address that did not answer as a gateway - a typo, a server that is
+            // down, a proxy in the way. Saying which would mean guessing from a message.
             return new GatewayCheck(false,
-                $"Could not connect to {hub}. Check the address and that the token has not been "
-                + $"revoked. The connection said: {failure.Message}");
+                $"Could not connect to {hub}. Check that the gateway is up and reachable from this "
+                + $"computer. The connection said: {failure.Message}");
         }
 
+        return await CheckAsync(connection, workspaces, ct);
+    }
+
+    /// <summary>
+    /// The check on a connection that is open: hello, then one sync.
+    ///
+    /// <para>Hello first, because a gateway of another protocol would refuse the sync too, for a reason
+    /// that names neither protocol - and would be handed a workspace list sealed in a format its
+    /// browsers may not open.</para>
+    /// </summary>
+    public static async Task<GatewayCheck> CheckAsync(
+        IGatewayConnection connection, IReadOnlyList<WorkspaceRef> workspaces, CancellationToken ct)
+    {
         try
         {
+            await connection.HelloAsync(RemoteProtocol.Version, ct);
             await connection.SyncAsync(workspaces, ct);
         }
         catch (GatewayRefusedException refused)
         {
             return new GatewayCheck(false,
-                $"Connected, but the gateway refused this computer: {refused.Code} - {refused.Message}");
+                $"Connected, but the gateway refused this computer: {refused.Message} ({refused.Code})");
         }
-        catch (Exception failure)
+        catch (Exception failure) when (failure is not OperationCanceledException)
         {
             return new GatewayCheck(false, $"Connected, but the first call failed: {failure.Message}");
         }

@@ -3,6 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.VisualTree;
 using Enactive.App.Ui.ViewModels;
+using Enactive.Remote.Contracts.Crypto;
 using Enactive.Settings;
 
 namespace Enactive.App.Ui;
@@ -16,19 +17,46 @@ namespace Enactive.App.Ui;
 internal sealed partial class SettingsWindow : Window
 {
     /// <param name="remoteCheck">
-    /// Tries a gateway address and token and says what happened. Supplied by the main window rather
-    /// than done here, because the check publishes this computer's workspaces and the workspace
-    /// list belongs to the registry.
+    /// Tries the stored remote connection and says what happened. Supplied by the main window rather
+    /// than done here, because the check publishes this computer's workspaces, sealed with keys the
+    /// running service holds, and the workspace list belongs to the registry.
+    /// </param>
+    /// <param name="remoteConnect">
+    /// Applies a connection code. Supplied by the main window, because the code changes the keys the
+    /// running service holds - it has to be stopped first - and the settings it saves are the live ones.
+    /// </param>
+    /// <param name="remoteDevices">
+    /// The trusted devices and invitations, through whichever service is running. Supplied by the main
+    /// window, which replaces that service when the settings change.
     /// </param>
     public SettingsWindow(
         AppSettings settings, Action<AppSettings> onSaved,
         string? workspaceRoot = null, IReadOnlyList<string>? toolNames = null,
-        Func<string, string, CancellationToken, Task<string>>? remoteCheck = null)
+        Func<CancellationToken, Task<string>>? remoteCheck = null,
+        Func<ConnectionCode, Func<string, Task<bool>>, Task<(bool Connected, string Detail)>>? remoteConnect = null,
+        RemoteDevices? remoteDevices = null)
     {
         var viewModel = new SettingsViewModel(settings, onSaved, workspaceRoot, toolNames)
         {
-            RemoteCheck = remoteCheck
+            RemoteCheck = remoteCheck,
+            RemoteConnect = remoteConnect
         };
+        if (remoteDevices is not null)
+        {
+            // The connection comes and goes while this window is open; Add a device follows it. Let go of
+            // on close, or every settings window ever opened would be kept alive by the main window's bridge.
+            var pane = viewModel.RemoteDeviceList;
+            pane.CanInvite = () => remoteDevices.CanInvite;
+            pane.Trusted = remoteDevices.TrustedAsync;
+            Action changed = pane.RefreshConnection;
+            remoteDevices.Changed += changed;
+            Closed += (_, _) => remoteDevices.Changed -= changed;
+            pane.AddDeviceRequested += () => new AddDeviceWindow(remoteDevices).ShowDialog(this);
+            pane.Remove = remoteDevices.RemoveAsync;
+            pane.Confirm = question => ConfirmWindow.AskAsync(this, question,
+                "What it already read stays on it. To use it again, add it again from this computer.",
+                "Remove", "Keep");
+        }
         viewModel.CloseRequested += () => Close();
         viewModel.ProviderEditRequested += (config, saved) =>
             new ProviderEditWindow(config, saved).Show(this);
@@ -36,6 +64,10 @@ internal sealed partial class SettingsWindow : Window
             new WorkerEditWindow(config, catalog, viewModel.ToolNames, saved).Show(this);
         viewModel.ConfirmRequested += (headline, detail) =>
             ConfirmWindow.AskAsync(this, headline, detail, "Remove", "Keep");
+        viewModel.RemoteQuestionRequested += question =>
+            ConfirmWindow.AskAsync(this, question,
+                "Nothing changes if you cancel. Only continue with a code you made yourself, in your own browser.",
+                "Continue", "Cancel");
 
         viewModel.McpEditRequested += (config, saved) => new McpEditWindow(config, saved).ShowDialog(this);
         viewModel.TemplateEditRequested += (draft, idEditable, scopes, saved) =>

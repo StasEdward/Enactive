@@ -23,6 +23,29 @@
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.5" />
     <ProjectReference Include="..\Enactive.Remote.Contracts\Enactive.Remote.Contracts.csproj" />
     <ProjectReference Include="..\Enactive.Core\Enactive.Core.csproj" />
+
+    <!--
+      The computer's remote keys are kept the way the API key is: DPAPI, this Windows user. One
+      implementation of "protected at rest", so a fix to it reaches both.
+    -->
+    <ProjectReference Include="..\Enactive.Secrets\Enactive.Secrets.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      For test seams that must not be public API: KeyAdministration's hook that shows a test the secret
+      arrays it reads, so the test can check they were wiped. Public, any caller could watch the pairing
+      secret go by.
+    -->
+    <InternalsVisibleTo Include="Enactive.Engine.Tests" />
+
+    <!--
+      SecretProtector.ForTestsOnly, which writes the computer's keys down in the clear: for the end-to-end
+      tests and the browser-test harness, which run a computer on Linux, where there is no DPAPI. Internal so
+      the desktop cannot be built to use it.
+    -->
+    <InternalsVisibleTo Include="Enactive.Remote.Gateway.Tests" />
+    <InternalsVisibleTo Include="RemoteHostHarness" />
   </ItemGroup>
 
 </Project>

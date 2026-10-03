@@ -152,5 +152,214 @@ check "pruning never removes the release that is running" \
     "yes" "$([ -d "$ROOT/releases/r1" ] && echo yes || echo no)"
 cleanup
 
+# ── a protocol change ───────────────────────────────────────────────────────
+
+# main() itself, end to end. The guard is not a comparison worth testing on its own: what matters is
+# that nothing after it - the schema check, --allow-migration - installs a release it refused. So
+# GitHub, the download and the database are stood in for, and the BUILDS are faked by a `dotnet` on
+# PATH that answers for the release directory it is pointed at, the way the real one does.
+SAVED_PATH=$PATH
+
+fake_server() {
+    mkdir -p "$ROOT/bin" "$ROOT/config"
+    CONFIG="$ROOT/config"
+
+    # main() names any of these that is missing before it does anything.
+    for tool in curl unzip python3 systemctl; do
+        printf '#!/usr/bin/env bash\nexit 0\n' > "$ROOT/bin/$tool"
+    done
+
+    # The database server: it knows one database, at one schema version, and refuses any other name the
+    # way MySQL does. So which database the script asks is part of what is tested, not stood in for.
+    cat > "$ROOT/bin/mysql" <<'FAKE'
+#!/usr/bin/env bash
+database=${!#}
+if [ "$database" = "$FAKE_DATABASE" ]; then
+    echo "$FAKE_APPLIED"
+else
+    echo "ERROR 1049 (42000): Unknown database '$database'" >&2
+    exit 1
+fi
+FAKE
+
+    # A build answers --schema-version and --protocol-version from files beside it. A build with no
+    # .protocol file is the protocol-1 gateway, which had no such switch: it went on to start as a web
+    # server, and died for want of a database with nothing on stdout - which is what this does.
+    cat > "$ROOT/bin/dotnet" <<'FAKE'
+#!/usr/bin/env bash
+dir=$(dirname "$1")
+printf '%s %s\n' "$(basename "$dir")" "$2" >> "$ENACTIVE_DEPLOY_ROOT/dotnet-calls"
+case $2 in
+    --schema-version) cat "$dir/.schema" ;;
+    --protocol-version)
+        [ -f "$dir/.protocol" ] && exec cat "$dir/.protocol"
+        echo "Unhandled exception. System.InvalidOperationException: Set ENACTIVE_REMOTE_DB" >&2
+        exit 134 ;;
+esac
+FAKE
+    chmod +x "$ROOT/bin/"*
+    PATH="$ROOT/bin:$SAVED_PATH"
+
+    export ENACTIVE_DEPLOY_REPO=owner/repo ENACTIVE_DEPLOY_BRANCH=main ENACTIVE_DEPLOY_TOKEN=token
+
+    # What is running: the protocol-1 gateway at schema 2, on a database at 2 - by default the new
+    # database's name, which is what the script asks unless deploy.env names another.
+    printf '2\n' > "$ROOT/releases/old/.schema"
+    export FAKE_DATABASE=enactive_remote_v2 FAKE_APPLIED=2
+
+    newest_green_run() { echo "1 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"; }
+    artifact_url() { echo "https://example.invalid/right"; }
+    health_ok() { return 0; }
+
+    # Sourcing the script put the real one back; this one only moves the symlink.
+    activate() { ln -sfn "$1" "$ROOT/current"; }
+
+    # A new name for every run, as a real clock gives when the timer comes back ten minutes later. Two
+    # runs inside one second would otherwise share a name and hide a second download.
+    cat > "$ROOT/bin/date" <<'FAKE'
+#!/usr/bin/env bash
+count=$(( $(cat "$ENACTIVE_DEPLOY_ROOT/date-count" 2>/dev/null || echo 0) + 1 ))
+printf '%s\n' "$count" > "$ENACTIVE_DEPLOY_ROOT/date-count"
+printf '20260101T0000%02dZ\n' "$count"
+FAKE
+    chmod +x "$ROOT/bin/date"
+
+    # The download: a build of the schema and protocol this test sets.
+    fetch() {
+        printf 'x' >> "$ROOT/fetches"
+        mkdir -p "$2"
+        printf '%s\n' "$NEW_SCHEMA" > "$2/.schema"
+        [ -z "$NEW_PROTOCOL" ] || printf '%s\n' "$NEW_PROTOCOL" > "$2/.protocol"
+    }
+}
+
+# Run in a subshell, because fail() exits; what it did is read back from the tree.
+# In a subshell with errexit, as the script runs on the server - a failing step must stop main() here
+# too, or a test passes on a run that would have died. Sourcing the script turned errexit on in this
+# file as well; it is turned off for the call, so a main() that fails is read back rather than ending
+# the file. (Not `|| true`: that would switch errexit off inside main() as well.)
+run_main() {
+    set +e
+    ( set -e; main "$@" ) >"$ROOT/out" 2>"$ROOT/err"
+}
+running() { cat "$ROOT/current/.commit"; }
+parked() { [ -s "$ROOT/PARKED" ] && echo parked || echo not-parked; }
+
+sandbox
+fake_server
+
+# What step 0 of the cutover writes beside the protocol-1 release: its protocol, said once by a person,
+# because the binary itself cannot say it.
+printf '1\n' > "$ROOT/current/.protocol-version"
+
+# The case the guard exists for. The protocol-2 schema starts again at version 1, BELOW the protocol-1
+# database's 2, so the migration check reads it as a rollback and would install it - onto a database
+# it cannot read, where it would create its own tables beside the old ones.
+NEW_SCHEMA=1 NEW_PROTOCOL=2
+run_main
+
+check "a protocol change is parked even when the schema version is lower" \
+    "aaaaaaaaaaaa parked" "$(running) $([ -s "$ROOT/PARKED" ] && echo parked || echo not-parked)"
+
+check "and it says to install it by hand" \
+    "yes" "$(grep -qF 'protocol change - install by hand (REMOTE_OPERATIONS §cutover)' "$ROOT/err" && echo yes || echo no)"
+
+# --allow-migration is the answer to a migration. A protocol change needs a new database and a new
+# environment first, which no flag on this script provides.
+run_main --allow-migration
+check "--allow-migration does not install a protocol change either" \
+    "aaaaaaaaaaaa" "$(running)"
+
+# A protocol-2 build can sit parked for days before somebody does the cutover, and the timer comes back
+# every ten minutes. Fetched again each time, under a new name each time, it filled the disk with copies.
+check "a parked release is downloaded once, not on every run" \
+    "x" "$(cat "$ROOT/fetches")"
+
+# Nor is the running protocol-1 binary asked on any of those runs. It has no such switch: asked, it
+# starts and dies of an unhandled exception - a crash in the journal, and perhaps a core dump, every ten
+# minutes for as long as the cutover waits.
+check "with the protocol step 0 writes, the running protocol-1 binary is never asked" \
+    "0" "$(grep -c '^current --protocol-version' "$ROOT/dotnet-calls" 2>/dev/null || true)"
+cleanup
+
+sandbox
+fake_server
+
+# A silence is not remembered. Kept as 1, one unanswered question - a first start after an install by
+# hand, a timeout, a runtime half upgraded - parked every later protocol-2 release on a protocol-2
+# server as a "protocol change", until somebody found the file and deleted it.
+NEW_SCHEMA=1 NEW_PROTOCOL=2
+run_main
+first=$(parked)
+rm -f "$ROOT/PARKED"
+
+printf '2\n' > "$ROOT/releases/old/.protocol"
+newest_green_run() { echo "2 cccccccccccccccccccccccccccccccccccccccc"; }
+NEW_SCHEMA=2 NEW_PROTOCOL=2
+run_main
+check "a silent first ask does not park a later protocol-2 release once the binary answers" \
+    "parked cccccccccccccccccccccccccccccccccccccccc" "$first $(running)"
+cleanup
+
+# ── before the cutover: the guard on a protocol-1 server ─────────────────────
+
+# Step 0 of the cutover puts this script on the protocol-1 server BEFORE protocol 2 can reach the
+# tracked branch, with deploy.env naming the database that server still runs on. Until then the old
+# script, which has no guard, would install the first green protocol-2 build onto that database.
+interim_server() {
+    export FAKE_DATABASE=enactive_remote
+    printf 'ENACTIVE_DEPLOY_DATABASE=enactive_remote\n' > "$CONFIG/deploy.env"
+}
+
+sandbox
+fake_server
+interim_server
+
+# A protocol-1 build does not answer --protocol-version either, and on a protocol-1 server that is
+# what an ordinary release is.
+NEW_SCHEMA=2 NEW_PROTOCOL=
+run_main
+interim_installed=$(running)
+cleanup
+
+sandbox
+fake_server
+interim_server
+NEW_SCHEMA=1 NEW_PROTOCOL=2
+run_main
+
+check "with the interim database a protocol-1 release at schema 2 is installed and a protocol-2 release is parked" \
+    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb aaaaaaaaaaaa parked" "$interim_installed $(running) $(parked)"
+cleanup
+
+# ── after the cutover: a build that does not answer ─────────────────────────
+
+sandbox
+fake_server
+
+# The running release speaks protocol 2, so a release that cannot say which protocol it speaks is not
+# a protocol-1 build: it is a broken one - a bad download, a missing runtime. Calling that a protocol
+# change sent the operator to the cutover for a fault that has nothing to do with it.
+printf '2\n' > "$ROOT/releases/old/.protocol"
+NEW_SCHEMA=2 NEW_PROTOCOL=
+run_main
+check "a release that does not answer is refused as unreadable, not parked as a protocol change" \
+    "aaaaaaaaaaaa not-parked yes" \
+    "$(running) $(parked) $(grep -qF 'could not read the protocol' "$ROOT/err" && echo yes || echo no)"
+cleanup
+
+sandbox
+fake_server
+
+# And the guard does not stand in the way of an ordinary release of the protocol that is running.
+printf '2\n' > "$ROOT/releases/old/.protocol"
+NEW_SCHEMA=2 NEW_PROTOCOL=2
+run_main
+check "a release of the running protocol at the same schema is installed" \
+    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" "$(running)"
+cleanup
+
+PATH=$SAVED_PATH
+
 printf '\n%s passed, %s failed\n' "$passed" "$failed"
 [ "$failed" -eq 0 ]

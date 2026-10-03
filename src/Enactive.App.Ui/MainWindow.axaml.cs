@@ -26,7 +26,7 @@ using Enactive.Core.Templates;
 using Enactive.Core.Tools;
 using Enactive.Core.Workers;
 using Enactive.Providers;
-using Enactive.Remote.Host;
+using Enactive.Remote.Contracts.Crypto;
 using Enactive.Settings;
 using Enactive.Tools;
 using Enactive.Tools.Mcp;
@@ -223,6 +223,8 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             new SettingsWindow(_settings, workspaceRoot: WorkspaceRootOrNull(),
                 toolNames: _toolRegistry.Definitions.Select(d => d.Name).ToArray(),
                 remoteCheck: CheckRemoteAsync,
+                remoteConnect: ConnectRemoteAsync,
+                remoteDevices: RemoteDeviceAccess,
                 onSaved: saved =>
             {
                 if (!saved.Save(replaceUnreadable: true))
@@ -323,6 +325,14 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     /// </summary>
     private RemoteAccessService? _remote;
 
+    /// <summary>
+    /// The trusted devices and invitations, for the settings pane and the Add a device window - through
+    /// whichever service is running, behind <see cref="_remoteGate"/>.
+    /// </summary>
+    private RemoteDevices RemoteDeviceAccess => _remoteDevices ??= new RemoteDevices(() => _remote, _remoteGate);
+
+    private RemoteDevices? _remoteDevices;
+
     /// <summary>Where this computer keeps what it was asked to do and has not yet reported.</summary>
     private static string RemoteDatabasePath()
         => Path.Combine(
@@ -332,8 +342,21 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     private void StartRemoteAccess()
     {
         if (_shuttingDown) return;
+
+        // One service per remote.db: a second one would hold a second key store over the same file,
+        // and a code applied meanwhile could reset the keys under either.
+        if (_remote is not null)
+        {
+            _log.Info(LogSource.System, "Remote access: already running, so it was not started again.");
+            return;
+        }
+
         _remote = new RemoteAccessService(
             _settings.RemoteAccess,
+            // Read by the service from remote.db, under the computer id a connection code stored in
+            // the settings. With no id it has none, and says so rather than connecting with nothing
+            // to seal or open with.
+            keys: null,
             // On the UI thread, because it reads the worker list and the app settings. Governed by
             // the workspace THE TASK NAMED, not by the slider: the slider is about the folder open
             // on this screen, and a phone naming a different project must get the level saved for
@@ -348,8 +371,30 @@ public sealed partial class MainWindow : Window, IDecisionHandler
             this,
             RemoteDatabasePath());
 
-        _remote.Changed += () => Dispatcher.UIThread.Post(() =>
-            _log.Info(LogSource.System, "Remote access: " + _remote!.Status));
+        // The service this handler belongs to, not whatever _remote is when the post runs. A restart sets _remote
+        // to null and then disposes the old service, and a status the old one raised while stopping was posted
+        // here and read _remote!.Status - null when remote access had been switched off, and the next service's
+        // status otherwise. So only the service still in use is logged; one that has been replaced is ignored.
+        // Not under test: the handler is the window's, and nothing smaller than the window runs it.
+        var service = _remote;
+        service.Changed += () => Dispatcher.UIThread.Post(() =>
+        {
+            if (ReferenceEquals(service, _remote))
+                _log.Info(LogSource.System, "Remote access: " + service.Status);
+        });
+
+        // Said in the log as well as in the window that made the invitation: that window may have been
+        // closed, and a device that now holds every key of this computer must be traceable to a moment.
+        _remote.DeviceAdmitted += device => Dispatcher.UIThread.Post(() =>
+            _log.Info(LogSource.System, $"Remote access: \"{device.Label}\" answered an invitation and is now trusted."));
+        // A refused answer is logged once, as the status line it also becomes; only answers set aside
+        // are logged from here.
+        _remote.InvitationNoticed += notice =>
+        {
+            if (!notice.Refused)
+                Dispatcher.UIThread.Post(() => _log.Info(LogSource.System, "Remote access: " + notice.Detail));
+        };
+        RemoteDeviceAccess.Attach(_remote);
 
         _remote.Start();
         _log.Info(LogSource.System, "Remote access: " + _remote.Status);
@@ -361,12 +406,11 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     ///
     /// <para>The token is compared by whether there is one, not by what it is: this decides whether
     /// to reconnect, and putting a bearer credential into a string that is compared, logged by
-    /// accident or held in a local is not worth the precision. A token REPLACED with a different
-    /// one of the same emptiness is the one case this misses, and Test connection is what covers
-    /// it.</para>
+    /// accident or held in a local is not worth the precision. A new token always comes with a new
+    /// connection code, and applying a code restarts the service itself.</para>
     /// </summary>
     private static string Describe(RemoteAccessSettings remote)
-        => $"{remote.Enabled}|{remote.GatewayUrl}|{remote.Token.Length > 0}";
+        => $"{remote.Enabled}|{remote.GatewayUrl}|{remote.HostId}|{remote.Token.Length > 0}";
 
     /// <summary>
     /// Applies changed remote settings without restarting the application.
@@ -379,33 +423,109 @@ public sealed partial class MainWindow : Window, IDecisionHandler
     /// </summary>
     private async Task RestartRemoteAccessAsync()
     {
-        var previous = _remote;
-        _remote = null;
-
-        if (previous is not null)
+        await _remoteGate.WaitAsync();
+        try
         {
-            _log.Info(LogSource.System, "Remote access: settings changed, reconnecting.");
-            await previous.DisposeAsync();
-        }
+            var previous = _remote;
+            _remote = null;
 
-        StartRemoteAccess();
+            if (previous is not null)
+            {
+                _log.Info(LogSource.System, "Remote access: settings changed, reconnecting.");
+                await previous.DisposeAsync();
+            }
+
+            StartRemoteAccess();
+        }
+        finally
+        {
+            _remoteGate.Release();
+        }
     }
 
     /// <summary>
-    /// Tries a gateway address and token for the settings window, and says what happened.
-    ///
-    /// <para>It runs against the REAL gateway with this computer's real workspace list, because a
-    /// check that stopped short of that would answer a narrower question than the one being
-    /// asked - and the question being asked is "why does the phone say Offline".</para>
+    /// Restarting the service and applying a code, one at a time. Interleaved, a restart could start a
+    /// service - and a key store over remote.db - while a code was resetting the keys in that file.
     /// </summary>
-    private async Task<string> CheckRemoteAsync(string gatewayUrl, string token, CancellationToken ct)
+    private readonly SemaphoreSlim _remoteGate = new(1, 1);
+
+    /// <summary>
+    /// Answers the settings window's "Test connection", and says what happened.
+    ///
+    /// <para>Through the running service, because the check publishes this computer's workspace list
+    /// and the names in it are sealed with the keys that service holds - one key store per remote.db.
+    /// A check that sent an empty list instead would unpublish every workspace.</para>
+    /// </summary>
+    private async Task<string> CheckRemoteAsync(CancellationToken ct)
     {
-        var workspaces = RemoteAccessService.Publishable(_registry.Entries);
-        var check = await GatewayProbe.CheckAsync(gatewayUrl, token, workspaces, ct);
+        var detail = _remote is { } remote
+            ? await remote.CheckAsync(ct)
+            : "Remote access is restarting - try again in a moment.";
 
-        _log.Info(LogSource.System, "Remote access check: " + check.Detail);
+        _log.Info(LogSource.System, "Remote access check: " + detail);
+        return detail;
+    }
 
-        return check.Detail;
+    /// <summary>
+    /// Applies a connection code from the settings window: this computer's keys, then the live
+    /// settings, saved - and remote access started again on them.
+    ///
+    /// <para>The questions come first, with the service still running: a person who says no keeps
+    /// it, and the remote tasks on it. Only once every answer is yes is it stopped - it holds the key
+    /// store over remote.db, and a code can replace the keys in it; a service still running would go
+    /// on sealing with keys that are no longer written anywhere - and it is started again whatever
+    /// happened after that.</para>
+    ///
+    /// <para>Nothing here logs the code or the settings it fills: both hold the token, and the code
+    /// holds the pairing secret too.</para>
+    /// </summary>
+    private async Task<(bool Connected, string Detail)> ConnectRemoteAsync(
+        ConnectionCode code, Func<string, Task<bool>> confirm)
+    {
+        await _remoteGate.WaitAsync();
+        var stopped = false;
+
+        try
+        {
+            var outcome = await RemoteAccessService.ConnectWithCodeAsync(
+                code, _settings.RemoteAccess, RemoteDatabasePath(), confirm,
+                beforeChange: async () =>
+                {
+                    stopped = true;
+                    var previous = _remote;
+                    _remote = null;
+                    if (previous is not null)
+                        await previous.DisposeAsync();
+                });
+
+            if (!outcome.Paired)
+                return (false, outcome.Problem
+                    ?? "Nothing was changed: this computer keeps the keys and the connection it had.");
+
+            _log.Info(LogSource.System,
+                $"Remote access: connected as computer {outcome.HostId}; device {outcome.DeviceId} is trusted"
+                + (outcome.Replaced ? ", and the previous keys were replaced." : "."));
+
+            // The keys are already written, so a failed save is not a failed connection: the settings
+            // window's copy takes the same values, and its Save writes them.
+            if (!_settings.Save(replaceUnreadable: true))
+                return (true, "Connected, but the settings could not be saved - press Save to try again. "
+                    + (_settings.LastSaveError ?? string.Empty));
+
+            return (true, "Connected. The browser that made the code is trusted, and gets this computer's key "
+                + "as soon as the connection is up.");
+        }
+        catch (Exception failure)
+        {
+            return (false, "The code could not be applied: " + failure.Message);
+        }
+        finally
+        {
+            if (stopped)
+                StartRemoteAccess();
+
+            _remoteGate.Release();
+        }
     }
 
     // ── Closing ──────────────────────────────────────────────────────────────

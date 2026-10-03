@@ -5,6 +5,7 @@ using Enactive.Core.Intents;
 using Enactive.Core.Orchestration;
 using Enactive.Core.Permissions;
 using Enactive.Remote.Contracts;
+using Enactive.Remote.Contracts.Crypto;
 
 /// <summary>
 /// What the application hands back for one task: the engine to run it with, the intent to run, and
@@ -44,42 +45,194 @@ public sealed record RemotePreparation(
 /// and the intent, and the first real caller had to open MCP tool servers to build one - which are
 /// child processes. They would have been left running, one set per remote run, until the desktop
 /// was closed.</para>
+///
+/// <para>It is handed the task as it OPENED, never the payload: the payload's plaintext is written by
+/// the gateway, and only what <see cref="Sealer"/> opened and checked came from the owner.</para>
+/// </param>
+/// <param name="administration">
+/// Who changes the trusted list when a browser removes or endorses a device. A function, asked when such a
+/// command arrives, because the application makes one per connection; null, or a function answering null,
+/// on a computer with no key store to change - those commands are then refused with a reason.
 /// </param>
 public sealed class RemoteRunner(
     HostStore store,
     RemoteApprovals approvals,
-    Func<StartTaskPayload, Func<IDecisionHandler, IDecisionHandler>, CancellationToken,
-        Task<RemotePreparation>> prepare)
+    Sealer sealer,
+    Func<OpenedStart, Func<IDecisionHandler, IDecisionHandler>, CancellationToken,
+        Task<RemotePreparation>> prepare,
+    Func<KeyAdministration?>? administration = null)
 {
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _running = new();
+    private readonly ConcurrentQueue<DeliveryNotice> _notices = new();
 
     /// <summary>Runs currently executing, by remote run id. For the desktop to show, and for tests.</summary>
     public IReadOnlyCollection<string> Running => _running.Keys.ToArray();
+
+    /// <summary>Commands this computer refused and had no run to report on, for the desktop to show.</summary>
+    public IReadOnlyCollection<DeliveryNotice> Notices => _notices.ToArray();
+
+    /// <summary>Raised when a notice is recorded. Not on the UI thread.</summary>
+    public event Action<DeliveryNotice>? Noticed;
+
+    /// <summary>
+    /// Carries out the commands one Sync brought, in <see cref="CommandOrder"/>: each is opened here, one after
+    /// another, and only a start's run is handed to <paramref name="runInBackground"/>.
+    ///
+    /// <para>Opened here and not on the background task, because opening is where the key is chosen: a start
+    /// opened on its own task raced the removal listed with it, and opened under the key the removal was
+    /// replacing. The removals and endorsements are carried out to the end before the next command is opened,
+    /// so whatever follows meets the trusted list and the key they left.</para>
+    /// </summary>
+    /// <param name="runInBackground">
+    /// Runs a started task without holding up the delivery loop: a run takes minutes, and nothing it produced
+    /// would be sent until it finished.
+    /// </param>
+    /// <param name="failed">
+    /// Told of a command that failed on this computer's side - not a refusal, which is said where refusals
+    /// are. Without it one failure ended the batch, and the commands after it, already acknowledged, were
+    /// never carried out.
+    /// </param>
+    public async Task ApplyAllAsync(
+        IReadOnlyList<HostCommand> commands,
+        Action<Func<CancellationToken, Task>> runInBackground,
+        Action<HostCommand, Exception> failed,
+        CancellationToken ct = default)
+    {
+        foreach (var command in CommandOrder.Arrange(commands))
+        {
+            try
+            {
+                if (command.Kind != CommandKind.StartTask)
+                {
+                    await ApplyAsync(command, ct);
+                    continue;
+                }
+
+                OpenedStart start;
+                try
+                {
+                    start = sealer.OpenStart(command);
+                }
+                catch (CommandRefusedException refused)
+                {
+                    Refuse(command, refused);
+                    continue;
+                }
+
+                runInBackground(token => StartAsync(start, command.Id, token));
+            }
+            catch (Exception failure) when (failure is not OperationCanceledException || !ct.IsCancellationRequested)
+            {
+                failed(command, failure);
+            }
+        }
+    }
 
     /// <summary>
     /// Carries out one accepted command.
     ///
     /// <para>The caller has already written it down and acknowledged it; by the time this is
-    /// reached, the only question left is what the command means.</para>
+    /// reached, the only question left is what the command means - and whether the owner sent it.
+    /// Every kind is opened before anything is done, and a command that does not open does nothing
+    /// at all.</para>
     /// </summary>
     public async Task ApplyAsync(HostCommand command, CancellationToken ct = default)
     {
-        switch (command.Kind)
+        try
         {
-            case CommandKind.StartTask:
-                await StartAsync(RemoteJson.Deserialize<StartTaskPayload>(command.Payload), command.Id, ct);
-                return;
+            switch (command.Kind)
+            {
+                case CommandKind.StartTask:
+                    var start = sealer.OpenStart(command);
+                    await StartAsync(start, command.Id, ct);
+                    return;
 
-            case CommandKind.CancelRun:
-                Cancel(RemoteJson.Deserialize<CancelRunPayload>(command.Payload).RunId);
-                return;
+                case CommandKind.CancelRun:
+                    Cancel(sealer.OpenCancel(command).RunId);
+                    return;
 
-            case CommandKind.ResolveApproval:
-                Answer(RemoteJson.Deserialize<ResolveApprovalPayload>(command.Payload));
-                return;
+                case CommandKind.ResolveApproval:
+                    Answer(sealer.OpenDecision(command));
+                    return;
 
-            default:
-                throw new NotSupportedException($"Command kind {command.Kind} is not one this build knows.");
+                // The browser removed the device at the gateway before it sent this, so the gateway is not
+                // asked again: this computer distrusts it and gives everyone else a new key.
+                case CommandKind.RevokeDevice:
+                    var revocation = sealer.OpenRevocation(command);
+                    await Administration().RevokeAsync(revocation.DeviceId, KeyAdministration.RemovedFromBrowser, ct);
+                    return;
+
+                case CommandKind.EndorseDevice:
+                    var endorsement = sealer.OpenEndorsement(command);
+                    await Administration().EndorseAsync(endorsement, ct);
+                    return;
+
+                default:
+                    throw new NotSupportedException($"Command kind {command.Kind} is not one this build carries out.");
+            }
+        }
+        catch (CommandRefusedException refused)
+        {
+            // The opening throws this, and a device command the trusted list will not take: StartAsync
+            // catches everything a run can throw and reports it as the run's ending, so nothing that began
+            // running is ever reported as refused.
+            Refuse(command, refused);
+        }
+    }
+
+    /// <summary>
+    /// Who changes the trusted list. A refusal rather than an exception when there is nobody: thrown, it
+    /// reached the person as "could not be carried out", as if this computer had failed at something it
+    /// can do.
+    /// </summary>
+    private KeyAdministration Administration()
+        => administration?.Invoke() ?? throw new CommandRefusedException(KeyAdministration.CannotManageDevices);
+
+    /// <summary>
+    /// A command that did not open, said where a person will see it.
+    ///
+    /// <para>A start is the one kind with a place of its own: the panel already shows a queued run for
+    /// it, and a run that never moved would leave the owner waiting on something that is never going to
+    /// happen. So the run is opened and at once ended Failed with the reason, and nothing runs. Opening
+    /// it also claims the command, so a redelivery of the same forgery is not even looked at again.
+    /// Every other kind has nothing to report on, and is a notice on this computer.</para>
+    /// </summary>
+    private void Refuse(HostCommand command, CommandRefusedException refused)
+    {
+        var reason = refused.Message;
+
+        if (command.Kind == CommandKind.StartTask && RunOf(command) is { } runId)
+        {
+            if (store.BeginRun(command.Id, runId))
+            {
+                // A start sealed under the key a removal replaced is most likely the owner's own, sent from a
+                // device that had not yet received the new key: it is asked for again, not called forged.
+                var detail = refused.SendAgain
+                    ? $"This computer refused the request: {reason}."
+                    : $"This computer refused the request: {reason}. It did not come from a device this computer trusts.";
+
+                store.Enqueue(runId, RemoteEventKind.Failed, sequence => sealer.Detail(
+                    runId, sequence, RemoteEventKind.Failed, detail));
+            }
+
+            return;
+        }
+
+        var notice = new DeliveryNotice("Refused", $"{command.Kind} {command.Id}: {reason}");
+        _notices.Enqueue(notice);
+        Noticed?.Invoke(notice);
+    }
+
+    /// <summary>The run a start names in its plaintext, if the payload can be read at all.</summary>
+    private static string? RunOf(HostCommand command)
+    {
+        try
+        {
+            return RemoteJson.Deserialize<StartTaskPayload>(command.Payload).RunId is { Length: > 0 } runId ? runId : null;
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return null;
         }
     }
 
@@ -106,10 +259,10 @@ public sealed class RemoteRunner(
     /// already on its way as an ApprovalResolved event, so there is nothing to report and nothing
     /// to correct.</para>
     /// </summary>
-    private void Answer(ResolveApprovalPayload answer)
+    private void Answer(DecisionAuthorization answer)
         => approvals.TryAnswer(answer.ApprovalId, answer.ActionHash, answer.Decision);
 
-    private async Task StartAsync(StartTaskPayload task, string commandId, CancellationToken ct)
+    private async Task StartAsync(OpenedStart task, string commandId, CancellationToken ct)
     {
         // The claim and the run record, in one transaction, BEFORE anything executes. False means a
         // redelivery of a command this machine already carried out, and the correct response to that
@@ -127,7 +280,7 @@ public sealed class RemoteRunner(
             var prepared = await prepare(
                 task,
                 desktop => new RemoteDecisionHandler(
-                    desktop, store, approvals, task.RunId, RemoteDecisionHandler.DefaultTimeout),
+                    desktop, store, approvals, sealer, task.RunId, RemoteDecisionHandler.DefaultTimeout),
                 cancellation.Token);
 
             // Whatever the preparation opened is closed here, however this ends - cancelled,
@@ -135,7 +288,7 @@ public sealed class RemoteRunner(
             // nothing to close says so by leaving it null rather than by handing over a stub.
             await using (prepared.Resources)
             {
-                store.Enqueue(task.RunId, RemoteEventKind.Running, $"Started: {task.Title}");
+                Report(task.RunId, RemoteEventKind.Running, $"Started: {task.Title}");
                 store.MarkRunState(task.RunId, LocalRunState.Running);
 
                 await ConsumeAsync(task.RunId, prepared.Engine, prepared.Intent, cancellation.Token);
@@ -174,14 +327,14 @@ public sealed class RemoteRunner(
         {
             if (EventMapping.Ending(published) is var (kind, detail))
             {
-                store.Enqueue(runId, kind, detail);
+                Report(runId, kind, detail);
                 ended = true;
                 continue;
             }
 
             if (EventMapping.Progress(published) is { } line)
             {
-                store.Enqueue(runId, RemoteEventKind.Progress, line);
+                Report(runId, RemoteEventKind.Progress, line);
             }
         }
 
@@ -207,7 +360,11 @@ public sealed class RemoteRunner(
     {
         if (!store.HasEnded(runId))
         {
-            store.Enqueue(runId, kind, detail);
+            Report(runId, kind, detail);
         }
     }
+
+    /// <summary>Queues an event with its sentence sealed for the sequence the store gives it.</summary>
+    private void Report(string runId, RemoteEventKind kind, string detail)
+        => store.Enqueue(runId, kind, sequence => sealer.Detail(runId, sequence, kind, detail));
 }
