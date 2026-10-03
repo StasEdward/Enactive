@@ -149,12 +149,19 @@ public sealed class RemoteRunner(
     /// A command that failed on this computer's side: counted, said when the failure is new, and given up on
     /// - marked carried out, and said once - at the <see cref="MaxAttempts"/>th. A command the inbox does not
     /// hold, handed in directly, is only said.
+    ///
+    /// <para>A removal or an endorsement is never given up on: it is tried for as long as it may wait, and the
+    /// inbox says so when that runs out. Given up after five failures - a minute of a disk that would not
+    /// write - a removal was dropped, and the device the person removed stayed trusted here with the key
+    /// unchanged. Both are safe to try again: a removal already made, or an endorsement already trusted,
+    /// changes nothing.</para>
     /// </summary>
     private void Failure(HostCommand command, Exception failure, Action<HostCommand, Exception> failed)
     {
         var attempt = store.RecordFailure(command.Id, failure.Message);
+        var mayGiveUp = command.Kind is not (CommandKind.RevokeDevice or CommandKind.EndorseDevice);
 
-        if (attempt is { Attempts: >= MaxAttempts })
+        if (mayGiveUp && attempt is { Attempts: >= MaxAttempts })
         {
             store.MarkApplied(command.Id);
             Notice(new DeliveryNotice("GaveUp",

@@ -741,6 +741,40 @@ public sealed class RemoteDeliveryTests : IDisposable
     }
 
     /// <summary>
+    /// A removal is never given up on. Given up after <see cref="RemoteRunner.MaxAttempts"/> failures - about a
+    /// minute of a disk that would not write - it was marked carried out and dropped, and the device the person
+    /// removed stayed trusted here with the key unchanged. It is tried for as long as it may wait, and each
+    /// failure is said once.
+    /// </summary>
+    [WindowsFact]
+    public async Task A_removal_that_keeps_failing_is_tried_until_it_succeeds()
+    {
+        using var store = Open();
+        using var keys = new HostKeyStore(store, "host-1");
+        using var phone = P256.Generate();
+        using var laptop = P256.Generate();
+        TrustDevice(keys, "phone", phone);
+        TrustDevice(keys, "laptop", laptop);
+        var administration = new KeyAdministration(keys, new FakeGateway(), TimeProvider.System);
+        var asked = 0;
+        var loop = DeviceLoop(store, keys, new FakeGateway { Pending = [new FixedHostKeys(keys.HostId, keys.Current).Revoke("laptop")] });
+        var runner = DeviceRunner(store, keys,
+            () => ++asked <= RemoteRunner.MaxAttempts ? throw new IOException("disk") : administration);
+        var said = new List<string>();
+
+        for (var turn = 0; turn <= RemoteRunner.MaxAttempts; turn++)
+        {
+            await ServeAsync(loop, runner, said);
+        }
+
+        Assert.Equal(2u, keys.Current.Epoch);
+        Assert.Equal(["phone"], keys.Live.Select(d => d.DeviceId));
+        Assert.True(store.WasApplied("command-r"));
+        Assert.Equal(["disk"], said);
+        Assert.Empty(runner.Notices);
+    }
+
+    /// <summary>
     /// An endorsement is marked carried out after it, not in the same step, because carried out again it
     /// changes nothing: the application closing between the two leaves a device already trusted with that
     /// key, which the endorsement, met again, leaves as it is - and it is marked then.

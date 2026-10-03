@@ -846,6 +846,57 @@ public sealed class RemoteKeyAdministrationTests
     }
 
     /// <summary>
+    /// The runs a previous process left open are reported Interrupted once, at the first point this process
+    /// reaches its records - whichever path gets there. Done only in the pass made without the gateway, and
+    /// only once that pass had read the records: when they could not be read at start but the connection then
+    /// opened them, the report was skipped, and a LATER failed connection made it - while this process's own
+    /// runs were going, telling the phone they had been interrupted.
+    /// </summary>
+    [Fact]
+    public async Task Runs_left_open_by_the_last_process_are_reported_on_the_first_connection_when_the_records_could_not_be_read_at_start()
+    {
+        using var fx = new EngineFixture();
+        var database = fx.PathOf("remote.db");
+        var keys = new FixedHostKeys();
+        using (var store = new HostStore(database))
+        {
+            store.Accept(keys.Start("command-1", "run-1"));
+            store.BeginRun("command-1", "run-1");
+        }
+
+        // The records cannot be opened at start: a folder stands where the file is.
+        var aside = database + ".aside";
+        File.Move(database, aside);
+        Directory.CreateDirectory(database);
+
+        var first = new FakeGateway();
+        var connections = 0;
+        await using (var service = new RemoteAccessService(
+            new RemoteAccessSettings { Enabled = true, GatewayUrl = Gateway.ToString(), HostId = keys.HostId, Token = "token" },
+            keys, _ => throw new InvalidOperationException("No composition expected"), () => [], fx.Decisions, database,
+            _ => Task.FromResult<IGatewayConnection>(Interlocked.Increment(ref connections) == 1 ? first : new FakeGateway()),
+            firstRetry: TimeSpan.FromMilliseconds(20)))
+        {
+            var restored = 0;
+            service.Changed += () =>
+            {
+                // Said on the loop's own thread, before it goes on to connect: the records are back by then.
+                if (service.Status.StartsWith("Remote commands already received could not be read", StringComparison.Ordinal)
+                    && Interlocked.Exchange(ref restored, 1) == 0)
+                {
+                    Directory.Delete(database);
+                    File.Move(aside, database);
+                }
+            };
+
+            service.Start();
+            await Until(() => first.Calls.Contains("Sync"));
+        }
+
+        Assert.Equal([RemoteEventKind.Interrupted], first.Published.Where(e => e.RunId == "run-1").Select(e => e.Kind));
+    }
+
+    /// <summary>
     /// A computer that was asleep while a phone was lost and removed hears of the removal in the same Sync as
     /// whatever was queued under the old key - by the thief, or by the phone before it was lost: a start, and an
     /// endorsement of a stand-in device. The removal is carried out first, whatever order the gateway listed

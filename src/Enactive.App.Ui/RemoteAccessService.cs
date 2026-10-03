@@ -581,19 +581,8 @@ internal sealed class RemoteAccessService : IAsyncDisposable
     {
         try
         {
-            var store = Store();
+            var store = Recovered();
             var loop = _offlineLoop ??= Watched(new DeliveryLoop(store, new NoGateway(), _sealer!));
-
-            // Once per PROCESS, not once per connection, and before anything is carried out. "In flight"
-            // means a run with no ending written, and a run going right now is one of those - so doing this
-            // after a dropped socket came back would tell the phone that a task still working had been
-            // interrupted, while it carried on working. Only now is every such run really the wreckage of
-            // a previous process.
-            if (!_recovered)
-            {
-                _recovered = true;
-                loop.RecoverInterruptedRuns();
-            }
 
             await Runner(store).ApplyAllAsync(loop.Owed(), Begin, Failed, ct);
         }
@@ -604,6 +593,33 @@ internal sealed class RemoteAccessService : IAsyncDisposable
     }
 
     private DeliveryLoop? _offlineLoop;
+
+    /// <summary>
+    /// The store, with the runs a previous process left open reported Interrupted - once per PROCESS, at the
+    /// first point either path reaches the store: the pass made without the gateway, or a connection.
+    ///
+    /// <para>"In flight" means a run with no ending written, and a run going right now is one of those - so
+    /// reporting after this process had begun a run would tell the phone that a task still working had been
+    /// interrupted, while it carried on working. Both paths come here before they carry anything out, and the
+    /// flag is set only once the report is made, so no run of this process can have begun before it. Made in
+    /// the offline pass alone, it was skipped when the store could not be opened there but the connection then
+    /// opened it - and made by a later failed connection, while this process's runs were going.</para>
+    /// </summary>
+    private HostStore Recovered()
+    {
+        var store = Store();
+
+        lock (_lifecycle)
+        {
+            if (!_recovered)
+            {
+                new DeliveryLoop(store, new NoGateway(), _sealer!).RecoverInterruptedRuns();
+                _recovered = true;
+            }
+        }
+
+        return store;
+    }
 
     /// <summary>
     /// A delivery loop whose notices a person must hear said as they happen: a device whose grant was refused
@@ -624,7 +640,7 @@ internal sealed class RemoteAccessService : IAsyncDisposable
 
     private async Task ConnectAndServeAsync(CancellationToken ct)
     {
-        var store = Store();
+        var store = Recovered();
         Runner(store);
 
         IGatewayConnection connection;
