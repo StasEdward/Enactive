@@ -11,7 +11,7 @@
 <a class="skip-link" href="#main">Skip to content</a>
 <header class="wiki-header"><a class="brand" href="../index.html" aria-label="Enactive home"><img class="brand-mark" src="assets/mark-loop.svg" alt="" width="32" height="32"><img class="wordmark dark-mark" src="assets/wordmark.svg" alt="Enactive" width="144" height="18"><img class="wordmark light-mark" src="assets/wordmark-light.svg" alt="Enactive" width="144" height="18"></a><a class="wiki-label" href="index.html">Wiki</a><div class="header-actions"><button type="button" class="search-trigger" aria-haspopup="dialog">Search wiki <kbd>Ctrl K</kbd></button><button type="button" id="theme-toggle" aria-label="Switch to light theme">Light theme</button><button type="button" id="menu-toggle" aria-expanded="false" aria-controls="sidebar">Menu</button></div></header>
 <div class="wiki-layout"><aside id="sidebar" class="sidebar"><nav aria-label="Wiki chapters"><p class="nav-group">Start here</p><a href="index.html">Wiki home</a><a href="overview.html">Application overview</a><a href="getting-started.html">Getting started</a><p class="nav-group">Workflows</p><a href="running-tasks.html">Running tasks</a><a href="console.html">Console & automation</a><a href="templates.html">Templates</a><a href="remote-access.html" aria-current="page">Remote access</a><a href="remote-security.html">Remote security</a><p class="nav-group">Configuration</p><a href="settings.html">Settings</a><a href="models-and-phases.html">Models & Phases</a><p class="nav-group">Reference</p><a href="architecture.html">Architecture</a><a href="operations.html">Operations & troubleshooting</a></nav><div class="sidebar-footer"><a href="../index.html">← Back to Enactive</a><span>Product & engineering handbook</span></div></aside>
-<main id="main" class="" tabindex="-1"><div class="page-heading"><div class="breadcrumb"><a href="index.html">Documentation</a><span aria-hidden="true">/</span><span>Remote access</span></div><p class="eyebrow">Workflows · Enactive</p><h1>Remote Access</h1><div class="page-meta"><span>18 min read</span><span>English</span><a href="https://github.com/StasEdward/Enactive/blob/master/Docs/wiki/Remote-Access.md">Markdown source ↗</a></div></div><details class="mobile-toc"><summary>On this page</summary><nav aria-label="On this page"><a href="#what-this-is">What this is</a><a href="#signing-in">Signing in</a><a href="#pairing-a-computer">Pairing a computer</a><a href="#adding-a-phone-or-another-browser">Adding a phone or another browser</a><a href="#removing-a-device">Removing a device</a><a href="#when-devices-are-lost">When devices are lost</a><a href="#deleting-the-account">Deleting the account</a><a href="#taking-your-data-out">Taking your data out</a><a href="#the-security-log">The security log</a><a href="#limits">Limits</a><a href="#what-a-remote-run-may-and-may-not-do">What a remote run may and may not do</a><a href="#permissions">Permissions</a><a href="#what-the-panel-shows">What the panel shows</a><a href="#connection-behaviour">Connection behaviour</a><a href="#limitations">Limitations</a><a href="#setting-up-your-own-gateway">Setting up your own gateway</a><a href="#implementation-references">Implementation references</a></nav></details><article><h2 id="what-this-is">What this is<a class="heading-anchor" href="#what-this-is" aria-label="Link to What this is">#</a></h2>
+<main id="main" class="" tabindex="-1"><div class="page-heading"><div class="breadcrumb"><a href="index.html">Documentation</a><span aria-hidden="true">/</span><span>Remote access</span></div><p class="eyebrow">Workflows · Enactive</p><h1>Remote Access</h1><div class="page-meta"><span>19 min read</span><span>English</span><a href="https://github.com/StasEdward/Enactive/blob/master/Docs/wiki/Remote-Access.md">Markdown source ↗</a></div></div><details class="mobile-toc"><summary>On this page</summary><nav aria-label="On this page"><a href="#what-this-is">What this is</a><a href="#end-to-end-encryption">End-to-end encryption</a><a href="#signing-in">Signing in</a><a href="#pairing-a-computer">Pairing a computer</a><a href="#adding-a-phone-or-another-browser">Adding a phone or another browser</a><a href="#removing-a-device">Removing a device</a><a href="#when-devices-are-lost">When devices are lost</a><a href="#deleting-the-account">Deleting the account</a><a href="#taking-your-data-out">Taking your data out</a><a href="#the-security-log">The security log</a><a href="#limits">Limits</a><a href="#what-a-remote-run-may-and-may-not-do">What a remote run may and may not do</a><a href="#permissions">Permissions</a><a href="#what-the-panel-shows">What the panel shows</a><a href="#connection-behaviour">Connection behaviour</a><a href="#limitations">Limitations</a><a href="#setting-up-your-own-gateway">Setting up your own gateway</a><a href="#implementation-references">Implementation references</a></nav></details><article><h2 id="what-this-is">What this is<a class="heading-anchor" href="#what-this-is" aria-label="Link to What this is">#</a></h2>
 <p>Remote access lets a task be started from a browser and run on a computer where Enactive is
 installed. The browser does not execute anything: it queues a request, the desktop application
 picks it up, runs it through the same engine as a task typed into the app, and reports back.</p>
@@ -43,11 +43,50 @@ picks it up, runs it through the same engine as a task typed into the app, and r
 </div><p>The host <strong>dials out</strong>. Nothing listens on the computer running Enactive, and no inbound port is
 opened on it. A computer that is switched off is simply not available; the task waits in the queue
 or its start command expires.</p>
+<p>Remote access is <strong>end-to-end encrypted</strong>: the next section says what that covers.</p>
+<h2 id="end-to-end-encryption">End-to-end encryption<a class="heading-anchor" href="#end-to-end-encryption" aria-label="Link to End-to-end encryption">#</a></h2>
 <p>What you write and what your computer reports back is encrypted on your computer and on your
 devices before it reaches the gateway, which stores it and passes it on but cannot read it. Signing
 in proves who the account is; reading and commanding a computer needs a key that only that computer
-and the devices it trusts hold. What the gateway can and cannot see, and where that protection
-stops, is in <a href="remote-security.html">Remote security</a>.</p>
+and the devices it trusts hold.</p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Question / How it is here"><table>
+<thead>
+<tr>
+<th>Question</th>
+<th>How it is here</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>What is encrypted</strong></td>
+<td>Task titles and prompts, progress messages, run summaries, permission requests with the whole action, notifications, and the names of workspaces.</td>
+</tr>
+<tr>
+<td><strong>Where the keys are</strong></td>
+<td>Each computer makes its own key and keeps it on that computer, protected by your Windows account. Each browser makes a device key that page scripts cannot read out. A computer&#39;s key reaches a device wrapped for that device&#39;s key alone.</td>
+</tr>
+<tr>
+<td><strong>How trust starts</strong></td>
+<td>With something you carry yourself: the connection code you paste into the desktop app, or the one-time link or QR you open on a new device. Their secrets never reach the gateway.</td>
+</tr>
+<tr>
+<td><strong>Commands</strong></td>
+<td>Starting a task, stopping a run, answering a permission and removing a device are each sealed for one computer and one command. The computer acts only on what opens under its current key, so the gateway cannot write a command, point one at something else, or replay an old one.</td>
+</tr>
+<tr>
+<td><strong>Removing a device</strong></td>
+<td>The computer changes its key and gives the new one to the devices that remain. The removed device keeps what it had already opened and reads nothing new.</td>
+</tr>
+<tr>
+<td><strong>What the service still sees</strong></td>
+<td>Who uses it and when, how many computers, runs and permission requests there are, their statuses and the size of the encrypted content, the name you give a computer, and an automatic label for each browser.</td>
+</tr>
+<tr>
+<td><strong>Where it stops</strong></td>
+<td>The panel is code the service sends to your browser; altered code could take keys out of it. The service publishes the fingerprints of the panel&#39;s files so they can be compared.</td>
+</tr>
+</tbody></table>
+</div><p>What the gateway can and cannot see in full, how to compare the panel with its build, and the
+limits of trusting a device that invited another, are in <a href="remote-security.html">Remote security</a>.</p>
 <h2 id="signing-in">Signing in<a class="heading-anchor" href="#signing-in" aria-label="Link to Signing in">#</a></h2>
 <p>Open the gateway&#39;s address and choose <strong>Continue with GitHub</strong> or <strong>Continue with Google</strong>. The page
 offers only the providers the gateway has configured. The gateway keeps the provider&#39;s id for your
@@ -454,6 +493,6 @@ automatic pull-based deploy and the cutover from protocol 1 are in
 <li><a href="https://github.com/StasEdward/Enactive/blob/master/src/Enactive.Remote.Host/HostStore.cs">Local outbox</a></li>
 </ul>
 </article><nav class="pagination" aria-label="Adjacent chapters"><a href="templates.html"><small>← Previous</small><strong>Templates</strong></a><a href="remote-security.html"><small>Next →</small><strong>Remote security</strong></a></nav><footer class="page-footer"><span>Enactive · Real, reviewable, recorded action.</span><a href="#main">Back to top ↑</a></footer></main>
-<aside class="page-toc"><p class="nav-group">On this page</p><nav aria-label="Page sections"><a href="#what-this-is">What this is</a><a href="#signing-in">Signing in</a><a href="#pairing-a-computer">Pairing a computer</a><a href="#adding-a-phone-or-another-browser">Adding a phone or another browser</a><a href="#removing-a-device">Removing a device</a><a href="#when-devices-are-lost">When devices are lost</a><a href="#deleting-the-account">Deleting the account</a><a href="#taking-your-data-out">Taking your data out</a><a href="#the-security-log">The security log</a><a href="#limits">Limits</a><a href="#what-a-remote-run-may-and-may-not-do">What a remote run may and may not do</a><a href="#permissions">Permissions</a><a href="#what-the-panel-shows">What the panel shows</a><a href="#connection-behaviour">Connection behaviour</a><a href="#limitations">Limitations</a><a href="#setting-up-your-own-gateway">Setting up your own gateway</a><a href="#implementation-references">Implementation references</a></nav><a class="source-link" href="https://github.com/StasEdward/Enactive/blob/master/Docs/wiki/Remote-Access.md">View Markdown source ↗</a></aside></div>
+<aside class="page-toc"><p class="nav-group">On this page</p><nav aria-label="Page sections"><a href="#what-this-is">What this is</a><a href="#end-to-end-encryption">End-to-end encryption</a><a href="#signing-in">Signing in</a><a href="#pairing-a-computer">Pairing a computer</a><a href="#adding-a-phone-or-another-browser">Adding a phone or another browser</a><a href="#removing-a-device">Removing a device</a><a href="#when-devices-are-lost">When devices are lost</a><a href="#deleting-the-account">Deleting the account</a><a href="#taking-your-data-out">Taking your data out</a><a href="#the-security-log">The security log</a><a href="#limits">Limits</a><a href="#what-a-remote-run-may-and-may-not-do">What a remote run may and may not do</a><a href="#permissions">Permissions</a><a href="#what-the-panel-shows">What the panel shows</a><a href="#connection-behaviour">Connection behaviour</a><a href="#limitations">Limitations</a><a href="#setting-up-your-own-gateway">Setting up your own gateway</a><a href="#implementation-references">Implementation references</a></nav><a class="source-link" href="https://github.com/StasEdward/Enactive/blob/master/Docs/wiki/Remote-Access.md">View Markdown source ↗</a></aside></div>
 <dialog id="search-dialog" aria-labelledby="search-title"><div class="search-heading"><h2 id="search-title">Search the wiki</h2><button id="close-search" type="button" aria-label="Close search">Close <kbd>Esc</kbd></button></div><label for="search-input">Find a topic, setting, or command</label><input id="search-input" type="search" placeholder="Try templates, Review, or --workspace" autocomplete="off"><p id="search-status" role="status" aria-live="polite">Search across all chapters.</p><div id="search-results"></div></dialog><div id="copy-status" class="sr-only" role="status" aria-live="polite"></div>
 </body></html>
