@@ -314,4 +314,161 @@ public sealed class SettingsLoadTests : IDisposable
 
         Assert.Empty(settings.Providers.Single(p => p.Id == "anthropic").Models);
     }
+
+    // ── a list somebody emptied ─────────────────────────────────────────────
+    //
+    // The legacy migration used to run whenever the provider list was empty, so "not migrated yet"
+    // and "the person removed them all" were one state: every provider was removed, the file was
+    // saved, and the next start brought back an Ollama endpoint and - when the workers were gone
+    // too - the whole default team. What tells the two apart is the version the FILE carries: a
+    // file that states one was written by a build that already had the team schema.
+
+    /// <summary>The report itself: what the settings window does, then a restart.</summary>
+    [Fact]
+    public void Providers_and_workers_removed_and_saved_stay_removed_after_a_restart()
+    {
+        var path = Path.Combine(_dir, "settings.json");
+        var settings = AppSettings.Load(path);
+        Assert.NotEmpty(settings.Providers);
+        Assert.NotEmpty(settings.Workers);
+
+        settings.Providers.Clear();
+        settings.Workers.Clear();
+        Assert.True(settings.Save(path), settings.LastSaveError);
+
+        var again = AppSettings.Load(path);
+
+        Assert.Empty(again.Providers);
+        Assert.Empty(again.Workers);
+        Assert.Empty(again.LoadProblems);
+    }
+
+    /// <summary>And through the copy the settings window really saves: it edits a clone.</summary>
+    [Fact]
+    public void The_same_through_the_clone_the_settings_window_saves()
+    {
+        var path = Path.Combine(_dir, "settings.json");
+        var edited = AppSettings.Load(path).Clone();
+
+        edited.Providers.Clear();
+        edited.Workers.Clear();
+        Assert.True(edited.Save(path), edited.LastSaveError);
+
+        var again = AppSettings.Load(path);
+
+        Assert.Empty(again.Providers);
+        Assert.Empty(again.Workers);
+    }
+
+    /// <summary>
+    /// Every version that has ever been written into a file, not only today's: the files already on
+    /// disks were saved at 2 to 6, and a rule that began at the current number would leave each of
+    /// them reseeded once more.
+    /// </summary>
+    [Theory]
+    [InlineData(2)]
+    [InlineData(5)]
+    [InlineData(AppSettings.CurrentSchemaVersion)]
+    public void A_file_that_states_its_version_keeps_an_empty_provider_list(int version)
+    {
+        var settings = AppSettings.Load(Write(
+            $$"""{ "SchemaVersion": {{version}}, "Providers": [], "Workers": [] }"""));
+
+        Assert.Empty(settings.Providers);
+        Assert.Empty(settings.Workers);
+        Assert.Equal(AppSettings.CurrentSchemaVersion, settings.SchemaVersion);
+    }
+
+    /// <summary>
+    /// The legacy fields do not bring the migration back. Every saved file still carries them -
+    /// they are ordinary properties - so their presence says nothing about whether the file was
+    /// migrated, and a rule that looked at them would reseed exactly the file in the report.
+    /// </summary>
+    [Fact]
+    public void Legacy_fields_left_in_a_versioned_file_do_not_bring_a_provider_back()
+    {
+        var settings = AppSettings.Load(Write($$"""
+        {
+          "SchemaVersion": {{AppSettings.CurrentSchemaVersion}},
+          "Providers": [],
+          "Workers": [],
+          "BaseUrl": "http://localhost:11434/v1",
+          "Model": "gemma4:31b-cloud"
+        }
+        """));
+
+        Assert.Empty(settings.Providers);
+        Assert.Empty(settings.Workers);
+    }
+
+    /// <summary>The workers are the person's too: providers removed, team kept, and it is kept as written.</summary>
+    [Fact]
+    public void Removing_the_providers_leaves_the_workers_as_they_were()
+    {
+        var settings = AppSettings.Load(Write($$"""
+        {
+          "SchemaVersion": {{AppSettings.CurrentSchemaVersion}},
+          "Providers": [],
+          "Workers": [
+            { "Id": "writer", "Role": "Writer", "Tools": [], "Level": "Execute", "Model": "gone/x" }
+          ]
+        }
+        """));
+
+        Assert.Empty(settings.Providers);
+        Assert.Equal("writer", Assert.Single(settings.Workers).Id);
+    }
+
+    /// <summary>
+    /// A file from before the team schema states no version and lists no provider, and is migrated
+    /// in full as it always was: the endpoint, the Anthropic account, the default team on the model
+    /// it named, and plan and review on the reasoner.
+    /// </summary>
+    [Fact]
+    public void A_file_from_before_the_team_schema_is_still_migrated_in_full()
+    {
+        var settings = AppSettings.Load(Write("""
+        {
+          "BaseUrl": "http://localhost:11434/v1",
+          "Model": "gemma4:31b-cloud",
+          "MultiAgent": true,
+          "AnthropicApiKey": "sk-not-a-real-key",
+          "ReasonerModel": "claude-sonnet-4-6"
+        }
+        """));
+
+        Assert.Equal(new[] { "ollama", "anthropic" }, settings.Providers.Select(p => p.Id));
+        Assert.NotEmpty(settings.Workers);
+        Assert.All(settings.Workers, w => Assert.Equal("ollama/gemma4:31b-cloud", w.Model));
+        Assert.Equal("anthropic/claude-sonnet-4-6", settings.Bindings.Plan);
+        Assert.Equal("anthropic/claude-sonnet-4-6", settings.Bindings.Review);
+        Assert.Equal(AppSettings.CurrentSchemaVersion, settings.SchemaVersion);
+    }
+
+    /// <summary>A file with providers is not touched by any of this, whatever version it states.</summary>
+    [Fact]
+    public void A_file_with_providers_gains_none()
+    {
+        var settings = AppSettings.Load(Write($$"""
+        {
+          "SchemaVersion": {{AppSettings.CurrentSchemaVersion}},
+          "Providers": [ { "Id": "mine", "Kind": "OpenAiCompatible", "BaseUrl": "http://example.test/v1" } ],
+          "Workers": []
+        }
+        """));
+
+        Assert.Equal("mine", Assert.Single(settings.Providers).Id);
+        Assert.Empty(settings.Workers);
+    }
+
+    /// <summary>A first run - no file - still starts with the endpoint and the default team.</summary>
+    [Fact]
+    public void A_machine_with_no_settings_file_still_gets_the_endpoint_and_the_default_team()
+    {
+        var settings = AppSettings.Load(Path.Combine(_dir, "nothing-here.json"));
+
+        Assert.Equal("ollama", Assert.Single(settings.Providers).Id);
+        Assert.NotEmpty(settings.Workers);
+        Assert.Equal(AppSettings.CurrentSchemaVersion, settings.SchemaVersion);
+    }
 }

@@ -371,14 +371,9 @@ public sealed class EngineCompositionTests : IDisposable
     }
 
     /// <summary>
-    /// No provider at all is its own message, and it is reachable — but NOT through a file. Loading
-    /// one runs the migration, which always adds the Ollama endpoint, so a settings.json with an
-    /// empty provider list comes back with one. The route that reaches this is
-    /// <c>new AppSettings()</c>, which the main window uses as its fallback when a file cannot be
-    /// applied; that path skips the migration and really does have nothing.
-    ///
-    /// <para>Written as a file first, which is how the difference was found: the test failed, and
-    /// the branch was right.</para>
+    /// No provider at all is its own message. One route to it is <c>new AppSettings()</c>, which
+    /// the main window uses as its fallback when a file cannot be applied; that path skips the
+    /// migration and really does have nothing.
     /// </summary>
     [Fact]
     public void Settings_with_no_provider_at_all_say_so_separately()
@@ -388,12 +383,28 @@ public sealed class EngineCompositionTests : IDisposable
         Assert.Contains(missing, m => m.Contains("No provider"));
     }
 
-    /// <summary>The same file through Load has a provider — with no model — so it reports the model,
-    /// not the provider. Two different states, two different sentences.</summary>
+    /// <summary>
+    /// The other route is a file. This test used to say the opposite - that an empty provider list
+    /// in a versioned file came back as the Ollama endpoint - and what it pinned was the defect:
+    /// somebody who removed every provider and saved got one back on the next start. A file that
+    /// states its version is read as it stands, and says the provider is what is missing.
+    /// </summary>
     [Fact]
-    public void An_empty_provider_list_in_a_file_becomes_the_endpoint_with_no_model()
+    public void An_empty_provider_list_in_a_versioned_file_stays_empty_and_says_so()
     {
         var settings = Configured("""{ "SchemaVersion": 5, "Providers": [] }""");
+
+        Assert.Empty(settings.Providers);
+        Assert.Contains(EngineComposition.Missing(settings), m => m.Contains("No provider"));
+    }
+
+    /// <summary>A file from before the team schema - no version - still gets the endpoint, with no
+    /// model, so it reports the model and not the provider. Two different states, two different
+    /// sentences.</summary>
+    [Fact]
+    public void A_file_with_no_version_and_no_provider_becomes_the_endpoint_with_no_model()
+    {
+        var settings = Configured("""{ "Providers": [] }""");
 
         Assert.Single(settings.Providers);
         Assert.Contains(EngineComposition.Missing(settings), m => m.Contains("No model is chosen"));
