@@ -197,6 +197,10 @@ jobs:
           E2E_NO_BUILD: "1"
           ENACTIVE_E2E_MYSQL: "Server=127.0.0.1;Port=3306;User ID=root;Password=enactive-dev;"
 
+      - name: Test the administrative directory in a browser
+        working-directory: tests/panel-e2e
+        run: npx playwright test --config admin.config.mjs
+
       # Only on a failure, and only for a week: the report, the traces and what the gateway and the computers
       # wrote are what a red run needs read, and nothing a green one does (see "Keep it" on storage).
       - name: Keep the browser tests' report

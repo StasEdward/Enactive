@@ -1,7 +1,8 @@
 # Remote Gateway administration
 
-Stage 2 provides administrator bootstrap, authentication, sessions, revocation, and a login page.
-User listings, registration decisions through the web, and quota editing are later implementation stages.
+Stages 2–3 provide administrator bootstrap, authentication, sessions, revocation, and a read-only
+directory with user details, registrations and overview counts. Web registration decisions and quota
+editing are later implementation stages.
 Existing account-management CLI commands remain available. Administration is disabled when all
 `ENACTIVE_ADMIN_*` settings below are absent. Partial configuration stops startup.
 
@@ -105,3 +106,34 @@ including while the web interface is disabled. Expired or revoked sessions are d
 their next request; cleanup timing does not determine access. Requests already authorized before a
 revocation commits may finish. Later web mutations must preserve transactional audit and their own
 authorization checks.
+
+## Read-only directory (stage 3)
+
+The signed-in page offers users and registrations, literal name search or exact ID/subject search,
+status filters, 25-row pages and account details. Registrations initially show waiting requests.
+Search/filter inputs remain available for retry after errors. Results and details are cleared on
+sign-out; late requests cannot restore them or replace a newer search.
+
+Authenticated endpoints on the administrative origin:
+
+- `GET /admin/api/overview`: user, disabled-user and waiting-registration counts.
+- `GET /admin/api/users`: `search`, `state` (`Active`/`Disabled`), `after`, `size`.
+- `GET /admin/api/registrations`: `search`, `state` (`Waiting`/`Approved`/`Refused`), `after`, `size`.
+- `GET /admin/api/users/{id}`: account metadata, resource counts and last recorded computer contact.
+
+Lists return `items` and a nullable `next` cursor. Pass `next` unchanged as URL-encoded `after`,
+keeping filters unchanged. Pages use existing primary-key indexes (user ID or provider/subject),
+not chronological ordering or offsets. Refresh starts again; pages are live views, not a snapshot.
+Maximum page size and search length are both 100. Literal substring search and aggregate overview
+counts may scan metadata; neither reads encrypted bodies. Last contact is not a live connectivity claim.
+Read endpoints share a separate 60-requests/minute budget per administrator so browsing cannot exhaust
+the sign-in/sign-out budget. The schema remains 10: this stage needs no migration or new settings.
+
+Responses deliberately omit credentials, session identifiers, tasks' encrypted content and keys.
+Stored bytes describe sealed-content accounting rather than total database disk usage. Resource counts
+include retained records; they are not yet effective quota usage or editable limits.
+
+Validation commands: the Gateway test project; `node --test "tests/panel/*.test.mjs"`; and, from
+`tests/panel-e2e`, `npx playwright test --config admin.config.mjs`. The latter uses the shipped UI
+with mocked API responses at desktop and mobile widths; signed OIDC and real database authorization
+are covered by the Gateway suite.

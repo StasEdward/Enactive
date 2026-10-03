@@ -57,6 +57,12 @@ internal static class AdminEndpoints
                     .ValidateRequestAsync(invocation.HttpContext);
             return await next(invocation);
         });
+        api.MapGet("/overview", (AdminDirectory directory, CancellationToken ct) => directory.OverviewAsync(ct)).RequireRateLimiting(RequestLimits.AdminRead);
+        api.MapGet("/users", (AdminDirectory directory, string? search, string? state, string? after, int? size, CancellationToken ct)
+            => directory.UsersAsync(search, state, after, size ?? 25, ct)).RequireRateLimiting(RequestLimits.AdminRead);
+        api.MapGet("/registrations", (AdminDirectory directory, string? search, string? state, string? after, int? size, CancellationToken ct)
+            => directory.RegistrationsAsync(search, state, after, size ?? 25, ct)).RequireRateLimiting(RequestLimits.AdminRead);
+        api.MapGet("/users/{id}", (AdminDirectory directory, string id, CancellationToken ct) => directory.UserAsync(id, ct)).RequireRateLimiting(RequestLimits.AdminRead);
         api.MapPost("/signout", async (HttpContext context, AdminStore store, CancellationToken ct) =>
         {
             await store.CloseAsync((AdminSession)context.Items[typeof(AdminSession)]!, ct);

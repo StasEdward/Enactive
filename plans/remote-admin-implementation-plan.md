@@ -2,7 +2,7 @@
 
 Date: 2026-10-03
 
-Status: stages 1 and 2 are implemented and tested locally. Stages 3–6 remain pending. The administrative login surface is disabled unless explicitly configured; user management and quota endpoints are not exposed yet.
+Status: stages 1–3 are implemented. Administrative login is deployed; the read-only directory is tested locally and awaiting deployment. Stages 4–6 remain pending.
 
 ## Objective
 
@@ -133,7 +133,15 @@ Stages 1 and 2 establish the shared behavior and security boundary before admini
 - Validation: isolated build passed without warnings; full Gateway suite passed 610 tests, with no skips. After adding the final callback-rate regression, all 23 administrative authentication tests passed. All 277 JavaScript panel tests passed, including four new administrative UI tests. Reports remain in `work/remote-admin-build/test-results/`.
 - The running Gateway was not restarted, no deployment configuration was changed, and no real administrator was granted access. Integration tests used disposable databases and an in-process signed OIDC provider.
 
-Next: stage 3, the read-only registration/user interface with bounded queries, search, filters, pagination, and metadata-only responses. The current shared waiting-list query preserves the CLI's full listing; add bounded pagination before exposing the web list. Stage 4 mutations must require the administrator/fresh policies themselves and carry the authenticated actor through their transactional audit.
+### Stage 3 — completed on 2026-10-04
+
+- Added protected metadata-only overview, user/registration lists and user details. Explicit projections omit encrypted payloads, credentials and keys.
+- Added primary-key cursor pagination (default 25, maximum 100), literal search, status filters, resource counts and last recorded computer contact. No database migration: schema remains 10.
+- Added the read-only directory UI, safe text rendering, retryable errors, stale-response protection, detail cards, and desktop/mobile layouts.
+- Added a separate administrator read budget so browsing does not consume the authentication/logout budget.
+- Validation: full Gateway suite passed 657 tests before the final rate-limit change; the final targeted directory/authentication suite passed 37 tests. All 284 JavaScript tests passed. Both Chromium browser tests passed at 1280px and 390px with mocked API responses; directory deployment is pending.
+
+Next: stage 4, approval/refusal, disable/enable and session revocation. Mutations must require the administrator/fresh policies and carry the authenticated actor through their transactional audit.
 
 ### Compatibility with the deployed schema 3 (2026-10-03)
 
@@ -141,7 +149,7 @@ Next: stage 3, the read-only registration/user interface with bounded queries, s
 - Added an upgrade regression using the actual schema 1/3 SQL and existing account/revocation/redemption records. Only migration 10 is applied; a repeated migration changes nothing.
 - Updated backup verification to require administrator tables only for schema 10 or later. Added seven checks covering valid older backups and missing administrator tables, wired into the reusable Gateway CI workflow.
 - Validation: 644 Gateway integration tests, 277 panel tests, and seven restore completeness checks passed. Tests used disposable local MySQL databases; production was not changed.
-- The Linux package is a stage-2 preview. Real Keycloak login and tunnel routing still require verification on the deployment. Stages 3–6 remain pending.
+- The initial Linux package was a stage-2 preview. The operator subsequently confirmed real Keycloak administrator login through the tunnel. The new directory package remains a separate deployment.
 
 ## Test and release criteria
 

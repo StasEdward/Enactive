@@ -74,6 +74,9 @@ jobs:
           E2E_CONFIGURATION: Release
           E2E_NO_BUILD: "1"
           ENACTIVE_E2E_MYSQL: "Server=127.0.0.1;Port=3306;User ID=root;Password=integration-only-password;SslMode=None"
+      - name: Test the administrative directory in a browser
+        working-directory: tests/panel-e2e
+        run: npx playwright test --config admin.config.mjs
       - name: Keep the browser tests' report
         if: failure()
         uses: actions/upload-artifact@v4

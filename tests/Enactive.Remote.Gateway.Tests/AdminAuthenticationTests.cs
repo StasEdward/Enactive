@@ -213,6 +213,65 @@ public sealed class AdminAuthenticationTests(TestDatabase database) : IClassFixt
         await AssertNoSessionAsync();
     }
 
+    [Theory]
+    [InlineData("/admin/api/overview")]
+    [InlineData("/admin/api/users")]
+    [InlineData("/admin/api/registrations")]
+    [InlineData("/admin/api/users/00000000000000000000000000000000")]
+    public async Task Directory_endpoints_require_a_live_administrator_on_the_admin_host(string path)
+    {
+        await using var gateway = Gateway();
+        using var client = Browser(gateway, out _);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync(path)).StatusCode);
+        using var panel = await PanelClient.SignedInAsync(gateway, Ids.New());
+        client.DefaultRequestHeaders.Add("Cookie", panel.Cookies.GetCookieHeader(panel.Http.BaseAddress!));
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync(path)).StatusCode);
+        client.DefaultRequestHeaders.Remove("Cookie");
+        using var publicClient = gateway.CreateDefaultClient(new Uri("https://panel.example.test"));
+        Assert.Equal(HttpStatusCode.NotFound, (await publicClient.GetAsync(path)).StatusCode);
+        await Store.GrantAsync(Identity, default);
+        using var callback = await LoginAsync(client);
+        using var authorized = await client.GetAsync(path);
+        Assert.Equal(path.EndsWith(new string('0', 32)) ? HttpStatusCode.NotFound : HttpStatusCode.OK, authorized.StatusCode);
+        Assert.True(authorized.Headers.CacheControl!.NoStore);
+        await Store.RevokeAsync(Identity, default);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync(path)).StatusCode);
+    }
+
+    [Fact]
+    public async Task Directory_responses_have_only_the_allowed_metadata_and_reject_invalid_input()
+    {
+        await using var gateway = Gateway();
+        using var client = Browser(gateway, out _);
+        var user = await TestAccounts.CreateAsync(database, Ids.New());
+        await Store.GrantAsync(Identity, default);
+        using var callback = await LoginAsync(client);
+        var json = await client.GetFromJsonAsync<System.Text.Json.JsonElement>("/admin/api/users?search=" + user.UserId);
+        var item = Assert.Single(json.GetProperty("items").EnumerateArray());
+        Assert.Equal(new[] { "createdAt", "displayName", "id", "sealedBytes", "status" },
+            item.EnumerateObject().Select(p => p.Name).Order(StringComparer.Ordinal));
+        var detail = await client.GetFromJsonAsync<System.Text.Json.JsonElement>("/admin/api/users/" + user.UserId);
+        Assert.Equal(new[] { "devices", "hosts", "lastHostSeenAt", "runs", "tasks", "user" },
+            detail.EnumerateObject().Select(p => p.Name).Order(StringComparer.Ordinal));
+        foreach (var path in new[] { "/users?size=101", "/users?size=abc", "/registrations?state=Active", "/registrations?after=bad" })
+            Assert.Equal(HttpStatusCode.BadRequest, (await client.GetAsync("/admin/api" + path)).StatusCode);
+    }
+
+    [Fact]
+    public async Task Directory_reads_are_bounded_without_exhausting_the_logout_budget()
+    {
+        await using var gateway = Gateway();
+        using var client = Browser(gateway, out _);
+        await Store.GrantAsync(Identity, default);
+        using var callback = await LoginAsync(client);
+        var session = await SessionAsync(client);
+        for (var i = 0; i < RequestLimits.AdminReadsPerMinute; i++)
+            Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/admin/api/overview")).StatusCode);
+        Assert.Equal(HttpStatusCode.TooManyRequests, (await client.GetAsync("/admin/api/users")).StatusCode);
+        client.DefaultRequestHeaders.Add("X-CSRF-TOKEN", session.CsrfToken);
+        Assert.Equal(HttpStatusCode.NoContent, (await client.PostAsync("/admin/api/signout", null)).StatusCode);
+    }
+
     private async Task AssertNoSessionAsync() => Assert.Equal(0, await database.ScalarLongAsync(
         "SELECT COUNT(*) FROM administrator_sessions WHERE administrator_id IN (SELECT id FROM administrators WHERE subject = '" + Identity.Subject + "')"));
     private WebApplicationFactory<Program> Gateway() => TestGateway.Create(database, configure: builder =>

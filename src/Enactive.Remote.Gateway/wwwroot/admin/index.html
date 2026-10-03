@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Enactive administration</title>
   <link rel="stylesheet" href="/admin/admin.css">
+  <script src="/admin/directory.js" defer></script>
   <script src="/admin/admin.js" defer></script>
 </head>
 <body>
@@ -16,7 +17,21 @@
     <a id="signin" href="/admin/auth/start" hidden>Sign in with MFA</a>
     <section id="session" hidden>
       <p id="expires"></p>
-      <p>User management and quotas will be available in a subsequent release.</p>
+      <section aria-labelledby="directory-title">
+        <h2 id="directory-title">Accounts and registrations</h2>
+        <p id="overview" aria-live="polite"></p>
+        <form id="directory-filter">
+          <label>View <select id="directory-kind"><option value="users">Users</option><option value="registrations">Registrations</option></select></label>
+          <label>Search <input id="directory-search" maxlength="100" type="search" placeholder="Name or exact ID"></label>
+          <label>Status <select id="directory-state"><option value="">All statuses</option><option>Active</option><option>Disabled</option></select></label>
+          <button type="submit">Search / refresh</button>
+        </form>
+        <p id="directory-status" role="status" aria-live="polite"></p>
+        <div class="table-scroll"><table><thead id="directory-head"></thead><tbody id="directory-rows"></tbody></table></div>
+        <div class="pagination"><button id="directory-previous" type="button" disabled>Previous</button><button id="directory-next" type="button" disabled>Next</button></div>
+        <section id="user-details" hidden aria-live="polite"><h3>User details</h3><dl id="user-fields"></dl></section>
+        <p class="note">Read-only preview. Registration decisions and quota editing are coming next. Stored bytes cover encrypted content, not database indexes, logs or backups.</p>
+      </section>
       <a href="/admin/auth/start">Authenticate again</a>
       <button id="signout" type="button">Sign out</button>
     </section>
