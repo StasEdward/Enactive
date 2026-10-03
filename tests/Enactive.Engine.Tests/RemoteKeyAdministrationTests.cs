@@ -793,6 +793,59 @@ public sealed class RemoteKeyAdministrationTests
     }
 
     /// <summary>
+    /// A removal this computer received - written down and acknowledged - and had not yet carried out when the
+    /// application closed is carried out when it starts again, whatever the gateway does meanwhile: Sync failing
+    /// on every connection, or no connection at all. Handed back only after a Sync that worked, the removal
+    /// waited for the gateway, and the device stayed trusted here exactly while the gateway was not there. It
+    /// rotates once, however many times the service goes round.
+    /// </summary>
+    [WindowsTheory]
+    [InlineData("sync fails")]
+    [InlineData("unreachable")]
+    public async Task A_removal_already_received_is_carried_out_without_the_gateway(string gatewayIs)
+    {
+        using var fx = new EngineFixture();
+        var database = fx.PathOf("remote.db");
+        var settings = new RemoteAccessSettings();
+        var (code, device) = NewCode();
+        using var _ = device;
+        await RemoteAccessService.ConnectWithCodeAsync(code, settings, database, NeverAsked);
+        using var phone = P256.Generate();
+        using (var store = new HostStore(database))
+        using (var keys = new HostKeyStore(store, code.HostId))
+        {
+            TrustDevice(keys, "phone", phone, "Phone");
+            var removal = new FixedHostKeys(code.HostId, keys.Current).Revoke("phone");
+            store.Accept(removal);
+            store.MarkAcknowledged(removal.Id);
+        }
+
+        var gateway = new FakeGateway { SyncRefusal = new IOException("The connection to the gateway closed.") };
+        var attempts = 0;
+        Func<CancellationToken, Task<IGatewayConnection>> connect = gatewayIs == "unreachable"
+            ? _ => { Interlocked.Increment(ref attempts); return Task.FromException<IGatewayConnection>(new IOException("The gateway is down.")); }
+            : _ => { Interlocked.Increment(ref attempts); return Task.FromResult<IGatewayConnection>(gateway); };
+
+        var said = new ConcurrentQueue<string>();
+        await using (var service = new RemoteAccessService(settings, keys: null,
+            _ => throw new InvalidOperationException("No composition expected"), () => [], fx.Decisions, database,
+            connect, firstRetry: TimeSpan.FromMilliseconds(20)))
+        {
+            service.Changed += () => said.Enqueue(service.Status);
+            service.Start();
+            await Until(() => Volatile.Read(ref attempts) >= 3);
+        }
+
+        Assert.Single(said, status => status.StartsWith("Phone was removed from the browser", StringComparison.Ordinal));
+        using (var store = new HostStore(database))
+        using (var keys = new HostKeyStore(store, code.HostId))
+        {
+            Assert.Equal([code.DeviceId], keys.Live.Select(d => d.DeviceId));
+            Assert.Equal(2u, keys.Current.Epoch);
+        }
+    }
+
+    /// <summary>
     /// A computer that was asleep while a phone was lost and removed hears of the removal in the same Sync as
     /// whatever was queued under the old key - by the thief, or by the phone before it was lost: a start, and an
     /// endorsement of a stand-in device. The removal is carried out first, whatever order the gateway listed

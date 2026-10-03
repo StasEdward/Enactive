@@ -87,6 +87,9 @@ public sealed class DeliveryLoop(HostStore store, IGatewayConnection gateway, Se
     /// so the first turn after a start brings back what the last process left, and every turn brings
     /// back what an earlier one could not finish. A start handed back twice still runs once: the
     /// runner claims it before it runs (<see cref="HostStore.BeginRun"/>).</para>
+    ///
+    /// <para>A turn whose Sync failed on the way throws, as before, so the caller connects again; what
+    /// the inbox owes meanwhile it asks for with <see cref="Owed()"/>.</para>
     /// </summary>
     public async Task<IReadOnlyList<HostCommand>> TurnAsync(
         IReadOnlyList<WorkspaceRef> workspaces, CancellationToken ct = default)
@@ -125,10 +128,12 @@ public sealed class DeliveryLoop(HostStore store, IGatewayConnection gateway, Se
         }
         catch (GatewayRefusedException refused) when (refused.Disposition == FaultDisposition.Fatal)
         {
-            // The credential is gone or the protocols differ. Reconnecting hears the same answer.
+            // The credential is gone or the protocols differ. Reconnecting hears the same answer. What
+            // was received before is still the owner's, and a removal among it protects them most
+            // exactly when the gateway will no longer take this computer's calls.
             Stopped = true;
             Notice(new DeliveryNotice("Stopped", $"{refused.Code} - {refused.Message}"));
-            return [];
+            return Owed([]);
         }
 
         var acknowledging = true;
@@ -171,7 +176,18 @@ public sealed class DeliveryLoop(HostStore store, IGatewayConnection gateway, Se
     }
 
     /// <summary>
-    /// Every command written down and not yet carried out, in <see cref="CommandOrder"/>.
+    /// What the inbox owes, asked for without the gateway: at start, before the first connection, and after
+    /// a turn the gateway failed in.
+    ///
+    /// <para>Carrying out what was received needs nothing from the gateway. Handed back only by a turn whose
+    /// Sync worked, a removal already received waited for the gateway - and the device stayed trusted here
+    /// exactly while the gateway could not be reached.</para>
+    /// </summary>
+    public IReadOnlyList<HostCommand> Owed() => Owed([]);
+
+    /// <summary>
+    /// Every command written down and not yet carried out, in <see cref="CommandOrder"/> - the one path
+    /// every caller's commands go through - after saying which device commands outlived their lifetime.
     ///
     /// <para>As the inbox has it, never as the gateway just sent it: a redelivery under the same id is
     /// written down as nothing new, and acting on its text instead would let the gateway change a
@@ -180,11 +196,41 @@ public sealed class DeliveryLoop(HostStore store, IGatewayConnection gateway, Se
     /// </summary>
     private IReadOnlyList<HostCommand> Owed(IReadOnlyList<HostCommand> synced)
     {
-        var owed = store.Unapplied(DateTimeOffset.UtcNow).Select(stored =>
+        var now = DateTimeOffset.UtcNow;
+
+        foreach (var expired in store.TakeExpired(now))
+        {
+            if (DroppedDeviceCommand(expired) is { } said)
+            {
+                Notice(new DeliveryNotice("Expired", said));
+            }
+        }
+
+        var owed = store.Unapplied(now).Select(stored =>
             synced.FirstOrDefault(c => c.Id == stored.Id && c.Kind == stored.Kind && c.Payload == stored.Payload)
                 ?? stored);
 
         return CommandOrder.Arrange(owed);
+    }
+
+    /// <summary>
+    /// What a person is told of a removal or an endorsement that outlived its lifetime without being carried
+    /// out, and null for the other kinds: a start or a cancel a day old has its run to say what became of it,
+    /// while a device command has nothing - the person removed the device in a browser and would go on
+    /// believing it removed here.
+    /// </summary>
+    private static string? DroppedDeviceCommand(HostCommand expired)
+    {
+        var received = expired.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
+
+        return expired.Kind switch
+        {
+            CommandKind.RevokeDevice =>
+                $"A device removal received on {received} was never carried out on this computer; remove the device again.",
+            CommandKind.EndorseDevice =>
+                $"A device endorsement received on {received} was never carried out on this computer; add the device again.",
+            _ => null
+        };
     }
 
     /// <summary>

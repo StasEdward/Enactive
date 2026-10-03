@@ -63,7 +63,9 @@ public sealed class HostStore : IDisposable
               payload         TEXT NOT NULL,
               received_at     TEXT NOT NULL,
               acknowledged_at TEXT NULL,
-              applied_at      TEXT NULL
+              applied_at      TEXT NULL,
+              attempts        INTEGER NOT NULL DEFAULT 0,
+              last_failure    TEXT NULL
             );
 
             CREATE TABLE IF NOT EXISTS outbox (
@@ -132,6 +134,24 @@ public sealed class HostStore : IDisposable
               since     TEXT NOT NULL
             );
             """);
+
+        // A database made before the inbox counted failed attempts is upgraded in place. SQLite has no
+        // "ADD COLUMN IF NOT EXISTS", and a duplicate column here is the success case: the column is there.
+        try
+        {
+            Execute("ALTER TABLE inbox ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0;");
+            Execute("ALTER TABLE inbox ADD COLUMN last_failure TEXT NULL;");
+
+            // Added just now, so this database is from before the inbox was read for what it owes, when
+            // nothing but a start was ever marked carried out. Its rows past their lifetime cannot be told
+            // apart from lost ones, and can no longer be carried out either way; said one by one, each
+            // removal among them would tell the person a device they removed was never removed here.
+            TakeExpired(DateTimeOffset.UtcNow);
+        }
+        catch (SqliteException)
+        {
+            // Already has them.
+        }
     }
 
     /// <summary>
@@ -228,22 +248,89 @@ public sealed class HostStore : IDisposable
     /// <para>The command is as it was written down. Its routing fields the inbox does not keep - nothing
     /// on this computer reads them, the sealer opens every command against this computer's own id - so
     /// the host id is empty, and the time it was made and the time it expires are counted from receipt.</para>
+    ///
+    /// <para>A database from before the inbox was read this way holds cancels, answers, removals and
+    /// endorsements that were carried out and never marked, since nothing marked them then. Those still
+    /// within their lifetime are met once more after the upgrade, where carrying them out again changes
+    /// nothing - but a removal already made is refused as sealed under the key it replaced, and that
+    /// refusal is said once.</para>
     /// </summary>
     public IReadOnlyList<HostCommand> Unapplied(DateTimeOffset now)
     {
+        using var guard = _gate.EnterScope();
+        return [.. ReadUnapplied(null).Where(c => c.ExpiresAt > now)];
+    }
+
+    /// <summary>
+    /// Every command not carried out that has outlived what a command of its kind may wait, marked carried
+    /// out - given up on - and returned, so the caller can say which were dropped. Once: a command taken here
+    /// is not met again.
+    ///
+    /// <para>Left unmarked, such a row was skipped without a word on every turn for ever. For a removal that
+    /// meant a device the person removed in a browser, refused by the gateway, still trusted here - and
+    /// nobody told.</para>
+    /// </summary>
+    public IReadOnlyList<HostCommand> TakeExpired(DateTimeOffset now)
+    {
+        using var guard = _gate.EnterScope();
+        using var transaction = _connection.BeginTransaction();
+
+        var expired = ReadUnapplied(transaction).Where(c => c.ExpiresAt <= now).ToList();
+        foreach (var command in expired)
+        {
+            MarkApplied(_connection, transaction, command.Id);
+        }
+
+        transaction.Commit();
+        return expired;
+    }
+
+    /// <summary>
+    /// Counts a failed attempt at carrying a command out, and says how many there have been and whether this
+    /// failure says something the last one did not. Null when the inbox has no such command.
+    /// </summary>
+    public (int Attempts, bool NewReason)? RecordFailure(string commandId, string reason)
+    {
+        using var guard = _gate.EnterScope();
+        using var transaction = _connection.BeginTransaction();
+
+        using var read = _connection.CreateCommand();
+        read.Transaction = transaction;
+        read.CommandText = "SELECT attempts, last_failure FROM inbox WHERE command_id = $id";
+        Bind(read, "$id", commandId);
+
+        int attempts;
+        string? last;
+        using (var reader = read.ExecuteReader())
+        {
+            if (!reader.Read())
+            {
+                return null;
+            }
+
+            attempts = reader.GetInt32(0) + 1;
+            last = reader.IsDBNull(1) ? null : reader.GetString(1);
+        }
+
+        Execute(transaction, "UPDATE inbox SET attempts = $attempts, last_failure = $reason WHERE command_id = $id",
+            ("$attempts", attempts), ("$reason", reason), ("$id", commandId));
+
+        transaction.Commit();
+        return (attempts, !string.Equals(last, reason, StringComparison.Ordinal));
+    }
+
+    /// <summary>Every row not carried out, oldest first, with its expiry counted from receipt. The caller holds the lock.</summary>
+    private List<HostCommand> ReadUnapplied(SqliteTransaction? transaction)
+    {
         var commands = new List<HostCommand>();
 
-        using var guard = _gate.EnterScope();
         using var statement = _connection.CreateCommand();
-
-        // Nothing received longer ago than the longest lifetime there is can still be owed: kept out
-        // here, so the rows a long-running computer piles up are not read on every turn.
+        statement.Transaction = transaction;
         statement.CommandText = """
             SELECT command_id, kind, payload, received_at FROM inbox
-            WHERE applied_at IS NULL AND received_at > $oldest
+            WHERE applied_at IS NULL
             ORDER BY received_at, rowid
             """;
-        Bind(statement, "$oldest", (now - RemoteProtocol.DeviceCommandLifetime).ToUniversalTime().ToString("O"));
 
         using var reader = statement.ExecuteReader();
         while (reader.Read())
@@ -258,16 +345,10 @@ public sealed class HostStore : IDisposable
             var received = DateTimeOffset.Parse(
                 reader.GetString(3), System.Globalization.CultureInfo.InvariantCulture,
                 System.Globalization.DateTimeStyles.RoundtripKind);
-            var expires = received + RemoteProtocol.LifetimeOf(kind);
-
-            if (expires <= now)
-            {
-                continue;
-            }
 
             commands.Add(new HostCommand(
                 reader.GetString(0), string.Empty, kind, reader.GetString(2),
-                CommandStatus.AcceptedByHost, received, expires));
+                CommandStatus.AcceptedByHost, received, received + RemoteProtocol.LifetimeOf(kind)));
         }
 
         return commands;
