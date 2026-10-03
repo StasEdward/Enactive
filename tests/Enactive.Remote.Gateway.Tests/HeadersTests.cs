@@ -168,6 +168,13 @@ public sealed class HeadersTests(TestDatabase database) : IClassFixture<TestData
 
         foreach (var (path, hash) in listed)
         {
+            // The release manifest covers every shipped asset, including the separate admin
+            // surface. Those files must not become public just to make hash verification possible.
+            if (path.StartsWith("/admin/", StringComparison.OrdinalIgnoreCase))
+            {
+                Assert.Equal(HttpStatusCode.NotFound, (await _http.GetAsync(path)).StatusCode);
+                continue;
+            }
             var served = await _http.GetByteArrayAsync(path);
 
             Assert.Equal(hash, Convert.ToHexStringLower(SHA256.HashData(served)));

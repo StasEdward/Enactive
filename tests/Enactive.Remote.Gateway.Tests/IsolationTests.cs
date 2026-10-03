@@ -895,8 +895,12 @@ public sealed class IsolationTests(TestDatabase database) : IClassFixture<TestDa
         var all = await database.StringsAsync(
             "SELECT table_name FROM information_schema.tables WHERE table_schema = DATABASE()");
 
-        // Nobody's: the allow-list of who may sign up, and the migrator's own bookkeeping.
-        var ownedByNobody = new HashSet<string> { "admissions", "schema_version" };
+        // Not owned by ordinary users: admission, migration bookkeeping, and the independent
+        // administrator security domain. User deletion must never cascade through this domain.
+        var ownedByNobody = new HashSet<string>
+        {
+            "admissions", "schema_version", "administrators", "administrator_sessions", "administrator_audit"
+        };
 
         Assert.DoesNotContain(all, t => !owned.Contains(t) && !ownedByNobody.Contains(t));
         Assert.Contains("tasks", owned);

@@ -1,0 +1,50 @@
+# The HTTPS reverse proxy runs on the host. Do not publish these ports on all interfaces:
+# Keycloak trusts proxy headers, and a public HTTP listener would allow header spoofing.
+name: enactive-keycloak
+services:
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?Set a generated database password}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U keycloak -d keycloak']
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    logging:
+      driver: json-file
+      options: { max-size: '10m', max-file: '3' }
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.8.0
+    command: [start]
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?Set a generated database password}
+      KC_HOSTNAME: ${KEYCLOAK_ORIGIN:?Set the public HTTPS origin}
+      KC_HOSTNAME_STRICT: 'true'
+      KC_HTTP_ENABLED: 'true'
+      KC_PROXY_HEADERS: xforwarded
+      KC_HEALTH_ENABLED: 'true'
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_BOOTSTRAP_USER:?Set the temporary administrator username}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_BOOTSTRAP_PASSWORD:?Set a generated bootstrap password}
+    ports:
+      - '127.0.0.1:8180:8080'
+      - '127.0.0.1:9190:9000'
+    # The JVM sizes its heap from container memory; a limit prevents competition with Gateway.
+    mem_limit: 2g
+    logging:
+      driver: json-file
+      options: { max-size: '10m', max-file: '3' }
+volumes:
+  postgres-data:

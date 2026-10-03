@@ -79,6 +79,7 @@ public sealed class SchemaTests(TestDatabase database) : IClassFixture<TestDatab
         Assert.Equal(
             new[]
             {
+                "administrator_audit", "administrator_sessions", "administrators",
                 "admissions", "approvals", "audit", "commands", "devices", "enrollments", "events",
                 "external_identities", "grants", "host_workspaces", "hosts", "invites", "notices", "runs",
                 "schema_version", "tasks", "user_retention", "user_sessions", "user_streams", "users"
@@ -105,7 +106,7 @@ public sealed class SchemaTests(TestDatabase database) : IClassFixture<TestDatab
 
         var reapplied = await Migrator.ApplyAsync(database.ConnectionString);
 
-        Assert.Equal([1], Migrator.KnownVersions());
+        Assert.Equal([1, 10], Migrator.KnownVersions());
         Assert.Equal(Migrator.KnownVersions(), reapplied);
         Assert.Equal(
             Migrator.KnownVersions(),
@@ -140,12 +141,13 @@ public sealed class SchemaTests(TestDatabase database) : IClassFixture<TestDatab
     /// call failed on tables of another shape: the install was reported a success and the service was down for
     /// everyone. It refuses to start instead, with what to do, and changes nothing.
     /// </summary>
-    [Fact]
-    public async Task A_database_of_another_protocol_stops_the_start_with_the_cutovers_instructions()
+    [Theory]
+    [InlineData(2)] // Protocol 1's version must stay unknown even as this protocol adds migrations.
+    [InlineData(int.MaxValue)]
+    public async Task A_database_of_another_protocol_stops_the_start_with_the_cutovers_instructions(int unknown)
     {
         await database.WithScratchDatabaseAsync("utf8mb4", "utf8mb4_0900_ai_ci", async connectionString =>
         {
-            var unknown = Migrator.KnownVersions().Max() + 1;
             await using (var connection = new MySqlConnection(connectionString))
             {
                 await connection.OpenAsync();

@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Enactive administration</title>
+  <link rel="stylesheet" href="/admin/admin.css">
+  <script src="/admin/admin.js" defer></script>
+</head>
+<body>
+  <main>
+    <p class="eyebrow">ENACTIVE · ADMINISTRATION</p>
+    <h1>Server administration</h1>
+    <p id="status" role="status" aria-live="polite">Checking your session…</p>
+    <p id="error" role="alert" hidden></p>
+    <a id="signin" href="/admin/auth/start" hidden>Sign in with MFA</a>
+    <section id="session" hidden>
+      <p id="expires"></p>
+      <p>User management and quotas will be available in a subsequent release.</p>
+      <a href="/admin/auth/start">Authenticate again</a>
+      <button id="signout" type="button">Sign out</button>
+    </section>
+    <p class="note">Access is granted by the server operator. Signing in does not create an administrator.</p>
+  </main>
+</body>
+</html>
