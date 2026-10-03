@@ -1,5 +1,6 @@
 namespace Enactive.Engine.Tests;
 
+using Enactive.Core.Events;
 using Enactive.Core.History;
 using Enactive.Core.Permissions;
 using Enactive.Core.Templates;
@@ -33,6 +34,53 @@ public sealed class RunHousekeepingTests
     }
 
     /// <summary>
+    /// A run that stopped at a question, or at a cause it cannot remove, has not done its work: it
+    /// is kept to be carried on. Both outcomes were added after the filter was written, were in no
+    /// list, and so fell through to "finished" - shown under Completed, where "Delete these N"
+    /// removes them along with the runs that are really over, and absent from Unfinished, where
+    /// somebody looks for what still needs them.
+    /// </summary>
+    [Theory]
+    [InlineData("Blocked")]
+    [InlineData("NeedsUser")]
+    public void A_run_waiting_to_be_carried_on_is_unfinished_and_not_completed(string status)
+    {
+        Assert.True(RunHousekeeping.Matches(Run(status), RunFilter.Unfinished, Now));
+        Assert.False(RunHousekeeping.Matches(Run(status), RunFilter.Completed, Now));
+    }
+
+    /// <summary>
+    /// Every outcome the engine can record, and which side of the filter it is on - written out
+    /// here, one by one. An outcome missing from this table fails the test: that is how Blocked
+    /// and NeedsUser went wrong, by being added to the enum and inheriting "finished" from a list
+    /// nobody was made to revisit.
+    /// </summary>
+    private static readonly Dictionary<RunOutcomeKind, bool> IsUnfinished = new()
+    {
+        [RunOutcomeKind.Completed] = false,
+        [RunOutcomeKind.Failed] = true,
+        [RunOutcomeKind.Incomplete] = true,
+        [RunOutcomeKind.Cancelled] = true,
+        [RunOutcomeKind.NeedsUser] = true,
+        [RunOutcomeKind.Blocked] = true
+    };
+
+    [Fact]
+    public void Every_outcome_the_engine_records_is_classified_on_purpose()
+    {
+        foreach (var kind in Enum.GetValues<RunOutcomeKind>())
+        {
+            Assert.True(IsUnfinished.TryGetValue(kind, out var unfinished),
+                $"{kind} is a new outcome: decide whether it is unfinished, here and in RunHousekeeping.");
+
+            // The name, because that is what the recorder stores as the run's status.
+            var run = Run(kind.ToString());
+            Assert.True(unfinished == RunHousekeeping.Matches(run, RunFilter.Unfinished, Now), $"{kind} under Unfinished");
+            Assert.True(!unfinished == RunHousekeeping.Matches(run, RunFilter.Completed, Now), $"{kind} under Completed");
+        }
+    }
+
+    /// <summary>
     /// A status this build does not know is treated as finished, so a bulk delete under
     /// "unfinished" cannot sweep up a run whose outcome it could not read. The safe direction is the
     /// one that keeps a record somebody may want.
@@ -41,6 +89,7 @@ public sealed class RunHousekeepingTests
     public void A_status_from_a_future_build_is_not_swept_up()
     {
         Assert.False(RunHousekeeping.Matches(Run("Quarantined"), RunFilter.Unfinished, Now));
+        Assert.True(RunHousekeeping.Matches(Run("Quarantined"), RunFilter.Completed, Now));
         Assert.True(RunHousekeeping.Matches(Run("Quarantined"), RunFilter.All, Now));
     }
 
