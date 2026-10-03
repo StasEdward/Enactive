@@ -271,18 +271,6 @@ public sealed class ExecutionJournal
 
     private volatile bool _resumed;
 
-    /// <summary>Whether anything recorded from <paramref name="from"/> on used one of these tools.</summary>
-    public bool UsedAny(IReadOnlyCollection<string> tools, int from = 0)
-    {
-        lock (_gate)
-            for (var i = Math.Max(0, from); i < _actions.Count; i++)
-                foreach (var tool in tools)
-                    if (string.Equals(_actions[i].Tool, tool, StringComparison.OrdinalIgnoreCase))
-                        return true;
-
-        return false;
-    }
-
     /// <summary>
     /// The default size of the whole evidence block, shared between every call's output.
     ///

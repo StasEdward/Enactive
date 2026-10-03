@@ -114,10 +114,6 @@ public static class ToolEffects
         }
         catch (JsonException) { return null; }
     }
-
-    public static bool ChangesProject(WorkspaceEffect effect, IReadOnlyList<string>? paths, string? root)
-        => effect == WorkspaceEffect.Changed && (root is null || paths is null || paths.Count == 0
-            || paths.Any(path => !WorkspaceGuard.IsScratchRelative(root, path)));
 }
 
 /// <summary>
