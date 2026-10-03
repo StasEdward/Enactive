@@ -98,7 +98,11 @@ internal static class PlanCheckContract
                 throw new JsonException("Action policy needs verbatim provenance, known tools and simple command prefixes.");
             if (names.Any(n => tools!.Any(t => t.Name == n && t.Kind == ToolKind.Command && t.CommandPolicy == CommandPolicySyntax.None)))
                 throw new JsonException("allowed_tools contains a command adapter with commandPolicy=None; select supported adapters from the inventory.");
-            actionPolicy = new(names, prefixes, quote, reason);
+            actionPolicy = new(names, prefixes, quote, reason)
+            {
+                // A list of command tools bounds commands, not the file tools (TaskActionPolicy.CommandsOnly).
+                CommandsOnly = names.Length > 0 && names.All(n => tools!.Any(t => t.Name == n && t.Kind == ToolKind.Command))
+            };
         }
         if (inputs.ActionPolicy is not null && (actionPolicy is null || !inputs.ActionPolicy.SameAs(actionPolicy)))
             throw new JsonException("Previously established action policy cannot be removed or changed.");

@@ -413,10 +413,12 @@ public sealed class Planner
                 }
 
                 var plan = disposition == IntentDisposition.Task ? DagPlan.FromSpecs(specs) : null;
+                var notes = new List<string>();
                 return new PlanResult(disposition, Truncate(title, 80), plan, Readout: readout)
                 {
-                    Checks = ParseChecks(root, fallbackTitle),
-                    PlannedCriteria = TypedCriteria.Read(root)
+                    Checks = ParseChecks(root, fallbackTitle, notes),
+                    PlannedCriteria = TypedCriteria.Read(root),
+                    ContractNotes = notes
                 };
             }
             catch (JsonException)
@@ -445,7 +447,7 @@ public sealed class Planner
     /// request passage and may describe an expected negative result. Extracting the user's intent
     /// remains the planner's semantic responsibility; source membership is checked in code.</para>
     /// </summary>
-    private static IReadOnlyList<SuccessCriterionDefinition> ParseChecks(JsonElement root, string request)
+    private static IReadOnlyList<SuccessCriterionDefinition> ParseChecks(JsonElement root, string request, List<string> notes)
     {
         if (!root.TryGetProperty("checks", out var checks) || checks.ValueKind != JsonValueKind.Array)
             return Array.Empty<SuccessCriterionDefinition>();
@@ -466,10 +468,22 @@ public sealed class Planner
 
             var name = Text(el, "name");
             var quote = Text(el, "request_quote");
-            if (!string.IsNullOrWhiteSpace(quote)
-                && (!request.Contains(quote, StringComparison.Ordinal)
-                    || !quote.Contains(command!.Trim(), StringComparison.Ordinal)))
+            // A passage the request does not contain is invented provenance, and the answer is not read at all.
+            if (!string.IsNullOrWhiteSpace(quote) && !request.Contains(quote, StringComparison.Ordinal))
                 throw new JsonException("A requested check must quote its exact command from the original request.");
+            // A passage the request DOES contain, which does not itself hold the command, is another matter: the
+            // person wrote it, and it does not show that they asked for this command. On 2026-10-04 a request said
+            // "Test command: X" and a line later "Run the tests with THAT command and no other"; the planner quoted
+            // the second sentence, and the whole answer - three steps with it - was thrown away as "not a plan",
+            // twice, so the run went on as one unplanned action. The check is kept as what it can be shown to be,
+            // the planner's own proposal (no claim of the person's word, and so the exit code a proposal expects),
+            // and the review of the final checks reads the request again and may restore it as requested.
+            if (!string.IsNullOrWhiteSpace(quote) && !quote.Contains(command!.Trim(), StringComparison.Ordinal))
+            {
+                notes.Add($"Planner check '{command.Trim()}' kept as a proposal, not as requested: the passage quoted for it "
+                    + "does not contain the command.");
+                quote = null;
+            }
             var expectedExit = !string.IsNullOrWhiteSpace(quote)
                 && el.TryGetProperty("expectedExitCode", out var code) && code.ValueKind == JsonValueKind.Number
                 && code.TryGetInt32(out var exit) ? exit : 0;
