@@ -41,6 +41,26 @@ public sealed class SessionStore(Database db, TimeProvider clock)
     /// </summary>
     internal async Task<(UserAccess Access, int SecurityVersion)> OpenWithVersionAsync(
         string userId, string provider, CancellationToken ct)
+        => await OpenSessionAsync(userId, provider, issued: null, ct)
+           ?? throw new InvalidOperationException("A session opened with no answer to compare was refused as a stale one.");
+
+    /// <summary>
+    /// As <see cref="OpenWithVersionAsync"/>, for a sign-in with a provider's answer issued at
+    /// <paramref name="issued"/>, already redeemed (<see cref="AccountService.SignInAsync"/>): null, and no
+    /// session, when the account's sessions were last ended at or after that moment
+    /// (<see cref="RevokeAllAsync(string, CancellationToken)"/>).
+    ///
+    /// <para>The answer is a protected ticket good for ten minutes. A copy kept from before "Sign out
+    /// everywhere" opened a session after it, stamped with the account's new version, so the version could not
+    /// tell. The revocation time is read under the same shared lock as the status, so a revocation committing
+    /// now either comes first and is seen, or waits and ends this session after it.</para>
+    /// </summary>
+    internal Task<(UserAccess Access, int SecurityVersion)?> OpenIssuedAsync(
+        string userId, string provider, DateTimeOffset issued, CancellationToken ct)
+        => OpenSessionAsync(userId, provider, issued, ct);
+
+    private async Task<(UserAccess Access, int SecurityVersion)?> OpenSessionAsync(
+        string userId, string provider, DateTimeOffset? issued, CancellationToken ct)
     {
         await using var connection = await db.OpenAsync(ct);
         await using var transaction = await connection.BeginAsync(ct);
@@ -48,8 +68,11 @@ public sealed class SessionStore(Database db, TimeProvider clock)
         // Shared, so a disablement or a revoke-all committing now is ordered with this: it either comes
         // first and this sees it, or waits for this session to exist and then ends it too.
         var account = await connection.ReadOneAsync(transaction,
-            "SELECT status, security_version FROM users WHERE id = @id FOR SHARE",
-            reader => (Status: reader.GetString("status"), Version: reader.GetInt32("security_version")),
+            "SELECT status, security_version, sessions_revoked_at FROM users WHERE id = @id FOR SHARE",
+            reader => (
+                Status: reader.GetString("status"),
+                Version: reader.GetInt32("security_version"),
+                RevokedAt: reader.UtcOrNull("sessions_revoked_at")),
             ("@id", userId));
 
         if (account.Status is null)
@@ -64,6 +87,13 @@ public sealed class SessionStore(Database db, TimeProvider clock)
 
         var sessionId = Ids.New();
         var now = clock.GetUtcNow();
+
+        // "At or after": both are kept to the millisecond, and an answer made in the same millisecond as the
+        // revocation cannot be shown to have come after it.
+        if (issued is { } answered && account.RevokedAt is { } revoked && revoked >= answered)
+        {
+            return null;
+        }
 
         await connection.ExecuteAsync(transaction,
             """
@@ -134,14 +164,21 @@ public sealed class SessionStore(Database db, TimeProvider clock)
     /// <summary>
     /// The person signing themselves out everywhere: ends every session of the account, and moves its
     /// security version on. The version is what makes this complete: a session opened by a sign-in racing
-    /// this one is stamped with the old version whichever way the race goes, and no longer matches. Written
-    /// to the account's security log as the person's own act; the operator's revocation is written as the
-    /// operator's (<see cref="AdminCommands"/>).
+    /// this one is stamped with the old version whichever way the race goes, and no longer matches. And it
+    /// records when, so a provider's answer issued before it opens no session after it
+    /// (<see cref="OpenIssuedAsync"/>). Written to the account's security log as the person's own act; the
+    /// operator's revocation is written as the operator's (<see cref="AdminCommands"/>).
     /// </summary>
     public async Task RevokeAllAsync(string userId, CancellationToken ct)
     {
         await using var connection = await db.OpenAsync(ct);
         await using var transaction = await connection.BeginAsync(ct);
+
+        // The account locked before the time is read, as the operator's commands do. Read first, the time was
+        // that of the start of a wait behind any sign-in holding the account, and an answer issued during the
+        // wait counted as issued after the revocation it was older than in effect, and opened a session.
+        await connection.ExecuteAsync(transaction,
+            "SELECT 1 FROM users WHERE id = @user FOR UPDATE", ("@user", userId));
         var now = clock.GetUtcNow();
 
         await RevokeAllAsync(connection, transaction, userId, now);
@@ -156,14 +193,18 @@ public sealed class SessionStore(Database db, TimeProvider clock)
     /// Disabling an account has to end its sessions in the same transaction that sets its status: done
     /// as a second step, a failure between the two left a disabled account whose sessions were still
     /// being refused only by the status check, and an account enabled again would have woken them up.
+    /// The caller has locked the account before reading <paramref name="now"/>, for the reason given in
+    /// <see cref="RevokeAllAsync(string, CancellationToken)"/>.
     /// </summary>
     internal static async Task RevokeAllAsync(
         MySqlConnection connection, MySqlTransaction transaction, string userId, DateTimeOffset now)
     {
-        // The account first, which is the order a sign-in takes them in.
+        // The account first, which is the order a sign-in takes them in. The time in the same statement as the
+        // version: a provider's answer from before this would otherwise still open a session after it, stamped
+        // with the new version, and signing out everywhere would not have signed out the copy somebody kept.
         await connection.ExecuteAsync(transaction,
-            "UPDATE users SET security_version = security_version + 1 WHERE id = @user",
-            ("@user", userId));
+            "UPDATE users SET security_version = security_version + 1, sessions_revoked_at = @now WHERE id = @user",
+            ("@now", now), ("@user", userId));
 
         await connection.ExecuteAsync(transaction,
             "UPDATE user_sessions SET revoked_at = @now WHERE user_id = @user AND revoked_at IS NULL",

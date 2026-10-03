@@ -67,6 +67,16 @@ public sealed class Retention(Database database, int days)
     public const int DefaultDays = 30;
 
     /// <summary>
+    /// How long the record of a redeemed sign-in is kept. It is what refuses a second redemption of the same
+    /// provider's answer, and is needed only while that answer can still be presented: ten minutes
+    /// (<see cref="Accounts.ExternalSignIn.AnswerLifetime"/>), after which the cookie handler refuses the ticket
+    /// whatever this table says. Keeping it a day is harmless - a random id nobody can present again, and room
+    /// for a clock that was set back. Keeping it for good is not: every sign-in writes one, and the table would
+    /// grow by every sign-in there ever was.
+    /// </summary>
+    public static readonly TimeSpan RedemptionsKept = TimeSpan.FromDays(1);
+
+    /// <summary>
     /// Runs removed per statement. Fewer than <see cref="Batch"/>, because each takes its requests, notices,
     /// commands and any events still left with it, all in one transaction under the account's lock.
     /// </summary>
@@ -86,7 +96,8 @@ public sealed class Retention(Database database, int days)
         var auditCutoff = DateTimeOffset.UtcNow.AddDays(-AuditDays);
         await using var connection = await database.OpenAsync(ct);
 
-        var removed = 0;
+        // Nobody's rows, so not per owner: the redemptions name no account.
+        var removed = await TrimRedemptionsAsync(connection, DateTimeOffset.UtcNow - RedemptionsKept, ct);
         var after = "";
 
         while (!ct.IsCancellationRequested)
@@ -334,6 +345,31 @@ public sealed class Retention(Database database, int days)
             if (tasks.Count < RunBatch)
             {
                 return total;
+            }
+        }
+
+        return total;
+    }
+
+    /// <summary>
+    /// The records of sign-ins redeemed before the cutoff (<see cref="RedemptionsKept"/>), oldest first through
+    /// their time key, a batch per statement for the reason <see cref="Batch"/> gives.
+    /// </summary>
+    private static async Task<int> TrimRedemptionsAsync(
+        MySqlConnection connection, DateTimeOffset cutoff, CancellationToken ct)
+    {
+        var total = 0;
+
+        while (!ct.IsCancellationRequested)
+        {
+            var deleted = await connection.ExecuteAsync(null,
+                $"DELETE FROM signin_redemptions WHERE redeemed_at < @cutoff ORDER BY redeemed_at LIMIT {Batch}",
+                ("@cutoff", cutoff));
+            total += deleted;
+
+            if (deleted < Batch)
+            {
+                break;
             }
         }
 

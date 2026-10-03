@@ -2,6 +2,7 @@ namespace Enactive.Remote.Gateway.Accounts;
 
 using System.Globalization;
 using System.Security.Claims;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Authentication;
@@ -141,7 +142,8 @@ public sealed record ExternalProviders(
 /// <para>The provider's handler ends its round trip by putting who the provider says this is into the
 /// <c>External</c> cookie, which only carries that answer the one hop to <c>/auth/complete</c> and lives
 /// ten minutes. The session is ours, made there through the admission list, and nothing of the
-/// provider's token is kept: identity is all this service asks a provider for.</para>
+/// provider's token is kept: identity is all this service asks a provider for. The answer opens one
+/// session at most, and none after the account signed out everywhere (<see cref="CompleteAsync"/>).</para>
 ///
 /// <para>Every place a sign-in ends is a fixed address on this site. None is taken from the request: a
 /// return address a caller could set would make this an open redirect, sending somebody from a real
@@ -159,6 +161,13 @@ public static class ExternalSignIn
     private const string CompletePath = "/auth/complete";
 
     /// <summary>
+    /// How long the provider's answer may be redeemed, from when the External cookie was written: the one hop
+    /// to <c>/auth/complete</c>, with room for a slow page. After it the cookie handler refuses the ticket, so
+    /// a record of its redemption is no longer needed (<see cref="Services.Retention.RedemptionsKept"/>).
+    /// </summary>
+    public static readonly TimeSpan AnswerLifetime = TimeSpan.FromMinutes(10);
+
+    /// <summary>
     /// How many provider callbacks one caller may make in a minute. A person signing in makes one; ten
     /// leaves room for retries and a few people behind one address.
     /// </summary>
@@ -168,6 +177,14 @@ public static class ExternalSignIn
     private const string ProviderClaim = "provider";
     private const string SubjectClaim = "subject";
     private const string DisplayClaim = "display";
+
+    // The answer's own id and when it was made, which are what make it good for one sign-in, and for none
+    // after the account signed out everywhere (see CompleteAsync). Internal so a test can leave one out.
+    internal const string TicketClaim = "ticket";
+    internal const string IssuedClaim = "issued";
+
+    // 32 random bytes, 64 hex characters: the width of signin_redemptions.id.
+    private const int TicketBytes = 32;
 
     // Where a sign-in ends. The fragment is for the panel to read, and is never sent to a server, so it
     // reaches no log.
@@ -192,7 +209,7 @@ public static class ExternalSignIn
             // read on the redirect straight after. Path /auth, because nothing else has any use for it.
             o.Cookie.SameSite = SameSiteMode.Lax;
             o.Cookie.Path = "/auth";
-            o.ExpireTimeSpan = TimeSpan.FromMinutes(10);
+            o.ExpireTimeSpan = AnswerLifetime;
             o.SlidingExpiration = false;
         });
 
@@ -231,7 +248,7 @@ public static class ExternalSignIn
                     var id = user.RootElement.GetProperty("id").GetInt64().ToString(CultureInfo.InvariantCulture);
                     var login = user.RootElement.GetProperty("login").GetString() ?? id;
 
-                    context.Principal = Answer(GitHub, id, login);
+                    context.Principal = NewAnswer(context.HttpContext, GitHub, id, login);
                 };
 
                 o.Events.OnRemoteFailure = FailedAsync;
@@ -267,7 +284,7 @@ public static class ExternalSignIn
                     var sub = token.FindFirstValue("sub")!;
                     var name = token.FindFirstValue("name") ?? sub;
 
-                    context.Principal = Answer(Google, sub, name);
+                    context.Principal = NewAnswer(context.HttpContext, Google, sub, name);
                     return Task.CompletedTask;
                 };
 
@@ -373,8 +390,10 @@ public static class ExternalSignIn
     {
         var external = await context.AuthenticateAsync(SchemeName);
 
-        // Ended in every outcome, before anything else can fail: the answer is good for one sign-in, and
-        // a copy left in the browser could be replayed into another for the rest of its ten minutes.
+        // Deleted in every outcome, before anything else can fail, because the browser has no further use for
+        // it. That is all this does: the cookie is a protected ticket and holds no state of ours, so a copy kept
+        // elsewhere stays acceptable for the rest of its ten minutes. What makes the answer good for one sign-in
+        // is its id, redeemed in the database before anything it leads to (AccountService.SignInAsync).
         await context.SignOutAsync(SchemeName);
 
         var principal = external.Succeeded ? external.Principal : null;
@@ -382,12 +401,16 @@ public static class ExternalSignIn
         var subject = principal?.FindFirstValue(SubjectClaim);
         var display = principal?.FindFirstValue(DisplayClaim);
 
-        if (provider is null || subject is null || display is null)
+        // An answer without its id could not be recorded as redeemed, and one without its time could not be
+        // compared with a revocation: either would be good for any number of sign-ins. Only this gateway makes
+        // the cookie, and every one it makes has both; anything else is refused rather than believed.
+        if (provider is null || subject is null || display is null
+            || Ticket(principal!) is not { } ticket)
         {
             return Results.Redirect(FailedPage);
         }
 
-        switch (await accounts.SignInAsync(provider, subject, display, ct))
+        switch (await accounts.SignInAsync(provider, subject, display, ticket, ct))
         {
             case SignInOutcome.SignedIn signedIn:
                 await UserCookie.IssueAsync(context, signedIn.Access, signedIn.SecurityVersion);
@@ -400,21 +423,57 @@ public static class ExternalSignIn
                 // Its own answer, not "refused": a person whose account was disabled is told so, rather
                 // than being sent to ask an operator for an account they already have.
                 return Results.Redirect(DisabledPage);
+            case SignInOutcome.Spent:
+                // Said like any other refused sign-in. A double-clicked button lands here too, after its
+                // first click signed in; the person signs in again, which costs them one click.
+                return Results.Redirect(FailedPage);
             default:
                 throw new InvalidOperationException("A sign-in outcome nothing here handles.");
         }
     }
 
     /// <summary>
-    /// What the provider said, as three claims and nothing else. A fresh principal rather than the
-    /// handler's: an id token's own claims would ride along in the cookie, and one named like ours
-    /// would be read in its place. Internal so a test can make the External cookie's ticket the way the
-    /// handlers make it.
+    /// What the provider said, as three claims, and the answer's own id and the moment it was made. A fresh
+    /// principal rather than the handler's: an id token's own claims would ride along in the cookie, and one
+    /// named like ours would be read in its place. Internal so a test can make the External cookie's ticket
+    /// the way the handlers make it.
     /// </summary>
-    internal static ClaimsPrincipal Answer(string provider, string subject, string display)
+    internal static ClaimsPrincipal Answer(
+        string provider, string subject, string display, string ticket, DateTimeOffset issued)
         => new(new ClaimsIdentity(
-            [new Claim(ProviderClaim, provider), new Claim(SubjectClaim, subject), new Claim(DisplayClaim, display)],
+            [
+                new Claim(ProviderClaim, provider), new Claim(SubjectClaim, subject), new Claim(DisplayClaim, display),
+                new Claim(TicketClaim, ticket),
+                new Claim(IssuedClaim, issued.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture))
+            ],
             provider));
+
+    /// <summary>
+    /// The answer's id and issue time, or null when either is missing or not the shape the handlers write:
+    /// 64 lowercase hex characters, the width of the column the redemption is keyed by, and Unix milliseconds.
+    /// </summary>
+    private static SignInTicket? Ticket(ClaimsPrincipal answer)
+    {
+        var id = answer.FindFirstValue(TicketClaim);
+        var issued = answer.FindFirstValue(IssuedClaim);
+
+        if (id is not { Length: TicketBytes * 2 } || !id.All(char.IsAsciiHexDigitLower)
+            || !long.TryParse(issued, NumberStyles.None, CultureInfo.InvariantCulture, out var milliseconds)
+            || milliseconds > DateTimeOffset.MaxValue.ToUnixTimeMilliseconds())
+        {
+            return null;
+        }
+
+        return new SignInTicket(id, DateTimeOffset.FromUnixTimeMilliseconds(milliseconds));
+    }
+
+    /// <summary>
+    /// The provider's answer as a handler makes it: with a fresh id, and issued now by the gateway's clock.
+    /// </summary>
+    private static ClaimsPrincipal NewAnswer(HttpContext context, string provider, string subject, string display)
+        => Answer(provider, subject, display,
+            Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(TicketBytes)),
+            context.RequestServices.GetRequiredService<TimeProvider>().GetUtcNow());
 
     /// <summary>
     /// A refused callback - a bad state, a code the provider would not redeem, an id token that failed a

@@ -272,6 +272,40 @@ sudo -u enactive /opt/enactive-remote/deploy/verify-restore.sh     # the backup 
 sudo -u enactive /opt/enactive-remote/deploy/pull-release.sh --allow-migration
 ```
 
+**Migration 3 (`003_signin_redemptions.sql`)** is the first since the cutover, and the timer parks the
+release that carries it (*schema version 3 and this database is at 1*). It adds the table
+`signin_redemptions` — the random id of each provider sign-in redeemed and when, so a kept copy of the
+sign-in cannot be redeemed again; the hourly retention pass removes rows older than a day — and the
+column `users.sessions_revoked_at`, set by **Sign out everywhere**, `admin sessions revoke` and `admin
+disable`, so a sign-in begun before it opens no session after it. A sign-in in flight at the moment of
+the deploy fails once (`/#failed`) and works on the next try: the cookie the older build wrote carries no
+ticket, and the new one refuses an answer without one.
+
+**Rolling the code back past migration 3 needs one statement first.** An older build refuses to start on
+a database that records a version it does not ship, so the symlink and restart of §4.3 alone leave the
+gateway down. The build before migration 3 says so in words meant for protocol 1's database — *This
+database was written by another protocol of Enactive Remote (schema version 3). Install by hand: …
+§cutover* — and it is **not** a protocol change: §8 is not the procedure. (Builds from migration 3 on say
+*This database was migrated by a newer build of Enactive Remote (schema version N)* for this case.) The
+table and the column are additions the older build never reads, so it is safe to forget the version and
+then switch:
+
+```bash
+sudo mysql -e "DELETE FROM enactive_remote_v2.schema_version WHERE version = 3"
+sudo -u enactive ln -sfn /opt/enactive-remote/releases/<older> /opt/enactive-remote/current
+sudo systemctl restart enactive-remote
+```
+
+The rolled-back gateway gives up both protections until the newer release is back. Installing that release
+again runs 003 again, which finds the table and the column there and only records the version. The timer
+parks it as a migration again, since the database reads 1: install it with `--allow-migration` as above.
+
+Copy the new `verify-restore.sh` first (§4.5): it asks for `signin_redemptions` only of a dump at version
+3 or later, so it passes on the backup taken before the install and on every one after. There is no
+version 2, on purpose: protocol 1's database records it, and a migration 2 of this protocol would make
+that database read as current to a gateway pointed at it by mistake, which would start on it instead of
+refusing (§8).
+
 **A protocol change is parked too, and `--allow-migration` does not install it.** The journal says
 *protocol change - install by hand (REMOTE_OPERATIONS §cutover)*: such a release needs a new database
 and a new environment, which no flag provides, and installing it onto the running one would leave
@@ -291,7 +325,8 @@ reads as a rollback. The procedure is §8.
   top of the first. Read `journalctl -u enactive-remote -n 100 --no-pager` and decide.
 
 Rolling back by hand at any time is a symlink and a restart, and it is only ever a rollback of the
-**code**:
+**code** — to a build older than the database's newest migration, only after the step §4.2 gives for that
+migration, or the older build refuses to start:
 
 ```bash
 sudo -u enactive ln -sfn /opt/enactive-remote/releases/<older> /opt/enactive-remote/current

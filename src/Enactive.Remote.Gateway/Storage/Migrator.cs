@@ -51,11 +51,25 @@ public static class Migrator
             var migrations = Migrations();
 
             // A version this build has no migration for was written by another protocol of the gateway: protocol
-            // 1's database records version 2, and this build ships no 002. Passed over, as every recorded version
-            // was, the gateway started on tables of another shape and answered its health check while every call
-            // failed - and the install script took that for a success. Refused before anything is applied, so the
-            // database is left as it was, and the start fails where the operator is looking.
+            // 1's database records versions 1 and 2, and this protocol never ships a 002 (its migrations go 001,
+            // 003), or that database would pass this check. Passed over, as every recorded version was, the gateway
+            // started on tables of another shape and answered its health check while every call failed - and the
+            // install script took that for a success. Refused before anything is applied, so the database is left
+            // as it was, and the start fails where the operator is looking.
+            //
+            // A version ABOVE this build's newest is not another protocol's but a newer build's: what a rollback of
+            // the code leaves after a migration. Refused the same way - this build does not know the shape that
+            // version made - but said as what it is: sent to the cutover, the operator would follow a procedure for
+            // another protocol. REMOTE_OPERATIONS §4.2 says what running an older build needs.
             var foreign = applied.Except(migrations.Select(m => m.Version)).ToArray();
+            if (foreign.Length > 0 && foreign.Max() > migrations.Max(m => m.Version))
+            {
+                throw new InvalidOperationException(
+                    "This database was migrated by a newer build of Enactive Remote (schema version "
+                    + foreign.Max().ToString(CultureInfo.InvariantCulture)
+                    + "). Install that build, or see Docs/REMOTE_OPERATIONS.md §4.2 before running an older one.");
+            }
+
             if (foreign.Length > 0)
             {
                 throw new InvalidOperationException(
