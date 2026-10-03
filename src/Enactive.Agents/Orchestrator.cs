@@ -809,7 +809,22 @@ public sealed partial class Orchestrator : IOrchestrator
                         RestoredChecks = true
                     };
                 else if (!string.Equals(settled.OptionId, "allow", StringComparison.OrdinalIgnoreCase))
+                {
+                    // A person who answers "stop" has stopped the run, and that is its outcome. It used to end as
+                    // Incomplete with an error beside it, like the answer nobody was there to give: on 2026-10-03 a
+                    // request with a typing mistake in it was stopped at this question to be typed again, and the
+                    // history kept it as work that went wrong. Where the no was decided before the question - an
+                    // unattended run, --approve deny, a standing answer - nobody stopped anything, and it stays the
+                    // unresolved contract it was; so does an answer that is none of the options offered.
+                    if (settled.Because is null && _decisions.CanApprove
+                        && string.Equals(settled.OptionId, "deny", StringComparison.OrdinalIgnoreCase))
+                    {
+                        yield return scope.Terminal(RunOutcomeKind.Cancelled,
+                            "Stopped at the question about the final checks; no work started.", _ => "");
+                        yield break;
+                    }
                     plan = plan with { IncompleteReason = "Unresolved verification contract: " + unsettled };
+                }
             }
             if (plan.IncompleteReason is { } contractFailure)
             {
@@ -3820,7 +3835,7 @@ public sealed partial class Orchestrator : IOrchestrator
                     yield return Invoked(handOnCall);
                     var handOnVerdict = StepOutputContract.Check(outputSchema, handOnCall.ArgumentsJson,
                         path => OutputPathExists(path, store), id => id >= 1 && id <= journal.Actions.Count,
-                        boundary is { ForItem: true } ? boundary.Items : null);
+                        boundary is { ForItem: true } ? boundary.Items : null, offered: submitTool);
                     if (handOnVerdict.Accepted)
                     {
                         outputSlot.Accept(handOnVerdict);
@@ -4646,7 +4661,7 @@ public sealed partial class Orchestrator : IOrchestrator
                     var sameAgain = outputSlot.LastRefused == TaskProgress.Canonical(call.ArgumentsJson);
                     var verdict = StepOutputContract.Check(outputSchema, call.ArgumentsJson,
                         path => OutputPathExists(path, store), id => id >= 1 && id <= journal.Actions.Count,
-                        boundary is { ForItem: true } ? boundary.Items : null);
+                        boundary is { ForItem: true } ? boundary.Items : null, offered: submitTool);
                     string handed;
                     if (verdict.Accepted)
                     {
