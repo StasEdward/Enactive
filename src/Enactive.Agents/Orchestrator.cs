@@ -4719,8 +4719,16 @@ public sealed partial class Orchestrator : IOrchestrator
 
                 // Outside what this step may change: refused before it runs, and said why. Not an open
                 // failure - it is the engine's rule, not a call that went wrong - and the way on is named.
+                // What a read-only step made itself, it may delete (WriteBoundary.Refuse): measured here, against the
+                // workspace as the step found it, and only when the call is one that deletes.
+                IReadOnlySet<string>? madeByThisStep = null;
+                if (boundary?.AsksWhatTheStepMade(_tools.DefinitionOf(call.Name)) == true && changes is not null && stepStart is not null
+                    && await changes.TakeAsync(ct) is { } nowThere && await changes.CompareAsync(stepStart, nowThere, ct) is { } sinceStart)
+                    madeByThisStep = sinceStart.Where(c => c.Kind == FileChangeKind.Added)
+                        .Select(c => ShellLookup.Normal(c.Path)).ToHashSet(StringComparer.OrdinalIgnoreCase);
                 if (boundary?.Refuse(call, _tools.DefinitionOf(call.Name),
-                        path => store.PendingPaths.Any(p => string.Equals(ShellLookup.Normal(p), path, StringComparison.OrdinalIgnoreCase)))
+                        path => store.PendingPaths.Any(p => string.Equals(ShellLookup.Normal(p), path, StringComparison.OrdinalIgnoreCase)),
+                        madeByThisStep)
                     is { } notItsToChange)
                 {
                     yield return Invoked(call);

@@ -44,6 +44,16 @@ internal sealed class WriteBoundary(
 
     private readonly Dictionary<string, List<string>> _creating = new(StringComparer.Ordinal);
 
+    /// <summary>Whether the step was planned to change no file.</summary>
+    public bool ReadOnly => readOnly;
+
+    /// <summary>
+    /// Whether a call takes a file away, in a step planned read-only - the one change such a step may make, and only
+    /// to what it made itself (see <see cref="Refuse"/>). The caller then finds out what the step made.
+    /// </summary>
+    public bool AsksWhatTheStepMade(ToolDefinition? definition)
+        => readOnly && definition is { FileCoverage: FileCoverageBehavior.Delete, ChangedPathArguments.Count: > 0 };
+
     /// <summary>Whether this is the boundary of a step for one item (and not only the reserved documents).</summary>
     public bool ForItem => items is not null;
 
@@ -51,7 +61,10 @@ internal sealed class WriteBoundary(
 
     /// <summary>Why this call may not change what it names, or null when it may.</summary>
     /// <param name="staged">Whether a path has a write of this step's that is not on disk yet.</param>
-    public string? Refuse(ToolCall call, ToolDefinition? definition, Func<string, bool> staged)
+    /// <param name="madeByThisStep">For a read-only step asked to delete: the files that were not in the workspace
+    /// when the step began and are there now, as measured. Null when that could not be measured.</param>
+    public string? Refuse(ToolCall call, ToolDefinition? definition, Func<string, bool> staged,
+        IReadOnlySet<string>? madeByThisStep = null)
     {
         if (definition?.ChangedPathArguments is not { Count: > 0 } arguments) return null;
         var creating = new List<string>();
@@ -61,7 +74,16 @@ internal sealed class WriteBoundary(
             if (reserved.Contains(rel, StringComparer.OrdinalIgnoreCase))
                 return $"'{rel}' is written by the engine from the steps' recorded results, and no step changes it. "
                        + $"Hand what you found on with {StepOutputContract.ToolName}.";
-            if (readOnly && !rel.StartsWith(WorkspaceGuard.ScratchPrefix + "/", StringComparison.OrdinalIgnoreCase))
+            // A read-only step may take away a file it made itself - and do nothing else to it. A command is the
+            // one way such a step can still change the workspace (no rule can stop a shell beforehand), and a step
+            // that did had no way back: run aab59d, 2026-10-03, made a test project with a command, was rejected
+            // and told the files must go, was refused when it deleted them, and was rejected again - the run failed
+            // on a mistake nobody was allowed to put right. Only deleting, and only what the comparison with the
+            // step's start shows as new: what was there before stays untouched, and editing what it made would be
+            // doing a later step's work here. Where the workspace could not be measured, nothing is taken as its own.
+            var takesAwayItsOwn = readOnly && definition.FileCoverage == FileCoverageBehavior.Delete
+                                  && madeByThisStep?.Contains(rel) == true;
+            if (readOnly && !takesAwayItsOwn && !rel.StartsWith(WorkspaceGuard.ScratchPrefix + "/", StringComparison.OrdinalIgnoreCase))
                 return $"'{rel}' was not changed: " + ReadOnlyRefusal;
             if (items is null) continue;
 
