@@ -2,7 +2,7 @@
 
 Date: 2026-10-03
 
-Status: stages 1–4 are implemented. Login and the directory are deployed; access management is awaiting operator deployment. Quotas and final release validation (stages 5–6) remain pending.
+Status: stages 1–4 are implemented and installed by the operator. Production login, directory data and access-control buttons are visually confirmed; production mutations are not yet verified. Quotas and final release validation (stages 5–6) remain pending.
 
 ## Objective
 
@@ -139,7 +139,7 @@ Stages 1 and 2 establish the shared behavior and security boundary before admini
 - Added primary-key cursor pagination (default 25, maximum 100), literal search, status filters, resource counts and last recorded computer contact. No database migration: schema remains 10.
 - Added the read-only directory UI, safe text rendering, retryable errors, stale-response protection, detail cards, and desktop/mobile layouts.
 - Added a separate administrator read budget so browsing does not consume the authentication/logout budget.
-- Validation: full Gateway suite passed 657 tests before the final rate-limit change; the final targeted directory/authentication suite passed 37 tests. All 284 JavaScript tests passed. Both Chromium browser tests passed at 1280px and 390px with mocked API responses; directory deployment is pending.
+- Validation: full Gateway suite passed 657 tests before the final rate-limit change; the final targeted directory/authentication suite passed 37 tests. All 284 JavaScript tests passed. Both Chromium browser tests passed at 1280px and 390px with mocked API responses; directory deployment was subsequently confirmed by the operator.
 
 ### Stage 4 — completed on 2026-10-04
 
@@ -149,7 +149,7 @@ Stages 1 and 2 establish the shared behavior and security boundary before admini
 - Added explicit confirmation, reauthentication guidance, conflict handling and no automatic retry after uncertain outcomes. Explained existing-account refusal, withdrawn commands and work already running locally.
 - Added regression coverage for migration from schema 10, preserved administrator sessions, audit failure rollback, concurrent decisions, stale retries and before/after audit attribution. Browser tests cover desktop/mobile confirmations and successful changes; JavaScript tests cover cancellation, CSRF, conflicts, freshness and network failures.
 - Validation: the final full Gateway run passed 669 tests with one test-only SQL collation failure. After changing that assertion to decode JSON in C#, all six access-service tests passed. Earlier full and targeted runs covered all mutation and migration paths; all 288 JavaScript tests, two Chromium desktop/mobile scenarios and ten restore-verification checks passed.
-- Production remains on the directory build until the operator installs the separate access-management package with a verified backup. Keycloak settings remain unchanged.
+- The operator installed the access-management package and confirmed the user detail card with Disable account and Revoke sessions controls. Actual production mutations and their audit effects have not been demonstrated. Keycloak settings remain unchanged.
 
 Next: stage 5, persisted quota defaults/overrides and enforcement across every relevant write path.
 
@@ -160,6 +160,19 @@ Next: stage 5, persisted quota defaults/overrides and enforcement across every r
 - Updated backup verification to require administrator tables only for schema 10 or later. Added seven checks covering valid older backups and missing administrator tables, wired into the reusable Gateway CI workflow.
 - Validation: 644 Gateway integration tests, 277 panel tests, and seven restore completeness checks passed. Tests used disposable local MySQL databases; production was not changed.
 - The initial Linux package was a stage-2 preview. The operator subsequently confirmed real Keycloak administrator login through the tunnel. The new directory package remains a separate deployment.
+
+## Deployment checkpoint — 2026-10-04
+
+Resume from stage 5 (persisted quota defaults/overrides and enforcement), not from Keycloak setup.
+
+- Gateway host: `remoteenactive`; public origin `https://remote.enactive.dev`; admin origin `https://admin.enactive.dev`; loopback service `http://127.0.0.1:5099`; systemd unit `enactive-remote`.
+- Keycloak runs in Docker on the separate `enactive.app` host. Authority: `https://auth.enactive.app/realms/enactive`; confidential client: `enactive-admin`; required MFA ACR: `2`. Client secrets remain on the servers and are not recorded here.
+- The operator handles all server commands and file transfers. Do not execute production deployment remotely without a new instruction changing that arrangement.
+- Installed access-management package was built from `890f02f`, with embedded schema 11 and protocol 2. Filename: `enactive-remote-admin-access-linux-x64.tar.gz`; SHA-256: `652bc38dd2e22524828ab737dd68711c1640ce19750bcdb4631e022fc73a524a`. Local package and checksum are under `work/remote-admin-access-release/` (ignored build outputs).
+- Operator screenshots confirm a live administrator session, two active users, zero waiting registrations, populated resource counts and the Disable account / Revoke sessions buttons. They do not establish that production mutations, CSRF rejection or audit persistence have been exercised.
+- The operator was instructed to keep `enactive-deploy.timer` stopped while preview builds are outside its tracked branch. No subsequent confirmation of its state was supplied. Re-enable only after the tracked branch contains the intended release and deployment prerequisites are checked.
+- Migration 11 requires a pre-upgrade database/key backup. Older binaries reject the newer schema: rollback needs the matching database backup, not just a symlink change. The latest installation's backup output was not supplied. The installation/recovery procedure is in `Docs/REMOTE_ADMIN_ACCESS_UPGRADE.md`.
+- Next implementation: quota defaults and per-user overrides in the database, effective-limit resolution and enforcement across instances, usage display, editing with fresh MFA/CSRF, atomic audit, and persistence/concurrency regression tests. Final release validation and deployment smoke checks remain stage 6.
 
 ## Test and release criteria
 
